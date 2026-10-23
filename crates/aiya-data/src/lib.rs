@@ -10,5 +10,5 @@ pub mod norm;
 pub mod repo;
 pub mod scanner;
 
-pub use db::{DbError, DbHandle, DbResult, open};
+pub use db::{DbError, DbHandle, DbResult, open, open_conn};
 pub use repo::{TrackRow, TrackSource, TrackWindowQuery};

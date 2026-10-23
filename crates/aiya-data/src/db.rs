@@ -48,6 +48,15 @@ pub fn open_in_memory() -> DbResult<Connection> {
     Ok(conn)
 }
 
+/// 独立连接（扫描线程用）：与主 DB 线程并行，WAL 下读不阻塞写。
+/// 只配 PRAGMA 与迁移，不开线程 —— 所有权归调用方。
+pub fn open_conn(path: &Path) -> DbResult<Connection> {
+    let conn = Connection::open(path)?;
+    configure(&conn)?;
+    migrate(&conn)?;
+    Ok(conn)
+}
+
 fn configure(conn: &Connection) -> DbResult<()> {
     // docs/02 §5.1 的启动 PRAGMA；WAL 让读不阻塞写，NORMAL 在掉电时最多丢最后事务
     conn.pragma_update(None, "journal_mode", "WAL")?;
