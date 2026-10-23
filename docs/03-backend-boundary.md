@@ -228,7 +228,7 @@ Rust structs → specta → ui/src/bindings.ts
 ## 8. 边界检查清单（PR 用）
 
 - [ ] 这个改动是否让 `aiya-player` 依赖了 OS/Tauri/DB？
-- [ ] 是否在前端创建了 `AudioContext`/`<audio>`/`MediaElementSource`？
+- [ ] 是否在前端创建了用于出声/取 PCM 的 `AudioContext`/`<audio src>`/`MediaElementSource`？（compat 保留的空 `<audio>` 挂载点除外）
 - [ ] 是否把 PCM/大数组放进了 JSON event？
 - [ ] 是否让 sidecar 打开了 SQLite？
 - [ ] 是否在 UI 里复制了“下一首是谁/队列索引”的判断？

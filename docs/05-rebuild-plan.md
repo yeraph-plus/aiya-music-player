@@ -194,7 +194,7 @@ CREATE INDEX idx_tracks_album ON tracks(album);
 
 CREATE TABLE playlists (...);
 CREATE TABLE playlist_items (...);
-CREATE TABLE queue_state (id INTEGER PRIMARY KEY CHECK (id=1), index INTEGER, position_ms INTEGER, repeat TEXT, shuffle INTEGER, volume REAL, muted INTEGER, rate REAL);
+CREATE TABLE queue_state (id INTEGER PRIMARY KEY CHECK (id=1), current_index INTEGER, position_ms INTEGER, repeat TEXT, shuffle INTEGER, volume REAL, muted INTEGER, rate REAL);
 CREATE TABLE queue_items (position INTEGER PRIMARY KEY, track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE);
 CREATE TABLE history (...);
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);

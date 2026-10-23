@@ -1,7 +1,7 @@
 # AIYA Music — Tauri 2 重建
 
 > 状态：**Phase 0 / UI 兼容 + 引擎选型**。
-> 基线：`../AIYA_MUSIC`（今天写的 Electron demo，`f99564e` + 未提交改动；255 测试全绿）。
+> 基线：`../AIYA_MUSIC`（Electron demo，已锁定于 tag `demo-final` = 代码终版 `4b5edfc`；255 测试全绿，仓库已归档只作参考）。
 > **无历史兼容**：不迁移旧库、不兼容旧 `media://`、不保留 Electron IPC。旧仓库只做 UI/行为参考。
 
 ## 这次重建的重点

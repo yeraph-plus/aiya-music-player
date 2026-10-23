@@ -191,6 +191,7 @@ pub enum Effect {
 4. `generation` 单调递增；旧 generation 的 `Ended/Error/Position` 丢弃。
 5. `position` 只能由 sidecar 的时钟事件推进；UI 不直接写状态。
 6. 持久化失败不回滚播放；记录 warning，下次重试。
+7. 从曲库移除/文件丢失导致 track 行删除时，`queue_items` 靠 FK `ON DELETE CASCADE` 只删行，**队列收缩后的 `current_index` 修正与 `order` 重映射必须由 Actor 在同一命令里完成**（若删除的是当前曲，跳到重映射后的同位下一首）；不能让 DB 级联单独生效而状态机不知情。
 
 ### 4.5 自动推进
 
@@ -224,15 +225,15 @@ AudioEvent::Ended { generation }
 
 ```sql
 CREATE TABLE queue_state (
-  id           INTEGER PRIMARY KEY CHECK (id = 1),
-  index        INTEGER NOT NULL DEFAULT -1,
-  position_ms  INTEGER NOT NULL DEFAULT 0,
-  repeat_mode  TEXT    NOT NULL DEFAULT 'off',
-  shuffle      INTEGER NOT NULL DEFAULT 0,
-  volume       REAL    NOT NULL DEFAULT 0.85,
-  muted        INTEGER NOT NULL DEFAULT 0,
-  rate         REAL    NOT NULL DEFAULT 1,
-  updated_at   INTEGER NOT NULL
+  id            INTEGER PRIMARY KEY CHECK (id = 1),
+  current_index INTEGER NOT NULL DEFAULT -1,
+  position_ms   INTEGER NOT NULL DEFAULT 0,
+  repeat_mode   TEXT    NOT NULL DEFAULT 'off',
+  shuffle       INTEGER NOT NULL DEFAULT 0,
+  volume        REAL    NOT NULL DEFAULT 0.85,
+  muted         INTEGER NOT NULL DEFAULT 0,
+  rate          REAL    NOT NULL DEFAULT 1,
+  updated_at    INTEGER NOT NULL
 );
 
 CREATE TABLE queue_items (
@@ -388,7 +389,7 @@ Audio → Host:
 | 单实例 | host | Tauri single-instance 插件；二次启动唤起窗口 |
 | 窗口状态 | host | Tauri window-state 插件；首帧底色用配置 |
 | 自定义协议 | host | 注册 `aiya-artwork`；Windows 实际 URL 为 `http://aiya-artwork.localhost/...`；按 artworkId 解析缓存，ACAO + immutable |
-| 更新/签名 | host | Tauri updater + Authenticode；sidecar 一起签 |
+| 更新/签名 | host | Tauri updater + Authenticode；sidecar 一起签（**v1 后置**，P5 只做签名，自动更新进 v2） |
 
 ### 8.1 beets 集成（可选 sidecar）
 
@@ -438,7 +439,7 @@ ui/src/
 - 列表/队列虚拟化继续用纯函数；选择集继续用视图下标。
 - 歌词高亮、进度条都用锚点 + `performance.now()` 外推；事件只负责对时。
 - 频谱只画后端 bands；不要在前端建 `AudioContext`。
-- `App.svelte` 先保持可用；等 beets 审阅界面需要新结构时再按 feature 拆，目标 < 300 行。
+- `App.svelte` 先保持可用；等 beets 审阅界面需要新结构时再按 feature 拆，目标 < 400 行。
 
 详细适配清单与“哪些文件不改”见 [`07-ui-reuse.md`](07-ui-reuse.md)。
 
@@ -502,7 +503,7 @@ quit requested
 | 搜索 | ≤ 20ms | 5 万行 |
 | 播放命令往返 | ≤ 20ms（不含设备重建） | host→sidecar→ack |
 | 位置事件 | 10Hz，单帧 < 200B | 协议统计 |
-| 频谱 | 30fps，48 bands，单帧 < 100B | 协议统计 |
+| 频谱 | 30fps，48 bands，单帧 < 100B（B 方案原生引擎才启用；v1 mpv 无 PCM tap，不提供频谱数据） | 协议统计 |
 | 内存稳态 | 播放 1h 增长 < 30MB | soak |
 | 音频欠载 | 0（正常设备） | stats |
 

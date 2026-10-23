@@ -65,7 +65,7 @@ export class AudioSink {
 }
 ```
 
-- `player.svelte.ts`、`App.svelte` 的 `init(audioEl)` 完全不用改；`<audio>` 元素留着但不加载 `src`。
+- `player.svelte.ts`、`App.svelte` 的 `init(audioEl)` 完全不用改；`<audio>` 元素留着但**永不加载 `src`、不接 Web Audio**——它是死挂载点，不是第二条音频路径。ADR-0001 禁止的是“用于出声/取 PCM 的音频元素与音频图”，与保留空元素不冲突；后续 UI 重写时删除。
 - `apply` 不转发 `load`，否则会出现第二条音频路径；后端是唯一出口。
 - `report` 不再需要；后端直接产生状态/位置事件。
 - 这样 UI 的播放按钮、队列、进度条都照旧工作。
