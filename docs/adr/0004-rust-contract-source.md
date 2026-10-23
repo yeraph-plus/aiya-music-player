@@ -9,7 +9,7 @@
 
 ## 决策
 
-领域命令、事件、错误、DTO 全部定义在 Rust（`aiya-core` / `aiya-app`），用 `specta` + `tauri-specta` 生成 `ui/src/bindings.ts`。CI 校验生成物与提交一致，并把 schema hash 写入 `contracts/schema.hash`。
+领域命令、事件、错误、DTO 全部定义在 Rust（`aiya-player` / `aiya-app`），用 `specta` + `tauri-specta` 生成 `ui/src/bindings.ts`。CI 校验生成物与提交一致，并把 schema hash 写入 `contracts/schema.hash`。
 
 ## 后果
 
@@ -31,6 +31,7 @@
 - 协议变更必须更新 `PROTOCOL_VERSION` 或提供向后兼容字段。
 - 事件/命令用 tagged enum，避免 `any`。
 - sidecar 协议独立生成/定义，不复用 Tauri 类型，保持可单独测试。
+- **v1 UI 兼容例外**：为了原样搬旧 UI，先复制旧 `packages/contracts` 的 `AiyaApi` 形状，Rust 按此返回 DTO；`bindings.ts` 并行生成，等 UI 重写时切换。这是临时适配，不是第二份长期契约。
 
 ## 否决的替代方案
 

@@ -3,6 +3,7 @@
 > 基线：`../AIYA_MUSIC`，`f99564e` + 工作区未提交改动（频谱、倍速、音频规格、CORS 修复）。
 > 验证：`npm run typecheck` 通过；`npm test` **27 文件 / 255 用例全绿**（2026-10-23）。
 > 状态：✅ 已实现并可用；⚠️ 部分实现/有已知边界；❌ 未实现。
+> **这是“今天的 demo”快照，不是新版的 parity 承诺。** 新版无历史兼容、全新库；v1 只做 UI/beets 相关的高价值项，优先级见 [`07-ui-reuse.md`](07-ui-reuse.md) §4。
 > “新版归属”是目标架构的建议，不是现状。
 
 ## 1. 曲库、扫描与文件
@@ -21,12 +22,12 @@
 | 1.10 | mtime/size 增量跳过 | ✅ | `scanner.ts:190-200` | Rust `aiya-data` |
 | 1.11 | 音频扩展名白名单 | ✅ | `scanner.ts:18-21`（mp3/flac/m4a/m4b/aac/ogg/oga/opus/wav/wma/aiff/aif） | Rust；按解码能力收窄 |
 | 1.12 | 标签解析（标题/艺人/专辑/序号/年份/时长） | ✅ | `scanner.ts:202-222`（music-metadata） | Rust `lofty` |
-| 1.13 | 技术规格解析（codec/container/采样率/声道/码率/位深/无损） | ✅ | `scanner.ts:258-270`；迁移 v4 | Rust `lofty`/`symphonia` |
+| 1.13 | 技术规格解析（codec/container/采样率/声道/码率/位深/无损） | ✅ | `scanner.ts:258-270`；现版 schema v4 | Rust `lofty`/`symphonia` |
 | 1.14 | ReplayGain 标签读取（track gain/peak） | ⚠️ | `scanner.ts:219-222`；只用了 gain，peak 未参与限幅 | Rust；DSP 内实现 |
 | 1.15 | 内嵌封面提取 + 原图缓存 | ✅ | `scanner.ts:238-246`；`artwork-cache.ts` | Rust `image` + cache |
 | 1.16 | 封面缩略图 96/256/512、并发去重、临时文件 rename | ✅ | `artwork-cache.ts`；测试 `artwork-cache.test.ts` | Rust 后端 |
 | 1.17 | 封面内容哈希去重 | ✅ | `makeArtworkId(bytes)`；`artworks.content_hash UNIQUE` | Rust 保留 SHA-1 兼容 |
-| 1.18 | Track / MediaAsset / MediaLocation 三分离 | ✅ | 迁移 v1；`domain.ts:20-51` | Rust 数据模型保留 |
+| 1.18 | Track / MediaAsset / MediaLocation 三分离 | ✅ | 现版 schema；`domain.ts:20-51` | v1 可简化为 tracks；多来源后置 |
 | 1.19 | 文件改名不影响 trackId/播放 | ✅ | 身份由标签指纹生成；`ids.ts` | Rust 保留算法 |
 | 1.20 | 多位置/可用性（online/offline/missing） | ⚠️ | schema 与 `findPlayable` 支持；UI 无多位置管理 | Rust 数据层 |
 | 1.21 | 从曲库移除（只删索引，不动文件） | ✅ | `ipc.ts:227-242`；`tracks.repo.ts:443-461` | Rust host |
@@ -166,9 +167,9 @@
 - 在线元数据、账号、云同步。
 - Linux/macOS 的完整验证（当前主要面向 Windows 11）。
 
-## 7. 新版 parity 验收口径
+## 7. 行为验收参考（不是 v1 全量 parity）
 
-重写不是“功能列表打勾”，而是下面这些行为逐条可复现：
+下面这些行为值得保留，但 **v1 只承诺 UI/beets 相关的高价值项**；完整优先级见 [`07-ui-reuse.md`](07-ui-reuse.md) §4。旧库/旧协议不在验收范围。
 
 1. 5 万首冷启动 ≤ 450ms；深分页 ≤ 5ms；搜索 ≤ 20ms（同口径）。
 2. 点击列表任意行，播放顺序等于当前视图整库顺序；播完最后一首才停。

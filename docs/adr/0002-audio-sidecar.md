@@ -9,7 +9,9 @@
 
 ## 决策
 
-`aiya-audio-host` 作为独立 sidecar 进程运行，由 Tauri host 启动/监控/重启。两者通过 Windows 命名管道传输**长度前缀帧**（v1 用 JSON，后续可换 postcard/共享内存），只传命令、状态、错误、频谱 band，不传 PCM。
+音频以独立进程运行，由 Tauri host 启动/监控/重启。v1 可以直接把 `mpv.exe` 当 sidecar（`--input-ipc-server` 命名管道 + JSON IPC）；B 方案用 `aiya-audio-host` 包原生引擎。两种都只传命令、状态、错误、频谱 band，不传 PCM。
+
+音频 sidecar 的协议 v1 用 JSON；后续可换长度前缀 MessagePack/共享内存。`mpv` 的命名管道/JSON 由 supervisor 适配成同一 `AudioPort`，UI 不感知。
 
 ## 后果
 

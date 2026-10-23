@@ -1,96 +1,86 @@
 # 06 — 需要拍板的问题
 
-> 这些不是“实现细节”，而是会影响仓库结构/依赖/工期的分叉。每项给出建议与代价，评审时逐条确认。
+> 这版只留 9 个真正影响结构/工期的分叉。每项给出建议与代价；没有旧库兼容问题。
 
-## 1. 音频是否独立进程？
+## 1. 音频引擎：mpv sidecar 还是 wasapi-rs 原生？
 
-**建议：是，v1 就用 sidecar。**
+**建议：v1 用 mpv sidecar；wasapi-rs 原生作为 v2 / B 方案。**
 
-- 代价：多一个 exe、命名管道、supervisor、打包签名；估时 +3–5 天。
-- 收益：崩溃隔离、独立重启/自检、实时线程不受 UI/DB 影响。
-- 备选：同进程线程，代码量少，但音频崩溃会带走整个应用；`AudioPort` 保留未来切换能力。
+- mpv：3–5 天；独占、设备、全格式、gapless、ReplayGain 都有；GPLv2+ 与项目 GPLv3 兼容。代价：+~50MB、行为受 mpv 约束、bit-perfect 不保证。
+- wasapi-rs：2–3 周；完全控制、二进制小；`wasapi` 0.26 已支持独占/格式探测/设备通知。代价：解码/时钟/gapless 自己扛。
+- 你的重点是 UI/beets，**先买音频，后补控制**。
+- 详见 [`09-audio-engine-choice.md`](09-audio-engine-choice.md)。
 
-## 2. 默认输出模式？
+## 2. UI 是原样搬，还是趁重写？
 
-**建议：默认 `Shared`，把 `Auto` / `Exclusive` 作为用户显式选项。**
+**建议：原样搬 + 薄兼容层，不重写。**
 
-- 默认独占会静音浏览器/游戏/会议，首次体验不可接受；蓝牙设备也常不支持独占。
-- `Shared` 最稳；发烧用户可主动切 `Auto` 或 `Exclusive`。
-- 回退必须可见：“已回退共享，原因：设备不支持 44.1k/24bit 独占”。
+- 旧 UI 有 54 个 `window.api.*` 调用点、48 个方法；写 `compat/api.ts` 即可。
+- 需要换的只有：`AudioSink`（远程出口）、`SpectrumSource`（compact）、`artworkUrl`（scheme）、`initialLook`（3 行）。
+- `.svelte` 文件最多改 1 个（频谱 pro 条件）。
+- 等 beets 审阅界面需要新结构时，再按 feature 重写；现在推倒重来是负收益。
+- 详见 [`07-ui-reuse.md`](07-ui-reuse.md)。
 
-## 3. 是否接受 FFmpeg 依赖？
+## 3. beets 是“依赖用户安装”，还是“随应用捆绑”？
 
-**建议：v1 不默认捆绑；先明确支持矩阵。**
+**建议：v1 依赖用户已安装的 `beet`（pipx/uv/系统 Python），检测 + 指引；v2 再考虑捆绑 Python。**
 
-- symphonia 覆盖 MP3/AAC/FLAC/ALAC/Vorbis/Opus/WAV 等主流格式。
-- WMA/AIFF/DFF 需要 FFmpeg 或额外 crate；FFmpeg 是 LGPL，动态链接/分发要合规。
-- 如果曲库里 WMA/AIFF 占比很低，v1 可标注“暂不支持”，后续加可选 FFmpeg 包。
-- 不要在 UI 里宣称支持一个实际不能播的格式。
+- 依赖用户安装：工期最短、体积最小；缺点是新用户要多一步。
+- 捆绑 `python-build-standalone` + beets：零安装；体积 +40–80MB，打包/签名/升级更复杂。
+- 无论哪种，都锁定 beets 2.14.x；sidecar 独立进程，崩溃不影响播放。
+- 详见 [`08-beets.md`](08-beets.md)。
 
-## 4. v1 parity 范围？
+## 4. beets 与自有库，谁是主？
 
-**建议：先不做 EQ / DSD / crossfade / gapless。**
+**建议：自有 DB 是“读模型”，beets 是“写权威”。**
 
-- 这四项都会显著增加音频引擎复杂度与测试矩阵。
-- 先保证 Shared/Exclusive、seek、设备、恢复、SMTC、频谱、歌词、播放列表。
-- 协议预留 `SetEq` / `Transition` / `PrepareNext` / DSD 格式，但不在 v1 实现。
+- 自有 DB 存播放/队列/历史/播放列表/封面；beets 不在也能跑。
+- 标签匹配、写标签、移动/复制由 beets sidecar 做；完成后宿主刷新受影响项。
+- 不直接让 UI 读 beets DB，也不在宿主复刻 autotag。
+- 可选存 `beets_item_id`，便于同步；不要求唯一。
 
-## 5. UI 是否继续 Svelte 5？
+## 5. 导入默认动作：只写标签，还是复制/移动？
 
-**建议：继续。**
+**建议：默认只写标签，复制/移动必须显式勾选。**
 
-- 现版 renderer 5,500 行、纯逻辑测试充分；换框架的收益低、风险高。
-- 只做 API 层替换（`window.api` → generated bindings）与 App 拆分。
-- 如果未来要换 React/Vue，`lib/` 纯函数与视觉可复用，但这是独立决策。
+- 预览阶段必须无副作用；不要在预览时写文件。
+- 复制/移动涉及路径/冲突/回滚，v1 先不默认做。
+- 目标路径冲突时报错，不覆盖；失败项可重试。
+- 不做 `beet import -q` 静默自动选择；低置信度必须人工确认。
 
-## 6. 旧库如何切？
+## 6. 默认输出模式？
 
-**建议：默认用副本库（`library-v2.sqlite`），验证稳定后再决定是否原地切换。**
+**建议：默认 `Shared`，`Auto` / `Exclusive` 作为显式选项。**
 
-- 旧版迁移 runner 遇到 `user_version` 高于自己支持的版本会直接报错（`db.ts:78-84`），所以原地升到 v5 后旧版无法回滚。
-- 副本策略：旧版继续用原库；新版在副本上迁移；回滚只是切回旧版。
-- 若确定原地迁移：必须先备份，回滚只能“停新版 + 恢复备份”，并做一次演练。
+- 默认独占会静音浏览器/游戏/会议；蓝牙设备也常不支持。
+- 回退必须可见：“已回退共享，原因：设备/格式不支持”。
+- 音频引擎若用 mpv：`--audio-exclusive=yes` + `--audio-fallback-to-null=no`，失败要能报出来。
 
-## 7. 安装包/更新/签名怎么解决？
+## 7. v1 是否砍掉这些？
 
-**建议：v1 先做未签名内测包；公开发布前买 Authenticode 证书。**
+**建议：砍掉 EQ / DSD / crossfade / watcher / 持久 jobs / 频谱 pro / 多窗口。**
 
-- host 与 sidecar 都要签，否则 SmartScreen/杀软会拦。
-- Tauri updater 需要签名密钥与更新源；可以先手动分发，后接 updater。
-- WebView2 运行时：Win10/11 通常已有；安装器带 bootstrapper 或检测提示。
+- 它们都不服务“UI 体验 + beets”这个目标。
+- 频谱 v1 可只做 compact，甚至先不做；不要为了它把 Web Audio 搬回前端。
+- 旧库迁移/旧 `media://`/旧 preload：**直接删除**，不需要讨论。
+- 如果某项是你的核心体验，单独提，我们重排优先级。
 
 ## 8. “音频 WS”到底指什么？
 
-当前仓库没有 WebSocket 音频链路。本文按两种理解处理：
+当前仓库没有 WebSocket 音频链路。两种理解：
 
-- 如果指 **Web Audio / Chromium 音频链路**：新版删除，音频进 Rust（ADR-0001）。
-- 如果指 **WebSocket 传输**：不要传 PCM；控制面可以，但 terminate 在 host，不要让 UI 直连。若你有具体的 WS 服务/协议，需要单独给出消息格式与用途，再决定是否保留。
+- 如果指 **Web Audio / Chromium 音频链路**：新版删除，音频进 sidecar（ADR-0001）。
+- 如果指 **WebSocket 传输**：不要传 PCM；控制面可以，但 terminate 在 host，不要让 UI 直连。若有具体 WS 服务/协议，给消息格式与用途再定。
 
-## 9. Pro 频谱/audioMotion 是否保留？
+## 9. 许可/分发怎么处理？
 
-**建议：v1 只做后端 bands + 自研 compact/pro 绘制；不绑定 audioMotion。**
+**建议：项目 GPLv3；mpv/FFmpeg/beets 的 notices 与源码提供方式从第一天就记录。**
 
-- audioMotion 依赖 `AnalyserNode`，与“音频在 Rust”冲突。
-- AGPL 对闭源分发有约束。
-- 后端已经能提供 48 bands；自研 canvas 绘制足够，后续可做更多形态。
+- mpv GPLv2+ 与 GPLv3 兼容；分发附许可/源码获取方式。
+- wasapi-rs MIT；symphonia MPL-2.0；FFmpeg LGPL 2.1+（动态链接）；beets MIT；Python PSF。
+- 不用 BASS（proprietary，GPLv3 需商业授权）。
+- v1 可先内测未签名；公开发布前做 Authenticode + 安装器测试。
 
-## 10. 是否需要多窗口？
+---
 
-**建议：v1 单主窗口 + 隐藏 SMTC 窗口。**
-
-- 多窗口会让“哪个窗口是活跃出口/哪个窗口显示队列”重新复杂化。
-- 后端权威状态已经支持多窗口读取；但先不做多窗口控制，避免重复现版补丁。
-
-## 11. 播放队列上限？
-
-**建议：统一 50,000，和后端 `list_all_ids` 上限一致。**
-
-- 现版 IPC 入参 20,000、内部可 50,000，是暗差异。
-- 统一后，UI 在入队前就能提示；不会“能选但一操作就报错”。
-
-## 12. 是否保留“最近/常听”作为主视图？
-
-**建议：保留。**
-
-- 现版 `TrackQuery.source` 四来源共用分页协议，设计好。
-- 新版继续用 source 维度，不要做成排序维度。
+**最小拍板组合**：1 选 mpv、2 选原样搬、3 选用户安装、5 选只写标签。其余按建议默认即可。

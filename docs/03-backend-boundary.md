@@ -22,11 +22,12 @@
 | 解码 | Chromium 媒体栈 | 需要统一 PCM、seek 精度、DSD/格式兜底、解码错误码 | `aiya-audio` |
 | 设备枚举/选择/热插拔 | 无 | `enumerateDevices()` 拿不到 WASAPI 端点能力/独占格式 | `aiya-audio` |
 | 播放时钟/位置 | `<audio>.currentTime` | 设备时钟是唯一可信时间；窗口挂起会漂 | `aiya-audio` |
-| 播放状态机/队列 | JS 主进程 | 与音频同生命周期；避免跨进程双状态 | `aiya-app` / `aiya-core` |
+| 播放状态机/队列 | JS 主进程 | 与音频同生命周期；避免跨进程双状态 | `aiya-app` / `aiya-player` |
 | 音量/静音/速率/DSP | Web Audio/`audio.volume` | 独占下没有 `audio.volume`；EQ/归一化必须在输出前 | `aiya-audio` |
 | 音频文件读取/Range | `media://` | 只为喂 `<audio>` 存在；原生引擎直接读文件 | 删除（见 §4） |
 | 元数据/标签解析 | `music-metadata` (JS) | 扫描/封面/ReplayGain 与文件系统同域；避免 JS 解析大库 | `aiya-data` |
-| SQLite/迁移 | `better-sqlite3` | 单写入者、事务、WAL、旧库兼容 | `aiya-data` |
+| beets 候选/写标签/移动 | 无 | beets 是 Python；需要 importer API 拿候选/diff；写文件必须隔离 | `sidecars/beets` |
+| SQLite/迁移 | `better-sqlite3` | 单写入者、事务、WAL；全新 v1，无旧库兼容 | `aiya-data` |
 | 文件扫描/对账/watcher | JS 主进程 | 长任务、可取消、崩溃恢复；不应阻塞 UI | `aiya-data` |
 | 封面解码/缩略图 | `sharp` (JS) | 与扫描同域；缓存/哈希/尺寸白名单 | `aiya-data` |
 | 播放历史/统计落库 | JS 主进程 | 与播放状态同一事务边界 | `aiya-app` + `aiya-data` |
@@ -60,14 +61,14 @@
 
 | 删除项 | 原因 | 替代 |
 |---|---|---|
-| `renderer/src/lib/audio-sink.ts` | `<audio>` 执行器，播放绑死 WebView | Rust `AudioEngine` |
+| `renderer/src/lib/audio-sink.ts` | `<audio>` 执行器，播放绑死 WebView | audio sidecar（mpv/native） |
 | Web Audio 图（`AudioContext`/`GainNode`/`AnalyserNode`） | 独占后渲染层无 PCM；CORS/静音/生命周期问题 | Rust DSP + 频谱 tap |
 | `media://track/*` 音频协议 | 只为 `<audio>` 服务；Range/流计数是补丁 | 原生引擎直接读文件 |
 | `preload/index.ts` + `contextBridge` | Tauri 不需要；IPC 由 commands/events 替代 | 生成 bindings |
 | `main/player-host.ts` 的 `did-finish-load` 补发 | UI 生命周期不再影响音频 | 常驻 Actor |
 | `main/media-session.ts` | WebView2 不直通 SMTC | Rust SMTC |
 | `audiomotion.ts` 的 AnalyserNode 接入 | 依赖前端音频图 | 后端 bands + 自研绘制 |
-| `queue.repo.ts` 的 JSON 整行写入 | 大队列每 5s 重写 | 规范化 `play_queue_items` |
+| `queue.repo.ts` 的 JSON 整行写入 | 大队列每 5s 重写 | 规范化 `queue_items` |
 
 > 不要为了“少改”保留一个 WebView 音频兜底。两条音频路径 = 两套时钟、两套错误、两套设备状态，最终一定互相打架。
 
@@ -100,7 +101,11 @@ type Lyrics = { found: boolean; synced: boolean; lines: LyricLine[]; offsetMs: n
 
 ### 5.4 频谱：后端算还是前端算？
 
-**结论：后端 tap + 算 bands，前端绘制。** 独占模式下渲染层没有 PCM；回环采集会混入系统声音且独占时不可用。引擎在输出前 tap 是最准确的。协议只传 48 个 `u8`（30fps），不要传 FFT/PCM。
+**结论：有原生引擎时后端 tap + 算 bands，前端绘制。** 独占模式下渲染层没有 PCM；回环采集会混入系统声音且独占时不可用。
+
+- v1 若用 mpv：mpv 没有稳定的 PCM tap API，**频谱先不做或只做“无数据降级”**；不要为了频谱把音频搬回 WebView。
+- v2 若用 wasapi-rs 原生：在 DSP 后、主音量前 tap，协议只传 48 个 `u8`（30fps），不传 FFT/PCM。
+- 频谱不是 v1 的核心；beets/UI 才是。
 
 ### 5.5 封面主色：后端算还是前端算？
 
@@ -114,7 +119,7 @@ type Lyrics = { found: boolean; synced: boolean; lines: LyricLine[]; offsetMs: n
 
 **结论：`aiya-data` 管文件与索引，`src-tauri` 只做协议适配。** 不要让协议层知道 SQL。
 
-## 6. 解耦的六个具体手法
+## 6. 解耦的八个具体手法
 
 ### 6.1 端口/适配器，而不是“工具函数”
 
@@ -141,7 +146,7 @@ pub trait StateStore: Send {
 
 ### 6.2 传输无关的协议
 
-`AudioCommand`/`AudioEvent` 定义在 `aiya-core`/`aiya-audio-api`，不依赖 Tauri、不依赖管道。sidecar 只是“把同一组类型序列化到管道”。这样：
+`AudioCommand`/`AudioEvent` 定义在 `aiya-player`/`aiya-audio-api`，不依赖 Tauri、不依赖管道。sidecar 只是“把同一组类型序列化到管道”。这样：
 
 - 单元测试可以直接调用；
 - 以后换 in-process 线程，不改协议；
@@ -166,6 +171,7 @@ Rust structs → specta → ui/src/bindings.ts
 - 前端不手写同名 interface。
 - CI 检查生成物 diff；协议变更必须带版本/迁移说明。
 - 事件/命令都有 `seq`/`revision`，避免“最后一条覆盖新状态”。
+- **v1 例外**：为了原样搬旧 UI，先复制旧 `contracts` 作为 `AiyaApi` 兼容形状；Rust 按此返回 DTO。生成 bindings 同步推进，等 UI 重写时切过去。这是“UI 兼容”，不是“旧数据兼容”。
 
 ### 6.5 UI 不拥有播放状态
 
@@ -174,7 +180,28 @@ Rust structs → specta → ui/src/bindings.ts
 - 拖动 seek 时本地显示 `dragMs`，松手发命令，收到 snapshot 后清 pending。
 - 队列面板用 `queue_slice`，不缓存全队列；拖动只发 `Move{from,to}`。
 
-### 6.6 错误分层
+### 6.6 UI 兼容层是“边界适配器”，不是第二套后端
+
+为了不重写 UI，v1 保留旧 `window.api` 形状：
+
+```
+旧组件 → window.api（compat/api.ts） → Tauri commands → aiya-app
+```
+
+- 兼容层只做参数/信封/事件映射，不实现业务规则。
+- `AudioSink` 兼容类不创建 `<audio>`/Web Audio；`apply()` 是 no-op，后端才是唯一出口。
+- `SpectrumSource` 兼容类从 Tauri 事件收 bands；pro（audioMotion）暂不可用。
+- `artworkUrl` 只改 scheme，7 个组件不改。
+- 兼容层可以随 UI 重写逐步删除，不是永久 API。
+
+### 6.7 beets：写操作归 sidecar，宿主只读/刷新
+
+- 宿主不 import beets、不解析 beets 文本输出、不直接写 beets DB。
+- `aiya-beets`（Python）负责候选/写标签/移动；宿主只发路径/决策，收结构化结果。
+- beets 不在时，曲库/播放仍可用；beets 是增强，不是启动依赖。
+- 导入预览必须无副作用；默认只写标签，移动/复制显式选择。
+
+### 6.8 错误分层
 
 | 层 | 错误类型 | UI 看到 |
 |---|---|---|
@@ -200,7 +227,7 @@ Rust structs → specta → ui/src/bindings.ts
 
 ## 8. 边界检查清单（PR 用）
 
-- [ ] 这个改动是否让 `aiya-core` 依赖了 OS/Tauri/DB？
+- [ ] 这个改动是否让 `aiya-player` 依赖了 OS/Tauri/DB？
 - [ ] 是否在前端创建了 `AudioContext`/`<audio>`/`MediaElementSource`？
 - [ ] 是否把 PCM/大数组放进了 JSON event？
 - [ ] 是否让 sidecar 打开了 SQLite？

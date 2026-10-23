@@ -10,7 +10,7 @@
 ## 决策
 
 - 删除 `media://track/*` 音频协议、Range/流计数/CORS 音频路径。
-- 保留一个仅用于封面的自定义协议 `aiya-artwork://artwork/{id}?size=96|256|512`。
+- 保留一个仅用于封面的自定义协议 `aiya-artwork`，路径 `/artwork/{id}?size=96|256|512`；Windows 运行时 URL 是 `http://aiya-artwork.localhost/...`（Tauri 平台差异，见 `07`）。
 - 协议只接受 artworkId，不接受任意路径；后端解析缓存并返回 immutable 响应。
 - 封面响应带 `Access-Control-Allow-Origin: *`，以便前端 canvas 取主色。
 

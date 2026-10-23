@@ -1,82 +1,90 @@
-# AIYA Music — Tauri 2 重写
+# AIYA Music — Tauri 2 重建
 
-> 状态：**Phase 0 / 架构决策期**。本仓库先锁定边界与协议，再开始写产品代码。
-> 基线：`../AIYA_MUSIC`（Electron 版，2026-10-23，`f99564e` + 未提交的频谱/倍速改动；27 个测试文件 / 255 用例全绿）。
-> 本文所有行号引用均以该基线为准。
+> 状态：**Phase 0 / UI 兼容 + 引擎选型**。
+> 基线：`../AIYA_MUSIC`（今天写的 Electron demo，`f99564e` + 未提交改动；255 测试全绿）。
+> **无历史兼容**：不迁移旧库、不兼容旧 `media://`、不保留 Electron IPC。旧仓库只做 UI/行为参考。
 
-## 为什么要重写
+## 这次重建的重点
 
-现版的 UI 与领域模型是健康的，真正的问题是**音频所有权放错了位置**：
+不是“把 Electron 换成 Tauri”，而是三件事：
 
-- 声音由渲染层 `<audio>` 出，播放状态机却主进程独占；窗口重载、关闭、Web Audio 建图、CORS、SMTC 都要靠补丁维持一致。
-- Chromium 的音频栈做不了 WASAPI 独占、按源采样率开流、bit-perfect、设备级诊断；`--enable-exclusive-audio` 是进程级开关且失败静默回落。
-- `MediaSession → SMTC` 在 Electron 里要靠特性开关与 AUMID 才成立；Tauri/WebView2 实测**不直通**，必须原生接管。
-- 队列以 JSON 整行每 5 秒重写；5 万首时这是无谓的 WAL 与序列化开销。
-- 音频问题（爆音、设备占用、独占失败、驱动差异）没有进程隔离与结构化诊断，排障只能靠猜。
+1. **音频所有权归后端**：WebView 不再创建 `<audio>` / `AudioContext` / `MediaElementSource`；由 Rust host 编排音频 sidecar，关窗/重载/崩溃不影响出声。
+2. **UI 先原样搬**：demo 的视觉/交互已经验证过，现在重写是负收益。先用 `window.api` 兼容层 + `RemoteAudioSink` 跑起来，后续按 feature 重写。
+3. **beets 是第一等功能**：不是“调一下 `beet import`”，而是把候选、差异、写标签、移动/复制做成可审阅、可解释的 UI。
 
-因此新版的核心不是“把 Electron 换成 Tauri”，而是：
+## 六条已定决策
 
-> **把音频、播放状态、曲库、文件与系统集成全部收进 Rust 后端；WebView 只负责显示与交互。**
-
-## 五个已定决策
-
-1. **Rust 拥有音频输出**：共享/独占 WASAPI、解码、DSP、设备与时钟都在 Rust；前端不再创建 `<audio>`、`AudioContext` 或 `MediaElementSource`。
-2. **播放状态机在 Rust**：队列、随机排列、重复、恢复、播放历史都只有一份真相；前端是视图，不是扬声器。
-3. **音频助手独立进程**：`aiya-audio` sidecar 通过命名管道/帧协议通信，崩溃可重启；宿主进程负责 UI、数据库与系统集成。
-4. **契约以 Rust 为源**：Rust 类型生成 TypeScript，带协议版本与 schema 哈希；不再维护两份手写类型。
-5. **单一数据库写入者**：只有宿主进程打开 SQLite；音频助手只接收 `trackId → path + format`，不碰库。
+1. **后端拥有音频输出**：共享/独占 WASAPI、解码、设备、时钟都在音频 sidecar（v1 mpv / B 方案 wasapi-rs）；Rust host 编排；前端只显示状态。
+2. **播放状态机在 Rust**：队列、随机、重复、恢复只有一份真相；托盘/SMTC/关窗都控制同一个 Actor。
+3. **音频独立进程**：v1 推荐 `mpv` sidecar（`--audio-exclusive`/`--wasapi-exclusive-buffer`/全格式）；`wasapi-rs` 原生是 B 方案。见 [`09`](docs/09-audio-engine-choice.md)。
+4. **契约以 Rust 为源**：生成 TS；但为了搬 UI，先保留旧 `AiyaApi` 形状作为“UI 兼容契约”（不是旧数据兼容）。
+5. **单一数据库写入者**：只有宿主开 SQLite；音频/beets sidecar 不碰宿主库。
+6. **全新 schema v1**：没有 v1–v5 迁移链；demo 数据可丢，直接从零建库。
 
 ## 仓库结构（规划）
 
 ```
 AIYA_MUSIC_TAURI/
-├── docs/                  # 功能盘点、代码评审、目标架构、迁移计划、ADR
+├── docs/                  # 功能盘点、UI 复用、beets、引擎选型、计划、ADR
 ├── crates/
-│   ├── aiya-core/         # 纯领域：队列、状态归约、命令/事件；无 IO/无 Tauri
-│   ├── aiya-data/         # SQLite、迁移、Repository、扫描、任务
-│   ├── aiya-audio/        # 解码、DSP、WASAPI、音频协议；无 DB/无 Tauri
-│   ├── aiya-audio-host/   # sidecar 二进制：音频进程入口
+│   ├── aiya-player/       # 纯领域：队列、状态归约、命令/事件；无 IO/无 Tauri
+│   ├── aiya-data/         # SQLite v1、Repository、扫描、封面、设置
+│   ├── aiya-audio/        # 原生音频（wasapi-rs + symphonia/FFmpeg）——B 方案
+│   ├── aiya-audio-host/   # sidecar 入口：mpv supervisor 或原生引擎
 │   ├── aiya-app/          # PlayerActor（mailbox/effects）、用例编排、端口 trait
-│   └── aiya-system/       # SMTC、托盘、电源、单实例等平台集成
+│   └── aiya-system/       # SMTC、托盘、电源、单实例
+├── sidecars/
+│   └── beets/             # Python + beets 2.14.x；stdio JSON
 ├── src-tauri/             # Tauri 2 宿主：commands/events、窗口、协议、supervisor
-├── ui/                    # Svelte 5 + Vite；只依赖生成的 contracts
-└── contracts/             # 协议说明、生成物、golden fixtures
+├── ui/                    # 复制 demo renderer + compat 适配
+└── contracts/             # 协议、生成物、golden fixtures
 ```
 
-依赖方向只有一条：
+依赖方向：
 
 ```
-ui → generated TS → src-tauri → aiya-app → aiya-core
+ui → compat API → src-tauri → aiya-app → aiya-player
                          │           ├── aiya-data
-                         │           └── aiya-audio-client ⇢ pipe ⇢ aiya-audio-host → aiya-audio
+                         │           └── aiya-audio-client ⇢ pipe ⇢ aiya-audio-host
                          └── aiya-system
+
+src-tauri ⇢ stdio JSON ⇢ sidecars/beets
 ```
 
-`aiya-core` 不允许依赖 `tauri`、`tokio`、`rusqlite`、`windows`；`aiya-audio` 不允许依赖数据库或 Tauri。违反这条，解耦就会在三个月内退化回现版。
+`aiya-player` 不依赖 `tauri`、`tokio`、`rusqlite`、`windows`；`aiya-audio` 不依赖数据库或 Tauri。违反这条，三个月后会退化回现版。
 
 ## 文档
 
 | 文档 | 内容 |
 |---|---|
-| [`docs/00-feature-inventory.md`](docs/00-feature-inventory.md) | 现版全部功能、状态、证据、重写归属 |
-| [`docs/01-code-review.md`](docs/01-code-review.md) | 写得好的代码段、主要代码地图、不能照搬的部分 |
-| [`docs/02-target-architecture.md`](docs/02-target-architecture.md) | 进程/分层/协议/数据流/错误恢复/测试 |
-| [`docs/03-backend-boundary.md`](docs/03-backend-boundary.md) | 哪些必须进后端、哪些留在前端、怎么解耦 |
-| [`docs/04-audio-engine.md`](docs/04-audio-engine.md) | WASAPI 共享/独占、格式协商、时钟、DSP、坑位 |
-| [`docs/05-migration-plan.md`](docs/05-migration-plan.md) | 阶段、验收、复用/删除清单、风险与工期 |
-| [`docs/06-open-questions.md`](docs/06-open-questions.md) | 需要拍板的 12 个分叉与建议 |
-| [`docs/adr/`](docs/adr/) | 五条不可回退的决策记录 |
+| [`00-feature-inventory.md`](docs/00-feature-inventory.md) | 现版 125 项功能/状态/证据（只作参考，不是 parity 承诺） |
+| [`01-code-review.md`](docs/01-code-review.md) | 值得保留的代码段、不能照搬的模式 |
+| [`02-target-architecture.md`](docs/02-target-architecture.md) | 进程/分层/协议/数据流/恢复/测试 |
+| [`03-backend-boundary.md`](docs/03-backend-boundary.md) | 后端/前端/删除边界 |
+| [`04-audio-engine.md`](docs/04-audio-engine.md) | wasapi-rs 原生路径：WASAPI、时钟、DSP、坑位 |
+| [`05-rebuild-plan.md`](docs/05-rebuild-plan.md) | **4–6 周重建计划**、阶段、验收、任务 |
+| [`06-open-questions.md`](docs/06-open-questions.md) | 仍需拍板的 9 个分叉 |
+| [`07-ui-reuse.md`](docs/07-ui-reuse.md) | **UI 原样搬**：54 个调用点、5 个适配器、优先级 |
+| [`08-beets.md`](docs/08-beets.md) | **beets 集成**：Python sidecar、预览/diff/应用 |
+| [`09-audio-engine-choice.md`](docs/09-audio-engine-choice.md) | mpv vs wasapi-rs、GPLv3、spike 门槛 |
+| [`adr/`](docs/adr/) | 五条不可回退的决策记录 |
 
 ## 现在不做什么
 
-- 不在旧仓库上继续补 WASAPI / EQ / DSD。
-- 不把 PCM 放进 WebSocket、Tauri event 或任何 JSON IPC。
-- 不追求一次 parity；先打通“能稳定出声、能恢复、能诊断”的最小闭环。
-- 不在架构评审前写大量 UI 或数据库代码。
+- 不迁移旧数据库、不兼容旧 `media://`、不保留 Electron preload/IPC。
+- 不为“以后可能要”保留 `MediaAsset/MediaLocation` 多来源模型；需要时再加。
+- 不在前端建第二条音频路径；不为了 pro 频谱把 Web Audio 搬回来。
+- 不先把 EQ/DSD/crossfade/watcher/在线做进去。
+- 不在 UI 兼容层跑通前写大量新界面。
+
+## License
+
+项目计划以 **GPL-3.0** 发布。第三方依赖（mpv/FFmpeg/beets/Tauri 等）的许可与分发注意事项见 [`09-audio-engine-choice.md`](docs/09-audio-engine-choice.md) §5；发布前补全 `NOTICE`/源码提供方式。
 
 ## 下一步
 
-1. 评审 `docs/02` / `docs/03` 的边界，尤其是“播放状态机整体迁 Rust”与“音频 sidecar”两项。
-2. 冻结旧库 schema（当前 `user_version = 4`），把 `AIYA_MUSIC/data/library.sqlite` 作为兼容性验收样本。
-3. 起 `aiya-core` 与 `aiya-data` 的空壳 + 协议 golden fixtures，先跑通 5 万首查询与队列纯逻辑。
-4. 再接 Tauri 壳与 `aiya-audio` 共享模式，最后做独占与 bit-perfect。
+1. 复制 renderer → `ui`，写 `compat/api.ts` + `RemoteAudioSink`，让旧界面在 Tauri 里显示（见 `07`）。
+2. 跑 2 天引擎 spike：mpv 独占/seek/设备/1h vs wasapi-rs；按 `09` §4 打分，拍板。
+3. 跑半天 beets spike：`beet --version`、`Library` 读取 10 条；确认 Python sidecar 路线。
+4. 建 `aiya-data` v1 + 扫描；接真实列表/封面。
+5. 接播放纵切；然后做 beets 预览/应用。

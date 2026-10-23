@@ -1,5 +1,6 @@
 # 04 — 音频引擎：WASAPI、解码、时钟与 DSP
 
+> **路径说明**：本文是 **B 方案（wasapi-rs 原生）** 的实现细节。v1 推荐先用 mpv sidecar（见 [`09`](09-audio-engine-choice.md)）；如果 mpv spike 不达标、或你明确要 bit-perfect/完全控制，再按本文落地。
 > 目标：把“能出声”变成“可证明地按正确格式、正确设备、正确时钟出声，并且失败可解释”。
 > 现版实测与坑位来自 `../AIYA_MUSIC/docs/04-WASAPI独占播放方案.md`、`10-WASAPI与解码与EQ调研.md` 与 `../spike/p4-wasapi/`。
 
@@ -28,10 +29,10 @@
 
 | 格式 | symphonia | 方案 |
 |---|---|---|
-| WMA | 不支持 | 可选 FFmpeg sidecar；或 v1 明确不支持 |
-| AIFF | 需验证 | 可选 FFmpeg；或 `aiff` crate |
-| DFF/DST | 不支持 | 可选 FFmpeg（LGPL 动态链接） |
-| DSF | 不支持 | 自写 DSF 解析 + dsd2pcm（后续） |
+| WMA | 不支持 | FFmpeg（LGPL 动态链接）；或明确不支持 |
+| AIFF | 需验证 | FFmpeg；或 `aiff` crate |
+| DFF/DST | 不支持 | FFmpeg（LGPL 动态链接） |
+| DSF | 不支持 | FFmpeg 解码为 PCM；DoP 后续 |
 
 > 不要在“支持格式列表”里写一个格式，却没有解码/播放验收。扫描支持 ≠ 能播。
 
@@ -50,7 +51,7 @@ decode thread:
 
 ## 3. WASAPI 输出
 
-> 实现优先用 `wasapi` crate（HEnquist/wasapi-rs，MIT；共享/独占、事件、热插拔、回环都有封装），缺口再用 `windows` crate 补 `IAudioClient3`/`IAudioClock`。版本在 P1 锁定，并把探针结果写成自检。
+> 实现用 `wasapi` crate **0.26.0**（HEnquist/wasapi-rs，MIT）：共享/独占、事件/轮询、设备枚举、设备增删/默认变化通知、**独占模式格式探测**、`IAudioClock` 都有封装；缺口再用 `windows` 0.62 补。版本在 P1 锁定，并把探针结果写成自检。
 
 ### 3.1 初始化流程
 

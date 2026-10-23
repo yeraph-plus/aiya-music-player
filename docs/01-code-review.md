@@ -138,7 +138,7 @@ return respond(controller.playTracks(ids, start));
 | 队列纯模型 | `packages/playback/src/queue.ts`（217 行） | 保留语义；Rust 重写 |
 | 播放宿主/装配 | `apps/desktop/src/main/player-host.ts`（369 行） | `AudioSink` 好；启动补发/多窗口广播是 WebView 时代的补丁，新版删除 |
 | IPC 边界 | `apps/desktop/src/main/ipc.ts`（513 行） | 信封/错误映射好；但与 Electron `ipcMain` 绑死，迁 Tauri commands |
-| 数据库 schema/迁移 | `packages/database/src/migrations.ts`（271 行） | `user_version` runner、追加式迁移、`WITHOUT ROWID` 都好；SQL 原样移植 |
+| 数据库 schema/迁移 | `packages/database/src/migrations.ts`（271 行） | 索引/`WITHOUT ROWID`/查询思路可复用；**不迁旧版本**，新版从 v1 开始 |
 | 查询/分页 | `packages/database/src/tracks.repo.ts`（589 行） | 核心资产；注意 `SELECT` 子查询与 `audio` 单曲填充策略 |
 | 播放列表 | `packages/database/src/playlists.repo.ts`（298 行） | 事务内全量重排 position；规模几千首，简单正确 |
 | 扫描 | `packages/library/src/scanner.ts`（509 行） | 两阶段、并发池、超时、单文件隔离；Rust 用 `walkdir` + `lofty` 重写 |
@@ -173,13 +173,15 @@ return respond(controller.playTracks(ids, start));
 
 `queue.repo.ts:67-94` 每次 `savePlayer` 都 `JSON.stringify(trackIds)` 并更新整行。20,000 首约 400KB/5s，5 万首更糟。新版：
 
-- `play_queue_items(queue_id, position, track_id)` 规范化；
-- `play_queue_state` 只存 index/repeat/shuffle/volume/muted/rate；
+- `queue_items(position, track_id)` 规范化；
+- `queue_state` 只存 index/repeat/shuffle/volume/muted/rate；
 - 进度单独节流写，队列结构变化才写 items。
 
 ### 3.4 两套手写契约
 
 现版 `contracts` 是 TS 单一来源，主/渲染共用，做得好；但迁 Tauri 后 Rust 是后端，继续手写 TS 会产生漂移。新版以 Rust 为源生成 TS，并加 schema hash/golden fixtures。
+
+**v1 例外**：为了原样搬 UI，先复制旧 `contracts` 作为 `AiyaApi` 兼容形状；Rust 按此返回 DTO。生成 bindings 并行推进，等 UI 重写时切换。这是 UI 兼容，不是旧数据兼容。
 
 ### 3.5 `window.api` 分散调用
 
@@ -215,12 +217,12 @@ return respond(controller.playTracks(ids, start));
 |---|---:|---|
 | `contracts` | 1,150 行 | 语义保留，Rust 重写 + 生成 TS |
 | `playback` | 750 行 | Rust 重写，测试翻译 |
-| `database` | 1,500 行 | SQL/schema 复用，Repository 重写 |
+| `database` | 1,500 行 | 查询/索引思路复用；全新 v1 schema，Repository 重写 |
 | `library` | 730 行 | Rust 重写（lofty/walkdir/image） |
 | `media` / `storage` | 630 行 | 音频协议删除；封面缓存重写 |
-| `jobs` | 60 行 | Rust 持久化队列重写 |
+| `jobs` | 60 行 | v1 后置；先用内存扫描调度 |
 | `main` | 3,250 行 | Tauri host 重写，系统集成迁 Rust |
 | `preload` | 130 行 | 删除 |
 | `renderer` | 5,580 行 | 大部分保留；API 层、App 拆分、音频图删除 |
 
-**结论：不是“全重写”。** UI 纯逻辑、视觉、交互、测试规格、数据库设计、ADRs 都能复用；真正重写的是“主进程 + 音频 + 文件/媒体协议”。把重写范围说清楚，才不会把 5,000 行 UI 也推倒。
+**结论：不是“全重写”。** UI 组件/视觉/纯逻辑、测试规格、数据库查询思路、ADRs 都能复用；真正重写的是“主进程 + 音频 + 文件协议”。v1 连 UI 都先原样搬（见 `07`），只改适配层；后面再按 feature 拆。把范围说清楚，才不会把 5,000 行 UI 也推倒。

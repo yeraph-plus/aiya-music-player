@@ -20,10 +20,19 @@ src-tauri/target/
 *.sqlite-shm
 *.log
 
+# Python (beets sidecar)
+__pycache__/
+*.py[cod]
+.venv/
+sidecars/beets/.beets/
+
+# Vendored binaries (download scripts instead of committing)
+/vendor/mpv/
+/vendor/ffmpeg/
+
 # Fixtures: keep small manifests, ignore generated media
 /fixtures/generated/
 /fixtures/media/
-/fixtures/legacy/*.sqlite
 
 # Editor / OS
 .DS_Store

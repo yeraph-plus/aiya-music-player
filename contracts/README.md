@@ -2,6 +2,7 @@
 
 > 这里先放“边界形状”，不是最终字段。实现时以 Rust 类型 + 生成物为准；本文件用于评审与 golden fixtures。
 > 原则：Rust 是单一来源；命令/事件/错误都有版本与序号；PCM 永不进入契约。
+> **v1 UI 兼容例外**：旧 UI 先通过 `compat/api.ts` 调用旧 `AiyaApi` 形状；Rust 返回同样的 DTO。生成 bindings 与兼容层并行，等 UI 重写时切换。这不是旧数据兼容。
 
 ## 1. 版本
 
@@ -147,5 +148,5 @@ cargo run -p aiya-contract-gen -- --out ui/src/bindings.ts --schema contracts/sc
 CI：
 
 - `git diff --exit-code ui/src/bindings.ts contracts/schema.json`
-- `cargo test -p aiya-core --test protocol_golden`
+- `cargo test -p aiya-player --test protocol_golden`
 - `cargo clippy --workspace -- -D warnings`

@@ -1,7 +1,7 @@
 # 02 — Tauri 2 目标架构
 
 > 本文定义“新版长什么样”。所有实现选择都要能回答一个问题：**它是否让音频、状态、数据、UI 四者的边界更清楚？**
-> 关联：[`03-backend-boundary.md`](03-backend-boundary.md)、[`04-audio-engine.md`](04-audio-engine.md)、[`05-migration-plan.md`](05-migration-plan.md)。
+> 关联：[`03-backend-boundary.md`](03-backend-boundary.md)、[`04-audio-engine.md`](04-audio-engine.md)、[`05-rebuild-plan.md`](05-rebuild-plan.md)、[`07-ui-reuse.md`](07-ui-reuse.md)、[`09-audio-engine-choice.md`](09-audio-engine-choice.md)。
 
 ## 1. 目标与非目标
 
@@ -21,33 +21,39 @@
 - 不做多窗口复杂同步；先单主窗口 + 隐藏 SMTC 窗口。
 - 不把 PCM 放进 WebSocket/JSON IPC。
 
-## 2. 进程模型：三个角色
+## 2. 进程模型：宿主 + 两个 sidecar
 
 ```
-┌──────────────────────────────┐
-│ WebView2 / Svelte 5          │
-│ 视图、交互、歌词、频谱绘制    │
-│ 无文件/DB/音频 API            │
-└──────────────┬───────────────┘
-               │ Tauri invoke / events（JSON，类型生成）
-┌──────────────▼───────────────┐
-│ Tauri host（Rust）            │
-│ commands / events             │
-│ PlayerActor（唯一状态机）      │
-│ SQLite / 扫描 / 任务           │
-│ SMTC / 托盘 / 电源 / 单实例    │
-│ artwork:// 协议               │
-│ audio supervisor              │
-└──────┬───────────────────────┘
-       │ 命名管道，长度前缀帧（控制/事件，无 PCM）
-┌──────▼───────────────────────┐
-│ aiya-audio sidecar（Rust）    │
-│ 解码线程 → 环形缓冲 → DSP     │
-│ 渲染线程 → WASAPI             │
-│ 设备/格式/时钟/欠载            │
-│ 频谱 tap（可选）               │
-└──────────────────────────────┘
+┌────────────────────────────────────┐
+│ WebView2 / Svelte 5（旧 UI 原样搬）│
+│ 组件/样式/纯函数 + compat 适配       │
+│ 无文件/DB/音频 API                  │
+└────────────────┬───────────────────┘
+                 │ Tauri invoke / events（JSON）
+┌────────────────▼───────────────────┐
+│ Tauri host（Rust）                  │
+│ commands / events                   │
+│ PlayerActor（唯一状态机）            │
+│ SQLite v1 / 扫描 / 设置              │
+│ SMTC / 托盘 / 电源 / 单实例          │
+│ aiya-artwork:// 协议                 │
+│ audio + beets supervisor            │
+└───────┬─────────────────────┬───────┘
+        │ 命名管道/帧          │ stdio JSON
+┌───────▼──────────────┐  ┌───▼──────────────────┐
+│ audio sidecar         │  │ aiya-beets (Python)  │
+│ v1: mpv --audio-      │  │ beets 2.14.x         │
+│ exclusive / IPC       │  │ 候选/差异/写标签     │
+│ v2: wasapi-rs 原生    │  │ 不碰宿主 DB          │
+└───────────────────────┘  └──────────────────────┘
 ```
+
+音频 sidecar 的两种实现：
+
+- **v1（推荐）**：`mpv.exe` + `--input-ipc-server`；`--audio-exclusive=yes`、`--wasapi-exclusive-buffer`、`--gapless-audio=weak`、`--replaygain=track`。见 [`09`](09-audio-engine-choice.md)。
+- **v2（可选）**：`wasapi-rs` + `symphonia`/FFmpeg；`aiya-audio` 自己解码/时钟/DSP。
+
+> 同一版本只启用一条出声路径。`AudioPort` 隔离，但不要同时维护两套时钟/设备状态。
 
 ### 为什么音频要独立进程
 
@@ -58,7 +64,7 @@
 | 设备占用 | 退出/重启整应用才释放 | 可单独重启、单独诊断 |
 | 调试 | 附加一个进程 | 可单独跑 `--selftest`、单独看日志 |
 | 复杂度 | 低 | 中（IPC、supervisor、打包） |
-| 打包 | 单 exe | 多一个几 MB 的 exe |
+| 打包 | 单 exe | 原生几 MB；mpv 约几十 MB |
 
 **决策：v1 就用 sidecar。** 理由不是“微服务化”，而是音频问题的排障成本远高于 IPC 成本：控制命令每秒个位数，位置 10Hz，频谱 30Hz；这些数据量很小。PCM 永远不过管道。
 
@@ -68,13 +74,15 @@
 
 ```
 ┌─────────────────────────────────────────────┐
-│ ui/ (Svelte)                                │
-│ 只依赖 generated contracts + 本地 UI 状态     │
+│ ui/ (Svelte，复制旧 renderer)                │
+│ 组件/样式/纯函数 + compat/api（旧 AiyaApi）   │
+│ + remote sink / remote spectrum              │
 └──────────────────┬──────────────────────────┘
-                   │ invoke / events
+                   │ Tauri invoke / events
 ┌──────────────────▼──────────────────────────┐
 │ src-tauri/ (adapter)                        │
 │ commands、events、窗口、协议、supervisor      │
+│ beets bridge（stdio JSON）                    │
 └──────────────────┬──────────────────────────┘
                    │ 调用用例
 ┌──────────────────▼──────────────────────────┐
@@ -85,24 +93,26 @@
         │                      │
 ┌───────▼────────┐   ┌─────────▼─────────────┐
 │ aiya-data/     │   │ aiya-audio-client/     │
-│ SQLite/扫描/任务│   │ 管道客户端/重连/帧协议  │
+│ SQLite v1/扫描 │   │ 管道客户端/重连/帧协议  │
 └───────┬────────┘   └─────────┬─────────────┘
         │                      │
 ┌───────▼────────┐   ┌─────────▼─────────────┐
-│ aiya-core/     │   │ aiya-audio/            │
-│ 纯领域类型/队列 │   │ 解码/DSP/WASAPI        │
-│ 状态机/错误     │   │ 无 DB/无 Tauri          │
+│ aiya-player/   │   │ audio sidecar:         │
+│ 纯领域/队列    │   │ mpv（v1）或 wasapi-rs  │
+│ 状态归约/错误  │   │ 无 DB/无 Tauri          │
 └────────────────┘   └───────────────────────┘
 ```
 
+`aiya-beets` 是 Python sidecar，不在 Rust 依赖图里；host 通过 stdio JSON 调用，beets 只改文件/beets DB，宿主通过事件刷新读模型。
+
 ### 硬规则
 
-1. `aiya-core` 不依赖 `tauri`、`tokio`、`rusqlite`、`windows`、`serde_json`（可用 `serde` 派生，但不做 IO）。
-2. `aiya-audio` 不依赖 `aiya-data`、`src-tauri`；只依赖 `aiya-core` 的音频契约与平台库。
-3. `aiya-data` 不依赖 `aiya-audio`、`src-tauri`；只依赖 `aiya-core`。
+1. `aiya-player` 不依赖 `tauri`、`tokio`、`rusqlite`、`windows`、`serde_json`（可用 `serde` 派生，但不做 IO）。
+2. `aiya-audio` 不依赖 `aiya-data`、`src-tauri`；只依赖 `aiya-player` 的音频契约与平台库。
+3. `aiya-data` 不依赖 `aiya-audio`、`src-tauri`；只依赖 `aiya-player`。
 4. `aiya-app` 是唯一同时看到“数据”和“音频”的地方；它负责编排，不实现 SQL/解码。
 5. `src-tauri` 只做适配：参数校验、调用用例、事件序列化、系统集成；不写业务规则。
-6. `ui` 不直接 `invoke` 任意命令；只通过生成的 `api` 模块与 stores。
+6. `ui` 不直接 `invoke` 任意命令；只通过 `compat/api.ts`（旧 `window.api` 形状）与 stores。兼容层是唯一知道 Tauri 命令名的地方。
 
 > 违反第 1/2 条，三个月后就会重新长出“播放状态机知道 WASAPI 设备”的耦合。
 
@@ -200,20 +210,22 @@ AudioEvent::Ended { generation }
 
 - **只有宿主进程打开 SQLite。** 音频 sidecar 不 import `rusqlite`。
 - `aiya-data` 用一个专用 DB 线程拥有连接（`rusqlite::Connection` 不是 `Sync`），通过有界 channel 接收 `DbRequest`，返回 `oneshot`。
-- 启动：`PRAGMA journal_mode=WAL; foreign_keys=ON; synchronous=NORMAL; busy_timeout=5000;`，然后跑迁移。
+- 启动：`PRAGMA journal_mode=WAL; foreign_keys=ON; synchronous=NORMAL; busy_timeout=5000;`；新库执行 v1 基线，之后只追加增量。
 - 读多写少；先用单连接串行，5 万首查询 2–30ms 足够。若 UI 卡顿，再加只读连接池（WAL 允许），不要过早。
 
-### 5.2 Schema 策略
+### 5.2 Schema 策略：全新 v1，不迁移
 
-- **保持现有 schema 与 `user_version`**，让新版能直接打开旧库；这是最便宜的迁移验收。
-- v1–v4 迁移 SQL 原样移植；新版只追加 v5（队列规范化）。
-- 旧 `play_queue` JSON 行在 v5 中迁移到 `play_queue_items`，迁移完成前保留旧列只读。
-- 新表：
+- **没有历史兼容**：这是今天的 demo，旧库可丢。新库从 `0001_init.sql` 开始，`user_version=1`。
+- 不保留 `media_assets/media_locations` 三分离；demo 没有多来源。以后要多位置再加迁移。
+- 表：`tracks`、`albums`、`artists`、`playlists`、`playlist_items`、`queue_state`、`queue_items`、`history`、`settings`。
+- `tracks` 只存播放/展示需要的字段；标签写操作归 beets，不复制 beets 的完整字段集。
+- `beets_item_id` 可空，用于把宿主 track 关联回 beets；不要求唯一。
+- 队列规范化，不写 JSON 整行：
 
 ```sql
-CREATE TABLE play_queue_state (
+CREATE TABLE queue_state (
   id           INTEGER PRIMARY KEY CHECK (id = 1),
-  position     INTEGER NOT NULL DEFAULT 0,
+  index        INTEGER NOT NULL DEFAULT -1,
   position_ms  INTEGER NOT NULL DEFAULT 0,
   repeat_mode  TEXT    NOT NULL DEFAULT 'off',
   shuffle      INTEGER NOT NULL DEFAULT 0,
@@ -223,31 +235,29 @@ CREATE TABLE play_queue_state (
   updated_at   INTEGER NOT NULL
 );
 
-CREATE TABLE play_queue_items (
-  queue_id  INTEGER NOT NULL,
-  position  INTEGER NOT NULL,
-  track_id  TEXT    NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-  PRIMARY KEY (queue_id, position)
-) WITHOUT ROWID;
+CREATE TABLE queue_items (
+  position  INTEGER PRIMARY KEY,
+  track_id  TEXT    NOT NULL REFERENCES tracks(id) ON DELETE CASCADE
+);
 ```
 
-- 进度写 `position_ms` 一个字段（5s 节流），队列编辑才重写 items；不再每 5 秒序列化 2 万 ID。
-- 队列上限：产品上统一为 50,000（或“当前视图全量”），在 app 层夹取并返回明确错误；不要 IPC 2 万、内部 5 万的暗差异。
+- 进度写 `position_ms` 一行（5s 节流），队列编辑才重写 items。
+- 5 万首以后如果 offset 深分页变慢，再加 `library_order` 物化表；v1 不预支复杂度。
 
 ### 5.3 查询与分页
 
-- 保留 cursor + 物化 offset 双路径；保留 `library_order`。
-- 保留 `title_norm` + `LIKE`，不要上 FTS5（两字中文的坑已验证）。
+- 先做 cursor 分页；滚动条跳页用 `LIMIT/OFFSET`，5 万首变慢再加 `library_order` 物化表。
+- `title_norm` + `LIKE`，不要上 FTS5（两字中文的坑已验证）。
 - `list_all_ids` 用于“点行播整库”；分页列表只取窗口。
 - 所有查询返回 `took_ms`，由 app 层汇总到 diagnostics。
 
 ### 5.4 扫描
 
 - `walkdir` 遍历，`rayon` 或固定 8 路 `spawn_blocking` 解析；单文件 5s 超时用 `CancellationToken` + 子任务。
-- `lofty` 读标签/封面/ReplayGain；`image` 生成 96/256/512 缩略图；`sha1` 保持现有 ID 算法兼容。
+- `lofty` 读标签/封面/ReplayGain；`image` 生成 96/256/512 缩略图；ID 用稳定指纹，无需兼容旧版。
 - 两阶段：先入库可播，再补封面；进度按 120ms 节流。
 - 扫描任务由 `ScanService` 统一入口 `request_scan(reason)`；忙时 dirty 补跑；取消优先。
-- watcher 只做触发器，正确性靠周期性对账（后续）。
+- watcher 后置；v1 用启动扫描 + 手动扫描。
 
 ## 6. 传输层：Tauri commands + events
 
@@ -332,10 +342,11 @@ pub struct AppError {
 - CI 校验：生成物与提交一致；协议 schema hash 写入 `contracts/schema.hash`。
 - sidecar 协议与 Tauri 协议分离：sidecar 不依赖 Tauri 类型，便于单独测试/复用。
 - 版本策略：`PROTOCOL_VERSION` 在 handshake 中校验；不兼容直接拒绝并提示升级，不做静默降级。
+- **v1 UI 兼容例外**：`compat/api.ts` 保留旧 `AiyaApi` 形状，Rust 返回同名 DTO；`bindings.ts` 并行生成，等 UI 重写时切换。
 
 ## 7. 音频 sidecar 协议
 
-详见 [`04-audio-engine.md`](04-audio-engine.md)。这里只定边界：
+详见 [`04-audio-engine.md`](04-audio-engine.md) 与 [`09-audio-engine-choice.md`](09-audio-engine-choice.md)。下面是与引擎无关的 `AudioPort` 边界；v1 的 mpv adapter 把它映射成 `loadfile`/`seek`/`set_property`/`observe_property`，B 方案的原生 adapter 直接实现。
 
 ```
 Host → Audio:
@@ -360,7 +371,7 @@ Audio → Host:
 ```
 
 - 帧格式：4 字节小端长度 + JSON（v1，易调试）；频谱可后续换 `postcard`/共享内存。
-- 传输：Windows 命名管道（`\\.\pipe\aiya-audio-{pid}`）；sidecar 启动后创建，宿主连接。命名管道比 stdio 更适合重启/多通道，也不会和日志混在一起。
+- 传输：Windows 命名管道（`\\.\pipe\aiya-audio-{pid}`）；sidecar 启动后创建，宿主连接。命名管道比 stdio 更适合重启/多通道，也不会和日志混在一起。mpv 的 `--input-ipc-server` 用同一思路；supervisor 负责把 mpv 属性/事件翻译成此协议。
 - 心跳：2s；5s 无响应 → kill + restart。
 - 背压：控制命令有界队列不丢；`Position`/`Spectrum` 可丢旧帧。
 - 日志：sidecar 写自己的滚动日志到 `data/logs/audio-*.log`，stderr 只输出致命错误。
@@ -376,8 +387,22 @@ Audio → Host:
 | 防休眠 | host | `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)` 或 Tauri 电源插件；允许熄屏 |
 | 单实例 | host | Tauri single-instance 插件；二次启动唤起窗口 |
 | 窗口状态 | host | Tauri window-state 插件；首帧底色用配置 |
-| 自定义协议 | host | 仅 `aiya-artwork://`；按 artworkId 解析缓存，ACAO + immutable |
+| 自定义协议 | host | 注册 `aiya-artwork`；Windows 实际 URL 为 `http://aiya-artwork.localhost/...`；按 artworkId 解析缓存，ACAO + immutable |
 | 更新/签名 | host | Tauri updater + Authenticode；sidecar 一起签 |
+
+### 8.1 beets 集成（可选 sidecar）
+
+```
+host → stdio JSON → aiya-beets (Python/beets) → 候选/diff/写标签
+  ← progress/result ←
+```
+
+- 宿主只发路径/决策，不读 beets 文本输出、不写 beets DB。
+- 预览无副作用；默认只写标签，移动/复制显式选择。
+- 完成后宿主刷新受影响项（扫描/封面/队列路径）。
+- beets 不在时应用照常跑；它是增强，不是启动依赖。
+
+详见 [`08-beets.md`](08-beets.md)。
 
 ### SMTC 的坑（来自 spike）
 
@@ -386,36 +411,36 @@ Audio → Host:
 - WebView2 的 `navigator.mediaSession` 不会出现在系统 SMTC（实测），不要依赖。
 - 关闭 `globalShortcut` 媒体键，否则会话可能消失（Electron 实测；Tauri 也按此原则）。
 
-## 9. 前端架构
+## 9. 前端架构：先复制，后拆分
+
+v1 不按理想目录重写，而是把 demo 的 `renderer/src` 原样复制，只加兼容层：
 
 ```
 ui/src/
-├── app/
-│   ├── App.svelte           # 只做 shell + 路由
-│   └── providers/           # 事件订阅、错误边界、主题
-├── features/
-│   ├── library/             # 列表、搜索、筛选、批量
-│   ├── player/              # 播放条、队列、速率、音量
-│   ├── playlists/
-│   ├── lyrics/
-│   ├── spectrum/
-│   ├── settings/
-│   └── diagnostics/
-├── components/              # 无业务状态的通用组件
-├── stores/                  # player/library/selection/ui（只缓存，不拥有真相）
-├── lib/                     # 纯函数：virtual/selection/track-window/drag/lyrics-clock/format
-└── bindings.ts              # 生成物，不手改
+├── compat/
+│   ├── api.ts               # 旧 window.api → Tauri invoke/events
+│   ├── audio-sink.ts        # 替换原 AudioSink；后端出声
+│   ├── spectrum.ts          # RemoteSpectrumSource（compact）
+│   ├── artwork.ts           # aiya-artwork:// 拼接
+│   └── boot.ts              # initialLook + mount
+├── App.svelte               # 先原样；后续再拆
+├── components/              # 原样复制
+├── stores/                  # 原样复制
+├── lib/                     # 原样复制（音频图实现替换）
+└── app.css                  # 原样复制
 ```
 
 规则：
 
-- 组件不直接 `invoke`；通过 feature store 的 action。
-- store 不复制后端状态；保存 `PlayerSnapshot` + `pending` 覆盖层（例如 seek 拖动中的本地值）。
+- 组件不直接 `invoke`；只通过 `compat/api.ts`（保持旧 `window.api` 形状）。
+- store 不复制后端状态；保存 `PlayerState` + `pending` 覆盖层（例如 seek 拖动中的本地值）。
 - 播放命令返回快照；不要乐观改成 `playing`，等 `started` 事件。
 - 列表/队列虚拟化继续用纯函数；选择集继续用视图下标。
 - 歌词高亮、进度条都用锚点 + `performance.now()` 外推；事件只负责对时。
-- 频谱只画后端给的 bands；不要在前端建 `AudioContext`。
-- `App.svelte` 目标 < 300 行；每个 feature 一个容器组件。
+- 频谱只画后端 bands；不要在前端建 `AudioContext`。
+- `App.svelte` 先保持可用；等 beets 审阅界面需要新结构时再按 feature 拆，目标 < 300 行。
+
+详细适配清单与“哪些文件不改”见 [`07-ui-reuse.md`](07-ui-reuse.md)。
 
 ## 10. 启动、关闭与恢复
 
@@ -424,13 +449,14 @@ ui/src/
 ```
 host start
   → init logging / paths
-  → open DB + migrate (backup first if version changes)
+  → open DB (fresh v1; create if missing)
   → load settings + player state
   → start PlayerActor (restored queue, paused)
-  → spawn audio sidecar + handshake
-  → open device (mode from settings; fallback policy)
+  → spawn audio sidecar (mpv or native) + handshake
+  → open device (Shared default; Auto/Exclusive opt-in)
   → if queue and autoplay: Actor.load(current, position)
   → create window (show when ready)
+  → if beets enabled: start beets sidecar (optional)
   → emit initial snapshot / events
 ```
 
@@ -460,6 +486,7 @@ quit requested
 
 - WebView 无文件系统权限；所有路径由后端解析，UI 只拿 ID。
 - 自定义协议只暴露 artwork ID，不暴露任意路径。
+- CSP 要允许封面 origin（Windows：`http://aiya-artwork.localhost`）的 `img-src`/`connect-src`；否则图裂、canvas 取色失败。
 - Tauri capabilities 最小化：只开 window/tray/dialog/opener 必要权限。
 - sidecar 只接受宿主连接；命名管道 ACL 限制当前用户。
 - 安装包签名 host + sidecar；WebView2 用系统运行时，安装器带 bootstrapper 或检测提示。
@@ -485,7 +512,7 @@ quit requested
 |---|---|---|
 | 领域纯逻辑 | `cargo test` | 队列/随机/重复/恢复/令牌；property test |
 | 应用层 | `cargo test` + FakeAudio | 命令→效果序列；自动推进；错误恢复 |
-| 数据层 | `cargo test` + temp SQLite | 迁移幂等/旧库兼容/分页/搜索/事务 |
+| 数据层 | `cargo test` + temp SQLite | 新库 v1/分页/搜索/事务 |
 | 音频引擎 | 单元 + 硬件自检 | 解码 PCM 哈希、seek 精度、格式协商、独占锁 |
 | 协议 | golden JSON | 命令/事件双向、版本、错误 |
 | UI 纯函数 | Vitest | 虚拟列表/选择/拖拽/歌词时钟/快捷键 |
@@ -499,7 +526,7 @@ quit requested
 
 | ADR | 决策 |
 |---|---|
-| [0001](adr/0001-rust-owns-audio.md) | Rust 拥有音频输出，WebView 不再出声 |
+| [0001](adr/0001-rust-owns-audio.md) | 后端拥有音频输出，WebView 不再出声 |
 | [0002](adr/0002-audio-sidecar.md) | 音频助手独立进程，命名管道通信 |
 | [0003](adr/0003-backend-authoritative-player.md) | 播放状态机在 Rust，UI 只读 |
 | [0004](adr/0004-rust-contract-source.md) | Rust 契约单一来源，生成 TS |

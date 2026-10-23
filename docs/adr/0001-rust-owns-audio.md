@@ -1,4 +1,4 @@
-# ADR-0001：Rust 拥有音频输出，WebView 不再出声
+# ADR-0001：后端拥有音频输出，WebView 不再出声
 
 - 状态：Accepted
 - 日期：2026-10-23
@@ -16,7 +16,9 @@
 
 ## 决策
 
-音频输出、解码、DSP、设备枚举、播放时钟全部由 Rust 负责。WebView 不创建 `<audio>`、`AudioContext`、`MediaElementSource`，不接触音频文件路径。
+音频输出、解码、DSP、设备枚举、播放时钟全部由**后端音频进程**负责，由 Rust host 编排。WebView 不创建 `<audio>`、`AudioContext`、`MediaElementSource`，不接触音频文件路径。
+
+v1 允许后端音频进程是成熟的 `mpv` sidecar（`--audio-exclusive` / WASAPI）；v2 可替换为 `wasapi-rs` 原生实现。两者都必须通过 `AudioPort` 隔离，UI 不知道引擎是谁。
 
 ## 后果
 
@@ -30,12 +32,14 @@
 负面：
 
 - 需要重写 `audio-sink.ts`、`media://` 音频协议、Web Audio 图、`audiomotion` 接入。
-- 速率/时间伸缩、EQ、DSD 都要在 Rust 实现。
+- v1 用 mpv 时，速率/时间伸缩/EQ/DSD 受 mpv 能力约束；v2 自研才需要自己实现。
 - 需要一套音频测试基础设施（NullSink/FileSink/硬件自检）。
 
 ## 否决的替代方案
 
 1. **继续用 Chromium `<audio>`，只修修补补**：无法满足独占/bit-perfect/设备诊断；补丁会继续累积。
 2. **用 `--enable-exclusive-audio`**：进程级、固定格式、失败静默回落，不可接受。
-3. **用 BASS/闭源引擎**：能快速拿到功能，但授权/绑定/与 `media://` 的整合成本高，且不可控。
+3. **用 BASS/闭源引擎**：能快速拿到功能，但授权/绑定/与 GPLv3 的整合成本高，且不可控。
 4. **WebSocket 把 PCM 推给前端播放**：延迟/抖动/设备时钟/独占都不可控。
+
+> mpv sidecar 不是“否决项”：它是 v1 的默认实现，见 [`09`](../09-audio-engine-choice.md)。
