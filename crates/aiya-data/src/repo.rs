@@ -71,8 +71,8 @@ pub enum Direction {
     Desc,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum TrackSource {
     Library,
     Playlist { playlist_id: String },
@@ -80,9 +80,10 @@ pub enum TrackSource {
     MostPlayed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Mode {
+    #[default]
     Cursor,
     Offset,
 }
@@ -100,10 +101,15 @@ pub struct TrackWindowQuery {
     pub artist_id: Option<String>,
     #[serde(default)]
     pub album_id: Option<String>,
-    #[serde(flatten)]
+    /// 嵌套形状 `{ source: { kind: "library" } }`，与 contracts/query.ts 的
+    /// trackSourceSchema（discriminatedUnion('kind')）同构。
+    /// 注意不能用 #[serde(flatten)] 把 kind 摊到顶层 —— 那是 Electron demo
+    /// 时代的形状，UI 原样搬过后 kind 在 source 对象里。
+    #[serde(default = "default_source")]
     pub source: TrackSource,
     #[serde(default = "default_limit")]
     pub limit: usize,
+    #[serde(default)]
     pub mode: Mode,
     #[serde(default)]
     pub cursor: Option<String>,
@@ -113,6 +119,10 @@ pub struct TrackWindowQuery {
 
 fn default_limit() -> usize {
     100
+}
+
+fn default_source() -> TrackSource {
+    TrackSource::Library
 }
 
 /* ---------------- 游标（与 contracts/query.ts 同格式：base64url(JSON [value,id])） ---------------- */
@@ -394,6 +404,33 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
 mod tests {
     use super::*;
     use crate::db::open_in_memory;
+
+    /// 重现 UI 报错 "missing field `kind`"：source 是嵌套对象（contracts/query.ts
+    /// trackSourceSchema 形状），不能用 flatten 摊平到顶层。
+    #[test]
+    fn query_deserializes_nested_source() {
+        // UI 实际形状：source 嵌套对象
+        let v = serde_json::json!({
+            "source": { "kind": "library" }, "mode": "cursor", "limit": 200,
+            "sort": "title", "direction": "asc"
+        });
+        let q = serde_json::from_value::<TrackWindowQuery>(v)
+            .expect("nested source must deserialize");
+        assert_eq!(q.source, TrackSource::Library);
+
+        // 歌单来源：camelCase playlistId → playlist_id
+        let v2 = serde_json::json!({
+            "source": { "kind": "playlist", "playlistId": "pl1" }, "mode": "offset", "offset": 0
+        });
+        let q2 = serde_json::from_value::<TrackWindowQuery>(v2).expect("playlist source");
+        assert_eq!(q2.source, TrackSource::Playlist { playlist_id: "pl1".into() });
+
+        // mode/limit 缺省也能反序列化（防御老调用方）
+        let v3 = serde_json::json!({});
+        let q3 = serde_json::from_value::<TrackWindowQuery>(v3).expect("empty defaults");
+        assert_eq!(q3.source, TrackSource::Library);
+        assert_eq!(q3.limit, 100);
+    }
 
     fn insert_fixtures(conn: &Connection) {
         conn.execute_batch(
