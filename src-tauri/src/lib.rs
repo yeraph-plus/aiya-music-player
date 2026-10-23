@@ -49,6 +49,12 @@ pub struct AppState {
     smtc_tx: Mutex<Option<std::sync::mpsc::Sender<smtc::SmtcUpdate>>>,
     /// 上次推给 SMTC 的曲目 id（换曲才重发 metadata + 查封面）
     smtc_track_id: Mutex<String>,
+    /// SMTC 可用性（诊断页）
+    smtc_active: AtomicBool,
+    /// 当前是否在防系统睡眠（诊断页；事件泵线程维护）
+    sleep_prevented: AtomicBool,
+    /// 托盘是否已创建（诊断页）
+    tray_active: AtomicBool,
 }
 
 impl AppState {
@@ -166,6 +172,9 @@ fn app_set_settings(state: State<'_, AppState>, settings: Value) -> Value {
 #[tauri::command]
 fn app_diagnostics(state: State<'_, AppState>) -> Value {
     let db_path = state.db_path.clone();
+    let smtc_active = state.smtc_active.load(Ordering::Relaxed);
+    let sleep_prevented = state.sleep_prevented.load(Ordering::Relaxed);
+    let tray_active = state.tray_active.load(Ordering::Relaxed);
     let result: aiya_data::DbResult<Value> = state.db().send(move |conn| {
         let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
         let db_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0) as i64
@@ -189,9 +198,16 @@ fn app_diagnostics(state: State<'_, AppState>) -> Value {
             "listTimings": [],
             "recentErrors": [],
             "shortcutConflicts": [],
-            "mediaKeys": { "enabled": false, "active": [], "failed": [] },
-            "power": { "active": false, "type": null },
-            "tray": false,
+            "mediaKeys": {
+                "enabled": smtc_active,
+                "active": if smtc_active { vec!["SMTC"] } else { vec![] },
+                "failed": if smtc_active { vec![] } else { vec!["SMTC 初始化失败"] },
+            },
+            "power": {
+                "active": sleep_prevented,
+                "type": if sleep_prevented { Some("SetThreadExecutionState") } else { None },
+            },
+            "tray": tray_active,
         }))
     });
     result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
@@ -1149,6 +1165,27 @@ fn player_clear(app: AppHandle, state: State<'_, AppState>) -> Value {
     drive_and_emit(&state, &app)
 }
 
+/// 播放历史：一曲播完（EngineEvent::Eof，自然结束或用户切走）记一条。
+/// seconds_played = 该曲播放时长（v1 记整曲；中途跳过不细分百分比）。
+fn record_history(state: &AppState, track_id: &str, seconds_played: u64) {
+    let track_id = track_id.to_string();
+    let played_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let result: aiya_data::DbResult<()> = state.db().send(move |conn| {
+        conn.execute(
+            "INSERT INTO history (track_id, played_at, seconds_played) VALUES (?1, ?2, ?3)",
+            rusqlite::params![track_id, played_at, seconds_played as i64],
+        )
+        .map(|_| ())
+        .map_err(aiya_data::DbError::from)
+    });
+    if let Err(e) = result {
+        tracing::warn!(error = %e, "history 写入失败");
+    }
+}
+
 /// 旧 UI 的回报通道（<audio> 出口时代）；引擎在 Rust 后只剩诊断价值。
 #[tauri::command]
 fn player_report(state: State<'_, AppState>, report: Value) -> Value {
@@ -1187,14 +1224,35 @@ fn lyrics_get(state: State<'_, AppState>, track_id: String) -> Value {
 fn history_stats(state: State<'_, AppState>) -> Value {
     let result: aiya_data::DbResult<Value> = state.db().send(|conn| {
         let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
+        let total_plays = count("SELECT COUNT(*) FROM history");
+        // completed：至少听了 1 秒；skipped：0 秒就切走的
+        let completed =
+            count("SELECT COUNT(*) FROM history WHERE seconds_played >= 1");
+        // topTracks：按播放次数前 10，JOIN 拿标题（已删曲目不计）
+        let mut stmt = conn.prepare(
+            "SELECT h.track_id, t.title, t.artist, COUNT(*) AS plays
+             FROM history h JOIN tracks t ON t.id = h.track_id
+             GROUP BY h.track_id ORDER BY plays DESC LIMIT 10",
+        )?;
+        let top: Vec<Value> = stmt
+            .query_map([], |r| {
+                Ok(json!({
+                    "id": r.get::<_, String>(0)?,
+                    "title": r.get::<_, String>(1)?,
+                    "artist": r.get::<_, Option<String>>(2)?,
+                    "playCount": r.get::<_, i64>(3)?,
+                }))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
         Ok(json!({
-            "totalPlays": count("SELECT COUNT(*) FROM history"),
-            "totalMs": 0,
-            "completed": 0,
-            "skipped": 0,
+            "totalPlays": total_plays,
+            "totalMs": count("SELECT COALESCE(SUM(seconds_played),0) FROM history") * 1000,
+            "completed": completed,
+            "skipped": total_plays - completed,
             "firstPlayAt": conn.query_row("SELECT MIN(played_at) FROM history", [], |r| r.get::<_, Option<i64>>(0)).unwrap_or(None),
             "lastPlayAt": conn.query_row("SELECT MAX(played_at) FROM history", [], |r| r.get::<_, Option<i64>>(0)).unwrap_or(None),
-            "topTracks": [],
+            "topTracks": top,
         }))
     });
     result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
@@ -1342,6 +1400,9 @@ pub fn run() {
                 last_persist_ms: std::sync::atomic::AtomicU64::new(0),
                 smtc_tx: Mutex::new(None),
                 smtc_track_id: Mutex::new(String::new()),
+                smtc_active: AtomicBool::new(false),
+                sleep_prevented: AtomicBool::new(false),
+                tray_active: AtomicBool::new(false),
             });
 
             // SMTC：主窗口 HWND（COM 对象要求）；失败只记日志，不影响播放
@@ -1350,6 +1411,7 @@ pub fn run() {
                     if let Some(tx) = smtc::spawn(app.handle().clone(), hwnd.0 as isize) {
                         if let Some(state) = app.try_state::<AppState>() {
                             *state.smtc_tx.lock().expect("smtc_tx poisoned") = Some(tx);
+                            state.smtc_active.store(true, Ordering::SeqCst);
                         }
                     }
                 }
@@ -1453,6 +1515,9 @@ pub fn run() {
                     tray = tray.icon(icon.clone());
                 }
                 tray.build(app)?;
+                if let Some(state) = app.try_state::<AppState>() {
+                    state.tray_active.store(true, Ordering::Relaxed);
+                }
             }
 
             // 引擎事件泵：EngineEvent → Actor 归约 → player:state 事件。
@@ -1473,6 +1538,9 @@ pub fn run() {
                     if playing_now != prevent_sleep_last {
                         smtc::set_prevent_sleep(playing_now);
                         prevent_sleep_last = playing_now;
+                        engine
+                            .sleep_prevented
+                            .store(playing_now, Ordering::Relaxed);
                     }
                     let events: Vec<aiya_audio::EngineEvent> = {
                         let engine_guard = engine.engine.lock().expect("engine poisoned");
@@ -1514,6 +1582,18 @@ pub fn run() {
                                 }
                                 aiya_audio::EngineEvent::Eof => {
                                     let token = actor.state().token;
+                                    // 播放历史：一曲播完记一条（持 actor 锁做一次轻量
+                                    // DB 写可接受；不 drop guard——后续事件还要用）
+                                    let (tid, secs) = {
+                                        let s = actor.state();
+                                        (
+                                            s.current.as_ref().map(|c| c.id.clone()),
+                                            s.duration_ms.unwrap_or(0) / 1000,
+                                        )
+                                    };
+                                    if let Some(tid) = tid {
+                                        record_history(&engine, &tid, secs);
+                                    }
                                     actor.reduce(aiya_player::PlayerCommand::Ended { token });
                                     should_emit = true;
                                 }
