@@ -209,34 +209,36 @@ pub fn probe(app: &tauri::AppHandle) -> BeetsStatus {
     }
 }
 
-/* ---------------- B1：preview_import 会话（事件流转发） ---------------- */
+/* ---------------- B1/B2：导入会话（事件流转发） ---------------- */
 
-/// 启动一次 preview_import：一次性子进程，stdout 每行 = 一个事件，
-/// 逐行转发到 Tauri 事件 `beets:import`。完成（进程退出）后自动回收。
-///
-/// 低频操作，不值得养常驻会话；每命令 ~300ms 的 Python 启动开销可接受。
-/// 返回 ok=false 表示没找到可用解释器（UI 显示指引）。
-pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
-    let script = ensure_script(&app)?;
-    let script_str = script.to_string_lossy().into_owned();
+/// apply 完成后宿主刷新读模型所需参数（lib.rs 注入 AppState 的克隆）。
+pub struct RefreshParams {
+    pub db_path: PathBuf,
+    pub artwork_dir: PathBuf,
+    /// 与 library_scan 共用的互斥标志（避免同时扫描写同一 DB）
+    pub scanning: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
 
-    // 快速探测：第一个能 status 成功的解释器（无 beets 也会答 not_found 信封，
-    // 那种解释器对 preview 同样没用，要跳过）
-    let mut python: Option<String> = None;
+/// 第一个能答 status 且装了 beets 的解释器（预览/应用共用）。
+fn pick_interpreter(script: &str) -> Option<String> {
     for cand in interpreter_candidates() {
-        if let Ok(s) = query_sidecar(&cand, &script_str, Duration::from_secs(10)) {
+        if let Ok(s) = query_sidecar(&cand, script, Duration::from_secs(10)) {
             if s.found {
-                python = Some(cand);
-                break;
+                return Some(cand);
             }
         }
     }
-    let Some(python) = python else {
-        return Err("no beets interpreter available".into());
-    };
+    None
+}
 
-    let mut child = std::process::Command::new(&python)
-        .arg(&script)
+/// 起一次性 sidecar 子进程并写入请求（不 drop stdin 之前先写完）。
+fn spawn_session(
+    python: &str,
+    script: &PathBuf,
+    request: &serde_json::Value,
+) -> Result<std::process::Child, String> {
+    let mut child = std::process::Command::new(python)
+        .arg(script)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -252,16 +254,23 @@ pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), St
 
     use std::io::Write;
     let mut stdin = child.stdin.take().expect("stdin piped");
-    let req = serde_json::json!({ "id": 1, "cmd": "preview_import", "paths": paths });
-    writeln!(stdin, "{req}").map_err(|e| format!("写请求: {e}"))?;
-    // 不 drop stdin：sidecar 处理完这条命令后事件流结束、进程自然退出前会阻塞
-    // 在下一行 read 上——所以这里显式 drop，sidecar 的 stdin EOF 后循环结束退出
+    writeln!(stdin, "{request}").map_err(|e| format!("写请求: {e}"))?;
+    // 不留 stdin 挂着：sidecar 处理完请求后事件流结束、在下一行 read 上阻塞，
+    // 显式 drop 让其 stdin EOF 后循环结束退出
     drop(stdin);
+    Ok(child)
+}
 
+/// 转发 stdout 行事件到 `beets:import`，进程退出后收尾。
+/// 返回 reader 线程句柄（start_preview / start_apply 共用骨架）。
+fn spawn_reader(
+    mut child: std::process::Child,
+    app: tauri::AppHandle,
+    on_exit: impl FnOnce(&tauri::AppHandle) + Send + 'static,
+) -> Result<(), String> {
     let mut stdout = child.stdout.take().expect("stdout piped");
-    let emit_app = app.clone();
     std::thread::Builder::new()
-        .name("beets-preview-reader".into())
+        .name("beets-session-reader".into())
         .spawn(move || {
             use std::io::BufRead;
             let reader = std::io::BufReader::new(&mut stdout);
@@ -273,7 +282,7 @@ pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), St
                 }
                 match serde_json::from_str::<serde_json::Value>(trimmed) {
                     Ok(evt) => {
-                        let _ = emit_app.emit("beets:import", evt);
+                        let _ = app.emit("beets:import", evt);
                     }
                     Err(e) => {
                         tracing::warn!(%e, %trimmed, "beets sidecar 非法事件行，忽略");
@@ -282,13 +291,138 @@ pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), St
             }
             // stdin 已关，sidecar 处理完请求后 EOF 退出；收尸防僵尸
             let _ = child.wait();
-            let _ = emit_app.emit(
-                "beets:import",
-                serde_json::json!({ "type": "sessionEnd" }),
-            );
+            on_exit(&app);
+            let _ = app.emit("beets:import", serde_json::json!({ "type": "sessionEnd" }));
         })
         .map_err(|e| format!("起 reader 线程: {e}"))?;
     Ok(())
+}
+
+/// 启动一次 preview_import：一次性子进程，stdout 每行 = 一个事件，
+/// 逐行转发到 Tauri 事件 `beets:import`。完成（进程退出）后自动回收。
+///
+/// 低频操作，不值得养常驻会话；每命令 ~300ms 的 Python 启动开销可接受。
+/// 返回 ok=false 表示没找到可用解释器（UI 显示指引）。
+pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
+    let script = ensure_script(&app)?;
+    let script_str = script.to_string_lossy().into_owned();
+
+    // 快速探测：无 beets 的解释器对 preview 同样没用，要跳过
+    let python = pick_interpreter(&script_str)
+        .ok_or_else(|| "no beets interpreter available".to_string())?;
+
+    let req = serde_json::json!({ "id": 1, "cmd": "preview_import", "paths": paths });
+    let child = spawn_session(&python, &script, &req)?;
+    spawn_reader(child, app, |_| {})
+}
+
+/// B2：应用导入决策。decisions 形状由契约定义（ApplyDecision），
+/// 宿主不解释语义，只透传给 sidecar；完成后刷新受影响目录的读模型。
+pub fn start_apply(
+    app: tauri::AppHandle,
+    decisions: Vec<serde_json::Value>,
+    refresh: Option<RefreshParams>,
+) -> Result<(), String> {
+    let script = ensure_script(&app)?;
+    let script_str = script.to_string_lossy().into_owned();
+    let python = pick_interpreter(&script_str)
+        .ok_or_else(|| "no beets interpreter available".to_string())?;
+
+    let req = serde_json::json!({ "id": 1, "cmd": "apply_import", "decisions": decisions });
+    let child = spawn_session(&python, &script, &req)?;
+
+    let refresh_dirs = affected_dirs(&decisions);
+    spawn_reader(child, app, move |app| {
+        if let Some(params) = refresh {
+            refresh_affected(app, params, &refresh_dirs);
+        }
+    })
+}
+
+/// 决策里 apply 动作的文件 → 去重后的父目录（刷新只扫这些目录，不全库重扫）。
+fn affected_dirs(decisions: &[serde_json::Value]) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for d in decisions {
+        if d.get("action").and_then(|a| a.as_str()) != Some("apply") {
+            continue;
+        }
+        if let Some(paths) = d.get("paths").and_then(|p| p.as_array()) {
+            for p in paths {
+                if let Some(s) = p.as_str() {
+                    let dir = PathBuf::from(s);
+                    let dir = if dir.is_dir() { dir } else { match dir.parent() {
+                        Some(parent) => parent.to_path_buf(),
+                        None => continue,
+                    } };
+                    if !out.contains(&dir) {
+                        out.push(dir);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// apply 完成后的读模型刷新：对受影响目录逐个 scan_directory（增量，快），
+/// 进度走既有 `scan:progress` 事件，汇总走 `libraryRefreshed`。
+fn refresh_affected(app: &tauri::AppHandle, params: RefreshParams, dirs: &[PathBuf]) {
+    use std::sync::atomic::Ordering;
+    let emit = |v: serde_json::Value| {
+        let _ = app.emit("beets:import", v);
+    };
+    // 与 library_scan 互斥；正扫全库时本次刷新让位（UI 可手动再扫）
+    if params
+        .scanning
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        emit(serde_json::json!({
+            "type": "libraryRefreshSkipped",
+            "reason": "scanBusy",
+        }));
+        return;
+    }
+
+    let mut scanned = 0usize;
+    let mut imported = 0usize;
+    let mut updated = 0usize;
+    let mut unchanged = 0usize;
+    let mut failed = 0usize;
+    for dir in dirs {
+        if !dir.is_dir() {
+            continue;
+        }
+        let Ok(mut conn) = aiya_data::open_conn(&params.db_path) else {
+            failed += 1;
+            continue;
+        };
+        let app2 = app.clone();
+        match aiya_data::scanner::scan_directory(&mut conn, dir, Some(&params.artwork_dir), move |p| {
+            if let Ok(v) = serde_json::to_value(&p) {
+                let _ = app2.emit("scan:progress", v);
+            }
+        }) {
+            Ok(r) => {
+                scanned += r.scanned;
+                imported += r.imported;
+                updated += r.updated;
+                unchanged += r.unchanged;
+                failed += r.failed;
+            }
+            Err(_) => failed += 1,
+        }
+        let _ = conn.close();
+    }
+    params.scanning.store(false, Ordering::SeqCst);
+    emit(serde_json::json!({
+        "type": "libraryRefreshed",
+        "scanned": scanned,
+        "imported": imported,
+        "updated": updated,
+        "unchanged": unchanged,
+        "failed": failed,
+    }));
 }
 
 #[cfg(test)]
@@ -346,6 +480,21 @@ mod tests {
                 error_message: Some(e),
             },
         }
+    }
+
+    /// 决策里 apply 动作的文件 → 去重后的父目录；skip 动作不参与刷新。
+    #[test]
+    fn affected_dirs_dedupes_and_skips() {
+        let decisions = serde_json::json!([
+            { "album": "a", "action": "apply", "paths": ["C:/m/one/1.flac", "C:/m/one/2.flac"] },
+            { "album": "b", "action": "skip", "paths": ["C:/m/two/1.mp3"] },
+            { "album": "c", "action": "apply", "paths": ["C:/m/one/3.flac", "C:/m/two/x.wav"] }
+        ]);
+        let dirs = affected_dirs(decisions.as_array().unwrap());
+        assert_eq!(dirs, vec![
+            PathBuf::from("C:/m/one"),
+            PathBuf::from("C:/m/two"),
+        ]);
     }
 
     fn script_path_for_test() -> String {

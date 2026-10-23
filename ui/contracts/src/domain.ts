@@ -416,5 +416,30 @@ export type BeetsImportEvent =
   | { type: 'album'; session: string; album: AlbumPreview }
   | { type: 'albumError'; session: string; stage: string; path: string; beets_message: string }
   | { type: 'done'; session: string; albums: number }
+  /* ---- B2：应用阶段 ---- */
+  /** 单张专辑应用完成；failed 是逐曲失败明细（可重试） */
+  | { type: 'applied'; session: string; albumId: string; written: number; failed: Array<{ path: string; message: string }> }
+  | { type: 'applyDone'; session: string; applied: number; skipped: number; failed: number }
+  /** 宿主对受影响目录的读模型刷新汇总 */
+  | { type: 'libraryRefreshed'; scanned: number; imported: number; updated: number; unchanged: number; failed: number }
+  /** 正在扫描全库，本次刷新让位（可手动再扫） */
+  | { type: 'libraryRefreshSkipped'; reason: string }
   | { type: 'sessionEnd' };
+
+/**
+ * B2 应用决策。candidate 数据由 UI 从预览结果**原样回传** ——
+ * sidecar 不重跑网络匹配，保证"所见即所写"（这也是一次性进程下
+ * apply 与 preview 无需共享 session 状态的原因）。
+ */
+export interface ApplyDecision {
+  /** 对应 AlbumPreview.id */
+  album: string;
+  action: 'apply' | 'skip';
+  paths: string[];
+  /** action=apply 时必填 */
+  candidate?: {
+    album: CandidatePreview['album'];
+    mapping: Record<string, TrackMeta>;
+  } | null;
+}
 

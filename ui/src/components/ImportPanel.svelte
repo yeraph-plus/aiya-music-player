@@ -1,10 +1,11 @@
 <script lang="ts">
-  import type { AlbumPreview, BeetsImportEvent, CandidatePreview } from '@aiya/contracts';
+  import type { AlbumPreview, BeetsImportEvent, CandidatePreview, ApplyDecision } from '@aiya/contracts';
   import Icon from './Icon.svelte';
 
   /**
-   * beets 导入预览面板（B1 只读）：选文件夹 → 专辑卡片 → 候选/逐字段 diff。
-   * 应用（写标签）是 B2；本面板不触发任何文件改动。
+   * beets 导入面板（B1 预览 + B2 应用）：
+   * 选文件夹 → 专辑卡片 → 候选/逐字段 diff → 应用（写标签 + 入库 + 刷新曲库）。
+   * 预览阶段零文件改动；应用阶段候选数据原样回传（所见即所写）。
    */
 
   interface Props {
@@ -14,10 +15,16 @@
 
   let albums = $state<AlbumPreview[]>([]);
   let running = $state(false);
+  let applying = $state(false);
   let error = $state<string | null>(null);
   /** 专辑 id → 展开的候选 id（null = 显示当前标签） */
   let picked = $state<Record<string, string | null>>({});
   let progress = $state<{ current: number; total: number } | null>(null);
+  let applyProgress = $state<{ current: number; total: number } | null>(null);
+  /** 专辑 id → 应用结果 */
+  let results = $state<Record<string, { written: number; failed: Array<{ path: string; message: string }> }>>({});
+  let applySummary = $state<{ applied: number; skipped: number; failed: number } | null>(null);
+  let refreshed = $state<{ imported: number; updated: number; unchanged: number; failed: number } | null>(null);
   let doneCount = $state<number | null>(null);
   let errors = $state<Array<{ path: string; message: string }>>([]);
   let unlisten: (() => void) | null = null;
@@ -29,9 +36,17 @@
       const strong = evt.album.candidates[0];
       picked[evt.album.id] = evt.album.recommendation === 'strong' && strong ? strong.id : null;
     } else if (evt.type === 'progress') {
-      progress = { current: evt.current, total: evt.total };
+      if (evt.stage === 'writing') applyProgress = { current: evt.current, total: evt.total };
+      else progress = { current: evt.current, total: evt.total };
     } else if (evt.type === 'albumError') {
       errors = [...errors, { path: evt.path, message: evt.beets_message }];
+    } else if (evt.type === 'applied') {
+      results = { ...results, [evt.albumId]: { written: evt.written, failed: evt.failed } };
+    } else if (evt.type === 'applyDone') {
+      applying = false;
+      applySummary = { applied: evt.applied, skipped: evt.skipped, failed: evt.failed };
+    } else if (evt.type === 'libraryRefreshed') {
+      refreshed = { imported: evt.imported, updated: evt.updated, unchanged: evt.unchanged, failed: evt.failed };
     } else if (evt.type === 'done') {
       doneCount = evt.albums;
       running = false;
@@ -48,6 +63,10 @@
     albums = [];
     picked = {};
     progress = null;
+    applyProgress = null;
+    results = {};
+    applySummary = null;
+    refreshed = null;
     doneCount = null;
     errors = [];
     const result = await window.api.app.beetsPreview([picked_dir.data.path]);
@@ -56,6 +75,45 @@
       return;
     }
     running = true;
+  }
+
+  /** 单张专辑的决策：有选中候选就应用，否则跳过 */
+  function decisionFor(album: AlbumPreview): ApplyDecision {
+    const cand = candidateMeta(album);
+    if (!cand) return { album: album.id, action: 'skip', paths: album.paths };
+    return {
+      album: album.id,
+      action: 'apply',
+      paths: album.paths,
+      candidate: { album: cand.album, mapping: cand.mapping },
+    };
+  }
+
+  const applyableCount = $derived(albums.filter((a) => candidateMeta(a)).length);
+
+  /** 应用全部有候选的专辑（其余按 skip 记账） */
+  async function applyAll(): Promise<void> {
+    await applyDecisions(albums.map(decisionFor));
+  }
+
+  /** 只应用一张专辑 */
+  async function applyOne(album: AlbumPreview): Promise<void> {
+    await applyDecisions(
+      albums.map((a) => (a.id === album.id ? decisionFor(a) : { album: a.id, action: 'skip', paths: a.paths })),
+    );
+  }
+
+  async function applyDecisions(decisions: ApplyDecision[]): Promise<void> {
+    error = null;
+    results = {};
+    applySummary = null;
+    refreshed = null;
+    const result = await window.api.app.beetsApply(decisions);
+    if (!result.ok) {
+      error = result.error.message;
+      return;
+    }
+    applying = true;
   }
 
   $effect(() => {
@@ -94,7 +152,7 @@
 
   <div class="import-body">
     <div class="import-actions">
-      <button class="btn primary" onclick={() => void chooseAndPreview()} disabled={running}>
+      <button class="btn primary" onclick={() => void chooseAndPreview()} disabled={running || applying}>
         <Icon name="folder" size={13} /> 选择文件夹预览
       </button>
       {#if running}
@@ -103,9 +161,34 @@
         </span>
       {/if}
       {#if doneCount !== null && !running}
-        <span class="dim">完成：{doneCount} 个文件夹分组</span>
+        <span class="dim">预览完成：{doneCount} 个文件夹分组</span>
+      {/if}
+      {#if applying}
+        <span class="dim">
+          写入标签 {applyProgress ? `${applyProgress.current}/${applyProgress.total}` : '…'}（不动文件位置）
+        </span>
+      {/if}
+      {#if doneCount !== null && !running && !applying}
+        <button class="btn primary" onclick={() => void applyAll()} disabled={applyableCount === 0}>
+          应用所选（{applyableCount} 张）
+        </button>
       {/if}
     </div>
+
+    {#if applySummary}
+      <div class="apply-summary" class:has-failed={applySummary.failed > 0}>
+        已应用 {applySummary.applied} 张 · 跳过 {applySummary.skipped} 张
+        {#if applySummary.failed > 0} · 失败 {applySummary.failed} 首{/if}
+        {#if refreshed}
+          <div class="dim">
+            曲库已刷新：新增 {refreshed.imported} · 更新 {refreshed.updated} · 未变 {refreshed.unchanged}
+            {#if refreshed.failed > 0} · 刷新失败 {refreshed.failed}{/if}
+          </div>
+        {:else}
+          <div class="dim">正在刷新曲库…</div>
+        {/if}
+      </div>
+    {/if}
 
     {#if error}
       <div class="import-error">
@@ -141,13 +224,24 @@
           </span>
         </div>
 
+        <!-- 应用结果徽标（B2） -->
+        {#if results[album.id]}
+          <div class="apply-result" class:has-failed={results[album.id].failed.length > 0}>
+            ✓ 已写入 {results[album.id].written} 首
+            {#each results[album.id].failed as f (f.path)}
+              <div class="dim">✗ {f.path.split(/[\\/]/).pop()}：{f.message}</div>
+            {/each}
+          </div>
+        {/if}
+
         <!-- 候选选择 -->
         {#if album.candidates.length === 0}
           <div class="dim">无候选（未联网或匹配不上）</div>
-        {:else}
+        {:else if !results[album.id]}
           <select
             class="cand-select"
             value={picked[album.id] ?? ''}
+            disabled={applying}
             onchange={(e) => (picked[album.id] = (e.currentTarget as HTMLSelectElement).value || null)}
           >
             <option value="">保持当前标签（不修改）</option>
@@ -184,6 +278,13 @@
                 </div>
               {/each}
             </details>
+            <button
+              class="btn apply-btn"
+              onclick={() => void applyOne(album)}
+              disabled={applying || running}
+            >
+              应用此候选（写标签）
+            </button>
           {/if}
         {/if}
       </div>
@@ -265,5 +366,27 @@
     justify-content: space-between;
     gap: 8px;
     padding: 1px 0;
+  }
+  .apply-btn {
+    align-self: flex-start;
+    font-size: 11.5px;
+  }
+  .apply-summary {
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .apply-summary.has-failed {
+    border-color: var(--danger, #c33);
+  }
+  .apply-result {
+    color: var(--accent);
+    font-size: 11.5px;
+    line-height: 1.5;
+  }
+  .apply-result.has-failed {
+    color: var(--text);
   }
 </style>

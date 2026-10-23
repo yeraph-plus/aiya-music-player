@@ -7,7 +7,7 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -40,7 +40,8 @@ pub struct AppState {
     player: Mutex<aiya_player::PlayerActor>,
     /// 音频 sidecar（ADR-0002：独立进程 + 命名管道，崩溃隔离）
     engine: Mutex<sidecar::SidecarHandle>,
-    scanning: AtomicBool,
+    /// 扫描互斥标志；Arc 是为了 beets apply 完成后的 reader 线程也能取到
+    scanning: Arc<AtomicBool>,
     /// 队列状态行上次落库时间（毫秒，事件泵 5s 节流用）
     last_persist_ms: std::sync::atomic::AtomicU64,
 }
@@ -207,6 +208,22 @@ fn beets_status(app: AppHandle) -> Value {
 #[tauri::command]
 fn beets_preview(app: AppHandle, paths: Vec<String>) -> Value {
     match beets::start_preview(app, paths) {
+        Ok(()) => ok(json!({ "started": true })),
+        Err(e) => fail("E_BEETS_NOT_FOUND", &e),
+    }
+}
+
+/// B2：应用导入决策（写标签 + 入 beets 库，不移动文件）。
+/// decisions 形状见契约 ApplyDecision；完成后宿主自动刷新受影响目录的读模型
+/// （进度走 scan:progress，汇总走 beets:import 的 libraryRefreshed）。
+#[tauri::command]
+fn beets_apply(app: AppHandle, state: State<'_, AppState>, decisions: Vec<Value>) -> Value {
+    let refresh = beets::RefreshParams {
+        db_path: state.db_path.clone(),
+        artwork_dir: state.artwork_dir.clone(),
+        scanning: state.scanning.clone(),
+    };
+    match beets::start_apply(app, decisions, Some(refresh)) {
         Ok(()) => ok(json!({ "started": true })),
         Err(e) => fail("E_BEETS_NOT_FOUND", &e),
     }
@@ -1177,7 +1194,7 @@ pub fn run() {
                 artwork_dir,
                 player: Mutex::new(aiya_player::PlayerActor::new()),
                 engine: Mutex::new(engine),
-                scanning: AtomicBool::new(false),
+                scanning: Arc::new(AtomicBool::new(false)),
                 last_persist_ms: std::sync::atomic::AtomicU64::new(0),
             });
 
@@ -1381,6 +1398,7 @@ pub fn run() {
             app_open_data_dir,
             beets_status,
             beets_preview,
+            beets_apply,
             library_list,
             library_tracks,
             library_stats,

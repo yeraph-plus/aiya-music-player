@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  ApplyDecision,
   BeetsImportEvent,
   BeetsStatus,
   Diagnostics,
@@ -258,6 +259,8 @@ export interface AiyaApi {
     beetsStatus(): Promise<IpcResult<BeetsStatus>>;
     /** 启动一次只读导入预览；事件流走 onBeetsImport */
     beetsPreview(paths: string[]): Promise<IpcResult<{ started: boolean }>>;
+    /** B2：应用导入决策（写标签 + 入 beets 库 + 自动刷新读模型） */
+    beetsApply(decisions: ApplyDecision[]): Promise<IpcResult<{ started: boolean }>>;
     /** beets 导入预览事件流（progress/album/albumError/done/sessionEnd） */
     onBeetsImport(callback: (evt: BeetsImportEvent) => void): () => void;
   };

@@ -194,6 +194,76 @@ def preview_import(req_id, paths: list[str], options: dict) -> None:
     _emit({"type": "done", "session": session, "albums": total})
 
 
+# 应用标签的字段（与 DIFF_FIELDS 同源：预览看到什么，应用就写什么）
+APPLY_FIELDS = DIFF_FIELDS
+
+
+def apply_import(req_id, decisions: list[dict]) -> None:
+    """应用导入决策：写标签到文件 + 入 beets 库（默认不移动文件）。
+
+    decisions: [{"album": "alb_01", "action": "apply" | "skip",
+                 "paths": [...],
+                 "candidate": {"album": {...专辑级...}, "mapping": {path: 单曲meta}}}]
+    候选数据由 UI 从预览结果原样回传 —— 不重跑网络匹配，保证"所见即所写"；
+    这也是为什么 apply 进程不需要与 preview 进程共享 session 状态（进程是一次性的）。
+    """
+    session = f"app_{req_id:02d}"
+    from beets import config as beets_config
+    from beets.dbcore import query as dbcore_query
+    from beets.library import Item, Library
+
+    lib = Library(beets_config["library"].as_filename())
+
+    apply_total = sum(1 for d in decisions if d.get("action") == "apply")
+    _emit({"type": "progress", "session": session, "stage": "writing",
+           "current": 0, "total": apply_total, "path": None})
+
+    applied = skipped = failed_files = 0
+    for i, dec in enumerate(decisions):
+        if dec.get("action") != "apply":
+            skipped += 1
+            continue
+        paths = [str(p) for p in (dec.get("paths") or [])]
+        _emit({"type": "progress", "session": session, "stage": "writing",
+               "current": i + 1, "total": apply_total,
+               "path": paths[0] if paths else None})
+        cand = dec.get("candidate") or {}
+        album_meta = cand.get("album") or {}
+        mapping = cand.get("mapping") or {}
+        written, failures = 0, []
+        for p in paths:
+            try:
+                item = Item.from_path(p)
+                # 专辑级字段打底，单曲级非 None 值覆盖（对齐 beets 的 merge 语义）
+                data = {}
+                for f in APPLY_FIELDS:
+                    val = album_meta.get(f)
+                    track_meta = mapping.get(p) or {}
+                    if track_meta.get(f) is not None:
+                        val = track_meta[f]
+                    if val is not None:
+                        data[f] = val
+                item.update(data)
+                item.write()  # 写标签进文件（可抛 ReadError/WriteError）
+                # 入库（幂等）：同路径已在 beets 库 → 更新行；否则新增
+                dup = list(lib.items(dbcore_query.PathQuery("path", item.path)))
+                if dup:
+                    for e in dup:
+                        e.update(data)
+                        e.store()
+                else:
+                    lib.add(item)
+                written += 1
+            except Exception as e:  # noqa: BLE001 —— 单曲失败不中断整张
+                failures.append({"path": p, "message": f"{type(e).__name__}: {e}"})
+        failed_files += len(failures)
+        applied += 1
+        _emit({"type": "applied", "session": session, "albumId": dec.get("album"),
+               "written": written, "failed": failures})
+    _emit({"type": "applyDone", "session": session,
+           "applied": applied, "skipped": skipped, "failed": failed_files})
+
+
 def handle(req: dict) -> dict | None:
     """返回 None 表示已用事件流自行应答（preview_import 模式）。"""
     cmd = req.get("cmd")
@@ -208,6 +278,14 @@ def handle(req: dict) -> dict | None:
             return {"ok": False, "error": {"code": "E_BAD_ARGS", "stage": "preview",
                                            "beets_message": "paths 为空"}}
         preview_import(req_id, [str(p) for p in paths], req.get("options") or {})
+        return None
+    if cmd == "apply_import":
+        req_id = int(req.get("id") or 0)
+        decisions = req.get("decisions") or []
+        if not decisions:
+            return {"ok": False, "error": {"code": "E_BAD_ARGS", "stage": "apply",
+                                           "beets_message": "decisions 为空"}}
+        apply_import(req_id, decisions)
         return None
     return {"ok": False, "error": {"code": "E_UNKNOWN_CMD", "stage": "dispatch", "beets_message": f"unknown cmd: {cmd!r}"}}
 

@@ -5,6 +5,7 @@ import {
   ok,
   type AiyaApi,
   type AppSettings,
+  type ApplyDecision,
   type BeetsImportEvent,
   type BeetsStatus,
   type Diagnostics,
@@ -167,6 +168,8 @@ export function installApi(): void {
       beetsStatus: () => call('beets_status') as Promise<IpcResult<BeetsStatus>>,
       beetsPreview: (paths: string[]) =>
         call('beets_preview', { paths }) as Promise<IpcResult<{ started: boolean }>>,
+      beetsApply: (decisions: ApplyDecision[]) =>
+        call('beets_apply', { decisions }) as Promise<IpcResult<{ started: boolean }>>,
       onBeetsImport,
     },
   };
