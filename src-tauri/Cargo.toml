@@ -1,0 +1,25 @@
+[package]
+name = "aiya"
+version = "0.1.0"
+description = "AIYA Music — 本地优先的桌面音乐播放器（Tauri 2）"
+edition = "2021"
+
+# Rust 后端见 crates/（规划）：aiya-player / aiya-data / aiya-audio。
+# 本 crate 是 Tauri 宿主壳：命令注册、事件桥、协议注册，不写领域业务（src-tauri/README.md）。
+
+[lib]
+name = "aiya_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
