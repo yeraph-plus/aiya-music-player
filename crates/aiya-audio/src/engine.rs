@@ -119,9 +119,12 @@ fn render_loop(cmd_rx: Receiver<EngineCommand>, ev_tx: Sender<EngineEvent>) {
     let tap = crate::spectrum::SpectrumTap::new();
     tap.spawn_consumer(ev_tx.clone());
 
+    // 变速跨曲目保持：在顶层循环外声明，EOF/Stop/错误回到顶层后不重置
+    // （P1：此前每轮 Load 周期重置 1.0，自然播完切下一曲后倍速静默丢失
+    // 且 UI 仍显示旧值；SetRate 只应被显式命令修改）
+    let mut pending_rate: f32 = 1.0;
     'outer: loop {
         // 命令循环：等 Load 或 Shutdown（Load 前到的 SetRate/SetSpectrum 暂存生效）
-        let mut pending_rate: f32 = 1.0;
         let mut path = loop {
             match cmd_rx.recv() {
                 Ok(EngineCommand::Load(p)) => break p,
@@ -186,6 +189,7 @@ fn play_file(
     tap: &crate::spectrum::SpectrumTap,
 ) -> Result<LoadExit, AudioError> {
     let mut decoder = Decoder::open(Path::new(path))?;
+    tap.set_sample_rate(decoder.sample_rate); // 频谱分带按实际采样率标定
     send(EngineEvent::Loaded { duration_ms: decoder.duration_ms });
 
     let enumerator = DeviceEnumerator::new().map_err(wasapi_err)?;
@@ -232,24 +236,33 @@ fn play_file(
     let mut result: Result<(), AudioError> = Ok(());
 
     loop {
-        // 等引擎缓冲区消费事件（暂停时也等，只是不写数据）
-        event.wait_for_event(2000).map_err(|e| AudioError::Custom(e.to_string()))?;
+        // 等引擎缓冲区消费事件。超时/错误都视为一次正常唤醒——绝不能把
+        // 超时当 Err 拆流（P0：暂停后 stop_stream 令事件停发，2s 超时曾走
+        // `?` 把流销毁，暂停期间所有命令石沉大海）。
+        // 新暂停模型下流保持 running，正常播放时事件每 ~10ms 触发一次，
+        // 超时不会命中；暂停期间引擎可能因缓冲排空停发事件，用 100ms 短
+        // 超时兜底驱动命令循环（Resume/Seek 响应延迟 ≤100ms）。
+        let wait_ms = if paused { 100 } else { 2000 };
+        let _ = event.wait_for_event(wait_ms);
 
         // 非阻塞处理命令
         loop {
             match cmd_rx.try_recv() {
                 Ok(EngineCommand::Pause) if !paused => {
+                    // 暂停 = 停止喂数据，流保持 running（事件照常触发、命令
+                    // 循环存活）。不 stop_stream：停流后 WASAPI 引擎不再为
+                    // 该流处理传递，事件停发。缓冲内残余（≤200ms）播完自然
+                    // 静音，Resume 直接续喂数据，无 start/stop 状态机风险。
                     paused = true;
-                    let _ = client.stop_stream().map_err(wasapi_err);
                     send(EngineEvent::StateChanged { playing: false });
                 }
                 Ok(EngineCommand::Resume) if paused => {
                     paused = false;
-                    client.start_stream().map_err(wasapi_err)?;
+                    // 流从未停止（见 Pause），无需 start_stream，直接恢复喂数据
                     send(EngineEvent::StateChanged { playing: true });
                 }
                 Ok(EngineCommand::Seek(ms)) => {
-                    // 停流 → seek → 清池（旧样本作废）→ reset → 重启
+                    // stop（reset 要求 stopped 态）→ seek → 清池（旧样本作废）→ reset → 重启
                     let _ = client.stop_stream().map_err(wasapi_err);
                     if let Err(e) = decoder.seek_ms(ms) {
                         result = Err(e);
@@ -259,10 +272,9 @@ fn play_file(
                     pool_pos = 0.0;
                     decoder_eof = false;
                     let _ = client.reset_stream().map_err(wasapi_err);
-                    // 暂停态保持停止：对已运行的流再 start，之后 Resume 再 start 会报错炸流
-                    if !paused {
-                        client.start_stream().map_err(wasapi_err)?;
-                    }
+                    // 新暂停模型：装载期间流始终 running（暂停只是不喂数据），
+                    // seek 后无条件重启；暂停态缓冲为空继续静音
+                    client.start_stream().map_err(wasapi_err)?;
                     send(EngineEvent::Position { position_ms: decoder.position_ms() });
                 }
                 Ok(EngineCommand::SetVolume(v)) => volume = v.clamp(0.0, 1.0),
@@ -366,9 +378,14 @@ fn play_file(
         }
 
         if eof_now {
-            // 等缓冲播完再报 EOF：padding 归零或超时
+            // 等缓冲播完再报 EOF：padding 归零或超时（间隙响应 Shutdown，
+            // 不让退出命令被最长 500ms 地卡住）
             let deadline = std::time::Instant::now() + Duration::from_millis(500);
             loop {
+                if let Ok(EngineCommand::Shutdown) = cmd_rx.try_recv() {
+                    let _ = client.stop_stream();
+                    return Ok(LoadExit::Shutdown);
+                }
                 let pad = client.get_current_padding().map_err(wasapi_err)?;
                 if pad == 0 || std::time::Instant::now() > deadline {
                     break;
@@ -411,7 +428,9 @@ fn resample_take(
         let src_f = pool_pos + i as f64 * rate;
         let i0 = (src_f.floor() as usize).min(pool_frames.saturating_sub(1));
         let i1 = (i0 + 1).min(pool_frames.saturating_sub(1));
-        let frac = (src_f - i0 as f64) as f32;
+        // i0 被 clamp 到池尾时 frac 可能 >1（EOF 残余防御路径），钳到 [0,1]
+        // 复制末帧而非线性外插
+        let frac = ((src_f - i0 as f64) as f32).clamp(0.0, 1.0);
         for ch in 0..channels {
             let a = pool[i0 * channels + ch];
             let b = pool[i1 * channels + ch];

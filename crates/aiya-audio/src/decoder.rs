@@ -72,9 +72,13 @@ impl Decoder {
             .make(&track.codec_params, &DecoderOptions::default())
             .map_err(|e| AudioError::Decode(e.to_string()))?;
 
-        // 复用缓冲按 100ms 容量（所有正常容器单包都远小于此）
+        // 复用缓冲容量：P1——此前按 100ms 固定分配，但 FLAC 允许单包最大
+        // 65535 帧，容量不足时 copy_interleaved_ref 的 assert 直接 panic
+        // （引擎线程死亡、音频静默中断）。统一给到 65535 帧下限
+        // （2ch f32 ≈ 512KB，一次性分配可忽略），并尊重轨道声明的更大值。
+        let max_frames = track.codec_params.max_frames_per_packet.unwrap_or(0).max(65_535);
         let spec = SignalSpec::new(sample_rate, track.codec_params.channels.unwrap_or_default());
-        let sample_buf = SampleBuffer::<f32>::new((sample_rate as u64 / 10).max(4096), spec);
+        let sample_buf = SampleBuffer::<f32>::new(max_frames as u64, spec);
 
         Ok(Self {
             format,

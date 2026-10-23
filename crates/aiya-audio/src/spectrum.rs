@@ -9,11 +9,11 @@
 //! UI 侧契约：`RemoteSpectrumSource` 监听 `spectrum:frame`（宿主把
 //! EngineEvent::Spectrum 原样 emit），分带值 0–255、无副载波数据。
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-/// 环容量（样本数，2 的幂）。48kHz 双声道立体声混单声道后 ≈ 85ms 余量。
+/// 环容量（样本数，2 的幂）。48kHz 混单声道后 ≈ 170ms 余量（96kHz ≈ 85ms）。
 const RING_CAP: usize = 8192;
 const RING_MASK: usize = RING_CAP - 1;
 /// FFT 窗长。48kHz 下 2048 = 43ms，频率分辨率 ~23Hz。
@@ -79,6 +79,8 @@ pub struct SpectrumTap {
     ring: Arc<MonoRing>,
     enabled: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
+    /// 实际采样率（Hz），由引擎在 Load 后填充分带标定；0 = 按 48kHz 兜底
+    sample_rate: Arc<AtomicU32>,
 }
 
 impl SpectrumTap {
@@ -87,16 +89,21 @@ impl SpectrumTap {
             ring: Arc::new(MonoRing::new()),
             enabled: Arc::new(AtomicBool::new(false)),
             dropped: Arc::new(AtomicU64::new(0)),
+            sample_rate: Arc::new(AtomicU32::new(48_000)),
         }
     }
 
     /// 订阅开关。false 时生产端只剩一次原子读。
+    /// 清环动作在消费者线程做（tail 的单写者不变量，P2：生产侧曾在这里写
+    /// tail 与消费者竞争，重开后可能重复读一帧旧样本）。
     pub fn set_enabled(&self, enabled: bool) {
         self.enabled.store(enabled, Ordering::Release);
-        if !enabled {
-            // 清环：避免重开后残留旧帧（tail 追平 head 即空）
-            let head = self.ring.head.load(Ordering::Acquire);
-            self.ring.tail.store(head, Ordering::Release);
+    }
+
+    /// 分带频率标定用实际采样率（Load 成功后由引擎线程调用）。
+    pub fn set_sample_rate(&self, sample_rate: u32) {
+        if sample_rate >= 8_000 {
+            self.sample_rate.store(sample_rate, Ordering::Relaxed);
         }
     }
 
@@ -124,21 +131,34 @@ impl SpectrumTap {
     pub fn spawn_consumer(&self, ev_tx: Sender<crate::EngineEvent>) {
         let ring = Arc::clone(&self.ring);
         let enabled = Arc::clone(&self.enabled);
-        std::thread::Builder::new()
+        let sample_rate = Arc::clone(&self.sample_rate);
+        let spawned = std::thread::Builder::new()
             .name("spectrum-fft".into())
-            .spawn(move || consume_loop(&ring, &enabled, ev_tx))
-            .ok();
+            .spawn(move || consume_loop(&ring, &enabled, &sample_rate, ev_tx));
+        if let Err(e) = spawned {
+            tracing::warn!("频谱 FFT 线程创建失败（本会话无可视化）: {e}");
+        }
     }
 }
 
 /// 消费者主循环：凑 FFT_SIZE 新样本 → 窗 → FFT → 分带 → 节流发帧。
-fn consume_loop(ring: &MonoRing, enabled: &AtomicBool, ev_tx: Sender<crate::EngineEvent>) {
+fn consume_loop(
+    ring: &MonoRing,
+    enabled: &AtomicBool,
+    sample_rate: &AtomicU32,
+    ev_tx: Sender<crate::EngineEvent>,
+) {
     let mut staging = [0.0f32; FFT_SIZE];
     let mut filled = 0usize;
     let mut last_frame = std::time::Instant::now() - std::time::Duration::from_millis(1_000);
 
     loop {
         if !enabled.load(Ordering::Relaxed) {
+            // 清环（tail 追平 head）：只能在消费者线程做——tail 的单写者
+            // 不变量（set_enabled 不再碰 tail）；禁用期间生产端不推新样本，
+            // 这里把禁用前在途的残留排掉，避免重开后出旧帧。
+            let head = ring.head.load(Ordering::Acquire);
+            ring.tail.store(head, Ordering::Release);
             std::thread::sleep(std::time::Duration::from_millis(50));
             continue;
         }
@@ -161,7 +181,7 @@ fn consume_loop(ring: &MonoRing, enabled: &AtomicBool, ev_tx: Sender<crate::Engi
                 std::time::Duration::from_millis(FRAME_MIN_INTERVAL_MS) - elapsed,
             );
         }
-        let bands = compute_bands(&staging);
+        let bands = compute_bands(&staging, sample_rate.load(Ordering::Relaxed) as f32);
         last_frame = std::time::Instant::now();
         if ev_tx.send(crate::EngineEvent::Spectrum { bands }).is_err() {
             return; // 引擎关闭
@@ -171,7 +191,9 @@ fn consume_loop(ring: &MonoRing, enabled: &AtomicBool, ev_tx: Sender<crate::Engi
 }
 
 /// Hann 窗 + radix-2 FFT + 48 对数分带 → u8。
-pub fn compute_bands(samples: &[f32; FFT_SIZE]) -> Vec<u8> {
+/// `sample_rate`：实际流采样率（Hz），分带频率轴按它标定
+/// （P2：此前恒按 48kHz，44.1k 源频带偏移约 8.8%）。
+pub fn compute_bands(samples: &[f32; FFT_SIZE], sample_rate: f32) -> Vec<u8> {
     // 1) Hann 窗
     let mut re: Vec<f32> = samples
         .iter()
@@ -188,15 +210,13 @@ pub fn compute_bands(samples: &[f32; FFT_SIZE]) -> Vec<u8> {
 
     // 3) 对数分带：20Hz–20kHz 均匀 48 带（每带取最大幅值，动画更有起伏）
     // 带边界：f_i = 20 * 1000^(i/BANDS)；bin = f * FFT_SIZE / sample_rate
-    // sample_rate 从数据推不出来，这里按 bin 域直接算：bin_i = 20*1000^(i/48)*FFT_SIZE/48000。
-    // 采样率不同只影响绝对频率标定，动画用途下按 48kHz 标定即可。
-    const SR: f32 = 48_000.0;
+    let sr = if sample_rate >= 8_000.0 { sample_rate } else { 48_000.0 };
     let half = FFT_SIZE / 2;
     let mut bands = vec![0u8; BANDS];
     let mut bin_lo = 1usize; // 跳过 DC
     for b in 0..BANDS {
         let f_hi = 20.0f32 * 1000f32.powf((b + 1) as f32 / BANDS as f32);
-        let bin_hi = ((f_hi * FFT_SIZE as f32 / SR).ceil() as usize).min(half);
+        let bin_hi = ((f_hi * FFT_SIZE as f32 / sr).ceil() as usize).min(half);
         let bin_hi = bin_hi.max(bin_lo + 1); // 每带至少 1 bin
         let mut peak = 0.0f32;
         for k in bin_lo..bin_hi.min(half) {
@@ -298,7 +318,7 @@ mod tests {
             .collect();
         let mut arr = [0f32; FFT_SIZE];
         arr.copy_from_slice(&samples);
-        let bands = compute_bands(&arr);
+        let bands = compute_bands(&arr, 48_000.0);
         // 1000Hz 应落在第 ~30 带（f_30 = 20*1000^(30/48) ≈ 940Hz）
         let peak_band = bands
             .iter()
@@ -312,8 +332,34 @@ mod tests {
 
     #[test]
     fn silence_is_zero() {
-        let bands = compute_bands(&[0.0; FFT_SIZE]);
+        let bands = compute_bands(&[0.0; FFT_SIZE], 48_000.0);
         assert!(bands.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn sample_rate_shifts_bin_mapping() {
+        // 分带边界按 Hz 定义、bin 换算按采样率——低频带够宽，错标定不显。
+        // 用 96kHz 源 + 15kHz 正弦放大差异：正确标定 bin=15000*2048/96000=320
+        // → 落第 45 带；若误用 48k 标定，45 带去看 bin 581-671，能量在
+        // bin 320（对应误标 7500Hz）→ 落第 41 带。
+        let sr = 96_000.0f32;
+        let freq = 15_000.0f32;
+        let samples: Vec<f32> = (0..FFT_SIZE)
+            .map(|i| (2.0 * std::f32::consts::PI * freq * i as f32 / sr).sin())
+            .collect();
+        let mut arr = [0f32; FFT_SIZE];
+        arr.copy_from_slice(&samples);
+        let correct = compute_bands(&arr, 96_000.0);
+        let wrong = compute_bands(&arr, 48_000.0);
+        let peak = |b: &[u8]| {
+            b.iter().enumerate().max_by_key(|(_, v)| **v).map(|(i, _)| i).unwrap()
+        };
+        assert!(
+            (45..=47).contains(&peak(&correct)),
+            "正确采样率标定应落 45-47 带，实际 {}",
+            peak(&correct)
+        );
+        assert_ne!(peak(&wrong), peak(&correct), "误用 48k 标定应偏移到别的带");
     }
 
     #[test]
