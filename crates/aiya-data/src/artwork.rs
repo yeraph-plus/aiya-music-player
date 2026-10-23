@@ -62,9 +62,16 @@ pub fn save_artwork(
             std::process::id()
         ));
         std::fs::write(&tmp, data).map_err(|e| DbError::Custom(e.to_string()))?;
-        // Windows 上目标已存在时 rename 失败 → 并发扫描下当作已写入
-        let _ = std::fs::rename(&tmp, &target);
-        let _ = std::fs::remove_file(&tmp);
+        // rename 失败分两种：目标已被并发扫描写入 → 幂等成功；
+        // 否则是真实 IO 故障 → 清理 tmp 并报错（不能照插 DB 行，否则永久破图）。
+        if let Err(e) = std::fs::rename(&tmp, &target) {
+            let _ = std::fs::remove_file(&tmp);
+            if target.exists() {
+                // 并发扫描已写入 → 当作已写入
+            } else {
+                return Err(DbError::Custom(format!("artwork rename failed: {e}")));
+            }
+        }
     }
 
     conn.execute(

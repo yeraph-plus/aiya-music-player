@@ -194,9 +194,9 @@ fn insert_track(tx: &Connection, it: &BeetsItem, now: i64) -> DbResult<()> {
             added_at, artwork_id, gain_db,
             codec, container, sample_rate, bits_per_sample, bitrate, channels,
             play_count, last_played_at,
-            path, size_bytes, mtime, availability, beets_item_id
+            path, path_lower, size_bytes, mtime, availability, beets_item_id
          ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULL,?11,
-                   ?12,NULL,?13,?14,?15,?16,0,NULL,?17,0,?18,'online',?19)",
+                   ?12,NULL,?13,?14,?15,?16,0,NULL,?17,?18,0,?19,'online',?20)",
         rusqlite::params![
             ids::track_id(&it.path),
             title,
@@ -215,6 +215,7 @@ fn insert_track(tx: &Connection, it: &BeetsItem, now: i64) -> DbResult<()> {
             it.bitrate,
             it.channels,
             it.path,
+            it.path.to_lowercase(),
             it.mtime.unwrap_or(0),
             it.id,
         ],
@@ -236,8 +237,7 @@ fn update_track(tx: &Connection, ex: &Existing, it: &BeetsItem) -> DbResult<()> 
            sample_rate = COALESCE(?12, sample_rate), bits_per_sample = COALESCE(?13, bits_per_sample),
            bitrate = COALESCE(?14, bitrate), channels = COALESCE(?15, channels),
            mtime = COALESCE(?16, mtime),
-           beets_item_id = ?17,
-           availability = 'online'
+           beets_item_id = ?17
          WHERE id = ?1",
         rusqlite::params![
             ex.id,

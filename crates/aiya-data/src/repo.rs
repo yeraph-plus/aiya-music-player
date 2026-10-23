@@ -204,8 +204,17 @@ fn build_head(q: &TrackWindowQuery, cursor_filter: Option<&str>) -> (String, Vec
 
     let mut where_clauses: Vec<String> = Vec::new();
     if let Some(search) = q.search.as_deref().filter(|s| !s.trim().is_empty()) {
-        // LIKE 通配符防误匹配：去掉 % _（搜索语义按普通文本处理）
-        let pattern = format!("%{}%", norm(search).replace('%', "").replace('_', " "));
+        // LIKE 通配符防误匹配：按字面语义转义 % _ \（\ 同时是 ESCAPE 字符）
+        let mut escaped = String::with_capacity(norm(search).len());
+        for c in norm(search).chars() {
+            match c {
+                '%' => escaped.push_str("\\%"),
+                '_' => escaped.push_str("\\_"),
+                '\\' => escaped.push_str("\\\\"),
+                _ => escaped.push(c),
+            }
+        }
+        let pattern = format!("%{escaped}%");
         for _ in 0..3 {
             let p = pattern.clone();
             binders.push(Box::new(move |v: &mut Vec<Box<dyn ToSql>>| {
@@ -213,7 +222,8 @@ fn build_head(q: &TrackWindowQuery, cursor_filter: Option<&str>) -> (String, Vec
             }));
         }
         where_clauses.push(
-            "(t.title_norm LIKE ? OR COALESCE(ar.name_norm,'') LIKE ? OR COALESCE(al.title_norm,'') LIKE ?)"
+            "(t.title_norm LIKE ? ESCAPE '\\' OR COALESCE(ar.name_norm,'') LIKE ? ESCAPE '\\' \
+             OR COALESCE(al.title_norm,'') LIKE ? ESCAPE '\\')"
                 .to_string(),
         );
     }
@@ -230,6 +240,16 @@ fn build_head(q: &TrackWindowQuery, cursor_filter: Option<&str>) -> (String, Vec
             v.push(Box::new(b.clone()));
         }));
         where_clauses.push("t.album_id = ?".to_string());
+    }
+    // 歌单来源：JOIN_PLAYLIST 从 playlist_items 出发，必须按 playlist_id 过滤，
+    // 否则任何歌单都返回全部曲目（P0）。占位符顺序 = binder 推入顺序
+    // （search → artist → album → playlist → cursor）。
+    if let TrackSource::Playlist { playlist_id } = &q.source {
+        let pid = playlist_id.clone();
+        binders.push(Box::new(move |v: &mut Vec<Box<dyn ToSql>>| {
+            v.push(Box::new(pid.clone()));
+        }));
+        where_clauses.push("pi.playlist_id = ?".to_string());
     }
     if let Some(cf) = cursor_filter {
         where_clauses.push(cf.to_string());
@@ -359,21 +379,24 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
     };
 
     // ---------- 页数据（limit+1 探测 next）----------
-    let items: Vec<TrackRow> = {
+    // 读满 limit+1 行才视为 has_more（多出的探测行丢弃）；不能用 total 取模判断
+    // —— total 恰为 limit 整数倍时会多发一次空页。
+    let (items, has_more): (Vec<TrackRow>, bool) = {
         let sql = format!("{head} LIMIT ? OFFSET ?");
         let mut stmt = conn.prepare(&sql)?;
         bind_all(&mut stmt, &binders, Some((limit + 1, offset)))?;
         let mut rows = stmt.raw_query();
-        let mut out = Vec::with_capacity(limit as usize);
+        let mut out: Vec<TrackRow> = Vec::with_capacity(limit as usize + 1);
+        let mut more = false;
         while let Some(r) = rows.next()? {
-            out.push(row_to_track(r)?);
-            if out.len() as i64 >= limit {
+            if out.len() as i64 == limit {
+                more = true; // 探测行：只判定还有下一页，不消费进结果
                 break;
             }
+            out.push(row_to_track(r)?);
         }
-        out
+        (out, more)
     };
-    let has_more = items.len() as i64 == limit && offset + limit < total;
 
     // ---------- next_cursor ----------
     let next_cursor = if has_more && key_expr(q).is_some() {
@@ -568,5 +591,60 @@ mod tests {
         ids.extend(page2.items.iter().map(|t| t.id.clone()));
         ids.sort();
         assert_eq!(ids, vec!["t1", "t2", "t3"]);
+    }
+
+    #[test]
+    fn playlist_query_is_filtered_by_playlist_id() {
+        let conn = open_in_memory().unwrap();
+        insert_fixtures(&conn);
+        // 两个歌单各含不同曲目；查 p1 绝不能带出 p2 的曲目
+        conn.execute_batch(
+            "INSERT INTO playlists (id,name,name_norm,created_at,updated_at) VALUES
+               ('p1','歌单一','歌单一',1,1),('p2','歌单二','歌单二',1,1);
+             INSERT INTO playlist_items (id,playlist_id,track_id,position,added_at) VALUES
+               ('i1','p1','t1',0,1),('i2','p1','t2',1,1),
+               ('i3','p2','t3',0,1);",
+        )
+        .unwrap();
+        let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
+        q.source = TrackSource::Playlist { playlist_id: "p1".into() };
+        let page = list_tracks(&conn, &q).unwrap();
+        let ids: Vec<_> = page.items.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["t1", "t2"], "p1 不含 p2 的曲目 t3");
+        assert_eq!(page.total, 2);
+
+        q.source = TrackSource::Playlist { playlist_id: "p2".into() };
+        let page2 = list_tracks(&conn, &q).unwrap();
+        let ids2: Vec<_> = page2.items.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids2, vec!["t3"]);
+        assert_eq!(page2.total, 1);
+    }
+
+    #[test]
+    fn search_wildcards_are_literal() {
+        let conn = open_in_memory().unwrap();
+        insert_fixtures(&conn);
+        // 搜 "bee_t" 应按字面匹配（不应把 _ 当单字符通配去匹配 beethoven）
+        let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
+        q.search = Some("bee_t".into());
+        let page = list_tracks(&conn, &q).unwrap();
+        assert_eq!(page.total, 0, "下划线按字面处理");
+
+        // 同理 % 按字面处理
+        q.search = Some("beet%".into());
+        let page = list_tracks(&conn, &q).unwrap();
+        assert_eq!(page.total, 0);
+    }
+
+    #[test]
+    fn cursor_no_extra_empty_page_when_total_is_multiple_of_limit() {
+        let conn = open_in_memory().unwrap();
+        insert_fixtures(&conn);
+        // total=3，limit=3：翻完第一页后不应再有下一页（旧行为会多发一次空页）
+        let mut q = q_library(Sort::Title, Mode::Cursor, None, None);
+        q.limit = 3;
+        let page = list_tracks(&conn, &q).unwrap();
+        assert_eq!(page.items.len(), 3);
+        assert!(page.next_cursor.is_none(), "整除时不得多发空页");
     }
 }

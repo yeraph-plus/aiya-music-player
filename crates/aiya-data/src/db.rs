@@ -26,6 +26,7 @@ pub enum DbError {
 const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_init.sql"),
     include_str!("../migrations/0002_artworks.sql"),
+    include_str!("../migrations/0003_tracks_path_lower.sql"),
 ];
 
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
@@ -71,12 +72,16 @@ fn configure(conn: &Connection) -> DbResult<()> {
 
 fn migrate(conn: &Connection) -> DbResult<()> {
     let mut version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    // 迁移按序补跑：每个迁移包在事务里（CREATE...ALTER 原子），失败不写 user_version
+    // 迁移按序补跑：每个迁移连同 PRAGMA user_version 一起包在一个事务里
+    // （CREATE...ALTER 原子）。user_version 必须与 DDL 同事务写入 —— 否则
+    // 两步之间崩溃会导致重放迁移报 already exists。BEGIN IMMEDIATE 拿写锁，
+    // 防止两个连接同时首跑迁移的竞态。
     for (i, sql) in MIGRATIONS.iter().enumerate() {
         let v = (i + 1) as i64;
         if version < v {
-            conn.execute_batch(&format!("BEGIN;\n{sql}\nCOMMIT;"))?;
-            conn.pragma_update(None, "user_version", v)?;
+            conn.execute_batch(&format!(
+                "BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version = {v};\nCOMMIT;"
+            ))?;
             version = v;
         }
     }
@@ -85,7 +90,10 @@ fn migrate(conn: &Connection) -> DbResult<()> {
 
 fn run_worker(mut conn: Connection, rx: Receiver<Job>) {
     while let Ok(job) = rx.recv() {
-        job(&mut conn);
+        // panic 隔离：单个闭包 panic 不允许杀死 worker 线程
+        //（否则后续所有 send 永久 Closed）。错误信封在 send() 的闭包内
+        // 通过 catch_unwind 构造；这里再兜一层防御未捕获路径。
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&mut conn)));
     }
     // channel 关闭（所有 handle drop）：正常退出路径
 }
@@ -105,7 +113,10 @@ impl DbHandle {
     ) -> DbResult<T> {
         let (reply_tx, reply_rx) = mpsc::channel();
         let job: Job = Box::new(move |conn| {
-            let result = f(conn);
+            // panic 隔离：用户闭包 panic 时构造错误信封回发（否则接收端
+            // recv 挂死/得到 Closed），worker 线程继续存活服务后续任务。
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(conn)))
+                .unwrap_or_else(|_| Err(DbError::Custom("db job panicked".into())));
             // 接收方已放弃等待（panic/超时）时丢弃结果
             let _ = reply_tx.send(result);
         });
@@ -168,6 +179,20 @@ mod tests {
             Ok(conn.query_row("SELECT 40 + 2", [], |r| r.get(0))?)
         }).unwrap();
         assert_eq!(answer, 42);
+        db.close();
+    }
+
+    #[test]
+    fn worker_survives_job_panic() {
+        let path = std::env::temp_dir().join(format!("aiya-test-panic-{}.db", std::process::id()));
+        let mut db = open(&path).unwrap();
+        // 闭包 panic → 回发错误信封，worker 存活
+        let r: DbResult<i64> = db.send(|_conn| panic!("boom"));
+        assert!(r.is_err(), "panic 转成错误信封");
+        let ok: i64 = db
+            .send(|conn| Ok(conn.query_row("SELECT 1", [], |r| r.get(0))?))
+            .expect("worker must still be alive after a panicking job");
+        assert_eq!(ok, 1);
         db.close();
     }
 }

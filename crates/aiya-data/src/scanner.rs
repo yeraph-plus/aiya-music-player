@@ -55,6 +55,10 @@ pub struct ScanResult {
     pub updated: usize,
     pub unchanged: usize,
     pub failed: usize,
+    /// 遍历目录时的 walkdir 错误条数（权限不足等）；只计数不中断。
+    /// `#[serde(default)]` 保持对旧调用方（缺字段反序列化）兼容。
+    #[serde(default)]
+    pub walk_errors: usize,
     pub cancelled: bool,
     pub errors: Vec<ScanError>,
     pub elapsed_ms: u64,
@@ -72,13 +76,18 @@ fn is_audio(p: &Path) -> bool {
 }
 
 /// 遍历目录收集音频文件。跳过隐藏目录与系统噪音目录。
-fn walk(root: &Path) -> Vec<PathBuf> {
+/// 返回 (音频文件列表, walk 错误数)。错误（权限不足等）只计数不中断。
+fn walk(root: &Path) -> (Vec<PathBuf>, usize) {
     let mut out = Vec::new();
-    for entry in walkdir::WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
+    let mut walk_errors = 0usize;
+    for entry in walkdir::WalkDir::new(root).follow_links(false) {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => {
+                walk_errors += 1;
+                continue;
+            }
+        };
         if entry.file_type().is_dir() {
             if let Some(name) = entry.file_name().to_str() {
                 if name.starts_with('.') || name == "$RECYCLE.BIN" || name == "System Volume Information" {
@@ -91,7 +100,7 @@ fn walk(root: &Path) -> Vec<PathBuf> {
             out.push(p.to_path_buf());
         }
     }
-    out
+    (out, walk_errors)
 }
 
 struct ParsedTrack {
@@ -105,7 +114,9 @@ struct ParsedTrack {
     year: Option<u32>,
     duration_ms: Option<i64>,
     size_bytes: u64,
-    mtime: i64,
+    /// 文件 mtime（unix 秒）。None = modified() 读取失败：跳过 unchanged
+    /// 短路，强制重新解析（避免 0==0 的假命中导致变更永远检测不到）。
+    mtime: Option<i64>,
     sample_rate: Option<u32>,
     bit_depth: Option<u32>,
     bitrate: Option<u32>,
@@ -127,12 +138,13 @@ fn tag_u32(tag: Option<&Tag>, key: ItemKey) -> Option<u32> {
 
 fn parse_file(path: &Path) -> Result<ParsedTrack, String> {
     let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    // modified() 失败时不得当 0（否则后续变更检测 0==0 跳过解析）：
+    // 返回 None，让 upsert 走强制重解析路径
     let mtime = meta
         .modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .map(|d| d.as_secs() as i64);
 
     let tagged = Probe::open(path)
         .map_err(|e| format!("probe: {e}"))?
@@ -195,16 +207,26 @@ fn upsert(
     now: i64,
     artwork_cache: Option<&Path>,
 ) -> DbResult<bool> {
-    let existing: Option<(String, i64, i64)> = conn
+    // 对账键 = path_lower（Windows 大小写不敏感语义，见 0003 迁移）
+    let path_lower = t.path.to_lowercase();
+    let existing: Option<(String, i64, i64, String)> = conn
         .query_row(
-            "SELECT id, mtime, size_bytes FROM tracks WHERE path = ?1",
-            [&t.path],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            "SELECT id, mtime, size_bytes, availability FROM tracks WHERE path_lower = ?1",
+            [&path_lower],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .ok();
-    if let Some((_, old_mtime, old_size)) = &existing {
-        if *old_mtime == t.mtime && *old_size == t.size_bytes as i64 {
-            return Ok(false);
+    if let Some((_, old_mtime, old_size, availability)) = &existing {
+        // 1) mtime 读取失败（None）→ 必须重新解析，不走 unchanged 短路；
+        // 2) 行标记为 missing（文件曾消失又出现）→ 也必须走更新路径，
+        //    否则 mtime/size 相同时恢复的文件永远翻不回 online。
+        let must_refresh = *availability == "missing";
+        if !must_refresh {
+            if let Some(m) = t.mtime {
+                if *old_mtime == m && *old_size == t.size_bytes as i64 {
+                    return Ok(false);
+                }
+            }
         }
     }
 
@@ -262,15 +284,15 @@ fn upsert(
             added_at, artwork_id, gain_db,
             codec, container, sample_rate, bits_per_sample, bitrate, channels,
             play_count, last_played_at,
-            path, size_bytes, mtime, availability
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,NULL,NULL,?12,?13,?14,?15,?16,0,NULL,?17,?18,?19,'online')
-         ON CONFLICT(path) DO UPDATE SET
+            path, path_lower, size_bytes, mtime, availability
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,NULL,NULL,?12,?13,?14,?15,?16,0,NULL,?17,?18,?19,?20,'online')
+         ON CONFLICT(path_lower) DO UPDATE SET
            title = excluded.title, title_norm = excluded.title_norm,
            artist_id = excluded.artist_id, album_id = excluded.album_id,
            duration_ms = excluded.duration_ms, track_no = excluded.track_no,
            disc_no = excluded.disc_no, year = excluded.year,
            artwork_id = excluded.artwork_id,
-           codec = excluded.codec, container = excluded.container,
+           container = excluded.container,
            sample_rate = excluded.sample_rate, bits_per_sample = excluded.bits_per_sample,
            bitrate = excluded.bitrate, channels = excluded.channels,
            size_bytes = excluded.size_bytes, mtime = excluded.mtime,
@@ -293,8 +315,9 @@ fn upsert(
             t.bitrate,
             t.channels,
             t.path,
+            path_lower,
             t.size_bytes as i64,
-            t.mtime,
+            t.mtime.unwrap_or(0),
         ],
     )?;
     Ok(existing.is_none())
@@ -302,6 +325,10 @@ fn upsert(
 
 /// 扫描入口。`on_progress` 每 BATCH 个文件回调一次（UI 侧再做 120ms 节流）。
 /// `artwork_cache`：封面原图缓存目录（None = 不提取封面）。
+///
+/// 收尾时把本轮 walk 到、但库中标记 online 且位于 root 前缀下的曲目标为
+/// `missing`（文件被删除）；文件重新出现靠 upsert 的
+/// `availability = 'online'` 恢复。
 pub fn scan_directory(
     conn: &mut Connection,
     root: &Path,
@@ -326,8 +353,13 @@ pub fn scan_directory(
         message: None,
     });
 
-    let files = walk(root);
+    let (files, walk_errors) = walk(root);
     let total = files.len();
+    // 本轮实际 walk 到的路径（小写），供 missing 对账用
+    let seen: std::collections::HashSet<String> = files
+        .iter()
+        .map(|p| p.to_string_lossy().to_lowercase())
+        .collect();
 
     on_progress(ScanProgress {
         phase: "parsing".into(),
@@ -341,46 +373,72 @@ pub fn scan_directory(
         message: None,
     });
 
-    for (i, path) in files.iter().enumerate() {
-        match parse_file(path).map(|parsed| {
-            let tx = conn.transaction().map_err(DbError::Sql)?;
-            let inserted = upsert(&tx, &parsed, now_secs(), artwork_cache)?;
-            tx.commit().map_err(DbError::Sql)?;
-            Ok::<bool, DbError>(inserted)
-        }) {
-            Ok(Ok(true)) => imported += 1,
-            Ok(Ok(false)) => unchanged += 1,
-            Ok(Err(e)) => {
-                failed += 1;
-                if errors.len() < 100 {
-                    errors.push(ScanError {
-                        path: path.to_string_lossy().into_owned(),
-                        message: e.to_string(),
-                    });
-                }
-            }
-            Err(msg) => {
-                failed += 1;
-                if errors.len() < 100 {
-                    errors.push(ScanError { path: path.to_string_lossy().into_owned(), message: msg });
+    // 按批包事务：一个事务提交 BATCH_SIZE 个文件的 upsert；
+    // 批内某个 upsert 失败 → 回滚整批、整批计入 failed，继续下一批。
+    let mut scanned_so_far = 0usize;
+    for batch in files.chunks(BATCH_SIZE) {
+        let mut parsed: Vec<(&PathBuf, ParsedTrack)> = Vec::with_capacity(batch.len());
+        for path in batch {
+            match parse_file(path) {
+                Ok(p) => parsed.push((path, p)),
+                Err(msg) => {
+                    failed += 1;
+                    if errors.len() < 100 {
+                        errors.push(ScanError { path: path.to_string_lossy().into_owned(), message: msg });
+                    }
                 }
             }
         }
 
-        if (i + 1) % BATCH_SIZE == 0 || i + 1 == total {
-            on_progress(ScanProgress {
-                phase: "parsing".into(),
-                scanned: i + 1,
-                total: Some(total),
-                imported,
-                skipped: unchanged,
-                failed,
-                current_path: Some(path.to_string_lossy().into_owned()),
-                elapsed_ms: started.elapsed().as_millis() as u64,
-                message: None,
-            });
+        let mut batch_imported = 0usize;
+        let mut batch_unchanged = 0usize;
+        if !parsed.is_empty() {
+            let tx = conn.transaction().map_err(DbError::Sql)?;
+            let mut upsert_err: Option<(&PathBuf, DbError)> = None;
+            for (path, p) in &parsed {
+                match upsert(&tx, p, now_secs(), artwork_cache) {
+                    Ok(true) => batch_imported += 1,
+                    Ok(false) => batch_unchanged += 1,
+                    Err(e) => {
+                        upsert_err = Some((path, e));
+                        break;
+                    }
+                }
+            }
+            match upsert_err {
+                None => {
+                    tx.commit().map_err(DbError::Sql)?;
+                    imported += batch_imported;
+                    unchanged += batch_unchanged;
+                }
+                Some((path, e)) => {
+                    tx.rollback().map_err(DbError::Sql)?;
+                    failed += parsed.len();
+                    if errors.len() < 100 {
+                        errors.push(ScanError {
+                            path: path.to_string_lossy().into_owned(),
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
         }
+
+        scanned_so_far += batch.len();
+        on_progress(ScanProgress {
+            phase: "parsing".into(),
+            scanned: scanned_so_far,
+            total: Some(total),
+            imported,
+            skipped: unchanged,
+            failed,
+            current_path: Some(batch.last().unwrap().to_string_lossy().into_owned()),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            message: None,
+        });
     }
+
+    mark_missing(conn, root, &seen)?;
 
     let elapsed_ms = started.elapsed().as_millis() as u64;
     let result = ScanResult {
@@ -389,6 +447,7 @@ pub fn scan_directory(
         updated: 0,
         unchanged,
         failed,
+        walk_errors,
         cancelled: false,
         errors: std::mem::take(&mut errors),
         elapsed_ms,
@@ -405,6 +464,59 @@ pub fn scan_directory(
         message: None,
     });
     Ok(result)
+}
+
+/// LIKE 通配符转义（ESCAPE '\'）：字面匹配 % _ \。
+fn like_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '%' | '_' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// 把「库中 online + 位于 root 前缀下 + 本轮未 walk 到」的曲目标为 missing。
+/// 重新出现的文件由 upsert 的 `availability = 'online'` 恢复。
+fn mark_missing(
+    conn: &mut Connection,
+    root: &Path,
+    seen: &std::collections::HashSet<String>,
+) -> DbResult<()> {
+    // 前缀统一小写并以路径分隔符收尾，防止 "C:\m" 误匹配 "C:\music\..."
+    let mut prefix = root.to_string_lossy().to_lowercase();
+    if !prefix.ends_with('\\') && !prefix.ends_with('/') {
+        prefix.push(std::path::MAIN_SEPARATOR);
+    }
+    let prefix_like = like_escape(&prefix);
+
+    let tx = conn.transaction().map_err(DbError::Sql)?;
+    tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS scan_seen (path_lower TEXT PRIMARY KEY)")?;
+    tx.execute("DELETE FROM scan_seen", [])?;
+    {
+        let mut stmt = tx.prepare("INSERT OR IGNORE INTO scan_seen (path_lower) VALUES (?1)")?;
+        for p in seen {
+            stmt.execute([p])?;
+        }
+    }
+    let missing = tx.execute(
+        "UPDATE tracks SET availability = 'missing'
+         WHERE availability = 'online'
+           AND path_lower LIKE ?1 ESCAPE '\\'
+           AND path_lower NOT IN (SELECT path_lower FROM scan_seen)",
+        rusqlite::params![format!("{prefix_like}%")],
+    )?;
+    tx.execute_batch("DROP TABLE IF EXISTS temp.scan_seen")?;
+    tx.commit().map_err(DbError::Sql)?;
+    if missing > 0 {
+        tracing::info!(missing, "scan marked missing tracks");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -547,5 +659,67 @@ mod tests {
         assert_eq!(result2.imported, 1);
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM artworks", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 1, "same picture bytes deduped");
+    }
+
+    #[test]
+    fn deleted_file_marked_missing_then_recovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_test_mp3(dir.path(), "a.mp3", "测试标题", "测试艺人");
+
+        let mut conn = open_in_memory().unwrap();
+        let result = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        assert_eq!(result.imported, 1, "errors={:?}", result.errors);
+
+        let avail = |conn: &Connection| -> String {
+            conn.query_row("SELECT availability FROM tracks", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(avail(&conn), "online");
+
+        // 删除文件 → 重扫 → missing
+        std::fs::remove_file(&mp3).unwrap();
+        let result2 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        assert_eq!(result2.imported, 0);
+        assert_eq!(avail(&conn), "missing", "删除的文件必须标 missing");
+
+        // 文件恢复 → 重扫 → online（重新出现的文件靠 upsert 恢复）
+        write_test_mp3(dir.path(), "a.mp3", "测试标题", "测试艺人");
+        let result3 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        assert_eq!(result3.imported, 0, "同路径文件重新出现走更新而非新插入");
+        assert_eq!(avail(&conn), "online", "文件恢复后必须回到 online");
+    }
+
+    #[test]
+    fn rescan_does_not_wipe_codec() {
+        let dir = tempfile::tempdir().unwrap();
+        write_test_mp3(dir.path(), "a.mp3", "A", "B");
+        let mut conn = open_in_memory().unwrap();
+        scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        // 模拟 beets_sync 写入 codec，并把 DB 里的 mtime 改掉，
+        // 迫使下次扫描走 upsert 的 DO UPDATE 路径
+        conn.execute("UPDATE tracks SET codec = 'MP3', mtime = 1", []).unwrap();
+        scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        let codec: Option<String> =
+            conn.query_row("SELECT codec FROM tracks", [], |r| r.get(0)).unwrap();
+        assert_eq!(codec.as_deref(), Some("MP3"), "重扫不得把 beets 写的 codec 冲回 NULL");
+    }
+
+    #[test]
+    fn case_variant_paths_do_not_duplicate_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        write_test_mp3(dir.path(), "a.mp3", "A", "B");
+        let mut conn = open_in_memory().unwrap();
+        let r1 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        assert_eq!(r1.imported, 1);
+        // 模拟第二次扫描时路径大小写变化（Windows 上盘符/目录大小写可能漂移）
+        // —— 直接手工 upsert 一个大写变体路径，验证命中同一行。
+        let mut parsed = parse_file(&dir.path().join("a.mp3")).unwrap();
+        parsed.path = parsed.path.to_uppercase();
+        let tx = conn.transaction().unwrap();
+        let inserted = upsert(&tx, &parsed, 999, None).unwrap();
+        tx.commit().unwrap();
+        assert!(!inserted, "大小写变体必须命中已有行而不是新插入");
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1);
     }
 }

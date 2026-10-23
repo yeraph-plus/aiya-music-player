@@ -30,22 +30,28 @@ pub struct LyricLine {
     pub text: String,
 }
 
+/// 歌词文件大小上限：正常 .lrc 远小于此，超限视为异常文件（防读到
+/// 巨型文件拖垮内存/解析），按"无歌词"处理。
+const MAX_LRC_BYTES: u64 = 2 * 1024 * 1024;
+
 /// 读歌词主入口：`audio_path` 同目录找同名 `.lrc`；找不到返回 None。
 pub fn read_lyrics(audio_path: &std::path::Path) -> Option<ParsedLyrics> {
     let lrc = lrc_path_for(audio_path)?;
+    // 先查大小再读：超过上限直接按无歌词处理（不读入内存）
+    if std::fs::metadata(&lrc).ok()?.len() > MAX_LRC_BYTES {
+        return None;
+    }
     let bytes = std::fs::read(&lrc).ok()?;
     Some(parse_lrc(&bytes))
 }
 
-/// 同目录同名 .lrc 的路径。主名不重复扩展名（`a.b.flac` → `a.b.lrc` 里的
-/// `a.b` 是完整主名；rsplit 一次即可）。
+/// 同目录同名 .lrc 的路径。用 OsStr 级的 `with_extension` 拼扩展名，
+/// 不经过 `to_str()` —— 非 UTF-8 文件名（Windows 上合法存在）不能静默
+/// 丢歌词。`with_extension` 替换最后一个扩展名，主名完整保留
+/// （`a.b.flac` → `a.b.lrc`，与原 rsplit 语义一致；无扩展名 → 直接追加）。
 fn lrc_path_for(audio_path: &std::path::Path) -> Option<std::path::PathBuf> {
-    let file_name = audio_path.file_name()?.to_str()?;
-    let stem = match file_name.rsplit_once('.') {
-        Some((stem, _ext)) if !stem.is_empty() => stem.to_string(),
-        _ => file_name.to_string(),
-    };
-    Some(audio_path.with_file_name(format!("{stem}.lrc")))
+    audio_path.file_name()?; // 只校验是文件路径（有文件名部分）
+    Some(audio_path.with_extension("lrc"))
 }
 
 /// 解析 LRC 字节（含编码检测）。
@@ -132,8 +138,9 @@ fn parse_lines(text: &str) -> (Vec<LyricLine>, Vec<LyricLine>, i64) {
 
         let content = rest.trim_end();
         if stamps.is_empty() {
-            // 元数据标签 [ti:...] 等不进纯文本；纯文本歌词才有意义
-            if !is_meta_tag(line) {
+            // 元数据标签 [ti:...] 等与整行方括号单标签（如 [Intro]/[副歌]）
+            // 不进纯文本；纯文本歌词才有意义
+            if !is_meta_tag(line) && !is_bracket_tag_line(content) {
                 plain.push(LyricLine { time_ms: 0, text: content.to_string() });
             }
         } else {
@@ -145,7 +152,8 @@ fn parse_lines(text: &str) -> (Vec<LyricLine>, Vec<LyricLine>, i64) {
 
     let offset_applied = offset_ms;
     for l in &mut timed {
-        l.time_ms += offset_applied;
+        // offset 可能为负：clamp 到 ≥0，防止出现负时间戳扰乱 UI 滚动
+        l.time_ms = (l.time_ms + offset_applied).max(0);
     }
     (timed, plain, offset_ms)
 }
@@ -191,6 +199,19 @@ fn is_meta_tag(line: &str) -> bool {
         None => return false,
     };
     matches!(inner.split(':').next(), Some("ti" | "ar" | "al" | "by" | "length" | "re" | "ve" | "tool"))
+}
+
+/// 整行就是一个方括号单标签（如 `[Intro]`、`[副歌]`）→ 视为结构标记，
+/// 不是歌词正文。保守规则：trim 后以 `[` 开头、`]` 结尾，剥掉首尾括号后
+/// 内部非空且不含任何括号（排除 `[a][b]` 连体与 `[xx[y]` 嵌套）。
+/// `[00:01]` 这类时间戳不会走到这里（已被 extract_stamp 消费）。
+fn is_bracket_tag_line(line: &str) -> bool {
+    let t = line.trim();
+    if t.len() < 2 || !t.starts_with('[') || !t.ends_with(']') {
+        return false;
+    }
+    let inner = &t[1..t.len() - 1];
+    !inner.is_empty() && !inner.contains('[') && !inner.contains(']')
 }
 
 #[cfg(test)]
@@ -267,5 +288,60 @@ mod tests {
         let audio = dir.path().join("song.flac");
         std::fs::write(&audio, b"x").unwrap();
         assert!(read_lyrics(&audio).is_none());
+    }
+
+    #[test]
+    fn oversized_lrc_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio = dir.path().join("big.flac");
+        std::fs::write(&audio, b"x").unwrap();
+        // 2MB + 1 字节的 .lrc → 按无歌词处理
+        let big = vec![b'x'; 2 * 1024 * 1024 + 1];
+        std::fs::write(dir.path().join("big.lrc"), &big).unwrap();
+        assert!(read_lyrics(&audio).is_none(), "超 2MB 的 lrc 必须拒绝");
+    }
+
+    #[test]
+    fn negative_offset_clamps_to_zero() {
+        let src = "[offset:-5000]\n[00:01.00]提前\n";
+        let l = parse_lrc(src.as_bytes());
+        assert!(l.synced);
+        assert_eq!(l.lines[0].time_ms, 0, "负时间戳 clamp 到 0");
+    }
+
+    #[test]
+    fn bracket_tag_lines_are_filtered_in_unsynced_text() {
+        let src = "[Intro]\n第一句\n[副歌]\n第二句\n[a][b]连体保留\n中括号在中间[不算]保留\n";
+        let l = parse_lrc(src.as_bytes());
+        assert!(!l.synced);
+        let texts: Vec<&str> = l.lines.iter().map(|l| l.text.as_str()).collect();
+        assert!(
+            !texts.iter().any(|t| *t == "[Intro]" || *t == "[副歌]"),
+            "整行方括号单标签要被过滤：{texts:?}"
+        );
+        assert_eq!(texts, vec!["第一句", "第二句", "[a][b]连体保留", "中括号在中间[不算]保留"]);
+    }
+
+    #[test]
+    fn lrc_path_handles_non_utf8_names() {
+        // 修复点：lrc_path_for 不再经过 to_str()（非 UTF-8 主名会静默丢歌词）。
+        // 旧实现这里返回 None；新实现必须拼出与音频同名的 .lrc。
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt as _;
+            // 非配对代理项 0xD800 → 非 UTF-8（WTF-8）文件名
+            let name = std::ffi::OsString::from_wide(&[0x73, 0x6F, 0x6E, 0x67, 0xD800]);
+            let audio = std::path::Path::new("D:/m").join(&name).with_extension("flac");
+            let expected = std::path::Path::new("D:/m").join(&name).with_extension("lrc");
+            assert_eq!(lrc_path_for(&audio).unwrap(), expected);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt as _;
+            let name = std::ffi::OsStr::from_bytes(b"song\xff");
+            let audio = std::path::Path::new("/m").join(name).with_extension("flac");
+            let expected = std::path::Path::new("/m").join(name).with_extension("lrc");
+            assert_eq!(lrc_path_for(&audio).unwrap(), expected);
+        }
     }
 }

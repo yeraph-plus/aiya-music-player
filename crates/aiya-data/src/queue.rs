@@ -38,9 +38,16 @@ impl Default for QueuePersist {
 }
 
 /// 读取队列：状态 + 原序 track_ids（按 position 排）。
-/// 无持久化队列（current_index=-1 且 items 空）时返回 None。
+/// 无持久化队列（items 为空）时返回 None。
+///
+/// 两条查询包进同一只读事务，避免读到「state 新 / items 旧」的中间态。
+/// current_index 归一化：语义上 -1 = 无当前曲目（见 QueuePersist 注释），因此
+///   * ids 为空 → 整个队列视为无，返回 None（防御 items 被清光但状态残留）
+///   * 超出尾部 → clamp 到 len-1
+///   * < -1（脏数据）→ clamp 回 -1 哨兵；-1 本身保留原语义
 pub fn load_queue(conn: &Connection) -> Result<Option<(QueuePersist, Vec<String>)>, DbError> {
-    let state = conn
+    let tx = conn.unchecked_transaction().map_err(DbError::Sql)?;
+    let mut state = tx
         .query_row(
             "SELECT current_index, position_ms, repeat_mode, shuffle, volume, muted, rate
              FROM queue_state WHERE id = 1",
@@ -58,13 +65,22 @@ pub fn load_queue(conn: &Connection) -> Result<Option<(QueuePersist, Vec<String>
             },
         )
         .map_err(DbError::Sql)?;
-    let ids: Vec<String> = conn
+    let ids: Vec<String> = tx
         .prepare("SELECT track_id FROM queue_items ORDER BY position")?
         .query_map([], |r| r.get(0))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(DbError::Sql)?;
-    if state.current_index < 0 && ids.is_empty() {
+    tx.commit().map_err(DbError::Sql)?;
+
+    if ids.is_empty() {
         return Ok(None);
+    }
+    // 归一化越界的 current_index（队列被 CASCADE 删短后常见）
+    let max = (ids.len() - 1) as i64;
+    if state.current_index > max {
+        state.current_index = max;
+    } else if state.current_index < -1 {
+        state.current_index = -1; // -1 = 无当前曲目，是合法哨兵；更小的值是脏数据
     }
     Ok(Some((state, ids)))
 }
@@ -226,5 +242,29 @@ mod tests {
         .unwrap();
         let (_, ids) = load_queue(&conn).unwrap().unwrap();
         assert_eq!(ids, vec!["c"], "全量重写不留旧行");
+    }
+
+    #[test]
+    fn load_clamps_out_of_range_current_index() {
+        let mut conn = open_conn(Path::new(":memory:")).unwrap();
+        for id in ["a", "b"] {
+            ins_track(&conn, id);
+        }
+        // 模拟曲目被删除导致 current_index 越界（items 被 CASCADE 删短）
+        save_queue_full(
+            &mut conn,
+            &QueuePersist { current_index: 5, ..QueuePersist::default() },
+            &["a".to_string(), "b".to_string()],
+        )
+        .unwrap();
+        // 直接改 queue_state 制造越界（save 不做校验，防御在 load 侧）
+        conn.execute("UPDATE queue_state SET current_index = 5", []).unwrap();
+        let (p, ids) = load_queue(&conn).unwrap().unwrap();
+        assert_eq!(ids.len(), 2);
+        assert_eq!(p.current_index, 1, "超出尾部 clamp 到 len-1");
+
+        conn.execute("UPDATE queue_state SET current_index = -9", []).unwrap();
+        let (p2, _) = load_queue(&conn).unwrap().unwrap();
+        assert_eq!(p2.current_index, -1, "脏负值 clamp 回 -1 哨兵");
     }
 }
