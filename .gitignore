@@ -46,3 +46,4 @@ Thumbs.db
 *.p12
 .env
 .env.*tools/beets-venv/
+tools/beets-home/
