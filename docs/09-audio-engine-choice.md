@@ -203,7 +203,7 @@ wasapi-rs 侧还要额外测：格式探测、`GetBufferSize` 对齐、设备通
 
 ## 7. 如果选 wasapi-rs：最小落地清单
 
-1. `wasapi` 0.26 + `windows` 0.62；先 `DeviceCollection` 枚举 + `CapabilityProbe`。
+1. 直接引入 `wasapi` 0.26（已拍板，不做底层 COM 考据）；先 `DeviceCollection` 枚举 + `CapabilityProbe`。
 2. `symphonia` 解码到 f32/i32；WAV/FLAC 先通；FFmpeg 后补。
 3. ring buffer + 事件驱动 `AudioClient`；Shared 先通。
 4. Exclusive：`initialize_client` + 格式探测 + `GetBufferSize` 对齐恢复。

@@ -51,7 +51,7 @@ decode thread:
 
 ## 3. WASAPI 输出
 
-> 实现用 `wasapi` crate **0.26.0**（HEnquist/wasapi-rs，MIT）：共享/独占、事件/轮询、设备枚举、设备增删/默认变化通知、**独占模式格式探测**、`IAudioClock` 都有封装；缺口再用 `windows` 0.62 补。版本在 P1 锁定，并把探针结果写成自检。
+> 实现直接引入 `wasapi` crate **0.26.0**（HEnquist/wasapi-rs，MIT，已核实为当前最新）：共享/独占、事件/轮询、设备枚举、设备增删/默认变化通知、**独占模式格式探测**、`IAudioClock` 都有封装。**已拍板（2026-10-23）：不做底层 COM/`windows` crate 考据**，wasapi-rs 就是 WASAPI 边界；若真撞到库缺口，先查上游 issue/PR 或提补丁，确需直调 COM 再局部引入 `windows`，不作为计划项。版本在 P1 锁定，并把探针结果写成自检。
 >
 > **为什么不用 Rodio（ADR-0006）**：Rodio 的 Sink/Source 模型要求把数据流所有权交给引擎，与自有 DSP 链、位置时钟、独占模式直接冲突，且不支持 WASAPI 独占。CPAL 仅作未来跨平台共享输出占位（Linux/macOS），不进 v1。
 
