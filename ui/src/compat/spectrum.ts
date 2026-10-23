@@ -36,6 +36,12 @@ export class RemoteSpectrumSource implements SpectrumSource {
   start(): void {
     if (this.running || this.disposed) return;
     this.running = true;
+    // 订阅引擎 tap（docs/04 §5.1）：面板打开才算订阅；失败不影响空态
+    try {
+      void window.api.app.spectrumSet(true);
+    } catch {
+      /* 浏览器预览无 api */
+    }
     // listen 返回 Promise；按旧 API 约定包成同步 unsubscribe。
     // 非 Tauri 环境（浏览器预览）listen 会拒绝 —— 吞掉，保持空态。
     void listen<number[]>(FRAME_EVENT, (event) => {
@@ -54,6 +60,14 @@ export class RemoteSpectrumSource implements SpectrumSource {
   }
 
   stop(): void {
+    if (this.running) {
+      // 退订引擎 tap；只在曾 start 过时调用，避免多余 IPC
+      try {
+        void window.api.app.spectrumSet(false);
+      } catch {
+        /* 浏览器预览无 api */
+      }
+    }
     this.running = false;
     this.unlisten?.();
     this.unlisten = null;

@@ -120,6 +120,14 @@ fn app_info(state: State<'_, AppState>) -> Value {
     }))
 }
 
+/// 频谱 tap 订阅开关（docs/04 §5.1：订阅制，关闭时引擎内零开销）。
+/// UI 频谱面板打开/关闭时调用。
+#[tauri::command]
+fn spectrum_set(state: State<'_, AppState>, enabled: bool) -> Value {
+    engine_send(&state, aiya_audio::EngineCommand::SetSpectrum(enabled));
+    ok(json!({ "enabled": enabled }))
+}
+
 #[tauri::command]
 fn app_get_ui_state(state: State<'_, AppState>) -> Value {
     let result: aiya_data::DbResult<Value> = state
@@ -1513,6 +1521,11 @@ pub fn run() {
                                     // Pause/Resume 由命令路径处理；这里对齐引擎侧被动变化
                                     let _ = playing;
                                 }
+                                aiya_audio::EngineEvent::Spectrum { bands } => {
+                                    // 频谱帧：不经 Actor，直接转发 UI（~30fps）
+                                    let _ = pump.emit("spectrum:frame", bands);
+                                    continue;
+                                }
                                 aiya_audio::EngineEvent::Error { message } => {
                                     actor.reduce(aiya_player::PlayerCommand::Failed { message });
                                     should_emit = true;
@@ -1551,6 +1564,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            spectrum_set,
             app_get_ui_state,
             app_set_ui_state,
             app_get_settings,

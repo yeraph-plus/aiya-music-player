@@ -165,6 +165,8 @@ export function installApi(): void {
       getSettings: () => call('app_get_settings') as Promise<IpcResult<AppSettings>>,
       setSettings: (settings: AppSettings) => call('app_set_settings', { settings }) as Promise<IpcResult<AppSettings>>,
       diagnostics: () => call('app_diagnostics') as Promise<IpcResult<Diagnostics>>,
+      spectrumSet: (enabled: boolean) =>
+        call('spectrum_set', { enabled }) as Promise<IpcResult<{ enabled: boolean }>>,
       beetsStatus: () => call('beets_status') as Promise<IpcResult<BeetsStatus>>,
       beetsPreview: (paths: string[]) =>
         call('beets_preview', { paths }) as Promise<IpcResult<{ started: boolean }>>,
@@ -289,6 +291,8 @@ function mockDispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>
       return mock.setSettings(a.settings as AppSettings);
     case 'app_diagnostics':
       return mock.diagnostics();
+    case 'spectrum_set':
+      return ok({ enabled: a.enabled as boolean });
     case 'beets_preview':
       return ok({ started: true });
     case 'beets_status':

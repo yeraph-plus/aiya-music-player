@@ -255,6 +255,8 @@ export interface AiyaApi {
     getSettings(): Promise<IpcResult<AppSettings>>;
     setSettings(settings: AppSettings): Promise<IpcResult<AppSettings>>;
     diagnostics(): Promise<IpcResult<Diagnostics>>;
+    /** 频谱 tap 订阅开关（面板打开/关闭时调用；关闭时引擎内零开销） */
+    spectrumSet(enabled: boolean): Promise<IpcResult<{ enabled: boolean }>>;
     /** beets 环境探测（低频；设置页打开时调用） */
     beetsStatus(): Promise<IpcResult<BeetsStatus>>;
     /** 启动一次只读导入预览；事件流走 onBeetsImport */

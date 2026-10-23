@@ -67,6 +67,10 @@ fn main() {
             Some(aiya_audio::EngineEvent::StateChanged { playing }) => {
                 println!("StateChanged playing={playing}");
             }
+            Some(aiya_audio::EngineEvent::Spectrum { bands }) => {
+                // 频谱帧（tap 未订阅时不会出现）
+                let _ = bands;
+            }
             None => std::thread::sleep(Duration::from_millis(20)),
         }
     }

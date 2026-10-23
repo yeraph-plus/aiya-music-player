@@ -34,6 +34,8 @@ pub enum EngineCommand {
     /// 变速：0.5–2.0，线性插值重采样（v1 变速变调；WSOLA 不变调后补）
     SetRate(f32),
     Stop,
+    /// 频谱 tap 订阅开关（订阅制必要采样复制，关闭零开销）
+    SetSpectrum(bool),
     /// 退出线程
     Shutdown,
 }
@@ -50,6 +52,8 @@ pub enum EngineEvent {
     Eof,
     /// 状态变化（供 PlayerActor 对齐）
     StateChanged { playing: bool },
+    /// 频谱帧（tap FFT 线程 ~30fps；宿主原样 emit `spectrum:frame`）
+    Spectrum { bands: Vec<u8> },
     Error { message: String },
 }
 
@@ -111,13 +115,18 @@ fn render_loop(cmd_rx: Receiver<EngineCommand>, ev_tx: Sender<EngineEvent>) {
 
     { let _ = wasapi::initialize_mta(); }
 
+    // 频谱 tap（docs/04 §5.1）：跨曲目常驻；FFT 消费线程把事件并进 ev_tx
+    let tap = crate::spectrum::SpectrumTap::new();
+    tap.spawn_consumer(ev_tx.clone());
+
     'outer: loop {
-        // 命令循环：等 Load 或 Shutdown（Load 前到的 SetRate 暂存，进 play_file 生效）
+        // 命令循环：等 Load 或 Shutdown（Load 前到的 SetRate/SetSpectrum 暂存生效）
         let mut pending_rate: f32 = 1.0;
         let mut path = loop {
             match cmd_rx.recv() {
                 Ok(EngineCommand::Load(p)) => break p,
                 Ok(EngineCommand::SetRate(r)) => pending_rate = r.clamp(0.5, 2.0),
+                Ok(EngineCommand::SetSpectrum(on)) => tap.set_enabled(on),
                 Ok(EngineCommand::Shutdown) | Err(_) => break 'outer,
                 Ok(other) => {
                     // 未装载时只响应 Stop 类命令的回报
@@ -129,7 +138,7 @@ fn render_loop(cmd_rx: Receiver<EngineCommand>, ev_tx: Sender<EngineEvent>) {
         // play_file 内部收到的新 Load 在这里续播（path 从 play_file 带回，
         // 不能在内部丢弃 —— 否则那条 Load 凭空消失，外层 recv() 永远等不到）。
         loop {
-            match play_file(&cmd_rx, &send, &path, pending_rate) {
+            match play_file(&cmd_rx, &send, &path, pending_rate, &tap) {
                 Ok(LoadExit::Finished) => break, // EOF/Stop/错误恢复：回顶层等下一条 Load
                 Ok(LoadExit::NewLoad { path: p, rate }) => {
                     path = p;
@@ -168,11 +177,13 @@ fn handle_preload(cmd: &EngineCommand, send: &impl Fn(EngineEvent)) {
 
 /// 打开文件并进入渲染循环直到 Stop/Shutdown/新 Load/EOF。
 /// `initial_rate`：Load 前收到的变速指令（如启动恢复/恢复会话）。
+/// `tap`：频谱采样点（跨曲目常驻；drain 前取已消费源帧，未乘音量）。
 fn play_file(
     cmd_rx: &Receiver<EngineCommand>,
     send: &impl Fn(EngineEvent),
     path: &str,
     initial_rate: f32,
+    tap: &crate::spectrum::SpectrumTap,
 ) -> Result<LoadExit, AudioError> {
     let mut decoder = Decoder::open(Path::new(path))?;
     send(EngineEvent::Loaded { duration_ms: decoder.duration_ms });
@@ -256,6 +267,7 @@ fn play_file(
                 }
                 Ok(EngineCommand::SetVolume(v)) => volume = v.clamp(0.0, 1.0),
                 Ok(EngineCommand::SetRate(r)) => rate = r.clamp(0.5, 2.0),
+                Ok(EngineCommand::SetSpectrum(on)) => tap.set_enabled(on),
                 Ok(EngineCommand::Stop) => {
                     user_stopped = true;
                     break;
@@ -338,11 +350,13 @@ fn play_file(
                 .map_err(wasapi_err)?;
             frames_to_write -= out_frames;
 
-            // 4) 消费池：前移读取位置，drain 已消费帧
+            // 4) 消费池：前移读取位置，drain 已消费帧。
+            //    tap 点：已消费的源帧未乘音量（低音量频谱仍可视），单声道入环。
             pool_pos += out_frames as f64 * rate as f64;
             let consumed = pool_pos.floor() as usize;
             if consumed > 0 {
                 let n = consumed.min(pool_frames) * channels;
+                tap.push_frame(&pool[..n], channels);
                 pool.drain(..n);
                 pool_pos -= consumed as f64;
             }

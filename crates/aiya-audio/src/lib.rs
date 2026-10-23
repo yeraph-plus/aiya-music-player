@@ -7,6 +7,7 @@
 pub mod decoder;
 pub mod engine;
 pub mod proto;
+pub mod spectrum;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AudioError {
