@@ -4,6 +4,7 @@
 //! 本文件把 `aiya-data` 的能力暴露为 IPC 命令，返回与 `@aiya/contracts`
 //! 的 `IpcResult<T>` 同构 JSON —— UI 的 `result.ok` 分支零改动。
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -30,6 +31,8 @@ fn fail(code: &str, message: &str) -> Value {
 pub struct AppState {
     db: Mutex<aiya_data::DbHandle>,
     db_path: PathBuf,
+    /// 封面缓存根：<app_data>/cache/artwork（originals/ + thumbs/）
+    artwork_dir: PathBuf,
     scanning: AtomicBool,
 }
 
@@ -46,6 +49,14 @@ fn default_db_path(app: &AppHandle) -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."));
     let _ = std::fs::create_dir_all(&dir);
     dir.join("library.sqlite")
+}
+
+fn default_artwork_dir(app: &AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("cache")
+        .join("artwork")
 }
 
 /* ---------------- 工具：settings 表读写 ---------------- */
@@ -313,6 +324,7 @@ async fn library_scan_body(app: AppHandle, state: &State<'_, AppState>, options:
     }
 
     let db_path = state.db_path.clone();
+    let artwork_dir = state.artwork_dir.clone();
     let handle = app.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -321,7 +333,7 @@ async fn library_scan_body(app: AppHandle, state: &State<'_, AppState>, options:
             Err(e) => return fail("E_INTERNAL", &e.to_string()),
         };
         let app2 = handle.clone();
-        let scan_result = scanner::scan_directory(&mut conn, &root, move |p| {
+        let scan_result = scanner::scan_directory(&mut conn, &root, Some(&artwork_dir), move |p| {
             if let Ok(v) = serde_json::to_value(&p) {
                 let _ = app2.emit("scan:progress", v);
             }
@@ -628,17 +640,119 @@ fn history_clear(state: State<'_, AppState>) -> Value {
         .unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
 }
 
+/* ---------------- aiya-artwork 协议 ---------------- */
+
+/// 处理 `http://aiya-artwork.localhost/artwork/<id>?size=N`。
+/// 流程：查 artworks 表 → 读原图 →（需要且可缩放时）生成缩略图缓存 → 响应。
+/// 失败一律 404（破图不该让前端 fetch 走重试）。
+fn artwork_protocol(app: &AppHandle, request: tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Cow<'static, [u8]>> {
+    use tauri::http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, CACHE_CONTROL, CONTENT_TYPE};
+
+    fn not_found() -> tauri::http::Response<Cow<'static, [u8]>> {
+        tauri::http::Response::builder().status(404).body(Cow::Borrowed(&b""[..])).unwrap()
+    }
+
+    // path: /artwork/<id>；先提取成 String，避免借 request 的生命周期
+    let path = request.uri().path().to_string();
+    let artwork_id = path.strip_prefix("/artwork/").unwrap_or("").to_string();
+    if artwork_id.is_empty() || artwork_id.contains('/') || artwork_id.contains("..") {
+        return not_found();
+    }
+    let size: u32 = request
+        .uri()
+        .query()
+        .and_then(|q| {
+            q.split('&').find_map(|kv| kv.strip_prefix("size="))?.parse().ok()
+        })
+        .unwrap_or(0);
+
+    let state = app.state::<AppState>();
+
+    // 1) 查记录（DB 线程）
+    let found = state.db().send(move |conn| {
+        Ok(aiya_data::find_artwork(conn, artwork_id.as_str())?)
+    });
+    let Some((cache_key, mime)) = found.ok().flatten() else {
+        return not_found();
+    };
+
+    // 2) 读原图（cache_key 只含 hash+ext，但仍然 basename 防御）
+    let original = state.artwork_dir.join("originals").join(
+        std::path::Path::new(&cache_key).file_name().unwrap_or_default(),
+    );
+    let Ok(bytes) = std::fs::read(&original) else {
+        return not_found();
+    };
+
+    // 3) 缩略图：size 指定且 ≤512 才缩（防滥用大尺寸请求），否则原图直出
+    let mut thumb_used = false;
+    let data: Cow<'static, [u8]> = if (1..=512).contains(&size) && mime.starts_with("image/") {
+        let thumb = state
+            .artwork_dir
+            .join("thumbs")
+            .join(format!("{}_{}.jpg", cache_key.split('.').next().unwrap_or("x"), size));
+        if let Ok(cached) = std::fs::read(&thumb) {
+            thumb_used = true;
+            Cow::Owned(cached)
+        } else if let Some(resized) = make_thumb(&bytes, size) {
+            // 原子写缓存；失败不影响本次响应
+            let tmp = thumb.with_extension(format!("tmp.{}", std::process::id()));
+            if std::fs::write(&tmp, &resized).is_ok() {
+                let _ = std::fs::rename(&tmp, &thumb);
+            }
+            thumb_used = true;
+            Cow::Owned(resized)
+        } else {
+            Cow::Owned(bytes)
+        }
+    } else {
+        Cow::Owned(bytes)
+    };
+    let out_mime = if thumb_used { "image/jpeg" } else { &mime };
+
+    tauri::http::Response::builder()
+        .status(200)
+        .header(CONTENT_TYPE, out_mime)
+        .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .body(data)
+        .unwrap()
+}
+
+/// 居中裁方 + 缩放 + JPEG。输入坏图/超小图返回 None（调用方回退原图）。
+fn make_thumb(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
+    use image::imageops::FilterType;
+    let img = image::load_from_memory(bytes).ok()?;
+    let thumb = img.resize_to_fill(size, size, FilterType::Lanczos3);
+    let mut out = std::io::Cursor::new(Vec::with_capacity(32 * 1024));
+    thumb
+        .write_to(&mut out, image::ImageFormat::Jpeg)
+        .ok()?;
+    Some(out.into_inner())
+}
+
 /* ---------------- 装配 ---------------- */
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .register_uri_scheme_protocol(aiya_data::ARTWORK_SCHEME, |ctx, request| {
+            artwork_protocol(ctx.app_handle(), request)
+        })
         .setup(|app| {
             let db_path = default_db_path(&app.handle());
             let db = aiya_data::open(&db_path)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
-            app.manage(AppState { db: Mutex::new(db), db_path, scanning: AtomicBool::new(false) });
+            let artwork_dir = default_artwork_dir(&app.handle());
+            let _ = std::fs::create_dir_all(artwork_dir.join("originals"));
+            let _ = std::fs::create_dir_all(artwork_dir.join("thumbs"));
+            app.manage(AppState {
+                db: Mutex::new(db),
+                db_path,
+                artwork_dir,
+                scanning: AtomicBool::new(false),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

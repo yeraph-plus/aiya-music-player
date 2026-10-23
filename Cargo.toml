@@ -16,6 +16,8 @@ lofty = "0.25.4"
 tracing = "0.1"
 uuid = { version = "1", features = ["v5"] }
 base64 = "0.22"
+sha2 = "0.10"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 
 [profile.release]
 strip = true

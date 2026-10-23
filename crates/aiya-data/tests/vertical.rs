@@ -57,7 +57,7 @@ fn vertical_scan_query_playlist() {
 
     // 1) 扫描走 DB 线程
     let scan_summary: aiya_data::DbResult<aiya_data::scanner::ScanResult> = db.send(move |conn| {
-        scan_directory(conn, dir.path(), |_| {}).map_err(|e| aiya_data::DbError::Custom(e.to_string()))
+        scan_directory(conn, dir.path(), None, |_| {}).map_err(|e| aiya_data::DbError::Custom(e.to_string()))
     });
     let scan = scan_summary.unwrap();
     assert_eq!(scan.imported, 3, "errors={:?}", scan.errors);

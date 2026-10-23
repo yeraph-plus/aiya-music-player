@@ -23,7 +23,10 @@ pub enum DbError {
     Custom(String),
 }
 
-const INIT_SQL: &str = include_str!("../migrations/0001_init.sql");
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_init.sql"),
+    include_str!("../migrations/0002_artworks.sql"),
+];
 
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
 
@@ -67,10 +70,15 @@ fn configure(conn: &Connection) -> DbResult<()> {
 }
 
 fn migrate(conn: &Connection) -> DbResult<()> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version < 1 {
-        conn.execute_batch(INIT_SQL)?;
-        conn.pragma_update(None, "user_version", 1)?;
+    let mut version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    // 迁移按序补跑：每个迁移包在事务里（CREATE...ALTER 原子），失败不写 user_version
+    for (i, sql) in MIGRATIONS.iter().enumerate() {
+        let v = (i + 1) as i64;
+        if version < v {
+            conn.execute_batch(&format!("BEGIN;\n{sql}\nCOMMIT;"))?;
+            conn.pragma_update(None, "user_version", v)?;
+            version = v;
+        }
     }
     Ok(())
 }
@@ -135,12 +143,27 @@ mod tests {
         let q: i64 = conn.query_row("SELECT COUNT(*) FROM queue_state", [], |r| r.get(0)).unwrap();
         assert_eq!(q, 1, "queue_state singleton row must exist");
         let uv: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(uv, 1);
+        assert_eq!(uv, MIGRATIONS.len() as i64, "all migrations applied");
+        // artworks 表与 tracks.artwork_id 列存在
+        let aw: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='artworks'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(aw, 1);
+        let has_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name='artwork_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_col, 1);
     }
 
     #[test]
     fn handle_roundtrip_and_close() {
-        let mut db = open(&std::env::temp_dir().join("aiya-test-handle.db")).unwrap();
+        // 每进程唯一文件名：避免上次运行的半迁移库残留影响
+        let path = std::env::temp_dir().join(format!("aiya-test-handle-{}.db", std::process::id()));
+        let mut db = open(&path).unwrap();
         let answer: i64 = db.send(|conn| {
             Ok(conn.query_row("SELECT 40 + 2", [], |r| r.get(0))?)
         }).unwrap();

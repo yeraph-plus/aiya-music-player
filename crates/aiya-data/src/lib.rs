@@ -4,11 +4,13 @@
 //! SQLite 连接由专用线程独占（`rusqlite::Connection` 非 `Sync`），
 //! 调用方通过 `DbHandle` 提交闭包，经有界 channel 进线程，结果经 reply channel 返回。
 
+pub mod artwork;
 pub mod db;
 pub mod ids;
 pub mod norm;
 pub mod repo;
 pub mod scanner;
 
+pub use artwork::{ARTWORK_SCHEME, find_artwork, save_artwork};
 pub use db::{DbError, DbHandle, DbResult, open, open_conn};
 pub use repo::{TrackRow, TrackSource, TrackWindowQuery};

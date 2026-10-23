@@ -111,6 +111,8 @@ struct ParsedTrack {
     bitrate: Option<u32>,
     channels: Option<u32>,
     container: String,
+    /// 第一个嵌入封面（原始字节 + 标签声明的 mime）
+    picture: Option<(Vec<u8>, Option<String>)>,
 }
 
 fn tag_str(tag: Option<&Tag>, key: ItemKey) -> Option<String> {
@@ -155,6 +157,15 @@ fn parse_file(path: &Path) -> Result<ParsedTrack, String> {
     let disc_no = tag_u32(tag, ItemKey::DiscNumber);
     let year = tag_u32(tag, ItemKey::Year);
 
+    let picture = tag.and_then(|t| t.pictures().first()).and_then(|pic| {
+        let data = pic.data();
+        if data.is_empty() {
+            return None;
+        }
+        let mime = pic.mime_type().map(|m| m.as_str().to_string());
+        Some((data.to_vec(), mime))
+    });
+
     Ok(ParsedTrack {
         path: path.to_string_lossy().into_owned(),
         title,
@@ -172,11 +183,18 @@ fn parse_file(path: &Path) -> Result<ParsedTrack, String> {
         bitrate: props.audio_bitrate(),
         channels: props.channels().map(|v| v as u32),
         container,
+        picture,
     })
 }
 
-/// 把一条解析结果 upsert 进库。返回 true = 新插入；false = unchanged 跳过。
-fn upsert(conn: &Connection, t: &ParsedTrack, now: i64) -> DbResult<bool> {
+/// 把一条解析结果 upsert 进库。`artwork_cache` 为 None 时不提取封面。
+/// 返回 true = 新插入；false = unchanged 跳过。
+fn upsert(
+    conn: &Connection,
+    t: &ParsedTrack,
+    now: i64,
+    artwork_cache: Option<&Path>,
+) -> DbResult<bool> {
     let existing: Option<(String, i64, i64)> = conn
         .query_row(
             "SELECT id, mtime, size_bytes FROM tracks WHERE path = ?1",
@@ -221,6 +239,23 @@ fn upsert(conn: &Connection, t: &ParsedTrack, now: i64) -> DbResult<bool> {
     let tid = ids::track_id(&t.path);
     let title_norm = norm(&t.title);
 
+    // 封面：提取 → 原子落盘 → artworks upsert → 拿 id
+    let artwork_id = match (&t.picture, artwork_cache) {
+        (Some((data, mime)), Some(cache_dir)) => crate::artwork::save_artwork(
+            conn,
+            cache_dir,
+            data,
+            mime.as_deref(),
+            now,
+        )
+        .map(|r| Some(r.id))
+        .unwrap_or_else(|e| {
+            tracing::warn!(path = %t.path, error = %e, "artwork extract failed");
+            None
+        }),
+        _ => None,
+    };
+
     conn.execute(
         "INSERT INTO tracks (
             id, title, title_norm, artist_id, album_id, duration_ms, track_no, disc_no, year,
@@ -228,12 +263,13 @@ fn upsert(conn: &Connection, t: &ParsedTrack, now: i64) -> DbResult<bool> {
             codec, container, sample_rate, bits_per_sample, bitrate, channels,
             play_count, last_played_at,
             path, size_bytes, mtime, availability
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULL,NULL,NULL,?11,?12,?13,?14,?15,0,NULL,?16,?17,?18,'online')
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,NULL,NULL,?12,?13,?14,?15,?16,0,NULL,?17,?18,?19,'online')
          ON CONFLICT(path) DO UPDATE SET
            title = excluded.title, title_norm = excluded.title_norm,
            artist_id = excluded.artist_id, album_id = excluded.album_id,
            duration_ms = excluded.duration_ms, track_no = excluded.track_no,
            disc_no = excluded.disc_no, year = excluded.year,
+           artwork_id = excluded.artwork_id,
            codec = excluded.codec, container = excluded.container,
            sample_rate = excluded.sample_rate, bits_per_sample = excluded.bits_per_sample,
            bitrate = excluded.bitrate, channels = excluded.channels,
@@ -250,6 +286,7 @@ fn upsert(conn: &Connection, t: &ParsedTrack, now: i64) -> DbResult<bool> {
             t.disc_no,
             t.year,
             now,
+            artwork_id,
             t.container,
             t.sample_rate,
             t.bit_depth,
@@ -264,9 +301,11 @@ fn upsert(conn: &Connection, t: &ParsedTrack, now: i64) -> DbResult<bool> {
 }
 
 /// 扫描入口。`on_progress` 每 BATCH 个文件回调一次（UI 侧再做 120ms 节流）。
+/// `artwork_cache`：封面原图缓存目录（None = 不提取封面）。
 pub fn scan_directory(
     conn: &mut Connection,
     root: &Path,
+    artwork_cache: Option<&Path>,
     mut on_progress: impl FnMut(ScanProgress),
 ) -> DbResult<ScanResult> {
     let started = Instant::now();
@@ -305,7 +344,7 @@ pub fn scan_directory(
     for (i, path) in files.iter().enumerate() {
         match parse_file(path).map(|parsed| {
             let tx = conn.transaction().map_err(DbError::Sql)?;
-            let inserted = upsert(&tx, &parsed, now_secs())?;
+            let inserted = upsert(&tx, &parsed, now_secs(), artwork_cache)?;
             tx.commit().map_err(DbError::Sql)?;
             Ok::<bool, DbError>(inserted)
         }) {
@@ -374,8 +413,17 @@ mod tests {
     use crate::db::open_in_memory;
     use std::io::Write;
 
-    /// 生成最小合法 MP3：ID3v2.4 头（TIT2/TPE1 UTF-8）+ 若干真实 MPEG-1 Layer3 帧
-    /// （44.1kHz / 128kbps / mono；lofty 需要至少一个有效音频帧才算解析成功）。
+    /// 最小合法 PNG（1x1 红色像素，IEND 齐全）
+    const PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D, 0xB0, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    /// 生成最小合法 MP3：ID3v2.4 头（TIT2/TPE1 UTF-8 + 可选 APIC 封面）
+    /// + 若干真实 MPEG-1 Layer3 帧（44.1kHz / 128kbps / mono）。
     fn write_test_mp3(dir: &Path, name: &str, title: &str, artist: &str) -> PathBuf {
         let path = dir.join(name);
         let mut f = std::fs::File::create(&path).unwrap();
@@ -390,6 +438,17 @@ mod tests {
             body.push(0x03); // UTF-8
             body.extend_from_slice(content);
         }
+        // APIC v2.4：编码(1) + mime(以\0结尾) + pic type(1) + description(\0) + data
+        body.extend_from_slice(b"APIC");
+        let apic_len = 1 + 10 + 1 + 1 + PNG_1X1.len(); // "image/png\0" = 10
+        body.extend_from_slice(&(apic_len as u32).to_be_bytes());
+        body.extend_from_slice(&[0, 0]);
+        body.push(0x00); // latin-1 编码
+        body.extend_from_slice(b"image/png\0");
+        body.push(0x03); // front cover
+        body.push(0x00); // 空 description
+        body.extend_from_slice(PNG_1X1);
+
         let size = body.len() as u32;
         let syncsafe = [
             ((size >> 21) & 0x7f) as u8,
@@ -421,7 +480,7 @@ mod tests {
         std::fs::write(dir.path().join("not-audio.txt"), b"nope").unwrap();
 
         let mut conn = open_in_memory().unwrap();
-        let result = scan_directory(&mut conn, dir.path(), |_| {}).unwrap();
+        let result = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
         assert_eq!(result.imported, 1, "one mp3 imported; errors={:?}", result.errors);
         assert_eq!(result.failed, 0);
 
@@ -435,7 +494,7 @@ mod tests {
         assert_eq!(title, "测试标题");
         assert_eq!(artist, "测试艺人");
 
-        let result2 = scan_directory(&mut conn, dir.path(), |_| {}).unwrap();
+        let result2 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
         assert_eq!(result2.imported, 0);
         assert_eq!(result2.unchanged, 1);
         assert_eq!(result2.failed, 0);
@@ -449,10 +508,44 @@ mod tests {
         std::fs::write(&bad, b"definitely not mp3 content").unwrap();
 
         let mut conn = open_in_memory().unwrap();
-        let result = scan_directory(&mut conn, dir.path(), |_| {}).unwrap();
+        let result = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
         assert_eq!(result.failed, 1, "bad file counted as failed; errors={:?}", result.errors);
         assert_eq!(result.imported, 1, "good file still imported");
         assert!(result.errors.iter().any(|e| e.path == bad.to_string_lossy()));
         let _ = good;
+    }
+
+    #[test]
+    fn scan_extracts_artwork_to_cache_and_links_track() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        write_test_mp3(dir.path(), "a.mp3", "带封面", "艺人");
+
+        let mut conn = open_in_memory().unwrap();
+        let result = scan_directory(&mut conn, dir.path(), Some(cache.path()), |_| {}).unwrap();
+        assert_eq!(result.imported, 1, "errors={:?}", result.errors);
+
+        let (art_id, mime, cache_key): (String, String, String) = conn
+            .query_row(
+                "SELECT t.artwork_id, aw.mime, aw.cache_key FROM tracks t JOIN artworks aw ON aw.id = t.artwork_id",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert!(art_id.starts_with("aw_"));
+        assert_eq!(mime, "image/png");
+        assert!(cache_key.ends_with(".png"));
+
+        let original = cache.path().join("originals").join(&cache_key);
+        assert!(original.exists(), "original saved");
+        let saved = std::fs::read(&original).unwrap();
+        assert_eq!(&saved[..4], &PNG_1X1[..4], "bytes round-trip");
+
+        // 同专辑第二首共享同一 artwork（hash 去重）
+        write_test_mp3(dir.path(), "b.mp3", "同专辑", "艺人");
+        let result2 = scan_directory(&mut conn, dir.path(), Some(cache.path()), |_| {}).unwrap();
+        assert_eq!(result2.imported, 1);
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM artworks", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1, "same picture bytes deduped");
     }
 }

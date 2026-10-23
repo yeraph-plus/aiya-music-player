@@ -20,4 +20,5 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 aiya-data = { path = "../crates/aiya-data" }
+image.workspace = true
 rusqlite.workspace = true
