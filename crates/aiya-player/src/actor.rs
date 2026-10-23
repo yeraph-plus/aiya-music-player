@@ -106,9 +106,53 @@ impl PlayerActor {
         (self.volume, self.muted)
     }
 
-    /* ---------------- 内部工具 ---------------- */
+    /// 启动恢复：按持久化状态重建 Actor 并装载到引擎（装载但暂停）。
+    ///
+    /// - 恢复成 `Paused`：不自动播放，用户点播放继续
+    /// - shuffle 开启时重新洗牌（排列不落库，对齐持久化决策），当前曲保持在 cursor 位
+    /// - `current_track_id` 按曲目 ID 定位（不传下标：DB 队列里被删曲目会让下标错位）
+    /// - 恢复前调用方负责用 DB 队列重建 tracks（缺失曲目已静默剔除）
+    pub fn hydrate(
+        &mut self,
+        tracks: Vec<TrackRef>,
+        repeat: RepeatMode,
+        shuffle: bool,
+        volume: f64,
+        muted: bool,
+        rate: f64,
+        position_ms: u64,
+        current_track_id: Option<&str>,
+    ) {
+        self.queue = tracks;
+        self.repeat = repeat;
+        self.shuffle = shuffle;
+        self.volume = volume.clamp(0.0, 1.0);
+        self.muted = muted;
+        self.rate = rate.clamp(0.5, 2.0);
+        self.position_ms = position_ms;
+        self.last_reported_ms = position_ms;
+        self.rebuild_order(None);
+        let target = current_track_id
+            .and_then(|id| self.queue.iter().position(|t| t.id == id))
+            .unwrap_or(0);
+        if let Some(pos) = self.order.iter().position(|&i| i == target) {
+            self.cursor = pos;
+        }
+        self.bump_queue_version();
+        if self.queue.is_empty() {
+            self.status = PlaybackStatus::Idle;
+        } else {
+            // 装载到引擎但暂停（autoplay=false → status=Paused）
+            self.instruct_load(false, position_ms);
+        }
+    }
 
-    fn current_track(&self) -> Option<&TrackRef> {
+    /// 队列原序 ids（持久化用，非播放顺序 —— 随机排列不落库）。
+    pub fn queue_ids(&self) -> Vec<String> {
+        self.queue.iter().map(|t| t.id.clone()).collect()
+    }
+
+    /* ---------------- 内部工具 ---------------- */    fn current_track(&self) -> Option<&TrackRef> {
         self.order
             .get(self.cursor)
             .and_then(|&i| self.queue.get(i))
@@ -614,5 +658,83 @@ mod tests {
         let (_, path, _, autoplay) = p.take_pending_load().unwrap();
         assert_eq!(path, "D:/m/a.flac");
         assert!(autoplay);
+    }
+
+    #[test]
+    fn hydrate_restores_paused_at_position() {
+        let mut p = PlayerActor::new();
+        p.hydrate(
+            vec![track("a"), track("b"), track("c")],
+            RepeatMode::All,
+            false,
+            0.7,
+            false,
+            1.25,
+            30_000,
+            Some("b"),
+        );
+        let (token, path, start, autoplay) = p.take_pending_load().unwrap();
+        assert_eq!(path, "D:/m/b.flac", "恢复到 current= b 的曲目");
+        assert_eq!(start, 30_000, "从持久化位置继续");
+        assert!(!autoplay, "恢复不自动播放");
+        let s = p.state();
+        assert_eq!(s.status, PlaybackStatus::Paused);
+        assert_eq!(s.repeat, RepeatMode::All);
+        assert_eq!(s.volume, 0.7);
+        assert_eq!(s.rate, 1.25);
+        assert_eq!(s.position_ms, 30_000);
+        assert_eq!(s.token, token);
+        assert_eq!(s.index, 1);
+        assert_eq!(p.queue_ids(), vec!["a", "b", "c"], "queue_ids 是原序");
+
+        // 恢复后点播放：Paused → Playing，不再触发新 load
+        p.reduce(PlayerCommand::TogglePause);
+        assert!(p.take_pending_load().is_none());
+        assert_eq!(p.state().status, PlaybackStatus::Playing);
+    }
+
+    #[test]
+    fn hydrate_shuffle_keeps_current_track() {
+        let mut p = PlayerActor::new();
+        p.hydrate(
+            (0..8).map(|i| track(&format!("t{i}"))).collect(),
+            RepeatMode::Off,
+            true,
+            0.85,
+            false,
+            1.0,
+            0,
+            Some("t5"),
+        );
+        let _ = p.take_pending_load().unwrap();
+        assert_eq!(p.state().current.unwrap().id, "t5", "洗牌后当前曲仍是 t5");
+        let mut ids = p.queue_snapshot().ids;
+        ids.sort();
+        assert_eq!(ids.len(), 8, "洗牌是排列，不丢曲");
+    }
+
+    #[test]
+    fn hydrate_missing_current_falls_back_to_first() {
+        let mut p = PlayerActor::new();
+        p.hydrate(
+            vec![track("a"), track("b")],
+            RepeatMode::Off,
+            false,
+            0.85,
+            false,
+            1.0,
+            0,
+            Some("deleted"),
+        );
+        let (_, path, ..) = p.take_pending_load().unwrap();
+        assert_eq!(path, "D:/m/a.flac", "当前曲已被删 → 回退第一首");
+    }
+
+    #[test]
+    fn hydrate_empty_queue_stays_idle() {
+        let mut p = PlayerActor::new();
+        p.hydrate(vec![], RepeatMode::Off, false, 0.85, false, 1.0, 0, None);
+        assert!(p.take_pending_load().is_none());
+        assert_eq!(p.state().status, PlaybackStatus::Idle);
     }
 }

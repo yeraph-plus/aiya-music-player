@@ -38,6 +38,8 @@ pub struct AppState {
     /// 原生音频引擎（Symphonia + WASAPI 共享模式）
     engine: Mutex<aiya_audio::Engine>,
     scanning: AtomicBool,
+    /// 队列状态行上次落库时间（毫秒，事件泵 5s 节流用）
+    last_persist_ms: std::sync::atomic::AtomicU64,
 }
 
 impl AppState {
@@ -596,6 +598,49 @@ fn emit_player_state(app: &AppHandle, state: &aiya_player::PlayerState) {
     }
 }
 
+/* ---------------- 队列持久化 ---------------- */
+
+/// 从 Actor 快照持久化状态行（节流落库 / 退出 flush 用）。
+fn queue_persist_from_actor(actor: &aiya_player::PlayerActor) -> aiya_data::QueuePersist {
+    let s = actor.state();
+    aiya_data::QueuePersist {
+        current_index: s.index,
+        position_ms: s.position_ms as i64,
+        repeat_mode: match s.repeat {
+            aiya_player::RepeatMode::All => "all",
+            aiya_player::RepeatMode::One => "one",
+            aiya_player::RepeatMode::Off => "off",
+        }
+        .into(),
+        shuffle: s.shuffle,
+        volume: s.volume,
+        muted: s.muted,
+        rate: s.rate,
+    }
+}
+
+/// 全量落库（queue_items 重写 + 状态行）：切歌/清空时调用。
+fn persist_queue_full(state: &State<'_, AppState>, actor: &aiya_player::PlayerActor) {
+    let p = queue_persist_from_actor(actor);
+    let ids = actor.queue_ids();
+    let result: aiya_data::DbResult<()> = state
+        .db()
+        .send(move |conn| aiya_data::save_queue_full(conn, &p, &ids));
+    if let Err(e) = result {
+        tracing::warn!(error = %e, "queue full persist failed");
+    }
+}
+
+/// 只落状态行（position/音量等，5s 节流）。
+fn persist_queue_state_handle(state: &State<'_, AppState>, actor: &aiya_player::PlayerActor) {
+    let p = queue_persist_from_actor(actor);
+    let result: aiya_data::DbResult<()> =
+        state.db().send(move |conn| aiya_data::save_queue_state(conn, &p));
+    if let Err(e) = result {
+        tracing::warn!(error = %e, "queue state persist failed");
+    }
+}
+
 /// Actor 归约后统一收尾：取 pending load → 发引擎；同步音量；推状态。
 /// 返回新快照（命令返回值用）。
 fn drive_and_emit(state: &State<'_, AppState>, app: &AppHandle) -> Value {
@@ -610,6 +655,8 @@ fn drive_and_emit(state: &State<'_, AppState>, app: &AppHandle) -> Value {
             engine_send(&state, aiya_audio::EngineCommand::Pause);
         }
         let _ = (token, start_ms);
+        // 切歌立即全量落库（队列结构可能变了；exit 时不必依赖节流尾巴）
+        persist_queue_full(state, &actor);
     }
     let snapshot = actor.state();
     drop(actor);
@@ -619,6 +666,15 @@ fn drive_and_emit(state: &State<'_, AppState>, app: &AppHandle) -> Value {
 
 fn actor_is_muted(actor: &aiya_player::PlayerActor) -> bool {
     actor.volume().1
+}
+
+/// 显示并聚焦主窗口（托盘左键 / 菜单共用）。
+fn show_main_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
 }
 
 /// 引擎命令统一入口（Engine 在 Mutex 里）。
@@ -807,10 +863,11 @@ fn player_toggle_mute(app: AppHandle, state: State<'_, AppState>) -> Value {
 
 #[tauri::command]
 fn player_set_rate(app: AppHandle, state: State<'_, AppState>, rate: f64) -> Value {
-    // v1 原生引擎不做变速（preservesPitch 需要 DSP）；状态保存，引擎实现随后补
+    // 引擎侧线性插值变速（0.5–2.0，v1 变速变调；WSOLA 不变调后补）
     {
         let mut actor = state.player.lock().expect("player poisoned");
         actor.reduce(aiya_player::PlayerCommand::SetRate(rate));
+        engine_send(&state, aiya_audio::EngineCommand::SetRate(actor.state().rate as f32));
     }
     drive_and_emit(&state, &app)
 }
@@ -1055,6 +1112,13 @@ fn make_thumb(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // 关窗 = 隐藏到托盘（ADR：退出走托盘菜单，播放不中断）
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .register_uri_scheme_protocol(aiya_data::ARTWORK_SCHEME, |ctx, request| {
             artwork_protocol(ctx.app_handle(), request)
         })
@@ -1074,7 +1138,108 @@ pub fn run() {
                 player: Mutex::new(aiya_player::PlayerActor::new()),
                 engine: Mutex::new(engine),
                 scanning: AtomicBool::new(false),
+                last_persist_ms: std::sync::atomic::AtomicU64::new(0),
             });
+
+            // 启动恢复：queue_state + queue_items → Actor hydrate → 引擎装载（暂停）。
+            // 恢复不自动播放；shuffle 开启时 Actor 内重新洗牌（排列不落库）。
+            if let Some(state) = app.try_state::<AppState>() {
+                let loaded: Result<
+                    Option<(aiya_data::QueuePersist, Vec<String>)>,
+                    aiya_data::DbError,
+                > = state.db().send(|conn| aiya_data::load_queue(conn));
+                if let Ok(Some((p, ids))) = loaded {
+                    if !ids.is_empty() {
+                        let tracks = fetch_track_refs(&state, &ids);
+                        if !tracks.is_empty() {
+                            let repeat = match p.repeat_mode.as_str() {
+                                "all" => aiya_player::RepeatMode::All,
+                                "one" => aiya_player::RepeatMode::One,
+                                _ => aiya_player::RepeatMode::Off,
+                            };
+                            let current_id = ids.get(p.current_index.max(0) as usize).cloned();
+                            let mut actor = state.player.lock().expect("player poisoned");
+                            actor.hydrate(
+                                tracks,
+                                repeat,
+                                p.shuffle,
+                                p.volume,
+                                p.muted,
+                                p.rate,
+                                p.position_ms.max(0) as u64,
+                                current_id.as_deref(),
+                            );
+                            if let Some((_, path, _, autoplay)) = actor.take_pending_load() {
+                                let muted = actor_is_muted(&actor);
+                                engine_send(
+                                    &state,
+                                    aiya_audio::EngineCommand::Load(path),
+                                );
+                                engine_send(
+                                    &state,
+                                    aiya_audio::EngineCommand::SetVolume(if muted {
+                                        0.0
+                                    } else {
+                                        p.volume as f32
+                                    }),
+                                );
+                                if !autoplay {
+                                    engine_send(&state, aiya_audio::EngineCommand::Pause);
+                                }
+                            }
+                            let snapshot = actor.state();
+                            drop(actor);
+                            tracing::info!(
+                                tracks = snapshot.queue_length,
+                                position = snapshot.position_ms,
+                                "player state restored"
+                            );
+                        }
+                    }
+                }
+            }
+
+            // 托盘：左键显示主窗口；菜单 [显示主窗口 / 退出]。
+            // 关窗 = 隐藏到托盘（播放不中断）；真正退出走托盘菜单（退出前 flush 队列）。
+            {
+                use tauri::menu::{Menu, MenuItem};
+                let show_item =
+                    MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+                let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+                let mut tray = tauri::tray::TrayIconBuilder::with_id("aiya-tray")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .tooltip("AIYA Music")
+                    .on_menu_event(|app, event| match event.id().as_ref() {
+                        "show" => show_main_window(app),
+                        "quit" => {
+                            // 退出前把队列状态落库（含最终 position）
+                            if let Some(state) = app.try_state::<AppState>() {
+                                let actor = state.player.lock().expect("player poisoned");
+                                if actor.state().queue_length > 0 {
+                                    persist_queue_state_handle(&state, &actor);
+                                }
+                            }
+                            app.exit(0);
+                        }
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let tauri::tray::TrayIconEvent::Click {
+                            button: tauri::tray::MouseButton::Left,
+                            button_state: tauri::tray::MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            show_main_window(tray.app_handle());
+                        }
+                    });
+                if let Some(icon) = app.default_window_icon() {
+                    tray = tray.icon(icon.clone());
+                }
+                tray.build(app)?;
+            }
 
             // 引擎事件泵：EngineEvent → Actor 归约 → player:state 事件。
             // Position 节流到 500ms（渲染循环节拍是 ~10ms，UI 不需要那么密）。
@@ -1143,6 +1308,23 @@ pub fn run() {
                         drop(actor);
                         if let Ok(v) = serde_json::to_value(&snapshot) {
                             let _ = pump.emit("player:state", v);
+                        }
+                    }
+                    // 5s 节流落库状态行（position/音量等；队列结构变化在 drive_and_emit 立即落）
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let last = engine
+                        .last_persist_ms
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    if now_ms >= last + 5_000 {
+                        engine
+                            .last_persist_ms
+                            .store(now_ms, std::sync::atomic::Ordering::Relaxed);
+                        let actor = engine.player.lock().expect("player poisoned");
+                        if actor.state().queue_length > 0 {
+                            persist_queue_state_handle(&engine, &actor);
                         }
                     }
                 }
