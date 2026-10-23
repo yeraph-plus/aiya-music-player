@@ -18,6 +18,7 @@ use aiya_data::scanner;
 
 mod beets;
 mod sidecar;
+mod smtc;
 
 /* ---------------- IpcResult 信封（与 contracts/ipc.ts 同构） ---------------- */
 
@@ -44,6 +45,10 @@ pub struct AppState {
     scanning: Arc<AtomicBool>,
     /// 队列状态行上次落库时间（毫秒，事件泵 5s 节流用）
     last_persist_ms: std::sync::atomic::AtomicU64,
+    /// SMTC 通道（smtc::spawn 成功才有）；emit_player_state 处推送
+    smtc_tx: Mutex<Option<std::sync::mpsc::Sender<smtc::SmtcUpdate>>>,
+    /// 上次推给 SMTC 的曲目 id（换曲才重发 metadata + 查封面）
+    smtc_track_id: Mutex<String>,
 }
 
 impl AppState {
@@ -654,6 +659,63 @@ fn emit_player_state(app: &AppHandle, state: &aiya_player::PlayerState) {
     if let Ok(v) = serde_json::to_value(state) {
         let _ = app.emit("player:state", v);
     }
+    smtc_notify(app, state);
+}
+
+/// 快照 → SMTC 更新。换曲（track id 变化）才重发 metadata（含封面 DB 查询）；
+/// 播放态/进度每次都推（SMTC 端自己合并）。
+fn smtc_notify(app: &AppHandle, state: &aiya_player::PlayerState) {
+    let Some(app_state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let Some(tx) = app_state.smtc_tx.lock().expect("smtc_tx poisoned").clone() else {
+        return;
+    };
+    let playing = state.status == aiya_player::PlaybackStatus::Playing;
+    let _ = tx.send(smtc::SmtcUpdate::Progress {
+        playing,
+        position_ms: state.position_ms,
+    });
+
+    let track_id = state.current.as_ref().map(|c| c.id.clone()).unwrap_or_default();
+    let mut last = app_state.smtc_track_id.lock().expect("smtc_track_id poisoned");
+    if *last == track_id {
+        return;
+    }
+    *last = track_id;
+    drop(last);
+
+    let Some(current) = &state.current else {
+        // 队列清空 → SMTC 回 Stopped（推空 Track 由线程侧按 Stopped 处理不了，
+        // 直接发 Progress(playing=false) 即可，metadata 保留最后一曲无妨）
+        return;
+    };
+    // 封面：artwork_id → cache_key → originals 文件
+    let cover_path = current.artwork_id.as_ref().and_then(|aid| {
+        let cache_key: Option<String> = app_state
+            .db()
+            .send({
+                let aid = aid.clone();
+                move |conn| {
+                    Ok(conn
+                        .query_row(
+                            "SELECT cache_key FROM artworks WHERE id = ?1",
+                            [&aid],
+                            |r| r.get(0),
+                        )
+                        .ok())
+                }
+            })
+            .unwrap_or(None);
+        cache_key.map(|k| app_state.artwork_dir.join("originals").join(k))
+    });
+    let _ = tx.send(smtc::SmtcUpdate::Track {
+        title: current.title.clone(),
+        artist: current.artist.clone(),
+        album: current.album.clone(),
+        duration_ms: state.duration_ms,
+        cover_path,
+    });
 }
 
 /* ---------------- 队列持久化 ---------------- */
@@ -678,7 +740,7 @@ fn queue_persist_from_actor(actor: &aiya_player::PlayerActor) -> aiya_data::Queu
 }
 
 /// 全量落库（queue_items 重写 + 状态行）：切歌/清空时调用。
-fn persist_queue_full(state: &State<'_, AppState>, actor: &aiya_player::PlayerActor) {
+fn persist_queue_full(state: &AppState, actor: &aiya_player::PlayerActor) {
     let p = queue_persist_from_actor(actor);
     let ids = actor.queue_ids();
     let result: aiya_data::DbResult<()> = state
@@ -690,7 +752,7 @@ fn persist_queue_full(state: &State<'_, AppState>, actor: &aiya_player::PlayerAc
 }
 
 /// 只落状态行（position/音量等，5s 节流）。
-fn persist_queue_state_handle(state: &State<'_, AppState>, actor: &aiya_player::PlayerActor) {
+fn persist_queue_state_handle(state: &AppState, actor: &aiya_player::PlayerActor) {
     let p = queue_persist_from_actor(actor);
     let result: aiya_data::DbResult<()> =
         state.db().send(move |conn| aiya_data::save_queue_state(conn, &p));
@@ -735,8 +797,8 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
-/// 引擎命令统一入口（Engine 在 Mutex 里）。
-fn engine_send(state: &State<'_, AppState>, cmd: aiya_audio::EngineCommand) {
+/// 引擎命令统一入口（Engine 在 Mutex 里）。&State 自动 deref 成 &AppState。
+fn engine_send(state: &AppState, cmd: aiya_audio::EngineCommand) {
     let _ = state.engine.lock().expect("engine poisoned").send(cmd);
 }
 
@@ -863,24 +925,60 @@ fn player_play_query(
 }
 
 #[tauri::command]
-fn player_toggle(app: AppHandle, state: State<'_, AppState>) -> Value {
-    let (playing_before, status_before) = {
-        let actor = state.player.lock().expect("player poisoned");
-        (actor.state().status == aiya_player::PlaybackStatus::Playing, actor.state().status)
-    };
+/// 播放/暂停切换的内部实现（tauri command 与 SMTC 回调共用）。
+fn cmd_toggle(state: &AppState, app: &AppHandle) -> Value {
+    let status_before = state.player.lock().expect("player poisoned").state().status;
     use aiya_player::PlaybackStatus as PS;
     match status_before {
-        PS::Playing => engine_send(&state, aiya_audio::EngineCommand::Pause),
-        PS::Paused => engine_send(&state, aiya_audio::EngineCommand::Resume),
+        PS::Playing => engine_send(state, aiya_audio::EngineCommand::Pause),
+        PS::Paused => engine_send(state, aiya_audio::EngineCommand::Resume),
         _ => {
             // Idle/Error：从当前位置重播（Actor 决定 load）
         }
     }
+    {
+        let mut actor = state.player.lock().expect("player poisoned");
+        actor.reduce(aiya_player::PlayerCommand::TogglePause);
+    }
+    drive_and_emit_inner(state, app)
+}
+
+#[tauri::command]
+fn player_toggle(app: AppHandle, state: State<'_, AppState>) -> Value {
+    cmd_toggle(&state, &app)
+}
+
+/// Seek 的内部实现（tauri command 与 SMTC 回调共用）。
+fn cmd_seek(state: &AppState, app: &AppHandle, position_ms: u64) -> Value {
+    engine_send(state, aiya_audio::EngineCommand::Seek(position_ms));
+    {
+        let mut actor = state.player.lock().expect("player poisoned");
+        actor.reduce(aiya_player::PlayerCommand::Seek(position_ms));
+    }
+    drive_and_emit_inner(state, app)
+}
+
+/// drive_and_emit 的 AppState 版本（SMTC 回调拿不到 State<'_>，语义相同）。
+fn drive_and_emit_inner(state: &AppState, app: &AppHandle) -> Value {
     let mut actor = state.player.lock().expect("player poisoned");
-    actor.reduce(aiya_player::PlayerCommand::TogglePause);
-    let _ = playing_before;
+    if let Some((token, path, start_ms, autoplay)) = actor.take_pending_load() {
+        let volume = actor.volume().0 as f32;
+        let muted = actor.volume().1;
+        engine_send(state, aiya_audio::EngineCommand::Load(path));
+        engine_send(
+            state,
+            aiya_audio::EngineCommand::SetVolume(if muted { 0.0 } else { volume }),
+        );
+        if !autoplay {
+            engine_send(state, aiya_audio::EngineCommand::Pause);
+        }
+        let _ = (token, start_ms);
+        persist_queue_full(state, &actor);
+    }
+    let snapshot = actor.state();
     drop(actor);
-    drive_and_emit(&state, &app)
+    emit_player_state(app, &snapshot);
+    ok(serde_json::to_value(&snapshot).unwrap_or(Value::Null))
 }
 
 #[tauri::command]
@@ -903,12 +1001,7 @@ fn player_prev(app: AppHandle, state: State<'_, AppState>) -> Value {
 
 #[tauri::command]
 fn player_seek(app: AppHandle, state: State<'_, AppState>, position_ms: u64) -> Value {
-    engine_send(&state, aiya_audio::EngineCommand::Seek(position_ms));
-    {
-        let mut actor = state.player.lock().expect("player poisoned");
-        actor.reduce(aiya_player::PlayerCommand::Seek(position_ms));
-    }
-    drive_and_emit(&state, &app)
+    cmd_seek(&state, &app, position_ms)
 }
 
 #[tauri::command]
@@ -1207,6 +1300,10 @@ fn make_thumb(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 单实例必须最先注册：二次启动唤起已有窗口（docs/05 §7 验收）
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_dialog::init())
         // 关窗 = 隐藏到托盘（ADR：退出走托盘菜单，播放不中断）
         .on_window_event(|window, event| {
@@ -1235,7 +1332,20 @@ pub fn run() {
                 engine: Mutex::new(engine),
                 scanning: Arc::new(AtomicBool::new(false)),
                 last_persist_ms: std::sync::atomic::AtomicU64::new(0),
+                smtc_tx: Mutex::new(None),
+                smtc_track_id: Mutex::new(String::new()),
             });
+
+            // SMTC：主窗口 HWND（COM 对象要求）；失败只记日志，不影响播放
+            if let Some(main) = app.get_webview_window("main") {
+                if let Ok(hwnd) = main.hwnd() {
+                    if let Some(tx) = smtc::spawn(app.handle().clone(), hwnd.0 as isize) {
+                        if let Some(state) = app.try_state::<AppState>() {
+                            *state.smtc_tx.lock().expect("smtc_tx poisoned") = Some(tx);
+                        }
+                    }
+                }
+            }
 
             // 启动恢复：queue_state + queue_items → Actor hydrate → 引擎装载（暂停）。
             // 恢复不自动播放；shuffle 开启时 Actor 内重新洗牌（排列不落库）。
@@ -1341,9 +1451,21 @@ pub fn run() {
             // Position 节流到 500ms（渲染循环节拍是 ~10ms，UI 不需要那么密）。
             let pump = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                // 防休眠 per-thread 状态固定在本泵线程维护
+                let mut prevent_sleep_last = false;
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                     let Some(engine) = pump.try_state::<AppState>() else { continue };
+                    // 播放中防系统睡眠（不管屏幕）；状态变化才调系统 API
+                    let playing_now = {
+                        let actor = engine.player.lock().expect("player poisoned");
+                        actor.state().status == aiya_player::PlaybackStatus::Playing
+                            && actor.state().current.is_some()
+                    };
+                    if playing_now != prevent_sleep_last {
+                        smtc::set_prevent_sleep(playing_now);
+                        prevent_sleep_last = playing_now;
+                    }
                     let events: Vec<aiya_audio::EngineEvent> = {
                         let engine_guard = engine.engine.lock().expect("engine poisoned");
                         let mut out = Vec::new();

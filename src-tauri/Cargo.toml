@@ -27,3 +27,7 @@ tokio = { version = "1", features = ["time"] }
 tracing.workspace = true
 image.workspace = true
 rusqlite.workspace = true
+souvlaki = "0.8"
+tauri-plugin-single-instance = "2"
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_System_Power"] }
