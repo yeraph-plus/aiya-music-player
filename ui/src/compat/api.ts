@@ -170,6 +170,7 @@ export function installApi(): void {
         call('beets_preview', { paths }) as Promise<IpcResult<{ started: boolean }>>,
       beetsApply: (decisions: ApplyDecision[]) =>
         call('beets_apply', { decisions }) as Promise<IpcResult<{ started: boolean }>>,
+      beetsCancel: () => call('beets_cancel') as Promise<IpcResult<{ requested: boolean }>>,
       beetsSync: () => call('beets_sync') as Promise<IpcResult<{ started: boolean }>>,
       onBeetsImport,
     },

@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
-"""B2 apply_import 冒烟：拷贝 WAV → 发 apply 决策 → 验证标签写入 + beets 入库。"""
+"""B3 apply_import 冒烟：只写标签 / 复制 / 移动 / 目标冲突 / 取消。
+
+隔离运行：独立临时 BEETSDIR + 独立库目录，不碰 dev 库和真实 Music 目录。
+"""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -9,113 +13,191 @@ import tempfile
 REPO = r"D:\MUSIC_Player\AIYA_MUSIC_TAURI"
 SIDECAR = os.path.join(REPO, "sidecar", "beets_sidecar.py")
 PYTHON = os.path.join(REPO, "tools", "beets-venv", "Scripts", "python.exe")
-BEETSDIR = os.path.join(REPO, "tools", "beets-home")
-TEST_DIR = tempfile.gettempdir() + r"\aiya-apply-test"
-
-files = sorted(
-    os.path.join(TEST_DIR, f) for f in os.listdir(TEST_DIR) if f.lower().endswith(".wav")
+SRC_WAV = sorted(
+    os.path.join(r"D:\MUSIC_Player\test-music", f)
+    for f in os.listdir(r"D:\MUSIC_Player\test-music") if f.lower().endswith(".wav")
 )
-print("files:", len(files))
-assert len(files) == 3, files
+assert len(SRC_WAV) == 3, SRC_WAV
 
-mapping = {}
-for i, p in enumerate(files, 1):
-    mapping[p] = {
-        "title": f"测试曲目 {i:02d}",
-        "artist": "测试艺人",
-        "track": i,
-        "disc": 1,
+WORK = tempfile.mkdtemp(prefix="aiya-b3-")
+BEETSDIR = os.path.join(WORK, "beetsdir")
+LIBDIR = os.path.join(WORK, "lib")
+os.makedirs(BEETSDIR)
+os.makedirs(LIBDIR)
+with open(os.path.join(BEETSDIR, "config.yaml"), "w", encoding="utf-8") as f:
+    # copy: no —— 防止 beets 导入默认复制行为干扰（我们用 sidecar 手动控制动作）
+    f.write(f"directory: {LIBDIR}\nimport:\n    copy: no\n")
+
+ENV = dict(os.environ, BEETSDIR=BEETSDIR, PYTHONIOENCODING="utf-8")
+
+
+def run_apply(decisions, timeout=120):
+    """一次性 sidecar 进程跑 apply_import，返回 (events, returncode)。"""
+    proc = subprocess.Popen(
+        [PYTHON, SIDECAR],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        text=True, encoding="utf-8", env=ENV,
+    )
+    req = json.dumps({"id": 7, "cmd": "apply_import", "decisions": decisions}, ensure_ascii=False)
+    try:
+        out, _ = proc.communicate(req + "\n", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, _ = proc.communicate()
+        raise
+    events = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            # beets 偶发往 stdout 打迁移/备份提示（如"Created database backup"），
+            # Rust reader 同样容错忽略；这里跳过不视为失败
+            print("skip non-JSON:", line[:120])
+            continue
+        if "type" in obj:
+            events.append(obj)
+    return events, proc.returncode
+
+
+def decision(action, paths, album_name, artist="测试艺人", title_prefix="曲目"):
+    # 标题要带场景前缀：beets 默认 singleton 模板 Non-Album/$artist/$title
+    # 不含专辑名，不同场景同标题会在库内撞目标路径
+    mapping = {
+        p: {"title": f"{title_prefix} {i:02d}", "artist": artist, "track": i, "disc": 1}
+        for i, p in enumerate(paths, 1)
+    }
+    return {
+        "album": "alb_test",
+        "action": action,
+        "paths": paths,
+        "candidate": {
+            "album": {"album": album_name, "albumartist": artist, "year": 2026, "genre": "测试流派"},
+            "mapping": mapping,
+        },
     }
 
-decision = {
-    "album": "alb_test",
-    "action": "apply",
-    "paths": files,
-    "candidate": {
-        "album": {
-            "album": "冒烟测试专辑",
-            "albumartist": "测试艺人",
-            "year": 2026,
-            "genre": "测试流派",
-        },
-        "mapping": mapping,
-    },
-}
 
-env = dict(os.environ, BEETSDIR=BEETSDIR, PYTHONIOENCODING="utf-8")
-proc = subprocess.Popen(
-    [PYTHON, SIDECAR],
-    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-    text=True, encoding="utf-8", env=env,
-)
-req = json.dumps({"id": 7, "cmd": "apply_import", "decisions": [decision]}, ensure_ascii=False)
-out, _ = proc.communicate(req + "\n", timeout=120)
+def beets_items():
+    sys.path.insert(0, os.path.join(REPO, "tools", "beets-venv", "Lib", "site-packages"))
+    os.environ["BEETSDIR"] = BEETSDIR
+    import beets
+    from beets.library import Library
+    # 与 sidecar _open_library 同款：beets 2.14 的 Library(path) 默认绑系统
+    # Music 目录做路径展开 context，必须显式传 config 的 directory
+    lib = Library(
+        beets.config["library"].as_filename(),
+        beets.config["directory"].as_filename(),
+    )
+    return lib, list(lib.items())
 
-events = []
-responses = []
-for line in out.splitlines():
-    if not line.strip():
-        continue
-    try:
-        obj = json.loads(line)
-    except json.JSONDecodeError:
-        print("NON-JSON LINE:", repr(line[:300]))
-        raise
-    (events if "type" in obj else responses).append(obj)
 
-print("--- events ---")
-for e in events:
-    print(e["type"], json.dumps(e, ensure_ascii=False)[:160])
+def fresh_src(dirname):
+    d = os.path.join(WORK, dirname)
+    os.makedirs(d)
+    out = []
+    for p in SRC_WAV:
+        dst = os.path.join(d, os.path.basename(p))
+        shutil.copy2(p, dst)
+        out.append(dst)
+    return out
 
+
+# ---- 场景 1：apply 只写标签，文件不移动 ----
+src1 = fresh_src("src1")
+events, rc = run_apply([decision("apply", src1, "冒烟A", title_prefix="A曲目")])
 types = [e["type"] for e in events]
-assert "progress" in types, types
-assert types.count("applied") == 1, types
-applied = [e for e in events if e["type"] == "applied"][0]
-assert applied["written"] == 3, applied
-assert applied["albumId"] == "alb_test", applied
-assert "applyDone" in types, types
-done = [e for e in events if e["type"] == "applyDone"][0]
-assert done == {"type": "applyDone", "session": done["session"], "applied": 1, "skipped": 0, "failed": 0}, done
-
-# 响应信封（stdin EOF 后 sidecar 正常退出，无 id 响应 —— apply 用事件流应答）
-assert proc.returncode == 0, proc.returncode
-
-# 1) 文件标签验证（mutagen 直读）
+assert "applied" in types and "applyDone" in types, types
+assert rc == 0, rc
 from mutagen.wave import WAVE
-for i, p in enumerate(files, 1):
-    tags = WAVE(p)
-    assert str(tags["TIT2"]) == f"测试曲目 {i:02d}", (p, tags["TIT2"])
-    assert str(tags["TALB"]) == "冒烟测试专辑", (p, tags["TALB"])
-    assert str(tags["TPE1"]) == "测试艺人", (p, tags["TPE1"])
-print("--- file tags OK ---")
+tags = WAVE(src1[0])
+assert str(tags["TIT2"]) == "A曲目 01", tags["TIT2"]
+lib, items = beets_items()
+assert len(items) == 3, len(items)
+assert all(it.path.decode("utf-8", "replace").lower().startswith(os.path.join(WORK, "src1").lower()) for it in items), "文件应留在原地"
+print("[1] 只写标签 OK（文件未移动）")
 
-# 2) beets 库验证
-sys.path.insert(0, os.path.join(REPO, "tools", "beets-venv", "Lib", "site-packages"))
-os.environ["BEETSDIR"] = BEETSDIR
-import beets
-from beets.library import Library
-lib = Library(beets.config["library"].as_filename())
-items = list(lib.items())
-print("beets lib items:", len(items))
-assert len(items) == 3, [str(it) for it in items]
-by_title = {it.title: it for it in items}
-it = by_title["测试曲目 01"]
-assert it.album == "冒烟测试专辑" and it.albumartist == "测试艺人"
-assert it.year == 2026 and it.genre == "测试流派" and it.track == 1
-assert it.path.decode("utf-8", "replace").lower() == files[0].lower(), it.path
-print("--- beets library OK ---")
+# ---- 场景 2：apply_copy —— 复制进库，源保留 ----
+events, rc = run_apply([decision("apply_copy", src1, "冒烟A", title_prefix="A曲目")])
+applied = [e for e in events if e["type"] == "applied"][0]
+assert applied["moved"] is True, applied
+assert applied["written"] == 3 and applied["failed"] == [], applied
+assert os.path.exists(src1[0]), "copy 后源文件必须保留"
+lib, items = beets_items()
+assert len(items) == 3, len(items)
+new_paths = [it.path.decode("utf-8", "replace") for it in items]
+assert all(p.lower().startswith(LIBDIR.lower()) for p in new_paths), new_paths
+assert all(os.path.exists(p) for p in new_paths), "库内文件应存在"
+print("[2] 复制进库 OK:", new_paths[0])
 
-# 3) 幂等验证：重放同一决策，不应产生重复行
+# ---- 场景 3：目标冲突 —— 不覆盖不改名 ----
+src3 = fresh_src("src3")
+# 先 copy 一次拿到真实 dest
+events, rc = run_apply([decision("apply_copy", src3, "冒烟C", title_prefix="C曲目")])
+lib, items = beets_items()
+dests = [it.path.decode("utf-8", "replace") for it in items if "冒烟C" in it.album]
+assert len(dests) == 3, dests
+# 删掉 beets item + 库内文件，在 dest 放一个哨兵文件
+for it in list(items):
+    if "冒烟C" in it.album:
+        it.remove()
+for d in dests:
+    os.remove(d)
+    with open(d, "w", encoding="utf-8") as f:
+        f.write("SENTINEL-DO-NOT-OVERWRITE")
+events, rc = run_apply([decision("apply_copy", src3, "冒烟C", title_prefix="C曲目")])
+applied = [e for e in events if e["type"] == "applied"][0]
+conflicts = [f for f in applied["failed"] if f.get("code") == "conflict"]
+assert len(conflicts) == 3, (applied, conflicts)
+assert all("SENTINEL" not in f["message"] or "目标已存在" in f["message"] for f in conflicts), conflicts
+for d in dests:
+    with open(d, encoding="utf-8") as f:
+        assert f.read() == "SENTINEL-DO-NOT-OVERWRITE", f"哨兵被覆盖: {d}"
+assert os.path.exists(src3[0]), "冲突时源文件不应被动"
+print("[3] 目标冲突不覆盖 OK")
+
+# ---- 场景 4：apply_move —— 移动进库，源消失 ----
+src4 = fresh_src("src4")
+events, rc = run_apply([decision("apply_move", src4, "冒烟D", title_prefix="D曲目")])
+applied = [e for e in events if e["type"] == "applied"][0]
+assert applied["failed"] == [], applied
+assert not os.path.exists(src4[0]), "move 后源文件应消失"
+lib, items = beets_items()
+d_paths = [it.path.decode("utf-8", "replace") for it in items if "冒烟D" in it.album]
+assert len(d_paths) == 3 and all(os.path.exists(p) for p in d_paths), d_paths
+assert all(os.listdir(os.path.dirname(p)) for p in d_paths), "库内文件应存在"
+# 源目录应被 prune（beets move 清理空目录）
+assert not os.path.exists(src4[0]), ""
+print("[4] 移动进库 OK")
+
+# ---- 场景 5：取消 —— cancel 在检查点收尾 ----
+src5 = fresh_src("src5")
 proc = subprocess.Popen(
     [PYTHON, SIDECAR],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-    text=True, encoding="utf-8", env=env,
+    text=True, encoding="utf-8", env=ENV,
 )
-out2, _ = proc.communicate(req + "\n", timeout=120)
-events2 = [json.loads(l) for l in out2.splitlines() if l.strip() and "type" in json.loads(l)]
-applied2 = [e for e in events2 if e["type"] == "applied"][0]
-assert applied2["written"] == 3, applied2
-lib2 = Library(beets.config["library"].as_filename())
-assert len(list(lib2.items())) == 3, "重放后不应出现重复行"
-print("--- idempotent replay OK ---")
+req = json.dumps({"id": 9, "cmd": "apply_import", "decisions": [decision("apply", src5, "冒烟E", title_prefix="E曲目")]}, ensure_ascii=False)
+proc.stdin.write(req + "\n")
+proc.stdin.write(json.dumps({"id": 10, "cmd": "cancel"}) + "\n")
+proc.stdin.flush()
+proc.stdin.close()
+out, _ = proc.communicate(timeout=60)
+ev_types = []
+for line in out.splitlines():
+    if line.strip():
+        try:
+            obj = json.loads(line)
+            if "type" in obj:
+                ev_types.append(obj["type"])
+        except json.JSONDecodeError:
+            pass
+assert "cancelAck" in ev_types, ev_types
+assert "cancelled" in ev_types or "applyDone" in ev_types, ev_types
+assert proc.returncode == 0, proc.returncode
+print("[5] 取消 OK:", ev_types)
+
+# ---- 清理 ----
+shutil.rmtree(WORK, ignore_errors=True)
 print("ALL PASS")

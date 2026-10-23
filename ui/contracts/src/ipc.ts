@@ -261,6 +261,8 @@ export interface AiyaApi {
     beetsPreview(paths: string[]): Promise<IpcResult<{ started: boolean }>>;
     /** B2：应用导入决策（写标签 + 入 beets 库 + 自动对齐读模型） */
     beetsApply(decisions: ApplyDecision[]): Promise<IpcResult<{ started: boolean }>>;
+    /** B3：取消当前导入（preview/apply）；结果走 onBeetsImport 的 cancelled */
+    beetsCancel(): Promise<IpcResult<{ requested: boolean }>>;
     /** 手动触发一次 beets → 自有读模型全量对齐；汇总走 onBeetsImport 的 librarySynced */
     beetsSync(): Promise<IpcResult<{ started: boolean }>>;
     /** beets 导入预览事件流（progress/album/albumError/done/sessionEnd） */

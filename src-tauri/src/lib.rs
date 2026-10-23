@@ -228,6 +228,13 @@ fn beets_apply(app: AppHandle, state: State<'_, AppState>, decisions: Vec<Value>
     }
 }
 
+/// 取消当前 beets 导入（preview/apply）：sidecar 在下个检查点收尾，
+/// 结果走 `cancelled` 事件（UI 据此解锁按钮）。
+#[tauri::command]
+fn beets_cancel() -> Value {
+    ok(json!({ "requested": beets::cancel_session() }))
+}
+
 /// 手动触发一次 beets → 自有读模型的全量对齐（异步，结果走 librarySynced 事件）。
 #[tauri::command]
 fn beets_sync(app: AppHandle, state: State<'_, AppState>) -> Value {
@@ -1411,6 +1418,7 @@ pub fn run() {
             beets_status,
             beets_preview,
             beets_apply,
+            beets_cancel,
             beets_sync,
             library_list,
             library_tracks,

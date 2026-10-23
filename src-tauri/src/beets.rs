@@ -230,12 +230,56 @@ fn pick_interpreter(script: &str) -> Option<String> {
     None
 }
 
-/// 起一次性 sidecar 子进程并写入请求（不 drop stdin 之前先写完）。
+/* ---------------- B3：会话槽 + 取消 ---------------- */
+
+/// 活跃导入会话的 stdin（preview/apply 互斥 + cancel 写入口）。
+///
+/// 所有权流转：start_* 放入 → reader 见终止事件（done/applyDone/cancelled）
+/// 或进程退出时取走 drop（sidecar stdin EOF 后自行退出）→
+/// cancel 命令取走、写 cancel 行再 drop。任一时刻至多一个持有者。
+type SessionStdin = std::process::ChildStdin;
+
+fn session_slot() -> &'static std::sync::Mutex<Option<SessionStdin>> {
+    static SLOT: std::sync::OnceLock<std::sync::Mutex<Option<SessionStdin>>> =
+        std::sync::OnceLock::new();
+    SLOT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// 占用会话槽；已被占用返回 Err（一次只允许一个 preview/apply）。
+fn acquire_session(stdin: SessionStdin) -> Result<(), String> {
+    let mut guard = session_slot().lock().map_err(|_| "session slot poisoned")?;
+    if guard.is_some() {
+        return Err("已有 beets 导入任务在执行（可先取消）".into());
+    }
+    *guard = Some(stdin);
+    Ok(())
+}
+
+/// 释放会话槽（reader/cancel 调用；返回取走的 stdin 交给调用方 drop）。
+fn release_session() -> Option<SessionStdin> {
+    session_slot().lock().ok().and_then(|mut g| g.take())
+}
+
+/// 取消当前导入：写 cancel 行（sidecar 在下个检查点收尾并发 cancelled 事件）
+/// 随后关闭 stdin（工作收尾后 EOF 退出）。无活跃会话返回 false。
+pub fn cancel_session() -> bool {
+    let Some(mut stdin) = release_session() else {
+        return false;
+    };
+    {
+        use std::io::Write;
+        let _ = writeln!(stdin, r#"{{"id":0,"cmd":"cancel"}}"#);
+    }
+    drop(stdin); // EOF：sidecar 工作收尾后主循环退出
+    true
+}
+
+/// 起一次性 sidecar 子进程并写入请求；stdin 交还调用方（保活以支持取消）。
 fn spawn_session(
     python: &str,
     script: &std::path::Path,
     request: &serde_json::Value,
-) -> Result<std::process::Child, String> {
+) -> Result<(std::process::Child, SessionStdin), String> {
     let mut child = std::process::Command::new(python)
         .arg(script)
         .stdin(Stdio::piped())
@@ -254,14 +298,11 @@ fn spawn_session(
     use std::io::Write;
     let mut stdin = child.stdin.take().expect("stdin piped");
     writeln!(stdin, "{request}").map_err(|e| format!("写请求: {e}"))?;
-    // 不留 stdin 挂着：sidecar 处理完请求后事件流结束、在下一行 read 上阻塞，
-    // 显式 drop 让其 stdin EOF 后循环结束退出
-    drop(stdin);
-    Ok(child)
+    Ok((child, stdin))
 }
 
-/// 转发 stdout 行事件到 `beets:import`，进程退出后收尾。
-/// 返回 reader 线程句柄（start_preview / start_apply 共用骨架）。
+/// 转发 stdout 行事件到 `beets:import`；见终止事件（done/applyDone/cancelled）
+/// 后关 stdin 让 sidecar EOF 退出，进程退出后收尾清槽。
 fn spawn_reader(
     mut child: std::process::Child,
     app: tauri::AppHandle,
@@ -281,14 +322,20 @@ fn spawn_reader(
                 }
                 match serde_json::from_str::<serde_json::Value>(trimmed) {
                     Ok(evt) => {
+                        let terminal = evt.get("type").and_then(|t| t.as_str())
+                            .is_some_and(|t| matches!(t, "done" | "applyDone" | "cancelled"));
                         let _ = app.emit("beets:import", evt);
+                        if terminal {
+                            break;
+                        }
                     }
                     Err(e) => {
                         tracing::warn!(%e, %trimmed, "beets sidecar 非法事件行，忽略");
                     }
                 }
             }
-            // stdin 已关，sidecar 处理完请求后 EOF 退出；收尸防僵尸
+            // 关 stdin → sidecar 主循环 EOF 退出；收尸防僵尸
+            drop(release_session());
             let _ = child.wait();
             on_exit(&app);
             let _ = app.emit("beets:import", serde_json::json!({ "type": "sessionEnd" }));
@@ -311,7 +358,8 @@ pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), St
         .ok_or_else(|| "no beets interpreter available".to_string())?;
 
     let req = serde_json::json!({ "id": 1, "cmd": "preview_import", "paths": paths });
-    let child = spawn_session(&python, &script, &req)?;
+    let (child, stdin) = spawn_session(&python, &script, &req)?;
+    acquire_session(stdin)?;
     spawn_reader(child, app, |_| {})
 }
 
@@ -328,8 +376,8 @@ pub fn start_apply(
         .ok_or_else(|| "no beets interpreter available".to_string())?;
 
     let req = serde_json::json!({ "id": 1, "cmd": "apply_import", "decisions": decisions });
-    let child = spawn_session(&python, &script, &req)?;
-
+    let (child, stdin) = spawn_session(&python, &script, &req)?;
+    acquire_session(stdin)?;
     spawn_reader(child, app, move |app| {
         if let Some(params) = refresh {
             // 自闭环（docs/08 §5）：beets 刚写完库就是最新权威，
@@ -354,12 +402,13 @@ fn collect_items(
     python: &str,
     script: &std::path::Path,
 ) -> Result<Vec<aiya_data::beets_sync::BeetsItem>, String> {
-    let child = spawn_session(
+    let (mut child, stdin) = spawn_session(
         python,
         script,
         &serde_json::json!({ "id": 1, "cmd": "dump_items" }),
     )?;
-    let mut child = child;
+    // dump 是一次性收集：不留 stdin 挂着，sidecar 处理完 EOF 退出
+    drop(stdin);
     let mut stdout = child.stdout.take().expect("stdout piped");
     let mut items = Vec::new();
     {

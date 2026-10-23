@@ -18,10 +18,17 @@ from __future__ import annotations
 import json
 import os
 import platform
+import queue
 import sys
+import threading
 import traceback
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
+
+# 取消标志：reader 线程收到 {"cmd":"cancel"} 立即置位，
+# preview/apply 的工作循环在专辑/单曲粒度检查后提前收尾。
+# dump_items 不可取消（部分 dump 会让宿主把缺失 item 误判为 orphaned）。
+CANCEL = threading.Event()
 
 
 def _status_payload() -> dict:
@@ -48,6 +55,23 @@ def _status_payload() -> dict:
 AUDIO_EXTENSIONS = {
     ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".wav", ".aiff", ".alac",
 }
+
+
+def _open_library():
+    """打开 beets 库（apply / dump 共用）。
+
+    beets 2.14 实测坑：Library(path) 的 directory 默认取**系统 Music 目录**
+    （platformdirs），不再读 config 的 directory；CLI 是显式传 config 值的
+    （beets/ui/__init__.py:857），sidecar 照做，否则 move/copy 会写进用户的
+    真实 Music 文件夹。
+    """
+    from beets import config as beets_config
+    from beets.library import Library
+
+    return Library(
+        beets_config["library"].as_filename(),
+        beets_config["directory"].as_filename(),
+    )
 
 # 当前标签 vs 候选：diff 展示字段（docs/08 §4.1）
 DIFF_FIELDS = ["title", "artist", "album", "albumartist", "year", "track", "disc", "genre"]
@@ -158,6 +182,9 @@ def preview_import(req_id, paths: list[str], options: dict) -> None:
     from beets import autotag
 
     for i, group_files in enumerate(groups):
+        if CANCEL.is_set():
+            _emit({"type": "cancelled", "session": session, "stage": "matching"})
+            return
         first = group_files[0]
         _emit({"type": "progress", "session": session, "stage": "matching",
                "current": i + 1, "total": total, "path": os.path.dirname(first) or first})
@@ -197,30 +224,68 @@ def preview_import(req_id, paths: list[str], options: dict) -> None:
 # 应用标签的字段（与 DIFF_FIELDS 同源：预览看到什么，应用就写什么）
 APPLY_FIELDS = DIFF_FIELDS
 
+# action → 文件操作（docs/08 §4.1：默认只写标签，移动/复制显式选择）。
+# move/copy 用 beets 自己的 Item.move：按用户 path_formats 算目标路径、
+# 建目录、更新 item.path、MOVE 后清理空目录。
+FILE_ACTIONS = {}
+
+
+def _load_file_actions():
+    from beets.util import MoveOperation
+
+    FILE_ACTIONS.update({
+        "apply_move": MoveOperation.MOVE,
+        "apply_copy": MoveOperation.COPY,
+    })
+
+
+def _dest_conflict(item, src: str) -> str | None:
+    """计算 item 的 beets 目标路径并检查冲突。
+
+    beets 的 move_file 遇到目标已存在会**静默改名**（unique_path → name.1.ext），
+    不符合"目标冲突先报错"；所以这里在 move 之前自查，冲突就跳过文件操作。
+    返回冲突描述（None = 无冲突；"same" = 目标就是源文件本身，move 是 no-op）。
+    """
+    dest = item.destination()  # bytes，按 lib.path_formats + db.directory
+    if not os.path.exists(dest):
+        return None
+    try:
+        if os.path.samefile(dest, src):
+            return "same"  # 库目录就是来源目录：无需移动
+    except OSError:
+        pass
+    return f"目标已存在：{dest.decode('utf-8', 'replace')}"
+
 
 def apply_import(req_id, decisions: list[dict]) -> None:
     """应用导入决策：写标签到文件 + 入 beets 库（默认不移动文件）。
 
-    decisions: [{"album": "alb_01", "action": "apply" | "skip",
+    decisions: [{"album": "alb_01", "action": "apply" | "apply_move" |
+                 "apply_copy" | "skip",
                  "paths": [...],
                  "candidate": {"album": {...专辑级...}, "mapping": {path: 单曲meta}}}]
     候选数据由 UI 从预览结果原样回传 —— 不重跑网络匹配，保证"所见即所写"；
     这也是为什么 apply 进程不需要与 preview 进程共享 session 状态（进程是一次性的）。
+
+    move/copy 语义：写标签 + 入库后，目标路径冲突的曲目**不覆盖不改名**，
+    报 conflict 失败（文件留在原地、标签已写，解决冲突后重新应用即可完成移动）。
     """
     session = f"app_{req_id:02d}"
-    from beets import config as beets_config
     from beets.dbcore import query as dbcore_query
-    from beets.library import Item, Library
+    from beets.library import Item
 
-    lib = Library(beets_config["library"].as_filename())
+    _load_file_actions()
+    lib = _open_library()
 
-    apply_total = sum(1 for d in decisions if d.get("action") == "apply")
+    apply_total = sum(1 for d in decisions if d.get("action") in ("apply", "apply_move", "apply_copy"))
     _emit({"type": "progress", "session": session, "stage": "writing",
            "current": 0, "total": apply_total, "path": None})
 
-    applied = skipped = failed_files = 0
+    applied = skipped = failed_files = moved_files = 0
     for i, dec in enumerate(decisions):
-        if dec.get("action") != "apply":
+        action = dec.get("action")
+        op = FILE_ACTIONS.get(action)
+        if action not in ("apply", "apply_move", "apply_copy"):
             skipped += 1
             continue
         paths = [str(p) for p in (dec.get("paths") or [])]
@@ -232,6 +297,9 @@ def apply_import(req_id, decisions: list[dict]) -> None:
         mapping = cand.get("mapping") or {}
         written, failures = 0, []
         for p in paths:
+            if CANCEL.is_set():
+                _emit({"type": "cancelled", "session": session, "stage": "writing"})
+                return
             try:
                 item = Item.from_path(p)
                 # 专辑级字段打底，单曲级非 None 值覆盖（对齐 beets 的 merge 语义）
@@ -251,17 +319,31 @@ def apply_import(req_id, decisions: list[dict]) -> None:
                     for e in dup:
                         e.update(data)
                         e.store()
+                    mover = dup[0] if op else None
                 else:
                     lib.add(item)
+                    mover = item if op else None
                 written += 1
+                if mover is not None:
+                    conflict = _dest_conflict(mover, p)
+                    if conflict == "same":
+                        pass  # 目标 == 源：无需移动
+                    elif conflict is not None:
+                        # 不覆盖不改名：文件留在原地（标签已写），可解决后重试
+                        failures.append({"path": p, "code": "conflict", "message": conflict})
+                    else:
+                        # beets 官方 move：建目录、搬文件、更新 item.path、清理空目录
+                        mover.move(op, with_album=False)
+                        moved_files += 1
             except Exception as e:  # noqa: BLE001 —— 单曲失败不中断整张
                 failures.append({"path": p, "message": f"{type(e).__name__}: {e}"})
         failed_files += len(failures)
         applied += 1
         _emit({"type": "applied", "session": session, "albumId": dec.get("album"),
-               "written": written, "failed": failures})
+               "written": written, "moved": op is not None, "failed": failures})
     _emit({"type": "applyDone", "session": session,
-           "applied": applied, "skipped": skipped, "failed": failed_files})
+           "applied": applied, "skipped": skipped, "failed": failed_files,
+           "moved": moved_files})
 
 
 # dump_items 输出的字段白名单：只给宿主读模型对齐需要的（beets 字段名原样，
@@ -279,10 +361,7 @@ def dump_items(req_id) -> None:
     每行一个 item 事件（几万条也不膨胀内存）；最后 dumpDone 带总数。
     """
     session = f"sync_{req_id:02d}"
-    from beets import config as beets_config
-    from beets.library import Library
-
-    lib = Library(beets_config["library"].as_filename())
+    lib = _open_library()
     total = 0
     for item in lib.items():
         payload = {"id": item.id, "path": item.path.decode("utf-8", "replace")}
@@ -352,24 +431,46 @@ def main() -> int:
         sys.stdout.flush()
         return 0
 
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
+    # cancel 必须在工作循环运行时也能被接收：后台线程持续读 stdin，
+    # cancel 命令立即置位 CANCEL（工作函数在下个检查点提前收尾），
+    # 其余行进队列由主循环处理；EOF 送 None 哨兵结束主循环。
+    req_q: queue.Queue = queue.Queue()
+
+    def _read_stdin() -> None:
+        for line in sys.stdin:
+            line = line.strip()
+            if line:
+                req_q.put(line)
+        req_q.put(None)  # EOF
+
+    threading.Thread(target=_read_stdin, name="stdin-reader", daemon=True).start()
+
+    while True:
+        line = req_q.get()
+        if line is None:
+            break
         try:
             req = json.loads(line)
-            resp = handle(req)
         except json.JSONDecodeError as e:
             resp = {"ok": False, "error": {"code": "E_BAD_JSON", "stage": "parse", "beets_message": str(e)}}
-        except Exception as e:  # noqa: BLE001 —— sidecar 顶层兜底，任何异常都要回信封
-            resp = {"ok": False, "error": {"code": "E_INTERNAL", "stage": "handle",
-                                           "beets_message": f"{type(e).__name__}: {e}",
-                                           "trace": traceback.format_exc(limit=4)}}
-        try:
-            req_id = req.get("id", 0) if isinstance(req, dict) else 0
-        except Exception:  # noqa: BLE001
             req_id = 0
-        # None = 命令已用事件流自行应答（preview_import），不再发 id 响应
+        else:
+            if isinstance(req, dict) and req.get("cmd") == "cancel":
+                CANCEL.set()
+                _emit({"type": "cancelAck"})
+                continue
+            CANCEL.clear()
+            try:
+                resp = handle(req)
+            except Exception as e:  # noqa: BLE001 —— sidecar 顶层兜底，任何异常都要回信封
+                resp = {"ok": False, "error": {"code": "E_INTERNAL", "stage": "handle",
+                                               "beets_message": f"{type(e).__name__}: {e}",
+                                               "trace": traceback.format_exc(limit=4)}}
+            try:
+                req_id = req.get("id", 0) if isinstance(req, dict) else 0
+            except Exception:  # noqa: BLE001
+                req_id = 0
+        # None = 命令已用事件流自行应答（preview_import 等），不再发 id 响应
         if resp is not None:
             sys.stdout.write(json.dumps({"id": req_id, **resp}, ensure_ascii=False) + "\n")
             sys.stdout.flush()

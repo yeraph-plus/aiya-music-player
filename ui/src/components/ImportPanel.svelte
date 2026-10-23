@@ -3,8 +3,9 @@
   import Icon from './Icon.svelte';
 
   /**
-   * beets 导入面板（B1 预览 + B2 应用）：
-   * 选文件夹 → 专辑卡片 → 候选/逐字段 diff → 应用（写标签 + 入库 + 刷新曲库）。
+   * beets 导入面板（B1 预览 + B2 应用 + B3 移动/复制/取消）：
+   * 选文件夹 → 专辑卡片 → 候选/逐字段 diff → 应用（写标签，可选移动/复制
+   * 到 beets 库）→ 取消随时可用（收尾到最近检查点）。
    * 预览阶段零文件改动；应用阶段候选数据原样回传（所见即所写）。
    */
 
@@ -15,17 +16,27 @@
   }
   let { onclose, onsynced }: Props = $props();
 
+  /** 文件动作（docs/08 §4.1：默认只写标签，移动/复制显式选择） */
+  type MoveMode = 'apply' | 'apply_copy' | 'apply_move';
+  const MOVE_LABELS: Record<MoveMode, string> = {
+    apply: '只写标签',
+    apply_copy: '复制到 beets 库',
+    apply_move: '移动到 beets 库',
+  };
+
   let albums = $state<AlbumPreview[]>([]);
   let running = $state(false);
   let applying = $state(false);
   let error = $state<string | null>(null);
+  /** 文件动作：默认只写标签（B3 移动/复制显式选择） */
+  let moveMode = $state<MoveMode>('apply');
   /** 专辑 id → 展开的候选 id（null = 显示当前标签） */
   let picked = $state<Record<string, string | null>>({});
   let progress = $state<{ current: number; total: number } | null>(null);
   let applyProgress = $state<{ current: number; total: number } | null>(null);
   /** 专辑 id → 应用结果 */
-  let results = $state<Record<string, { written: number; failed: Array<{ path: string; message: string }> }>>({});
-  let applySummary = $state<{ applied: number; skipped: number; failed: number } | null>(null);
+  let results = $state<Record<string, { written: number; moved: boolean; failed: Array<{ path: string; message: string; code?: string }> }>>({});
+  let applySummary = $state<{ applied: number; skipped: number; failed: number; moved: number } | null>(null);
   let synced = $state<{ matched: number; updated: number; imported: number; unchanged: number; orphaned: number } | null>(null);
   let syncing = $state(false);
   let doneCount = $state<number | null>(null);
@@ -44,10 +55,17 @@
     } else if (evt.type === 'albumError') {
       errors = [...errors, { path: evt.path, message: evt.beets_message }];
     } else if (evt.type === 'applied') {
-      results = { ...results, [evt.albumId]: { written: evt.written, failed: evt.failed } };
+      results = { ...results, [evt.albumId]: { written: evt.written, moved: evt.moved, failed: evt.failed } };
     } else if (evt.type === 'applyDone') {
       applying = false;
-      applySummary = { applied: evt.applied, skipped: evt.skipped, failed: evt.failed };
+      applySummary = { applied: evt.applied, skipped: evt.skipped, failed: evt.failed, moved: evt.moved };
+    } else if (evt.type === 'cancelled') {
+      // 取消收尾：已完成的部分保留，解锁按钮
+      running = false;
+      applying = false;
+      errors = [...errors, { path: 'cancel', message: '已取消（已完成的部分保留）' }];
+    } else if (evt.type === 'cancelAck') {
+      // sidecar 回执，无需 UI 动作
     } else if (evt.type === 'librarySynced') {
       syncing = false;
       synced = { matched: evt.matched, updated: evt.updated, imported: evt.imported, unchanged: evt.unchanged, orphaned: evt.orphaned };
@@ -90,13 +108,13 @@
     running = true;
   }
 
-  /** 单张专辑的决策：有选中候选就应用，否则跳过 */
+  /** 单张专辑的决策：有选中候选就应用，否则跳过（动作跟随 moveMode） */
   function decisionFor(album: AlbumPreview): ApplyDecision {
     const cand = candidateMeta(album);
     if (!cand) return { album: album.id, action: 'skip', paths: album.paths };
     return {
       album: album.id,
-      action: 'apply',
+      action: moveMode,
       paths: album.paths,
       candidate: { album: cand.album, mapping: cand.mapping },
     };
@@ -128,6 +146,14 @@
     }
     applying = true;
     syncing = true;
+  }
+
+  /** 取消当前预览/应用：sidecar 收尾到最近检查点，已完成部分保留 */
+  async function cancelSession(): Promise<void> {
+    const result = await window.api.app.beetsCancel();
+    if (!result.ok) {
+      error = result.error.message;
+    }
   }
 
   /** 手动全量对齐：beets 库 → 自有读模型（无需先预览） */
@@ -191,10 +217,23 @@
       {/if}
       {#if applying}
         <span class="dim">
-          写入标签 {applyProgress ? `${applyProgress.current}/${applyProgress.total}` : '…'}（不动文件位置）
+          {MOVE_LABELS[moveMode]} {applyProgress ? `${applyProgress.current}/${applyProgress.total}` : '…'}
         </span>
       {/if}
+      {#if running || applying}
+        <button class="btn" onclick={() => void cancelSession()}>取消</button>
+      {/if}
       {#if doneCount !== null && !running && !applying}
+        <select
+          class="cand-select mode-select"
+          value={moveMode}
+          onchange={(e) => (moveMode = (e.currentTarget as HTMLSelectElement).value as MoveMode)}
+          title="移动/复制按 beets 的 path_formats 计算目标路径；目标已存在时该曲目不覆盖，报冲突"
+        >
+          {#each Object.entries(MOVE_LABELS) as [mode, label] (mode)}
+            <option value={mode}>{label}</option>
+          {/each}
+        </select>
         <button class="btn primary" onclick={() => void applyAll()} disabled={applyableCount === 0}>
           应用所选（{applyableCount} 张）
         </button>
@@ -207,6 +246,7 @@
     {#if applySummary}
       <div class="apply-summary" class:has-failed={applySummary.failed > 0}>
         已应用 {applySummary.applied} 张 · 跳过 {applySummary.skipped} 张
+        {#if applySummary.moved > 0} · 已{MOVE_LABELS[moveMode].replace('到 beets 库', '')} {applySummary.moved} 首{/if}
         {#if applySummary.failed > 0} · 失败 {applySummary.failed} 首{/if}
         {#if synced}
           <div class="dim">
@@ -258,12 +298,18 @@
           </span>
         </div>
 
-        <!-- 应用结果徽标（B2） -->
+        <!-- 应用结果徽标（B2 写标签 + B3 移动/复制/冲突） -->
         {#if results[album.id]}
           <div class="apply-result" class:has-failed={results[album.id].failed.length > 0}>
             ✓ 已写入 {results[album.id].written} 首
+            {#if results[album.id].moved}
+              · 文件已{moveMode === 'apply_move' ? '移动' : '复制'}到 beets 库
+            {/if}
             {#each results[album.id].failed as f (f.path)}
-              <div class="dim">✗ {f.path.split(/[\\/]/).pop()}：{f.message}</div>
+              <div class="fail-line" class:conflict={f.code === 'conflict'}>
+                {f.code === 'conflict' ? '⚠ 目标冲突' : '✗'}
+                {f.path.split(/[\\/]/).pop()}：{f.message}
+              </div>
             {/each}
           </div>
         {/if}
@@ -317,7 +363,7 @@
               onclick={() => void applyOne(album)}
               disabled={applying || running}
             >
-              应用此候选（写标签）
+              应用此候选（{MOVE_LABELS[moveMode]}）
             </button>
           {/if}
         {/if}
@@ -422,5 +468,11 @@
   }
   .apply-result.has-failed {
     color: var(--text);
+  }
+  .fail-line.conflict {
+    color: var(--warning, #d90);
+  }
+  .mode-select {
+    width: auto;
   }
 </style>

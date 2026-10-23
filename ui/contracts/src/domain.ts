@@ -417,9 +417,14 @@ export type BeetsImportEvent =
   | { type: 'albumError'; session: string; stage: string; path: string; beets_message: string }
   | { type: 'done'; session: string; albums: number }
   /* ---- B2：应用阶段 ---- */
-  /** 单张专辑应用完成；failed 是逐曲失败明细（可重试） */
-  | { type: 'applied'; session: string; albumId: string; written: number; failed: Array<{ path: string; message: string }> }
-  | { type: 'applyDone'; session: string; applied: number; skipped: number; failed: number }
+  /** 单张专辑应用完成；failed 是逐曲失败明细（可重试），code=conflict 表示目标路径已存在 */
+  | { type: 'applied'; session: string; albumId: string; written: number; moved: boolean; failed: Array<{ path: string; message: string; code?: string }> }
+  | { type: 'applyDone'; session: string; applied: number; skipped: number; failed: number; moved: number }
+  /* ---- B3：取消 ---- */
+  /** 用户取消；session 收尾到最近的检查点为止（已完成的部分保留） */
+  | { type: 'cancelled'; session: string; stage: string }
+  /** sidecar 收到取消命令的回执 */
+  | { type: 'cancelAck' }
   /* ---- 读模型对齐（beets 写权威 → 自有 DB 读模型，docs/08 §5 自闭环） ---- */
   /** beets 库 → 自有 DB 全量对齐汇总（apply 完成后自动触发，也可手动） */
   | { type: 'librarySynced'; matched: number; updated: number; imported: number; unchanged: number; orphaned: number }
@@ -436,9 +441,14 @@ export type BeetsImportEvent =
 export interface ApplyDecision {
   /** 对应 AlbumPreview.id */
   album: string;
-  action: 'apply' | 'skip';
+  /**
+   * apply：只写标签（docs/08 §4.1 默认，不移动文件）；
+   * apply_move / apply_copy：写标签 + 移动/复制到 beets 库目录（显式选择），
+   * 目标路径冲突的曲目不覆盖不改名，逐曲报 conflict 失败。
+   */
+  action: 'apply' | 'apply_move' | 'apply_copy' | 'skip';
   paths: string[];
-  /** action=apply 时必填 */
+  /** action=apply* 时必填 */
   candidate?: {
     album: CandidatePreview['album'];
     mapping: Record<string, TrackMeta>;
