@@ -16,6 +16,8 @@ use aiya_data::ids;
 use aiya_data::repo::{self, TrackWindowQuery};
 use aiya_data::scanner;
 
+mod sidecar;
+
 /* ---------------- IpcResult 信封（与 contracts/ipc.ts 同构） ---------------- */
 
 fn ok(data: Value) -> Value {
@@ -35,8 +37,8 @@ pub struct AppState {
     artwork_dir: PathBuf,
     /// 播放状态机（ADR-0003：唯一真相）
     player: Mutex<aiya_player::PlayerActor>,
-    /// 原生音频引擎（Symphonia + WASAPI 共享模式）
-    engine: Mutex<aiya_audio::Engine>,
+    /// 音频 sidecar（ADR-0002：独立进程 + 命名管道，崩溃隔离）
+    engine: Mutex<sidecar::SidecarHandle>,
     scanning: AtomicBool,
     /// 队列状态行上次落库时间（毫秒，事件泵 5s 节流用）
     last_persist_ms: std::sync::atomic::AtomicU64,
@@ -1129,8 +1131,8 @@ pub fn run() {
             let artwork_dir = default_artwork_dir(&app.handle());
             let _ = std::fs::create_dir_all(artwork_dir.join("originals"));
             let _ = std::fs::create_dir_all(artwork_dir.join("thumbs"));
-            let engine = aiya_audio::Engine::spawn()
-                .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
+            let engine = sidecar::SidecarHandle::launch()
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
             app.manage(AppState {
                 db: Mutex::new(db),
                 db_path,

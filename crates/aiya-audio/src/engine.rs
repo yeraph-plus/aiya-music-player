@@ -18,7 +18,10 @@ use crate::decoder::Decoder;
 use crate::AudioError;
 
 /// 引擎线程收到的命令。
-#[derive(Debug, Clone)]
+///
+/// wire 侧（ADR-0002 sidecar）用相邻 tag：`{"t":"load","v":"D:/…"}`。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "t", content = "v", rename_all = "camelCase")]
 pub enum EngineCommand {
     /// 装载并播放
     Load(String),
@@ -36,7 +39,8 @@ pub enum EngineCommand {
 }
 
 /// 引擎线程发出的回报。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "t", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum EngineEvent {
     /// 装载成功（时长毫秒）
     Loaded { duration_ms: u64 },
@@ -244,7 +248,10 @@ fn play_file(
                     pool_pos = 0.0;
                     decoder_eof = false;
                     let _ = client.reset_stream().map_err(wasapi_err);
-                    client.start_stream().map_err(wasapi_err)?;
+                    // 暂停态保持停止：对已运行的流再 start，之后 Resume 再 start 会报错炸流
+                    if !paused {
+                        client.start_stream().map_err(wasapi_err)?;
+                    }
                     send(EngineEvent::Position { position_ms: decoder.position_ms() });
                 }
                 Ok(EngineCommand::SetVolume(v)) => volume = v.clamp(0.0, 1.0),

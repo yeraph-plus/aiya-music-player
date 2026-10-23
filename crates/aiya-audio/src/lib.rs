@@ -6,6 +6,7 @@
 
 pub mod decoder;
 pub mod engine;
+pub mod proto;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AudioError {
@@ -21,3 +22,25 @@ pub enum AudioError {
 
 pub use decoder::Decoder;
 pub use engine::{Engine, EngineCommand, EngineEvent};
+pub use proto::{encode_line, HostToSidecar, SidecarToHost, PROTOCOL_VERSION};
+
+/// 设备自检（sidecar --selftest 用）：列出渲染设备名。
+pub fn selftest_info() -> Result<Vec<String>, AudioError> {
+    let _ = wasapi::initialize_mta();
+    let enumerator = wasapi::DeviceEnumerator::new().map_err(|e| AudioError::Wasapi(e.to_string()))?;
+    let collection = enumerator
+        .get_device_collection(&wasapi::Direction::Render)
+        .map_err(|e| AudioError::Wasapi(e.to_string()))?;
+    let count = collection
+        .get_nbr_devices()
+        .map_err(|e| AudioError::Wasapi(e.to_string()))?;
+    let mut names = Vec::new();
+    for i in 0..count {
+        if let Ok(dev) = collection.get_device_at_index(i) {
+            if let Ok(name) = dev.get_friendlyname() {
+                names.push(name);
+            }
+        }
+    }
+    Ok(names)
+}

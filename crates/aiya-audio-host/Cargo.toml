@@ -1,0 +1,22 @@
+[package]
+name = "aiya-audio-host"
+version.workspace = true
+edition.workspace = true
+description = "AIYA Music 音频 sidecar 进程（ADR-0002）：命名管道 JSON 协议，崩溃隔离。"
+
+[dependencies]
+aiya-audio = { path = "../aiya-audio" }
+miow.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["handleapi", "processthreadsapi", "winnt"] }
+
+[dev-dependencies]
+winapi = { version = "0.3", features = ["handleapi", "processthreadsapi", "winnt"] }
+
+[[bin]]
+name = "aiya-audio-host"
+path = "src/main.rs"
