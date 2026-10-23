@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Track, TrackSort } from '@aiya/contracts';
   import { artworkUrl } from '@aiya/contracts';
-  import { startRowDrag } from '../lib/drag';
+  import { startRowDrag, consumeClickSuppressed } from '../lib/drag';
   import { computeRange } from '../lib/virtual';
   import { formatTime, highlight } from '../lib/format';
   import type { TrackWindow } from '../lib/track-window';
@@ -189,6 +189,11 @@
           tabindex="-1"
           onpointerdown={(event) => handlePointerDown(event, row.index)}
           onclick={(event) => {
+            // 拖拽激活后松手会派发一次残留 click，吞掉避免误播放
+            if (consumeClickSuppressed()) {
+              event.stopPropagation();
+              return;
+            }
             if (event.ctrlKey || event.metaKey || event.shiftKey) onselect(row.index, event);
             else onplay(row.index);
           }}

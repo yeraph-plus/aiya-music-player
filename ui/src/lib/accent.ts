@@ -14,6 +14,8 @@
 import { loadArtworkBlob } from './artwork-blob.js';
 
 const cache = new Map<string, string | null>();
+/** 色值可随时重算，缓存只做加速：超限整体清空，防长期运行膨胀 */
+const CACHE_LIMIT = 500;
 const SAMPLE = 24;
 
 interface Hsl {
@@ -127,6 +129,7 @@ export async function accentForArtwork(url: string): Promise<string | null> {
     result = null;
   }
 
+  if (cache.size >= CACHE_LIMIT) cache.clear();
   cache.set(url, result);
   return result;
 }

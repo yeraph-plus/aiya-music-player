@@ -30,6 +30,22 @@ export interface RowDragOptions {
 const EDGE = 32;
 const SCROLL_STEP = 10;
 
+/**
+ * 拖拽激活（移动超过阈值）后松手，浏览器仍会在同一元素上派发一次 click。
+ * 这里用短窗口负缓存让行组件能识别并忽略这次"假点击"：
+ * finish(true) 且激活过时置位，CLICK_SUPPRESS_MS 内的 click 视为拖拽残留。
+ * 下一次 pointerdown（startRowDrag 入口）会重置，不影响之后的正常点击。
+ */
+const CLICK_SUPPRESS_MS = 300;
+let dragClickUntil = 0;
+
+/** 本次 click 是否是拖拽残留；命中即消费（只拦一次） */
+export function consumeClickSuppressed(): boolean {
+  if (Date.now() >= dragClickUntil) return false;
+  dragClickUntil = 0;
+  return true;
+}
+
 export function startRowDrag(options: RowDragOptions): void {
   const { event, index, count, rowHeight, scroller, onState, onDrop } = options;
   const target = event.target as HTMLElement | null;
@@ -40,6 +56,7 @@ export function startRowDrag(options: RowDragOptions): void {
   const startY = event.clientY;
   const threshold = options.threshold ?? 6;
   const startScrollTop = scroller?.scrollTop ?? 0;
+  dragClickUntil = 0;
   let active = false;
   let to = index;
   let scrollOffset = 0;
@@ -83,6 +100,7 @@ export function startRowDrag(options: RowDragOptions): void {
     window.removeEventListener('pointercancel', onCancel);
     document.body.classList.remove('is-dragging');
     if (raf) cancelAnimationFrame(raf);
+    if (commit && active) dragClickUntil = Date.now() + CLICK_SUPPRESS_MS;
     if (commit && active && to !== index) onDrop(index, to);
     onState(null);
   };

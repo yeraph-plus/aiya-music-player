@@ -72,10 +72,15 @@ class PlayerStore {
 
   async refreshQueue(version?: number): Promise<void> {
     if (version !== undefined && version === this.version) return;
-    const result = await window.api.player.queue();
-    if (result.ok) {
-      this.queueIds = result.data.ids;
-      this.version = result.data.version;
+    try {
+      const result = await window.api.player.queue();
+      if (result.ok) {
+        this.queueIds = result.data.ids;
+        this.version = result.data.version;
+      }
+    } catch (err) {
+      // 队列快照拉取失败只降级（保留旧 ids），不打断播放
+      console.warn('refreshQueue failed:', err);
     }
   }
 

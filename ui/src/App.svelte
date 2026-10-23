@@ -279,9 +279,19 @@
   async function batchEnqueue(): Promise<void> {
     const ids = await resolveSelectionIds();
     if (ids.length === 0) return;
-    await player.enqueue(ids);
-    showToast(`已加入队列 ${ids.length} 首`);
-    selection.clear();
+    try {
+      const result = await player.enqueue(ids);
+      // 信封不 ok 视为失败，走错误条；reject 已在下方 catch
+      if (result && typeof result === 'object' && 'ok' in result && !result.ok) {
+        error = '加入队列失败';
+        return;
+      }
+      showToast(`已加入队列 ${ids.length} 首`);
+      selection.clear();
+    } catch (err) {
+      console.warn('batchEnqueue failed:', err);
+      error = '加入队列失败';
+    }
   }
 
   async function batchPlay(): Promise<void> {
@@ -718,6 +728,8 @@
 
   onMount(() => {
     const unsubscribers: Array<() => void> = [];
+    // player:state 事件已到过的标志：晚到的 fetchState 结果不能盖回旧状态
+    let stateEventSeen = false;
 
     unsubscribers.push(
       listStore.subscribe(() => {
@@ -729,7 +741,10 @@
     if (audioEl) {
       unsubscribers.push(
         player.init(audioEl, {
-          onState: (next) => mediaSession?.update(next),
+          onState: (next) => {
+            stateEventSeen = true;
+            mediaSession?.update(next);
+          },
         }),
       );
     }
@@ -761,7 +776,9 @@
       // fetchState 已解包信封，直接就是 PlayerState | null。
       // 旧代码误用 .ok/.data，条件恒假 —— 启动恢复块从未执行过，
       // 一直被 init() 里的 onState 订阅掩盖。
-      if (playerResult) {
+      // 另外 fetchState 与 player:state 事件并发：事件已先到（stateEventSeen）
+      // 时 store 里已是新状态，丢弃这份晚到的快照，避免盖回旧值。
+      if (playerResult && !stateEventSeen) {
         player.state = playerResult;
         mediaSession?.update(playerResult);
         await player.refreshQueue(playerResult.queueVersion);
@@ -860,7 +877,7 @@
     {/if}
 
     {#if error}
-      <div class="error">
+      <div class="error" aria-live="assertive">
         {error}
         <button class="link" onclick={() => (error = null)}>关闭</button>
       </div>
@@ -993,7 +1010,7 @@
 </div>
 
 {#if toast}
-  <div class="toast">{toast}</div>
+  <div class="toast" aria-live="polite">{toast}</div>
 {/if}
 
 {#if menu}

@@ -292,11 +292,12 @@ function mockDispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>
     case 'app_diagnostics':
       return mock.diagnostics();
     case 'spectrum_set':
-      return ok({ enabled: a.enabled as boolean });
+      // 外层 mockCall 已统一包 ok() 信封，这里返回裸数据
+      return { enabled: a.enabled as boolean };
     case 'beets_preview':
-      return ok({ started: true });
+      return { started: true };
     case 'beets_status':
-      return ok({
+      return {
         found: true,
         interpreter: 'mock-python',
         scriptPath: 'mock://beets_sidecar.py',
@@ -309,7 +310,7 @@ function mockDispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>
         configDir: 'C:/mock/beets',
         errorCode: null,
         errorMessage: null,
-      });
+      };
     default:
       throw new Error(`mock 未实现的命令：${cmd}`);
   }

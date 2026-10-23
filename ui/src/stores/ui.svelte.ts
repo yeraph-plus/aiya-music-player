@@ -196,11 +196,20 @@ class UiStore {
 
   /** 首屏并发拉取：设置/歌单/UiState。返回恢复出的 lastScrollTop */
   async bootstrap(): Promise<number> {
-    const [ui, settingsResult, playlistsResult] = await Promise.all([
-      window.api.app.getUiState(),
-      window.api.app.getSettings(),
-      window.api.playlists.list(),
-    ]);
+    let ui: Awaited<ReturnType<typeof window.api.app.getUiState>>;
+    let settingsResult: Awaited<ReturnType<typeof window.api.app.getSettings>>;
+    let playlistsResult: Awaited<ReturnType<typeof window.api.playlists.list>>;
+    try {
+      [ui, settingsResult, playlistsResult] = await Promise.all([
+        window.api.app.getUiState(),
+        window.api.app.getSettings(),
+        window.api.playlists.list(),
+      ]);
+    } catch (err) {
+      // 启动引导失败不致命：设置/歌单/视图恢复走默认值
+      console.warn('bootstrap failed:', err);
+      return 0;
+    }
     if (settingsResult.ok) this.settings = settingsResult.data;
     if (playlistsResult.ok) this.playlists = playlistsResult.data;
     let scrollTop = 0;

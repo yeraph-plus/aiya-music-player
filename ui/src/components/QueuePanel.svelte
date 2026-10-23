@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Track } from '@aiya/contracts';
   import { artworkUrl } from '@aiya/contracts';
-  import { startRowDrag } from '../lib/drag';
+  import { startRowDrag, consumeClickSuppressed } from '../lib/drag';
   import { computeRange } from '../lib/virtual';
   import { formatDurationLong, formatTime } from '../lib/format';
   import { library as libraryStore } from '../stores/library.svelte';
@@ -21,6 +21,10 @@
 
   const ROW_HEIGHT = 46;
   const META_BATCH = 120;
+  /** 同一 id 确认失败/缺失达到该次数后不再请求（有界负缓存，防无限重试） */
+  const META_ATTEMPT_LIMIT = 3;
+  /** 负缓存条数上限，超过整体清空（曲目可能重新上架，允许再试） */
+  const META_FAILURE_CAP = 1000;
 
   let scroller = $state<HTMLDivElement | null>(null);
   let viewportHeight = $state(520);
@@ -32,6 +36,13 @@
   // 元数据按可见区间批量取，而不是"拉全队列的曲目"。
   const meta = new Map<string, Track>();
   const pending = new Set<string>();
+  /** trackId → 已失败次数：返回缺失（可能已从曲库删除）或请求异常时累加 */
+  const failedAttempts = new Map<string, number>();
+
+  function noteFailure(id: string): void {
+    if (failedAttempts.size >= META_FAILURE_CAP) failedAttempts.clear();
+    failedAttempts.set(id, (failedAttempts.get(id) ?? 0) + 1);
+  }
 
   const range = $derived(
     computeRange({ scrollTop, viewportHeight, rowHeight: ROW_HEIGHT, total: ids.length, overscan: 4 }),
@@ -50,9 +61,18 @@
 
   const totalMs = $derived.by(() => {
     void metaVersion;
+    // 元数据随滚动补齐：还有行没加载时总时长必然偏小且漂移，宁可不算。
+    // 按 ids 逐个查 meta（而非 meta.size），避免历史残留条目虚报完成度。
+    if (ids.length === 0) return 0;
     let sum = 0;
-    for (const track of meta.values()) sum += track.durationMs ?? 0;
-    return sum;
+    let known = 0;
+    for (const id of ids) {
+      const track = meta.get(id);
+      if (!track) continue;
+      known += 1;
+      sum += track.durationMs ?? 0;
+    }
+    return known === ids.length ? sum : 0;
   });
 
   const dropLineTop = $derived(
@@ -63,17 +83,34 @@
     const missing: string[] = [];
     for (const row of visible) {
       if (row.track || pending.has(row.id)) continue;
+      // 负缓存命中：确认过多次缺失的 id 不再请求，否则 effect 会无限重跑
+      if ((failedAttempts.get(row.id) ?? 0) >= META_ATTEMPT_LIMIT) continue;
       missing.push(row.id);
       if (missing.length >= META_BATCH) break;
     }
     if (missing.length === 0) return;
 
     for (const id of missing) pending.add(id);
-    void libraryStore.tracks(missing).then((tracks) => {
-      for (const id of missing) pending.delete(id);
-      for (const track of tracks) meta.set(track.id, track);
-      metaVersion += 1;
-    });
+    void libraryStore
+      .tracks(missing)
+      .then((tracks) => {
+        for (const id of missing) pending.delete(id);
+        const got = new Set(tracks.map((track) => track.id));
+        for (const track of tracks) meta.set(track.id, track);
+        // 返回里没有的 id 视为确认缺失，记入负缓存
+        for (const id of missing) {
+          if (!got.has(id)) noteFailure(id);
+        }
+        metaVersion += 1;
+      })
+      .catch(() => {
+        // 请求本身失败：清 pending 并计入失败，同样有界重试
+        for (const id of missing) {
+          pending.delete(id);
+          noteFailure(id);
+        }
+        metaVersion += 1;
+      });
   });
 
   // 队列换了（重新播放）时把面板滚回当前曲目附近
@@ -135,7 +172,14 @@
           class="queue-row"
           class:active={row.index === index}
           class:drag-source={dragState?.active && dragState.from === row.index}
-          onclick={() => onplay(row.index)}
+          onclick={(event) => {
+            // 拖拽激活后松手会派发一次残留 click，吞掉避免误播放
+            if (consumeClickSuppressed()) {
+              event.stopPropagation();
+              return;
+            }
+            onplay(row.index);
+          }}
           onpointerdown={(event) => handlePointerDown(event, row.index)}
           role="button"
           tabindex="-1"

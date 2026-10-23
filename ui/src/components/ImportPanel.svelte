@@ -87,7 +87,13 @@
 
   async function chooseAndPreview(): Promise<void> {
     error = null;
-    const picked_dir = await window.api.library.chooseRoot();
+    let picked_dir: Awaited<ReturnType<typeof window.api.library.chooseRoot>>;
+    try {
+      picked_dir = await window.api.library.chooseRoot();
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      return;
+    }
     if (!picked_dir.ok || !picked_dir.data) return;
     // 重置状态，订阅事件，发起预览
     albums = [];
@@ -100,7 +106,13 @@
     syncing = false;
     doneCount = null;
     errors = [];
-    const result = await window.api.app.beetsPreview([picked_dir.data.path]);
+    let result: Awaited<ReturnType<typeof window.api.app.beetsPreview>>;
+    try {
+      result = await window.api.app.beetsPreview([picked_dir.data.path]);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      return;
+    }
     if (!result.ok) {
       error = result.error.message;
       return;
@@ -139,7 +151,13 @@
     results = {};
     applySummary = null;
     synced = null;
-    const result = await window.api.app.beetsApply(decisions);
+    let result: Awaited<ReturnType<typeof window.api.app.beetsApply>>;
+    try {
+      result = await window.api.app.beetsApply(decisions);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      return;
+    }
     if (!result.ok) {
       error = result.error.message;
       return;
@@ -150,9 +168,14 @@
 
   /** 取消当前预览/应用：sidecar 收尾到最近检查点，已完成部分保留 */
   async function cancelSession(): Promise<void> {
-    const result = await window.api.app.beetsCancel();
-    if (!result.ok) {
-      error = result.error.message;
+    try {
+      const result = await window.api.app.beetsCancel();
+      if (!result.ok) {
+        error = result.error.message;
+      }
+    } catch (err) {
+      // 取消失败不阻塞流程，sidecar 会在 sessionEnd 自己收尾
+      console.warn('beetsCancel failed:', err);
     }
   }
 
@@ -160,7 +183,13 @@
   async function syncNow(): Promise<void> {
     error = null;
     synced = null;
-    const result = await window.api.app.beetsSync();
+    let result: Awaited<ReturnType<typeof window.api.app.beetsSync>>;
+    try {
+      result = await window.api.app.beetsSync();
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      return;
+    }
     if (!result.ok) {
       error = result.error.message;
       return;

@@ -62,8 +62,16 @@
   const lines = $derived(lyrics?.lines ?? []);
   const activeIndex = $derived(findActiveLine(lines, clockMs));
 
-  // 跟随播放滚动。用户手动滚过之后 2 秒内不抢滚动条 ——
-  // 否则想往上翻两句歌词会被下一次 timeupdate 硬拽回来。
+  // 用户手动滚过之后 2 秒内不抢滚动条。只认真实输入事件（滚轮/触摸/按下），
+  // 不认 scroll —— 程序化 smooth 滚动也会触发 scroll，会把跟随自己抑制掉。
+  // touch/pointer 挂 window 上（容器上的静态元素交互会报 a11y 警告），
+  // 但只在目标落在歌词容器内时生效；点歌词行按钮是"跳转"不是"翻走"，不抑制。
+  function markUserScroll(event: Event): void {
+    if (!scroller || !(event.target instanceof Node) || !scroller.contains(event.target)) return;
+    if (event.target instanceof Element && event.target.closest('button')) return;
+    userScrolledAt = Date.now();
+  }
+
   $effect(() => {
     const index = activeIndex;
     if (!scroller || index < 0) return;
@@ -76,6 +84,8 @@
   });
 </script>
 
+<svelte:window ontouchstart={markUserScroll} onpointerdown={markUserScroll} />
+
 <aside class="lyrics-panel" aria-label="歌词">
   <header>
     <strong>歌词</strong>
@@ -83,7 +93,11 @@
     <button class="icon-btn" onclick={onclose} aria-label="关闭歌词"><Icon name="close" size={14} /></button>
   </header>
 
-  <div class="lyrics-body" bind:this={scroller} onscroll={() => (userScrolledAt = Date.now())}>
+  <div
+    class="lyrics-body"
+    bind:this={scroller}
+    onwheel={() => (userScrolledAt = Date.now())}
+  >
     {#if loading}
       <div class="lyrics-empty">正在查找歌词…</div>
     {:else if !lyrics?.found}
