@@ -1057,9 +1057,29 @@ fn player_report(state: State<'_, AppState>, report: Value) -> Value {
     ok(json!({ "received": true }))
 }
 
+/// 歌词（P4）：同目录同名 .lrc → 解析。没找到回 found=false（UI 显示"暂无"，
+/// 不当错误）。trackId 是自有库的 tracks.id。
 #[tauri::command]
-fn lyrics_get(_track_id: String) -> Value {
-    fail("E_NOT_FOUND", "歌词功能在 P4 提供")
+fn lyrics_get(state: State<'_, AppState>, track_id: String) -> Value {
+    let path: Option<String> = state
+        .db()
+        .send(move |conn| {
+            Ok(conn
+                .query_row("SELECT path FROM tracks WHERE id = ?1", [&track_id], |r| r.get(0))
+                .ok())
+        })
+        .unwrap_or(None);
+    let Some(path) = path else {
+        return ok(json!({
+            "found": false, "lines": [], "offsetMs": 0, "synced": false, "encoding": null,
+        }));
+    };
+    match aiya_data::lyrics::read_lyrics(std::path::Path::new(&path)) {
+        Some(parsed) => ok(serde_json::to_value(&parsed).unwrap_or_else(|_| json!(null))),
+        None => ok(json!({
+            "found": false, "lines": [], "offsetMs": 0, "synced": false, "encoding": null,
+        })),
+    }
 }
 
 #[tauri::command]

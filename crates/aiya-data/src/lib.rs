@@ -8,6 +8,7 @@ pub mod artwork;
 pub mod beets_sync;
 pub mod db;
 pub mod ids;
+pub mod lyrics;
 pub mod norm;
 pub mod queue;
 pub mod repo;
