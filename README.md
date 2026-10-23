@@ -14,9 +14,9 @@
 
 ## 六条已定决策
 
-1. **后端拥有音频输出**：共享/独占 WASAPI、解码、设备、时钟都在音频 sidecar（v1 mpv / B 方案 wasapi-rs）；Rust host 编排；前端只显示状态。
+1. **后端拥有音频输出**：共享/独占 WASAPI、解码、设备、时钟都在音频 sidecar（v1 原生：Symphonia 解码 + wasapi-rs 输出，ADR-0006；mpv 仅 spike 对照）；Rust host 编排；前端只显示状态。
 2. **播放状态机在 Rust**：队列、随机、重复、恢复只有一份真相；托盘/SMTC/关窗都控制同一个 Actor。
-3. **音频独立进程**：v1 推荐 `mpv` sidecar（`--audio-exclusive`/`--wasapi-exclusive-buffer`/全格式）；`wasapi-rs` 原生是 B 方案。见 [`09`](docs/09-audio-engine-choice.md)。
+3. **音频独立进程 + PCM 链内 tap**：`aiya-audio-host` sidecar 承载原生引擎；DSP 链内建订阅制“必要采样” tap（动画级频谱，关闭零开销、不破坏 bit-perfect），EQ、LRC、WASAPI 输出联合设计一次定形。见 04 §5、ADR-0006。
 4. **契约以 Rust 为源**：生成 TS；但为了搬 UI，先保留旧 `AiyaApi` 形状作为“UI 兼容契约”（不是旧数据兼容）。
 5. **单一数据库写入者**：只有宿主开 SQLite；音频/beets sidecar 不碰宿主库。
 6. **全新 schema v1**：没有 v1–v5 迁移链；demo 数据可丢，直接从零建库。
@@ -29,7 +29,7 @@ AIYA_MUSIC_TAURI/
 ├── crates/
 │   ├── aiya-player/       # 纯领域：队列、状态归约、命令/事件；无 IO/无 Tauri
 │   ├── aiya-data/         # SQLite v1、Repository、扫描、封面、设置
-│   ├── aiya-audio/        # 原生音频（wasapi-rs + symphonia/FFmpeg）——B 方案
+│   ├── aiya-audio/        # 原生音频（wasapi-rs + symphonia/FFmpeg）——v1 主方案（ADR-0006）
 │   ├── aiya-audio-host/   # sidecar 入口：mpv supervisor 或原生引擎
 │   ├── aiya-app/          # PlayerActor（mailbox/effects）、用例编排、端口 trait
 │   └── aiya-system/       # SMTC、托盘、电源、单实例
@@ -66,7 +66,8 @@ src-tauri ⇢ stdio JSON ⇢ sidecars/beets
 | [`06-open-questions.md`](docs/06-open-questions.md) | 仍需拍板的 9 个分叉 |
 | [`07-ui-reuse.md`](docs/07-ui-reuse.md) | **UI 原样搬**：54 个调用点、5 个适配器、优先级 |
 | [`08-beets.md`](docs/08-beets.md) | **beets 集成**：Python sidecar、预览/diff/应用 |
-| [`09-audio-engine-choice.md`](docs/09-audio-engine-choice.md) | mpv vs wasapi-rs、GPLv3、spike 门槛 |
+| [`09-audio-engine-choice.md`](docs/09-audio-engine-choice.md) | mpv vs wasapi-rs 对比、GPLv3、spike 门槛（含 §3.1 修订：原生首发） |
+| [`10-plan-alignment.md`](docs/10-plan-alignment.md) | **底盘规划对齐评估**：一致/冲突裁决（FTS5、UI 复用、引擎改判等）、ADR-0006 依据 |
 | [`adr/`](docs/adr/) | 五条不可回退的决策记录 |
 
 ## 现在不做什么
@@ -74,7 +75,7 @@ src-tauri ⇢ stdio JSON ⇢ sidecars/beets
 - 不迁移旧数据库、不兼容旧 `media://`、不保留 Electron preload/IPC。
 - 不为“以后可能要”保留 `MediaAsset/MediaLocation` 多来源模型；需要时再加。
 - 不在前端建第二条音频路径；不为了 pro 频谱把 Web Audio 搬回来。
-- 不先把 EQ/DSD/crossfade/watcher/在线做进去。
+- 不先把 EQ 实现/DSD/crossfade/watcher/在线做进去（EQ 的链路位置与协议已随 ADR-0006 定形，实现后置）。
 - 不在 UI 兼容层跑通前写大量新界面。
 
 ## License
@@ -84,7 +85,7 @@ src-tauri ⇢ stdio JSON ⇢ sidecars/beets
 ## 下一步
 
 1. 复制 renderer → `ui`，写 `compat/api.ts` + `RemoteAudioSink`，让旧界面在 Tauri 里显示（见 `07`）。
-2. 跑 2 天引擎 spike：mpv 独占/seek/设备/1h vs wasapi-rs；按 `09` §4 打分，拍板。
+2. 跑 2 天原生引擎 spike：wasapi-rs Shared/Exclusive（44.1/16、48/24、帧对齐）+ Symphonia 格式矩阵 + seek/设备/1h（09 §4 门槛）；mpv 仅对照。
 3. 跑半天 beets spike：`beet --version`、`Library` 读取 10 条；确认 Python sidecar 路线。
 4. 建 `aiya-data` v1 + 扫描；接真实列表/封面。
 5. 接播放纵切；然后做 beets 预览/应用。

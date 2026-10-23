@@ -12,6 +12,7 @@
 | 逐 feature 重写 UI | **先原样复制 + compat 适配** | UI 是今天刚写的，重写负收益 |
 | 保留旧库 v1–v5 迁移 | **全新 schema v1，不迁移** | demo 无历史包袱 |
 | 自研 wasapi-rs 首发 | **mpv sidecar 首发**（wasapi-rs 为 B 方案） | 重点 UI/beets，音频买/借 |
+| mpv sidecar 首发（本文件早版） | **原生引擎首发**（Symphonia + wasapi，ADR-0006） | 频谱动画需要链内 PCM tap，mpv 无 tap；EQ/LRC/WASAPI 联合设计 |
 | beets 放 P6 | **beets 提前到 P3，独立 sidecar** | 项目差异点 |
 | 7–10 周 | **4–6 周**（全职） | UI/音频都省了 |
 
@@ -19,14 +20,14 @@
 
 | 阶段 | 目标 | 主要产物 | 退出条件 | 估时 |
 |---|---|---|---|---|
-| P0 | UI 兼容 + 引擎/beets spike | 复制 UI、`compat/`、mpv spike、beets `status` | 旧 UI 在 Tauri 里显示；mpv 能出声；`beet` 可检测 | 2–3d |
+| P0 | UI 兼容 + 引擎/beets spike | 复制 UI、`compat/`、原生引擎 spike、beets `status` | 旧 UI 在 Tauri 里显示；原生引擎能出声；`beet` 可检测 | 2–3d |
 | P1 | 数据 + 只读 UI | 全新 schema、扫描、列表/搜索/封面、播放列表 | 5 千–5 万首可浏览；UI 组件基本不改 | 1w |
-| P2 | 播放纵切 | `AudioPort` + mpv sidecar、PlayerActor、恢复 | 点行出声、seek、暂停、关窗继续 | 1w |
+| P2 | 播放纵切 | `AudioPort` + 原生引擎（Symphonia+wasapi）、PlayerActor、恢复 | 点行出声、seek、暂停、关窗继续 | 2w |
 | P3 | **beets 预览/应用** | Python sidecar、diff UI、写标签 | 选文件夹→候选→diff→应用→曲库刷新 | 1–1.5w |
 | P4 | 体验/系统 | 歌词、托盘、SMTC、频谱 compact、快捷键、设置 | 日常可用；E2E 通过 | 1–1.5w |
 | P5 | 打包/收尾 | 安装包、签名、GPL notices、soak | 干净 Win11 安装/卸载；4h 长播 | 3–5d |
 
-**总计约 4–6 周**。如果 mpv spike 失败转 wasapi-rs 原生，P2 +1–2 周；如果 beets API 不顺，P3 +1 周。
+**总计约 5–7 周**（ADR-0006 原生引擎后）。若原生 spike 暴露硬伤可回退 mpv（P2 省回 1 周，明确代价：无频谱、EQ 受限）；如果 beets API 不顺，P3 +1 周。
 
 ## 3. P0 — UI 兼容 + 两个 spike（2–3 天）
 
@@ -49,7 +50,7 @@ cp -r ../AIYA_MUSIC/packages/contracts ui/contracts   # 先当“UI 兼容契约
 - A：`mpv.exe` + `--input-ipc-server`，测独占/seek/device/gapless/1h。
 - B：`wasapi` 0.26 + `symphonia`，测 Shared/Exclusive/对齐/时钟。
 - 用同一批 fixtures，按 [`09-audio-engine-choice.md`](09-audio-engine-choice.md) §4 的门槛打分。
-- **默认 A**；A 不达标再转 B。
+- **默认 B（原生）**；A（mpv）仅作对照数据，不进发布路径（ADR-0006）。
 
 ### 3.3 beets spike（半天）
 
@@ -88,8 +89,8 @@ cp -r ../AIYA_MUSIC/packages/contracts ui/contracts   # 先当“UI 兼容契约
 ### 交付
 
 - `aiya-player`：队列/随机/重复/状态归约；`PlayerActor`。
-- `AudioPort` trait；`MpvAudio`（或 `NativeAudio`）适配器。
-- mpv sidecar：启动/JSON IPC/属性观察/重启；`--audio-exclusive`、`--audio-device`、`--gapless-audio=weak`、`--replaygain`。
+- `AudioPort` trait + `NativeAudio` 适配器：Symphonia 解码、ring buffer、事件驱动 WASAPI Shared 渲染、位置时钟（04 §3）。
+- DSP 链一次定形：`decode → [resample(共享)] → [ReplayGain] → [EQ 预留] → [tap 预留] → [volume]`（ADR-0006）；`SetEq`/`SetSpectrum` 协议进 golden fixtures，tap 数据链 P2 就位、频谱 UI P4 接。
 - 命令：play/pause/next/prev/seek/volume/mute/rate；队列编辑；恢复。
 - 关窗到托盘；UI 重载不断声。
 
@@ -99,7 +100,7 @@ cp -r ../AIYA_MUSIC/packages/contracts ui/contracts   # 先当“UI 兼容契约
 - [ ] 连点 200 次下一首不越界；旧 generation 事件不覆盖新状态。
 - [ ] seek 容差 ±100ms（共享）/±50ms（独占，实测记录）。
 - [ ] UI 重载/关窗到托盘，音乐继续；重启恢复队列/进度/音量。
-- [ ] mpv 崩溃：宿主重启 sidecar，从最后位置恢复/暂停；UI 有提示。
+- [ ] 引擎 sidecar 崩溃：宿主重启，从最后位置恢复/暂停；UI 有提示。
 
 ## 6. P3 — beets（1–1.5 周，核心）
 
@@ -125,7 +126,7 @@ cp -r ../AIYA_MUSIC/packages/contracts ui/contracts   # 先当“UI 兼容契约
 
 - 歌词：读文件/编码/解析；前端时钟/滚动/点击。
 - 托盘、关窗到托盘、单实例、防休眠、SMTC（隐藏顶层窗口）。
-- 频谱 compact：v1 用 mpv 时先做“无数据降级/不做”，或等 wasapi-rs 原生 tap；pro 后置。
+- 频谱 compact：原生 tap 已随 P2 就位（04 §5.1 订阅制必要采样复制），接 `RemoteSpectrumSource` 即可；pro 后置。
 - 快捷键、批量选择/右键、Toast/对话框、主题/密度/主色。
 - 播放历史/最近/常听；诊断页音频/beets 状态。
 
@@ -136,7 +137,7 @@ cp -r ../AIYA_MUSIC/packages/contracts ui/contracts   # 先当“UI 兼容契约
 - [ ] 歌词/封面/主题在深浅色下正常。
 - [ ] 诊断页能显示：设备/格式/独占结果、mpv 版本、beets 版本/库路径。
 
-> 频谱注意：mpv 没有直接的“PCM tap”API。v1 可以先不做频谱，或让 mpv 输出到 `--ao=null` 的并行分析链路（复杂），不要为了频谱把音频搬回 WebView。若频谱是核心体验，再考虑 wasapi-rs 原生 tap。
+> 频谱注意（已随 ADR-0006 解决）：tap 在引擎链内（04 §5.1），订阅制必要采样复制、关闭零开销；仍然不要为了任何频谱形态把音频搬回 WebView。
 
 ## 8. P5 — 打包/收尾（3–5 天）
 
@@ -209,11 +210,11 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 | # | 风险 | 影响 | 缓解 |
 |---|---|---|---|
-| 1 | mpv 独占/时钟/设备行为不符合预期 | 播放体验差 | 2 天 spike；不达标转 wasapi-rs |
-| 2 | mpv 二进制 50MB/许可 | 包大/合规 | GPLv3 已兼容；notices/源码；可选 libmpv LGPL |
+| 1 | 原生引擎 Shared/独占/时钟工期超预期 | 播放延期 | P0 spike 按 09 §4 门槛先行；mpv 作逃生（代价：无频谱、EQ 受限） |
+| 2 | WMA/DFF 等 Symphonia 格式缺口 | 部分曲播不了 | 先明示"不支持"；FFmpeg LGPL 动态链接后补（04 §2.2） |
 | 3 | beets API/版本漂移 | 导入功能坏 | 锁 2.14.x；sidecar 隔离；错误可见；CLI fallback |
 | 4 | UI compat 漏方法 | 页面局部坏 | 54 个调用点清单；smoke 覆盖；`window.api` 全量实现 |
-| 5 | 频谱 pro 不可用 | 体验缺失 | v1 只做 compact/后置；不把音频搬回 WebView |
+| 5 | 频谱 pro 不可用 | 体验缺失 | compact 随原生 tap 交付（ADR-0006）；pro 后置；不把音频搬回 WebView |
 | 6 | 导入写坏文件 | 数据风险 | 默认只写标签；预览无副作用；移动/复制显式；失败可重试 |
 | 7 | 打包/签名/杀软 | 安装失败 | 一起签名；干净机测试；日志 |
 | 8 | 范围蔓延 | 延期 | v1 不做 EQ/DSD/watcher/jobs/在线 |
@@ -222,7 +223,7 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 1. 建 Cargo workspace + `ui` Vite；复制 renderer；跑静态页面。
 2. 写 `compat/api.ts`，用 mock 数据接通列表/搜索/选择。
-3. 跑 mpv spike：独占 44.1/16、48/24、seek、设备、1h。
+3. 跑原生引擎 spike：wasapi-rs Shared/Exclusive（44.1/16、48/24、帧对齐）、Symphonia 格式矩阵、seek、设备、1h（09 §4 门槛）；mpv 对照可选。
 4. 跑 beets spike：`beet --version`、`Library` 读取 10 条。
 5. 写 `aiya-data` schema v1 + 扫描 + 列表查询。
 6. 接 `aiya-artwork://` + 封面；验证 canvas 主色。

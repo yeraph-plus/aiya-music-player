@@ -1,6 +1,6 @@
 # ADR-0002：音频助手独立进程，命名管道通信
 
-- 状态：Accepted
+- 状态：Accepted（"v1 可用 mpv.exe"的实现选择已被 [ADR-0006](0006-native-engine-first.md) 修订为原生引擎；独立进程决策不变）
 - 日期：2026-10-23
 
 ## 背景

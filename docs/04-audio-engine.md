@@ -1,7 +1,7 @@
 # 04 — 音频引擎：WASAPI、解码、时钟与 DSP
 
-> **路径说明**：本文是 **B 方案（wasapi-rs 原生）** 的实现细节。v1 推荐先用 mpv sidecar（见 [`09`](09-audio-engine-choice.md)）；如果 mpv spike 不达标、或你明确要 bit-perfect/完全控制，再按本文落地。
-> 目标：把“能出声”变成“可证明地按正确格式、正确设备、正确时钟出声，并且失败可解释”。
+> **路径说明**：本文是 **v1 主方案（原生引擎）** 的实现细节（ADR-0006，2026-10-23 改判；依据见 [`10`](10-plan-alignment.md) §3.3）。mpv sidecar 降级为 spike 对照与逃生实现，不进入发布包。
+> 目标：把"能出声"变成"可证明地按正确格式、正确设备、正确时钟出声，并且失败可解释"。
 > 现版实测与坑位来自 `../AIYA_MUSIC/docs/04-WASAPI独占播放方案.md`、`10-WASAPI与解码与EQ调研.md` 与 `../spike/p4-wasapi/`。
 
 ## 1. 输出模式
@@ -52,6 +52,8 @@ decode thread:
 ## 3. WASAPI 输出
 
 > 实现用 `wasapi` crate **0.26.0**（HEnquist/wasapi-rs，MIT）：共享/独占、事件/轮询、设备枚举、设备增删/默认变化通知、**独占模式格式探测**、`IAudioClock` 都有封装；缺口再用 `windows` 0.62 补。版本在 P1 锁定，并把探针结果写成自检。
+>
+> **为什么不用 Rodio（ADR-0006）**：Rodio 的 Sink/Source 模型要求把数据流所有权交给引擎，与自有 DSP 链、位置时钟、独占模式直接冲突，且不支持 WASAPI 独占。CPAL 仅作未来跨平台共享输出占位（Linux/macOS），不进 v1。
 
 ### 3.1 初始化流程
 
@@ -168,15 +170,39 @@ decode → [resample if shared/rate] → [ReplayGain] → [EQ] → [volume/fade]
 - 音量：每样本 ramp；静音淡出，避免爆音。
 - 削波：ReplayGain 用 `min(gain, 1/peak)`；最终输出 clamp，但记录 clipping 计数。
 
-## 5. 频谱
+## 5. 频谱与 PCM 数据链路（ADR-0006）
 
-**在引擎内部 tap，不用系统回环。**
+**在引擎内部 tap，不用系统回环。** 频谱只做动画效果，不做专业分析（无声学加权/标定）。
 
-- tap 点：DSP 之后、主音量之前（低音量时仍有可视数据）。
-- FFT 2048/4096，Hann 窗；48 个对数分带（40Hz–16kHz）；时间平滑 attack/release。
-- 30fps 推 `u8` bands；暂停时衰减到 0，不冻结。
-- 独占模式下同样可用；回环在独占时捕获不到本应用，且会混入系统声音，不作为方案。
-- 前端只画；不要传 PCM/FFT。
+### 5.1 tap：订阅制"必要采样复制"
+
+统一数据面（EQ、频谱、LRC、WASAPI 输出共用，见 §5.2）：
+
+```
+decode(symphonia) → [resample(共享模式)] → [ReplayGain] → [EQ] → [tap] → [volume/fade] → WASAPI
+```
+
+- **tap 点**：EQ 之后、主音量之前——频谱反映 EQ 效果，且低音量时仍有可视数据。
+- **订阅制**：`SetSpectrum{enabled}` 控制；关闭时整条 tap 退化为一个布尔分支，零拷贝、零分配。
+- **必要复制**：解码/DSP 线程把样本混音成**单声道 f32** 写入 SPSC 无锁环（容量 8192，2 的幂）；渲染线程完全不参与 tap。环满丢弃旧帧并计数，不影响音频。
+- **分析线程**（普通优先级）：30Hz 消费滚动 4096 样本窗 → FFT 2048/4096 + Hann 窗 → 48 个对数分带（40Hz–16kHz）→ attack/release 时间平滑 → `u8[48]` 事件。
+- 暂停/无声：不冻结，按 release 衰减到 0；seek 时环随解码 flush。
+- **纯旁路复制，不修改样本**：独占/bit-perfect 模式下频谱照常可用，且不破坏 bit-perfect（破坏 bit-perfect 的只有 resample/ReplayGain/EQ/音量≠1，UI 已按 04 §6 提示）。
+- 不用系统回环：独占时捕获不到本应用，且会混入系统声音。
+- 前端只画；不传 PCM/FFT，只传分带能量。
+
+### 5.2 EQ、LRC、WASAPI 联合设计
+
+三项共享同一条数据面与位置时钟，接口一次定形、不随后续功能返工：
+
+| 能力 | 链路位置 | 接口 | 交付 |
+|---|---|---|---|
+| EQ | tap 之前（频谱反映 EQ） | `SetEq{enabled, bands}`：10 段 biquad + preamp，系数随采样率重算，DSD 禁用 | 协议/链路位置 v1 定形，**实现后置** |
+| LRC | 不在数据面——复用位置时钟 | 位置 = `base + frames_written / rate`（§3.5），10Hz 事件 + 前端 rAF 外推 | P4 |
+| WASAPI 输出 | 链路终点 | `OpenDevice{device_id, mode, policy}`；Shared 默认，Exclusive 按 §3 分期 | v1（P2 Shared，P4/后续 Exclusive） |
+| 频谱 | tap（§5.1） | `SetSpectrum` + `Spectrum{bands:[u8;48]}` 30fps | P4（链路与协议 P2 就位） |
+
+> 关键约束：EQ 在解码/DSP 线程执行（非实时路径），音量 ramp 在渲染线程（§3.4）；tap 只在解码/DSP 线程写入，渲染线程保持"无分配、无锁、无日志"。
 
 ## 6. 播放语义
 

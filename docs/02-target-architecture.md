@@ -42,16 +42,16 @@
         │ 命名管道/帧          │ stdio JSON
 ┌───────▼──────────────┐  ┌───▼──────────────────┐
 │ audio sidecar         │  │ aiya-beets (Python)  │
-│ v1: mpv --audio-      │  │ beets 2.14.x         │
-│ exclusive / IPC       │  │ 候选/差异/写标签     │
-│ v2: wasapi-rs 原生    │  │ 不碰宿主 DB          │
+│ v1: wasapi-rs +       │  │ beets 2.14.x         │
+│ symphonia（ADR-0006） │  │ 候选/差异/写标签     │
+│ 对照/逃生: mpv        │  │ 不碰宿主 DB          │
 └───────────────────────┘  └──────────────────────┘
 ```
 
-音频 sidecar 的两种实现：
+音频 sidecar 的实现（ADR-0006）：
 
-- **v1（推荐）**：`mpv.exe` + `--input-ipc-server`；`--audio-exclusive=yes`、`--wasapi-exclusive-buffer`、`--gapless-audio=weak`、`--replaygain=track`。见 [`09`](09-audio-engine-choice.md)。
-- **v2（可选）**：`wasapi-rs` + `symphonia`/FFmpeg；`aiya-audio` 自己解码/时钟/DSP。
+- **v1（主方案）**：`aiya-audio-host` sidecar = `wasapi-rs` 输出 + Symphonia 解码，自有时钟/DSP/链内 PCM tap（动画级频谱，04 §5.1）。见 [`04`](04-audio-engine.md)、[`09`](09-audio-engine-choice.md) §3.1。
+- **对照/逃生**：`mpv.exe` + `--input-ipc-server`。无 PCM tap（无频谱）、EQ 只能走 `--af`；仅作 spike 对照，不进发布包。
 
 > 同一版本只启用一条出声路径。`AudioPort` 隔离，但不要同时维护两套时钟/设备状态。
 
@@ -347,7 +347,7 @@ pub struct AppError {
 
 ## 7. 音频 sidecar 协议
 
-详见 [`04-audio-engine.md`](04-audio-engine.md) 与 [`09-audio-engine-choice.md`](09-audio-engine-choice.md)。下面是与引擎无关的 `AudioPort` 边界；v1 的 mpv adapter 把它映射成 `loadfile`/`seek`/`set_property`/`observe_property`，B 方案的原生 adapter 直接实现。
+详见 [`04-audio-engine.md`](04-audio-engine.md) 与 [`09-audio-engine-choice.md`](09-audio-engine-choice.md)。下面是与引擎无关的 `AudioPort` 边界；原生 adapter（v1）直接实现；mpv adapter（对照/逃生）把它映射成 `loadfile`/`seek`/`set_property`/`observe_property`。
 
 ```
 Host → Audio:
@@ -503,7 +503,7 @@ quit requested
 | 搜索 | ≤ 20ms | 5 万行 |
 | 播放命令往返 | ≤ 20ms（不含设备重建） | host→sidecar→ack |
 | 位置事件 | 10Hz，单帧 < 200B | 协议统计 |
-| 频谱 | 30fps，48 bands，单帧 < 100B（B 方案原生引擎才启用；v1 mpv 无 PCM tap，不提供频谱数据） | 协议统计 |
+| 频谱 | 30fps，48 bands，单帧 < 100B（原生引擎链内 tap，ADR-0006；订阅制，关闭零开销） | 协议统计 |
 | 内存稳态 | 播放 1h 增长 < 30MB | soak |
 | 音频欠载 | 0（正常设备） | stats |
 
@@ -532,6 +532,7 @@ quit requested
 | [0003](adr/0003-backend-authoritative-player.md) | 播放状态机在 Rust，UI 只读 |
 | [0004](adr/0004-rust-contract-source.md) | Rust 契约单一来源，生成 TS |
 | [0005](adr/0005-artwork-protocol-only.md) | 只为封面保留自定义协议，音频不再走 media:// |
+| [0006](adr/0006-native-engine-first.md) | 原生引擎首发（Symphonia+wasapi），PCM 链内建必要采样 tap |
 
 ## 15. 一句话总结
 

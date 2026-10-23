@@ -106,6 +106,7 @@ const look = window.__AIYA_LOOK__ ?? { theme: 'dark', density: 'comfortable' };
 
 ### 2.5 频谱：compact 可复用，pro 先停用
 
+- v1 原生引擎自带链内 tap（04 §5.1，ADR-0006）：compact 频谱随引擎就位，不再有“mpv 无数据降级”问题。
 - 写 `RemoteSpectrumSource implements SpectrumSource`：从 Tauri event/Channel 收 48 个 `u8`，维护 `bandCount/live/start/stop/frame`；`audioNode` 为 `undefined`。
 - `SpectrumPanel` 的 compact 分支只读 `frame()`，可以直接用。
 - pro 分支（audioMotion）要求 `AudioNode`；后端没有。最小改动：`spectrumEngine === 'pro' && source.audioNode` 才走 pro，否则回落 compact；或在设置里暂时把 pro 标为“即将支持”。

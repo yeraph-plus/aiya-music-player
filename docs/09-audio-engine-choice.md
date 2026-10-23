@@ -1,7 +1,8 @@
 # 09 — 音频引擎选型：mpv sidecar vs wasapi-rs 原生
 
-> 这篇回答一个问题：**在“UI 体验 + beets”是重点、项目 GPLv3 的前提下，音频引擎应该买/借，还是自己写？**
-> 结论：**v1 用 mpv sidecar，wasapi-rs 原生留作 v2。** 如果你坚持首发 wasapi-rs，本文给出可执行的 B 方案与工期。
+> 这篇回答一个问题：**在"UI 体验 + beets"是重点、项目 GPLv3 的前提下，音频引擎应该买/借，还是自己写？**
+> **修订（2026-10-23）**：决策改为**原生引擎首发**（Symphonia + wasapi-rs），见 §3.1 与 [ADR-0006](adr/0006-native-engine-first.md)。本文其余分析保留作依据与逃生路径参考。
+> 原结论：v1 用 mpv sidecar、wasapi-rs 原生留作 v2——**已被 §3.1 修订取代**（原生首发，ADR-0006）。原 B 方案章节即现行主方案。
 
 ## 1. 需求排序
 
@@ -111,7 +112,26 @@ FFmpeg/symphonia 解码 → ring buffer → resample（共享时）
 
 ## 3. 决策
 
-### 推荐：v1 用 mpv sidecar
+### 3.1 修订（2026-10-23）：改判原生首发
+
+原推荐（v1 mpv）基于"最快出声、把时间留给 beets/UI"。底盘规划对齐（[`10`](10-plan-alignment.md)）后新增硬要求：
+
+1. **频谱是必要体验**（动画级即可），需要在引擎数据链路内有 PCM tap——mpv 无 PCM tap API，做不到；
+2. **EQ、LRC、WASAPI 输出联合设计**，接口一次定形；
+3. 音频采用成熟 Rust 原生组件。
+
+因此改判：
+
+- **v1 = 原生**：Symphonia 解码 + `wasapi` crate 输出（Shared 先行，Exclusive 按 [`04`](04-audio-engine.md) §3 分期），`aiya-audio-host` sidecar 交付；DSP 链内建订阅制 tap（04 §5.1）。
+- **不采用 Rodio**（模型冲突、无独占）；CPAL 仅作跨平台占位。
+- mpv 降为 spike 对照与**逃生实现**：若原生 spike 暴露硬伤，回退 mpv 的明确代价 = 无频谱、EQ 受限、+50MB、GPLv2+ 分发义务。
+- 工期影响：P2 1 周 → 2 周；总 4–6 周 → 5–7 周。
+- §4 spike 门槛不变，默认跑原生，mpv 仅作对照数据。
+- §6 的 mpv 落地清单降级为"逃生路径参考"。
+
+### 原推荐（已被 3.1 取代，保留作依据）
+
+#### 推荐：v1 用 mpv sidecar
 
 理由：
 

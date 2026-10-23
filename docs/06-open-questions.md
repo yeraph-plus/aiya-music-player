@@ -2,14 +2,12 @@
 
 > 这版只留 9 个真正影响结构/工期的分叉。每项给出建议与代价；没有旧库兼容问题。
 
-## 1. 音频引擎：mpv sidecar 还是 wasapi-rs 原生？
+## 1. 音频引擎：mpv sidecar 还是 wasapi-rs 原生？✅ 已拍板（2026-10-23，ADR-0006）：原生首发
 
-**建议：v1 用 mpv sidecar；wasapi-rs 原生作为 v2 / B 方案。**
-
-- mpv：3–5 天；独占、设备、全格式、gapless、ReplayGain 都有；GPLv2+ 与项目 GPLv3 兼容。代价：+~50MB、行为受 mpv 约束、bit-perfect 不保证。
-- wasapi-rs：2–3 周；完全控制、二进制小；`wasapi` 0.26 已支持独占/格式探测/设备通知。代价：解码/时钟/gapless 自己扛。
-- 你的重点是 UI/beets，**先买音频，后补控制**。
-- 详见 [`09-audio-engine-choice.md`](09-audio-engine-choice.md)。
+- 频谱（动画级）是必要体验，需要链内 PCM tap——mpv 做不到；EQ、LRC、WASAPI 输出联合设计，接口一次定形。
+- v1 = Symphonia 解码 + `wasapi` crate 输出（Shared 先行，Exclusive 分期），`aiya-audio-host` sidecar 交付；tap 为订阅制必要采样复制（04 §5.1）。
+- mpv 降为 spike 对照与逃生（代价：无频谱、EQ 受限）。工期 +1–2 周。
+- 对比依据保留在 [`09`](09-audio-engine-choice.md)（含 §3.1 修订）、[`10`](10-plan-alignment.md) §3.3。
 
 ## 2. UI 是原样搬，还是趁重写？
 
@@ -72,6 +70,8 @@
 - 如果指 **Web Audio / Chromium 音频链路**：新版删除，音频进 sidecar（ADR-0001）。
 - 如果指 **WebSocket 传输**：不要传 PCM；控制面可以，但 terminate 在 host，不要让 UI 直连。若有具体 WS 服务/协议，给消息格式与用途再定。
 
+✅ 已关闭（2026-10-23）：无 WS 音频链路；频谱走引擎链内 tap（ADR-0006），本问题不再有分叉。
+
 ## 9. 许可/分发怎么处理？
 
 **建议：项目 GPLv3；mpv/FFmpeg/beets 的 notices 与源码提供方式从第一天就记录。**
@@ -83,4 +83,4 @@
 
 ---
 
-**最小拍板组合**：1 选 mpv、2 选原样搬、3 选用户安装、5 选只写标签。其余按建议默认即可。
+**最小拍板组合**：1 已定原生（ADR-0006）、2 选原样搬、3 选用户安装、5 选只写标签。其余按建议默认即可。
