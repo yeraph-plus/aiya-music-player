@@ -176,11 +176,28 @@ fn connect_once(
         .map_err(|e| format!("启动 sidecar 失败：{e}"))?;
     *shared.child.lock().unwrap() = Some(child);
 
+    // 连接 + 握手；任何失败路径都收尸（P2：spawn 后连接/握手失败曾把
+    // 孤儿 sidecar 进程留在后台——无看门狗线程接管它）
+    let result = connect_and_handshake(&pipe);
+    if result.is_err() {
+        if let Some(mut c) = shared.child.lock().unwrap().take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        return result;
+    }
+    let conn = result.unwrap();
+
+    *shared.alive_ms.lock().unwrap() = now_ms();
+    Ok(conn)
+}
+
+fn connect_and_handshake(pipe: &str) -> Result<Connection, String> {
     // 连接重试（子进程创建管道需要一点时间）
     let client = {
         let deadline = Instant::now() + CONNECT_TIMEOUT;
         loop {
-            match miow::pipe::connect(&pipe) {
+            match miow::pipe::connect(pipe) {
                 Ok(c) => break c,
                 Err(_) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(100));
@@ -225,7 +242,6 @@ fn connect_once(
 
     let reader_file = reader.into_inner();
     let writer_file = writer.into_inner().map_err(|e| e.to_string())?;
-    *shared.alive_ms.lock().unwrap() = now_ms();
     Ok(Connection { reader: reader_file, writer: writer_file })
 }
 
@@ -272,9 +288,20 @@ fn spawn_reader(
                                 _ => {}
                             }
                         }
-                        // 有界队列：满了丢一帧（ADR 允许 Position 丢旧）
-                        if let Err(mpsc::TrySendError::Disconnected(_)) = ev_tx.try_send(evt) {
-                            break;
+                        // 有界队列：满了丢 Position（ADR 允许丢位置帧）；其余事件
+                        // （Eof/StateChanged/Error）阻塞等空位——P2：此前 Full
+                        // 静默丢任意事件，丢 Eof 会让播放器卡在播放态不切曲。
+                        // 泵 25ms 一轮 drain，阻塞窗口极短。
+                        match ev_tx.try_send(evt) {
+                            Ok(()) => {}
+                            Err(mpsc::TrySendError::Full(restage)) => {
+                                if !matches!(restage, aiya_audio::EngineEvent::Position { .. }) {
+                                    if ev_tx.send(restage).is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(mpsc::TrySendError::Disconnected(_)) => break,
                         }
                     }
                     aiya_audio::SidecarToHost::Hb
@@ -353,22 +380,35 @@ fn spawn_watchdog(
             spawn_reader(conn.reader, ev_tx.clone(), shared.clone(), gen, track.clone());
             tracing::info!(generation = gen, "sidecar 已重启");
 
-            // 恢复现场：音量/倍速/当前曲/位置/播放态
+            // 恢复现场：音量/倍速/当前曲/位置/播放态。
+            // 单次持锁拼写全部命令（P2：此前逐条拿锁写，writer 线程的新命令
+            // 可插进恢复序列中间——如插到 Seek 之前，最终状态不可预测）。
+            // writer 线程与这里的锁互斥，恢复字节流对它是原子的。
             let t = track.lock().unwrap().clone();
             if let Some(path) = t.last_path {
-                let _ = shared;
-                let cmds = [
+                let mut restore: Vec<u8> = Vec::new();
+                for c in [
                     aiya_audio::EngineCommand::SetVolume(t.volume),
                     aiya_audio::EngineCommand::SetRate(t.rate),
                     aiya_audio::EngineCommand::Load(path),
                     aiya_audio::EngineCommand::Seek(t.position_ms),
-                ];
-                for c in cmds {
-                    // 直接写入新管道（绕过命令队列，保证顺序在 Load 之后恢复态之前无乱序）
-                    write_cmd(&shared, &c);
+                ] {
+                    if let Ok(b) = aiya_audio::encode_line(&aiya_audio::HostToSidecar::Cmd(c)) {
+                        restore.extend_from_slice(&b);
+                    }
                 }
                 if !t.playing {
-                    write_cmd(&shared, &aiya_audio::EngineCommand::Pause);
+                    if let Ok(b) =
+                        aiya_audio::encode_line(&aiya_audio::HostToSidecar::Cmd(
+                            aiya_audio::EngineCommand::Pause,
+                        ))
+                    {
+                        restore.extend_from_slice(&b);
+                    }
+                }
+                let mut guard = shared.writer_slot.lock().unwrap();
+                if let Some(w) = guard.as_mut() {
+                    let _ = w.write_all(&restore).and_then(|_| w.flush());
                 }
                 tracing::info!(
                     position_ms = t.position_ms,
@@ -378,17 +418,6 @@ fn spawn_watchdog(
             }
         })
         .expect("spawn sidecar watchdog");
-}
-
-/// 看门狗专用：直接往当前管道写一条命令（writer 线程不在时由本函数保证互斥）。
-fn write_cmd(shared: &Arc<Shared>, cmd: &aiya_audio::EngineCommand) {
-    let Ok(bytes) = aiya_audio::encode_line(&aiya_audio::HostToSidecar::Cmd(cmd.clone())) else {
-        return;
-    };
-    let mut guard = shared.writer_slot.lock().unwrap();
-    if let Some(w) = guard.as_mut() {
-        let _ = w.write_all(&bytes).and_then(|_| w.flush());
-    }
 }
 
 fn now_ms() -> u64 {

@@ -30,6 +30,10 @@ PROTOCOL_VERSION = 2
 # dump_items 不可取消（部分 dump 会让宿主把缺失 item 误判为 orphaned）。
 CANCEL = threading.Event()
 
+# stdout 写锁：reader 线程的 cancelAck 与主线程的事件流/响应并发写 stdout，
+# 无锁时两行可能交错破坏行帧协议
+_OUT_LOCK = threading.Lock()
+
 
 def _status_payload() -> dict:
     """beets 环境自检：版本/库/插件。beets 导入失败由调用方捕获成 not_found。"""
@@ -79,8 +83,9 @@ DIFF_FIELDS = ["title", "artist", "album", "albumartist", "year", "track", "disc
 
 def _emit(evt: dict) -> None:
     """流式事件（进度/专辑/结果）——与响应不同，无 id，靠 type 区分。"""
-    sys.stdout.write(json.dumps(evt, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    with _OUT_LOCK:
+        sys.stdout.write(json.dumps(evt, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
 
 
 def scan_audio_files(paths: list[str]) -> list[str]:
@@ -412,7 +417,10 @@ def main() -> int:
     try:
         import beets  # noqa: F401
         import beets.ui  # noqa: F401
-        _ = _status_payload  # 触发一次以提前暴露配置问题
+        try:
+            _status_payload()  # 真调用一次：提前暴露 config 问题（此前只取了函数引用，没调用）
+        except Exception:  # noqa: BLE001 —— config 错误不打断启动，status 请求时会给出具体错误信封
+            pass
     except ImportError:
         sys.stdout.write(json.dumps({
             "id": 0, "ok": False,
@@ -431,16 +439,27 @@ def main() -> int:
         sys.stdout.flush()
         return 0
 
-    # cancel 必须在工作循环运行时也能被接收：后台线程持续读 stdin，
-    # cancel 命令立即置位 CANCEL（工作函数在下个检查点提前收尾），
+    # cancel 必须在工作循环运行时也能被接收：后台线程持续读 stdin。
+    # P0 修复：cancel 在 reader 线程**立即置位**——此前 cancel 行与其他请求
+    # 一样进队列，而主循环正同步执行 preview/apply（网络匹配+写文件），
+    # req_q.get() 根本轮不到它，CANCEL 永远看不到，取消实际失效。
     # 其余行进队列由主循环处理；EOF 送 None 哨兵结束主循环。
     req_q: queue.Queue = queue.Queue()
 
     def _read_stdin() -> None:
         for line in sys.stdin:
             line = line.strip()
-            if line:
-                req_q.put(line)
+            if not line:
+                continue
+            try:
+                req = json.loads(line)
+            except json.JSONDecodeError:
+                req = None
+            if isinstance(req, dict) and req.get("cmd") == "cancel":
+                CANCEL.set()
+                _emit({"type": "cancelAck"})
+                continue
+            req_q.put(line)
         req_q.put(None)  # EOF
 
     threading.Thread(target=_read_stdin, name="stdin-reader", daemon=True).start()
@@ -456,6 +475,7 @@ def main() -> int:
             req_id = 0
         else:
             if isinstance(req, dict) and req.get("cmd") == "cancel":
+                # 兜底分支（正常路径已在 reader 线程旁路处理）
                 CANCEL.set()
                 _emit({"type": "cancelAck"})
                 continue
@@ -472,8 +492,14 @@ def main() -> int:
                 req_id = 0
         # None = 命令已用事件流自行应答（preview_import 等），不再发 id 响应
         if resp is not None:
-            sys.stdout.write(json.dumps({"id": req_id, **resp}, ensure_ascii=False) + "\n")
-            sys.stdout.flush()
+            payload = {"id": req_id, **resp}
+            if payload.get("ok") is False:
+                # 会话模式：错误信封也是终止事件（P2：宿主 reader 只认带 type
+                # 的终止事件，错误信封曾让会话卡死在等 EOF、槽位占死）
+                payload["type"] = "sessionFailed"
+            with _OUT_LOCK:
+                sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                sys.stdout.flush()
     return 0
 
 

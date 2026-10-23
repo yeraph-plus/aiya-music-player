@@ -82,20 +82,31 @@ fn query_sidecar(
         let _ = writeln!(stdin, r#"{{"id":1,"cmd":"status"}}"#);
     }
 
-    // 读响应：单独线程 + 超时，避免 beets 卡住拖死宿主
+    // 读响应：单独线程 + 超时，避免 beets 卡住拖死宿主。
+    // 容错非 JSON 行（beets 2.14 坑⑤：新库首写会往 stdout 打迁移提示）：
+    // 循环读到第一条可解析 JSON 行才算响应。
     let (tx, rx) = std::sync::mpsc::channel();
     let mut stdout = child.stdout.take().expect("stdout piped");
     std::thread::spawn(move || {
         use std::io::BufRead;
         let reader = std::io::BufReader::new(&mut stdout);
         for line in reader.lines() {
-            let _ = tx.send(line.unwrap_or_default());
-            break; // status 是单问单答
+            let Ok(line) = line else { break };
+            if serde_json::from_str::<serde_json::Value>(line.trim()).is_ok() {
+                let _ = tx.send(line);
+                break;
+            }
         }
     });
-    let line = rx
-        .recv_timeout(timeout)
-        .map_err(|_| format!("sidecar 响应超时（{timeout:.0?}）"))?;
+    let line = match rx.recv_timeout(timeout) {
+        Ok(l) => l,
+        Err(_) => {
+            // 超时收尸（P2：此前直接 return，卡死的 sidecar 进程泄漏）
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("sidecar 响应超时（{timeout:.0?}）"));
+        }
+    };
     let _ = child.kill();
     let _ = child.wait();
 
@@ -234,9 +245,10 @@ fn pick_interpreter(script: &str) -> Option<String> {
 
 /// 活跃导入会话的 stdin（preview/apply 互斥 + cancel 写入口）。
 ///
-/// 所有权流转：start_* 放入 → reader 见终止事件（done/applyDone/cancelled）
-/// 或进程退出时取走 drop（sidecar stdin EOF 后自行退出）→
-/// cancel 命令取走、写 cancel 行再 drop。任一时刻至多一个持有者。
+/// 所有权流转：start_* 先占 session_flag 再 spawn → spawn 完成后 stdin 放入
+/// 槽 → reader 见终止事件（done/applyDone/cancelled/sessionFailed）或进程
+/// 退出时取走 drop → cancel 命令取走、写 cancel 行再 drop。任一时刻至多
+/// 一个持有者。
 type SessionStdin = std::process::ChildStdin;
 
 fn session_slot() -> &'static std::sync::Mutex<Option<SessionStdin>> {
@@ -245,7 +257,23 @@ fn session_slot() -> &'static std::sync::Mutex<Option<SessionStdin>> {
     SLOT.get_or_init(|| std::sync::Mutex::new(None))
 }
 
-/// 占用会话槽；已被占用返回 Err（一次只允许一个 preview/apply）。
+/// 会话占用标志（spawn 前置占位）。P1：此前槽位在 spawn **之后**才 acquire，
+/// 并发 preview/apply 会双双 spawn sidecar——败者的请求行已进 sidecar 队列
+/// 会照常执行（写标签/动 beets 库），且败者没有 reader → 事件不发、进程泄漏。
+fn session_flag() -> &'static std::sync::atomic::AtomicBool {
+    static FLAG: std::sync::OnceLock<std::sync::atomic::AtomicBool> =
+        std::sync::OnceLock::new();
+    FLAG.get_or_init(|| std::sync::atomic::AtomicBool::new(false))
+}
+
+fn reserve_session() -> bool {
+    use std::sync::atomic::Ordering;
+    session_flag()
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+}
+
+/// 占用会话槽（stdin 保管）。flag 已由 reserve_session 占住，理论上不会失败。
 fn acquire_session(stdin: SessionStdin) -> Result<(), String> {
     let mut guard = session_slot().lock().map_err(|_| "session slot poisoned")?;
     if guard.is_some() {
@@ -255,8 +283,10 @@ fn acquire_session(stdin: SessionStdin) -> Result<(), String> {
     Ok(())
 }
 
-/// 释放会话槽（reader/cancel 调用；返回取走的 stdin 交给调用方 drop）。
+/// 释放会话槽 + 占用标志（reader/cancel/失败路径调用）。
 fn release_session() -> Option<SessionStdin> {
+    use std::sync::atomic::Ordering;
+    session_flag().store(false, Ordering::SeqCst);
     session_slot().lock().ok().and_then(|mut g| g.take())
 }
 
@@ -301,46 +331,112 @@ fn spawn_session(
     Ok((child, stdin))
 }
 
-/// 转发 stdout 行事件到 `beets:import`；见终止事件（done/applyDone/cancelled）
-/// 后关 stdin 让 sidecar EOF 退出，进程退出后收尾清槽。
+/// 转发 stdout 行事件到 `beets:import`；见终止事件（done/applyDone/
+/// cancelled/sessionFailed）后关 stdin 让 sidecar EOF 退出，进程退出后收尾清槽。
+/// 内置空闲看门狗：10 分钟无任何 stdout 输出判卡死（匹配是网络操作，但正常
+/// 路径每个专辑都有 progress 事件），kill 子进程并发 sessionFailed——
+/// 此前导入会话无任何超时保护，卡死即槽位永久占死。
+const SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
 fn spawn_reader(
     mut child: std::process::Child,
     app: tauri::AppHandle,
     on_exit: impl FnOnce(&tauri::AppHandle) + Send + 'static,
 ) -> Result<(), String> {
     let mut stdout = child.stdout.take().expect("stdout piped");
-    std::thread::Builder::new()
-        .name("beets-session-reader".into())
+    // 管道线程：阻塞读原始行进 channel（超时判断在会话线程做）
+    let (line_tx, line_rx) = std::sync::mpsc::channel::<String>();
+    let pipe_thread = std::thread::Builder::new()
+        .name("beets-pipe-recv".into())
         .spawn(move || {
             use std::io::BufRead;
-            let reader = std::io::BufReader::new(&mut stdout);
-            for line in reader.lines() {
-                let Ok(line) = line else { break };
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                match serde_json::from_str::<serde_json::Value>(trimmed) {
-                    Ok(evt) => {
-                        let terminal = evt.get("type").and_then(|t| t.as_str())
-                            .is_some_and(|t| matches!(t, "done" | "applyDone" | "cancelled"));
-                        let _ = app.emit("beets:import", evt);
-                        if terminal {
+            for line in std::io::BufReader::new(&mut stdout).lines() {
+                match line {
+                    Ok(l) => {
+                        if line_tx.send(l).is_err() {
                             break;
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(%e, %trimmed, "beets sidecar 非法事件行，忽略");
-                    }
+                    Err(_) => break,
                 }
             }
-            // 关 stdin → sidecar 主循环 EOF 退出；收尸防僵尸
+        });
+    if let Err(e) = pipe_thread {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("起 pipe 线程: {e}"));
+    }
+
+    let session_thread = {
+        // Arc<Mutex<Child>>：会话线程持有（kill/wait），外层失败路径也要收尸
+        let child = std::sync::Arc::new(std::sync::Mutex::new(child));
+        let child_for_fail = std::sync::Arc::clone(&child);
+        let spawned = std::thread::Builder::new()
+            .name("beets-session-reader".into())
+            .spawn(move || {
+                let mut idle = SESSION_IDLE_TIMEOUT;
+                loop {
+                    match line_rx.recv_timeout(idle) {
+                        Ok(line) => {
+                            idle = SESSION_IDLE_TIMEOUT; // 有输出就续命
+                            let trimmed = line.trim();
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+                            match serde_json::from_str::<serde_json::Value>(trimmed) {
+                                Ok(evt) => {
+                                    let terminal = evt.get("type").and_then(|t| t.as_str())
+                                        .is_some_and(|t| matches!(
+                                            t, "done" | "applyDone" | "cancelled" | "sessionFailed"));
+                                    let _ = app.emit("beets:import", evt);
+                                    if terminal {
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(%e, %trimmed, "beets sidecar 非法事件行，忽略");
+                                }
+                            }
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            tracing::error!("beets 会话空闲超时（10 分钟无输出），看门狗终止");
+                            {
+                                let mut c = child.lock().unwrap();
+                                let _ = c.kill();
+                            }
+                            let _ = app.emit(
+                                "beets:import",
+                                serde_json::json!({
+                                    "type": "sessionFailed",
+                                    "error": {
+                                        "code": "E_SESSION_TIMEOUT", "stage": "watchdog",
+                                        "beets_message": "会话 10 分钟无输出，已被看门狗终止",
+                                    },
+                                }),
+                            );
+                            break;
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break, // sidecar 退出
+                    }
+                }
+                // 关 stdin → sidecar 主循环 EOF 退出；收尸防僵尸
+                drop(release_session());
+                {
+                    let mut c = child.lock().unwrap();
+                    let _ = c.wait();
+                }
+                on_exit(&app);
+                let _ = app.emit("beets:import", serde_json::json!({ "type": "sessionEnd" }));
+            });
+        spawned.map_err(|e| {
+            let mut c = child_for_fail.lock().unwrap();
+            let _ = c.kill();
+            let _ = c.wait();
             drop(release_session());
-            let _ = child.wait();
-            on_exit(&app);
-            let _ = app.emit("beets:import", serde_json::json!({ "type": "sessionEnd" }));
+            format!("起 reader 线程: {e}")
         })
-        .map_err(|e| format!("起 reader 线程: {e}"))?;
+    };
+    session_thread?;
     Ok(())
 }
 
@@ -358,9 +454,20 @@ pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), St
         .ok_or_else(|| "no beets interpreter available".to_string())?;
 
     let req = serde_json::json!({ "id": 1, "cmd": "preview_import", "paths": paths });
-    let (child, stdin) = spawn_session(&python, &script, &req)?;
-    acquire_session(stdin)?;
-    spawn_reader(child, app, |_| {})
+    // P1：先占会话标志再 spawn，失败路径释放（并发请求第二个直接被拒，
+    // 不会像以前那样 spawn 出第二个照常执行的 sidecar）
+    if !reserve_session() {
+        return Err("已有 beets 导入任务在执行（可先取消）".into());
+    }
+    let result = (|| {
+        let (child, stdin) = spawn_session(&python, &script, &req)?;
+        acquire_session(stdin)?;
+        spawn_reader(child, app, |_| {})
+    })();
+    if result.is_err() {
+        release_session();
+    }
+    result
 }
 
 /// B2：应用导入决策。decisions 形状由契约定义（ApplyDecision），
@@ -376,15 +483,25 @@ pub fn start_apply(
         .ok_or_else(|| "no beets interpreter available".to_string())?;
 
     let req = serde_json::json!({ "id": 1, "cmd": "apply_import", "decisions": decisions });
-    let (child, stdin) = spawn_session(&python, &script, &req)?;
-    acquire_session(stdin)?;
-    spawn_reader(child, app, move |app| {
-        if let Some(params) = refresh {
-            // 自闭环（docs/08 §5）：beets 刚写完库就是最新权威，
-            // 直接全量对齐自有 DB，替代旧"重扫受影响目录"路径。
-            run_sync(app, params);
-        }
-    })
+    // P1：同 start_preview，先占位再 spawn
+    if !reserve_session() {
+        return Err("已有 beets 导入任务在执行（可先取消）".into());
+    }
+    let result = (|| {
+        let (child, stdin) = spawn_session(&python, &script, &req)?;
+        acquire_session(stdin)?;
+        spawn_reader(child, app, move |app| {
+            if let Some(params) = refresh {
+                // 自闭环（docs/08 §5）：beets 刚写完库就是最新权威，
+                // 直接全量对齐自有 DB，替代旧"重扫受影响目录"路径。
+                run_sync(app, params);
+            }
+        })
+    })();
+    if result.is_err() {
+        release_session();
+    }
+    result
 }
 
 /// 手动触发一次读模型对齐（设置页/导入面板按钮；B4 的自动同步基座）。
@@ -460,6 +577,16 @@ fn run_sync(app: &tauri::AppHandle, params: RefreshParams) {
         return;
     }
 
+    // P2：scanning 标志的 panic 保护——sync 链路里任一 panic 曾让标志永真，
+    // 之后所有扫描 E_SCAN_BUSY。Drop 兜底保证退出路径（含 unwind）必复位。
+    struct ScanGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for ScanGuard {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = ScanGuard(std::sync::Arc::clone(&params.scanning));
+
     let result = (|| -> Result<aiya_data::beets_sync::SyncStats, String> {
         let script_str = script.to_string_lossy().into_owned();
         let python = pick_interpreter(&script_str)
@@ -473,7 +600,6 @@ fn run_sync(app: &tauri::AppHandle, params: RefreshParams) {
         Ok(stats)
     })();
 
-    params.scanning.store(false, Ordering::SeqCst);
     match result {
         Ok(stats) => match serde_json::to_value(&stats) {
             Ok(mut v) => {

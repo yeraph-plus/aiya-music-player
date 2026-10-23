@@ -8,7 +8,8 @@
 //!   不会产生系统条目，与本模块无冲突（WebView 侧留作浏览器预览用）。
 //! - 防休眠：`SetThreadExecutionState(ES_CONTINUOUS|ES_SYSTEM_REQUIRED)`，
 //!   播放中防系统睡眠（不锁显示器策略，v1 不挡屏幕休眠）。
-//!   该状态是 per-thread 的，事件泵线程常驻且每次状态变化重新设置。
+//!   该状态是 per-thread 的，由 lib.rs 里专用的 prevent-sleep std::thread
+//!   维护（P1：tokio 泵任务会跨 worker 迁移，per-thread 状态不可靠）。
 
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
@@ -36,65 +37,78 @@ pub enum SmtcUpdate {
 pub fn spawn(app: AppHandle, hwnd: isize) -> Option<Sender<SmtcUpdate>> {
     let (tx, rx) = std::sync::mpsc::channel::<SmtcUpdate>();
 
-    let config = souvlaki::PlatformConfig {
-        dbus_name: "aiya",
-        display_name: "AIYA Music",
-        hwnd: Some(hwnd as *mut std::ffi::c_void),
-    };
-    let mut controls = match souvlaki::MediaControls::new(config) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(error = %e, "SMTC 初始化失败，系统媒体控制不可用");
-            return None;
-        }
-    };
-
-    // 按钮事件 → 播放器动作。回调在 WinRT 线程池跑，AppHandle 是 Send+Sync。
-    let cb_app = app.clone();
-    if let Err(e) = controls.attach(move |event| handle_event(&cb_app, event)) {
-        tracing::warn!(error = %e, "SMTC 事件订阅失败");
-        return None;
-    }
-    // 初始为 Stopped，系统里出现条目但不可按
-    let _ = controls.set_playback(souvlaki::MediaPlayback::Stopped);
-
+    // P2：MediaControls 构造 + attach 全部移进专用线程——此前构造在主线程、
+    // 使用在专用线程，跨 COM apartment 依赖 WinRT agility，不保证可靠。
+    // 初始化结果经一次性 channel 回传，保持"失败返回 None"的对外语义。
+    let (init_tx, init_rx) = std::sync::mpsc::channel::<bool>();
     let thread_app = app.clone();
-    std::thread::Builder::new()
-        .name("smtc".into())
-        .spawn(move || {
-            let mut last_playing: Option<bool> = None;
-            while let Ok(update) = rx.recv() {
-                match update {
-                    SmtcUpdate::Track { title, artist, album, duration_ms, cover_path } => {
-                        let cover_url = cover_path.as_ref().and_then(|p| file_uri(p));
-                        let meta = souvlaki::MediaMetadata {
-                            title: Some(&title),
-                            artist: artist.as_deref(),
-                            album: album.as_deref(),
-                            duration: duration_ms.map(|ms| Duration::from_millis(ms)),
-                            cover_url: cover_url.as_deref(),
-                        };
-                        if let Err(e) = controls.set_metadata(meta) {
-                            tracing::warn!(error = %e, "SMTC set_metadata 失败");
-                        }
-                        // 换曲后重申当前播放态（SMTC 的 UI 以最后一次设置为准）
-                        if let Some(playing) = last_playing {
-                            let _ = controls.set_playback(playback_state(playing, 0));
-                        }
+    let spawned = std::thread::Builder::new().name("smtc".into()).spawn(move || {
+        let config = souvlaki::PlatformConfig {
+            dbus_name: "aiya",
+            display_name: "AIYA Music",
+            hwnd: Some(hwnd as *mut std::ffi::c_void),
+        };
+        let mut controls = match souvlaki::MediaControls::new(config) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "SMTC 初始化失败，系统媒体控制不可用");
+                let _ = init_tx.send(false);
+                return;
+            }
+        };
+
+        // 按钮事件 → 播放器动作。回调在 WinRT 线程池跑，AppHandle 是 Send+Sync。
+        let cb_app = thread_app.clone();
+        if let Err(e) = controls.attach(move |event| handle_event(&cb_app, event)) {
+            tracing::warn!(error = %e, "SMTC 事件订阅失败");
+            let _ = init_tx.send(false);
+            return;
+        }
+        // 初始为 Stopped，系统里出现条目但不可按
+        let _ = controls.set_playback(souvlaki::MediaPlayback::Stopped);
+        let _ = init_tx.send(true);
+
+        let mut last_playing: Option<bool> = None;
+        while let Ok(update) = rx.recv() {
+            match update {
+                SmtcUpdate::Track { title, artist, album, duration_ms, cover_path } => {
+                    let cover_url = cover_path.as_ref().and_then(|p| file_uri(p));
+                    let meta = souvlaki::MediaMetadata {
+                        title: Some(&title),
+                        artist: artist.as_deref(),
+                        album: album.as_deref(),
+                        duration: duration_ms.map(|ms| Duration::from_millis(ms)),
+                        cover_url: cover_url.as_deref(),
+                    };
+                    if let Err(e) = controls.set_metadata(meta) {
+                        tracing::warn!(error = %e, "SMTC set_metadata 失败");
                     }
-                    SmtcUpdate::Progress { playing, position_ms } => {
-                        if last_playing != Some(playing) || playing {
-                            let _ = controls
-                                .set_playback(playback_state(playing, position_ms));
-                        }
-                        last_playing = Some(playing);
+                    // 换曲后重申当前播放态（SMTC 的 UI 以最后一次设置为准）
+                    if let Some(playing) = last_playing {
+                        let _ = controls.set_playback(playback_state(playing, 0));
                     }
                 }
-                let _ = &thread_app; // 保持句柄存活到线程结束
+                SmtcUpdate::Progress { playing, position_ms } => {
+                    if last_playing != Some(playing) || playing {
+                        let _ = controls
+                            .set_playback(playback_state(playing, position_ms));
+                    }
+                    last_playing = Some(playing);
+                }
             }
-        })
-        .ok()?;
-    Some(tx)
+            let _ = &thread_app; // 保持句柄存活到线程结束
+        }
+    });
+    match spawned {
+        Err(e) => {
+            tracing::warn!(error = %e, "SMTC 线程创建失败");
+            None
+        }
+        Ok(_) => match init_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(true) => Some(tx),
+            _ => None,
+        },
+    }
 }
 
 fn playback_state(playing: bool, position_ms: u64) -> souvlaki::MediaPlayback {
@@ -107,19 +121,10 @@ fn playback_state(playing: bool, position_ms: u64) -> souvlaki::MediaPlayback {
 }
 
 fn file_uri(path: &std::path::Path) -> Option<String> {
-    // Windows 本地路径 → file:///C:/...（souvlaki 只认 file:// 前缀）
-    let s = path.to_str()?;
-    let s = s.replace('\\', "/");
-    let mut out = String::with_capacity(s.len() + 8);
-    for c in s.chars() {
-        match c {
-            ' ' => out.push_str("%20"),
-            '#' => out.push_str("%23"),
-            '?' => out.push_str("%3F"),
-            _ => out.push(c),
-        }
-    }
-    Some(format!("file://{out}"))
+    // Windows 本地路径 → 规范 file:///C:/...（P2：此前手工拼 file://C:/...，
+    // "C:" 被当 authority；且 '%' 未编码，路径含 % 字面量时会被双重解码）。
+    // url::Url::from_file_path 产 canonical 形式并做百分号编码。
+    tauri::Url::from_file_path(path).ok().map(|u| u.to_string())
 }
 
 /// 播放器命令路径（供 SMTC 回调与 tauri command 共用）。
@@ -134,7 +139,7 @@ pub mod commands {
 
     pub fn play(app: &AppHandle) {
         if let Some(state) = app.try_state::<crate::AppState>() {
-            if state.player.lock().expect("player poisoned").state().status
+            if state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state().status
                 == aiya_player::PlaybackStatus::Paused
             {
                 crate::cmd_toggle(&state, app);
@@ -144,7 +149,7 @@ pub mod commands {
 
     pub fn pause(app: &AppHandle) {
         if let Some(state) = app.try_state::<crate::AppState>() {
-            if state.player.lock().expect("player poisoned").state().status
+            if state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state().status
                 == aiya_player::PlaybackStatus::Playing
             {
                 crate::cmd_toggle(&state, app);
@@ -155,7 +160,7 @@ pub mod commands {
     pub fn next(app: &AppHandle) {
         if let Some(state) = app.try_state::<crate::AppState>() {
             {
-                let mut actor = state.player.lock().expect("player poisoned");
+                let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 actor.reduce(aiya_player::PlayerCommand::Next);
             }
             crate::drive_and_emit(&state, app);
@@ -165,7 +170,7 @@ pub mod commands {
     pub fn prev(app: &AppHandle) {
         if let Some(state) = app.try_state::<crate::AppState>() {
             {
-                let mut actor = state.player.lock().expect("player poisoned");
+                let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 actor.reduce(aiya_player::PlayerCommand::Prev);
             }
             crate::drive_and_emit(&state, app);
@@ -209,7 +214,7 @@ fn handle_event(app: &AppHandle, event: souvlaki::MediaControlEvent) {
                 commands::seek(app, ms);
             }
             E::Raise => crate::show_main_window(app),
-            E::Quit => app.exit(0),
+            E::Quit => crate::quit_app(app), // P2：退出前 flush 队列（与托盘退出一致）
             // MPRIS 专属（Linux），Windows 后端不会发
             E::OpenUri(_) | E::SetVolume(_) => {}
         }
@@ -224,7 +229,7 @@ fn seek_relative(app: &AppHandle, delta_ms: i64) -> Result<(), String> {
     let state = app
         .try_state::<crate::AppState>()
         .ok_or_else(|| "app state 不可用".to_string())?;
-    let current = state.player.lock().expect("player poisoned").state().position_ms;
+    let current = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state().position_ms;
     let target = (current as i64 + delta_ms).max(0) as u64;
     commands::seek(app, target);
     Ok(())
