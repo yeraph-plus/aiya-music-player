@@ -460,10 +460,10 @@ mod tests {
             r#"
             INSERT INTO artists (id, name, name_norm) VALUES ('a1','周杰伦','周杰伦');
             INSERT INTO albums (id, title, title_norm, artist_id, year) VALUES ('al1','叶惠美','叶惠美','a1',2003);
-            INSERT INTO tracks (id,title,title_norm,artist_id,album_id,duration_ms,added_at,track_no,disc_no,year,path,size_bytes,mtime,gain_db,play_count,last_played_at) VALUES
-              ('t1','晴天','晴天','a1','al1',269000,100,3,1,2003,'/m/1.flac',1,1,-6.5,2,600),
-              ('t2','以父之名','以父之名','a1','al1',342000,110,2,1,2003,'/m/2.flac',1,1,NULL,1,700),
-              ('t3','Beethoven','beethoven',NULL,NULL,1000,120,NULL,NULL,NULL,'/m/3.mp3',1,1,NULL,0,NULL);
+            INSERT INTO tracks (id,title,title_norm,artist_id,album_id,duration_ms,added_at,track_no,disc_no,year,path,path_lower,size_bytes,mtime,gain_db,play_count,last_played_at) VALUES
+              ('t1','晴天','晴天','a1','al1',269000,100,3,1,2003,'/m/1.flac','/m/1.flac',1,1,-6.5,2,600),
+              ('t2','以父之名','以父之名','a1','al1',342000,110,2,1,2003,'/m/2.flac','/m/2.flac',1,1,NULL,1,700),
+              ('t3','Beethoven','beethoven',NULL,NULL,1000,120,NULL,NULL,NULL,'/m/3.mp3','/m/3.mp3',1,1,NULL,0,NULL);
             INSERT INTO history (track_id, played_at) VALUES ('t1', 500), ('t1', 600), ('t2', 700);
             "#,
         )

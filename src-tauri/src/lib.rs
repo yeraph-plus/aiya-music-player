@@ -43,6 +43,8 @@ pub struct AppState {
     engine: Mutex<sidecar::SidecarHandle>,
     /// 扫描互斥标志；Arc 是为了 beets apply 完成后的 reader 线程也能取到
     scanning: Arc<AtomicBool>,
+    /// 扫描取消请求（library_scan_cancel 置位，扫描循环轮询后自行收尾）
+    scan_cancel: Arc<AtomicBool>,
     /// 队列状态行上次落库时间（毫秒，事件泵 5s 节流用）
     last_persist_ms: std::sync::atomic::AtomicU64,
     /// SMTC 通道（smtc::spawn 成功才有）；emit_player_state 处推送
@@ -465,6 +467,9 @@ async fn library_scan_body(app: AppHandle, state: &State<'_, AppState>, options:
     let db_path = state.db_path.clone();
     let artwork_dir = state.artwork_dir.clone();
     let handle = app.clone();
+    // 取消标志：新扫描开始前清掉上一次的残留请求
+    state.scan_cancel.store(false, Ordering::SeqCst);
+    let scan_cancel = state.scan_cancel.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
         let mut conn = match aiya_data::open_conn(&db_path) {
@@ -475,7 +480,12 @@ async fn library_scan_body(app: AppHandle, state: &State<'_, AppState>, options:
         // 宿主侧 100ms 节流（P2：此前每条目一次 IPC 序列化，10 万文件 =
         // 10 万次跨进程 emit；UI 侧节流只省渲染不省传输）
         let last_emit_ms = std::sync::atomic::AtomicU64::new(0);
-        let scan_result = scanner::scan_directory(&mut conn, &root, Some(&artwork_dir), move |p| {
+        let scan_result = scanner::scan_directory_ext(
+            &mut conn,
+            &root,
+            Some(&artwork_dir),
+            || scan_cancel.load(Ordering::Relaxed),
+            move |p| {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -503,10 +513,14 @@ async fn library_scan_body(app: AppHandle, state: &State<'_, AppState>, options:
 
 #[tauri::command]
 fn library_scan_cancel(state: State<'_, AppState>) -> Value {
-    // v1 第一切：scan_directory 还没有取消点；返回 false 让 UI 显示"无法取消"
-    // 而不是假装成功。取消能力随 P1-2 的 CancellationToken 补上。
-    let _ = &state.scanning;
-    ok(json!({ "cancelled": false }))
+    // 置位取消请求，扫描循环在 walk 每条目 / 每批事务边界自行收尾
+    //（取消路径不执行 mark_missing，防止误标在线文件）。
+    if state.scanning.load(Ordering::SeqCst) {
+        state.scan_cancel.store(true, Ordering::SeqCst);
+        ok(json!({ "cancelled": true }))
+    } else {
+        ok(json!({ "cancelled": false }))
+    }
 }
 
 /// 选目录并持久化为 `library.root`（UI 的 startScan 不带 path，扫描时从这里取）。
@@ -1486,6 +1500,7 @@ pub fn run() {
                 player: Mutex::new(aiya_player::PlayerActor::new()),
                 engine: Mutex::new(engine),
                 scanning: Arc::new(AtomicBool::new(false)),
+                scan_cancel: Arc::new(AtomicBool::new(false)),
                 last_persist_ms: std::sync::atomic::AtomicU64::new(0),
                 smtc_tx: Mutex::new(None),
                 smtc_track_id: Mutex::new(String::new()),

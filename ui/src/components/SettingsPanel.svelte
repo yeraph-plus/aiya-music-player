@@ -73,6 +73,21 @@
     capturing = null;
   }
 
+  /** 模态 Escape 语义：录制快捷键时交给 onCaptureKey（Esc 只取消录制）；输入态只失焦；其余关闭面板 */
+  function onWindowKey(event: KeyboardEvent): void {
+    if (capturing) {
+      onCaptureKey(event);
+      return;
+    }
+    if (event.key !== 'Escape') return;
+    const el = event.target as HTMLElement | null;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
+      el.blur();
+      return;
+    }
+    onclose();
+  }
+
   const TABS: Array<{ id: Tab; label: string }> = [
     { id: 'appearance', label: '外观' },
     { id: 'playback', label: '播放' },
@@ -82,7 +97,7 @@
   ];
 </script>
 
-<svelte:window onkeydown={onCaptureKey} />
+<svelte:window onkeydown={onWindowKey} />
 
 <div class="modal-backdrop" role="presentation" onclick={onclose}></div>
 <div class="modal settings" role="dialog" aria-label="设置">

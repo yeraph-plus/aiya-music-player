@@ -76,11 +76,14 @@ fn is_audio(p: &Path) -> bool {
 }
 
 /// 遍历目录收集音频文件。跳过隐藏目录与系统噪音目录。
-/// 返回 (音频文件列表, walk 错误数)。错误（权限不足等）只计数不中断。
-fn walk(root: &Path) -> (Vec<PathBuf>, usize) {
+/// 返回 (音频文件列表, walk 错误数, 是否被取消)。错误（权限不足等）只计数不中断。
+fn walk(root: &Path, is_cancelled: &dyn Fn() -> bool) -> (Vec<PathBuf>, usize, bool) {
     let mut out = Vec::new();
     let mut walk_errors = 0usize;
     for entry in walkdir::WalkDir::new(root).follow_links(false) {
+        if is_cancelled() {
+            return (out, walk_errors, true);
+        }
         let entry = match entry {
             Ok(e) => e,
             Err(_) => {
@@ -100,7 +103,7 @@ fn walk(root: &Path) -> (Vec<PathBuf>, usize) {
             out.push(p.to_path_buf());
         }
     }
-    (out, walk_errors)
+    (out, walk_errors, false)
 }
 
 struct ParsedTrack {
@@ -323,16 +326,25 @@ fn upsert(
     Ok(existing.is_none())
 }
 
-/// 扫描入口。`on_progress` 每 BATCH 个文件回调一次（UI 侧再做 120ms 节流）。
+/// 扫描入口（不可取消版）。`on_progress` 每 BATCH 个文件回调一次（UI 侧再做 120ms 节流）。
 /// `artwork_cache`：封面原图缓存目录（None = 不提取封面）。
-///
-/// 收尾时把本轮 walk 到、但库中标记 online 且位于 root 前缀下的曲目标为
-/// `missing`（文件被删除）；文件重新出现靠 upsert 的
-/// `availability = 'online'` 恢复。
 pub fn scan_directory(
     conn: &mut Connection,
     root: &Path,
     artwork_cache: Option<&Path>,
+    on_progress: impl FnMut(ScanProgress),
+) -> DbResult<ScanResult> {
+    scan_directory_ext(conn, root, artwork_cache, || false, on_progress)
+}
+
+/// 扫描入口（可取消版）。`should_cancel` 在 walk 每条目与每批事务开始时轮询；
+/// 返回 true 后尽快收尾。**取消路径绝不执行 mark_missing**——seen 集合不完整，
+/// 此时对账会把大量在线文件误标 missing。
+pub fn scan_directory_ext(
+    conn: &mut Connection,
+    root: &Path,
+    artwork_cache: Option<&Path>,
+    should_cancel: impl Fn() -> bool,
     mut on_progress: impl FnMut(ScanProgress),
 ) -> DbResult<ScanResult> {
     let started = Instant::now();
@@ -353,7 +365,34 @@ pub fn scan_directory(
         message: None,
     });
 
-    let (files, walk_errors) = walk(root);
+    let (files, walk_errors, walk_cancelled) = walk(root, &should_cancel);
+
+    if walk_cancelled {
+        let result = ScanResult {
+            scanned: 0,
+            imported: 0,
+            updated: 0,
+            unchanged: 0,
+            failed: 0,
+            walk_errors,
+            cancelled: true,
+            errors,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        };
+        on_progress(ScanProgress {
+            phase: "cancelled".into(),
+            scanned: 0,
+            total: None,
+            imported: 0,
+            skipped: 0,
+            failed: 0,
+            current_path: None,
+            elapsed_ms: result.elapsed_ms,
+            message: None,
+        });
+        return Ok(result);
+    }
+
     let total = files.len();
     // 本轮实际 walk 到的路径（小写），供 missing 对账用
     let seen: std::collections::HashSet<String> = files
@@ -376,7 +415,12 @@ pub fn scan_directory(
     // 按批包事务：一个事务提交 BATCH_SIZE 个文件的 upsert；
     // 批内某个 upsert 失败 → 回滚整批、整批计入 failed，继续下一批。
     let mut scanned_so_far = 0usize;
+    let mut cancelled = false;
     for batch in files.chunks(BATCH_SIZE) {
+        if should_cancel() {
+            cancelled = true;
+            break;
+        }
         let mut parsed: Vec<(&PathBuf, ParsedTrack)> = Vec::with_capacity(batch.len());
         for path in batch {
             match parse_file(path) {
@@ -436,6 +480,34 @@ pub fn scan_directory(
             elapsed_ms: started.elapsed().as_millis() as u64,
             message: None,
         });
+    }
+
+    // 取消收尾：绝不 mark_missing（seen 不完整会误标大量在线文件），
+    // 已提交的批次保留（增量无害，下次重扫继续）。
+    if cancelled {
+        let result = ScanResult {
+            scanned: scanned_so_far,
+            imported,
+            updated: 0,
+            unchanged,
+            failed,
+            walk_errors,
+            cancelled: true,
+            errors: std::mem::take(&mut errors),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        };
+        on_progress(ScanProgress {
+            phase: "cancelled".into(),
+            scanned: scanned_so_far,
+            total: Some(total),
+            imported,
+            skipped: unchanged,
+            failed,
+            current_path: None,
+            elapsed_ms: result.elapsed_ms,
+            message: None,
+        });
+        return Ok(result);
     }
 
     mark_missing(conn, root, &seen)?;
@@ -721,5 +793,59 @@ mod tests {
         assert!(!inserted, "大小写变体必须命中已有行而不是新插入");
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn scan_cancelled_skips_mark_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_test_mp3(dir.path(), "a.mp3", "A", "B");
+        let mut conn = open_in_memory().unwrap();
+        let r1 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        assert_eq!(r1.imported, 1);
+
+        // 文件已删除但取消扫描 → 不许把 online 误标 missing（seen 不完整）
+        std::fs::remove_file(&mp3).unwrap();
+        let r2 = scan_directory_ext(&mut conn, dir.path(), None, || true, |_| {}).unwrap();
+        assert!(r2.cancelled);
+        let avail: String =
+            conn.query_row("SELECT availability FROM tracks", [], |r| r.get(0)).unwrap();
+        assert_eq!(avail, "online", "取消路径绝不能执行 mark_missing");
+
+        // 取消后再完整重扫 → 正常标 missing
+        let r3 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        assert!(!r3.cancelled);
+        let avail: String =
+            conn.query_row("SELECT availability FROM tracks", [], |r| r.get(0)).unwrap();
+        assert_eq!(avail, "missing");
+    }
+
+    #[test]
+    fn scan_cancelled_mid_batches_keeps_committed_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        // BATCH_SIZE=200 → 201 个文件拆成两批；第一批提交后置位取消，
+        // 第二批批顶检查点退出：已提交前缀保留、cancelled=true。
+        for i in 0..201 {
+            write_test_mp3(dir.path(), &format!("t{i:03}.mp3"), &format!("T{i}"), "B");
+        }
+        let mut conn = open_in_memory().unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let r = scan_directory_ext(
+            &mut conn,
+            dir.path(),
+            None,
+            || cancel.load(std::sync::atomic::Ordering::Relaxed),
+            |p| {
+                if p.phase == "parsing" && p.scanned > 0 {
+                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            },
+        )
+        .unwrap();
+        assert!(r.cancelled);
+        assert_eq!(r.scanned, BATCH_SIZE, "第二批未开始，scanned 停在批边界");
+        assert_eq!(r.imported, BATCH_SIZE, "已提交的第一批保留");
+        assert_eq!(r.unchanged, 0);
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, BATCH_SIZE as i64, "已提交批次落库");
     }
 }

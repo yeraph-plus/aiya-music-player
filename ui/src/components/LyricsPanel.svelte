@@ -106,19 +106,26 @@
         <span class="dim">在同目录放一个同名的 .lrc 文件即可显示</span>
       </div>
     {:else if !lyrics.synced}
-      <div class="lyrics-lines plain">
+      <div class="lyrics-lines plain" aria-label={`歌词（纯文本）：《${trackTitle ?? '当前曲目'}》`}>
         {#each lines as line, index (index)}
           <div class="lyric-line">{line.text}</div>
         {/each}
       </div>
     {:else}
-      <div class="lyrics-lines">
+      <div class="lyrics-lines" aria-label={`同步歌词：《${trackTitle ?? '当前曲目'}》，点击或回车某一行跳转到该句`}>
         {#each lines as line, index (index)}
           <button
             class="lyric-line"
             class:active={index === activeIndex}
             class:past={index < activeIndex}
             onclick={() => seekTo(line.timeMs)}
+            onkeydown={(event) => {
+              // 原生 button 自带 Enter 触发，Space 在部分浏览器只滚动不点击，这里补齐
+              if (event.key === ' ') {
+                event.preventDefault();
+                seekTo(line.timeMs);
+              }
+            }}
             title="跳到这一句"
           >
             {line.text || '·'}

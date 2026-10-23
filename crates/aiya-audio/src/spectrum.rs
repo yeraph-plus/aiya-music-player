@@ -10,7 +10,7 @@
 //! EngineEvent::Spectrum 原样 emit），分带值 0–255、无副载波数据。
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
 /// 环容量（样本数，2 的幂）。48kHz 混单声道后 ≈ 170ms 余量（96kHz ≈ 85ms）。
@@ -128,7 +128,8 @@ impl SpectrumTap {
     }
 
     /// 启动 FFT 消费线程。事件经 ev_tx 出（EngineEvent::Spectrum）。
-    pub fn spawn_consumer(&self, ev_tx: Sender<crate::EngineEvent>) {
+    /// 通道有界（引擎事件通道 256 容量），满时丢新帧——下一帧 30ms 后就来。
+    pub fn spawn_consumer(&self, ev_tx: SyncSender<crate::EngineEvent>) {
         let ring = Arc::clone(&self.ring);
         let enabled = Arc::clone(&self.enabled);
         let sample_rate = Arc::clone(&self.sample_rate);
@@ -146,7 +147,7 @@ fn consume_loop(
     ring: &MonoRing,
     enabled: &AtomicBool,
     sample_rate: &AtomicU32,
-    ev_tx: Sender<crate::EngineEvent>,
+    ev_tx: SyncSender<crate::EngineEvent>,
 ) {
     let mut staging = [0.0f32; FFT_SIZE];
     let mut filled = 0usize;
@@ -183,8 +184,11 @@ fn consume_loop(
         }
         let bands = compute_bands(&staging, sample_rate.load(Ordering::Relaxed) as f32);
         last_frame = std::time::Instant::now();
-        if ev_tx.send(crate::EngineEvent::Spectrum { bands }).is_err() {
-            return; // 引擎关闭
+        match ev_tx.try_send(crate::EngineEvent::Spectrum { bands }) {
+            Ok(()) => {}
+            // 通道满：丢新保旧（帧是瞬态可视化数据）；对端关闭：引擎退出
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {}
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return,
         }
         filled = 0;
     }

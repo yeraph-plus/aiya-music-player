@@ -23,11 +23,9 @@ pub enum DbError {
     Custom(String),
 }
 
-const MIGRATIONS: &[&str] = &[
-    include_str!("../migrations/0001_init.sql"),
-    include_str!("../migrations/0002_artworks.sql"),
-    include_str!("../migrations/0003_tracks_path_lower.sql"),
-];
+// 单一迁移：schema v1 压平基线（项目未发布无存量库，0001+0002+0003 已合并，
+// 见 migrations/0001_init.sql 头注）。后续破坏性演进继续往前追加编号即可。
+const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
 
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
 
@@ -72,6 +70,15 @@ fn configure(conn: &Connection) -> DbResult<()> {
 
 fn migrate(conn: &Connection) -> DbResult<()> {
     let mut version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    // 防呆：库比应用新（降级启动/换了空迁移链）时拒绝打开，避免用旧代码
+    // 读写新结构造成静默损坏。压平后老开发库（user_version=3）同样会被拦下，
+    // 删库重扫即可（当时无存量数据）。
+    if version > MIGRATIONS.len() as i64 {
+        return Err(DbError::Custom(format!(
+            "数据库 user_version={version} 比应用支持的 {max} 新，拒绝打开（旧开发库请直接删除后重扫）",
+            max = MIGRATIONS.len()
+        )));
+    }
     // 迁移按序补跑：每个迁移连同 PRAGMA user_version 一起包在一个事务里
     // （CREATE...ALTER 原子）。user_version 必须与 DDL 同事务写入 —— 否则
     // 两步之间崩溃会导致重放迁移报 already exists。BEGIN IMMEDIATE 拿写锁，

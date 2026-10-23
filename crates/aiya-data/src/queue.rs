@@ -155,7 +155,7 @@ mod tests {
     /// 插入最小合法曲目行（queue_items 的 FK 目标）。
     fn ins_track(conn: &rusqlite::Connection, id: &str) {
         conn.execute(
-            "INSERT INTO tracks (id, title, title_norm, added_at, path) VALUES (?1, ?1, ?1, 0, ?2)",
+            "INSERT INTO tracks (id, title, title_norm, added_at, path, path_lower) VALUES (?1, ?1, ?1, 0, ?2, lower(?2))",
             rusqlite::params![id, format!("D:/m/{id}.flac")],
         )
         .unwrap();

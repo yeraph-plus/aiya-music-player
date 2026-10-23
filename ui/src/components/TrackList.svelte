@@ -186,7 +186,7 @@
           class:drag-source={dragState?.active && dragState.from === row.index}
           style={`height:${rowHeight}px`}
           role="row"
-          tabindex="-1"
+          tabindex="0"
           onpointerdown={(event) => handlePointerDown(event, row.index)}
           onclick={(event) => {
             // 拖拽激活后松手会派发一次残留 click，吞掉避免误播放
@@ -198,10 +198,10 @@
             else onplay(row.index);
           }}
           onkeydown={(event) => {
-            if (event.key === 'Enter') onplay(row.index);
-            else if (event.key === ' ') {
+            // 键盘与鼠标单击同语义：Enter/Space 播放（选择走 Ctrl/Shift+点击或全局快捷键）
+            if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault();
-              onselect(row.index, event);
+              onplay(row.index);
             }
           }}
           oncontextmenu={(event) => {

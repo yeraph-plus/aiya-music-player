@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { AlbumPreview, BeetsImportEvent, CandidatePreview, ApplyDecision } from '@aiya/contracts';
+  import type { AlbumPreview, ApplyDecision, CandidatePreview } from '@aiya/contracts';
+  import { beetsSession as beets } from '../stores/beets-session.svelte';
   import Icon from './Icon.svelte';
 
   /**
@@ -7,6 +8,11 @@
    * 选文件夹 → 专辑卡片 → 候选/逐字段 diff → 应用（写标签，可选移动/复制
    * 到 beets 库）→ 取消随时可用（收尾到最近检查点）。
    * 预览阶段零文件改动；应用阶段候选数据原样回传（所见即所写）。
+   *
+   * 会话状态（phase/进度/错误/结果）全部来自 stores/beets-session.svelte.ts：
+   * 事件监听在 store 模块级注册，不随本组件生命周期；这里只发起命令
+   * （beets_preview/beets_apply/beets_cancel/beets_sync）并保留局部 UI 态
+   * （文件动作选择、逐专辑候选选择）。
    */
 
   interface Props {
@@ -24,100 +30,47 @@
     apply_move: '移动到 beets 库',
   };
 
-  let albums = $state<AlbumPreview[]>([]);
-  let running = $state(false);
-  let applying = $state(false);
-  let error = $state<string | null>(null);
   /** 文件动作：默认只写标签（B3 移动/复制显式选择） */
   let moveMode = $state<MoveMode>('apply');
-  /** 专辑 id → 展开的候选 id（null = 显示当前标签） */
-  let picked = $state<Record<string, string | null>>({});
-  let progress = $state<{ current: number; total: number } | null>(null);
-  let applyProgress = $state<{ current: number; total: number } | null>(null);
-  /** 专辑 id → 应用结果 */
-  let results = $state<Record<string, { written: number; moved: boolean; failed: Array<{ path: string; message: string; code?: string }> }>>({});
-  let applySummary = $state<{ applied: number; skipped: number; failed: number; moved: number } | null>(null);
-  let synced = $state<{ matched: number; updated: number; imported: number; unchanged: number; orphaned: number } | null>(null);
-  let syncing = $state(false);
-  let doneCount = $state<number | null>(null);
-  let errors = $state<Array<{ path: string; message: string }>>([]);
-  let unlisten: (() => void) | null = null;
 
-  function onEvent(evt: BeetsImportEvent): void {
-    if (evt.type === 'album') {
-      albums = [...albums, evt.album];
-      // 默认选择：只有 strong 才默认选第一个候选（docs/08 §4.1 低置信度不默认勾选）
-      const strong = evt.album.candidates[0];
-      picked[evt.album.id] = evt.album.recommendation === 'strong' && strong ? strong.id : null;
-    } else if (evt.type === 'progress') {
-      if (evt.stage === 'writing') applyProgress = { current: evt.current, total: evt.total };
-      else progress = { current: evt.current, total: evt.total };
-    } else if (evt.type === 'albumError') {
-      errors = [...errors, { path: evt.path, message: evt.beets_message }];
-    } else if (evt.type === 'applied') {
-      results = { ...results, [evt.albumId]: { written: evt.written, moved: evt.moved, failed: evt.failed } };
-    } else if (evt.type === 'applyDone') {
-      applying = false;
-      applySummary = { applied: evt.applied, skipped: evt.skipped, failed: evt.failed, moved: evt.moved };
-    } else if (evt.type === 'cancelled') {
-      // 取消收尾：已完成的部分保留，解锁按钮
-      running = false;
-      applying = false;
-      errors = [...errors, { path: 'cancel', message: '已取消（已完成的部分保留）' }];
-    } else if (evt.type === 'cancelAck') {
-      // sidecar 回执，无需 UI 动作
-    } else if (evt.type === 'librarySynced') {
-      syncing = false;
-      synced = { matched: evt.matched, updated: evt.updated, imported: evt.imported, unchanged: evt.unchanged, orphaned: evt.orphaned };
-      // 曲库数据变了（新增/更新行），让主视图重拉列表
-      onsynced?.();
-    } else if (evt.type === 'librarySyncFailed') {
-      syncing = false;
-      errors = [...errors, { path: 'sync', message: evt.message }];
-    } else if (evt.type === 'libraryRefreshSkipped') {
-      syncing = false;
-      errors = [...errors, { path: 'sync', message: '有扫描正在进行，本次对齐让位；稍后再试' }];
-    } else if (evt.type === 'done') {
-      doneCount = evt.albums;
-      running = false;
-    } else if (evt.type === 'sessionEnd') {
-      running = false;
-    }
-  }
+  const running = $derived(beets.phase === 'previewing');
+  const applying = $derived(beets.phase === 'applying');
+  const syncing = $derived(beets.phase === 'syncing');
+
+  // store 的 syncVersion 递增 = 一次新的曲库对齐完成 → 通知主视图重拉。
+  // 以挂载时的版本为基线，避免打开面板时被旧会话的对齐结果误触发。
+  let seenSyncVersion = beets.syncVersion;
+  $effect(() => {
+    if (beets.syncVersion === seenSyncVersion) return;
+    seenSyncVersion = beets.syncVersion;
+    onsynced?.();
+  });
 
   async function chooseAndPreview(): Promise<void> {
-    error = null;
+    beets.lastError = null;
     let picked_dir: Awaited<ReturnType<typeof window.api.library.chooseRoot>>;
     try {
       picked_dir = await window.api.library.chooseRoot();
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      beets.lastError = err instanceof Error ? err.message : String(err);
       return;
     }
     if (!picked_dir.ok || !picked_dir.data) return;
-    // 重置状态，订阅事件，发起预览
-    albums = [];
-    picked = {};
-    progress = null;
-    applyProgress = null;
-    results = {};
-    applySummary = null;
-    synced = null;
-    syncing = false;
-    doneCount = null;
-    errors = [];
+    // 清掉上一轮会话数据，发起预览
+    beets.reset();
     let result: Awaited<ReturnType<typeof window.api.app.beetsPreview>>;
     try {
       result = await window.api.app.beetsPreview([picked_dir.data.path]);
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      beets.lastError = err instanceof Error ? err.message : String(err);
       return;
     }
     if (!result.ok) {
-      error = result.error.message;
+      beets.lastError = result.error.message;
+      beets.phase = 'failed';
       return;
     }
-    running = true;
+    beets.phase = 'previewing';
   }
 
   /** 单张专辑的决策：有选中候选就应用，否则跳过（动作跟随 moveMode） */
@@ -132,38 +85,38 @@
     };
   }
 
-  const applyableCount = $derived(albums.filter((a) => candidateMeta(a)).length);
+  const applyableCount = $derived(beets.albums.filter((a) => candidateMeta(a)).length);
 
   /** 应用全部有候选的专辑（其余按 skip 记账） */
   async function applyAll(): Promise<void> {
-    await applyDecisions(albums.map(decisionFor));
+    await applyDecisions(beets.albums.map(decisionFor));
   }
 
   /** 只应用一张专辑 */
   async function applyOne(album: AlbumPreview): Promise<void> {
     await applyDecisions(
-      albums.map((a) => (a.id === album.id ? decisionFor(a) : { album: a.id, action: 'skip', paths: a.paths })),
+      beets.albums.map((a) => (a.id === album.id ? decisionFor(a) : { album: a.id, action: 'skip', paths: a.paths })),
     );
   }
 
   async function applyDecisions(decisions: ApplyDecision[]): Promise<void> {
-    error = null;
-    results = {};
-    applySummary = null;
-    synced = null;
+    beets.lastError = null;
+    beets.results = {};
+    beets.applySummary = null;
+    beets.synced = null;
     let result: Awaited<ReturnType<typeof window.api.app.beetsApply>>;
     try {
       result = await window.api.app.beetsApply(decisions);
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      beets.lastError = err instanceof Error ? err.message : String(err);
       return;
     }
     if (!result.ok) {
-      error = result.error.message;
+      beets.lastError = result.error.message;
+      beets.phase = 'failed';
       return;
     }
-    applying = true;
-    syncing = true;
+    beets.phase = 'applying';
   }
 
   /** 取消当前预览/应用：sidecar 收尾到最近检查点，已完成部分保留 */
@@ -171,7 +124,7 @@
     try {
       const result = await window.api.app.beetsCancel();
       if (!result.ok) {
-        error = result.error.message;
+        beets.lastError = result.error.message;
       }
     } catch (err) {
       // 取消失败不阻塞流程，sidecar 会在 sessionEnd 自己收尾
@@ -181,36 +134,28 @@
 
   /** 手动全量对齐：beets 库 → 自有读模型（无需先预览） */
   async function syncNow(): Promise<void> {
-    error = null;
-    synced = null;
+    beets.lastError = null;
+    beets.synced = null;
     let result: Awaited<ReturnType<typeof window.api.app.beetsSync>>;
     try {
       result = await window.api.app.beetsSync();
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      beets.lastError = err instanceof Error ? err.message : String(err);
       return;
     }
     if (!result.ok) {
-      error = result.error.message;
+      beets.lastError = result.error.message;
+      beets.phase = 'failed';
       return;
     }
-    syncing = true;
+    beets.phase = 'syncing';
   }
-
-  $effect(() => {
-    const off = window.api.app.onBeetsImport(onEvent);
-    unlisten = off;
-    return () => {
-      off();
-      unlisten = null;
-    };
-  });
 
   function currentMeta(album: AlbumPreview) {
     return album.current;
   }
   function candidateMeta(album: AlbumPreview): CandidatePreview | null {
-    const id = picked[album.id];
+    const id = beets.picked[album.id];
     return album.candidates.find((c) => c.id === id) ?? null;
   }
   function fieldDiff(current: unknown, candidate: unknown): boolean {
@@ -238,21 +183,21 @@
       </button>
       {#if running}
         <span class="dim">
-          匹配中 {progress ? `${progress.current}/${progress.total}` : '…'}（MusicBrainz，只读不改文件）
+          匹配中 {beets.progress ? `${beets.progress.current}/${beets.progress.total}` : '…'}（MusicBrainz，只读不改文件）
         </span>
       {/if}
-      {#if doneCount !== null && !running}
-        <span class="dim">预览完成：{doneCount} 个文件夹分组</span>
+      {#if beets.doneCount !== null && !running}
+        <span class="dim">预览完成：{beets.doneCount} 个文件夹分组</span>
       {/if}
       {#if applying}
         <span class="dim">
-          {MOVE_LABELS[moveMode]} {applyProgress ? `${applyProgress.current}/${applyProgress.total}` : '…'}
+          {MOVE_LABELS[moveMode]} {beets.applyProgress ? `${beets.applyProgress.current}/${beets.applyProgress.total}` : '…'}
         </span>
       {/if}
       {#if running || applying}
-        <button class="btn" onclick={() => void cancelSession()}>取消</button>
+        <button class="btn" onclick={() => void cancelSession()} aria-label="取消当前 beets 导入">取消</button>
       {/if}
-      {#if doneCount !== null && !running && !applying}
+      {#if beets.doneCount !== null && !running && !applying}
         <select
           class="cand-select mode-select"
           value={moveMode}
@@ -272,52 +217,52 @@
       </button>
     </div>
 
-    {#if applySummary}
-      <div class="apply-summary" class:has-failed={applySummary.failed > 0}>
-        已应用 {applySummary.applied} 张 · 跳过 {applySummary.skipped} 张
-        {#if applySummary.moved > 0} · 已{MOVE_LABELS[moveMode].replace('到 beets 库', '')} {applySummary.moved} 首{/if}
-        {#if applySummary.failed > 0} · 失败 {applySummary.failed} 首{/if}
-        {#if synced}
+    {#if beets.applySummary}
+      <div class="apply-summary" class:has-failed={beets.applySummary.failed > 0}>
+        已应用 {beets.applySummary.applied} 张 · 跳过 {beets.applySummary.skipped} 张
+        {#if beets.applySummary.moved > 0} · 已{MOVE_LABELS[moveMode].replace('到 beets 库', '')} {beets.applySummary.moved} 首{/if}
+        {#if beets.applySummary.failed > 0} · 失败 {beets.applySummary.failed} 首{/if}
+        {#if beets.synced}
           <div class="dim">
-            曲库已对齐：命中 {synced.matched} · 更新 {synced.updated} · 新增 {synced.imported} · 未变 {synced.unchanged}
-            {#if synced.orphaned > 0} · beets 已删 {synced.orphaned}{/if}
+            曲库已对齐：命中 {beets.synced.matched} · 更新 {beets.synced.updated} · 新增 {beets.synced.imported} · 未变 {beets.synced.unchanged}
+            {#if beets.synced.orphaned > 0} · beets 已删 {beets.synced.orphaned}{/if}
           </div>
         {:else if syncing}
           <div class="dim">正在对齐曲库（beets → 本地）…</div>
         {/if}
       </div>
-    {:else if synced}
+    {:else if beets.synced}
       <div class="apply-summary">
-        曲库已对齐：命中 {synced.matched} · 更新 {synced.updated} · 新增 {synced.imported} · 未变 {synced.unchanged}
-        {#if synced.orphaned > 0} · beets 已删 {synced.orphaned}{/if}
+        曲库已对齐：命中 {beets.synced.matched} · 更新 {beets.synced.updated} · 新增 {beets.synced.imported} · 未变 {beets.synced.unchanged}
+        {#if beets.synced.orphaned > 0} · beets 已删 {beets.synced.orphaned}{/if}
       </div>
     {/if}
 
-    {#if error}
+    {#if beets.lastError}
       <div class="import-error">
-        {error}
+        {beets.lastError}
         <div class="dim">
           需要 beets 2.14+：<code>pipx install beets</code>（装好重启应用）
         </div>
       </div>
     {/if}
 
-    {#if errors.length > 0}
+    {#if beets.errors.length > 0}
       <div class="import-error">
-        {#each errors as e (e.path + e.message)}
+        {#each beets.errors as e (e.path + e.message)}
           <div>{e.path}：{e.message}</div>
         {/each}
       </div>
     {/if}
 
-    {#if albums.length === 0 && !running && doneCount === null}
+    {#if beets.albums.length === 0 && !running && beets.doneCount === null}
       <div class="dim empty-hint">
         选择一个待整理的文件夹，beets 会只读匹配候选元数据并展示逐字段差异；
         预览阶段不写任何文件。
       </div>
     {/if}
 
-    {#each albums as album (album.id)}
+    {#each beets.albums as album (album.id)}
       <div class="album-card">
         <div class="album-head">
           <b>{album.current.album || '(未知专辑)'}</b>
@@ -328,13 +273,13 @@
         </div>
 
         <!-- 应用结果徽标（B2 写标签 + B3 移动/复制/冲突） -->
-        {#if results[album.id]}
-          <div class="apply-result" class:has-failed={results[album.id].failed.length > 0}>
-            ✓ 已写入 {results[album.id].written} 首
-            {#if results[album.id].moved}
+        {#if beets.results[album.id]}
+          <div class="apply-result" class:has-failed={beets.results[album.id].failed.length > 0}>
+            ✓ 已写入 {beets.results[album.id].written} 首
+            {#if beets.results[album.id].moved}
               · 文件已{moveMode === 'apply_move' ? '移动' : '复制'}到 beets 库
             {/if}
-            {#each results[album.id].failed as f (f.path)}
+            {#each beets.results[album.id].failed as f (f.path)}
               <div class="fail-line" class:conflict={f.code === 'conflict'}>
                 {f.code === 'conflict' ? '⚠ 目标冲突' : '✗'}
                 {f.path.split(/[\\/]/).pop()}：{f.message}
@@ -346,12 +291,12 @@
         <!-- 候选选择 -->
         {#if album.candidates.length === 0}
           <div class="dim">无候选（未联网或匹配不上）</div>
-        {:else if !results[album.id]}
+        {:else if !beets.results[album.id]}
           <select
             class="cand-select"
-            value={picked[album.id] ?? ''}
+            value={beets.picked[album.id] ?? ''}
             disabled={applying}
-            onchange={(e) => (picked[album.id] = (e.currentTarget as HTMLSelectElement).value || null)}
+            onchange={(e) => (beets.picked[album.id] = (e.currentTarget as HTMLSelectElement).value || null)}
           >
             <option value="">保持当前标签（不修改）</option>
             {#each album.candidates as c (c.id)}

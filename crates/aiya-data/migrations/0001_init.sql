@@ -1,9 +1,13 @@
--- 0001_init.sql — AIYA Music schema v1 基线（全新建库，无历史迁移链）
+-- 0001_init.sql — AIYA Music schema v1 基线（单一迁移，压平自原 0001+0002+0003；
+-- 项目未发布、无存量库需要保留，按"新库第一版即最终形态"直接建全量结构）
 -- 设计依据 docs/02 §5.2：
 --   * tracks 不暴露路径给 UI（locator/文件事实只存在于本库）
 --   * 标签写操作归 beets，tracks 只存播放/展示需要的字段
 --   * 队列规范化（queue_state 单行 + queue_items 位置表），不写 JSON 整行
 --   * 搜索用 title_norm + LIKE（FTS5 的两字中文坑已验证，不上）
+--   * 路径对账键 path_lower（Windows 大小写不敏感语义）直接内联，
+--     不走 ALTER+回填+去重的历史包袱
+--   * artworks 按内容哈希去重内联（同一专辑几十首共享一张嵌入图）
 
 PRAGMA foreign_keys = ON;
 
@@ -51,6 +55,9 @@ CREATE TABLE tracks (
   last_played_at INTEGER,
   -- 文件事实（扫描对账用；UI 不可见）
   path        TEXT NOT NULL UNIQUE,
+  -- 对账/去重键（lower(path)）。注意：ids::track_id 的派生逻辑不动
+  --（不参与 ID 生成），本列只作大小写不敏感匹配。
+  path_lower  TEXT NOT NULL UNIQUE,
   size_bytes  INTEGER NOT NULL DEFAULT 0,
   mtime       INTEGER NOT NULL DEFAULT 0,
   availability TEXT NOT NULL DEFAULT 'online' CHECK (availability IN ('online','offline','missing')),
@@ -61,6 +68,19 @@ CREATE INDEX idx_tracks_order       ON tracks(title_norm, id);
 CREATE INDEX idx_tracks_added       ON tracks(added_at, id);
 CREATE INDEX idx_tracks_artist      ON tracks(artist_id);
 CREATE INDEX idx_tracks_album       ON tracks(album_id);
+CREATE INDEX idx_tracks_artwork     ON tracks(artwork_id);
+
+-- ---------------------------------------------------------------- 封面
+
+CREATE TABLE artworks (
+  id           TEXT PRIMARY KEY,            -- aw_<hash 前 24>
+  content_hash TEXT NOT NULL UNIQUE,
+  mime         TEXT NOT NULL,
+  width        INTEGER,
+  height       INTEGER,
+  cache_key    TEXT NOT NULL,               -- originals/ 下的文件名
+  created_at   INTEGER NOT NULL
+);
 
 -- ---------------------------------------------------------------- 歌单
 

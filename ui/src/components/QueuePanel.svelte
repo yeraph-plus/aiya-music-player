@@ -182,9 +182,14 @@
           }}
           onpointerdown={(event) => handlePointerDown(event, row.index)}
           role="button"
-          tabindex="-1"
+          tabindex="0"
           onkeydown={(event) => {
-            if (event.key === 'Enter') onplay(row.index);
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              onplay(row.index);
+            } else if (event.key === 'Delete') {
+              onremove(row.index);
+            }
           }}
         >
           <span class="q-grip" aria-hidden="true"><Icon name="grip" size={13} /></span>
