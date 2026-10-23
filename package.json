@@ -1,0 +1,16 @@
+{
+  "name": "aiya-music",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "ui\\node_modules\\.bin\\tauri.cmd dev",
+    "build": "npm run build --prefix ui && ui\\node_modules\\.bin\\tauri.cmd build",
+    "check": "npm run check --prefix ui",
+    "test": "cargo test --workspace",
+    "test:all": "cargo test --workspace && npm run check --prefix ui && npm run build --prefix ui",
+    "smoke:apply": "tools\\beets-venv\\Scripts\\python.exe tools\\smoke_apply.py"
+  }
+}
