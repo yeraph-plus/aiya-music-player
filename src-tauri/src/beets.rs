@@ -211,11 +211,10 @@ pub fn probe(app: &tauri::AppHandle) -> BeetsStatus {
 
 /* ---------------- B1/B2：导入会话（事件流转发） ---------------- */
 
-/// apply 完成后宿主刷新读模型所需参数（lib.rs 注入 AppState 的克隆）。
+/// 读模型刷新参数（lib.rs 注入 AppState 的克隆）。
 pub struct RefreshParams {
     pub db_path: PathBuf,
-    pub artwork_dir: PathBuf,
-    /// 与 library_scan 共用的互斥标志（避免同时扫描写同一 DB）
+    /// 与 library_scan 共用的互斥标志（避免同时写同一 DB）
     pub scanning: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -234,7 +233,7 @@ fn pick_interpreter(script: &str) -> Option<String> {
 /// 起一次性 sidecar 子进程并写入请求（不 drop stdin 之前先写完）。
 fn spawn_session(
     python: &str,
-    script: &PathBuf,
+    script: &std::path::Path,
     request: &serde_json::Value,
 ) -> Result<std::process::Child, String> {
     let mut child = std::process::Command::new(python)
@@ -317,7 +316,7 @@ pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), St
 }
 
 /// B2：应用导入决策。decisions 形状由契约定义（ApplyDecision），
-/// 宿主不解释语义，只透传给 sidecar；完成后刷新受影响目录的读模型。
+/// 宿主不解释语义，只透传给 sidecar；完成后自动 beets 对齐读模型（自闭环）。
 pub fn start_apply(
     app: tauri::AppHandle,
     decisions: Vec<serde_json::Value>,
@@ -331,47 +330,75 @@ pub fn start_apply(
     let req = serde_json::json!({ "id": 1, "cmd": "apply_import", "decisions": decisions });
     let child = spawn_session(&python, &script, &req)?;
 
-    let refresh_dirs = affected_dirs(&decisions);
     spawn_reader(child, app, move |app| {
         if let Some(params) = refresh {
-            refresh_affected(app, params, &refresh_dirs);
+            // 自闭环（docs/08 §5）：beets 刚写完库就是最新权威，
+            // 直接全量对齐自有 DB，替代旧"重扫受影响目录"路径。
+            run_sync(app, params);
         }
     })
 }
 
-/// 决策里 apply 动作的文件 → 去重后的父目录（刷新只扫这些目录，不全库重扫）。
-fn affected_dirs(decisions: &[serde_json::Value]) -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = Vec::new();
-    for d in decisions {
-        if d.get("action").and_then(|a| a.as_str()) != Some("apply") {
-            continue;
-        }
-        if let Some(paths) = d.get("paths").and_then(|p| p.as_array()) {
-            for p in paths {
-                if let Some(s) = p.as_str() {
-                    let dir = PathBuf::from(s);
-                    let dir = if dir.is_dir() { dir } else { match dir.parent() {
-                        Some(parent) => parent.to_path_buf(),
-                        None => continue,
-                    } };
-                    if !out.contains(&dir) {
-                        out.push(dir);
+/// 手动触发一次读模型对齐（设置页/导入面板按钮；B4 的自动同步基座）。
+pub fn sync_now(app: tauri::AppHandle, params: RefreshParams) {
+    std::thread::Builder::new()
+        .name("beets-sync".into())
+        .spawn(move || run_sync(&app, params))
+        .map(|_| ())
+        .map_err(|e| tracing::warn!(%e, "起 sync 线程失败"))
+        .ok();
+}
+
+/// 从 sidecar 收集 dump_items 全量（一次性进程，调用线程同步读）。
+fn collect_items(
+    python: &str,
+    script: &std::path::Path,
+) -> Result<Vec<aiya_data::beets_sync::BeetsItem>, String> {
+    let child = spawn_session(
+        python,
+        script,
+        &serde_json::json!({ "id": 1, "cmd": "dump_items" }),
+    )?;
+    let mut child = child;
+    let mut stdout = child.stdout.take().expect("stdout piped");
+    let mut items = Vec::new();
+    {
+        use std::io::BufRead;
+        let reader = std::io::BufReader::new(&mut stdout);
+        for line in reader.lines() {
+            let Ok(line) = line else { break };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+                continue;
+            };
+            if v.get("type").and_then(|t| t.as_str()) == Some("item") {
+                if let Some(item) = v.get("item") {
+                    match serde_json::from_value(item.clone()) {
+                        Ok(it) => items.push(it),
+                        Err(e) => tracing::warn!(%e, "beets item 解析失败，跳过"),
                     }
                 }
             }
         }
     }
-    out
+    let _ = child.wait();
+    Ok(items)
 }
 
-/// apply 完成后的读模型刷新：对受影响目录逐个 scan_directory（增量，快），
-/// 进度走既有 `scan:progress` 事件，汇总走 `libraryRefreshed`。
-fn refresh_affected(app: &tauri::AppHandle, params: RefreshParams, dirs: &[PathBuf]) {
+/// 对齐执行体：dump 全量 → sync_items → 发 `librarySynced` 汇总。
+/// 与 library_scan 共用 scanning 互斥；正扫全库时让位（libraryRefreshSkipped）。
+fn run_sync(app: &tauri::AppHandle, params: RefreshParams) {
     use std::sync::atomic::Ordering;
     let emit = |v: serde_json::Value| {
         let _ = app.emit("beets:import", v);
     };
-    // 与 library_scan 互斥；正扫全库时本次刷新让位（UI 可手动再扫）
+
+    let script = match ensure_script(app) {
+        Ok(p) => p,
+        Err(e) => {
+            emit(serde_json::json!({ "type": "librarySyncFailed", "message": e }));
+            return;
+        }
+    };
     if params
         .scanning
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -384,45 +411,39 @@ fn refresh_affected(app: &tauri::AppHandle, params: RefreshParams, dirs: &[PathB
         return;
     }
 
-    let mut scanned = 0usize;
-    let mut imported = 0usize;
-    let mut updated = 0usize;
-    let mut unchanged = 0usize;
-    let mut failed = 0usize;
-    for dir in dirs {
-        if !dir.is_dir() {
-            continue;
-        }
-        let Ok(mut conn) = aiya_data::open_conn(&params.db_path) else {
-            failed += 1;
-            continue;
-        };
-        let app2 = app.clone();
-        match aiya_data::scanner::scan_directory(&mut conn, dir, Some(&params.artwork_dir), move |p| {
-            if let Ok(v) = serde_json::to_value(&p) {
-                let _ = app2.emit("scan:progress", v);
-            }
-        }) {
-            Ok(r) => {
-                scanned += r.scanned;
-                imported += r.imported;
-                updated += r.updated;
-                unchanged += r.unchanged;
-                failed += r.failed;
-            }
-            Err(_) => failed += 1,
-        }
+    let result = (|| -> Result<aiya_data::beets_sync::SyncStats, String> {
+        let script_str = script.to_string_lossy().into_owned();
+        let python = pick_interpreter(&script_str)
+            .ok_or_else(|| "no beets interpreter available".to_string())?;
+        let items = collect_items(&python, &script)?;
+        let mut conn = aiya_data::open_conn(&params.db_path)
+            .map_err(|e| format!("open db: {e}"))?;
+        let stats = aiya_data::beets_sync::sync_items(&mut conn, &items, now_secs())
+            .map_err(|e| format!("sync: {e}"))?;
         let _ = conn.close();
-    }
+        Ok(stats)
+    })();
+
     params.scanning.store(false, Ordering::SeqCst);
-    emit(serde_json::json!({
-        "type": "libraryRefreshed",
-        "scanned": scanned,
-        "imported": imported,
-        "updated": updated,
-        "unchanged": unchanged,
-        "failed": failed,
-    }));
+    match result {
+        Ok(stats) => match serde_json::to_value(&stats) {
+            Ok(mut v) => {
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("type".into(), serde_json::json!("librarySynced"));
+                }
+                emit(v);
+            }
+            Err(e) => emit(serde_json::json!({ "type": "librarySyncFailed", "message": e.to_string() })),
+        },
+        Err(e) => emit(serde_json::json!({ "type": "librarySyncFailed", "message": e })),
+    }
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 #[cfg(test)]
@@ -482,19 +503,59 @@ mod tests {
         }
     }
 
-    /// 决策里 apply 动作的文件 → 去重后的父目录；skip 动作不参与刷新。
+    /// 端到端：真 sidecar dump_items（dev venv + dev 隔离库，B2 冒烟留下的 3 条）
+    /// → Rust 解析 → beets_sync 对齐进临时 DB。
+    /// 不复用 collect_items（那要 AppHandle 落脚本 + set_var 污染并行测试），
+    /// 事件形状按同一契约独立构造。
+    #[cfg(debug_assertions)]
     #[test]
-    fn affected_dirs_dedupes_and_skips() {
-        let decisions = serde_json::json!([
-            { "album": "a", "action": "apply", "paths": ["C:/m/one/1.flac", "C:/m/one/2.flac"] },
-            { "album": "b", "action": "skip", "paths": ["C:/m/two/1.mp3"] },
-            { "album": "c", "action": "apply", "paths": ["C:/m/one/3.flac", "C:/m/two/x.wav"] }
-        ]);
-        let dirs = affected_dirs(decisions.as_array().unwrap());
-        assert_eq!(dirs, vec![
-            PathBuf::from("C:/m/one"),
-            PathBuf::from("C:/m/two"),
-        ]);
+    fn dump_parse_and_sync_end_to_end() {
+        let venv = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../tools/beets-venv/Scripts/python.exe");
+        let beets_home = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tools/beets-home");
+        if !venv.exists() || !beets_home.exists() {
+            return; // CI/其他机器没有 dev 环境就跳过
+        }
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sidecar/beets_sidecar.py");
+
+        let mut child = std::process::Command::new(&venv)
+            .arg(&script)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .env("BEETSDIR", &beets_home)
+            .spawn()
+            .expect("spawn sidecar");
+        use std::io::Write;
+        writeln!(child.stdin.take().expect("stdin"), r#"{{"id":1,"cmd":"dump_items"}}"#).unwrap();
+
+        let mut stdout = child.stdout.take().expect("stdout");
+        let mut items: Vec<aiya_data::beets_sync::BeetsItem> = Vec::new();
+        {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(&mut stdout).lines() {
+                let Ok(line) = line else { break };
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) else { continue };
+                if v.get("type").and_then(|t| t.as_str()) == Some("item") {
+                    items.push(serde_json::from_value(v["item"].clone()).expect("item 形状"));
+                }
+            }
+        }
+        let _ = child.wait();
+        assert!(items.len() >= 3, "dev 库应有 B2 冒烟写入的 3 条，实际 {}", items.len());
+        assert!(items.iter().all(|it| it.id > 0 && !it.path.is_empty()));
+
+        let mut conn = aiya_data::db::open_in_memory().unwrap();
+        let stats = aiya_data::beets_sync::sync_items(&mut conn, &items, 0).unwrap();
+        assert_eq!(stats.imported, items.len());
+        // 再对齐一次 → 全部 unchanged（幂等）
+        let stats2 = aiya_data::beets_sync::sync_items(&mut conn, &items, 1).unwrap();
+        assert_eq!((stats2.matched, stats2.updated, stats2.unchanged), (items.len(), 0, items.len()));
+        // beets_item_id 真的写进去了
+        let with_id: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tracks WHERE beets_item_id IS NOT NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(with_id as usize, items.len());
     }
 
     fn script_path_for_test() -> String {

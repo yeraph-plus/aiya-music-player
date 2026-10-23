@@ -953,7 +953,7 @@
       onclose={() => (ui.sidePanel = null)}
     />
   {:else if sidePanel === 'import'}
-    <ImportPanel onclose={() => (ui.sidePanel = null)} />
+    <ImportPanel onclose={() => (ui.sidePanel = null)} onsynced={() => void reload()} />
   {/if}
 
   {#if selectionSet.size > 0}

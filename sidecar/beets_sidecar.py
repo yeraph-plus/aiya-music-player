@@ -264,6 +264,41 @@ def apply_import(req_id, decisions: list[dict]) -> None:
            "applied": applied, "skipped": skipped, "failed": failed_files})
 
 
+# dump_items 输出的字段白名单：只给宿主读模型对齐需要的（beets 字段名原样，
+# 宿主侧映射到自有列）。path 是对账 key。
+DUMP_FIELDS = [
+    "title", "artist", "albumartist", "album", "genre",
+    "year", "track", "disc", "length", "bitrate", "format",
+    "samplerate", "bitdepth", "channels", "mtime", "rg_track_gain",
+]
+
+
+def dump_items(req_id) -> None:
+    """流式导出 beets 库 items（宿主读模型对齐用，docs/08 §5 读模型同步）。
+
+    每行一个 item 事件（几万条也不膨胀内存）；最后 dumpDone 带总数。
+    """
+    session = f"sync_{req_id:02d}"
+    from beets import config as beets_config
+    from beets.library import Library
+
+    lib = Library(beets_config["library"].as_filename())
+    total = 0
+    for item in lib.items():
+        payload = {"id": item.id, "path": item.path.decode("utf-8", "replace")}
+        for f in DUMP_FIELDS:
+            v = item.get(f)
+            if isinstance(v, bytes):
+                v = v.decode("utf-8", "replace")
+            elif f == "mtime" and v is not None:
+                # beets 的 DATE 类型读出来是 float（1792771928.0），契约是整型秒
+                v = int(v)
+            payload[f] = v
+        total += 1
+        _emit({"type": "item", "session": session, "item": payload})
+    _emit({"type": "dumpDone", "session": session, "items": total})
+
+
 def handle(req: dict) -> dict | None:
     """返回 None 表示已用事件流自行应答（preview_import 模式）。"""
     cmd = req.get("cmd")
@@ -286,6 +321,9 @@ def handle(req: dict) -> dict | None:
             return {"ok": False, "error": {"code": "E_BAD_ARGS", "stage": "apply",
                                            "beets_message": "decisions 为空"}}
         apply_import(req_id, decisions)
+        return None
+    if cmd == "dump_items":
+        dump_items(int(req.get("id") or 0))
         return None
     return {"ok": False, "error": {"code": "E_UNKNOWN_CMD", "stage": "dispatch", "beets_message": f"unknown cmd: {cmd!r}"}}
 

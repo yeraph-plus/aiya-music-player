@@ -214,19 +214,31 @@ fn beets_preview(app: AppHandle, paths: Vec<String>) -> Value {
 }
 
 /// B2：应用导入决策（写标签 + 入 beets 库，不移动文件）。
-/// decisions 形状见契约 ApplyDecision；完成后宿主自动刷新受影响目录的读模型
-/// （进度走 scan:progress，汇总走 beets:import 的 libraryRefreshed）。
+/// decisions 形状见契约 ApplyDecision；完成后自动 beets 对齐读模型
+/// （自闭环：进度/汇总走 beets:import 的 librarySynced）。
 #[tauri::command]
 fn beets_apply(app: AppHandle, state: State<'_, AppState>, decisions: Vec<Value>) -> Value {
     let refresh = beets::RefreshParams {
         db_path: state.db_path.clone(),
-        artwork_dir: state.artwork_dir.clone(),
         scanning: state.scanning.clone(),
     };
     match beets::start_apply(app, decisions, Some(refresh)) {
         Ok(()) => ok(json!({ "started": true })),
         Err(e) => fail("E_BEETS_NOT_FOUND", &e),
     }
+}
+
+/// 手动触发一次 beets → 自有读模型的全量对齐（异步，结果走 librarySynced 事件）。
+#[tauri::command]
+fn beets_sync(app: AppHandle, state: State<'_, AppState>) -> Value {
+    beets::sync_now(
+        app,
+        beets::RefreshParams {
+            db_path: state.db_path.clone(),
+            scanning: state.scanning.clone(),
+        },
+    );
+    ok(json!({ "started": true }))
 }
 
 #[tauri::command]
@@ -1399,6 +1411,7 @@ pub fn run() {
             beets_status,
             beets_preview,
             beets_apply,
+            beets_sync,
             library_list,
             library_tracks,
             library_stats,

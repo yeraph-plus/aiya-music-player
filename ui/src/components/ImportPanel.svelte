@@ -10,8 +10,10 @@
 
   interface Props {
     onclose: () => void;
+    /** 读模型对齐完成（曲库数据可能变了），主视图应重拉列表 */
+    onsynced?: () => void;
   }
-  let { onclose }: Props = $props();
+  let { onclose, onsynced }: Props = $props();
 
   let albums = $state<AlbumPreview[]>([]);
   let running = $state(false);
@@ -24,7 +26,8 @@
   /** 专辑 id → 应用结果 */
   let results = $state<Record<string, { written: number; failed: Array<{ path: string; message: string }> }>>({});
   let applySummary = $state<{ applied: number; skipped: number; failed: number } | null>(null);
-  let refreshed = $state<{ imported: number; updated: number; unchanged: number; failed: number } | null>(null);
+  let synced = $state<{ matched: number; updated: number; imported: number; unchanged: number; orphaned: number } | null>(null);
+  let syncing = $state(false);
   let doneCount = $state<number | null>(null);
   let errors = $state<Array<{ path: string; message: string }>>([]);
   let unlisten: (() => void) | null = null;
@@ -45,8 +48,17 @@
     } else if (evt.type === 'applyDone') {
       applying = false;
       applySummary = { applied: evt.applied, skipped: evt.skipped, failed: evt.failed };
-    } else if (evt.type === 'libraryRefreshed') {
-      refreshed = { imported: evt.imported, updated: evt.updated, unchanged: evt.unchanged, failed: evt.failed };
+    } else if (evt.type === 'librarySynced') {
+      syncing = false;
+      synced = { matched: evt.matched, updated: evt.updated, imported: evt.imported, unchanged: evt.unchanged, orphaned: evt.orphaned };
+      // 曲库数据变了（新增/更新行），让主视图重拉列表
+      onsynced?.();
+    } else if (evt.type === 'librarySyncFailed') {
+      syncing = false;
+      errors = [...errors, { path: 'sync', message: evt.message }];
+    } else if (evt.type === 'libraryRefreshSkipped') {
+      syncing = false;
+      errors = [...errors, { path: 'sync', message: '有扫描正在进行，本次对齐让位；稍后再试' }];
     } else if (evt.type === 'done') {
       doneCount = evt.albums;
       running = false;
@@ -66,7 +78,8 @@
     applyProgress = null;
     results = {};
     applySummary = null;
-    refreshed = null;
+    synced = null;
+    syncing = false;
     doneCount = null;
     errors = [];
     const result = await window.api.app.beetsPreview([picked_dir.data.path]);
@@ -107,13 +120,26 @@
     error = null;
     results = {};
     applySummary = null;
-    refreshed = null;
+    synced = null;
     const result = await window.api.app.beetsApply(decisions);
     if (!result.ok) {
       error = result.error.message;
       return;
     }
     applying = true;
+    syncing = true;
+  }
+
+  /** 手动全量对齐：beets 库 → 自有读模型（无需先预览） */
+  async function syncNow(): Promise<void> {
+    error = null;
+    synced = null;
+    const result = await window.api.app.beetsSync();
+    if (!result.ok) {
+      error = result.error.message;
+      return;
+    }
+    syncing = true;
   }
 
   $effect(() => {
@@ -173,20 +199,28 @@
           应用所选（{applyableCount} 张）
         </button>
       {/if}
+      <button class="btn" onclick={() => void syncNow()} disabled={syncing} title="beets 库 → 本地曲库全量对齐">
+        从 beets 同步
+      </button>
     </div>
 
     {#if applySummary}
       <div class="apply-summary" class:has-failed={applySummary.failed > 0}>
         已应用 {applySummary.applied} 张 · 跳过 {applySummary.skipped} 张
         {#if applySummary.failed > 0} · 失败 {applySummary.failed} 首{/if}
-        {#if refreshed}
+        {#if synced}
           <div class="dim">
-            曲库已刷新：新增 {refreshed.imported} · 更新 {refreshed.updated} · 未变 {refreshed.unchanged}
-            {#if refreshed.failed > 0} · 刷新失败 {refreshed.failed}{/if}
+            曲库已对齐：命中 {synced.matched} · 更新 {synced.updated} · 新增 {synced.imported} · 未变 {synced.unchanged}
+            {#if synced.orphaned > 0} · beets 已删 {synced.orphaned}{/if}
           </div>
-        {:else}
-          <div class="dim">正在刷新曲库…</div>
+        {:else if syncing}
+          <div class="dim">正在对齐曲库（beets → 本地）…</div>
         {/if}
+      </div>
+    {:else if synced}
+      <div class="apply-summary">
+        曲库已对齐：命中 {synced.matched} · 更新 {synced.updated} · 新增 {synced.imported} · 未变 {synced.unchanged}
+        {#if synced.orphaned > 0} · beets 已删 {synced.orphaned}{/if}
       </div>
     {/if}
 

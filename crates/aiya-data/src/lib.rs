@@ -5,6 +5,7 @@
 //! 调用方通过 `DbHandle` 提交闭包，经有界 channel 进线程，结果经 reply channel 返回。
 
 pub mod artwork;
+pub mod beets_sync;
 pub mod db;
 pub mod ids;
 pub mod norm;

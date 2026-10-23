@@ -420,9 +420,11 @@ export type BeetsImportEvent =
   /** 单张专辑应用完成；failed 是逐曲失败明细（可重试） */
   | { type: 'applied'; session: string; albumId: string; written: number; failed: Array<{ path: string; message: string }> }
   | { type: 'applyDone'; session: string; applied: number; skipped: number; failed: number }
-  /** 宿主对受影响目录的读模型刷新汇总 */
-  | { type: 'libraryRefreshed'; scanned: number; imported: number; updated: number; unchanged: number; failed: number }
-  /** 正在扫描全库，本次刷新让位（可手动再扫） */
+  /* ---- 读模型对齐（beets 写权威 → 自有 DB 读模型，docs/08 §5 自闭环） ---- */
+  /** beets 库 → 自有 DB 全量对齐汇总（apply 完成后自动触发，也可手动） */
+  | { type: 'librarySynced'; matched: number; updated: number; imported: number; unchanged: number; orphaned: number }
+  | { type: 'librarySyncFailed'; message: string }
+  /** 正在扫描全库，本次对齐让位（可手动再触发） */
   | { type: 'libraryRefreshSkipped'; reason: string }
   | { type: 'sessionEnd' };
 

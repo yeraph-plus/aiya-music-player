@@ -259,8 +259,10 @@ export interface AiyaApi {
     beetsStatus(): Promise<IpcResult<BeetsStatus>>;
     /** 启动一次只读导入预览；事件流走 onBeetsImport */
     beetsPreview(paths: string[]): Promise<IpcResult<{ started: boolean }>>;
-    /** B2：应用导入决策（写标签 + 入 beets 库 + 自动刷新读模型） */
+    /** B2：应用导入决策（写标签 + 入 beets 库 + 自动对齐读模型） */
     beetsApply(decisions: ApplyDecision[]): Promise<IpcResult<{ started: boolean }>>;
+    /** 手动触发一次 beets → 自有读模型全量对齐；汇总走 onBeetsImport 的 librarySynced */
+    beetsSync(): Promise<IpcResult<{ started: boolean }>>;
     /** beets 导入预览事件流（progress/album/albumError/done/sessionEnd） */
     onBeetsImport(callback: (evt: BeetsImportEvent) => void): () => void;
   };
