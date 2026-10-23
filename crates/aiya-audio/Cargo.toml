@@ -1,0 +1,14 @@
+[package]
+name = "aiya-audio"
+version.workspace = true
+edition.workspace = true
+description = "AIYA Music 音频引擎：Symphonia 解码 + WASAPI 输出。不依赖 Tauri 与数据库。"
+
+[dependencies]
+symphonia.workspace = true
+wasapi.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

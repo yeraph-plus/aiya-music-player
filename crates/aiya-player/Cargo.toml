@@ -1,0 +1,15 @@
+[package]
+name = "aiya-player"
+version.workspace = true
+edition.workspace = true
+description = "AIYA Music 播放状态机：队列、模式、状态归约。纯逻辑，不依赖 Tauri 与具体音频后端。"
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+aiya-audio = { path = "../aiya-audio" }
+
+[dev-dependencies]
+tempfile = "3"

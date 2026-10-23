@@ -33,6 +33,10 @@ pub struct AppState {
     db_path: PathBuf,
     /// 封面缓存根：<app_data>/cache/artwork（originals/ + thumbs/）
     artwork_dir: PathBuf,
+    /// 播放状态机（ADR-0003：唯一真相）
+    player: Mutex<aiya_player::PlayerActor>,
+    /// 原生音频引擎（Symphonia + WASAPI 共享模式）
+    engine: Mutex<aiya_audio::Engine>,
     scanning: AtomicBool,
 }
 
@@ -583,27 +587,341 @@ fn playlist_create(state: State<'_, AppState>, name: String, track_ids: Option<V
     }
 }
 
-/* ---------------- player / lyrics / history（P2/P4 接管，先给合法桩） ---------------- */
+/* ---------------- player：PlayerActor + 引擎适配（P2 真实现） ---------------- */
 
-fn idle_player_state() -> Value {
-    json!({
-        "queueLength": 0, "queueVersion": 0, "index": -1, "cursor": -1,
-        "repeat": "off", "shuffle": false, "status": "idle",
-        "positionMs": 0, "durationMs": Value::Null,
-        "volume": 0.85, "muted": false, "rate": 1.0,
-        "error": Value::Null, "current": Value::Null,
-        "token": 0, "updatedAt": 0,
-    })
+/// 把引擎/Actor 的状态推给 UI。所有状态变化都经此出口。
+fn emit_player_state(app: &AppHandle, state: &aiya_player::PlayerState) {
+    if let Ok(v) = serde_json::to_value(state) {
+        let _ = app.emit("player:state", v);
+    }
+}
+
+/// Actor 归约后统一收尾：取 pending load → 发引擎；同步音量；推状态。
+/// 返回新快照（命令返回值用）。
+fn drive_and_emit(state: &State<'_, AppState>, app: &AppHandle) -> Value {
+    let mut actor = state.player.lock().expect("player poisoned");
+    // 1) 引擎装载指令
+    if let Some((token, path, start_ms, autoplay)) = actor.take_pending_load() {
+        let volume = actor.volume().0 as f32;
+        let muted = actor_is_muted(&actor);
+        engine_send(&state, aiya_audio::EngineCommand::Load(path));
+        engine_send(&state, aiya_audio::EngineCommand::SetVolume(if muted { 0.0 } else { volume }));
+        if !autoplay {
+            engine_send(&state, aiya_audio::EngineCommand::Pause);
+        }
+        let _ = (token, start_ms);
+    }
+    let snapshot = actor.state();
+    drop(actor);
+    emit_player_state(app, &snapshot);
+    ok(serde_json::to_value(&snapshot).unwrap_or(Value::Null))
+}
+
+fn actor_is_muted(actor: &aiya_player::PlayerActor) -> bool {
+    actor.volume().1
+}
+
+/// 引擎命令统一入口（Engine 在 Mutex 里）。
+fn engine_send(state: &State<'_, AppState>, cmd: aiya_audio::EngineCommand) {
+    let _ = state.engine.lock().expect("engine poisoned").send(cmd);
+}
+
+/// 从 DB 拿 TrackRef 列表（trackIds 保序）。
+fn fetch_track_refs(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_player::TrackRef> {
+    let ids = ids.to_vec();
+    state
+        .db()
+        .send(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT t.id, t.title, ar.name, al.title, t.duration_ms, t.artwork_id, t.gain_db, t.path
+                 FROM tracks t
+                 LEFT JOIN artists ar ON ar.id = t.artist_id
+                 LEFT JOIN albums al ON al.id = t.album_id
+                 WHERE t.id = ?1",
+            )?;
+            let mut out = Vec::with_capacity(ids.len());
+            for id in &ids {
+                let row = stmt.query_row([id], |r| {
+                    Ok(aiya_player::TrackRef {
+                        id: r.get(0)?,
+                        title: r.get(1)?,
+                        artist: r.get(2)?,
+                        album: r.get(3)?,
+                        duration_ms: r.get(4)?,
+                        artwork_id: r.get(5)?,
+                        gain_db: r.get(6)?,
+                        path: r.get(7)?,
+                    })
+                });
+                if let Ok(t) = row {
+                    out.push(t);
+                }
+            }
+            Ok(out)
+        })
+        .unwrap_or_default()
 }
 
 #[tauri::command]
-fn player_state() -> Value {
-    ok(idle_player_state())
+fn player_state(state: State<'_, AppState>) -> Value {
+    let actor = state.player.lock().expect("player poisoned");
+    ok(serde_json::to_value(actor.state()).unwrap_or(Value::Null))
 }
 
 #[tauri::command]
-fn player_queue() -> Value {
-    ok(json!({ "ids": [], "index": -1, "version": 0 }))
+fn player_queue(state: State<'_, AppState>) -> Value {
+    let actor = state.player.lock().expect("player poisoned");
+    ok(serde_json::to_value(actor.queue_snapshot()).unwrap_or(Value::Null))
+}
+
+#[tauri::command]
+fn player_play_tracks(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    track_ids: Vec<String>,
+    start_index: Option<usize>,
+) -> Value {
+    let tracks = fetch_track_refs(&state, &track_ids);
+    if tracks.is_empty() {
+        return fail("E_NOT_FOUND", "没有可播放的曲目");
+    }
+    let start = start_index.unwrap_or(0);
+    let mut actor = state.player.lock().expect("player poisoned");
+    actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::ReplaceAll {
+        tracks,
+        start,
+    }));
+    drop(actor);
+    drive_and_emit(&state, &app)
+}
+
+/// 按 TrackWindowQuery 语义播放查询结果（UI 的"播放全部/播放专辑"）。
+#[tauri::command]
+fn player_play_query(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    query: Value,
+    start_index: Option<usize>,
+) -> Value {
+    let q: aiya_data::TrackWindowQuery = match serde_json::from_value(query) {
+        Ok(q) => q,
+        Err(e) => return fail("E_INVALID", &format!("query 无效：{e}")),
+    };
+    // 拉全量 id（source 过滤 + 排序一致；limit 放大到 10000 —— 播放全部场景）
+    let q = aiya_data::TrackWindowQuery { limit: 10_000, offset: None, ..q };
+    let ids: Vec<String> = state
+        .db()
+        .send(move |conn| {
+            let page = aiya_data::repo::list_tracks(conn, &q)?;
+            Ok(page.items.into_iter().map(|t| t.id).collect())
+        })
+        .unwrap_or_default();
+    if ids.is_empty() {
+        return fail("E_NOT_FOUND", "查询结果为空");
+    }
+    let tracks = fetch_track_refs(&state, &ids);
+    let start = start_index.unwrap_or(0);
+    let mut actor = state.player.lock().expect("player poisoned");
+    actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::ReplaceAll {
+        tracks,
+        start,
+    }));
+    drop(actor);
+    drive_and_emit(&state, &app)
+}
+
+#[tauri::command]
+fn player_toggle(app: AppHandle, state: State<'_, AppState>) -> Value {
+    let (playing_before, status_before) = {
+        let actor = state.player.lock().expect("player poisoned");
+        (actor.state().status == aiya_player::PlaybackStatus::Playing, actor.state().status)
+    };
+    use aiya_player::PlaybackStatus as PS;
+    match status_before {
+        PS::Playing => engine_send(&state, aiya_audio::EngineCommand::Pause),
+        PS::Paused => engine_send(&state, aiya_audio::EngineCommand::Resume),
+        _ => {
+            // Idle/Error：从当前位置重播（Actor 决定 load）
+        }
+    }
+    let mut actor = state.player.lock().expect("player poisoned");
+    actor.reduce(aiya_player::PlayerCommand::TogglePause);
+    let _ = playing_before;
+    drop(actor);
+    drive_and_emit(&state, &app)
+}
+
+#[tauri::command]
+fn player_next(app: AppHandle, state: State<'_, AppState>) -> Value {
+    {
+        let mut actor = state.player.lock().expect("player poisoned");
+        actor.reduce(aiya_player::PlayerCommand::Next);
+    }
+    drive_and_emit(&state, &app)
+}
+
+#[tauri::command]
+fn player_prev(app: AppHandle, state: State<'_, AppState>) -> Value {
+    {
+        let mut actor = state.player.lock().expect("player poisoned");
+        actor.reduce(aiya_player::PlayerCommand::Prev);
+    }
+    drive_and_emit(&state, &app)
+}
+
+#[tauri::command]
+fn player_seek(app: AppHandle, state: State<'_, AppState>, position_ms: u64) -> Value {
+    engine_send(&state, aiya_audio::EngineCommand::Seek(position_ms));
+    {
+        let mut actor = state.player.lock().expect("player poisoned");
+        actor.reduce(aiya_player::PlayerCommand::Seek(position_ms));
+    }
+    drive_and_emit(&state, &app)
+}
+
+#[tauri::command]
+fn player_set_volume(app: AppHandle, state: State<'_, AppState>, volume: f64) -> Value {
+    {
+        let mut actor = state.player.lock().expect("player poisoned");
+        actor.reduce(aiya_player::PlayerCommand::SetVolume { volume, muted: false });
+        let v = actor.volume();
+        engine_send(
+            &state,
+            aiya_audio::EngineCommand::SetVolume(if v.1 { 0.0 } else { v.0 as f32 }));
+    }
+    drive_and_emit(&state, &app)
+}
+
+#[tauri::command]
+fn player_toggle_mute(app: AppHandle, state: State<'_, AppState>) -> Value {
+    {
+        let mut actor = state.player.lock().expect("player poisoned");
+        let (v, muted) = actor.volume();
+        actor.reduce(aiya_player::PlayerCommand::SetVolume { volume: v, muted: !muted });
+        engine_send(
+            &state,
+            aiya_audio::EngineCommand::SetVolume(if !muted { 0.0 } else { v as f32 }));
+    }
+    drive_and_emit(&state, &app)
+}
+
+#[tauri::command]
+fn player_set_rate(app: AppHandle, state: State<'_, AppState>, rate: f64) -> Value {
+    // v1 原生引擎不做变速（preservesPitch 需要 DSP）；状态保存，引擎实现随后补
+    {
+        let mut actor = state.player.lock().expect("player poisoned");
+        actor.reduce(aiya_player::PlayerCommand::SetRate(rate));
+    }
+    drive_and_emit(&state, &app)
+}
+
+#[tauri::command]
+fn player_set_repeat(app: AppHandle, state: State<'_, AppState>, repeat: String) -> Value {
+    let mode = match repeat.as_str() {
+        "all" => aiya_player::RepeatMode::All,
+        "one" => aiya_player::RepeatMode::One,
+        _ => aiya_player::RepeatMode::Off,
+    };
+    {
+        let mut actor = state.player.lock().expect("player poisoned");
+        actor.reduce(aiya_player::PlayerCommand::SetRepeat(mode));
+    }
+    drive_and_emit(&state, &app)
+}
+
+#[tauri::command]
+fn player_set_shuffle(app: AppHandle, state: State<'_, AppState>, shuffle: bool) -> Value {
+    {
+        let mut actor = state.player.lock().expect("player poisoned");
+        let cur = actor.state().shuffle;
+        if cur != shuffle {
+            actor.reduce(aiya_player::PlayerCommand::ToggleShuffle);
+        }
+    }
+    drive_and_emit(&state, &app)
+}
+
+#[tauri::command]
+fn player_enqueue(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    track_ids: Vec<String>,
+    options: Option<Value>,
+) -> Value {
+    let tracks = fetch_track_refs(&state, &track_ids);
+    if tracks.is_empty() {
+        return fail("E_NOT_FOUND", "没有可播放的曲目");
+    }
+    // options: { mode: "next" | "end" }（contracts QueueInsertMode）
+    let mode = options
+        .as_ref()
+        .and_then(|o| o.get("mode"))
+        .and_then(|m| m.as_str())
+        .unwrap_or("end")
+        .to_string();
+    {
+        let mut actor = state.player.lock().expect("player poisoned");
+        actor.reduce(aiya_player::PlayerCommand::Queue(if mode == "next" {
+            aiya_player::QueueOp::PlayNext { tracks }
+        } else {
+            aiya_player::QueueOp::Append { tracks }
+        }));
+    }
+    drive_and_emit(&state, &app)
+}
+
+#[tauri::command]
+fn player_insert_next(app: AppHandle, state: State<'_, AppState>, track_id: String) -> Value {
+    let tracks = fetch_track_refs(&state, &[track_id]);
+    if tracks.is_empty() {
+        return fail("E_NOT_FOUND", "曲目不存在");
+    }
+    {
+        let mut actor = state.player.lock().expect("player poisoned");
+        actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::PlayNext { tracks }));
+    }
+    drive_and_emit(&state, &app)
+}
+
+#[tauri::command]
+fn player_remove_at(app: AppHandle, state: State<'_, AppState>, index: usize) -> Value {
+    {
+        let mut actor = state.player.lock().expect("player poisoned");
+        actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::Remove {
+            indices: vec![index],
+        }));
+    }
+    drive_and_emit(&state, &app)
+}
+
+#[tauri::command]
+fn player_move(_app: AppHandle, state: State<'_, AppState>, from: usize, to: usize) -> Value {
+    let actor = state.player.lock().expect("player poisoned");
+    let _ = (&from, &to);
+    // 队列重排在 P2 后期（UI 拖拽）接入；先原样返回状态
+    ok(serde_json::to_value(actor.state()).unwrap_or(Value::Null))
+}
+
+#[tauri::command]
+fn player_clear(app: AppHandle, state: State<'_, AppState>) -> Value {
+    engine_send(&state, aiya_audio::EngineCommand::Stop);
+    {
+        let mut actor = state.player.lock().expect("player poisoned");
+        actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::ReplaceAll {
+            tracks: vec![],
+            start: 0,
+        }));
+    }
+    drive_and_emit(&state, &app)
+}
+
+/// 旧 UI 的回报通道（<audio> 出口时代）；引擎在 Rust 后只剩诊断价值。
+#[tauri::command]
+fn player_report(state: State<'_, AppState>, report: Value) -> Value {
+    let kind = report.get("kind").and_then(|k| k.as_str()).unwrap_or("").to_string();
+    tracing::debug!(kind, "player_report (legacy)");
+    let _ = &state;
+    ok(json!({ "received": true }))
 }
 
 #[tauri::command]
@@ -747,11 +1065,87 @@ pub fn run() {
             let artwork_dir = default_artwork_dir(&app.handle());
             let _ = std::fs::create_dir_all(artwork_dir.join("originals"));
             let _ = std::fs::create_dir_all(artwork_dir.join("thumbs"));
+            let engine = aiya_audio::Engine::spawn()
+                .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
             app.manage(AppState {
                 db: Mutex::new(db),
                 db_path,
                 artwork_dir,
+                player: Mutex::new(aiya_player::PlayerActor::new()),
+                engine: Mutex::new(engine),
                 scanning: AtomicBool::new(false),
+            });
+
+            // 引擎事件泵：EngineEvent → Actor 归约 → player:state 事件。
+            // Position 节流到 500ms（渲染循环节拍是 ~10ms，UI 不需要那么密）。
+            let pump = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                    let Some(engine) = pump.try_state::<AppState>() else { continue };
+                    let events: Vec<aiya_audio::EngineEvent> = {
+                        let engine_guard = engine.engine.lock().expect("engine poisoned");
+                        let mut out = Vec::new();
+                        while let Some(ev) = engine_guard.try_recv() {
+                            out.push(ev);
+                        }
+                        out
+                    };
+                    if events.is_empty() {
+                        continue;
+                    }
+                    let mut should_emit = false;
+                    {
+                        let mut actor = engine.player.lock().expect("player poisoned");
+                        for ev in events {
+                            match ev {
+                                aiya_audio::EngineEvent::Loaded { duration_ms } => {
+                                    let token = actor.state().token;
+                                    actor.reduce(aiya_player::PlayerCommand::Loaded {
+                                        token,
+                                        duration_ms,
+                                    });
+                                    should_emit = true;
+                                }
+                                aiya_audio::EngineEvent::Position { position_ms } => {
+                                    // 节流：距上次快照 >500ms 才落 Actor 并广播
+                                    let last = actor.state().updated_at;
+                                    let now_ms = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis() as u64;
+                                    if now_ms >= last + 500 {
+                                        actor.reduce(aiya_player::PlayerCommand::Position {
+                                            position_ms,
+                                        });
+                                        should_emit = true;
+                                    }
+                                }
+                                aiya_audio::EngineEvent::Eof => {
+                                    let token = actor.state().token;
+                                    actor.reduce(aiya_player::PlayerCommand::Ended { token });
+                                    should_emit = true;
+                                }
+                                aiya_audio::EngineEvent::StateChanged { playing } => {
+                                    // Pause/Resume 由命令路径处理；这里对齐引擎侧被动变化
+                                    let _ = playing;
+                                }
+                                aiya_audio::EngineEvent::Error { message } => {
+                                    actor.reduce(aiya_player::PlayerCommand::Failed { message });
+                                    should_emit = true;
+                                }
+                            }
+                        }
+                    }
+                    if should_emit {
+                        let actor = engine.player.lock().expect("player poisoned");
+                        let snapshot = actor.state();
+                        drop(actor);
+                        if let Ok(v) = serde_json::to_value(&snapshot) {
+                            let _ = pump.emit("player:state", v);
+                        }
+                    }
+                }
             });
             Ok(())
         })
@@ -777,6 +1171,23 @@ pub fn run() {
             playlist_create,
             player_state,
             player_queue,
+            player_play_tracks,
+            player_play_query,
+            player_toggle,
+            player_next,
+            player_prev,
+            player_seek,
+            player_set_volume,
+            player_toggle_mute,
+            player_set_rate,
+            player_set_repeat,
+            player_set_shuffle,
+            player_enqueue,
+            player_insert_next,
+            player_remove_at,
+            player_move,
+            player_clear,
+            player_report,
             lyrics_get,
             history_stats,
             history_clear,
