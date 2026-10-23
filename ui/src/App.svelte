@@ -985,7 +985,6 @@
     onqueue={() => togglePanel('queue')}
     ontogglelyrics={() => togglePanel('lyrics')}
     ontogglespectrum={() => togglePanel('spectrum')}
-    onreveal={() => void revealTrack(playerState?.current?.id ?? null)}
   />
 </div>
 

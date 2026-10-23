@@ -1037,6 +1037,10 @@ body.is-dragging {
 
 .now .meta {
   min-width: 0;
+  /* container-type 会让内容尺寸被抑制（contain: inline-size），
+     flex 里 flex-basis:auto 就成了 0 —— 必须显式 flex:1 占位，
+     否则 .title（自身 overflow:hidden）宽度 0 被整行裁掉 */
+  flex: 1;
   /* container query 的基准：窄到放不下时隐藏规格文字，徽章保留 */
   container-type: inline-size;
 }

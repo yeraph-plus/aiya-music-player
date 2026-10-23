@@ -34,7 +34,6 @@
     onqueue: () => void;
     ontogglelyrics: () => void;
     ontogglespectrum: () => void;
-    onreveal: () => void;
   }
 
   let {
@@ -55,7 +54,6 @@
     onqueue,
     ontogglelyrics,
     ontogglespectrum,
-    onreveal,
   }: Props = $props();
 
   let dragging = $state(false);
@@ -118,9 +116,7 @@
       </div>
       <div class="line2">
         {#if player?.current}
-          <button class="link artist" onclick={onreveal} title="在文件夹中显示">
-            {player.current.artist ?? '未知艺人'}
-          </button>
+          <span class="artist">{player.current.artist ?? '未知艺人'}</span>
           {#if badge}
             <span class="fmt-badge" class:hires={audio ? isHiRes(audio) : false} title={tooltip ?? ''}>
               {badge}
