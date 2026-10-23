@@ -110,7 +110,7 @@ fn render_loop(cmd_rx: Receiver<EngineCommand>, ev_tx: Sender<EngineEvent>) {
     'outer: loop {
         // 命令循环：等 Load 或 Shutdown（Load 前到的 SetRate 暂存，进 play_file 生效）
         let mut pending_rate: f32 = 1.0;
-        let path = loop {
+        let mut path = loop {
             match cmd_rx.recv() {
                 Ok(EngineCommand::Load(p)) => break p,
                 Ok(EngineCommand::SetRate(r)) => pending_rate = r.clamp(0.5, 2.0),
@@ -122,17 +122,37 @@ fn render_loop(cmd_rx: Receiver<EngineCommand>, ev_tx: Sender<EngineEvent>) {
             }
         };
 
-        match play_file(&cmd_rx, &send, &path, pending_rate) {
-            Ok(()) => {}
-            Err(e) => {
-                tracing::error!(%path, error = %e, "engine stream failed");
-                send(EngineEvent::Error { message: e.to_string() });
-                // 回到命令循环等下一条 Load（设备恢复）
+        // play_file 内部收到的新 Load 在这里续播（path 从 play_file 带回，
+        // 不能在内部丢弃 —— 否则那条 Load 凭空消失，外层 recv() 永远等不到）。
+        loop {
+            match play_file(&cmd_rx, &send, &path, pending_rate) {
+                Ok(LoadExit::Finished) => break, // EOF/Stop/错误恢复：回顶层等下一条 Load
+                Ok(LoadExit::NewLoad { path: p, rate }) => {
+                    path = p;
+                    pending_rate = rate;
+                }
+                Ok(LoadExit::Shutdown) => break 'outer,
+                Err(e) => {
+                    tracing::error!(%path, error = %e, "engine stream failed");
+                    send(EngineEvent::Error { message: e.to_string() });
+                    // 回到命令循环等下一条 Load（设备恢复）
+                    break;
+                }
             }
         }
     }
 
     { let _ = wasapi::deinitialize(); }
+}
+
+/// play_file 的退出原因。NewLoad 必须把 path/rate 带回外层续播。
+enum LoadExit {
+    /// EOF / Stop / 设备错误：回命令循环等下一条 Load
+    Finished,
+    /// 播放中收到新 Load：直接换曲续播
+    NewLoad { path: String, rate: f32 },
+    /// 收到 Shutdown：终止渲染线程
+    Shutdown,
 }
 
 fn handle_preload(cmd: &EngineCommand, send: &impl Fn(EngineEvent)) {
@@ -149,7 +169,7 @@ fn play_file(
     send: &impl Fn(EngineEvent),
     path: &str,
     initial_rate: f32,
-) -> Result<(), AudioError> {
+) -> Result<LoadExit, AudioError> {
     let mut decoder = Decoder::open(Path::new(path))?;
     send(EngineEvent::Loaded { duration_ms: decoder.duration_ms });
 
@@ -233,9 +253,14 @@ fn play_file(
                     user_stopped = true;
                     break;
                 }
-                Ok(EngineCommand::Load(_)) | Ok(EngineCommand::Shutdown) => {
-                    // 交给外层：先把当前流收尾，外层循环重新进入
-                    return finalize(client, result);
+                Ok(EngineCommand::Load(p)) => {
+                    // 换曲：停流后把新 path 带回外层续播（绝不能在此丢弃）
+                    let _ = client.stop_stream();
+                    return Ok(LoadExit::NewLoad { path: p, rate });
+                }
+                Ok(EngineCommand::Shutdown) => {
+                    let _ = client.stop_stream();
+                    return Ok(LoadExit::Shutdown);
                 }
                 Ok(_) => {}
                 Err(_) => break,
@@ -245,10 +270,11 @@ fn play_file(
             send(EngineEvent::StateChanged { playing: false });
             send(EngineEvent::Eof); // Stop 视为曲目结束（PlayerActor 决定下一动作）
             let _ = client.stop_stream().map_err(wasapi_err);
-            return Ok(());
+            return Ok(LoadExit::Finished);
         }
         if result.is_err() {
-            return finalize(client, result);
+            let _ = client.stop_stream();
+            return Err(result.unwrap_err());
         }
         if paused {
             continue;
@@ -332,19 +358,10 @@ fn play_file(
             send(EngineEvent::Position { position_ms: decoder.duration_ms });
             send(EngineEvent::StateChanged { playing: false });
             send(EngineEvent::Eof);
-            // EOF 后回命令循环等下一条 Load（外层 'outer）
-            return Ok(());
+            // EOF 后回命令循环等下一条 Load
+            return Ok(LoadExit::Finished);
         }
     }
-}
-
-/// 收尾：停流并返回原 result（用于把内部错误传出）。
-fn finalize(
-    client: wasapi::AudioClient,
-    result: Result<(), AudioError>,
-) -> Result<(), AudioError> {
-    let _ = client.stop_stream();
-    result
 }
 
 /// 播放位置（源时间轴毫秒）：解码位置减去池内未播样本的源时长。
