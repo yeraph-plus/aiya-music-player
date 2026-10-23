@@ -1,0 +1,19 @@
+[package]
+name = "aiya-data"
+version.workspace = true
+edition.workspace = true
+description = "AIYA Music 数据层：SQLite v1、Repository、扫描、设置。不依赖 Tauri 与音频平台细节。"
+
+[dependencies]
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+walkdir.workspace = true
+lofty.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
