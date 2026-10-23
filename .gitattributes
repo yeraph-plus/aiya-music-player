@@ -1,0 +1,21 @@
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.wav binary
+*.flac binary
+*.mp3 binary
+*.m4a binary
+*.ogg binary
+*.opus binary
+*.dll binary
+*.exe binary
+*.node binary
+*.sqlite binary
+
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf

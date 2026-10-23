@@ -1,0 +1,39 @@
+# Rust
+/target/
+**/target/
+*.pdb
+*.ilk
+
+# Node / Tauri
+node_modules/
+ui/dist/
+ui/.vite/
+src-tauri/gen/
+src-tauri/target/
+*.tsbuildinfo
+
+# Local data / logs / caches
+/data/
+/backups/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.log
+
+# Fixtures: keep small manifests, ignore generated media
+/fixtures/generated/
+/fixtures/media/
+/fixtures/legacy/*.sqlite
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.local
+
+# Secrets / signing
+*.pfx
+*.p12
+.env
+.env.*
