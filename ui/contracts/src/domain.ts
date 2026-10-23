@@ -365,3 +365,56 @@ export interface BeetsStatus {
   errorMessage: string | null;
 }
 
+/* ---------------- beets 导入预览（docs/08 §3.2 事件协议） ---------------- */
+
+/** 单曲级标签（当前与候选同形，UI 才能逐字段对齐） */
+export interface TrackMeta {
+  title: string | number | null;
+  artist: string | null;
+  album: string | null;
+  albumartist: string | null;
+  year: number | null;
+  track: number | null;
+  disc: number | null;
+  genre: string | null;
+  path?: string;
+  length?: number;
+}
+
+export interface CandidatePreview {
+  id: string;
+  /** 0–1，1 - distance；低置信度 UI 不默认勾选 */
+  confidence: number;
+  fromScratch: boolean;
+  extraItems: number;
+  extraTracks: number;
+  album: {
+    id: string | null;
+    album: string | null;
+    artist: string | null;
+    year: number | null;
+    genre: string | null;
+    dataSource: string | null;
+    tracks: TrackMeta[];
+  };
+  /** item.path → 候选 TrackInfo（逐曲对齐） */
+  mapping: Record<string, TrackMeta>;
+}
+
+export interface AlbumPreview {
+  id: string;
+  paths: string[];
+  /** strong / medium / low / none；低置信度不默认勾选 */
+  recommendation: 'strong' | 'medium' | 'low' | 'none';
+  current: { album: string | null; artist: string | null; tracks: TrackMeta[] };
+  candidates: CandidatePreview[];
+}
+
+/** `beets:import` 事件流（sidecar 逐行转发） */
+export type BeetsImportEvent =
+  | { type: 'progress'; session: string; stage: string; current: number; total: number; path: string | null }
+  | { type: 'album'; session: string; album: AlbumPreview }
+  | { type: 'albumError'; session: string; stage: string; path: string; beets_message: string }
+  | { type: 'done'; session: string; albums: number }
+  | { type: 'sessionEnd' };
+

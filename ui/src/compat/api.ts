@@ -5,6 +5,7 @@ import {
   ok,
   type AiyaApi,
   type AppSettings,
+  type BeetsImportEvent,
   type BeetsStatus,
   type Diagnostics,
   type HistoryStats,
@@ -85,6 +86,9 @@ export function installApi(): void {
   const onState = (cb: (state: PlayerState) => void): (() => void) =>
     mock ? mock.emitter.on(EV_PLAYER_STATE, cb as (p: unknown) => void) : onTauriEvent(EV_PLAYER_STATE, cb);
 
+  const onBeetsImport = (cb: (evt: BeetsImportEvent) => void): (() => void) =>
+    mock ? mock.emitter.on('beets:import', cb as (p: unknown) => void) : onTauriEvent('beets:import', cb);
+
   const api: AiyaApi = {
     library: {
       list: (query?: TrackQuery) => call('library_list', { query }) as Promise<IpcResult<import('@aiya/contracts').TrackPage>>,
@@ -161,6 +165,9 @@ export function installApi(): void {
       setSettings: (settings: AppSettings) => call('app_set_settings', { settings }) as Promise<IpcResult<AppSettings>>,
       diagnostics: () => call('app_diagnostics') as Promise<IpcResult<Diagnostics>>,
       beetsStatus: () => call('beets_status') as Promise<IpcResult<BeetsStatus>>,
+      beetsPreview: (paths: string[]) =>
+        call('beets_preview', { paths }) as Promise<IpcResult<{ started: boolean }>>,
+      onBeetsImport,
     },
   };
 
@@ -277,6 +284,8 @@ function mockDispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>
       return mock.setSettings(a.settings as AppSettings);
     case 'app_diagnostics':
       return mock.diagnostics();
+    case 'beets_preview':
+      return ok({ started: true });
     case 'beets_status':
       return ok({
         found: true,

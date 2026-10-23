@@ -202,6 +202,16 @@ fn beets_status(app: AppHandle) -> Value {
     }
 }
 
+/// 启动一次只读预览（B1）：事件流走 `beets:import`。
+/// 未装 beets → E_BEETS_NOT_FOUND（UI 显示指引）。
+#[tauri::command]
+fn beets_preview(app: AppHandle, paths: Vec<String>) -> Value {
+    match beets::start_preview(app, paths) {
+        Ok(()) => ok(json!({ "started": true })),
+        Err(e) => fail("E_BEETS_NOT_FOUND", &e),
+    }
+}
+
 #[tauri::command]
 fn library_list(state: State<'_, AppState>, query: Value) -> Value {
     let q: TrackWindowQuery = match serde_json::from_value(query) {
@@ -1370,6 +1380,7 @@ pub fn run() {
             app_diagnostics,
             app_open_data_dir,
             beets_status,
+            beets_preview,
             library_list,
             library_tracks,
             library_stats,

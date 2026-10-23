@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  BeetsImportEvent,
   BeetsStatus,
   Diagnostics,
   LibraryStats,
@@ -133,7 +134,7 @@ export interface UiState {
   /** 上次停留的视图：'library' | 'recent' | 'mostPlayed' | 'playlist:<id>' */
   view?: string;
   /** 上次打开的右侧面板 */
-  sidePanel?: 'queue' | 'lyrics' | 'spectrum' | null;
+  sidePanel?: 'queue' | 'lyrics' | 'spectrum' | 'import' | null;
 }
 
 export interface PlaylistAddResult {
@@ -255,6 +256,10 @@ export interface AiyaApi {
     diagnostics(): Promise<IpcResult<Diagnostics>>;
     /** beets 环境探测（低频；设置页打开时调用） */
     beetsStatus(): Promise<IpcResult<BeetsStatus>>;
+    /** 启动一次只读导入预览；事件流走 onBeetsImport */
+    beetsPreview(paths: string[]): Promise<IpcResult<{ started: boolean }>>;
+    /** beets 导入预览事件流（progress/album/albumError/done/sessionEnd） */
+    onBeetsImport(callback: (evt: BeetsImportEvent) => void): () => void;
   };
 }
 

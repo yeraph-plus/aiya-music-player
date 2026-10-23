@@ -26,7 +26,7 @@ class UiStore {
   direction = $state<'asc' | 'desc'>('asc');
   artistId = $state<string | null>(null);
   albumId = $state<string | null>(null);
-  sidePanel = $state<'queue' | 'lyrics' | 'spectrum' | null>(null);
+  sidePanel = $state<'queue' | 'lyrics' | 'spectrum' | 'import' | null>(null);
 
   settings = $state<AppSettings>({ ...DEFAULT_SETTINGS });
   playlists = $state<PlaylistSummary[]>([]);

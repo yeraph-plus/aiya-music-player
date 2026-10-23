@@ -9,7 +9,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// 设置页 beets 状态区数据源。serde 进 IPC：camelCase 契约（铁律）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,6 +207,88 @@ pub fn probe(app: &tauri::AppHandle) -> BeetsStatus {
         error_code: Some("E_BEETS_NOT_FOUND".into()),
         error_message: last_err,
     }
+}
+
+/* ---------------- B1：preview_import 会话（事件流转发） ---------------- */
+
+/// 启动一次 preview_import：一次性子进程，stdout 每行 = 一个事件，
+/// 逐行转发到 Tauri 事件 `beets:import`。完成（进程退出）后自动回收。
+///
+/// 低频操作，不值得养常驻会话；每命令 ~300ms 的 Python 启动开销可接受。
+/// 返回 ok=false 表示没找到可用解释器（UI 显示指引）。
+pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
+    let script = ensure_script(&app)?;
+    let script_str = script.to_string_lossy().into_owned();
+
+    // 快速探测：第一个能 status 成功的解释器（无 beets 也会答 not_found 信封，
+    // 那种解释器对 preview 同样没用，要跳过）
+    let mut python: Option<String> = None;
+    for cand in interpreter_candidates() {
+        if let Ok(s) = query_sidecar(&cand, &script_str, Duration::from_secs(10)) {
+            if s.found {
+                python = Some(cand);
+                break;
+            }
+        }
+    }
+    let Some(python) = python else {
+        return Err("no beets interpreter available".into());
+    };
+
+    let mut child = std::process::Command::new(&python)
+        .arg(&script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        // AIYA_BEETS_DIR 设置时映射成 BEETSDIR（dev 隔离库）；否则用用户真实环境
+        .envs(
+            std::env::var("AIYA_BEETS_DIR")
+                .ok()
+                .map(|d| ("BEETSDIR".to_string(), d))
+                .into_iter(),
+        )
+        .spawn()
+        .map_err(|e| format!("spawn beets sidecar: {e}"))?;
+
+    use std::io::Write;
+    let mut stdin = child.stdin.take().expect("stdin piped");
+    let req = serde_json::json!({ "id": 1, "cmd": "preview_import", "paths": paths });
+    writeln!(stdin, "{req}").map_err(|e| format!("写请求: {e}"))?;
+    // 不 drop stdin：sidecar 处理完这条命令后事件流结束、进程自然退出前会阻塞
+    // 在下一行 read 上——所以这里显式 drop，sidecar 的 stdin EOF 后循环结束退出
+    drop(stdin);
+
+    let mut stdout = child.stdout.take().expect("stdout piped");
+    let emit_app = app.clone();
+    std::thread::Builder::new()
+        .name("beets-preview-reader".into())
+        .spawn(move || {
+            use std::io::BufRead;
+            let reader = std::io::BufReader::new(&mut stdout);
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                match serde_json::from_str::<serde_json::Value>(trimmed) {
+                    Ok(evt) => {
+                        let _ = emit_app.emit("beets:import", evt);
+                    }
+                    Err(e) => {
+                        tracing::warn!(%e, %trimmed, "beets sidecar 非法事件行，忽略");
+                    }
+                }
+            }
+            // stdin 已关，sidecar 处理完请求后 EOF 退出；收尸防僵尸
+            let _ = child.wait();
+            let _ = emit_app.emit(
+                "beets:import",
+                serde_json::json!({ "type": "sessionEnd" }),
+            );
+        })
+        .map_err(|e| format!("起 reader 线程: {e}"))?;
+    Ok(())
 }
 
 #[cfg(test)]

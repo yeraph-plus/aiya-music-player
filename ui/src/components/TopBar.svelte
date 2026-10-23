@@ -22,6 +22,7 @@
     onsettings: () => void;
     onchooseroot: () => void;
     onscan: () => void;
+    onimport: () => void;
   }
 
   let {
@@ -37,6 +38,7 @@
     onsettings,
     onchooseroot,
     onscan,
+    onimport,
   }: Props = $props();
 
   let input = $state<HTMLInputElement | null>(null);
@@ -69,6 +71,9 @@
   {/if}
 
   <span class="stats">{total > 0 ? `${total} 首` : ''}</span>
+  <button class="icon-btn" onclick={onimport} title="导入整理（beets）" aria-label="导入整理">
+    <Icon name="folder" size={15} />
+  </button>
   <button class="icon-btn" onclick={onsettings} title="设置" aria-label="设置">
     <Icon name="settings" size={15} />
   </button>

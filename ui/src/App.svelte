@@ -23,6 +23,7 @@
   import ViewHeader from './components/ViewHeader.svelte';
   import PlayerBar from './components/PlayerBar.svelte';
   import QueuePanel from './components/QueuePanel.svelte';
+  import ImportPanel from './components/ImportPanel.svelte';
   import LyricsPanel from './components/LyricsPanel.svelte';
   import SettingsPanel from './components/SettingsPanel.svelte';
   import ContextMenu from './components/ContextMenu.svelte';
@@ -817,6 +818,7 @@
       onsettings={() => void ui.openSettings()}
       onchooseroot={chooseRoot}
       onscan={startScan}
+      onimport={() => togglePanel('import')}
     />
 
     <ViewHeader
@@ -950,6 +952,8 @@
       engine={settings.spectrumEngine}
       onclose={() => (ui.sidePanel = null)}
     />
+  {:else if sidePanel === 'import'}
+    <ImportPanel onclose={() => (ui.sidePanel = null)} />
   {/if}
 
   {#if selectionSet.size > 0}
