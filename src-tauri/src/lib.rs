@@ -690,8 +690,11 @@ fn fetch_track_refs(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_pla
     state
         .db()
         .send(move |conn| {
+            // 音频规格列一并带出：PlayerState.current 是播放条唯一数据源，
+            // 徽章/规格/Hi-Res 判定都靠 current.audio（contracts Track.audio）
             let mut stmt = conn.prepare(
-                "SELECT t.id, t.title, ar.name, al.title, t.duration_ms, t.artwork_id, t.gain_db, t.path
+                "SELECT t.id, t.title, ar.name, al.title, t.duration_ms, t.artwork_id, t.gain_db, t.path,
+                        t.codec, t.container, t.sample_rate, t.bits_per_sample, t.bitrate, t.channels
                  FROM tracks t
                  LEFT JOIN artists ar ON ar.id = t.artist_id
                  LEFT JOIN albums al ON al.id = t.album_id
@@ -700,6 +703,20 @@ fn fetch_track_refs(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_pla
             let mut out = Vec::with_capacity(ids.len());
             for id in &ids {
                 let row = stmt.query_row([id], |r| {
+                    let codec: Option<String> = r.get(8)?;
+                    let container: Option<String> = r.get(9)?;
+                    let audio = if codec.is_some() || container.is_some() {
+                        Some(aiya_player::TrackAudio {
+                            codec,
+                            container,
+                            sample_rate: r.get(10)?,
+                            bits_per_sample: r.get(11)?,
+                            bitrate: r.get(12)?,
+                            channels: r.get(13)?,
+                        })
+                    } else {
+                        None
+                    };
                     Ok(aiya_player::TrackRef {
                         id: r.get(0)?,
                         title: r.get(1)?,
@@ -708,6 +725,7 @@ fn fetch_track_refs(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_pla
                         duration_ms: r.get(4)?,
                         artwork_id: r.get(5)?,
                         gain_db: r.get(6)?,
+                        audio,
                         path: r.get(7)?,
                     })
                 });

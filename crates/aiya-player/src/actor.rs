@@ -472,6 +472,7 @@ mod tests {
             duration_ms: Some(180_000),
             artwork_id: None,
             gain_db: None,
+            audio: None,
             path: format!("D:/m/{id}.flac"),
         }
     }

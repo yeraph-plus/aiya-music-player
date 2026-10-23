@@ -8,5 +8,6 @@ pub mod state;
 
 pub use actor::PlayerActor;
 pub use state::{
-    PlaybackStatus, PlayerCommand, PlayerState, QueueOp, QueueSnapshot, RepeatMode, TrackRef,
+    PlaybackStatus, PlayerCommand, PlayerState, QueueOp, QueueSnapshot, RepeatMode, TrackAudio,
+    TrackRef,
 };
