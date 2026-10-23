@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  BeetsStatus,
   Diagnostics,
   Lyrics,
   PlaylistSummary,
@@ -31,6 +32,7 @@ class UiStore {
   playlists = $state<PlaylistSummary[]>([]);
   diagnostics = $state<Diagnostics | null>(null);
   settingsOpen = $state(false);
+  beets = $state<BeetsStatus | null>(null);
 
   lyrics = $state<Lyrics | null>(null);
   lyricsLoading = $state(false);
@@ -107,11 +109,20 @@ class UiStore {
     this.diagnostics = null;
     const result = await window.api.app.diagnostics();
     if (result.ok) this.diagnostics = result.data;
+    void this.refreshBeets();
   }
 
   async refreshDiagnostics(): Promise<void> {
     const result = await window.api.app.diagnostics();
     if (result.ok) this.diagnostics = result.data;
+    void this.refreshBeets();
+  }
+
+  /** beets 环境探测（低频：设置页打开/手动刷新时） */
+  async refreshBeets(): Promise<void> {
+    this.beets = null;
+    const result = await window.api.app.beetsStatus();
+    if (result.ok) this.beets = result.data;
   }
 
   /* ---------------- 歌单 ---------------- */

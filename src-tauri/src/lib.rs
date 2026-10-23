@@ -16,6 +16,7 @@ use aiya_data::ids;
 use aiya_data::repo::{self, TrackWindowQuery};
 use aiya_data::scanner;
 
+mod beets;
 mod sidecar;
 
 /* ---------------- IpcResult 信封（与 contracts/ipc.ts 同构） ---------------- */
@@ -191,6 +192,15 @@ fn app_open_data_dir(state: State<'_, AppState>) -> Value {
 }
 
 /* ---------------- library 命令 ---------------- */
+
+/// beets 环境状态（设置页诊断区）。低频查询，每次现查（探测 + 一次 status 往返）。
+#[tauri::command]
+fn beets_status(app: AppHandle) -> Value {
+    match serde_json::to_value(beets::probe(&app)) {
+        Ok(v) => ok(v),
+        Err(e) => fail("E_INTERNAL", &e.to_string()),
+    }
+}
 
 #[tauri::command]
 fn library_list(state: State<'_, AppState>, query: Value) -> Value {
@@ -1359,6 +1369,7 @@ pub fn run() {
             app_set_settings,
             app_diagnostics,
             app_open_data_dir,
+            beets_status,
             library_list,
             library_tracks,
             library_stats,

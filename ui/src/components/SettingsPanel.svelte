@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AppSettings, Diagnostics, ShortcutAction } from '@aiya/contracts';
+  import type { AppSettings, BeetsStatus, Diagnostics, ShortcutAction } from '@aiya/contracts';
   import {
     SHORTCUT_ACTIONS,
     SHORTCUT_LABELS,
@@ -14,6 +14,7 @@
   interface Props {
     settings: AppSettings;
     diagnostics: Diagnostics | null;
+    beets: BeetsStatus | null;
     onclose: () => void;
     onsave: (next: AppSettings) => void;
     onrefresh: () => void;
@@ -21,7 +22,16 @@
     onopendatadir: () => void;
   }
 
-  let { settings, diagnostics, onclose, onsave, onrefresh, onclearhistory, onopendatadir }: Props =
+  let {
+    settings,
+    diagnostics,
+    beets,
+    onclose,
+    onsave,
+    onrefresh,
+    onclearhistory,
+    onopendatadir,
+  }: Props =
     $props();
 
   type Tab = 'appearance' | 'playback' | 'system' | 'shortcuts' | 'diagnostics';
@@ -312,6 +322,36 @@
           <div class="dim">
             播放中不应休眠（允许熄屏）；托盘图标只在"关闭窗口时最小化到托盘"打开时存在。
           </div>
+        </div>
+
+        <div class="diag-block">
+          <div class="diag-head">
+            beets 集成
+            {#if beets === null}
+              <span class="dim">探测中…</span>
+            {:else if beets.found}
+              <span>beets {beets.beetsVersion} · Python {beets.pythonVersion}</span>
+            {:else}
+              <span class="danger">未找到 beets</span>
+            {/if}
+          </div>
+          {#if beets?.found}
+            <div class="diag-grid">
+              <div class="wide"><span>曲库</span><b class="path" title={beets.libraryPath ?? ''}>{beets.libraryExists ? shortenPath(beets.libraryPath ?? '') : '尚未创建（首次导入时生成）'}</b></div>
+              <div class="wide"><span>插件</span><b>{beets.plugins?.length ? beets.plugins.join(', ') : '无'}</b></div>
+              <div class="wide"><span>配置目录</span><b class="path" title={beets.configDir ?? ''}>{shortenPath(beets.configDir ?? '')}</b></div>
+            </div>
+            <div class="dim">标签匹配/候选/diff 由 beets 完成（写权威）；未安装时播放功能不受影响。</div>
+          {:else if beets}
+            <div class="dim">
+              安装后重启应用即可启用导入整理功能：
+              <code>pipx install beets</code> 或 <code>uv tool install beets</code>（推荐），
+              或 <code>pip install beets</code>。
+              {#if beets.errorMessage}
+                <br /><span class="danger">{beets.errorMessage}</span>
+              {/if}
+            </div>
+          {/if}
         </div>
 
         <div class="diag-block">

@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  BeetsStatus,
   Diagnostics,
   LibraryStats,
   ListDensity,
@@ -252,6 +253,8 @@ export interface AiyaApi {
     getSettings(): Promise<IpcResult<AppSettings>>;
     setSettings(settings: AppSettings): Promise<IpcResult<AppSettings>>;
     diagnostics(): Promise<IpcResult<Diagnostics>>;
+    /** beets 环境探测（低频；设置页打开时调用） */
+    beetsStatus(): Promise<IpcResult<BeetsStatus>>;
   };
 }
 

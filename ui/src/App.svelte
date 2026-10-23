@@ -1116,6 +1116,7 @@
   <SettingsPanel
     {settings}
     {diagnostics}
+    beets={ui.beets}
     onclose={() => (ui.settingsOpen = false)}
     onsave={applySettings}
     onrefresh={() => void ui.refreshDiagnostics()}

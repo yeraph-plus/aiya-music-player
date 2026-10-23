@@ -346,3 +346,22 @@ export interface Diagnostics {
   };
 }
 
+/**
+ * beets 环境状态（sidecar status 的结构化结果；docs/08-beets.md B0）。
+ * found=false 时播放功能不受影响，设置页只显示安装指引。
+ */
+export interface BeetsStatus {
+  found: boolean;
+  interpreter: string | null;
+  scriptPath: string | null;
+  protocolVersion: number | null;
+  beetsVersion: string | null;
+  pythonVersion: string | null;
+  libraryPath: string | null;
+  libraryExists: boolean | null;
+  plugins: string[] | null;
+  configDir: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+

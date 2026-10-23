@@ -5,6 +5,7 @@ import {
   ok,
   type AiyaApi,
   type AppSettings,
+  type BeetsStatus,
   type Diagnostics,
   type HistoryStats,
   type IpcResult,
@@ -159,6 +160,7 @@ export function installApi(): void {
       getSettings: () => call('app_get_settings') as Promise<IpcResult<AppSettings>>,
       setSettings: (settings: AppSettings) => call('app_set_settings', { settings }) as Promise<IpcResult<AppSettings>>,
       diagnostics: () => call('app_diagnostics') as Promise<IpcResult<Diagnostics>>,
+      beetsStatus: () => call('beets_status') as Promise<IpcResult<BeetsStatus>>,
     },
   };
 
@@ -275,6 +277,21 @@ function mockDispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>
       return mock.setSettings(a.settings as AppSettings);
     case 'app_diagnostics':
       return mock.diagnostics();
+    case 'beets_status':
+      return ok({
+        found: true,
+        interpreter: 'mock-python',
+        scriptPath: 'mock://beets_sidecar.py',
+        protocolVersion: 1,
+        beetsVersion: '2.14.1',
+        pythonVersion: '3.14.0',
+        libraryPath: 'C:/mock/beets/library.db',
+        libraryExists: true,
+        plugins: ['fetchart', 'lyrics'],
+        configDir: 'C:/mock/beets',
+        errorCode: null,
+        errorMessage: null,
+      });
     default:
       throw new Error(`mock 未实现的命令：${cmd}`);
   }
