@@ -47,13 +47,12 @@ ui/src/
     artwork.ts            artworkUrl()（从 contracts 搬来，唯一源）
     keyboard/             快捷键注册表 + 冲突检测（从 App.svelte 抽出）
   stores/
-    player.svelte.ts      直连 ipc.player.* + events.playerState（合帧）
-    library.svelte.ts     直连 ipc.library.*（游标分页）
-    playlists.svelte.ts   直连 ipc.playlist.*
-    ui.svelte.ts          view / 侧栏 / 面板开关 / 主题（zod 校验边界）
-    selection.svelte.ts   纯内存，原样保留
-    beets.svelte.ts       直连 ipc.beets.* + events.beetsImport
-    history.svelte.ts     直连 ipc.history.*
+    player.svelte.ts      直连 ipc.player.* + events.playerState（rAF 合帧）✓
+    library.svelte.ts     直连 ipc.library.* + events.scanProgress ✓
+    ui.svelte.ts          view / 侧栏 / 面板 / 设置 / 歌单 / 歌词 / 诊断 ✓
+    selection.svelte.ts   纯内存，原样保留 ✓
+    beets-session.svelte.ts  直连 ipc.beets.* + events.beetsImport ✓
+    history.svelte.ts     批次 3 接历史视图时再拆（现在只有 clear 一个调用）
   views/
     LibraryView.svelte    曲目表（TrackList 的宿主）
     PlaylistView.svelte
@@ -104,11 +103,70 @@ ui/src/
 与新文件合集做多重集比对，245 = 245 无差异。
 
 ### 批次 2 · 数据层换血（关键一步）
-- [ ] `player` store 改直连 `ipc.player.*` + `events.playerState`（10 Hz 合帧）
-- [ ] `library` store 改直连 `ipc.library.list`（游标分页，`TrackQueryInput`）
-- [ ] `ui` store 的 `getSettings/setSettings` 走 `ipc.app.*` + `settingsSchema` 校验
-- [ ] `playlists` / `history` / `beets` store 从组件里抽出来（现在散在面板里）
-- [ ] 验收：`grep -r "window.api" ui/src` 只剩 `compat/` 自身；功能无回归
+- [x] `player` store 改直连 `ipc.player.*` + `events.playerState`（10 Hz 合帧）
+- [x] `library` store 改直连 `ipc.library.*`（游标分页，`TrackQueryInput`）
+- [x] `ui` store 的 `getSettings/setSettings` 走 `ipc.app.*` + `settingsSchema` 校验
+- [x] `beets` store 承接命令（`chooseAndPreview/apply/cancel/syncNow`），`ImportPanel` 归零
+- [x] `history` 暂不单独建 store（只有 `clear` 一个写操作，理由见下）
+- [x] 验收：`grep -r "window.api" ui/src` 只剩 `compat/` 自身 —— **实测 0 处**
+
+#### 2.1 与计划的偏差
+
+**`history` store 没拆**：计划里写"playlists / history / beets 从组件里抽出来"，
+但实测 `history` 只有 `clear()` 一个调用，真正的历史视图（播放次数榜）在批次 3
+才落地。为一个 `clear` 建空 store 是仪式感，先留在 `library.clearHistory()`，
+批次 3 接 `history.stats` 时再拆（已在代码注释里写明）。
+
+**顺便删掉 4 个死文件**：`player` store 一旦不再用 AudioSink，
+`lib/audio-sink.ts` → `compat/audio-sink.ts` → `compat/spectrum.ts` /
+`lib/spectrum.ts` 就是一条闭合的死链（`AnalyserSource` 无人实例化，
+WebView 里早就没有音频图）。留着不仅浪费打包体积，还会让"`window.api`
+只出现在 compat"这条验收线上多一个假阳性。
+
+#### 2.2 播放器 store 的三处结构变化
+
+1. **`<audio>` 元素和 `AudioSink` 一起删了**。ADR-0006 之后音频在 Rust 出声，
+   `<audio>` 是死挂载点、`AudioSink.apply()` 是空实现。旧代码里
+   `player.init(audioEl)` 还带个 `if (audioEl)` 守卫 —— 元素一旦没绑上，
+   整个状态订阅就不启动。现在 `init(hooks)` 没有可空的入参。
+2. **10 Hz 事件用 rAF 合帧**：事件先写非响应式快照，rAF 刷进 `$state`。
+   但 `onState` 观察者（系统媒体中心）**同步**调用，不等 rAF ——
+   窗口隐藏时浏览器把 rAF 降到 0，而 OS 的媒体卡片必须立刻知道换歌了。
+   UI 落后一帧没观感影响，两者需求不一致，分开处理。
+3. **`alignVolume` / `setNormalization` 删除**：Rust 侧注释自己写着
+   "旧 UI 侧 setNormalization 已是 no-op"，归一化由 `normalizeVolume`
+   设置标志驱动（`lib.rs` 事件泵每拍读）。UI 再"对齐"一次只会制造第二条真相。
+
+#### 2.3 错误语义：什么时候抛、什么时候降级
+
+新契约失败即 reject（`ApiError`），所以每个调用点都要表态。本批的分工：
+
+| 场景 | 处理 | 理由 |
+|---|---|---|
+| 列表 / 播放 / 歌单 CRUD / 清空历史 / 扫描 | **抛出** → 调用方写错误条 | 用户显式动作，失败必须让他看到 |
+| 播放条单键命令（播放/暂停/音量/静音…） | `catch` → `console.warn` | 按不动不会崩，状态里已体现；但绝不能变 unhandled rejection |
+| 统计 / 扫描进度 / 数据目录 / 诊断 / beets 探测 | 降级为空 | 侧栏统计拉不到不该挡住整个界面 |
+| 歌词 | 降级为空态 | 没有 `.lrc` 是常态（纯音乐） |
+
+#### 2.4 类型归位时挖出的两个真问题
+
+类型对齐不是收尾工作，它是**本批最有价值的产出**——两处旧类型在说谎：
+
+1. **`PlayerState.current` 在 `contracts` 里被声明成完整 `Track`**
+   （带 `artistId` / `albumId` / `trackNo` / `addedAtMs` 等 9 个字段），
+   而 Rust 实际下发的是 `TrackRef`（只有 8 个字段，且**不含 path**）。
+   也就是说 `playerState.current.artistId` 一直是 `undefined`，类型却说是
+   `string | null`。现在 `PlayerState` 全部改用生成类型，谎话消除。
+2. **`AudioFormat.lossless` 在 Rust 侧根本不存在**
+   （`crates/aiya-player/src/state.rs` 的 `TrackAudio` 没有这个字段）。
+   而 contracts 把它当必填，`isHiRes()` / `audioTooltip()` 全靠它分流
+   —— 于是 Tauri 版播放条的无损/有损徽章**一直是"未知"**，
+   这是从 v1 重写时丢掉的功能，被类型分叉藏了一个多月。
+   本批只把类型改成可选（如实反映 payload），**功能恢复记在 §9 待办**。
+
+这两处都验证了 §1 表格里那句"`ui/contracts/` 与生成类型重复且已分叉"——
+分叉的方向是旧类型「更乐观」，正好是最容易静默错误的那个方向。
+不做这批，批次 4 删 `contracts/` 时会一次性炸掉，而那时更难分辨是重构错还是类型错。
 
 ### 批次 3 · 拆 `App.svelte`
 - [ ] 视图路由改成 `views/`（`LibraryView` 先行：曲目表 + 表头 + 批量栏）
@@ -212,7 +270,7 @@ npm run probe:ui -- --actions    # 追加面板开关交互序列
 | 批次 | 状态 | 验证 |
 |---|---|---|
 | 1 地基 | **完成** | `check` 0/0；CSS 构建产物 31845 字节逐字节一致；`probe:ui` 无异常、面板开关链路 4/4 |
-| 2 数据层换血 | 待开始 | — |
+| 2 数据层换血 | **完成** | `window.api` 业务代码归零；208 测试 / 0 警告；真窗口走通设置读写 + 事件链路（见 §8.3） |
 | 3 拆 `App.svelte` | 待开始 | — |
 | 4 删旧壳 | 待开始 | — |
 
@@ -248,3 +306,53 @@ npm run probe:ui -- --actions    # 追加面板开关交互序列
 
 反面判据：如果某个回调在壳里能只用 store 实现（比如播放条 15 个按钮、
 队列的删除/拖拽/清空），就**不进 prop**，直接在壳里调 store。
+
+### 8.3 批次 2 实际改了什么
+
+| 文件 | 变化 |
+|---|---|
+| `stores/player.svelte.ts` | 重写：`ipc.player.*` + `events.playerState`（rAF 合帧）；删 `AudioSink`/`audioEl`/`alignVolume`/`setNormalization` |
+| `stores/library.svelte.ts` | 重写：`ipc.library.*`；`scan:progress` 动态载荷按结构读（缺字段按 0） |
+| `stores/ui.svelte.ts` | 重写：`ipc.app.*` / `ipc.playlist.*` / `ipc.lyrics.*`；`mergeSettings()` 用默认值兜老配置 |
+| `stores/beets-session.svelte.ts` | 新增 `chooseAndPreview/apply/cancel/syncNow`，`events.beetsImport` |
+| `components/ImportPanel.svelte` | 5 个命令调用全删，只剩「动作 → store」 |
+| `lib/errors.ts` | 新增：`errorMessage/isNotFound/isBusy/isRetryable`（`ApiError` 不是 `Error` 实例） |
+| `lib/spectrum-source.ts` | `AnalyserSource` → `RemoteSpectrumSource`（订阅 `spectrum:frame`，按需开 tap） |
+| `lib/lyrics-loader.ts` | 取数签名 `Promise<IpcResult<Lyrics>>` → `Promise<Lyrics>` |
+| `main.ts` | 去掉 `window.api.app.initialLook`（顺带修正注释：`__AIYA_LOOK__` 后端从来没注入过） |
+| 删除 | `lib/spectrum.ts`、`lib/audio-sink.ts`、`compat/audio-sink.ts`、`compat/spectrum.ts`（死链） |
+| 类型 | `PlayerState` / `Diagnostics` 改用生成类型；`AudioFormat.lossless` 改为可选（见 §2.4） |
+
+**真窗口验证证据**（`probe:ui` + 脚本点击，不是"看着对"）：
+
+| 验证项 | 结果 |
+|---|---|
+| 设置面板 → `app_diagnostics` | 显示真值：`版本 0.1.0` / `Electron tauri` / `Schema v2` / `DB 144.1 KB` / 媒体流与系统集成块有数据 |
+| `beets_status` | `beets 2.14.1 · Python 3.14.7`，库路径与配置目录都填上了 |
+| 主题往返（`app_set_settings`） | 点「浅色」→ `<html data-theme=light>`；点「深色」→ `dark` |
+| 设置落库 | `settings` 表 `app_settings` 行 `theme=dark`，且 `output` 等默认字段齐全（合并逻辑生效） |
+| UI 状态落库（`app_set_ui_state`） | `ui_state` 行 `sidePanel=queue`、`view=library`、`sort=title` —— 面板开关的防抖写入通 |
+| `player:state` → rAF → UI | 点「静音」：按钮 title `静音 → 取消静音 → 静音`（事件链路 + 合帧端到端） |
+| console / 异常 | 0 error、0 warning、0 未捕获异常 |
+
+### 8.4 浏览器预览从此没有数据
+
+按拍板结论，批次 2 起 `npm run dev:ui`（只跑 vite，不是 Tauri）会渲染出空列表：
+新 `ipc` 客户端只走 `invoke`，非 Tauri 环境必失败。这是**有意接受**的过渡状态，
+批次 4 把 `MockBackend` 搬到 `lib/ipc/mock` 下做一次派发表再接上。
+日常开发/验收一律用 `npm run dev`（真窗口）+ `npm run probe:ui`。
+
+## 9. 遗留（本轮明确不做，别忘）
+
+1. **`TrackAudio.lossless` 功能缺失**（§2.4 第 2 条）：Rust 侧按 codec 派生
+   无损/有损并加进 DTO，然后 `npm run gen:types` 重新生成、把
+   `AudioFormat.lossless` 的 `?` 去掉。涉及 `crates/aiya-player/src/state.rs`
+   + 两处 `TrackAudio` 构造点（`src-tauri/src/lib.rs`）。
+2. **诊断页三个数组恒为空**：`list_timings / recent_errors / shortcut_conflicts`
+   在 `lib.rs` 里是 `Vec::new()`，DTO 只能导出 `unknown[]`，
+   `SettingsPanel` 目前用本地视图类型 + 一次显式转换顶上。等真的做采集时补 DTO。
+3. **`PlayerState.index/cursor` 的 `-1` 哨兵**：换 `Option` 要重写状态机的下标算术。
+4. **`__AIYA_LOOK__` 没有注入**：浅色主题启动会闪一帧深色（`main.ts` 注释已改成实情）。
+5. **`player_report` 的形状未定**：v1 遗留诊断通道，`ipc.player.report` 收 `DynamicJson`。
+6. **`complex` 参数仍收 `Json`**：`query` / `settings` / `options` / `decisions`
+   是刻意不收紧的（docs/17 §3.1），别"顺手"改成强类型。

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { AppSettings, BeetsStatus, Diagnostics, ShortcutAction } from '@aiya/contracts';
+  import type { AppSettings, BeetsStatus, ShortcutAction } from '@aiya/contracts';
+  import type { Diagnostics } from '../lib/ipc/generated/Diagnostics';
   import {
     SHORTCUT_ACTIONS,
     SHORTCUT_LABELS,
@@ -33,6 +34,22 @@
     onopendatadir,
   }: Props =
     $props();
+
+  /**
+   * 诊断页两张表的数据形状。
+   *
+   * 为什么要在前端定义：Rust `Diagnostics` 的 `list_timings` / `recent_errors` /
+   * `shortcut_conflicts` 是 `Vec<serde_json::Value>`，ts-rs 只能导出 `unknown[]`，
+   * 而这三个数组在 `src-tauri/src/lib.rs` 里**恒为 `Vec::new()`**（还没实现采集）。
+   * 所以这里按 UI 实际消费的字段声明视图类型 + 一次显式转换：
+   * 空数组转换成空数组是无害的；等后端真的填数据时，补 DTO 并把这两行删掉
+   * （记在 docs/18 §9 的遗留项里）。
+   */
+  type TimingRow = { at: number; source: string; rows: number; total: number; tookMs: number };
+  type ErrorRow = { at: number; message: string };
+
+  const listTimings = $derived((diagnostics?.listTimings ?? []) as TimingRow[]);
+  const recentErrors = $derived((diagnostics?.recentErrors ?? []) as ErrorRow[]);
 
   type Tab = 'appearance' | 'playback' | 'system' | 'shortcuts' | 'diagnostics';
   let tab = $state<Tab>('appearance');
@@ -371,13 +388,13 @@
 
         <div class="diag-block">
           <div class="diag-head">最近查询<span class="dim">越多越慢时说明该看索引了</span></div>
-          {#if diagnostics.listTimings.length === 0}
+          {#if listTimings.length === 0}
             <div class="dim">还没有记录</div>
           {:else}
             <table class="diag-table">
               <thead><tr><th>时间</th><th>来源</th><th>行数</th><th>总数</th><th>耗时</th></tr></thead>
               <tbody>
-                {#each diagnostics.listTimings.slice(0, 8) as timing (timing.at + String(timing.rows))}
+                {#each listTimings.slice(0, 8) as timing (timing.at + String(timing.rows))}
                   <tr>
                     <td>{formatDateTime(timing.at)}</td>
                     <td>{timing.source}</td>
@@ -393,11 +410,11 @@
 
         <div class="diag-block">
           <div class="diag-head">最近错误<span class="dim">最多保留 30 条</span></div>
-          {#if diagnostics.recentErrors.length === 0}
+          {#if recentErrors.length === 0}
             <div class="dim">没有错误</div>
           {:else}
             <ul class="error-list">
-              {#each diagnostics.recentErrors as item (item.at + item.message)}
+              {#each recentErrors as item (item.at + item.message)}
                 <li><span class="dim">{formatDateTime(item.at)}</span> {item.message}</li>
               {/each}
             </ul>

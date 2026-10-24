@@ -1,71 +1,85 @@
-import type { LibraryStats, ScanProgress, TrackPage, TrackQuery } from '@aiya/contracts';
+import type { TrackQueryInput } from '../lib/ipc/client';
+import { events, ipc } from '../lib/ipc';
+import type { LibraryStats } from '../lib/ipc/generated/LibraryStats';
+import type { TrackPage } from '../lib/ipc/generated/TrackPage';
+import type { TrackDetail } from '../lib/ipc/generated/TrackDetail';
+import type { ScanResult } from '../lib/ipc/generated/ScanResult';
+import { errorMessage } from '../lib/errors';
 
 /**
- * 曲库 store：统计、扫描进度、数据目录。
+ * 曲库 store：统计、扫描进度、数据目录、分页取数。
  *
- * 扫描进度的订阅收敛在这里（window.api.library.onScanProgress）；
- * 扫描完成后的联动（统计/歌单/列表刷新）通过 `onScanDone` 回调
- * 交回 App——store 不持有列表刷新逻辑。
+ * 失败约定：只有 `list` / `idsForSelection` 这类"要弹错误条"的方法**抛出**
+ * （调用方 catch 后展示），其余（统计、进度、信息）失败只降级不抛 ——
+ * 侧栏统计拉不到不该挡住整个界面。
+ *
+ * 扫描进度的事件形状随扫描器演化（`scan:progress` 是动态载荷），
+ * 这里按结构读到啥用啥，字段缺失就当 0（`scanned ?? 0`）。
  */
 class LibraryStore {
   stats = $state<LibraryStats | null>(null);
-  scan = $state<ScanProgress | null>(null);
+  scan = $state<ScanProgressView | null>(null);
   dataDir = $state<string | null>(null);
 
   readonly scanning = $derived(this.scan?.phase === 'walking' || this.scan?.phase === 'parsing');
 
   async loadStats(): Promise<void> {
-    const result = await window.api.library.stats();
-    if (result.ok) this.stats = result.data;
+    try {
+      this.stats = await ipc.library.stats();
+    } catch (e) {
+      console.warn('library.stats failed:', errorMessage(e));
+    }
   }
 
-  /** 分页列表（TrackWindow 与 App.reload 共用这一个入口） */
-  async list(query: TrackQuery): Promise<{ ok: true; page: TrackPage } | { ok: false; message: string }> {
-    const result = await window.api.library.list(query);
-    return result.ok
-      ? { ok: true, page: result.data }
-      : { ok: false, message: result.error.message };
+  /** 分页列表（TrackWindow 与 App.reload 共用这一个入口）。失败抛出，由调用方决定怎么显示 */
+  async list(query: TrackQueryInput): Promise<TrackPage> {
+    return ipc.library.list(query);
   }
 
-  /** 在系统文件管理器中定位曲目；未定位出时给出原因 */
+  /** 按 ID 批量取（含音频规格）。失败降级为空数组：队列面板少一行说明比整块报错好 */
+  async tracks(ids: string[]): Promise<TrackDetail[]> {
+    try {
+      return await ipc.library.tracks(ids);
+    } catch (e) {
+      console.warn('library.tracks failed:', errorMessage(e));
+      return [];
+    }
+  }
+
+  /** 在系统文件管理器中定位曲目；`revealed=false` 时看 `reason`（不是错误） */
   async revealTrack(trackId: string | null): Promise<{ revealed: boolean; reason?: string } | null> {
     if (!trackId) return null;
-    const result = await window.api.library.revealTrack(trackId);
-    return result.ok ? result.data : null;
+    try {
+      const result = await ipc.library.revealTrack(trackId);
+      return result.revealed ? { revealed: true } : { revealed: false, reason: result.reason ?? undefined };
+    } catch (e) {
+      return { revealed: false, reason: errorMessage(e) };
+    }
   }
 
-  /** 从曲库移除（只删索引，不动磁盘文件） */
-  async removeTracks(ids: string[]): Promise<{ ok: true; removed: number } | { ok: false; message: string }> {
-    const result = await window.api.library.removeTracks(ids);
-    return result.ok
-      ? { ok: true, removed: result.data.removed }
-      : { ok: false, message: result.error.message };
+  /** 从曲库移除（只删索引，不动磁盘文件）。失败抛出 */
+  async removeTracks(ids: string[]): Promise<number> {
+    const result = await ipc.library.removeTracks(ids);
+    return result.removed;
   }
 
   /** 打开系统目录选择器；用户取消返回 null */
-  async chooseRoot(): Promise<{ ok: true; path: string | null } | { ok: false; message: string }> {
-    const result = await window.api.library.chooseRoot();
-    return result.ok
-      ? { ok: true, path: result.data?.path ?? null }
-      : { ok: false, message: result.error.message };
-  }
-
-  /** 按 ID 批量取曲目（队列面板补齐展示字段用） */
-  async tracks(ids: string[]): Promise<import('@aiya/contracts').Track[]> {
-    const result = await window.api.library.tracks(ids);
-    return result.ok ? result.data : [];
+  async chooseRoot(): Promise<string | null> {
+    const chosen = await ipc.library.chooseRoot();
+    return chosen?.path ?? null;
   }
 
   /** 订阅扫描进度；返回清理函数 */
   watchScan(onDone: () => void): () => void {
-    return window.api.library.onScanProgress((progress) => {
+    return events.scanProgress((raw) => {
+      const progress = readScanProgress(raw);
       this.scan = progress;
       if (progress.phase === 'done') onDone();
     });
   }
 
-  /** 手动触发扫描；失败时清掉本地进度并把错误交回调用方 */
-  async startScan(): Promise<{ ok: boolean; message?: string }> {
+  /** 手动触发扫描。阻塞到结束（进度走事件）；失败时清掉本地进度并抛出 */
+  async startScan(): Promise<ScanResult> {
     this.scan = {
       phase: 'walking',
       scanned: 0,
@@ -76,34 +90,72 @@ class LibraryStore {
       currentPath: null,
       elapsedMs: 0,
     };
-    const result = await window.api.library.scan();
-    if (!result.ok) {
+    try {
+      return await ipc.library.scan();
+    } catch (e) {
       this.scan = null;
-      return { ok: false, message: result.error.message };
+      throw e;
     }
-    return { ok: true };
   }
 
   cancelScan(): void {
-    void window.api.library.cancelScan();
+    void ipc.library.scanCancel().catch((e) => console.warn('scanCancel failed:', errorMessage(e)));
   }
 
   /** 应用信息（dataDir 用于侧栏展示） */
   async fetchInfo(): Promise<string | null> {
-    const result = await window.api.app.info();
-    return result.ok ? result.data.dataDir : null;
+    try {
+      const info = await ipc.app.info();
+      return info.dataDir;
+    } catch (e) {
+      console.warn('app.info failed:', errorMessage(e));
+      return null;
+    }
   }
 
-  /** 选择集下标 → 曲目 ID（主进程按同一查询换算，渲染层不拉整库） */
-  async idsForSelection(query: TrackQuery, indices: number[]): Promise<string[] | null> {
-    const result = await window.api.library.idsForSelection({ query, indices });
-    return result.ok ? result.data : null;
+  /** 选择集下标 → 曲目 ID（后端按同一查询换算，渲染层不拉整库）。失败抛出 */
+  async idsForSelection(query: TrackQueryInput, indices: number[]): Promise<string[]> {
+    return ipc.library.idsForSelection({ query, indices });
   }
 
-  async clearHistory(): Promise<{ ok: boolean; message?: string }> {
-    const result = await window.api.history.clear();
-    return result.ok ? { ok: true } : { ok: false, message: result.error.message };
+  /**
+   * 清空播放历史。失败抛出（调用方要给用户看到"没清掉"）。
+   *
+   * 放在这里而不是单独建 `history` store：目前历史只有一个写操作，
+   * 真正的历史视图（播放次数榜）在批次 3 才落地，届时再按 docs/18 §2
+   * 拆出 `history.svelte.ts` 一并接 `history.stats` —— 现在拆是空壳。
+   */
+  async clearHistory(): Promise<void> {
+    await ipc.history.clear();
   }
+}
+
+/** 扫描进度的视图形状（事件载荷是动态 JSON，这里定义读出来的结构） */
+export interface ScanProgressView {
+  phase: string;
+  scanned: number;
+  total: number | null;
+  imported: number;
+  skipped: number;
+  failed: number;
+  currentPath: string | null;
+  elapsedMs: number;
+}
+
+/** 动态载荷 → 视图形状：缺字段不报错，按 0/null 处理 */
+function readScanProgress(raw: unknown): ScanProgressView {
+  const o = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const num = (key: string): number => (typeof o[key] === 'number' ? (o[key] as number) : 0);
+  return {
+    phase: typeof o.phase === 'string' ? o.phase : 'unknown',
+    scanned: num('scanned'),
+    total: typeof o.total === 'number' ? o.total : null,
+    imported: num('imported'),
+    skipped: num('skipped'),
+    failed: num('failed'),
+    currentPath: typeof o.currentPath === 'string' ? o.currentPath : null,
+    elapsedMs: num('elapsedMs'),
+  };
 }
 
 export const library = new LibraryStore();

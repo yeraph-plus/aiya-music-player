@@ -46,32 +46,8 @@
     onsynced?.();
   });
 
-  async function chooseAndPreview(): Promise<void> {
-    beets.lastError = null;
-    let picked_dir: Awaited<ReturnType<typeof window.api.library.chooseRoot>>;
-    try {
-      picked_dir = await window.api.library.chooseRoot();
-    } catch (err) {
-      beets.lastError = err instanceof Error ? err.message : String(err);
-      return;
-    }
-    if (!picked_dir.ok || !picked_dir.data) return;
-    // 清掉上一轮会话数据，发起预览
-    beets.reset();
-    let result: Awaited<ReturnType<typeof window.api.app.beetsPreview>>;
-    try {
-      result = await window.api.app.beetsPreview([picked_dir.data.path]);
-    } catch (err) {
-      beets.lastError = err instanceof Error ? err.message : String(err);
-      return;
-    }
-    if (!result.ok) {
-      beets.lastError = result.error.message;
-      beets.phase = 'failed';
-      return;
-    }
-    beets.phase = 'previewing';
-  }
+  // 取数全部在 store 里：本组件只发动作、只读快照（docs/18 §4.1）
+  const chooseAndPreview = (): Promise<void> => beets.chooseAndPreview();
 
   /** 单张专辑的决策：有选中候选就应用，否则跳过（动作跟随 moveMode） */
   function decisionFor(album: AlbumPreview): ApplyDecision {
@@ -100,56 +76,14 @@
   }
 
   async function applyDecisions(decisions: ApplyDecision[]): Promise<void> {
-    beets.lastError = null;
-    beets.results = {};
-    beets.applySummary = null;
-    beets.synced = null;
-    let result: Awaited<ReturnType<typeof window.api.app.beetsApply>>;
-    try {
-      result = await window.api.app.beetsApply(decisions);
-    } catch (err) {
-      beets.lastError = err instanceof Error ? err.message : String(err);
-      return;
-    }
-    if (!result.ok) {
-      beets.lastError = result.error.message;
-      beets.phase = 'failed';
-      return;
-    }
-    beets.phase = 'applying';
+    await beets.apply(decisions);
   }
 
   /** 取消当前预览/应用：sidecar 收尾到最近检查点，已完成部分保留 */
-  async function cancelSession(): Promise<void> {
-    try {
-      const result = await window.api.app.beetsCancel();
-      if (!result.ok) {
-        beets.lastError = result.error.message;
-      }
-    } catch (err) {
-      // 取消失败不阻塞流程，sidecar 会在 sessionEnd 自己收尾
-      console.warn('beetsCancel failed:', err);
-    }
-  }
+  const cancelSession = (): Promise<void> => beets.cancel();
 
   /** 手动全量对齐：beets 库 → 自有读模型（无需先预览） */
-  async function syncNow(): Promise<void> {
-    beets.lastError = null;
-    beets.synced = null;
-    let result: Awaited<ReturnType<typeof window.api.app.beetsSync>>;
-    try {
-      result = await window.api.app.beetsSync();
-    } catch (err) {
-      beets.lastError = err instanceof Error ? err.message : String(err);
-      return;
-    }
-    if (!result.ok) {
-      beets.lastError = result.error.message;
-      beets.phase = 'failed';
-      return;
-    }
-    beets.phase = 'syncing';
-  }
+  const syncNow = (): Promise<void> => beets.syncNow();
 
   function currentMeta(album: AlbumPreview) {
     return album.current;

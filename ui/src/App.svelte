@@ -23,6 +23,7 @@
   import ConfirmDialog from './components/ConfirmDialog.svelte';
   import PlaylistPicker from './components/PlaylistPicker.svelte';
   import { artworkUrl } from './lib/artwork';
+  import { errorMessage } from './lib/errors';
   import { TrackWindow } from './lib/track-window';
   import { accentForArtwork } from './lib/accent';
   import { listKeyIntent } from './lib/list-keys';
@@ -55,9 +56,9 @@
     fetchPage: async (offset, limit) => {
       // parseTrackQuery：offset 模式的查询带 offset 覆盖，直接展开会被
       // 判别联合的 cursor 分支拒绝（旧 demo 未跑 svelte-check，遗留于此）
-      const result = await library.list(parseTrackQuery({ ...currentQuery(), offset, limit }));
-      if (!result.ok) throw new Error(result.message);
-      return { items: result.page.items, total: result.page.total };
+      // 失败直接抛：TrackWindow 自己会把列表切到"重试"态
+      const page = await library.list(parseTrackQuery({ ...currentQuery(), offset, limit }));
+      return { items: page.items, total: page.total };
     },
   });
 
@@ -98,7 +99,6 @@
   let listMenu = $state<{ x: number; y: number; playlist: PlaylistSummary } | null>(null);
   let dialog = $state<Dialog>(null);
 
-  let audioEl = $state<HTMLAudioElement | null>(null);
   /** 顶栏实例：快捷键 focusSearch 需要把焦点交给它的输入框 */
   let topBar = $state<{ focus: () => void } | null>(null);
 
@@ -152,21 +152,17 @@
     loadingView = true;
     error = null;
     try {
-      const result = await library.list(currentQuery());
+      const page = await library.list(currentQuery());
       if (generation !== reloadGeneration) return;
-      if (!result.ok) {
-        error = result.message;
-        return;
-      }
-      listStore.reset(result.page.total);
-      listStore.primePage(0, result.page.items);
-      total = result.page.total;
+      listStore.reset(page.total);
+      listStore.primePage(0, page.items);
+      total = page.total;
       selection.clear();
       if (options.restore) restoreScrollTop = lastScrollTop;
       else restoreScrollTop = 0;
     } catch (err) {
       if (generation !== reloadGeneration) return;
-      error = err instanceof Error ? err.message : String(err);
+      error = errorMessage(err);
     } finally {
       if (generation === reloadGeneration) loadingView = false;
       booted = true;
@@ -217,21 +213,28 @@
   async function playIndex(index: number): Promise<void> {
     error = null;
     selection.clear();
-    const result = await player.playQuery(currentQuery(), index);
-    if (!result.ok) error = result.message ?? '播放失败';
+    try {
+      await player.playQuery(currentQuery(), index);
+    } catch (err) {
+      error = errorMessage(err);
+    }
   }
 
   async function playAll(): Promise<void> {
     if (total === 0) return;
     selection.clear();
-    const result = await player.playQuery(currentQuery(), 0);
-    if (!result.ok) error = result.message ?? '播放失败';
+    try {
+      await player.playQuery(currentQuery(), 0);
+    } catch (err) {
+      error = errorMessage(err);
+    }
   }
 
   async function playQueueAt(index: number): Promise<void> {
-    const result = await player.playTracks(queueIds, index);
-    if (result && typeof result === 'object' && 'ok' in result && !result.ok) {
-      error = '播放失败';
+    try {
+      await player.playTracks(queueIds, index);
+    } catch (err) {
+      error = errorMessage(err);
     }
   }
 
@@ -255,66 +258,62 @@
 
   async function resolveSelectionIds(): Promise<string[]> {
     if (selection.size === 0) return [];
-    const ids = await library.idsForSelection(currentQuery(), selection.sortedIndices());
-    if (!ids) {
-      error = '获取选中曲目失败';
+    try {
+      return await library.idsForSelection(currentQuery(), selection.sortedIndices());
+    } catch (err) {
+      error = errorMessage(err);
       return [];
     }
-    return ids;
   }
 
   async function batchEnqueue(): Promise<void> {
     const ids = await resolveSelectionIds();
     if (ids.length === 0) return;
     try {
-      const result = await player.enqueue(ids);
-      // 信封不 ok 视为失败，走错误条；reject 已在下方 catch
-      if (result && typeof result === 'object' && 'ok' in result && !result.ok) {
-        error = '加入队列失败';
-        return;
-      }
+      await player.enqueue(ids);
       showToast(`已加入队列 ${ids.length} 首`);
       selection.clear();
     } catch (err) {
-      console.warn('batchEnqueue failed:', err);
-      error = '加入队列失败';
+      error = errorMessage(err);
     }
   }
 
   async function batchPlay(): Promise<void> {
     const ids = await resolveSelectionIds();
     if (ids.length === 0) return;
-    const result = await player.playTracks(ids, 0);
-    if (result && typeof result === 'object' && 'ok' in result && !result.ok) {
-      error = '播放失败';
+    try {
+      await player.playTracks(ids, 0);
+      selection.clear();
+    } catch (err) {
+      error = errorMessage(err);
     }
-    selection.clear();
   }
 
   async function batchAddToPlaylist(playlistId: string): Promise<void> {
     const ids = await resolveSelectionIds();
     dialog = null;
     if (ids.length === 0) return;
-    const result = await ui.addTracks(playlistId, ids);
-    if (!result.ok) {
-      error = result.message ?? '添加失败';
-      return;
+    try {
+      const added = await ui.addTracks(playlistId, ids);
+      await ui.refreshPlaylists();
+      showToast(`新增 ${added.added} 首，跳过 ${added.skipped} 首`);
+      selection.clear();
+    } catch (err) {
+      error = errorMessage(err);
     }
-    await ui.refreshPlaylists();
-    showToast(`新增 ${result.added} 首，跳过 ${result.skipped} 首`);
-    selection.clear();
   }
 
   async function removeTracksByIds(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
-    const result = await library.removeTracks(ids);
     dialog = null;
-    if (!result.ok) {
-      error = result.message;
+    try {
+      const removed = await library.removeTracks(ids);
+      showToast(`已移出曲库 ${removed} 首`);
+      selection.clear();
+    } catch (err) {
+      error = errorMessage(err);
       return;
     }
-    showToast(`已移出曲库 ${result.removed} 首`);
-    selection.clear();
     await library.loadStats();
     await ui.refreshPlaylists();
     await reload({ restore: true });
@@ -330,20 +329,23 @@
     const current = dialog;
     dialog = null;
     const seed = current?.kind === 'createPlaylist' ? current.seedIds : undefined;
-    const result = await ui.createPlaylist(name, seed);
-    if (!result.ok) {
-      error = result.message;
+    let id: string;
+    try {
+      id = await ui.createPlaylist(name, seed);
+    } catch (err) {
+      error = errorMessage(err);
       return;
     }
     await ui.refreshPlaylists();
-    openPlaylist(result.id);
+    openPlaylist(id);
   }
 
   async function renamePlaylistConfirmed(playlist: PlaylistSummary, name: string): Promise<void> {
     dialog = null;
-    const result = await ui.renamePlaylist(playlist.id, name);
-    if (!result.ok) {
-      error = result.message ?? '重命名失败';
+    try {
+      await ui.renamePlaylist(playlist.id, name);
+    } catch (err) {
+      error = errorMessage(err);
       return;
     }
     await ui.refreshPlaylists();
@@ -351,9 +353,10 @@
 
   async function deletePlaylist(playlist: PlaylistSummary): Promise<void> {
     dialog = null;
-    const result = await ui.removePlaylist(playlist.id);
-    if (!result.ok) {
-      error = result.message ?? '删除失败';
+    try {
+      await ui.removePlaylist(playlist.id);
+    } catch (err) {
+      error = errorMessage(err);
       return;
     }
     await ui.refreshPlaylists();
@@ -365,9 +368,10 @@
   }
 
   async function clearPlaylistItems(playlist: PlaylistSummary): Promise<void> {
-    const result = await ui.clearPlaylist(playlist.id);
-    if (!result.ok) {
-      error = result.message ?? '清空失败';
+    try {
+      await ui.clearPlaylist(playlist.id);
+    } catch (err) {
+      error = errorMessage(err);
       return;
     }
     await ui.refreshPlaylists();
@@ -378,14 +382,15 @@
   async function addTracksToPlaylistById(playlistId: string, ids: string[]): Promise<void> {
     dialog = null;
     if (ids.length === 0) return;
-    const result = await ui.addTracks(playlistId, ids);
-    if (!result.ok) {
-      error = result.message ?? '添加失败';
+    try {
+      const added = await ui.addTracks(playlistId, ids);
+      await ui.refreshPlaylists();
+      showToast(`新增 ${added.added} 首，跳过 ${added.skipped} 首`);
+      selection.clear();
+    } catch (err) {
+      error = errorMessage(err);
       return;
     }
-    await ui.refreshPlaylists();
-    showToast(`新增 ${result.added} 首，跳过 ${result.skipped} 首`);
-    selection.clear();
     if (view.kind === 'playlist' && view.id === playlistId) await reload({ restore: true });
   }
 
@@ -396,9 +401,10 @@
   }
 
   async function clearHistory(): Promise<void> {
-    const result = await library.clearHistory();
-    if (!result.ok) {
-      error = result.message ?? '清空失败';
+    try {
+      await library.clearHistory();
+    } catch (err) {
+      error = errorMessage(err);
       return;
     }
     showToast('播放历史已清空');
@@ -417,9 +423,10 @@
 
   async function movePlaylistItem(from: number, to: number): Promise<void> {
     if (view.kind !== 'playlist') return;
-    const result = await ui.moveItem(view.id, from, to);
-    if (!result.ok) {
-      error = result.message ?? '移动失败';
+    try {
+      await ui.moveItem(view.id, from, to);
+    } catch (err) {
+      error = errorMessage(err);
       return;
     }
     await reload({ restore: true });
@@ -427,9 +434,10 @@
 
   async function removePlaylistItemAt(index: number): Promise<void> {
     if (view.kind !== 'playlist') return;
-    const result = await ui.removeItemAt(view.id, index);
-    if (!result.ok) {
-      error = result.message ?? '移除失败';
+    try {
+      await ui.removeItemAt(view.id, index);
+    } catch (err) {
+      error = errorMessage(err);
       return;
     }
     await ui.refreshPlaylists();
@@ -633,19 +641,20 @@
 
   async function chooseRoot(): Promise<void> {
     error = null;
-    const result = await library.chooseRoot();
-    if (!result.ok) {
-      error = result.message;
-      return;
+    try {
+      const path = await library.chooseRoot();
+      if (path) await startScan();
+    } catch (err) {
+      error = errorMessage(err);
     }
-    if (result.path) await startScan();
   }
 
   async function startScan(): Promise<void> {
     error = null;
-    const result = await library.startScan();
-    if (!result.ok) {
-      error = result.message ?? '扫描失败';
+    try {
+      await library.startScan();
+    } catch (err) {
+      error = errorMessage(err);
       return;
     }
     await library.loadStats();
@@ -683,11 +692,9 @@
     };
   });
 
-  // ReplayGain：只在开启归一化且曲目有增益时才补偿
-  $effect(() => {
-    const gain = settings.normalizeVolume ? (playerState?.current?.gainDb ?? null) : null;
-    player.setNormalization(gain);
-  });
+  // ReplayGain 归一化**不在这里做**：增益在 Rust DSP 链内应用，
+  // 开关由 `app_set_settings` 的设置标志驱动（src-tauri/src/lib.rs 的
+  // 事件泵每拍读 normalizeVolume）。旧 UI 的 setNormalization 早就是 no-op。
 
   /**
    * 系统媒体键开关。
@@ -725,16 +732,14 @@
       }),
     );
 
-    if (audioEl) {
-      unsubscribers.push(
-        player.init(audioEl, {
-          onState: (next) => {
-            stateEventSeen = true;
-            mediaSession?.update(next);
-          },
-        }),
-      );
-    }
+    unsubscribers.push(
+      player.init({
+        onState: (next) => {
+          stateEventSeen = true;
+          mediaSession?.update(next);
+        },
+      }),
+    );
 
     mediaSession = buildMediaSession();
     mediaSessionActions = settings.mediaKeys;
@@ -768,15 +773,10 @@
       if (playerResult && !stateEventSeen) {
         player.state = playerResult;
         mediaSession?.update(playerResult);
+        // 装载由主进程补发的 load 指令完成（attach 时一次性发出）；
+        // 音量/静音/归一化全部以后端状态为准，UI 不再"对齐"一遍
+        // （旧的 alignVolume/setNormalization 在远程出口上本来就是 no-op）
         await player.refreshQueue(playerResult.queueVersion);
-        if (playerResult.current) {
-          // 装载由主进程补发的 load 指令完成（attach 时一次性发出），
-          // 这里只对齐音量与归一化 —— 不再自己拼第二条 load 路径
-          player.alignVolume(playerResult.volume, playerResult.muted);
-          player.setNormalization(
-            settings.normalizeVolume ? (playerResult.current.gainDb ?? null) : null,
-          );
-        }
       }
     })();
 
@@ -1068,4 +1068,3 @@
   />
 {/if}
 
-<audio bind:this={audioEl} preload="metadata"></audio>

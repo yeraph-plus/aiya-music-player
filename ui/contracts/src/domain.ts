@@ -66,8 +66,14 @@ export interface AudioFormat {
    * 无损/有损的分流**只能看这个字段**：有损容器（AAC）也会报
    * `bitsPerSample = 16`（解码器输出位深），按位深判断会把 m4a 标成
    * "44.1 kHz / 16 bit"。
+   *
+   * **`?` 是 2026-10-25 补的，不是手滑**：Rust 生成的 `TrackAudio`
+   * （`crates/aiya-player/src/state.rs`）**没有这个字段** —— Tauri 重写时
+   * 丢了，所以运行期它恒为 `undefined`，判断一律落到"未知"。
+   * 把这里改成可选，是让类型如实反映 payload，而不是继续假装后端有值。
+   * 真正的修法是在 Rust 侧按 codec 派生并加进 DTO（待办见 docs/18 §9）。
    */
-  lossless: boolean | null;
+  lossless?: boolean | null;
 }
 
 export interface AlbumSummary {

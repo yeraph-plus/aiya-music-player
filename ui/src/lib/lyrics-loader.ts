@@ -1,5 +1,4 @@
 import type { Lyrics } from '@aiya/contracts';
-import type { IpcResult } from '@aiya/contracts';
 
 /**
  * 歌词加载状态机。
@@ -25,8 +24,12 @@ export class LyricsLoader {
   private request = 0;
   private state: LyricsState = { lyrics: null, loading: false, trackId: null };
 
+  /**
+   * `fetchLyrics` **失败即抛出**（新契约的 `ApiError`），由 load() 统一吞成空态：
+   * 没有歌词是常态（纯音乐、未匹配到同名 .lrc），不该弹错误条。
+   */
   constructor(
-    private readonly fetchLyrics: (trackId: string) => Promise<IpcResult<Lyrics>>,
+    private readonly fetchLyrics: (trackId: string) => Promise<Lyrics>,
     private readonly emit: (state: LyricsState) => void,
   ) {}
 
@@ -45,9 +48,9 @@ export class LyricsLoader {
     this.publish({ lyrics: null, loading: true, trackId });
 
     void this.fetchLyrics(trackId)
-      .then((result) => {
+      .then((lyrics) => {
         if (ticket !== this.request) return;
-        this.publish({ lyrics: result.ok ? result.data : null, loading: false, trackId });
+        this.publish({ lyrics, loading: false, trackId });
       })
       .catch(() => {
         if (ticket !== this.request) return;

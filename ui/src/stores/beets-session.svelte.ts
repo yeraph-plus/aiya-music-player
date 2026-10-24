@@ -1,4 +1,6 @@
 import type { AlbumPreview, BeetsImportEvent } from '@aiya/contracts';
+import { events, ipc, type ApplyDecision } from '../lib/ipc';
+import { errorMessage } from '../lib/errors';
 
 /**
  * beets 导入会话 store（模块级单例）。
@@ -55,8 +57,90 @@ class BeetsSessionStore {
   syncVersion = $state(0);
 
   constructor() {
-    // window.api 由 compat/install.ts 在任何模块之前同步安装（index.html 先于 main.ts）
-    window.api.app.onBeetsImport((evt) => this.onEvent(evt));
+    // 模块级订阅：面板开关不拆监听（否则刷新/重开面板会丢掉进行中的会话）
+    events.beetsImport((evt) => this.onEvent(evt as unknown as BeetsImportEvent));
+  }
+
+  /* ---------------- 命令 ----------------
+   * 组件只调这四个方法、只读上面的快照，不再自己 invoke（docs/18 §4.1）。
+   * 失败统一写 `lastError` + `phase='failed'`，不抛：会话组件没有 catch 的位置，
+   * 而错误就该显示在面板里（那里已经有一块"需要 beets 2.14+"的提示区）。
+   */
+
+  /**
+   * 面板主按钮：弹目录选择器 → 清空上一轮 → 发起预览。
+   *
+   * 选择器与预览合成一个动作：用户点了"选择文件夹预览"，中途取消就是没发生，
+   * 不该留下半个已重置的会话。目录来自 `library_choose_root`（同一个系统对话框，
+   * 与曲库根目录无关，后端只负责返回路径）。
+   */
+  async chooseAndPreview(): Promise<void> {
+    this.lastError = null;
+    let path: string | null = null;
+    try {
+      const chosen = await ipc.library.chooseRoot();
+      path = chosen?.path ?? null;
+    } catch (e) {
+      this.lastError = errorMessage(e);
+      return;
+    }
+    if (!path) return; // 用户取消：不动会话状态
+    this.reset();
+    await this.preview([path]);
+  }
+
+  /** 选文件夹 → 只读预览。用户取消选择返回 false（不是错误） */
+  async preview(paths: string[]): Promise<boolean> {
+    this.lastError = null;
+    try {
+      await ipc.beets.preview(paths);
+    } catch (e) {
+      this.lastError = errorMessage(e);
+      this.phase = 'failed';
+      return false;
+    }
+    this.phase = 'previewing';
+    return true;
+  }
+
+  /** 应用决策（写标签 + 可选移动/复制 + 随后自动对齐读模型） */
+  async apply(decisions: ApplyDecision[]): Promise<void> {
+    this.lastError = null;
+    this.results = {};
+    this.applySummary = null;
+    this.synced = null;
+    try {
+      await ipc.beets.apply(decisions);
+    } catch (e) {
+      this.lastError = errorMessage(e);
+      this.phase = 'failed';
+      return;
+    }
+    this.phase = 'applying';
+  }
+
+  /** 取消当前预览/应用：sidecar 收尾到最近检查点，已完成部分保留 */
+  async cancel(): Promise<void> {
+    try {
+      await ipc.beets.cancel();
+    } catch (e) {
+      // 取消失败不阻塞流程：sidecar 会在 sessionEnd 自己收尾
+      console.warn('beets.cancel failed:', errorMessage(e));
+    }
+  }
+
+  /** 手动全量对齐：beets 库 → 自有读模型（无需先预览） */
+  async syncNow(): Promise<void> {
+    this.lastError = null;
+    this.synced = null;
+    try {
+      await ipc.beets.sync();
+    } catch (e) {
+      this.lastError = errorMessage(e);
+      this.phase = 'failed';
+      return;
+    }
+    this.phase = 'syncing';
   }
 
   /** 清空会话数据回到 idle（新一轮预览前调用） */

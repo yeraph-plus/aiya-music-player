@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { PlayerState } from '@aiya/contracts';
+  import type { PlayerState } from '../lib/ipc/generated/PlayerState';
   import { artworkUrl } from '../lib/artwork';
   import {
     AUDIO_RATE_MAX,

@@ -1,4 +1,4 @@
-import type { PlayerState } from '@aiya/contracts';
+import type { PlayerState } from './ipc/generated/PlayerState';
 import { ARTWORK_SIZES, artworkUrl } from './artwork';
 import { artworkObjectUrl } from './artwork-blob.js';
 

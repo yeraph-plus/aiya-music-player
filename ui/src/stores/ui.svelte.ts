@@ -1,23 +1,22 @@
-import type {
-  AppSettings,
-  BeetsStatus,
-  Diagnostics,
-  Lyrics,
-  PlaylistSummary,
-  TrackSort,
-  UiState,
-} from '@aiya/contracts';
+import type { AppSettings, BeetsStatus, Lyrics, PlaylistSummary, TrackSort } from '@aiya/contracts';
+import type { Diagnostics } from '../lib/ipc/generated/Diagnostics';
 import { DEFAULT_SETTINGS } from '@aiya/contracts';
+import { ipc, type DynamicJson } from '../lib/ipc';
+import { errorMessage } from '../lib/errors';
+import { devValidate, settingsSchema, uiStateSchema, type UiState } from '../lib/ipc/schema';
 import { LIBRARY_VIEW, parseViewKey, viewKey, type View } from '../lib/view';
 import { LyricsLoader } from '../lib/lyrics-loader';
 
 /**
- * 界面状态 store：视图、搜索排序、筛选、面板、设置、歌单列表、歌词。
+ * 界面状态 store：视图、搜索排序、筛选、面板、设置、歌单列表、歌词、诊断。
  *
- * 这里只持有"是什么"，不持有"怎么取数"——列表刷新（reload/TrackWindow）
- * 仍在 App：store 改完状态后由 App 触发一次 reload。
- * `window.api.app` / `window.api.playlists` / `window.api.lyrics` 的调用
- * 全部收敛在这里。
+ * 这里只持有"是什么"，不持有"列表怎么刷"——reload/TrackWindow 仍在 App：
+ * store 改完状态后由 App 触发一次 reload。
+ *
+ * 动态边界（docs/18 §4.3）：`app_get_settings` / `app_get_ui_state` 返回的是
+ * **无 DTO 的动态 JSON**（老配置文件缺字段是常态），所以这两个走 zod：
+ * 开发期 `devValidate` 报形状不符，生产期只做合并默认值。
+ * 其余命令的返回值都由 Rust 生成类型，不再二次校验。
  */
 class UiStore {
   view = $state<View>(LIBRARY_VIEW);
@@ -41,7 +40,7 @@ class UiStore {
    * 都会调它，晚到的旧请求会被丢弃（详见 lib/lyrics-loader.ts）。
    */
   private readonly lyricsLoader = new LyricsLoader(
-    (trackId) => window.api.lyrics.get(trackId),
+    (trackId) => ipc.lyrics.get(trackId),
     (state) => {
       this.lyrics = state.lyrics;
       this.lyricsLoading = state.loading;
@@ -67,7 +66,10 @@ class UiStore {
         view: viewKey(this.view),
         sidePanel: this.sidePanel,
       };
-      void window.api.app.setUiState(state);
+      // 视图状态丢失不影响可用性，失败只记日志（别打断滚动）
+      void ipc.app.setUiState(state as DynamicJson).catch((e) => {
+        console.warn('setUiState failed:', errorMessage(e));
+      });
     });
   }
 
@@ -83,54 +85,62 @@ class UiStore {
   /* ---------------- 设置 ---------------- */
 
   /**
-   * 必须 snapshot：settings 是 $state，里面的 shortcuts 是 Proxy。
+   * 必须 snapshot：settings 是 `$state`，里面的 `shortcuts` / `output` 是 Proxy。
    * Proxy 过不了结构化克隆，直接 invoke 会抛 "An object could not be cloned."，
-   * 而主题/密度在本地已经生效 —— 于是看起来一切正常，设置却没有落盘。
+   * 而主题/密度在本地已经生效 —— 看起来一切正常，设置却没落盘。
+   *
+   * 先用新值本地生效（主题切换要跟手），再以后端返回的为准：
+   * 后端会补齐默认值/拒绝非法值，这一步是"以磁盘为准"的对账。
    */
   applySettings(next: AppSettings, onError?: (message: string) => void): void {
     this.settings = next;
-    void window.api.app
-      .setSettings($state.snapshot(next) as AppSettings)
-      .then((result) => {
-        if (result.ok) this.settings = result.data;
-        else onError?.(result.error.message);
+    void ipc.app
+      .setSettings($state.snapshot(next) as DynamicJson)
+      .then((raw) => {
+        this.settings = mergeSettings(raw);
       })
-      .catch((err: unknown) => {
-        onError?.(err instanceof Error ? err.message : String(err));
-      });
+      .catch((e) => onError?.(errorMessage(e)));
   }
 
   openDataDir(): void {
-    void window.api.app.openDataDir();
+    void ipc.app.openDataDir().catch((e) => console.warn('openDataDir failed:', errorMessage(e)));
   }
 
   async openSettings(): Promise<void> {
     this.settingsOpen = true;
     this.diagnostics = null;
-    const result = await window.api.app.diagnostics();
-    if (result.ok) this.diagnostics = result.data;
-    void this.refreshBeets();
+    await this.refreshDiagnostics();
   }
 
   async refreshDiagnostics(): Promise<void> {
-    const result = await window.api.app.diagnostics();
-    if (result.ok) this.diagnostics = result.data;
+    try {
+      this.diagnostics = await ipc.app.diagnostics();
+    } catch (e) {
+      console.warn('diagnostics failed:', errorMessage(e));
+      this.diagnostics = null;
+    }
     void this.refreshBeets();
   }
 
-  /** beets 环境探测（低频：设置页打开/手动刷新时） */
+  /** beets 环境探测（低频：设置页打开/手动刷新时；最坏 ~30s，必须容错） */
   async refreshBeets(): Promise<void> {
     this.beets = null;
-    const result = await window.api.app.beetsStatus();
-    if (result.ok) this.beets = result.data;
+    try {
+      this.beets = await ipc.beets.status();
+    } catch (e) {
+      console.warn('beets.status failed:', errorMessage(e));
+    }
   }
 
   /* ---------------- 歌单 ---------------- */
 
   async refreshPlaylists(): Promise<void> {
-    const result = await window.api.playlists.list();
-    if (!result.ok) return;
-    this.playlists = result.data;
+    try {
+      this.playlists = await ipc.playlist.list();
+    } catch (e) {
+      console.warn('playlist.list failed:', errorMessage(e));
+      return;
+    }
     const view = this.view;
     if (view.kind === 'playlist' && !this.playlists.some((item) => item.id === view.id)) {
       this.view = LIBRARY_VIEW;
@@ -141,91 +151,91 @@ class UiStore {
     return this.playlists.find((item) => item.id === id) ?? null;
   }
 
-  /* ---------------- 歌单 CRUD（调用方负责随后的 refresh/reload） ---------------- */
+  /* ---------------- 歌单 CRUD（调用方负责随后的 refresh/reload） ----------------
+   * 全部抛出：歌单操作是用户显式动作，失败必须让他看到。
+   */
 
-  async createPlaylist(name: string, trackIds?: string[]): Promise<{ ok: true; id: string } | { ok: false; message: string }> {
-    const result = await window.api.playlists.create(name, trackIds);
-    return result.ok
-      ? { ok: true, id: result.data.id }
-      : { ok: false, message: result.error.message };
+  async createPlaylist(name: string, trackIds?: string[]): Promise<string> {
+    const created = await ipc.playlist.create(name, trackIds);
+    return created.id;
   }
 
-  async renamePlaylist(id: string, name: string): Promise<{ ok: boolean; message?: string }> {
-    const result = await window.api.playlists.rename(id, name);
-    return result.ok ? { ok: true } : { ok: false, message: result.error.message };
+  async renamePlaylist(id: string, name: string): Promise<void> {
+    await ipc.playlist.rename(id, name);
   }
 
-  async removePlaylist(id: string): Promise<{ ok: boolean; message?: string }> {
-    const result = await window.api.playlists.remove(id);
-    return result.ok ? { ok: true } : { ok: false, message: result.error.message };
+  async removePlaylist(id: string): Promise<void> {
+    await ipc.playlist.remove(id);
   }
 
-  async clearPlaylist(id: string): Promise<{ ok: boolean; message?: string }> {
-    const result = await window.api.playlists.clear(id);
-    return result.ok ? { ok: true } : { ok: false, message: result.error.message };
+  async clearPlaylist(id: string): Promise<void> {
+    await ipc.playlist.clear(id);
   }
 
-  async addTracks(
-    id: string,
-    trackIds: string[],
-  ): Promise<{ ok: true; added: number; skipped: number } | { ok: false; message: string }> {
-    const result = await window.api.playlists.addTracks(id, trackIds);
-    return result.ok
-      ? { ok: true, added: result.data.added, skipped: result.data.skipped }
-      : { ok: false, message: result.error.message };
+  /** 返回新增/跳过计数（`addTracks` 的去重结果，UI 要原样告诉用户） */
+  async addTracks(id: string, trackIds: string[]): Promise<{ added: number; skipped: number }> {
+    const result = await ipc.playlist.addTracks(id, trackIds);
+    return { added: result.added, skipped: result.skipped };
   }
 
-  async moveItem(id: string, from: number, to: number): Promise<{ ok: boolean; message?: string }> {
-    const result = await window.api.playlists.move(id, from, to);
-    return result.ok ? { ok: true } : { ok: false, message: result.error.message };
+  async moveItem(id: string, from: number, to: number): Promise<void> {
+    await ipc.playlist.move(id, from, to);
   }
 
-  /** 侧栏歌单整体排序 */
+  /** 侧栏歌单整体排序：后端回排好的完整列表，省一次 roundtrip */
   async reorderPlaylists(from: number, to: number): Promise<PlaylistSummary[]> {
-    const result = await window.api.playlists.reorder(from, to);
-    if (result.ok) this.playlists = result.data;
+    this.playlists = await ipc.playlist.reorder(from, to);
     return this.playlists;
   }
 
-  async removeItemAt(id: string, position: number): Promise<{ ok: boolean; message?: string }> {
-    const result = await window.api.playlists.removeAt(id, position);
-    return result.ok ? { ok: true } : { ok: false, message: result.error.message };
+  async removeItemAt(id: string, position: number): Promise<void> {
+    await ipc.playlist.removeAt(id, position);
   }
 
   /* ---------------- 启动引导 ---------------- */
 
-  /** 首屏并发拉取：设置/歌单/UiState。返回恢复出的 lastScrollTop */
+  /** 首屏并发拉取：设置 / 歌单 / UiState。返回恢复出的 lastScrollTop */
   async bootstrap(): Promise<number> {
-    let ui: Awaited<ReturnType<typeof window.api.app.getUiState>>;
-    let settingsResult: Awaited<ReturnType<typeof window.api.app.getSettings>>;
-    let playlistsResult: Awaited<ReturnType<typeof window.api.playlists.list>>;
+    let rawUi: DynamicJson;
+    let rawSettings: DynamicJson;
+    let playlists: PlaylistSummary[];
     try {
-      [ui, settingsResult, playlistsResult] = await Promise.all([
-        window.api.app.getUiState(),
-        window.api.app.getSettings(),
-        window.api.playlists.list(),
+      [rawUi, rawSettings, playlists] = await Promise.all([
+        ipc.app.getUiState(),
+        ipc.app.getSettings(),
+        ipc.playlist.list(),
       ]);
-    } catch (err) {
-      // 启动引导失败不致命：设置/歌单/视图恢复走默认值
-      console.warn('bootstrap failed:', err);
+    } catch (e) {
+      // 启动引导失败不致命：设置/歌单/视图恢复走默认值，界面仍可用
+      console.warn('bootstrap failed:', errorMessage(e));
       return 0;
     }
-    if (settingsResult.ok) this.settings = settingsResult.data;
-    if (playlistsResult.ok) this.playlists = playlistsResult.data;
-    let scrollTop = 0;
-    if (ui.ok) {
-      this.restore(ui.data);
-      scrollTop = ui.data.scrollTop ?? 0;
-      const view = this.view;
-      if (
-        view.kind === 'playlist' &&
-        !this.playlists.some((item) => item.id === view.id)
-      ) {
-        this.view = LIBRARY_VIEW;
-      }
+
+    this.settings = mergeSettings(rawSettings);
+    this.playlists = playlists;
+
+    devValidate(uiStateSchema, rawUi, 'app.uiState');
+    const restored = rawUi as UiState;
+    this.restore(restored);
+    const view = this.view;
+    if (view.kind === 'playlist' && !this.playlists.some((item) => item.id === view.id)) {
+      this.view = LIBRARY_VIEW;
     }
-    return scrollTop;
+    return typeof restored.scrollTop === 'number' ? restored.scrollTop : 0;
   }
+}
+
+/**
+ * 动态 JSON → `AppSettings`：以默认值为底合并。
+ *
+ * 为什么不直接当 `AppSettings` 用：老配置文件里没有 `output`（2026-10 才加），
+ * 直接断言会让 `settings.output.mode` 在运行期是 undefined —— 类型说有、
+ * 实际没有，是这类 bug 最难查的形态。
+ */
+function mergeSettings(raw: unknown): AppSettings {
+  devValidate(settingsSchema, raw, 'app.settings');
+  const partial = (typeof raw === 'object' && raw !== null ? raw : {}) as Partial<AppSettings>;
+  return { ...DEFAULT_SETTINGS, ...partial } as AppSettings;
 }
 
 export const ui = new UiStore();

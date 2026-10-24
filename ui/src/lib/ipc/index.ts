@@ -11,7 +11,20 @@
 export * from './generated';
 
 export { ipc, toApiError, isRetryable } from './client';
-export type { TrackQueryInput, DynamicJson } from './client';
+export type {
+  /** 命令参数里的查询形状（Rust 侧收 `Json` 再解析，故不出生成类型） */
+  TrackQueryInput,
+  /** 批量选择的 indices 联合（`number[] | 'all'`） */
+  SelectionIdsQuery,
+  /** 队列插入位置 */
+  QueueInsertMode,
+  /** 扫描选项 */
+  ScanOptions,
+  /** beets 应用决策（`candidate` 原样回传，宿主不解读） */
+  ApplyDecision,
+  /** 没有固定形状的载荷（设置 / UiState） */
+  DynamicJson,
+} from './client';
 export { settingsSchema, uiStateSchema, devValidate } from './schema';
 export type { Settings, UiState } from './schema';
 export { events } from './events';
