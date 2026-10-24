@@ -25,6 +25,7 @@
     "smoke:rate": "node tools/run.mjs cargo run -q -p aiya-audio --example rate_smoke",
     "smoke:mode": "node tools/run.mjs cargo run -q -p aiya-audio --example mode_smoke",
     "probe:exclusive": "node tools/run.mjs cargo run -q -p aiya-audio --example exclusive_probe",
+    "probe:matrix": "node tools/run.mjs cargo run -q -p aiya-audio --example output_matrix",
     "smoke:supervisor": "node tools/run.mjs cargo run -q -p aiya-audio-host --example supervisor_smoke",
     "smoke:beets": "tools\\beets-venv\\Scripts\\python.exe tools\\smoke_apply.py",
     "smoke:apply": "npm run smoke:beets",

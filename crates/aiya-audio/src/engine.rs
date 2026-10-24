@@ -131,15 +131,24 @@ pub struct Engine {
     /// 装载后由 Load 事件填充
     pub duration_ms: Arc<AtomicU64>,
     pub playing: Arc<AtomicBool>,
+    /// 累计写入设备的帧数（跨曲目不清零）。
+    ///
+    /// 存在的理由：**"引擎报告在播"和"声音真的在走"是两件事**。独占模式曾
+    /// 因 padding 恒等于 buffer 而只写一缓冲就停（`writable_frames` 注释有
+    /// 实测），而当时的冒烟只断言了 `AudioMode` 事件，一路绿灯。用"单位时间
+    /// 内写入帧数 ≈ 采样率"才能证伪静音。诊断页也用它算实际输出速率。
+    pub written_frames: Arc<AtomicU64>,
 }
 
 impl Engine {
     pub fn spawn() -> Result<Self, AudioError> {
         let (cmd_tx, cmd_rx) = mpsc::channel::<EngineCommand>();
         let (ev_tx, ev_rx) = mpsc::sync_channel::<EngineEvent>(EVENT_CHANNEL_CAP);
+        let written = Arc::new(AtomicU64::new(0));
+        let written_worker = Arc::clone(&written);
         let worker = std::thread::Builder::new()
             .name("aiya-audio-engine".into())
-            .spawn(move || render_loop(cmd_rx, ev_tx))
+            .spawn(move || render_loop(cmd_rx, ev_tx, written_worker))
             .map_err(|e| AudioError::Custom(e.to_string()))?;
         Ok(Self {
             tx: cmd_tx,
@@ -147,7 +156,13 @@ impl Engine {
             worker: Some(worker),
             duration_ms: Arc::new(AtomicU64::new(0)),
             playing: Arc::new(AtomicBool::new(false)),
+            written_frames: written,
         })
+    }
+
+    /// 已写入设备的累计帧数（诊断/冒烟用）。
+    pub fn written_frames(&self) -> u64 {
+        self.written_frames.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn send(&self, cmd: EngineCommand) {
@@ -174,7 +189,11 @@ impl Drop for Engine {
 }
 
 /// 渲染循环：COM init → 设备 → mix format → 事件驱动写流。
-fn render_loop(cmd_rx: Receiver<EngineCommand>, ev_tx: SyncSender<EngineEvent>) {
+fn render_loop(
+    cmd_rx: Receiver<EngineCommand>,
+    ev_tx: SyncSender<EngineEvent>,
+    written: Arc<AtomicU64>,
+) {
     let ev = EventTx(ev_tx);
     // tap 线程拿裸 SyncSender（自走 try_send 丢帧策略，见 consume_loop）
     let tap = crate::spectrum::SpectrumTap::new();
@@ -220,6 +239,7 @@ fn render_loop(cmd_rx: Receiver<EngineCommand>, ev_tx: SyncSender<EngineEvent>) 
                 pending_rate,
                 pending_exclusive,
                 &tap,
+                &written,
             ) {
                 Ok(LoadExit::Finished { exclusive }) => {
                     pending_exclusive = exclusive;
@@ -453,18 +473,36 @@ fn open_exclusive(decoder: &Decoder) -> Result<Output, String> {
     // 记录"最接近成功"的那次失败：全部候选都挂时用它解释原因
     let mut best_reason: Option<String> = None;
 
+    // 周期候选。设备自报的"默认周期"**不可信**：实测 Realtek 44.1k 下默认
+    // 10ms 直接 0x88890019(AUDCLNT_E_INVALID_DEVICE_PERIOD)，20ms 才成功；
+    // 同一设备 48k 下 10ms 反而可用。事件驱动独占里 buffer 恒等于 period
+    // （wasapi-rs 的 EventsExclusive 就按 period 传 buffer），所以周期同时是
+    // 缓冲深度，也决定抗欠载能力——必须逐个试，不能只用默认值。
+    let periods: Vec<i64> = match new_client()
+        .and_then(|c| c.get_device_period().map_err(wasapi_err))
+    {
+        Ok((default, _min)) => vec![default, default * 2, 500_000],
+        Err(e) => {
+            best_reason = Some(format!("读取设备周期失败（{e}）"));
+            vec![500_000]
+        }
+    };
+
     for (fmt, bits, valid, sub) in EXCLUSIVE_CANDIDATES {
-        // 每个候选重建 client：Initialize 失败后同一 client 的可用性依赖驱动实现
-        let mut client = new_client().map_err(|e| e.to_string())?;
         let want = WaveFormat::new(bits, valid, &sub, rate as usize, channels, None);
-        let negotiated = match client.is_supported_exclusive_with_quirks(&want) {
-            Ok(f) => f,
-            Err(e) => {
-                best_reason = Some(format!(
-                    "{rate} Hz / {channels} ch 下 f32/i24/i16 均被拒绝（最后尝试 {}：{e}）",
-                    fmt.label()
-                ));
-                continue;
+        // 探测用一次性 client：Initialize 失败后同一 client 的可用性依赖驱动
+        // 实现，失败后重建最省心（只在装载/切模式时发生）
+        let negotiated = {
+            let probe = new_client().map_err(|e| e.to_string())?;
+            match probe.is_supported_exclusive_with_quirks(&want) {
+                Ok(f) => f,
+                Err(e) => {
+                    best_reason = Some(format!(
+                        "{rate} Hz / {channels} ch 下 f32/i24/i16 均被拒绝（最后尝试 {}：{e}）",
+                        fmt.label()
+                    ));
+                    continue;
+                }
             }
         };
         if negotiated.get_samplespersec() != rate || negotiated.get_nchannels() as usize != channels {
@@ -485,22 +523,36 @@ fn open_exclusive(decoder: &Decoder) -> Result<Output, String> {
                 continue;
             }
         };
-        let (period, _min) = match client.get_device_period() {
-            Ok(p) => p,
-            Err(e) => {
-                best_reason = Some(format!("读取设备周期失败（{e}）"));
-                continue;
+
+        let mut opened: Option<(wasapi::AudioClient, i64)> = None;
+        for period in &periods {
+            let mut client = new_client().map_err(|e| e.to_string())?;
+            match client.initialize_client(
+                &negotiated,
+                &Direction::Render,
+                &StreamMode::EventsExclusive { period_hns: *period },
+            ) {
+                Ok(()) => {
+                    opened = Some((client, *period));
+                    break;
+                }
+                Err(e) => {
+                    best_reason = Some(format!(
+                        "{} 独占流初始化失败（周期 {:.1}ms：{e}）",
+                        actual.label(),
+                        *period as f64 / 10_000.0
+                    ));
+                }
             }
-        };
-        if let Err(e) = client.initialize_client(
-            &negotiated,
-            &Direction::Render,
-            &StreamMode::EventsExclusive { period_hns: period },
-        ) {
-            best_reason = Some(format!("{} 独占流初始化失败（{e}）", actual.label()));
-            continue;
         }
-        tracing::info!(format = actual.label(), rate, channels, "独占模式已启用");
+        let Some((client, period)) = opened else { continue };
+        tracing::info!(
+            format = actual.label(),
+            rate,
+            channels,
+            period_ms = period as f64 / 10_000.0,
+            "独占模式已启用"
+        );
         return finish_stream(client, OutputMode::Exclusive, channels, actual)
             .map_err(|e| e.to_string());
     }
@@ -596,6 +648,7 @@ fn play_file(
     initial_rate: f32,
     initial_exclusive: bool,
     tap: &crate::spectrum::SpectrumTap,
+    written: &AtomicU64,
 ) -> Result<LoadExit, AudioError> {
     let mut decoder = Decoder::open(Path::new(path))?;
     tap.set_sample_rate(decoder.sample_rate); // 频谱分带按实际采样率标定
@@ -833,7 +886,7 @@ fn play_file(
                 continue;
             }
         };
-        let available = out.buffer_frames.saturating_sub(padding);
+        let available = writable_frames(out.mode, out.buffer_frames, padding);
         // 每轮渲染心跳都上报位置（泵侧再做 500ms 节流；写满瞬间 available 不会为 0）
         // 位置要扣掉设备缓冲里还没播的部分，否则进度条领先耳朵最多 200ms
         let position_now = |decoder: &Decoder, pool: &[f32], padding: u32| -> u64 {
@@ -912,7 +965,10 @@ fn play_file(
                 &out.sample_bytes[..out_frames * frame_bytes_all],
                 None,
             ) {
-                Ok(()) => device_failures = 0, // 写成功：恢复计数归零
+                Ok(()) => {
+                    device_failures = 0; // 写成功：恢复计数归零
+                    written.fetch_add(out_frames as u64, std::sync::atomic::Ordering::Relaxed);
+                }
                 Err(e) => {
                     // 设备失效：走循环尾部的统一恢复出口
                     stream_err = Some(wasapi_err(e));
@@ -941,7 +997,15 @@ fn play_file(
             // 等缓冲播完再报 EOF：padding 归零或超时。等待期间必须继续消费
             // 命令——此前只认 Shutdown，用户在曲尾 500ms 内按"下一首"的 Load
             // 会滞留到 EOF 之后，表现是慢半拍甚至丢一次切歌。
+            //
+            // 独占下不能用 `padding == 0` 判排空：实测独占事件驱动下 padding
+            // 恒等于 buffer，永远等不到 0，会白等满 500ms 上限才报 EOF（歌曲
+            // 尾巴明明已经播完）。改用"在途 = 一整个缓冲"的时长估算。
             let deadline = std::time::Instant::now() + Duration::from_millis(500);
+            let drained_at = std::time::Instant::now()
+                + Duration::from_millis(
+                    padding_ms(&decoder, out.buffer_frames).clamp(10, 500),
+                );
             loop {
                 match cmd_rx.try_recv() {
                     Ok(EngineCommand::Shutdown) => {
@@ -975,8 +1039,15 @@ fn play_file(
                     }
                     Err(_) => {}
                 }
-                let pad = out.client.get_current_padding().unwrap_or(0);
-                if pad == 0 || std::time::Instant::now() > deadline {
+                let now = std::time::Instant::now();
+                if now > deadline {
+                    break;
+                }
+                if out.mode == OutputMode::Exclusive {
+                    if now >= drained_at {
+                        break;
+                    }
+                } else if out.client.get_current_padding().unwrap_or(0) == 0 {
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(10));
@@ -1010,6 +1081,28 @@ fn play_position(decoder: &Decoder, pool: &[f32]) -> u64 {
 /// 耳朵超前最多一个缓冲深度（200ms），暂停瞬间停在"超前 200ms"处。
 fn padding_ms(decoder: &Decoder, padding_frames: u32) -> u64 {
     (padding_frames as u64 * 1000) / (decoder.sample_rate as u64).max(1)
+}
+
+/// 本轮可写帧数。
+///
+/// **共享模式**：`buffer - padding`。实测 shared 下 padding 在 0..buffer 之间
+/// 正常跟随（events 与 polling 都验证过），可以据此填满。
+///
+/// **独占模式**：不能问 padding。实测（`examples/output_matrix.rs`，Realtek，
+/// 44.1k 与 48k 均复现）独占事件驱动下 `GetCurrentPadding` **恒等于 buffer**，
+/// 于是 `buffer - padding` 恒为 0 → 只在第一轮写过一缓冲，之后全程欠载插静音。
+/// wasapi-rs 自己的 `get_available_space_in_frames()` 也对 exclusive+events
+/// 特例直返 buffer，同一个结论：事件驱动独占的正确写法是**每个事件写满一个
+/// 缓冲**（其内部 buffer 恒等于 period）。
+///
+/// 附带证据：修前 `smoke:mode` 在 48k 报"独占 ✓"，而同一配置下实测 2 秒内
+/// 只写了 480 帧（应为 96000），即除首 10ms 外全是静音——冒烟只断言了事件，
+/// 没断言"声音真的在走"，这正是本次补写进度计数的原因。
+fn writable_frames(mode: OutputMode, buffer_frames: u32, padding: u32) -> u32 {
+    match mode {
+        OutputMode::Shared => buffer_frames.saturating_sub(padding),
+        OutputMode::Exclusive => buffer_frames,
+    }
 }
 
 /// 从 pool 的 pool_pos 起按 rate 线性插值取 out_frames 帧，交错 f32（已乘音量）写入 out。
@@ -1245,5 +1338,25 @@ mod tests {
         let mut dst = vec![0u8; 4]; // 只装得下 2 个 i16
         encode_frames(OutFormat::I16, &src, &mut dst);
         assert_eq!(read_i16(&dst), vec![32767, 32767]);
+    }
+
+    #[test]
+    fn writable_shared_tracks_padding() {
+        assert_eq!(writable_frames(OutputMode::Shared, 8820, 0), 8820);
+        assert_eq!(writable_frames(OutputMode::Shared, 8820, 4000), 4820);
+        // 满缓冲：无可写（此时不该写，否则覆盖未播样本）
+        assert_eq!(writable_frames(OutputMode::Shared, 8820, 8820), 0);
+        // padding 异常大于 buffer 时饱和到 0，不能下溢成天文数字
+        assert_eq!(writable_frames(OutputMode::Shared, 480, 900), 0);
+    }
+
+    #[test]
+    fn writable_exclusive_ignores_stuck_padding() {
+        // 实测：独占事件驱动下 GetCurrentPadding 恒等于 buffer。
+        // 共享算法此时得 0 → 引擎只在首轮写过一缓冲，之后全程静音。
+        assert_eq!(writable_frames(OutputMode::Shared, 480, 480), 0);
+        // 独占按"每个事件写满一缓冲"（buffer == period），与 padding 无关
+        assert_eq!(writable_frames(OutputMode::Exclusive, 480, 480), 480);
+        assert_eq!(writable_frames(OutputMode::Exclusive, 480, 0), 480);
     }
 }

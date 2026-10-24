@@ -5,7 +5,7 @@
 //! * 设备拒绝 → `AudioMode { exclusive: false, reason: Some(非空) }`（回落共享，**不是** Error）
 //! * 播放中来回切换 → 每次切换都能收到新的 `AudioMode`，且播放不中断
 //!
-//! 会出声（3 秒 440Hz）。用法：cargo run -p aiya-audio --example mode_smoke
+//! 会出声（8 秒 440Hz；时长要盖住全部步骤，否则中途 EOF 会让后续切换拿不到 AudioMode）。用法：cargo run -p aiya-audio --example mode_smoke
 use std::io::Write;
 use std::time::{Duration, Instant};
 
@@ -60,7 +60,7 @@ fn main() {
     let dir = std::env::temp_dir().join("aiya-mode-smoke");
     std::fs::create_dir_all(&dir).unwrap();
     let wav = dir.join("tone.wav");
-    write_wav(&wav, 48_000, 3.0);
+    write_wav(&wav, 48_000, 8.0);
 
     let mut engine = Engine::spawn().expect("engine spawn");
 
@@ -86,6 +86,23 @@ fn main() {
         println!("独占：设备拒绝 → 已回落共享，原因：{}", reason.unwrap());
     }
 
+    // 1.5) 声音真的在走吗？
+    //
+    // 只断言 `AudioMode` 会漏掉"报在播、实际静音"——独占模式曾经就是这样：
+    // 独占下 GetCurrentPadding 恒等于 buffer，可写空间算成 0，写满一缓冲后
+    // 全程欠载，而冒烟一路绿灯。这里用写入帧数对采样率交叉验证，1 秒内写入
+    // 至少 70% 的帧数才算过。
+    let before = engine.written_frames();
+    drain_modes(&engine, 1000);
+    let delta = engine.written_frames() - before;
+    let expect = 48_000u64;
+    assert!(
+        delta * 10 >= expect * 7,
+        "1 秒只写 {delta} 帧（期望 ≈{expect}）：引擎在静音。\
+         独占下若 padding 恒等于 buffer，可写空间会算成 0"
+    );
+    println!("写入速率：{delta} 帧/秒（期望 ≈{expect}）");
+
     // 2) 播放中切回共享
     engine.send(EngineCommand::SetExclusive(false));
     let second = drain_modes(&engine, 1200);
@@ -95,7 +112,6 @@ fn main() {
         "切回共享后不该再报 exclusive=true：{second:?}"
     );
     println!("切回共享：OK");
-
     // 3) 再切独占（应重新尝试并给出同样的结论）
     engine.send(EngineCommand::SetExclusive(true));
     let third = drain_modes(&engine, 1200);
