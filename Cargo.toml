@@ -21,6 +21,8 @@ sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 symphonia = { version = "0.5.4", default-features = false, features = ["mp3", "flac", "ogg", "wav", "aac", "isomp4", "pcm"] }
 wasapi = "0.26.0"
+# 契约层：Rust 是唯一源，TS 类型由 derive(TS) 生成（docs/17）
+ts-rs = "12"
 
 [profile.release]
 strip = true

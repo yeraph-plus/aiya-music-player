@@ -187,12 +187,19 @@ impl PumpCore {
                         reason,
                     });
                 }
-                EngineEvent::Error { token, message } => {
+                EngineEvent::Error { token, kind, message } => {
                     // token=0 表示"装载前的错误"，仍要上报
                     if token != 0 && token != actor.state().token {
                         continue;
                     }
-                    actor.reduce(PlayerCommand::Failed { message });
+                    // 分类由引擎在错误产生处给出（v5 协议），宿主只做翻译，
+                    // 绝不解析消息文案——文案是会改的，分类不会。
+                    actor.reduce(PlayerCommand::Failed {
+                        error: aiya_player::AudioError::new(
+                            aiya_player::AudioErrorCode::parse(&kind),
+                            message,
+                        ),
+                    });
                     should_emit = true;
                 }
             }
@@ -493,6 +500,7 @@ mod tests {
         let fx = core.ingest(
             vec![EngineEvent::Error {
                 token: 0,
+                kind: "deviceLost".into(),
                 message: "device lost".into(),
             }],
             &mut actor,
@@ -501,7 +509,9 @@ mod tests {
         );
         assert_eq!(fx, vec![PumpEffect::EmitState]);
         assert_eq!(actor.state().status, PlaybackStatus::Error);
-        assert_eq!(actor.state().error.as_deref(), Some("device lost"));
+        let err = actor.state().error.clone().expect("错误必须被记录");
+        assert_eq!(err.code, aiya_player::AudioErrorCode::DeviceLost);
+        assert_eq!(err.message, "device lost");
     }
 
     #[test]
@@ -514,6 +524,7 @@ mod tests {
         let fx = core.ingest(
             vec![EngineEvent::Error {
                 token: stale,
+                kind: "decode".into(),
                 message: "old".into(),
             }],
             &mut actor,

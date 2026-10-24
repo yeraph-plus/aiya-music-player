@@ -99,7 +99,10 @@ pub enum EngineEvent {
         /// 回落/降级原因（空 = 完全按请求生效）
         reason: Option<String>,
     },
-    Error { token: u64, message: String },
+    /// 播放失败。`kind` 是**分类**（`fileMissing`/`io`/`decode`/`deviceLost`/
+    /// `unsupportedFormat`/`unknown`），在错误产生处由 `AudioError::kind()` 定，
+    /// 不经宿主猜——UI 要靠它决定"跳下一首"还是"提示/亮灰标"。
+    Error { token: u64, kind: String, message: String },
 }
 
 /// 引擎事件通道容量。Position ~10ms/帧 + Spectrum ~30fps，正常消费下远用不满；
@@ -294,7 +297,11 @@ fn render_loop(
                 Ok(LoadExit::Shutdown) => break 'outer,
                 Err(e) => {
                     tracing::error!(%path, error = %e, "engine stream failed");
-                    send(EngineEvent::Error { token, message: e.to_string() });
+                    send(EngineEvent::Error {
+                        token,
+                        kind: e.kind().as_str().into(),
+                        message: e.to_string(),
+                    });
                     // 回到命令循环等下一条 Load（设备恢复）
                     break;
                 }
@@ -846,7 +853,7 @@ fn play_file(
         if !out.is_live() {
             // 独占暂停释放了设备：这是正常静止态，无需重建
             if !paused {
-                stream_err = Some(AudioError::Custom("输出流意外为空".into()));
+                stream_err = Some(AudioError::Device("输出流意外为空".into()));
             }
             continue;
         }
@@ -885,9 +892,9 @@ fn play_file(
                     // 其余交给设备恢复路径（它还会退避重试几轮）
                     tracing::error!(reason = %why, "输出流哑火且无可降级路径");
                     if cfg.mode == ModePref::ExclusiveRequired && out.mode == OutputMode::Exclusive {
-                        return Err(AudioError::Custom(format!("独占流不工作：{why}")));
+                        return Err(AudioError::Device(format!("独占流不工作：{why}")));
                     }
-                    stream_err = Some(AudioError::Custom(format!("输出流不消费数据：{why}")));
+                    stream_err = Some(AudioError::Device(format!("输出流不消费数据：{why}")));
                 }
             }
             continue;
@@ -1700,7 +1707,7 @@ fn open_output(
             Ok(out) => Ok((out, None)),
             Err(reason) => {
                 if cfg.mode == ModePref::ExclusiveRequired {
-                    return Err(AudioError::Custom(format!("独占模式不可用：{reason}")));
+                    return Err(AudioError::Unsupported(format!("独占模式不可用：{reason}")));
                 }
                 let (out, note) = open_shared_with_note(decoder, cfg)?;
                 Ok((

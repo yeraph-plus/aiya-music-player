@@ -26,6 +26,10 @@ __pycache__/
 .venv/
 sidecars/beets/.beets/
 
+# ts-rs 的默认导出目录：直接 `cargo test` 时会把类型写到各 crate 下，
+# 那不是契约产物（真正入库的是 ui/src/lib/ipc/generated/，由 npm run gen:types 生成）
+bindings/
+
 # Vendored binaries (download scripts instead of committing)
 /vendor/mpv/
 /vendor/ffmpeg/

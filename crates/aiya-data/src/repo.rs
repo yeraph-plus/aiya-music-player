@@ -8,6 +8,7 @@ use std::time::Instant;
 use rusqlite::types::{ToSql, Value as SqlValue};
 use rusqlite::{Connection, Row};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use serde_json::Value;
 
 use crate::db::{DbError, DbResult};
@@ -17,7 +18,8 @@ type Binder = Box<dyn Fn(&mut Vec<Box<dyn ToSql>>) + Send>;
 
 /* ---------------- DTO ---------------- */
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackRow {
     pub id: String,
@@ -27,24 +29,37 @@ pub struct TrackRow {
     pub album_id: Option<String>,
     pub album: Option<String>,
     pub album_artist: Option<String>,
+    #[ts(type = "number | null")]
     pub duration_ms: Option<i64>,
+    #[ts(type = "number | null")]
     pub track_no: Option<i64>,
+    #[ts(type = "number | null")]
     pub disc_no: Option<i64>,
+    #[ts(type = "number | null")]
     pub year: Option<i64>,
-    pub added_at: i64,
+    /// 入库时间。**毫秒**（DB 存的是 unix 秒，映射时 ×1000）。
+    /// 名字带单位是刻意的：同结构里 `durationMs` 是时长毫秒，
+    /// 旧字段 `addedAt` 却是秒，UI 侧 `new Date(addedAt)` 会得到 1970 年。
+    #[ts(type = "number")]
+    pub added_at_ms: i64,
     pub artwork_id: Option<String>,
+    #[ts(type = "number")]
     pub play_count: i64,
-    pub last_played_at: Option<i64>,
+    /// 最后播放时间，毫秒（DB 存秒）。从未播过为 null。
+    #[ts(type = "number | null")]
+    pub last_played_at_ms: Option<i64>,
     pub gain_db: Option<f64>,
     /// 文件可用性：online / offline / missing。扫描器与 beets 对账都会改它，
     /// UI 用它给行打灰标（此前 DTO 里没有 → 列表看不出哪首已经找不到文件）。
     pub availability: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackPage {
     pub items: Vec<TrackRow>,
+    #[ts(type = "number")]
     pub total: i64,
     pub limit: usize,
     pub mode: String,
@@ -350,7 +365,7 @@ fn to_sql_value(v: &Value) -> SqlValue {
     }
 }
 
-fn row_to_track(r: &Row<'_>) -> rusqlite::Result<TrackRow> {
+pub fn row_to_track(r: &Row<'_>) -> rusqlite::Result<TrackRow> {
     Ok(TrackRow {
         id: r.get(0)?,
         title: r.get(1)?,
@@ -363,10 +378,11 @@ fn row_to_track(r: &Row<'_>) -> rusqlite::Result<TrackRow> {
         track_no: r.get(8)?,
         disc_no: r.get(9)?,
         year: r.get(10)?,
-        added_at: r.get(11)?,
+        // DB 存 unix 秒，DTO 一律毫秒（docs/17 §3.1）
+        added_at_ms: r.get::<_, i64>(11)? * 1000,
         artwork_id: r.get(12)?,
         play_count: r.get(13)?,
-        last_played_at: r.get(14)?,
+        last_played_at_ms: r.get::<_, Option<i64>>(14)?.map(|s| s * 1000),
         gain_db: r.get(15)?,
         availability: r.get(16)?,
     })
@@ -442,7 +458,9 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
         let last = items.last().expect("items nonempty when has_more");
         let value: Value = match q.sort {
             Sort::Title => Value::from(norm(&last.title)),
-            Sort::Added => Value::from(last.added_at),
+            // 游标要回喂给 SQL（`t.added_at` 是秒），所以这里必须除回秒；
+            // 漏了这一步，added 排序的游标分页会静默错位（值差 1000 倍）。
+            Sort::Added => Value::from(last.added_at_ms / 1000),
             Sort::Artist => Value::from(norm(last.artist.as_deref().unwrap_or(""))),
             Sort::Album => Value::from(norm(last.album.as_deref().unwrap_or(""))),
         };
@@ -661,7 +679,8 @@ mod tests {
         let page = list_tracks(&conn, &q).unwrap();
         assert_eq!(page.items[0].id, "t1");
         assert_eq!(page.items[0].play_count, 2);
-        assert_eq!(page.items[0].last_played_at, Some(600));
+        // 600 是 DB 里的秒，DTO 一律毫秒（docs/17 §3.1）——这条断言同时锁住换算
+        assert_eq!(page.items[0].last_played_at_ms, Some(600_000));
     }
 
     #[test]

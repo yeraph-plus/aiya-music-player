@@ -30,6 +30,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 time = { version = "0.3", features = ["local-offset"] }
 image.workspace = true
 rusqlite.workspace = true
+ts-rs.workspace = true
 souvlaki = "0.8"
 tauri-plugin-single-instance = "2"
 [target.'cfg(windows)'.dependencies]

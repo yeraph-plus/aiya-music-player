@@ -4,8 +4,10 @@
 //! 队列按版本号单独拉取（queueVersion 变化才重取）。
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "lowercase")]
 pub enum RepeatMode {
     Off,
@@ -13,7 +15,8 @@ pub enum RepeatMode {
     One,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "lowercase")]
 pub enum PlaybackStatus {
     Idle,
@@ -25,71 +28,144 @@ pub enum PlaybackStatus {
 
 /// 音频规格（播放条徽章/规格显示；对齐 contracts 的 AudioFormat）。
 /// 列表查询不填（None），只有播放条数据源（单曲级查询）会带。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackAudio {
     pub codec: Option<String>,
     pub container: Option<String>,
+    #[ts(type = "number | null")]
     pub sample_rate: Option<i64>,
+    #[ts(type = "number | null")]
     pub bits_per_sample: Option<i64>,
+    #[ts(type = "number | null")]
     pub bitrate: Option<i64>,
+    #[ts(type = "number | null")]
     pub channels: Option<i64>,
 }
 
-/// 队列元素：Track 的最小子集 + 播放需要的 path。
+/// 队列元素：Track 的最小子集（**不含 path**，path 只在宿主内部流转）。
 /// 宿主层从 aiya-data TrackRow 转换而来。
 ///
 /// **camelCase 是契约要求**：`current` 直接作为 PlayerState.current 下发，
 /// UI 读 `artworkId` / `gainDb` / `audio` —— snake_case 会让封面/规格/归一化全部静默失效。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackRef {
     pub id: String,
     pub title: String,
     pub artist: Option<String>,
     pub album: Option<String>,
+    #[ts(type = "number | null")]
     pub duration_ms: Option<i64>,
     pub artwork_id: Option<String>,
     pub gain_db: Option<f64>,
     #[serde(default)]
     pub audio: Option<TrackAudio>,
-    /// 引擎装载用；不出现在对外 DTO（DTO 侧由 trackId 查询）
-    #[serde(default)]
+    /// 引擎装载用；**不下发**（DTO 侧由 trackId 查询）。
+    ///
+    /// 曾经只是注释这么写、代码照发：`#[serde(default)]` 会把它一起序列化，
+    /// UI 能从 `player:state.current.path` 拿到绝对路径。现在真的 skip。
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
     pub path: String,
 }
 
+/// 播放失败的分类。**给 UI 用**：决定"自动跳下一首"还是"提示/亮灰标"。
+///
+/// 为什么不用字符串：v1 的 `error: Option<String>` 只有一句话，UI 无法判断
+/// "文件没了（跳过就行）"和"声卡拔了（必须提示）"，只能靠人肉看文案。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioErrorCode {
+    /// 文件不存在/被删
+    FileMissing,
+    /// 其他 IO：权限、占用、磁盘
+    Io,
+    /// 解码失败：编码不支持、文件损坏
+    Decode,
+    /// 输出设备：打不开、断开、不消费数据
+    DeviceLost,
+    /// 设备/格式不支持（如"必须独占"被拒）
+    UnsupportedFormat,
+    /// 未分类
+    Unknown,
+}
+
+impl AudioErrorCode {
+    /// wire 值 → 枚举。与 `aiya_audio::AudioErrorKind::as_str()` 一一对应；
+    /// 未知值按 `Unknown`（新引擎给新分类时，旧宿主不该直接崩）。
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "fileMissing" => AudioErrorCode::FileMissing,
+            "io" => AudioErrorCode::Io,
+            "decode" => AudioErrorCode::Decode,
+            "deviceLost" => AudioErrorCode::DeviceLost,
+            "unsupportedFormat" => AudioErrorCode::UnsupportedFormat,
+            _ => AudioErrorCode::Unknown,
+        }
+    }
+}
+
+/// 播放失败：分类 + 一句话。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioError {
+    pub code: AudioErrorCode,
+    pub message: String,
+}
+
+impl AudioError {
+    pub fn new(code: AudioErrorCode, message: impl Into<String>) -> Self {
+        Self { code, message: message.into() }
+    }
+}
+
 /// 播放状态快照（对齐 PlayerState 契约形状，camelCase serde）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerState {
     pub queue_length: usize,
+    #[ts(type = "number")]
     pub queue_version: u64,
     /// 队列下标；-1 = 空队列
+    #[ts(type = "number")]
     pub index: i64,
     /// 播放顺序位置（随机模式下与 index 不同）
+    #[ts(type = "number")]
     pub cursor: i64,
     pub repeat: RepeatMode,
     pub shuffle: bool,
     pub status: PlaybackStatus,
+    #[ts(type = "number")]
     pub position_ms: u64,
+    #[ts(type = "number | null")]
     pub duration_ms: Option<u64>,
     pub volume: f64,
     pub muted: bool,
     pub rate: f64,
-    pub error: Option<String>,
+    pub error: Option<AudioError>,
     pub current: Option<TrackRef>,
+    #[ts(type = "number")]
     pub token: u64,
+    #[ts(type = "number")]
     pub updated_at: u64,
 }
 
 /// 队列快照（对齐 QueueSnapshot：ids + tracks 最小字段 + 游标）。
 /// v1 只给 ids + index；tracks 全量字段由 library_tracks 查询补齐。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueSnapshot {
     pub ids: Vec<String>,
     pub index: usize,
     pub cursor: usize,
+    #[ts(type = "number")]
     pub version: u64,
     pub took_ms: u32,
 }
@@ -128,7 +204,7 @@ pub enum PlayerCommand {
     /// 引擎回报：曲目自然播完
     Ended { token: u64 },
     /// 引擎回报：错误
-    Failed { message: String },
+    Failed { error: AudioError },
 }
 
 #[cfg(test)]

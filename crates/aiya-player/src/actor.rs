@@ -8,7 +8,8 @@
 //! （shuffle 开启时打乱）。`cursor` 在 order 里走，`index` 是 order[cursor]。
 
 use crate::state::{
-    PlaybackStatus, PlayerCommand, PlayerState, QueueOp, QueueSnapshot, RepeatMode, TrackRef,
+    AudioError, PlaybackStatus, PlayerCommand, PlayerState, QueueOp, QueueSnapshot, RepeatMode,
+    TrackRef,
 };
 
 pub struct PlayerActor {
@@ -23,7 +24,7 @@ pub struct PlayerActor {
     volume: f64,
     muted: bool,
     rate: f64,
-    error: Option<String>,
+    error: Option<AudioError>,
     queue_version: u64,
     token: u64,
     /// 最近一次需要发出的引擎指令（Actor 不直接驱动线程）
@@ -504,8 +505,8 @@ impl PlayerActor {
                 }
             }
 
-            PlayerCommand::Failed { message } => {
-                self.error = Some(message);
+            PlayerCommand::Failed { error } => {
+                self.error = Some(error);
                 self.status = PlaybackStatus::Error;
             }
         }

@@ -8,6 +8,7 @@ description = "AIYA Music 数据层：SQLite v1、Repository、扫描、设置�
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+ts-rs.workspace = true
 thiserror.workspace = true
 walkdir.workspace = true
 lofty.workspace = true

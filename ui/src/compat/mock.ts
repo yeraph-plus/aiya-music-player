@@ -90,10 +90,10 @@ function buildLibrary(): Track[] {
           trackNo: t,
           discNo: 1,
           year: 2015 + Math.floor(rand() * 11),
-          addedAt: Math.floor(base - rand() * 86400 * 180),
+          addedAtMs: Math.floor(base - rand() * 86400 * 180) * 1000,
           artworkId: null,
           playCount: played ? Math.floor(rand() * 60) : 0,
-          lastPlayedAt: played ? Math.floor(base - rand() * 86400 * 60) : null,
+          lastPlayedAtMs: played ? Math.floor(base - rand() * 86400 * 60) : null,
           gainDb: null,
         });
       }
@@ -414,8 +414,8 @@ export class MockBackend {
       totalMs: played.reduce((s, t) => s + (t.durationMs ?? 0) * t.playCount, 0),
       completed: played.length,
       skipped: 0,
-      firstPlayAt: played.length ? Math.min(...played.map((t) => t.lastPlayedAt ?? Infinity)) : null,
-      lastPlayAt: played.length ? Math.max(...played.map((t) => t.lastPlayedAt ?? 0)) : null,
+      firstPlayAt: played.length ? Math.min(...played.map((t) => t.lastPlayedAtMs ?? Infinity)) : null,
+      lastPlayAt: played.length ? Math.max(...played.map((t) => t.lastPlayedAtMs ?? 0)) : null,
       topTracks: [...played]
         .sort((a, b) => b.playCount - a.playCount)
         .slice(0, 10)
@@ -424,7 +424,7 @@ export class MockBackend {
   }
 
   historyClear(): { cleared: boolean } {
-    this.tracks = this.tracks.map((t) => ({ ...t, playCount: 0, lastPlayedAt: null }));
+    this.tracks = this.tracks.map((t) => ({ ...t, playCount: 0, lastPlayedAtMs: null }));
     return { cleared: true };
   }
 
@@ -680,7 +680,7 @@ export class MockBackend {
       const tie = a.id.localeCompare(b.id);
       switch (q.sort) {
         case 'added':
-          return (a.addedAt - b.addedAt) * dir || tie;
+          return (a.addedAtMs - b.addedAtMs) * dir || tie;
         case 'artist':
           return Math.sign((a.artist ?? '').localeCompare(b.artist ?? '', 'zh')) * dir || tie;
         case 'album':
@@ -699,8 +699,8 @@ export class MockBackend {
     }
     if (source.kind === 'recent') {
       return [...rows]
-        .filter((t) => t.lastPlayedAt !== null)
-        .sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0) || a.id.localeCompare(b.id));
+        .filter((t) => t.lastPlayedAtMs !== null)
+        .sort((a, b) => (b.lastPlayedAtMs ?? 0) - (a.lastPlayedAtMs ?? 0) || a.id.localeCompare(b.id));
     }
     if (source.kind === 'mostPlayed') {
       return [...rows]

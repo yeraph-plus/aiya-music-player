@@ -8,6 +8,25 @@ import type { PlaybackStatus, RepeatMode, Track } from './domain.js';
  * - 连点 20 次下一首时，顺序由主进程串行决定，不存在跨进程竞态
  * - 状态落库与播放状态在同一事务边界内，重启恢复不会错位
  */
+/**
+ * 播放失败的分类（与 Rust `aiya_player::AudioErrorCode` 一致）。
+ *
+ * v1 这里是一句话（`error: string`），UI 无法判断"文件没了（跳过就行）"
+ * 和"声卡拔了（必须提示）"，只能人肉看文案。
+ */
+export type AudioErrorCode =
+  | 'fileMissing'
+  | 'io'
+  | 'decode'
+  | 'deviceLost'
+  | 'unsupportedFormat'
+  | 'unknown';
+
+export interface AudioError {
+  code: AudioErrorCode;
+  message: string;
+}
+
 export interface PlayerState {
   /**
    * 状态里**不放**队列本身：5 万首的 ID 数组在每秒一次的时间回报里
@@ -34,7 +53,8 @@ export interface PlayerState {
    * 不是曲目属性 —— 进 `Track` 会让列表缓存与广播都背上它。
    */
   rate: number;
-  error: string | null;
+  /** 播放失败（结构化：code 决定 UI 该跳过还是提示）；正常为 null */
+  error: AudioError | null;
   /** 当前曲目的展示字段快照，避免渲染层为了显示一首歌再查一次列表 */
   current: Track | null;
   /** 装载令牌：渲染层回传时带上，主进程据此丢弃过期回报 */

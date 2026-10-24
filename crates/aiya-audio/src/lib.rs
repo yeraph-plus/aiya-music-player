@@ -18,8 +18,64 @@ pub enum AudioError {
     Decode(String),
     #[error("wasapi: {0}")]
     Wasapi(String),
+    /// 设备/输出流层面的失败：流为空、不消费数据、恢复失败
+    #[error("device: {0}")]
+    Device(String),
+    /// 设备或配置不支持（独占被拒、格式不匹配）
+    #[error("unsupported: {0}")]
+    Unsupported(String),
     #[error("{0}")]
     Custom(String),
+}
+
+/// 播放失败的分类：**给宿主/UI 用**，不是给日志用。
+///
+/// 为什么要在错误里带分类：宿主拿到的是 `String`（协议里只传一句话），
+/// UI 却要据此决定"自动跳下一首"还是"弹提示/亮灰标"。靠解析消息前缀
+/// 来判断等于把契约写在文案里，改一句话就崩。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioErrorKind {
+    /// 文件不存在/被删（IO NotFound）
+    FileMissing,
+    /// 其他 IO：权限、占用、磁盘
+    Io,
+    /// 解码失败：编码不支持、文件损坏
+    Decode,
+    /// 输出设备：打不开、断开、不消费数据
+    Device,
+    /// 设备不支持所请求的格式/模式（如必须独占被拒）
+    Unsupported,
+    /// 兜底
+    Unknown,
+}
+
+impl AudioErrorKind {
+    /// wire 值（与 `aiya_player::AudioErrorCode` 的 serde 值一致）
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AudioErrorKind::FileMissing => "fileMissing",
+            AudioErrorKind::Io => "io",
+            AudioErrorKind::Decode => "decode",
+            AudioErrorKind::Device => "deviceLost",
+            AudioErrorKind::Unsupported => "unsupportedFormat",
+            AudioErrorKind::Unknown => "unknown",
+        }
+    }
+}
+
+impl AudioError {
+    pub fn kind(&self) -> AudioErrorKind {
+        match self {
+            AudioError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                AudioErrorKind::FileMissing
+            }
+            AudioError::Io(_) => AudioErrorKind::Io,
+            AudioError::Decode(_) => AudioErrorKind::Decode,
+            AudioError::Wasapi(_) | AudioError::Device(_) => AudioErrorKind::Device,
+            AudioError::Unsupported(_) => AudioErrorKind::Unsupported,
+            AudioError::Custom(_) => AudioErrorKind::Unknown,
+        }
+    }
 }
 
 pub use decoder::Decoder;

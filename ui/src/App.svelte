@@ -885,7 +885,7 @@
 
     {#if playerState?.status === 'error' && playerState.error}
       <div class="error">
-        《{playerState.current?.title ?? '未知曲目'}》{playerState.error}
+        《{playerState.current?.title ?? '未知曲目'}》{playerState.error.message}
         <button class="link" onclick={() => player.next()}>跳到下一首</button>
       </div>
     {/if}

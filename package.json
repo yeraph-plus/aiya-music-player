@@ -12,6 +12,8 @@
     "bundle": "node tools/run.mjs ui/node_modules/@tauri-apps/cli/tauri.js build",
     "build:ui": "npm --prefix ui run build",
     "build:sidecar": "node tools/run.mjs tools/build-sidecar.mjs",
+    "gen:types": "node tools/gen-types.mjs",
+    "gen:types:check": "node tools/gen-types.mjs --check",
     "check": "npm --prefix ui run check",
     "test": "node tools/run.mjs cargo test --workspace",
     "test:data": "node tools/run.mjs cargo test -p aiya-data",
@@ -35,7 +37,7 @@
     "notices": "node tools/run.mjs tools/gen-notices.mjs",
     "icon:source": "node scripts/gen-icon.mjs",
     "clean": "node tools/run.mjs cargo clean",
-    "verify": "npm run test:all && npm run smoke:beets",
+    "verify": "npm run test:all && npm run gen:types:check && npm run smoke:beets",
     "verify:release": "npm run test:all && npm run bundle"
   }
 }

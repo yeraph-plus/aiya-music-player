@@ -18,6 +18,7 @@ use aiya_data::repo::{self, TrackWindowQuery};
 use aiya_data::scanner;
 
 mod beets;
+pub mod dto;
 mod logging;
 mod pump;
 mod sidecar;
@@ -26,6 +27,13 @@ mod smtc;
 use pump::{PumpCore, PumpEffect};
 
 /* ---------------- IpcResult 信封（与 contracts/ipc.ts 同构） ---------------- */
+
+/// 动态 JSON 的别名：用于 settings / ui_state 这类**没有固定形状**的载荷。
+///
+/// 它们是真正的动态边界（配置项会演化、旧配置要兼容），所以不定义 DTO，
+/// 由 UI 侧 zod schema 兜住（docs/17 §6）。写成 `Json` 而不是 `Value` 是为了
+/// 在签名上一眼看出"这里是故意的动态"，而不是"还没收口"。
+type Json = Value;
 
 fn ok(data: Value) -> Value {
     json!({ "ok": true, "data": data })
@@ -253,29 +261,36 @@ const DEFAULT_SETTINGS: &str = r#"{
 /* ---------------- app 命令 ---------------- */
 
 #[tauri::command]
-fn app_info(state: State<'_, AppState>) -> Value {
-    ok(json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "electron": "tauri",
-        "platform": std::env::consts::OS,
-        "dataDir": state.db_path.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
-    }))
+fn app_info(state: State<'_, AppState>) -> Result<dto::AppInfo, dto::ApiError> {
+    Ok(dto::AppInfo {
+        version: env!("CARGO_PKG_VERSION").into(),
+        electron: "tauri".into(),
+        platform: std::env::consts::OS.into(),
+        data_dir: state
+            .db_path
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    })
 }
 
 /// 频谱 tap 订阅开关（docs/04 §5.1：订阅制，关闭时引擎内零开销）。
 /// UI 频谱面板打开/关闭时调用。
 #[tauri::command]
-fn spectrum_set(state: State<'_, AppState>, enabled: bool) -> Value {
+fn spectrum_set(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<dto::SpectrumToggle, dto::ApiError> {
     engine_send(&state, aiya_audio::EngineCommand::SetSpectrum(enabled));
-    ok(json!({ "enabled": enabled }))
+    Ok(dto::SpectrumToggle { enabled })
 }
 
 #[tauri::command]
-fn app_get_ui_state(state: State<'_, AppState>) -> Value {
-    let result: aiya_data::DbResult<Value> = state
+fn app_get_ui_state(state: State<'_, AppState>) -> Result<Json, dto::ApiError> {
+    state
         .db()
-        .send(|conn| Ok(setting_get(conn, "ui_state").unwrap_or_else(|| json!({}))));
-    result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
+        .send(|conn| Ok(setting_get(conn, "ui_state").unwrap_or_else(|| json!({}))))
+        .map_err(dto::ApiError::from)
 }
 
 /// 注意参数名：Tauri 2 按 camelCase 匹配 JS 的 key，UI 侧的 compat 层发的是
@@ -283,24 +298,27 @@ fn app_get_ui_state(state: State<'_, AppState>) -> Value {
 /// "missing required key" → 视图/滚动/侧栏状态永不落盘，且每 600ms 抛一个
 /// unhandled rejection。注入参数改名（app_state）以腾出 `state`。
 #[tauri::command]
-fn app_set_ui_state(app_state: State<'_, AppState>, state: Value) -> Value {
-    let result: aiya_data::DbResult<()> = app_state.db().send(move |conn| {
-        setting_set(conn, "ui_state", &state).map_err(aiya_data::DbError::Sql)
-    });
-    result.map(|_| ok(json!(null))).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
+fn app_set_ui_state(
+    app_state: State<'_, AppState>,
+    state: Json,
+) -> Result<(), dto::ApiError> {
+    app_state
+        .db()
+        .send(move |conn| setting_set(conn, "ui_state", &state).map_err(aiya_data::DbError::Sql))
+        .map_err(dto::ApiError::from)
 }
 
 #[tauri::command]
-fn app_get_settings(state: State<'_, AppState>) -> Value {
-    let default: Value = serde_json::from_str(DEFAULT_SETTINGS).expect("valid default");
-    let result: aiya_data::DbResult<Value> = state.db().send(move |conn| {
-        Ok(setting_get(conn, "app_settings").unwrap_or(default))
-    });
-    result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
+fn app_get_settings(state: State<'_, AppState>) -> Result<Json, dto::ApiError> {
+    let default: Json = serde_json::from_str(DEFAULT_SETTINGS).expect("valid default");
+    state
+        .db()
+        .send(move |conn| Ok(setting_get(conn, "app_settings").unwrap_or(default)))
+        .map_err(dto::ApiError::from)
 }
 
 #[tauri::command]
-fn app_set_settings(state: State<'_, AppState>, settings: Value) -> Value {
+fn app_set_settings(state: State<'_, AppState>, settings: Json) -> Result<Json, dto::ApiError> {
     // "改完立即生效"的项在这里做 diff：只写库不通知引擎的话，用户切了独占要等
     // 下次换曲才生效，体感是"设置没反应"。
     //
@@ -310,18 +328,20 @@ fn app_set_settings(state: State<'_, AppState>, settings: Value) -> Value {
     let want_normalize = settings.get("normalizeVolume").and_then(Value::as_bool);
     let prev_normalize = state.setting_flag("normalizeVolume", false);
 
-    let result: aiya_data::DbResult<Value> = state.db().send({
-        let settings = settings.clone();
-        move |conn| {
-            setting_set(conn, "app_settings", &settings).map_err(aiya_data::DbError::Sql)?;
-            Ok(settings)
-        }
-    });
-    let out = result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()));
-    if out.get("ok").and_then(Value::as_bool) == Some(true) {
-        // 落库成功才刷新缓存：写失败时缓存保持旧值，与实际生效行为一致
-        state.refresh_settings(&settings);
-    }
+    // 落库失败直接返回错误：缓存不能先刷（否则"缓存新、库里旧"，
+    // 下次启动会莫名回退），副作用也不该执行。
+    state
+        .db()
+        .send({
+            let settings = settings.clone();
+            move |conn| {
+                setting_set(conn, "app_settings", &settings).map_err(aiya_data::DbError::Sql)?;
+                Ok(settings)
+            }
+        })
+        .map_err(dto::ApiError::from)?;
+    // 落库成功才刷新缓存：写失败时缓存保持旧值，与实际生效行为一致
+    state.refresh_settings(&settings);
 
     // 落库成功后 setting_output() 读的就是新值，直接比对
     let next_output = state.setting_output();
@@ -353,12 +373,12 @@ fn app_set_settings(state: State<'_, AppState>, settings: Value) -> Value {
             engine_send(&state, aiya_audio::EngineCommand::SetVolume(v));
         }
     }
-    out
+    Ok(settings)
 }
 
 /// 诊断页。v1 第一切：统计字段真实，引擎/系统字段为占位（P2/P4 回填）。
 #[tauri::command]
-fn app_diagnostics(state: State<'_, AppState>) -> Value {
+fn app_diagnostics(state: State<'_, AppState>) -> Result<dto::Diagnostics, dto::ApiError> {
     let db_path = state.db_path.clone();
     let smtc_active = state.smtc_active.load(Ordering::Relaxed);
     let sleep_prevented = state.sleep_prevented.load(Ordering::Relaxed);
@@ -370,64 +390,76 @@ fn app_diagnostics(state: State<'_, AppState>) -> Value {
         .clone();
     // 必须在进入 db 闭包之前读（同一个 DB 线程，闭包里再 send 会死锁）
     let desired = state.setting_output();
-    let result: aiya_data::DbResult<Value> = state.db().send(move |conn| {
-        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
-        let db_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0) as i64
-            + std::fs::metadata(db_path.with_extension("sqlite-wal"))
-                .map(|m| m.len())
-                .unwrap_or(0) as i64;
-        Ok(json!({
-            "version": env!("CARGO_PKG_VERSION"),
-            "electron": "tauri",
-            "platform": std::env::consts::OS,
-            "dataDir": db_path.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
-            // 日志位置：出问题时让用户直接把这两个路径发过来
-            "logDir": logging::dir().map(|p| p.to_string_lossy().into_owned()),
-            "logFile": logging::dir()
-                .map(|p| p.join(format!("aiya-{}.log", logging::today())).to_string_lossy().into_owned()),
-            "schemaVersion": conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap_or(0),
-            "dbBytes": db_bytes,
-            "tracks": count("SELECT COUNT(*) FROM tracks"),
-            "albums": count("SELECT COUNT(*) FROM albums"),
-            "artists": count("SELECT COUNT(*) FROM artists"),
-            "playlists": count("SELECT COUNT(*) FROM playlists"),
-            "historyRows": count("SELECT COUNT(*) FROM history"),
-            "totalDurationMs": count("SELECT COALESCE(SUM(duration_ms),0) FROM tracks"),
-            "streams": { "opened": 0, "closed": 0, "active": 0 },
-            "listTimings": [],
-            "recentErrors": [],
-            "shortcutConflicts": [],
-            "mediaKeys": {
-                "enabled": smtc_active,
-                "active": if smtc_active { vec!["SMTC"] } else { vec![] },
-                "failed": if smtc_active { vec![] } else { vec!["SMTC 初始化失败"] },
-            },
-            "power": {
-                "active": sleep_prevented,
-                "type": if sleep_prevented { Some("SetThreadExecutionState") } else { None },
-            },
-            "tray": tray_active,
-            // 音频实际状态：desired 是用户设置，actual 是设备真给了什么，
-            // note 说明回落/自愈原因（"独占可选且失败可解释"的落点）。
-            // 三档都列出来是因为"独占 50ms 轮询"与"共享 200ms 事件"的
-            // 听感差异远小于它们的配置差异，用户只能靠这里判断实际生效。
-            "audioMode": {
-                "requested": audio.requested,
-                "mode": audio.mode,
-                "clock": audio.clock,
-                "bufferMs": audio.buffer_ms,
-                "format": audio.format,
-                "note": audio.reason,
-                "desired": {
-                    "mode": desired.mode.as_str(),
-                    "bufferMs": desired.buffer_ms,
-                    "clock": desired.clock.as_str(),
-                    "releaseOnPause": desired.release_on_pause,
+    state
+        .db()
+        .send(move |conn| {
+            let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
+            let db_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0) as i64
+                + std::fs::metadata(db_path.with_extension("sqlite-wal"))
+                    .map(|m| m.len())
+                    .unwrap_or(0) as i64;
+            Ok(dto::Diagnostics {
+                version: env!("CARGO_PKG_VERSION").into(),
+                electron: "tauri".into(),
+                platform: std::env::consts::OS.into(),
+                data_dir: db_path
+                    .parent()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                // 日志位置：出问题时让用户直接把这两个路径发过来
+                log_dir: logging::dir().map(|p| p.to_string_lossy().into_owned()),
+                log_file: logging::dir().map(|p| {
+                    p.join(format!("aiya-{}.log", logging::today()))
+                        .to_string_lossy()
+                        .into_owned()
+                }),
+                schema_version: conn
+                    .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                    .unwrap_or(0),
+                db_bytes,
+                tracks: count("SELECT COUNT(*) FROM tracks"),
+                albums: count("SELECT COUNT(*) FROM albums"),
+                artists: count("SELECT COUNT(*) FROM artists"),
+                playlists: count("SELECT COUNT(*) FROM playlists"),
+                history_rows: count("SELECT COUNT(*) FROM history"),
+                total_duration_ms: count("SELECT COALESCE(SUM(duration_ms),0) FROM tracks"),
+                // 引擎侧目前只暴露 written_frames，没有流计数；保留结构不编数字
+                streams: dto::StreamsInfo { opened: 0, closed: 0, active: 0 },
+                list_timings: Vec::new(),
+                recent_errors: Vec::new(),
+                shortcut_conflicts: Vec::new(),
+                media_keys: dto::MediaKeysInfo {
+                    enabled: smtc_active,
+                    active: if smtc_active { vec!["SMTC".into()] } else { Vec::new() },
+                    failed: if smtc_active {
+                        Vec::new()
+                    } else {
+                        vec!["SMTC 初始化失败".into()]
+                    },
                 },
-            },
-        }))
-    });
-    result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
+                power: dto::PowerInfo {
+                    active: sleep_prevented,
+                    kind: sleep_prevented.then(|| "SetThreadExecutionState".into()),
+                },
+                tray: tray_active,
+                audio_mode: dto::AudioModeInfo {
+                    requested: audio.requested,
+                    mode: audio.mode,
+                    clock: audio.clock,
+                    buffer_ms: audio.buffer_ms,
+                    format: audio.format,
+                    note: Some(audio.reason).filter(|s| !s.is_empty()),
+                    desired: dto::DesiredOutput {
+                        mode: desired.mode.as_str().into(),
+                        buffer_ms: desired.buffer_ms,
+                        clock: desired.clock.as_str().into(),
+                        release_on_pause: desired.release_on_pause,
+                    },
+                },
+            })
+        })
+        .map_err(dto::ApiError::from)
+
 }
 
 #[tauri::command]
@@ -527,105 +559,102 @@ fn beets_sync(app: AppHandle, state: State<'_, AppState>) -> Value {
 }
 
 #[tauri::command]
-fn library_list(state: State<'_, AppState>, query: Value) -> Value {
-    let q: TrackWindowQuery = match serde_json::from_value(query) {
-        Ok(q) => q,
-        Err(e) => return fail("E_BAD_QUERY", &e.to_string()),
-    };
-    let result: aiya_data::DbResult<Value> = state.db().send(move |conn| {
-        serde_json::to_value(repo::list_tracks(conn, &q)?)
-            .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
-    });
-    result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
+fn library_list(
+    state: State<'_, AppState>,
+    query: Json,
+) -> Result<aiya_data::repo::TrackPage, dto::ApiError> {
+    // 参数仍然是 Value + 手动反序列化：形状不对时由我们给出 `invalidArg`
+    // 分类，而不是把 Tauri 自己的反序列化文案抛给 UI（分类权要留在自己手里）。
+    let q: TrackWindowQuery = serde_json::from_value(query)
+        .map_err(|e| dto::ApiError::invalid_arg(format!("查询参数不合法：{e}")))?;
+    state
+        .db()
+        .send(move |conn| repo::list_tracks(conn, &q))
+        .map_err(dto::ApiError::from)
 }
 
 /// 单曲/多曲查询（播放条数据源）：带出音频规格。列表查询不带（契约约定）。
 #[tauri::command]
-fn library_tracks(state: State<'_, AppState>, ids: Vec<String>) -> Value {
-    let result: aiya_data::DbResult<Value> = state.db().send(move |conn| {
-        let mut out = Vec::with_capacity(ids.len());
-        for id in &ids {
-            let row = conn.query_row(
-                "SELECT t.id, t.title, t.artist_id, ar.name, t.album_id, al.title, al_ar.name,
-                        t.duration_ms, t.track_no, t.disc_no, t.year, t.added_at, t.artwork_id,
-                        t.play_count, t.last_played_at, t.gain_db,
-                        t.codec, t.container, t.sample_rate, t.bits_per_sample, t.bitrate, t.channels
-                 FROM tracks t
-                 LEFT JOIN artists ar ON ar.id = t.artist_id
-                 LEFT JOIN albums al ON al.id = t.album_id
-                 LEFT JOIN artists al_ar ON al_ar.id = al.artist_id
-                 WHERE t.id = ?1",
-                [id],
-                |r| {
-                    let codec: Option<String> = r.get(16)?;
-                    let sample_rate: Option<i64> = r.get(18)?;
-                    let audio = if codec.is_none() && sample_rate.is_none() {
-                        Value::Null
-                    } else {
-                        json!({
-                            "codec": codec,
-                            "container": r.get::<_, Option<String>>(17)?,
-                            "sampleRate": sample_rate,
-                            "bitsPerSample": r.get::<_, Option<i64>>(19)?,
-                            "bitrate": r.get::<_, Option<i64>>(20)?,
-                            "channels": r.get::<_, Option<i64>>(21)?,
-                        })
-                    };
-                    Ok(json!({
-                        "id": r.get::<_, String>(0)?,
-                        "title": r.get::<_, String>(1)?,
-                        "artistId": r.get::<_, Option<String>>(2)?,
-                        "artist": r.get::<_, Option<String>>(3)?,
-                        "albumId": r.get::<_, Option<String>>(4)?,
-                        "album": r.get::<_, Option<String>>(5)?,
-                        "albumArtist": r.get::<_, Option<String>>(6)?,
-                        "durationMs": r.get::<_, Option<i64>>(7)?,
-                        "trackNo": r.get::<_, Option<i64>>(8)?,
-                        "discNo": r.get::<_, Option<i64>>(9)?,
-                        "year": r.get::<_, Option<i64>>(10)?,
-                        "addedAt": r.get::<_, i64>(11)?,
-                        "artworkId": r.get::<_, Option<String>>(12)?,
-                        "playCount": r.get::<_, i64>(13)?,
-                        "lastPlayedAt": r.get::<_, Option<i64>>(14)?,
-                        "gainDb": r.get::<_, Option<f64>>(15)?,
-                        "audio": audio,
-                    }))
-                },
-            );
-            match row {
-                Ok(v) => out.push(v),
-                Err(rusqlite::Error::QueryReturnedNoRows) => {}
-                Err(e) => return Err(aiya_data::DbError::Sql(e)),
+fn library_tracks(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> Result<Vec<dto::TrackDetail>, dto::ApiError> {
+    state
+        .db()
+        .send(move |conn| {
+            let mut out = Vec::with_capacity(ids.len());
+            for id in &ids {
+                // 列顺序必须与 `aiya_data::repo::row_to_track` 一致（0..=16），
+                // 音频规格接在后面（17..=22）。此前这里是手拼 17 个字段的 json!，
+                // 列一改就静默错位。
+                let row = conn.query_row(
+                    "SELECT t.id, t.title, t.artist_id, ar.name, t.album_id, al.title, al_ar.name,
+                            t.duration_ms, t.track_no, t.disc_no, t.year, t.added_at, t.artwork_id,
+                            t.play_count, t.last_played_at, t.gain_db, t.availability,
+                            t.codec, t.container, t.sample_rate, t.bits_per_sample, t.bitrate, t.channels
+                     FROM tracks t
+                     LEFT JOIN artists ar ON ar.id = t.artist_id
+                     LEFT JOIN albums al ON al.id = t.album_id
+                     LEFT JOIN artists al_ar ON al_ar.id = al.artist_id
+                     WHERE t.id = ?1",
+                    [id],
+                    |r| {
+                        let track = aiya_data::repo::row_to_track(r)?;
+                        let codec: Option<String> = r.get(17)?;
+                        let sample_rate: Option<i64> = r.get(19)?;
+                        // 全空 → None（标签里没有规格信息），而不是发一堆 null
+                        let audio = if codec.is_none() && sample_rate.is_none() {
+                            None
+                        } else {
+                            Some(aiya_player::TrackAudio {
+                                codec,
+                                container: r.get::<_, Option<String>>(18)?,
+                                sample_rate,
+                                bits_per_sample: r.get::<_, Option<i64>>(20)?,
+                                bitrate: r.get::<_, Option<i64>>(21)?,
+                                channels: r.get::<_, Option<i64>>(22)?,
+                            })
+                        };
+                        Ok(dto::TrackDetail::new(track, audio))
+                    },
+                );
+                match row {
+                    Ok(v) => out.push(v),
+                    // 查不到先跳过：批量查询里缺一首不该让整页失败
+                    Err(rusqlite::Error::QueryReturnedNoRows) => {}
+                    Err(e) => return Err(aiya_data::DbError::Sql(e)),
+                }
             }
-        }
-        serde_json::to_value(out).map_err(|e| aiya_data::DbError::Custom(e.to_string()))
-    });
-    result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
+            Ok(out)
+        })
+        .map_err(dto::ApiError::from)
 }
 
 #[tauri::command]
-fn library_stats(state: State<'_, AppState>) -> Value {
+fn library_stats(state: State<'_, AppState>) -> Result<dto::LibraryStats, dto::ApiError> {
     let db_path = state.db_path.clone();
-    let result: aiya_data::DbResult<Value> = state.db().send(move |conn| {
+    state.db().send(move |conn| {
         let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
         let db_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0) as i64;
-        Ok(json!({
-            "tracks": count("SELECT COUNT(*) FROM tracks"),
-            "albums": count("SELECT COUNT(*) FROM albums"),
-            "artists": count("SELECT COUNT(*) FROM artists"),
+        Ok(dto::LibraryStats {
+            tracks: count("SELECT COUNT(*) FROM tracks"),
+            albums: count("SELECT COUNT(*) FROM albums"),
+            artists: count("SELECT COUNT(*) FROM artists"),
             // locations / missingLocations 对应旧仓库的 media_locations 两列：
             // 新 schema 把"文件位置"并进 tracks（一曲一位置），所以
             // locations = 曲目数，missingLocations = 非 online 的位置数。
             // 此前两个数都是写死的 0/1 → 侧栏永远不提示"位置缺失"，
             // 用户看着满列表的歌，其实一半文件已经不在盘上了。
-            "locations": count("SELECT COUNT(*) FROM tracks"),
-            "missingLocations": count("SELECT COUNT(*) FROM tracks WHERE availability <> 'online'"),
-            "totalDurationMs": count("SELECT COALESCE(SUM(duration_ms),0) FROM tracks"),
-            "dbBytes": db_bytes,
-            "schemaVersion": conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap_or(0),
-        }))
-    });
-    result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
+            locations: count("SELECT COUNT(*) FROM tracks"),
+            missing_locations: count("SELECT COUNT(*) FROM tracks WHERE availability <> 'online'"),
+            total_duration_ms: count("SELECT COALESCE(SUM(duration_ms),0) FROM tracks"),
+            db_bytes,
+            schema_version: conn
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap_or(0),
+        })
+    })
+    .map_err(dto::ApiError::from)
 }
 
 /// 扫描：阻塞直到完成（进度经 `scan:progress` 事件推送，UI 侧节流渲染）。
@@ -1271,15 +1300,19 @@ fn fetch_track_refs(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_pla
 }
 
 #[tauri::command]
-fn player_state(state: State<'_, AppState>) -> Value {
+fn player_state(
+    state: State<'_, AppState>,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
     let actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    ok(serde_json::to_value(actor.state()).unwrap_or(Value::Null))
+    Ok(actor.state())
 }
 
 #[tauri::command]
-fn player_queue(state: State<'_, AppState>) -> Value {
+fn player_queue(
+    state: State<'_, AppState>,
+) -> Result<aiya_player::QueueSnapshot, dto::ApiError> {
     let actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    ok(serde_json::to_value(actor.queue_snapshot()).unwrap_or(Value::Null))
+    Ok(actor.queue_snapshot())
 }
 
 #[tauri::command]
@@ -2066,14 +2099,14 @@ pub fn run() {
                                 }
                                 let _ = handle.emit(
                                     "audio:mode",
-                                    json!({
-                                        "requested": requested,
-                                        "mode": mode,
-                                        "clock": clock,
-                                        "bufferMs": buffer_ms,
-                                        "format": format,
-                                        "reason": if note.is_empty() { Value::Null } else { Value::String(note) },
-                                    }),
+                                    dto::AudioModeEvent {
+                                        requested,
+                                        mode,
+                                        clock,
+                                        buffer_ms,
+                                        format,
+                                        reason: Some(note).filter(|s| !s.is_empty()),
+                                    },
                                 );
                             }
                             PumpEffect::EmitState => emit_state = true,

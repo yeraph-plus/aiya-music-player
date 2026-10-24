@@ -29,12 +29,14 @@ export interface Track {
   trackNo: number | null;
   discNo: number | null;
   year: number | null;
-  addedAt: number;
+  /** 入库时间，毫秒（DB 存秒，DTO 已换算） */
+  addedAtMs: number;
   artworkId: string | null;
   /** 播放次数（track_stats）；从未播过为 0 */
   playCount: number;
   /** 最后一次播放时间；从未播过为 null */
-  lastPlayedAt: number | null;
+  /** 最后播放时间，毫秒（DB 存秒，DTO 已换算） */
+  lastPlayedAtMs: number | null;
   /**
    * ReplayGain 曲目增益（dB），来自标签；缺失为 null。
    * 只用于音量归一化的换算，不改变用户设置的音量本身。

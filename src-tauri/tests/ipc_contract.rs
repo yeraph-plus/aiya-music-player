@@ -12,6 +12,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 const API_TS: &str = include_str!("../../ui/src/compat/api.ts");
+/// 新 IPC 客户端（docs/17）：`call<T>('cmd', {...})`。类型参数必须先剥掉，
+/// 否则下面的解析器只认 `call('`。
+const CLIENT_TS: &str = include_str!("../../ui/src/lib/ipc/client.ts");
 const LIB_RS: &str = include_str!("../src/lib.rs");
 
 /// UI 侧一次调用：命令名 + 入参键
@@ -89,6 +92,45 @@ fn parse_ui_calls(src: &str) -> Vec<UiCall> {
         out.push(UiCall { name, keys });
     }
     out
+}
+
+/// 去掉 `call<Type>(` 里的类型参数，统一成 `call(`，好让同一个解析器复用。
+///
+/// 只处理紧邻形态 `call<`，且按 `<>` 深度找配对的 `>`（类型里可能还有
+/// `Record<string, number>` 这种嵌套 + 逗号）。
+fn strip_call_generics(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut rest = src;
+    while let Some(pos) = rest.find("call<") {
+        out.push_str(&rest[..pos]);
+        out.push_str("call");
+        let after = &rest[pos + "call<".len()..];
+        let mut depth = 1i32;
+        let mut end = after.len();
+        for (idx, ch) in after.char_indices() {
+            match ch {
+                '<' => depth += 1,
+                '>' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = idx + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 两个 UI 层（旧 compat 壳 + 新 typed client）的全部调用，合并后统一校验。
+fn all_ui_calls() -> Vec<UiCall> {
+    let mut calls = parse_ui_calls(API_TS);
+    calls.extend(parse_ui_calls(&strip_call_generics(CLIENT_TS)));
+    calls
 }
 
 /// Rust 侧注册的命令名（`generate_handler![...]` 里的标识符）
@@ -194,7 +236,7 @@ fn snake_case(s: &str) -> String {
 
 #[test]
 fn every_ui_invoked_command_is_registered() {
-    let calls = parse_ui_calls(API_TS);
+    let calls = all_ui_calls();
     assert!(calls.len() > 30, "解析出的 UI 调用太少，规则可能失效：{}", calls.len());
     let registered = parse_registered(LIB_RS);
     assert!(registered.len() > 30, "注册命令解析失败：{}", registered.len());
@@ -212,7 +254,7 @@ fn every_ui_invoked_command_is_registered() {
 
 #[test]
 fn every_ui_argument_maps_to_a_rust_parameter() {
-    let calls = parse_ui_calls(API_TS);
+    let calls = all_ui_calls();
     let params = parse_command_params(LIB_RS);
     let mut problems: Vec<String> = Vec::new();
 

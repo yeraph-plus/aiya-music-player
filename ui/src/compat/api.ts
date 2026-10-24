@@ -28,6 +28,7 @@ import {
   type TrackQuery,
   type UiState,
 } from '@aiya/contracts';
+import { toApiError } from '../lib/ipc/client.js';
 import { MockBackend } from './mock.js';
 import { artworkUrl } from './artwork.js';
 
@@ -50,8 +51,45 @@ const EV_SCAN_PROGRESS = 'scan:progress';
 
 type InvokeFn = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 
-function tauriInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
-  return invoke<unknown>(cmd, args);
+/** 旧信封：`{ok:true,data}` / `{ok:false,error}`（未迁移的命令仍然这么返回） */
+function isEnvelope(v: unknown): boolean {
+  return typeof v === 'object' && v !== null && typeof (v as { ok?: unknown }).ok === 'boolean';
+}
+
+/**
+ * 新码 → 旧码（docs/17 §2.2）。
+ *
+ * B1 命令已经改成 `Result<T, ApiError>`：成功返回**裸载荷**、失败直接 reject。
+ * 老组件只认信封，所以在这一处统一翻译——**这是新旧契约的唯一接缝**，
+ * 旧壳（`ui/compat`）删除时连同本函数一起删。
+ */
+const LEGACY_CODE: Record<string, string> = {
+  internal: 'E_INTERNAL',
+  notFound: 'E_NOT_FOUND',
+  invalidArg: 'E_INVALID_ARG',
+  busy: 'E_BUSY',
+  io: 'E_IO',
+  beetsMissing: 'E_NOT_FOUND',
+  unsupported: 'E_INVALID_ARG',
+  deviceLost: 'E_INTERNAL',
+};
+
+async function tauriInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
+  try {
+    const data = await invoke<unknown>(cmd, args);
+    // 未迁移命令自带信封：原样透传，避免包两层
+    return isEnvelope(data) ? data : { ok: true, data };
+  } catch (e) {
+    const err = toApiError(e);
+    return {
+      ok: false,
+      error: {
+        code: LEGACY_CODE[err.code] ?? 'E_INTERNAL',
+        message: err.message,
+        ...(err.detail === undefined ? {} : { detail: err.detail }),
+      },
+    };
+  }
 }
 
 function onTauriEvent<T>(event: string, cb: (payload: T) => void): () => void {

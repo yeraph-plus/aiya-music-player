@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 
 /// 协议版本。不匹配的握手直接失败，由调用方决定重启或退出。
 ///
+/// v5：`EngineEvent::Error` 加 `kind` 分类（`fileMissing`/`io`/`decode`/
+/// `deviceLost`/`unsupportedFormat`/`unknown`）。此前只有一句话，宿主无法区分
+/// "文件没了该跳过"和"设备断了该提示"，只能解析文案前缀。
+///
 /// v4：`SetExclusive(bool)` → `SetOutputConfig(OutputConfig)`（模式/时钟/缓冲/
 ///     暂停释放一组下发）；`AudioMode` 事件从"只有 exclusive 布尔"扩成
 ///     `requested + mode + clock + bufferMs + format + reason` 的完整快照——
@@ -16,7 +20,7 @@ use serde::{Deserialize, Serialize};
 /// v3：新增 `SetExclusive` 命令与 `AudioMode` 事件（独占可选 + 失败可解释）。
 /// v2：`Load` 携带 `start_ms` + `token`；所有事件回显 `token`
 /// （ADR-0003 generation，修"启动恢复从 0 播"与"曲尾切歌连跳两首"）。
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// host → sidecar 消息。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,7 +97,11 @@ mod tests {
             SidecarToHost::Evt(EngineEvent::Position { token: 1, position_ms: 1234 }),
             SidecarToHost::Evt(EngineEvent::Eof { token: 1 }),
             SidecarToHost::Evt(EngineEvent::StateChanged { token: 1, playing: true }),
-            SidecarToHost::Evt(EngineEvent::Error { token: 1, message: "boom".into() }),
+            SidecarToHost::Evt(EngineEvent::Error {
+                token: 1,
+                kind: "decode".into(),
+                message: "boom".into(),
+            }),
             SidecarToHost::Evt(EngineEvent::AudioMode {
                 token: 1,
                 requested: "exclusive".into(),
@@ -164,6 +172,18 @@ mod tests {
         assert_eq!(
             std::str::from_utf8(&mode).unwrap(),
             "{\"k\":\"evt\",\"m\":{\"t\":\"audioMode\",\"token\":4,\"requested\":\"exclusive\",\"mode\":\"shared\",\"clock\":\"events\",\"bufferMs\":200,\"format\":\"f32\",\"reason\":\"设备拒了\"}}\n"
+        );
+
+        // v5 形状：错误必须自带分类，UI 才能决定"跳过"还是"提示"
+        let err = encode_line(&SidecarToHost::Evt(EngineEvent::Error {
+            token: 5,
+            kind: "fileMissing".into(),
+            message: "io: 系统找不到指定的文件。".into(),
+        }))
+        .unwrap();
+        assert_eq!(
+            std::str::from_utf8(&err).unwrap(),
+            "{\"k\":\"evt\",\"m\":{\"t\":\"error\",\"token\":5,\"kind\":\"fileMissing\",\"message\":\"io: 系统找不到指定的文件。\"}}\n"
         );
     }
 
