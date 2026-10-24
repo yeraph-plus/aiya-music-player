@@ -25,6 +25,9 @@ aiya-audio = { path = "../crates/aiya-audio" }
 miow.workspace = true
 tokio = { version = "1", features = ["time"] }
 tracing.workspace = true
+# 日志落盘（logging.rs）：subscriber 写文件，time 只用来取本地时间
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+time = { version = "0.3", features = ["local-offset"] }
 image.workspace = true
 rusqlite.workspace = true
 souvlaki = "0.8"

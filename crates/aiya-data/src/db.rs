@@ -23,17 +23,18 @@ pub enum DbError {
     Custom(String),
 }
 
-// 单一迁移：schema v1 压平基线（项目未发布无存量库，0001+0002+0003 已合并，
-// 见 migrations/0001_init.sql 头注）。后续破坏性演进继续往前追加编号即可。
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
+// 迁移链：v1 压平基线（项目未发布无存量库，0001+0002+0003 曾是三个编号，
+// 已合并进 0001，见 migrations/0001_init.sql 头注）；0002 起是真增量。
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_init.sql"),
+    include_str!("../migrations/0002_playlist_order.sql"),
+];
 
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
 
-/// 打开（或创建）数据库，执行 PRAGMA 与 v1 基线迁移，并启动 DB 线程。
+/// 打开（或创建）数据库，执行 PRAGMA 与迁移，并启动 DB 线程。
 pub fn open(path: &Path) -> DbResult<DbHandle> {
-    let conn = Connection::open(path)?;
-    configure(&conn)?;
-    migrate(&conn)?;
+    let conn = open_checked(path)?;
     let (tx, rx): (SyncSender<Job>, Receiver<Job>) = mpsc::sync_channel(256);
     let worker = thread::Builder::new()
         .name("aiya-db".into())
@@ -53,10 +54,69 @@ pub fn open_in_memory() -> DbResult<Connection> {
 /// 独立连接（扫描线程用）：与主 DB 线程并行，WAL 下读不阻塞写。
 /// 只配 PRAGMA 与迁移，不开线程 —— 所有权归调用方。
 pub fn open_conn(path: &Path) -> DbResult<Connection> {
+    open_checked(path)
+}
+
+/// 打开 + 配置 + 版本体检 + 迁移。
+///
+/// 版本超前的处理（此前是直接 Err，用户侧表现：降级安装后 App 起不来，
+/// 且没有任何恢复手段 —— 只能自己去 AppData 里找库删掉）：
+/// 把库文件**改名留底**（同目录 `xxx.sqlite.v{N}-{时间戳}.bak`），
+/// 再在原路径建一个新库重新开始。旧库一个字节都不丢，用户想找回数据
+/// 随时可以拿备份文件覆盖回去；代价只是"降级后要重扫/重新对齐一次"。
+fn open_checked(path: &Path) -> DbResult<Connection> {
     let conn = Connection::open(path)?;
     configure(&conn)?;
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version > MIGRATIONS.len() as i64 {
+        // Windows 上打开着的文件不能改名，必须先关连接
+        drop(conn);
+        quarantine(path, version)?;
+        let fresh = Connection::open(path)?;
+        configure(&fresh)?;
+        migrate(&fresh)?;
+        return Ok(fresh);
+    }
     migrate(&conn)?;
     Ok(conn)
+}
+
+/// 把超前版本的库文件（连同 -wal/-shm）改名留底，原路径留给新库。
+///
+/// 必须一起挪 WAL 附属文件：只挪主库的话，新建的空库会套用旧 WAL 里残留的
+/// 页帧，等于把旧 schema 的脏页灌进新库（比版本检查本身更危险）。
+fn quarantine(path: &Path, version: i64) -> DbResult<()> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| DbError::Custom(format!("非法数据库路径: {}", path.display())))?
+        .to_string_lossy()
+        .into_owned();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let backup = path.with_file_name(format!("{file_name}.v{version}-{stamp}.bak"));
+    std::fs::rename(path, &backup).map_err(|e| {
+        DbError::Custom(format!(
+            "数据库版本 {version} 比应用支持的 {} 新，且留底改名失败（{e}）：{}",
+            MIGRATIONS.len(),
+            path.display()
+        ))
+    })?;
+    for suffix in ["-wal", "-shm"] {
+        let side = path.with_file_name(format!("{file_name}{suffix}"));
+        if side.exists() {
+            let _ = std::fs::rename(&side, path.with_file_name(format!("{file_name}{suffix}.bak")));
+        }
+    }
+    tracing::warn!(
+        from = %path.display(),
+        to = %backup.display(),
+        version,
+        supported = MIGRATIONS.len(),
+        "数据库版本超前（降级启动？），已留底改名并新建空库，需要重新扫描/对齐"
+    );
+    Ok(())
 }
 
 fn configure(conn: &Connection) -> DbResult<()> {
@@ -70,15 +130,7 @@ fn configure(conn: &Connection) -> DbResult<()> {
 
 fn migrate(conn: &Connection) -> DbResult<()> {
     let mut version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    // 防呆：库比应用新（降级启动/换了空迁移链）时拒绝打开，避免用旧代码
-    // 读写新结构造成静默损坏。压平后老开发库（user_version=3）同样会被拦下，
-    // 删库重扫即可（当时无存量数据）。
-    if version > MIGRATIONS.len() as i64 {
-        return Err(DbError::Custom(format!(
-            "数据库 user_version={version} 比应用支持的 {max} 新，拒绝打开（旧开发库请直接删除后重扫）",
-            max = MIGRATIONS.len()
-        )));
-    }
+    // 版本超前的库不会走到这里（open_checked 已把它留底改名后重建空库）；
     // 迁移按序补跑：每个迁移连同 PRAGMA user_version 一起包在一个事务里
     // （CREATE...ALTER 原子）。user_version 必须与 DDL 同事务写入 —— 否则
     // 两步之间崩溃会导致重放迁移报 already exists。BEGIN IMMEDIATE 拿写锁，
@@ -201,5 +253,53 @@ mod tests {
             .expect("worker must still be alive after a panicking job");
         assert_eq!(ok, 1);
         db.close();
+    }
+
+    /// 降级启动（库比应用新）不能直接起不来：必须留底改名 + 建新库。
+    #[test]
+    fn future_version_db_is_quarantined_and_recreated() {
+        let path = std::env::temp_dir().join(format!("aiya-test-future-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE legacy_only(x); PRAGMA user_version = 99;").unwrap();
+        }
+
+        let mut db = open(&path).expect("超前版本不能直接报错起不来");
+        let (uv, legacy): (i64, i64) = db
+            .send(|conn| {
+                Ok((
+                    conn.query_row("PRAGMA user_version", [], |r| r.get(0))?,
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE name='legacy_only'",
+                        [],
+                        |r| r.get(0),
+                    )?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(uv, MIGRATIONS.len() as i64, "新库迁移全部跑完");
+        assert_eq!(legacy, 0, "旧结构不会残留在新库里");
+
+        // 备份留底：同目录下应有 xxx.db.v99-<stamp>.bak
+        let dir = path.parent().unwrap();
+        let prefix = format!(
+            "{}.v99-",
+            path.file_name().unwrap().to_string_lossy()
+        );
+        let backups: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(&prefix) && n.ends_with(".bak"))
+            .collect();
+        assert_eq!(backups.len(), 1, "旧库必须有一个留底文件: {backups:?}");
+        db.close();
+
+        // 清理现场（含备份），避免污染后续运行
+        let _ = std::fs::remove_file(&path);
+        for name in backups {
+            let _ = std::fs::remove_file(dir.join(name));
+        }
     }
 }

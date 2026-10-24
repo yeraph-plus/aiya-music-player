@@ -8,7 +8,11 @@
 use serde::{Deserialize, Serialize};
 
 /// 协议版本。不匹配的握手直接失败，由调用方决定重启或退出。
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// v3：新增 `SetExclusive` 命令与 `AudioMode` 事件（独占可选 + 失败可解释）。
+/// v2：`Load` 携带 `start_ms` + `token`；所有事件回显 `token`
+/// （ADR-0003 generation，修"启动恢复从 0 播"与"曲尾切歌连跳两首"）。
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// host → sidecar 消息。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,15 +67,17 @@ mod tests {
 
     #[test]
     fn wire_roundtrips() {
+        let load = EngineCommand::Load { path: "D:/m/a.flac".into(), start_ms: 0, token: 1 };
         for m in [
             HostToSidecar::Hello { protocol: PROTOCOL_VERSION },
             HostToSidecar::Ping,
-            HostToSidecar::Cmd(EngineCommand::Load("D:/m/a.flac".into())),
+            HostToSidecar::Cmd(load),
             HostToSidecar::Cmd(EngineCommand::SetVolume(0.42)),
             HostToSidecar::Cmd(EngineCommand::Seek(12_345)),
             HostToSidecar::Cmd(EngineCommand::SetRate(1.25)),
             HostToSidecar::Cmd(EngineCommand::Pause),
             HostToSidecar::Cmd(EngineCommand::Stop),
+            HostToSidecar::Cmd(EngineCommand::SetExclusive(true)),
         ] {
             assert_eq!(format!("{:?}", roundtrip_in(m.clone())), format!("{:?}", m));
         }
@@ -79,11 +85,16 @@ mod tests {
             SidecarToHost::Welcome { protocol: PROTOCOL_VERSION },
             SidecarToHost::Pong,
             SidecarToHost::Hb,
-            SidecarToHost::Evt(EngineEvent::Loaded { duration_ms: 5000 }),
-            SidecarToHost::Evt(EngineEvent::Position { position_ms: 1234 }),
-            SidecarToHost::Evt(EngineEvent::Eof),
-            SidecarToHost::Evt(EngineEvent::StateChanged { playing: true }),
-            SidecarToHost::Evt(EngineEvent::Error { message: "boom".into() }),
+            SidecarToHost::Evt(EngineEvent::Loaded { token: 1, duration_ms: 5000 }),
+            SidecarToHost::Evt(EngineEvent::Position { token: 1, position_ms: 1234 }),
+            SidecarToHost::Evt(EngineEvent::Eof { token: 1 }),
+            SidecarToHost::Evt(EngineEvent::StateChanged { token: 1, playing: true }),
+            SidecarToHost::Evt(EngineEvent::Error { token: 1, message: "boom".into() }),
+            SidecarToHost::Evt(EngineEvent::AudioMode {
+                token: 1,
+                exclusive: false,
+                reason: Some("设备不支持".into()),
+            }),
         ] {
             assert_eq!(format!("{:?}", roundtrip_out(m.clone())), format!("{:?}", m));
         }
@@ -92,20 +103,46 @@ mod tests {
     #[test]
     fn wire_shapes_are_stable() {
         // 形状锚点：协议字段改名会让旧 sidecar/host 互相对不上，必须显式发现
-        let hello = encode_line(&HostToSidecar::Hello { protocol: 1 }).unwrap();
-        assert_eq!(std::str::from_utf8(&hello).unwrap(), "{\"k\":\"hello\",\"m\":{\"protocol\":1}}\n");
+        let hello = encode_line(&HostToSidecar::Hello { protocol: 3 }).unwrap();
+        assert_eq!(std::str::from_utf8(&hello).unwrap(), "{\"k\":\"hello\",\"m\":{\"protocol\":3}}\n");
 
-        let load = encode_line(&HostToSidecar::Cmd(EngineCommand::Load("p".into()))).unwrap();
+        let load = encode_line(&HostToSidecar::Cmd(EngineCommand::Load {
+            path: "p".into(),
+            start_ms: 0,
+            token: 7,
+        }))
+        .unwrap();
         assert_eq!(
             std::str::from_utf8(&load).unwrap(),
-            "{\"k\":\"cmd\",\"m\":{\"t\":\"load\",\"v\":\"p\"}}\n"
+            "{\"k\":\"cmd\",\"m\":{\"t\":\"load\",\"v\":{\"path\":\"p\",\"startMs\":0,\"token\":7}}}\n"
         );
 
-        let pos =
-            encode_line(&SidecarToHost::Evt(EngineEvent::Position { position_ms: 7 })).unwrap();
+        let pos = encode_line(&SidecarToHost::Evt(EngineEvent::Position {
+            token: 3,
+            position_ms: 7,
+        }))
+        .unwrap();
         assert_eq!(
             std::str::from_utf8(&pos).unwrap(),
-            "{\"k\":\"evt\",\"m\":{\"t\":\"position\",\"positionMs\":7}}\n"
+            "{\"k\":\"evt\",\"m\":{\"t\":\"position\",\"token\":3,\"positionMs\":7}}\n"
+        );
+
+        // v3 的两个新形状：命令走相邻 tag，事件字段全部 camelCase
+        let excl = encode_line(&HostToSidecar::Cmd(EngineCommand::SetExclusive(true))).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&excl).unwrap(),
+            "{\"k\":\"cmd\",\"m\":{\"t\":\"setExclusive\",\"v\":true}}\n"
+        );
+
+        let mode = encode_line(&SidecarToHost::Evt(EngineEvent::AudioMode {
+            token: 4,
+            exclusive: false,
+            reason: Some("设备拒了".into()),
+        }))
+        .unwrap();
+        assert_eq!(
+            std::str::from_utf8(&mode).unwrap(),
+            "{\"k\":\"evt\",\"m\":{\"t\":\"audioMode\",\"token\":4,\"exclusive\":false,\"reason\":\"设备拒了\"}}\n"
         );
     }
 

@@ -40,7 +40,7 @@ fn main() {
 
     let mut engine = Engine::spawn().expect("engine spawn");
     engine.send(EngineCommand::SetRate(2.0));
-    engine.send(EngineCommand::Load(wav.to_string_lossy().into()));
+    engine.send(EngineCommand::Load { path: wav.to_string_lossy().into(), start_ms: 0, token: 1 });
 
     let start = Instant::now();
     let mut loaded = false;
@@ -50,18 +50,21 @@ fn main() {
     let deadline = Instant::now() + Duration::from_secs(6);
     while Instant::now() < deadline {
         match engine.try_recv() {
-            Some(aiya_audio::EngineEvent::Loaded { duration_ms }) => {
+            Some(aiya_audio::EngineEvent::Loaded { duration_ms, .. }) => {
                 loaded = true;
                 println!("Loaded: {duration_ms}ms (source)");
             }
-            Some(aiya_audio::EngineEvent::Position { position_ms }) => {
+            Some(aiya_audio::EngineEvent::Position { position_ms, .. }) => {
                 max_pos = max_pos.max(position_ms);
             }
-            Some(aiya_audio::EngineEvent::Eof) => {
+            Some(aiya_audio::EngineEvent::Eof { .. }) => {
                 got_eof = true;
                 break;
             }
-            Some(aiya_audio::EngineEvent::Error { message }) => {
+            Some(aiya_audio::EngineEvent::AudioMode { exclusive, reason, .. }) => {
+                println!("AudioMode exclusive={exclusive} reason={reason:?}");
+            }
+            Some(aiya_audio::EngineEvent::Error { message, .. }) => {
                 errored = Some(message);
                 break;
             }

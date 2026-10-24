@@ -103,8 +103,10 @@ pub enum QueueOp {
     Append { tracks: Vec<TrackRef> },
     /// "下一首播放"
     PlayNext { tracks: Vec<TrackRef> },
-    /// 移除指定下标
+    /// 移除指定位置（播放顺序 order 里的下标，与 queue_snapshot().ids 一致）
     Remove { indices: Vec<usize> },
+    /// 重排：把 from 位置的曲目移到 to 位置（同一坐标系）
+    Move { from: usize, to: usize },
 }
 
 /// PlayerActor 接受的命令。

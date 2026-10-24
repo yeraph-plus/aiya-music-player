@@ -29,6 +29,8 @@ sidecars/beets/.beets/
 # Vendored binaries (download scripts instead of committing)
 /vendor/mpv/
 /vendor/ffmpeg/
+# externalBin 产物：由 tools/build-sidecar.mjs 现编现拷，不入库
+/src-tauri/binaries/
 
 # Fixtures: keep small manifests, ignore generated media
 /fixtures/generated/
@@ -45,5 +47,8 @@ Thumbs.db
 *.pfx
 *.p12
 .env
-.env.*tools/beets-venv/
+.env.*
+
+# Dev-only beets 环境（体积大、可重建）
+tools/beets-venv/
 tools/beets-home/

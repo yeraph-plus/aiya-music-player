@@ -123,6 +123,20 @@ impl SpectrumTap {
         }
     }
 
+    /// 渲染线程：推**已混好的单声道输出帧**（重采样之后、乘音量之前）。
+    ///
+    /// 为什么不用 push_frame 推源帧：源帧速率 = 输出帧 × rate，倍速下入环
+    /// 速率跟着变（2× 溢出丢帧、0.5× 帧率腰斩），而频谱应当反映实际出声。
+    #[inline]
+    pub fn push_mono(&self, mono: &[f32]) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        for &s in mono {
+            self.ring.push(s, &self.dropped);
+        }
+    }
+
     pub fn dropped_count(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
@@ -371,8 +385,11 @@ mod tests {
         let tap = SpectrumTap::new();
         tap.set_enabled(false);
         tap.push_frame(&[0.5, 0.5, 0.5, 0.5], 2);
+        tap.push_mono(&[0.1, 0.2]);
+        // 真实断言环内容：禁用时生产端必须一次都不写
+        let mut out = [0f32; 8];
+        assert_eq!(tap.ring.pop(&mut out), 0, "禁用时环内必须为空");
         assert_eq!(tap.dropped_count(), 0);
-        // 环为空：无法直接读（pop 是消费者私有），用 dropped 间接验证 + enabled 分支
     }
 
     #[test]
@@ -380,8 +397,21 @@ mod tests {
         let tap = SpectrumTap::new();
         tap.set_enabled(true);
         tap.push_frame(&[1.0, 0.0, 1.0, 0.0], 2); // 两帧 L=1 R=0 → mono=0.5
-        // 经由 spawn_consumer 太重；直接验证环内数据——用一个小写法绕过：
-        // MonoRing 是私有结构，这里通过行为验证：dropped 不增即入环成功
-        assert_eq!(tap.dropped_count(), 0);
+        let mut out = [0f32; 2];
+        assert_eq!(tap.ring.pop(&mut out), 2, "两帧应入环两个单声道样本");
+        assert!((out[0] - 0.5).abs() < 1e-6, "mono = (1+0)/2，实际 {}", out[0]);
+        assert!((out[1] - 0.5).abs() < 1e-6);
+    }
+
+    /// 变速不改变入环速率：推 N 个输出帧就得到 N 个样本（此前推源帧，
+    /// 2× 速每秒入环 2× 样本，环长期溢出）。
+    #[test]
+    fn push_mono_is_rate_independent() {
+        let tap = SpectrumTap::new();
+        tap.set_enabled(true);
+        tap.push_mono(&[0.3; 32]);
+        let mut out = [0f32; 64];
+        assert_eq!(tap.ring.pop(&mut out), 32);
+        assert_eq!(tap.dropped_count(), 0, "32 样本远小于环容量，不该丢");
     }
 }

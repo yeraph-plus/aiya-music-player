@@ -28,8 +28,16 @@ pub struct PlayerActor {
     token: u64,
     /// 最近一次需要发出的引擎指令（Actor 不直接驱动线程）
     pending_load: Option<(u64, String, u64, bool)>, // (token, path, startMs, autoplay)
+    /// 需要下发 EngineCommand::Stop（队尾停住/删掉当前曲且队列空）。
+    /// 此前只有 pending_load，这两种迁移对引擎完全静默：UI 显示已停、
+    /// 声音继续放到本曲结束。
+    pending_stop: bool,
     /// Actor 自己维护的单调位置估计（无引擎回报时给 UI）
     last_reported_ms: u64,
+    /// ReplayGain 归一化开关（设置项 normalizeVolume）。放在 Actor 里而不是
+    /// 宿主里：音量是 Actor 的状态，gain_db 也在 Actor 手里（current），
+    /// 分两处算会重复且容易不同步（旧 UI 的 setNormalization 已废弃为 no-op）。
+    normalize: bool,
 }
 
 impl Default for PlayerActor {
@@ -56,7 +64,9 @@ impl PlayerActor {
             queue_version: 0,
             token: 0,
             pending_load: None,
+            pending_stop: false,
             last_reported_ms: 0,
+            normalize: false,
         }
     }
 
@@ -76,7 +86,9 @@ impl PlayerActor {
             repeat: self.repeat,
             shuffle: self.shuffle,
             status: self.status,
-            position_ms: self.position_ms.max(self.last_reported_ms),
+            // 不再 max(last_reported_ms)：那是"上一曲末尾"的残留值，
+            // 切曲瞬间会把旧进度挂到新曲上（时长对不上，进度条跳回）。
+            position_ms: self.position_ms,
             duration_ms: self.duration_ms,
             volume: self.volume,
             muted: self.muted,
@@ -102,8 +114,44 @@ impl PlayerActor {
         self.pending_load.take()
     }
 
+    /// 取走"需要停引擎"的标记（队尾停住 / 队列清空）。
+    pub fn take_pending_stop(&mut self) -> bool {
+        std::mem::take(&mut self.pending_stop)
+    }
+
     pub fn volume(&self) -> (f64, bool) {
         (self.volume, self.muted)
+    }
+
+    /// 归一化开关（宿主从设置里同步；换曲不用重设，gain_db 从 current 现取）
+    pub fn set_normalize(&mut self, on: bool) {
+        self.normalize = on;
+    }
+
+    /// ReplayGain 线性增益倍数。关闭 / 曲目无 `gain_db` 时为 1.0。
+    ///
+    /// 限幅 ±12 dB：beets 的 `rg_track_gain` 来自标签，坏标签能写出 −40 dB
+    /// 这种值，直接乘会把声音"搞没"。上限 +12 dB 实际还会被引擎的音量
+    /// 上限（1.0）夹住——我们不承诺"响度拉平"，只承诺"按标签补偿"。
+    pub fn norm_factor(&self) -> f32 {
+        if !self.normalize {
+            return 1.0;
+        }
+        let db = self
+            .current_track()
+            .and_then(|t| t.gain_db)
+            .unwrap_or(0.0)
+            .clamp(-12.0, 12.0);
+        10f32.powf((db / 20.0) as f32)
+    }
+
+    /// 实际送给引擎的音量：静音为 0，否则用户音量 × 归一化倍数，夹到 [0,1]。
+    /// **唯一**计算点——宿主三处下发（装载/拖动/静音）都走这里，避免各算一遍。
+    pub fn engine_volume(&self) -> f32 {
+        if self.muted {
+            return 0.0;
+        }
+        (self.volume as f32 * self.norm_factor()).clamp(0.0, 1.0)
     }
 
     /// 启动恢复：按持久化状态重建 Actor 并装载到引擎（装载但暂停）。
@@ -215,6 +263,8 @@ impl PlayerActor {
             self.pending_load = Some((token, track.path.clone(), start_ms, autoplay));
             self.status = if autoplay { PlaybackStatus::Loading } else { PlaybackStatus::Paused };
             self.position_ms = start_ms;
+            self.last_reported_ms = start_ms; // 换曲必须重置，否则快照带上上一曲的残留进度
+            self.pending_stop = false; // 新的装载取代旧的停止意图
             self.duration_ms = track.duration_ms.map(|d| d.max(0) as u64);
             self.error = None;
         } else {
@@ -242,23 +292,28 @@ impl PlayerActor {
             },
 
             PlayerCommand::Next => {
+                // 暂停中点"下一首"应保持暂停（主流播放器行为）；只有正在播才起播
+                let autoplay = self.status == PlaybackStatus::Playing;
                 if self.advance() {
-                    self.instruct_load(true, 0);
+                    self.instruct_load(autoplay, 0);
                 } else {
-                    // 队列尽头：停住
+                    // 队列尽头：停住 —— 必须下发 Stop，否则引擎继续把这首放完
                     self.status = PlaybackStatus::Idle;
                     self.position_ms = 0;
+                    self.last_reported_ms = 0;
+                    self.pending_stop = true;
                 }
             }
 
             PlayerCommand::Prev => {
+                let autoplay = self.status == PlaybackStatus::Playing;
                 // 播放超过 3 秒 → 回到本曲开头（通用播放器惯例）
                 if self.position_ms > 3_000 && self.current_track().is_some() {
-                    self.instruct_load(true, 0);
-                } else if self.rewind() {
-                    self.instruct_load(true, 0);
+                    self.instruct_load(autoplay, 0);
                 } else {
-                    self.instruct_load(true, 0);
+                    // 到队首且 repeat=off 时 rewind 失败，仍按"重播本曲"处理
+                    let _ = self.rewind();
+                    self.instruct_load(autoplay, 0);
                 }
             }
 
@@ -289,11 +344,25 @@ impl PlayerActor {
 
             PlayerCommand::Queue(op) => match op {
                 QueueOp::ReplaceAll { tracks, start } => {
-                    let start = start.min(tracks.len().saturating_sub(1));
                     self.queue = tracks;
+                    let n = self.queue.len();
+                    if n == 0 {
+                        self.status = PlaybackStatus::Idle;
+                        self.position_ms = 0;
+                        self.last_reported_ms = 0;
+                        self.pending_stop = true;
+                        self.bump_queue_version();
+                        return;
+                    }
+                    let start = start.min(n - 1);
                     self.rebuild_order(None);
-                    self.cursor = start.min(self.order.len().saturating_sub(1)).max(0);
-                    self.cursor = start;
+                    // start 是"队列原序"下标，必须换算成 order 里的位置 ——
+                    // 洗牌后 cursor 直接用 start 会播到另一首
+                    self.cursor = self
+                        .order
+                        .iter()
+                        .position(|&i| i == start)
+                        .unwrap_or(0);
                     self.bump_queue_version();
                     self.instruct_load(true, 0);
                 }
@@ -325,48 +394,80 @@ impl PlayerActor {
                     self.bump_queue_version();
                 }
                 QueueOp::Remove { indices } => {
-                    let mut to_remove: Vec<usize> = indices;
-                    to_remove.sort_unstable();
-                    to_remove.dedup();
-                    let removed_before = to_remove.iter().filter(|&&i| {
-                        self.order
-                            .get(self.cursor)
-                            .map(|&c| i < c)
-                            .unwrap_or(false)
-                    });
-                    let n_before = removed_before.count();
-                    let current_removed = to_remove
-                        .iter()
-                        .any(|&i| self.order.get(self.cursor) == Some(&i));
-                    // 从 queue 里删（倒序防错位）
-                    for &i in to_remove.iter().rev() {
-                        if i < self.queue.len() {
-                            self.queue.remove(i);
+                    let was_playing = self.status == PlaybackStatus::Playing;
+                    // indices 是**播放顺序里的位置**（UI 拿到的是 queue_snapshot().ids
+                    // 的下标）。此前当成 queue 下标用：洗牌时删错歌，且
+                    // rebuild_order(None) 会把整队重洗 —— 删一首就打乱全部顺序。
+                    let mut positions: Vec<usize> = indices
+                        .into_iter()
+                        .filter(|&p| p < self.order.len())
+                        .collect();
+                    positions.sort_unstable();
+                    positions.dedup();
+                    if positions.is_empty() {
+                        return;
+                    }
+                    let cur_pos = self.cursor;
+                    let cur_queue_idx = self.order.get(cur_pos).copied();
+                    let removed_before_cursor =
+                        positions.iter().filter(|&&p| p < cur_pos).count();
+                    let current_removed = cur_queue_idx
+                        .map(|c| positions.iter().any(|&p| self.order[p] == c))
+                        .unwrap_or(false);
+
+                    // 位置 → queue 下标
+                    let mut queue_idx: Vec<usize> =
+                        positions.iter().map(|&p| self.order[p]).collect();
+                    queue_idx.sort_unstable();
+                    queue_idx.dedup();
+                    for &qi in queue_idx.iter().rev() {
+                        if qi < self.queue.len() {
+                            self.queue.remove(qi);
                         }
                     }
-                    // 重建 order（删除后的下标已经移位）
-                    let was_playing_at = if current_removed {
-                        // 删除了当前曲目：跳到下一个（同 cursor 位置）
-                        Some(self.cursor.saturating_sub(n_before))
-                    } else {
-                        None
-                    };
-                    self.rebuild_order(None);
-                    if let Some(pos) = was_playing_at {
-                        self.cursor = pos.min(self.order.len().saturating_sub(1));
-                    } else {
-                        // 未删除当前曲目：cursor 前移补偿
-                        self.cursor = self.cursor.saturating_sub(n_before);
+                    // 重建 order：过滤被删位置、剩余下标按删除数量平移，
+                    // 保持相对顺序（不重洗）
+                    let mut new_order = Vec::with_capacity(self.order.len() - positions.len());
+                    for (pos, &qi) in self.order.iter().enumerate() {
+                        if positions.binary_search(&pos).is_ok() {
+                            continue;
+                        }
+                        let shift = queue_idx.iter().filter(|&&d| d < qi).count();
+                        new_order.push(qi - shift);
                     }
+                    self.order = new_order;
                     self.bump_queue_version();
+
                     if current_removed {
+                        // cursor 原地指向"下一首"；删的是末尾则回退一格
+                        self.cursor = cur_pos.min(self.order.len().saturating_sub(1));
                         if self.order.is_empty() {
                             self.status = PlaybackStatus::Idle;
                             self.position_ms = 0;
+                            self.last_reported_ms = 0;
+                            self.pending_stop = true;
                         } else {
-                            self.instruct_load(true, 0);
+                            self.instruct_load(was_playing, 0);
+                        }
+                    } else {
+                        self.cursor = cur_pos.saturating_sub(removed_before_cursor);
+                    }
+                }
+                QueueOp::Move { from, to } => {
+                    // 与 Remove 同一坐标系：order 里的位置
+                    if from >= self.order.len() || to >= self.order.len() || from == to {
+                        return;
+                    }
+                    let cur_queue_idx = self.order.get(self.cursor).copied();
+                    let moved = self.order.remove(from);
+                    self.order.insert(to, moved);
+                    // cursor 跟着"当前这首"走
+                    if let Some(c) = cur_queue_idx {
+                        if let Some(pos) = self.order.iter().position(|&i| i == c) {
+                            self.cursor = pos;
                         }
                     }
+                    self.bump_queue_version();
                 }
             },
 
@@ -399,6 +500,7 @@ impl PlayerActor {
                     self.status = PlaybackStatus::Idle;
                     self.position_ms = 0;
                     self.last_reported_ms = 0;
+                    self.pending_stop = true; // 队尾：引擎必须真的停
                 }
             }
 
@@ -425,15 +527,12 @@ impl PlayerActor {
                 let j = (x % (i as u64 + 1)) as usize;
                 order.swap(i, j);
             }
-            // 让 keep 的曲目排到当前位置附近（自然体验：shuffle 不打断当前歌）
+            // 让 keep 的曲目排到最前（shuffle 不打断当前歌）：
+            // 先洗牌再把当前曲换到 0 位，cursor 随后由下方统一指向它
             if let Some(k) = keep {
                 if let Some(pos) = order.iter().position(|&i| i == k) {
-                    let target = order.len().min(1); // 洗牌后当前歌放最前
-                    let _ = target;
-                    let pos = pos;
-                    let swap_to = 0.min(order.len() - 1);
-                    if pos != swap_to {
-                        order.swap(pos, swap_to);
+                    if pos != 0 {
+                        order.swap(pos, 0);
                     }
                 }
             }
@@ -737,5 +836,58 @@ mod tests {
         p.hydrate(vec![], RepeatMode::Off, false, 0.85, false, 1.0, 0, None);
         assert!(p.take_pending_load().is_none());
         assert_eq!(p.state().status, PlaybackStatus::Idle);
+    }
+
+    /* ---------------- ReplayGain 归一化 ---------------- */
+
+    /// 装一首带 gain_db 的曲目并让它成为 current
+    fn actor_with_gain(gain_db: Option<f64>) -> PlayerActor {
+        let mut p = PlayerActor::new();
+        let mut t = track("g");
+        t.gain_db = gain_db;
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll { tracks: vec![t], start: 0 }));
+        p.take_pending_load();
+        p
+    }
+
+    #[test]
+    fn normalize_off_keeps_volume() {
+        let mut p = actor_with_gain(Some(-6.0));
+        p.set_normalize(false);
+        assert!((p.norm_factor() - 1.0).abs() < 1e-6);
+        assert!((p.engine_volume() - p.volume().0 as f32).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normalize_applies_track_gain() {
+        let mut p = actor_with_gain(Some(-6.0));
+        p.set_normalize(true);
+        // -6 dB ≈ 0.501
+        assert!((p.norm_factor() - 0.5011872).abs() < 1e-4, "{}", p.norm_factor());
+    }
+
+    #[test]
+    fn normalize_without_gain_is_unity() {
+        let mut p = actor_with_gain(None);
+        p.set_normalize(true);
+        assert!((p.norm_factor() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normalize_clamps_absurd_tags() {
+        // 坏标签 -60 dB 不能把声音搞没；限幅到 -12 dB
+        let mut p = actor_with_gain(Some(-60.0));
+        p.set_normalize(true);
+        assert!((p.norm_factor() - 0.25118864).abs() < 1e-4, "{}", p.norm_factor());
+    }
+
+    #[test]
+    fn engine_volume_clamps_to_unity_and_mutes() {
+        let mut p = actor_with_gain(Some(9.0));
+        p.set_normalize(true);
+        p.reduce(PlayerCommand::SetVolume { volume: 1.0, muted: false });
+        assert_eq!(p.engine_volume(), 1.0, "增益不能把音量推过 1.0");
+        p.reduce(PlayerCommand::SetVolume { volume: 1.0, muted: true });
+        assert_eq!(p.engine_volume(), 0.0, "静音恒为 0");
     }
 }

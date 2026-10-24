@@ -29,10 +29,16 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Default, Clone)]
 struct TrackState {
     last_path: Option<String>,
+    /// 最近一次 Load 的代数：恢复时必须沿用，否则宿主会把这些事件
+    /// 当成过期回报丢掉（UI 停在旧状态）。
+    last_token: u64,
     volume: f32,
     rate: f32,
     position_ms: u64,
     playing: bool,
+    /// 独占偏好。sidecar 崩溃重启后是新进程，引擎内部的 pending_exclusive
+    /// 归零；不回放这条，用户开着独占会静默退回共享（设置页却显示已开）。
+    exclusive: bool,
 }
 
 /// 跨线程共享的 supervisor 状态。
@@ -40,8 +46,9 @@ struct Shared {
     child: Mutex<Option<Child>>,
     /// 当前代管道写端；None = 断线中（命令静默丢弃，等看门狗重启）
     writer_slot: Mutex<Option<BufWriter<File>>>,
-    /// 当前代最后消息时间戳（ms）；与 generation 配对防旧线程污染
-    alive_ms: Mutex<u64>,
+    /// 当前代最后消息时间（单调时钟 Instant）。此前用系统时钟毫秒：
+    /// 休眠唤醒/改系统时间后 now-last 必然 >5s，健康 sidecar 会被误杀重启。
+    alive: Mutex<Instant>,
     generation: AtomicU64,
     shutting_down: AtomicBool,
 }
@@ -87,7 +94,7 @@ impl SidecarHandle {
         let shared = Arc::new(Shared {
             child: Mutex::new(None),
             writer_slot: Mutex::new(None),
-            alive_ms: Mutex::new(now_ms()),
+            alive: Mutex::new(Instant::now()),
             generation: AtomicU64::new(0),
             shutting_down: AtomicBool::new(false),
         });
@@ -113,9 +120,13 @@ impl SidecarHandle {
         {
             let mut t = self.track.lock().unwrap();
             match &cmd {
-                aiya_audio::EngineCommand::Load(path) => t.last_path = Some(path.clone()),
+                aiya_audio::EngineCommand::Load { path, token, .. } => {
+                    t.last_path = Some(path.clone());
+                    t.last_token = *token;
+                }
                 aiya_audio::EngineCommand::SetVolume(v) => t.volume = *v,
                 aiya_audio::EngineCommand::SetRate(r) => t.rate = *r,
+                aiya_audio::EngineCommand::SetExclusive(on) => t.exclusive = *on,
                 _ => {}
             }
         }
@@ -171,7 +182,9 @@ fn connect_once(
     let child = Command::new(host_exe)
         .args(["--pipe", &pipe])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        // stderr 落 {app_data}/logs/sidecar.log：引擎进程自己的 tracing
+        // 此前被 Stdio::null() 丢掉，崩溃/设备失败完全没有痕迹
+        .stderr(crate::logging::sidecar_stderr())
         .spawn()
         .map_err(|e| format!("启动 sidecar 失败：{e}"))?;
     *shared.child.lock().unwrap() = Some(child);
@@ -188,7 +201,7 @@ fn connect_once(
     }
     let conn = result.unwrap();
 
-    *shared.alive_ms.lock().unwrap() = now_ms();
+    *shared.alive.lock().unwrap() = Instant::now();
     Ok(conn)
 }
 
@@ -266,7 +279,7 @@ fn spawn_reader(
                 }
                 // 只有当前代的线程可以刷新存活时钟
                 if shared.generation.load(Ordering::SeqCst) == generation {
-                    *shared.alive_ms.lock().unwrap() = now_ms();
+                    *shared.alive.lock().unwrap() = Instant::now();
                 }
                 let Ok(msg) =
                     serde_json::from_str::<aiya_audio::SidecarToHost>(line.trim())
@@ -279,10 +292,10 @@ fn spawn_reader(
                         {
                             let mut t = track.lock().unwrap();
                             match &evt {
-                                aiya_audio::EngineEvent::Position { position_ms } => {
+                                aiya_audio::EngineEvent::Position { position_ms, .. } => {
                                     t.position_ms = *position_ms;
                                 }
-                                aiya_audio::EngineEvent::StateChanged { playing } => {
+                                aiya_audio::EngineEvent::StateChanged { playing, .. } => {
                                     t.playing = *playing;
                                 }
                                 _ => {}
@@ -353,9 +366,8 @@ fn spawn_watchdog(
             if shared.shutting_down.load(Ordering::SeqCst) {
                 return;
             }
-            let now = now_ms();
-            let last = *shared.alive_ms.lock().unwrap();
-            if now.saturating_sub(last) <= WATCHDOG_TIMEOUT_MS {
+            let idle = shared.alive.lock().unwrap().elapsed();
+            if idle.as_millis() <= WATCHDOG_TIMEOUT_MS as u128 {
                 continue;
             }
             tracing::error!("sidecar 心跳超时（>{}ms），kill 并重启", WATCHDOG_TIMEOUT_MS);
@@ -376,53 +388,56 @@ fn spawn_watchdog(
                     continue;
                 }
             };
-            *shared.writer_slot.lock().unwrap() = Some(BufWriter::new(conn.writer));
-            spawn_reader(conn.reader, ev_tx.clone(), shared.clone(), gen, track.clone());
-            tracing::info!(generation = gen, "sidecar 已重启");
 
-            // 恢复现场：音量/倍速/当前曲/位置/播放态。
-            // 单次持锁拼写全部命令（P2：此前逐条拿锁写，writer 线程的新命令
-            // 可插进恢复序列中间——如插到 Seek 之前，最终状态不可预测）。
-            // writer 线程与这里的锁互斥，恢复字节流对它是原子的。
+            // 恢复现场：音量/倍速/当前曲（带起点与代数）/播放态。
+            // 恢复字节必须在**发布 writer_slot 之前**写好：此前先发布槽再拼恢复
+            // 序列，窗口内 writer 线程会把用户命令（如 Load/Play）先送进新
+            // sidecar，随后被恢复序列的旧 Load 覆盖 —— 表现为"重启后跳回上一首"。
             let t = track.lock().unwrap().clone();
+            let mut writer = BufWriter::new(conn.writer);
+            let mut restore: Vec<u8> = Vec::new();
+            // 独占偏好无条件回放（与是否装载无关）：引擎未装载时只暂存，
+            // 首曲 Load 才真正开流。漏了这条，崩溃重启后会静默退回共享。
+            if let Ok(b) = aiya_audio::encode_line(&aiya_audio::HostToSidecar::Cmd(
+                aiya_audio::EngineCommand::SetExclusive(t.exclusive),
+            )) {
+                restore.extend_from_slice(&b);
+            }
             if let Some(path) = t.last_path {
-                let mut restore: Vec<u8> = Vec::new();
                 for c in [
                     aiya_audio::EngineCommand::SetVolume(t.volume),
                     aiya_audio::EngineCommand::SetRate(t.rate),
-                    aiya_audio::EngineCommand::Load(path),
-                    aiya_audio::EngineCommand::Seek(t.position_ms),
+                    // 起点直接进 Load：不再先 Load 再 Seek（那会先出声再从 0 跳）
+                    aiya_audio::EngineCommand::Load {
+                        path,
+                        start_ms: t.position_ms,
+                        token: t.last_token,
+                    },
                 ] {
                     if let Ok(b) = aiya_audio::encode_line(&aiya_audio::HostToSidecar::Cmd(c)) {
                         restore.extend_from_slice(&b);
                     }
                 }
                 if !t.playing {
-                    if let Ok(b) =
-                        aiya_audio::encode_line(&aiya_audio::HostToSidecar::Cmd(
-                            aiya_audio::EngineCommand::Pause,
-                        ))
-                    {
+                    if let Ok(b) = aiya_audio::encode_line(&aiya_audio::HostToSidecar::Cmd(
+                        aiya_audio::EngineCommand::Pause,
+                    )) {
                         restore.extend_from_slice(&b);
                     }
                 }
-                let mut guard = shared.writer_slot.lock().unwrap();
-                if let Some(w) = guard.as_mut() {
-                    let _ = w.write_all(&restore).and_then(|_| w.flush());
-                }
-                tracing::info!(
-                    position_ms = t.position_ms,
-                    playing = t.playing,
-                    "sidecar 恢复现场完成"
-                );
             }
+            // 无论有没有当前曲都要把恢复序列写进去（独占偏好可能就在里面）
+            let _ = writer.write_all(&restore).and_then(|_| writer.flush());
+            tracing::info!(
+                position_ms = t.position_ms,
+                playing = t.playing,
+                exclusive = t.exclusive,
+                "sidecar 恢复现场完成"
+            );
+            *shared.writer_slot.lock().unwrap() = Some(writer);
+            spawn_reader(conn.reader, ev_tx.clone(), shared.clone(), gen, track.clone());
+            tracing::info!(generation = gen, "sidecar 已重启");
         })
         .expect("spawn sidecar watchdog");
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}

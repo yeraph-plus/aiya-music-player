@@ -77,10 +77,16 @@ fn is_audio(p: &Path) -> bool {
 
 /// 遍历目录收集音频文件。跳过隐藏目录与系统噪音目录。
 /// 返回 (音频文件列表, walk 错误数, 是否被取消)。错误（权限不足等）只计数不中断。
+///
+/// 用 `into_iter()` + `skip_current_dir()` 而不是 `for entry in ...`：
+/// 后者在目录上 `continue` 只是跳过**这个条目**，子目录照样被走进去 ——
+/// `.git/`、`$RECYCLE.BIN/` 里几万个文件照样被遍历 + parse，用户看到的是
+/// "扫了十分钟还没完"，而统计里又说不清时间花在哪。
 fn walk(root: &Path, is_cancelled: &dyn Fn() -> bool) -> (Vec<PathBuf>, usize, bool) {
     let mut out = Vec::new();
     let mut walk_errors = 0usize;
-    for entry in walkdir::WalkDir::new(root).follow_links(false) {
+    let mut it = walkdir::WalkDir::new(root).follow_links(false).into_iter();
+    while let Some(entry) = it.next() {
         if is_cancelled() {
             return (out, walk_errors, true);
         }
@@ -91,9 +97,13 @@ fn walk(root: &Path, is_cancelled: &dyn Fn() -> bool) -> (Vec<PathBuf>, usize, b
                 continue;
             }
         };
-        if entry.file_type().is_dir() {
+        if entry.file_type().is_dir() && entry.depth() > 0 {
+            // depth==0 是用户指定的库根：哪怕它叫 `.music` 也必须进去
+            // （tempfile 的目录名就以 `.tmp` 开头，剪掉根 = 一个文件都扫不到）
             if let Some(name) = entry.file_name().to_str() {
                 if name.starts_with('.') || name == "$RECYCLE.BIN" || name == "System Volume Information" {
+                    // 整个子树剪掉（不只跳过目录条目本身）
+                    it.skip_current_dir();
                     continue;
                 }
             }
@@ -414,6 +424,11 @@ pub fn scan_directory_ext(
 
     // 按批包事务：一个事务提交 BATCH_SIZE 个文件的 upsert；
     // 批内某个 upsert 失败 → 回滚整批、整批计入 failed，继续下一批。
+    //
+    // BEGIN IMMEDIATE（不是默认的 DEFERRED）：扫描线程与主 DB 线程是**两个连接**，
+    // DEFERRED 事务先拿读锁，要等第一条写语句才升级写锁；升级时若别处已持有写锁，
+    // SQLITE_BUSY 会立刻返回（busy_timeout 对"锁升级"不生效），表现为扫描中途
+    // 突然整批失败。IMMEDIATE 在事务开始就排队等写锁，busy_timeout 才真正起作用。
     let mut scanned_so_far = 0usize;
     let mut cancelled = false;
     for batch in files.chunks(BATCH_SIZE) {
@@ -437,7 +452,9 @@ pub fn scan_directory_ext(
         let mut batch_imported = 0usize;
         let mut batch_unchanged = 0usize;
         if !parsed.is_empty() {
-            let tx = conn.transaction().map_err(DbError::Sql)?;
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(DbError::Sql)?;
             let mut upsert_err: Option<(&PathBuf, DbError)> = None;
             for (path, p) in &parsed {
                 match upsert(&tx, p, now_secs(), artwork_cache) {
@@ -567,7 +584,10 @@ fn mark_missing(
     }
     let prefix_like = like_escape(&prefix);
 
-    let tx = conn.transaction().map_err(DbError::Sql)?;
+    // 同批事务的理由：与主 DB 线程并发时 DEFERRED 的锁升级会立刻 BUSY
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(DbError::Sql)?;
     tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS scan_seen (path_lower TEXT PRIMARY KEY)")?;
     tx.execute("DELETE FROM scan_seen", [])?;
     {
@@ -655,6 +675,32 @@ mod tests {
             f.write_all(&frame).unwrap();
         }
         path
+    }
+
+    /// 隐藏目录 / 系统噪音目录必须**整棵子树**剪掉。
+    /// 回归点：旧实现 `for entry in WalkDir` 里对目录 `continue`，
+    /// 只跳过目录条目本身，子目录照样走进去（.git 里几万个小文件全被遍历）。
+    #[test]
+    fn walk_prunes_hidden_and_noise_subtrees() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".git/objects/ab")).unwrap();
+        std::fs::create_dir_all(root.join("$RECYCLE.BIN/keep")).unwrap();
+        std::fs::create_dir_all(root.join("music")).unwrap();
+        write_test_mp3(&root.join("music"), "keep.mp3", "留下", "艺");
+        // 这些在剪掉的子树里，不该出现在结果中
+        for (sub, name) in [
+            (".git/objects/ab", "hidden.mp3"),
+            ("$RECYCLE.BIN/keep", "junk.mp3"),
+        ] {
+            write_test_mp3(&root.join(sub), name, "噪音", "艺");
+        }
+
+        let (files, errors, cancelled) = walk(root, &|| false);
+        assert_eq!(errors, 0);
+        assert!(!cancelled);
+        assert_eq!(files.len(), 1, "只应有 music/keep.mp3，实际: {files:?}");
+        assert!(files[0].ends_with("keep.mp3"));
     }
 
     #[test]

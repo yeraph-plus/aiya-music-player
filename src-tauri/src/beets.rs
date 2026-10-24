@@ -48,6 +48,25 @@ fn ensure_script(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// 每次 spawn sidecar 都要带的环境（三处 spawn 共用，别再各写一份）。
+///
+/// * `PYTHONIOENCODING` / `PYTHONUTF8`：把子进程的管道编码钉成 UTF-8。
+///   Windows 上 Python 默认按本地代码页（简中 = cp936）编码 stdout，带中文的
+///   路径/标题写出来就是 GBK 字节，宿主按 UTF-8 解析直接失配（旧实现的
+///   `lines()` 遇到非法字节会静默 break，整个会话无声死掉）。脚本内部也
+///   reconfigure 了一次，这里是双保险（脚本被替换/被单独调用时仍正确）。
+/// * `BEETSDIR`：`AIYA_BEETS_DIR` 存在时映射为隔离库（dev 冒烟不碰用户真实库）。
+fn sidecar_env() -> Vec<(String, String)> {
+    let mut env = vec![
+        ("PYTHONIOENCODING".to_string(), "utf-8".to_string()),
+        ("PYTHONUTF8".to_string(), "1".to_string()),
+    ];
+    if let Ok(dir) = std::env::var("AIYA_BEETS_DIR") {
+        env.push(("BEETSDIR".to_string(), dir));
+    }
+    env
+}
+
 /// 候选解释器列表（按优先级）。
 fn interpreter_candidates() -> Vec<String> {
     let mut out = Vec::new();
@@ -73,6 +92,7 @@ fn query_sidecar(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .envs(sidecar_env())
         .spawn()
         .map_err(|e| format!("spawn {python}: {e}"))?;
 
@@ -85,16 +105,38 @@ fn query_sidecar(
     // 读响应：单独线程 + 超时，避免 beets 卡住拖死宿主。
     // 容错非 JSON 行（beets 2.14 坑⑤：新库首写会往 stdout 打迁移提示）：
     // 循环读到第一条可解析 JSON 行才算响应。
+    //
+    // 按字节读再显式 from_utf8：`lines()` 遇非法字节直接返回 Err 并结束迭代，
+    // 调用方只看到"没拿到响应"——真正的编码问题被埋掉。这里逐行判编码，
+    // 非法行记日志后跳过（配合 sidecar_env 的 PYTHONIOENCODING，正常不会出现）。
     let (tx, rx) = std::sync::mpsc::channel();
     let mut stdout = child.stdout.take().expect("stdout piped");
     std::thread::spawn(move || {
         use std::io::BufRead;
-        let reader = std::io::BufReader::new(&mut stdout);
-        for line in reader.lines() {
-            let Ok(line) = line else { break };
-            if serde_json::from_str::<serde_json::Value>(line.trim()).is_ok() {
-                let _ = tx.send(line);
-                break;
+        let mut reader = std::io::BufReader::new(&mut stdout);
+        let mut buf: Vec<u8> = Vec::new();
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf) {
+                Ok(0) => break,   // EOF
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "读 beets status 响应失败");
+                    break;
+                }
+            }
+            match std::str::from_utf8(&buf) {
+                Ok(s) => {
+                    if serde_json::from_str::<serde_json::Value>(s.trim()).is_ok() {
+                        let _ = tx.send(s.trim().to_string());
+                        break;
+                    }
+                }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    len = buf.len(),
+                    "beets 响应含非法 UTF-8 字节（PYTHONIOENCODING 未生效？），跳过该行"
+                ),
             }
         }
     });
@@ -315,13 +357,7 @@ fn spawn_session(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        // AIYA_BEETS_DIR 设置时映射成 BEETSDIR（dev 隔离库）；否则用用户真实环境
-        .envs(
-            std::env::var("AIYA_BEETS_DIR")
-                .ok()
-                .map(|d| ("BEETSDIR".to_string(), d))
-                .into_iter(),
-        )
+        .envs(sidecar_env())
         .spawn()
         .map_err(|e| format!("spawn beets sidecar: {e}"))?;
 
@@ -344,20 +380,39 @@ fn spawn_reader(
     on_exit: impl FnOnce(&tauri::AppHandle) + Send + 'static,
 ) -> Result<(), String> {
     let mut stdout = child.stdout.take().expect("stdout piped");
-    // 管道线程：阻塞读原始行进 channel（超时判断在会话线程做）
+    // 管道线程：阻塞读原始行进 channel（超时判断在会话线程做）。
+    // 按字节 read_until + 显式 from_utf8：`lines()` 遇非法字节会 Err 并结束，
+    // 会话线程只能看到 channel 断开（= "sidecar 退出了"），编码问题完全没有痕迹。
+    // 现在非法行记 valid_up_to 日志后跳过，会话继续。
     let (line_tx, line_rx) = std::sync::mpsc::channel::<String>();
     let pipe_thread = std::thread::Builder::new()
         .name("beets-pipe-recv".into())
         .spawn(move || {
             use std::io::BufRead;
-            for line in std::io::BufReader::new(&mut stdout).lines() {
-                match line {
-                    Ok(l) => {
-                        if line_tx.send(l).is_err() {
+            let mut reader = std::io::BufReader::new(&mut stdout);
+            let mut buf: Vec<u8> = Vec::new();
+            loop {
+                buf.clear();
+                match reader.read_until(b'\n', &mut buf) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(error = %e, "读 beets sidecar 输出失败");
+                        break;
+                    }
+                }
+                match std::str::from_utf8(&buf) {
+                    Ok(s) => {
+                        let s = s.trim_end().to_string();
+                        if line_tx.send(s).is_err() {
                             break;
                         }
                     }
-                    Err(_) => break,
+                    Err(e) => tracing::warn!(
+                        valid_up_to = e.valid_up_to(),
+                        len = buf.len(),
+                        "beets sidecar 输出含非法 UTF-8 字节（PYTHONIOENCODING 未生效？），丢弃该行"
+                    ),
                 }
             }
         });
@@ -514,39 +569,128 @@ pub fn sync_now(app: tauri::AppHandle, params: RefreshParams) {
         .ok();
 }
 
+/// dump 全量收集的整体超时：本地库读取，几万条也在秒级；超过这个数就是卡死。
+const DUMP_TIMEOUT: Duration = Duration::from_secs(180);
+
 /// 从 sidecar 收集 dump_items 全量（一次性进程，调用线程同步读）。
+///
+/// 两条硬要求（此前都没有，导致过静默的数据损坏风险）：
+/// 1. **必须收到 `dumpDone` 才算成功**。只看"进程退出"的话，dump 中途崩/被
+///    kill 会返回半份结果，而 `sync_items` 把"自有有、beets 没有"的行计入
+///    orphaned —— 半份 dump 会让一大批曲目被误判成 orphan，后续清理逻辑
+///    会拿它当依据。
+/// 2. **整体超时要收尸**。卡死的 sidecar 会一直占着 stdout 读取线程，
+///    sync 线程永远等下去（用户侧表现：手动同步按钮按了没反应）。
 fn collect_items(
     python: &str,
     script: &std::path::Path,
 ) -> Result<Vec<aiya_data::beets_sync::BeetsItem>, String> {
-    let (mut child, stdin) = spawn_session(
+    let (child, stdin) = spawn_session(
         python,
         script,
         &serde_json::json!({ "id": 1, "cmd": "dump_items" }),
     )?;
     // dump 是一次性收集：不留 stdin 挂着，sidecar 处理完 EOF 退出
     drop(stdin);
-    let mut stdout = child.stdout.take().expect("stdout piped");
-    let mut items = Vec::new();
+    let child = std::sync::Arc::new(std::sync::Mutex::new(child));
+    let mut stdout = {
+        let mut c = child.lock().map_err(|_| "child lock poisoned")?;
+        c.stdout.take().expect("stdout piped")
+    };
+
+    // 读线程：逐行带编码检查地送进 channel（超时/收尸在主线程）
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
     {
-        use std::io::BufRead;
-        let reader = std::io::BufReader::new(&mut stdout);
-        for line in reader.lines() {
-            let Ok(line) = line else { break };
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
-                continue;
-            };
-            if v.get("type").and_then(|t| t.as_str()) == Some("item") {
-                if let Some(item) = v.get("item") {
-                    match serde_json::from_value(item.clone()) {
-                        Ok(it) => items.push(it),
-                        Err(e) => tracing::warn!(%e, "beets item 解析失败，跳过"),
+        let spawned = std::thread::Builder::new()
+            .name("beets-dump-recv".into())
+            .spawn(move || {
+                use std::io::BufRead;
+                let mut reader = std::io::BufReader::new(&mut stdout);
+                let mut buf: Vec<u8> = Vec::new();
+                loop {
+                    buf.clear();
+                    match reader.read_until(b'\n', &mut buf) {
+                        Ok(0) => break,
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                    match std::str::from_utf8(&buf) {
+                        Ok(s) => {
+                            if tx.send(s.trim_end().to_string()).is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => tracing::warn!(
+                            valid_up_to = e.valid_up_to(),
+                            len = buf.len(),
+                            "dump 输出含非法 UTF-8 字节，丢弃该行"
+                        ),
                     }
                 }
-            }
+            });
+        if let Err(e) = spawned {
+            let mut c = child.lock().map_err(|_| "child lock poisoned")?;
+            let _ = c.kill();
+            let _ = c.wait();
+            return Err(format!("起 dump 读线程: {e}"));
         }
     }
-    let _ = child.wait();
+
+    let mut items = Vec::new();
+    let mut done = false;
+    loop {
+        match rx.recv_timeout(DUMP_TIMEOUT) {
+            Ok(line) => {
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+                    continue; // 非 JSON 行（beets 新库迁移提示等）
+                };
+                match v.get("type").and_then(|t| t.as_str()) {
+                    Some("item") => {
+                        if let Some(item) = v.get("item") {
+                            match serde_json::from_value(item.clone()) {
+                                Ok(it) => items.push(it),
+                                Err(e) => tracing::warn!(%e, "beets item 解析失败，跳过"),
+                            }
+                        }
+                    }
+                    Some("dumpDone") => {
+                        done = true;
+                        break;
+                    }
+                    Some("sessionFailed") => {
+                        let msg = v
+                            .get("error")
+                            .and_then(|e| e.get("beets_message"))
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("sidecar 报告失败");
+                        let mut c = child.lock().map_err(|_| "child lock poisoned")?;
+                        let _ = c.kill();
+                        let _ = c.wait();
+                        return Err(format!("dump 失败: {msg}"));
+                    }
+                    _ => {}
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let mut c = child.lock().map_err(|_| "child lock poisoned")?;
+                let _ = c.kill();
+                let _ = c.wait();
+                return Err(format!("dump 超时（{DUMP_TIMEOUT:.0?} 无输出）"));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break, // 进程退出
+        }
+    }
+    {
+        let mut c = child.lock().map_err(|_| "child lock poisoned")?;
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+    if !done {
+        return Err(format!(
+            "dump 未收到 dumpDone（已收到 {} 条 item，进程可能中途退出）",
+            items.len()
+        ));
+    }
     Ok(items)
 }
 
@@ -698,6 +842,8 @@ mod tests {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
+            // 与生产路径同一套环境（编码钉 UTF-8），再覆盖隔离库
+            .envs(sidecar_env())
             .env("BEETSDIR", &beets_home)
             .spawn()
             .expect("spawn sidecar");

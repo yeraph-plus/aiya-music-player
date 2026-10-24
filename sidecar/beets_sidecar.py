@@ -25,14 +25,52 @@ import traceback
 
 PROTOCOL_VERSION = 2
 
-# 取消标志：reader 线程收到 {"cmd":"cancel"} 立即置位，
-# preview/apply 的工作循环在专辑/单曲粒度检查后提前收尾。
-# dump_items 不可取消（部分 dump 会让宿主把缺失 item 误判为 orphaned）。
-CANCEL = threading.Event()
+# 取消代数（generation），不是布尔标志。
+#
+# 为什么不能用一个 Event：宿主发 cancel 时可能"请求行已进管道、主循环还没派发"
+# —— 旧实现每次派发前 CANCEL.clear()，于是刚置的取消被下一条请求抹掉，取消
+# 静默失效（表现为点了取消还在写标签）。改成自增代数后：
+#   * 请求入队时记下当时的代数；派发时比较"当前代数是否变过"，
+#     变过就说明自己在排队期间被取消过 → 直接跳过；
+#   * 工作循环里同样比较代数，变过就收尾发 cancelled。
+_CANCEL_GEN = 0
+_CANCEL_LOCK = threading.Lock()
+
+
+def _bump_cancel() -> int:
+    global _CANCEL_GEN
+    with _CANCEL_LOCK:
+        _CANCEL_GEN += 1
+        return _CANCEL_GEN
+
+
+def _cancel_gen() -> int:
+    with _CANCEL_LOCK:
+        return _CANCEL_GEN
+
 
 # stdout 写锁：reader 线程的 cancelAck 与主线程的事件流/响应并发写 stdout，
 # 无锁时两行可能交错破坏行帧协议
 _OUT_LOCK = threading.Lock()
+
+
+def _force_utf8_stdio() -> None:
+    """把 stdin/stdout 钉成 UTF-8（行协议的唯一编码）。
+
+    为什么必须显式设置：Windows 上 Python 对管道用**本地编码**（简中 = cp936），
+    `json.dumps(..., ensure_ascii=False)` 出来的中文会以 GBK 字节写出，宿主按
+    UTF-8 读 → 非法字节 → 旧 reader 直接 break，整个会话无声死掉（用户看到的是
+    "导入没反应"）。ensure_ascii=True 能绕过，但会把路径/标题全变 \\uXXXX，
+    日志与断点调试都失去可读性，所以选择在协议层钉编码。
+    """
+    for stream, kwargs in (
+        (sys.stdin, {"errors": "replace"}),
+        (sys.stdout, {"errors": "replace", "newline": "\n"}),
+    ):
+        try:
+            stream.reconfigure(encoding="utf-8", **kwargs)
+        except (AttributeError, ValueError):  # 非标准流（测试替身/重定向）忽略
+            pass
 
 
 def _status_payload() -> dict:
@@ -171,11 +209,13 @@ def _candidate_payload(cid: str, match) -> dict:
     }
 
 
-def preview_import(req_id, paths: list[str], options: dict) -> None:
+def preview_import(req_id, paths: list[str], options: dict, gen: int) -> None:
     """只读预览：分组 → tag_album 候选 → album/progress 事件流。
 
     不写任何文件/库（B1 铁律）；匹配是网络操作（MusicBrainz），
     单组失败不中断整批（错误进事件，UI 可见）。
+
+    `gen` = 请求入队时的取消代数（见 _bump_cancel 注释）。
     """
     session = f"imp_{req_id:02d}"
     files = scan_audio_files(paths)
@@ -187,7 +227,7 @@ def preview_import(req_id, paths: list[str], options: dict) -> None:
     from beets import autotag
 
     for i, group_files in enumerate(groups):
-        if CANCEL.is_set():
+        if _cancel_gen() != gen:
             _emit({"type": "cancelled", "session": session, "stage": "matching"})
             return
         first = group_files[0]
@@ -262,7 +302,7 @@ def _dest_conflict(item, src: str) -> str | None:
     return f"目标已存在：{dest.decode('utf-8', 'replace')}"
 
 
-def apply_import(req_id, decisions: list[dict]) -> None:
+def apply_import(req_id, decisions: list[dict], gen: int) -> None:
     """应用导入决策：写标签到文件 + 入 beets 库（默认不移动文件）。
 
     decisions: [{"album": "alb_01", "action": "apply" | "apply_move" |
@@ -274,6 +314,9 @@ def apply_import(req_id, decisions: list[dict]) -> None:
 
     move/copy 语义：写标签 + 入库后，目标路径冲突的曲目**不覆盖不改名**，
     报 conflict 失败（文件留在原地、标签已写，解决冲突后重新应用即可完成移动）。
+
+    进度**按文件**发（不是按专辑）：宿主有 10 分钟无输出就判卡死的看门狗，
+    一张几百首的专辑或慢速磁盘上"专辑级"粒度太粗，会被误杀。
     """
     session = f"app_{req_id:02d}"
     from beets.dbcore import query as dbcore_query
@@ -282,7 +325,10 @@ def apply_import(req_id, decisions: list[dict]) -> None:
     _load_file_actions()
     lib = _open_library()
 
-    apply_total = sum(1 for d in decisions if d.get("action") in ("apply", "apply_move", "apply_copy"))
+    active = [d for d in decisions if d.get("action") in ("apply", "apply_move", "apply_copy")]
+    apply_total = len(active)
+    file_total = sum(len(d.get("paths") or []) for d in active)
+    file_done = 0
     _emit({"type": "progress", "session": session, "stage": "writing",
            "current": 0, "total": apply_total, "path": None})
 
@@ -302,9 +348,14 @@ def apply_import(req_id, decisions: list[dict]) -> None:
         mapping = cand.get("mapping") or {}
         written, failures = 0, []
         for p in paths:
-            if CANCEL.is_set():
+            if _cancel_gen() != gen:
                 _emit({"type": "cancelled", "session": session, "stage": "writing"})
                 return
+            # 逐文件进度：既是 UI 的真实进度，也是看门狗的心跳
+            file_done += 1
+            _emit({"type": "progress", "session": session, "stage": "writing",
+                   "current": i + 1, "total": apply_total,
+                   "fileCurrent": file_done, "fileTotal": file_total, "path": p})
             try:
                 item = Item.from_path(p)
                 # 专辑级字段打底，单曲级非 None 值覆盖（对齐 beets 的 merge 语义）
@@ -383,8 +434,11 @@ def dump_items(req_id) -> None:
     _emit({"type": "dumpDone", "session": session, "items": total})
 
 
-def handle(req: dict) -> dict | None:
-    """返回 None 表示已用事件流自行应答（preview_import 模式）。"""
+def handle(req: dict, gen: int) -> dict | None:
+    """返回 None 表示已用事件流自行应答（preview/apply/dump 模式）。
+
+    `gen` = 该请求入队时的取消代数：主循环据此判断"排队期间是否被取消过"。
+    """
     cmd = req.get("cmd")
     if cmd == "status":
         return {"ok": True, "data": _status_payload()}
@@ -396,7 +450,7 @@ def handle(req: dict) -> dict | None:
         if not paths:
             return {"ok": False, "error": {"code": "E_BAD_ARGS", "stage": "preview",
                                            "beets_message": "paths 为空"}}
-        preview_import(req_id, [str(p) for p in paths], req.get("options") or {})
+        preview_import(req_id, [str(p) for p in paths], req.get("options") or {}, gen)
         return None
     if cmd == "apply_import":
         req_id = int(req.get("id") or 0)
@@ -404,7 +458,7 @@ def handle(req: dict) -> dict | None:
         if not decisions:
             return {"ok": False, "error": {"code": "E_BAD_ARGS", "stage": "apply",
                                            "beets_message": "decisions 为空"}}
-        apply_import(req_id, decisions)
+        apply_import(req_id, decisions, gen)
         return None
     if cmd == "dump_items":
         dump_items(int(req.get("id") or 0))
@@ -413,6 +467,8 @@ def handle(req: dict) -> dict | None:
 
 
 def main() -> int:
+    # 编码先钉死，再考虑输出任何一行（含下面的 not_found 信封）
+    _force_utf8_stdio()
     # beets 导入失败 = 没装 = status 也答不上来；回 not_found 让宿主给安装指引
     try:
         import beets  # noqa: F401
@@ -440,10 +496,11 @@ def main() -> int:
         return 0
 
     # cancel 必须在工作循环运行时也能被接收：后台线程持续读 stdin。
-    # P0 修复：cancel 在 reader 线程**立即置位**——此前 cancel 行与其他请求
+    # cancel 在 reader 线程**立即递增取消代数**——此前 cancel 行与其他请求
     # 一样进队列，而主循环正同步执行 preview/apply（网络匹配+写文件），
-    # req_q.get() 根本轮不到它，CANCEL 永远看不到，取消实际失效。
-    # 其余行进队列由主循环处理；EOF 送 None 哨兵结束主循环。
+    # req_q.get() 根本轮不到它，取消永远看不到。
+    # 队列元素是 (行, 入队时的取消代数)：排队期间被取消过的请求在派发时
+    # 就能识别出来（旧实现的 CANCEL.clear() 会把这个取消抹掉）。
     req_q: queue.Queue = queue.Queue()
 
     def _read_stdin() -> None:
@@ -456,18 +513,19 @@ def main() -> int:
             except json.JSONDecodeError:
                 req = None
             if isinstance(req, dict) and req.get("cmd") == "cancel":
-                CANCEL.set()
+                _bump_cancel()
                 _emit({"type": "cancelAck"})
                 continue
-            req_q.put(line)
+            req_q.put((line, _cancel_gen()))
         req_q.put(None)  # EOF
 
     threading.Thread(target=_read_stdin, name="stdin-reader", daemon=True).start()
 
     while True:
-        line = req_q.get()
-        if line is None:
+        item = req_q.get()
+        if item is None:
             break
+        line, gen = item
         try:
             req = json.loads(line)
         except json.JSONDecodeError as e:
@@ -476,12 +534,11 @@ def main() -> int:
         else:
             if isinstance(req, dict) and req.get("cmd") == "cancel":
                 # 兜底分支（正常路径已在 reader 线程旁路处理）
-                CANCEL.set()
+                _bump_cancel()
                 _emit({"type": "cancelAck"})
                 continue
-            CANCEL.clear()
             try:
-                resp = handle(req)
+                resp = handle(req, gen)
             except Exception as e:  # noqa: BLE001 —— sidecar 顶层兜底，任何异常都要回信封
                 resp = {"ok": False, "error": {"code": "E_INTERNAL", "stage": "handle",
                                                "beets_message": f"{type(e).__name__}: {e}",

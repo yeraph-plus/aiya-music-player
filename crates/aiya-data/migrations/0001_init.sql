@@ -92,7 +92,9 @@ CREATE TABLE playlists (
   updated_at INTEGER NOT NULL
 );
 
--- 独立行 ID + 稳定 position：同一曲目可重复加入歌单（契约要求）
+-- 独立行 ID + 稠密 position（0..n-1，每次结构变化同事务重排）。
+-- 行 ID 是一次性身份（不按 position 派生：位置会重排，派生 id 会与残留行撞主键）；
+-- 同一首曲目在同一歌单里只出现一次（加歌去重，契约 PlaylistAddResult.skipped 即此语义）。
 CREATE TABLE playlist_items (
   id          TEXT PRIMARY KEY,
   playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,

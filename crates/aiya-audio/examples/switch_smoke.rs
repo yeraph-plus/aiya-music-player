@@ -41,7 +41,7 @@ fn main() {
     write_wav(&wav_b, 48_000, 1.0, 660.0);
 
     let mut engine = Engine::spawn().expect("engine spawn");
-    engine.send(EngineCommand::Load(wav_a.to_string_lossy().into()));
+    engine.send(EngineCommand::Load { path: wav_a.to_string_lossy().into(), start_ms: 0, token: 1 });
 
     // 等第一首装载并实际开播
     let mut loaded_a = false;
@@ -57,7 +57,7 @@ fn main() {
     std::thread::sleep(Duration::from_millis(400)); // 让 A 真正进入渲染循环
 
     // 播放中切歌（旧代码：这条 Load 被吞 → 转圈）
-    engine.send(EngineCommand::Load(wav_b.to_string_lossy().into()));
+    engine.send(EngineCommand::Load { path: wav_b.to_string_lossy().into(), start_ms: 0, token: 1 });
 
     // 断言 B 装载（duration=1000ms）且最终 EOF
     let mut loaded_b_ms = 0u64;
@@ -66,15 +66,18 @@ fn main() {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         match engine.try_recv() {
-            Some(aiya_audio::EngineEvent::Loaded { duration_ms }) => {
+            Some(aiya_audio::EngineEvent::Loaded { duration_ms, .. }) => {
                 loaded_b_ms = duration_ms;
                 println!("Loaded(second): {duration_ms}ms");
             }
-            Some(aiya_audio::EngineEvent::Eof) => {
+            Some(aiya_audio::EngineEvent::Eof { .. }) => {
                 got_eof = true;
                 break;
             }
-            Some(aiya_audio::EngineEvent::Error { message }) => {
+            Some(aiya_audio::EngineEvent::AudioMode { exclusive, reason, .. }) => {
+                println!("AudioMode exclusive={exclusive} reason={reason:?}");
+            }
+            Some(aiya_audio::EngineEvent::Error { message, .. }) => {
                 errored = Some(message);
                 break;
             }

@@ -171,19 +171,27 @@ assert all(os.listdir(os.path.dirname(p)) for p in d_paths), "库内文件应存
 assert not os.path.exists(src4[0]), ""
 print("[4] 移动进库 OK")
 
-# ---- 场景 5：取消 —— cancel 在检查点收尾 ----
-src5 = fresh_src("src5")
+# ---- 场景 5：取消 —— 覆盖"已入队未派发"与"执行中"两个窗口 ----
+# 12 组决策（36 个文件）让 apply 有足够的执行时间；cancel 紧跟请求行写入，
+# 命中哪个窗口取决于线程调度，但**两个窗口都必须收尾成 cancelled**。
+# 旧断言 `"cancelled" in ev or "applyDone" in ev` 恰好把 P1-7（取消被
+# CANCEL.clear() 抹掉、全量照跑）放过去，所以这里改成排他断言。
+src5_groups = [fresh_src(f"src5_{i:02d}") for i in range(12)]
+decisions5 = [
+    decision("apply", paths, f"冒烟E{i:02d}", title_prefix=f"E{i:02d}曲目")
+    for i, paths in enumerate(src5_groups)
+]
 proc = subprocess.Popen(
     [PYTHON, SIDECAR],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
     text=True, encoding="utf-8", env=ENV,
 )
-req = json.dumps({"id": 9, "cmd": "apply_import", "decisions": [decision("apply", src5, "冒烟E", title_prefix="E曲目")]}, ensure_ascii=False)
+req = json.dumps({"id": 9, "cmd": "apply_import", "decisions": decisions5}, ensure_ascii=False)
 proc.stdin.write(req + "\n")
 proc.stdin.write(json.dumps({"id": 10, "cmd": "cancel"}) + "\n")
 proc.stdin.flush()
 proc.stdin.close()
-out, _ = proc.communicate(timeout=60)
+out, _ = proc.communicate(timeout=120)
 ev_types = []
 for line in out.splitlines():
     if line.strip():
@@ -194,7 +202,9 @@ for line in out.splitlines():
         except json.JSONDecodeError:
             pass
 assert "cancelAck" in ev_types, ev_types
-assert "cancelled" in ev_types or "applyDone" in ev_types, ev_types
+terminal = [t for t in ev_types if t in ("cancelled", "applyDone")]
+assert len(terminal) == 1, f"终止事件必须恰好一个，实际 {terminal}（{ev_types}）"
+assert terminal[0] == "cancelled", f"取消后不能出现 applyDone（全量照跑=P1-7 回归）: {ev_types}"
 assert proc.returncode == 0, proc.returncode
 print("[5] 取消 OK:", ev_types)
 

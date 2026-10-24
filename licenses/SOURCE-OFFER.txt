@@ -1,0 +1,16 @@
+源码获取要约（GPL-3.0 第 6(d) 条）
+
+本安装包内含 GPL-3.0-or-later 程序：
+  - aiya.exe（AIYA Music 主程序）
+  - aiya-audio-host.exe（音频引擎 sidecar）
+  - beets_sidecar.py（beets 协议桥）
+
+对应源码可从以下位置取得（版本号见应用「关于」页 / 安装包文件名）：
+  https://github.com/aiya-music/aiya-music
+
+若该地址不可用，任何持有本安装包的人可书面索取，我们承诺在收到请求后
+三年内提供对应版本的完整源码（含构建脚本、Cargo.lock、前端源码），
+仅收取介质与寄送成本。
+
+第三方组件（Rust crates / 前端 npm 包 / 可选外部程序 Python、beets）的
+许可与来源见同目录 THIRD-PARTY-NOTICES.md 与 CARGO-DEPS.md。

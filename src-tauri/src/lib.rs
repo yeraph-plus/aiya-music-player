@@ -13,12 +13,17 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use aiya_data::ids;
+use aiya_data::playlist as playlist_repo;
 use aiya_data::repo::{self, TrackWindowQuery};
 use aiya_data::scanner;
 
 mod beets;
+mod logging;
+mod pump;
 mod sidecar;
 mod smtc;
+
+use pump::{PumpCore, PumpEffect};
 
 /* ---------------- IpcResult 信封（与 contracts/ipc.ts 同构） ---------------- */
 
@@ -26,8 +31,64 @@ fn ok(data: Value) -> Value {
     json!({ "ok": true, "data": data })
 }
 
+fn now_ms_u64() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// 秒级时间戳（DB 里的 created_at / updated_at / played_at 都是 UTC 秒）
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
 fn fail(code: &str, message: &str) -> Value {
     json!({ "ok": false, "error": { "code": code, "message": message } })
+}
+
+#[cfg(test)]
+mod lib_tests {
+    use crate::pump::position_emit_due;
+
+    /// P0-1 回归：节流基准必须是泵私有变量，不能被任何"刚刚被归约"的
+    /// 时间戳影响。这里锁住三条性质。
+    #[test]
+    fn position_throttle_is_based_on_last_emit_only() {
+        // 首个事件（last=0）必须立刻放行，否则 UI 要空等 500ms
+        assert!(position_emit_due(1_000, 0));
+        // 同一毫秒内再来一次（last 已置为当前时刻）：压掉（节流生效）
+        assert!(!position_emit_due(1_000, 1_000));
+        // 距上次广播不足 500ms 全部压掉
+        assert!(!position_emit_due(1_400, 1_000));
+        // 满 500ms 放行
+        assert!(position_emit_due(1_500, 1_000));
+        // 时钟回拨（now < last）不 panic、也不放开节流：saturating 兜住溢出，
+        // 结果维持"不广播"，等时间追上再说。
+        assert!(!position_emit_due(0, u64::MAX));
+    }
+
+    #[test]
+    fn snake_case_mapping_matches_tauri_convention() {
+        // Tauri 只做 camelCase→snake_case，名字不同就收不到值（P1-17 的成因）。
+        // 这里锚定我们依赖的映射规则本身。
+        let cases = [("trackIds", "track_ids"), ("state", "state"), ("from", "from")];
+        for (camel, snake) in cases {
+            let mut out = String::new();
+            for c in camel.chars() {
+                if c.is_ascii_uppercase() {
+                    out.push('_');
+                    out.push(c.to_ascii_lowercase());
+                } else {
+                    out.push(c);
+                }
+            }
+            assert_eq!(out, snake);
+        }
+    }
 }
 
 /* ---------------- 应用状态 ---------------- */
@@ -57,6 +118,17 @@ pub struct AppState {
     sleep_prevented: AtomicBool,
     /// 托盘是否已创建（诊断页）
     tray_active: AtomicBool,
+    /// 实际生效的音频模式（独占是否真的拿到；诊断页/设置页展示）。
+    /// 与设置里的"请求值"分开：设备可能拒绝独占而回落共享。
+    exclusive_active: AtomicBool,
+    /// 回落/切换失败的原因（空串 = 无）
+    audio_mode_note: Mutex<String>,
+    /// app_settings 的内存镜像。
+    ///
+    /// 为什么必须有：事件泵每 25ms 跑一拍，`preventSleep` / `normalizeVolume`
+    /// 这类开关每拍都要读。走 DB 就是每拍一次跨线程往返（DB 单 worker 串行），
+    /// 泵会被自己的读库拖慢。启动时灌一次，`app_set_settings` 写入时同步。
+    settings: Mutex<Value>,
 }
 
 impl AppState {
@@ -66,16 +138,22 @@ impl AppState {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// 读 app_settings 里的布尔项（读失败按 default）。closeToTray 接线用。
+    /// 读设置缓存里的布尔项（缓存未初始化时按 default）。
     fn setting_flag(&self, key: &str, default: bool) -> bool {
-        let key = key.to_string();
-        self.db()
-            .send(move |conn| {
-                Ok(setting_get(conn, "app_settings")
-                    .and_then(|v| v.get(&key).and_then(|b| b.as_bool()))
-                    .unwrap_or(default))
-            })
+        self.settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(key)
+            .and_then(Value::as_bool)
             .unwrap_or(default)
+    }
+
+    /// 用最新设置整体替换缓存（`app_set_settings` 落库成功后调用）
+    fn refresh_settings(&self, settings: &Value) {
+        *self
+            .settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = settings.clone();
     }
 }
 
@@ -115,6 +193,9 @@ fn setting_set(conn: &rusqlite::Connection, key: &str, value: &Value) -> rusqlit
     Ok(())
 }
 
+/// 批量收集 ID 的硬上限（防极端库把队列撑爆；超限会记 warn）。
+const ID_COLLECT_CAP: usize = 50_000;
+
 const DEFAULT_SETTINGS: &str = r#"{
   "theme": "dark",
   "density": "comfortable",
@@ -123,6 +204,7 @@ const DEFAULT_SETTINGS: &str = r#"{
   "spectrum": false,
   "spectrumEngine": "pro",
   "mediaKeys": true,
+  "exclusiveMode": false,
   "autoplayOnStart": false,
   "rememberPosition": true,
   "preventSleep": true,
@@ -158,10 +240,14 @@ fn app_get_ui_state(state: State<'_, AppState>) -> Value {
     result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
 }
 
+/// 注意参数名：Tauri 2 按 camelCase 匹配 JS 的 key，UI 侧的 compat 层发的是
+/// `{ state }`。此前 Rust 参数叫 `ui_state`（期望 `uiState`）→ 每次调用都
+/// "missing required key" → 视图/滚动/侧栏状态永不落盘，且每 600ms 抛一个
+/// unhandled rejection。注入参数改名（app_state）以腾出 `state`。
 #[tauri::command]
-fn app_set_ui_state(state: State<'_, AppState>, ui_state: Value) -> Value {
-    let result: aiya_data::DbResult<()> = state.db().send(move |conn| {
-        setting_set(conn, "ui_state", &ui_state).map_err(aiya_data::DbError::Sql)
+fn app_set_ui_state(app_state: State<'_, AppState>, state: Value) -> Value {
+    let result: aiya_data::DbResult<()> = app_state.db().send(move |conn| {
+        setting_set(conn, "ui_state", &state).map_err(aiya_data::DbError::Sql)
     });
     result.map(|_| ok(json!(null))).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
 }
@@ -177,11 +263,56 @@ fn app_get_settings(state: State<'_, AppState>) -> Value {
 
 #[tauri::command]
 fn app_set_settings(state: State<'_, AppState>, settings: Value) -> Value {
-    let result: aiya_data::DbResult<Value> = state.db().send(move |conn| {
-        setting_set(conn, "app_settings", &settings).map_err(aiya_data::DbError::Sql)?;
-        Ok(settings)
+    // "改完立即生效"的项在这里做 diff：只写库不通知引擎的话，用户切了独占要等
+    // 下次换曲才生效，体感是"设置没反应"。
+    let want_exclusive = settings.get("exclusiveMode").and_then(Value::as_bool);
+    let prev_exclusive = state.setting_flag("exclusiveMode", false);
+    let want_normalize = settings.get("normalizeVolume").and_then(Value::as_bool);
+    let prev_normalize = state.setting_flag("normalizeVolume", false);
+
+    let result: aiya_data::DbResult<Value> = state.db().send({
+        let settings = settings.clone();
+        move |conn| {
+            setting_set(conn, "app_settings", &settings).map_err(aiya_data::DbError::Sql)?;
+            Ok(settings)
+        }
     });
-    result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
+    let out = result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()));
+    if out.get("ok").and_then(Value::as_bool) == Some(true) {
+        // 落库成功才刷新缓存：写失败时缓存保持旧值，与实际生效行为一致
+        state.refresh_settings(&settings);
+    }
+
+    if let Some(on) = want_exclusive {
+        if on != prev_exclusive {
+            engine_send(&state, aiya_audio::EngineCommand::SetExclusive(on));
+            if !on {
+                // 切回共享是确定的结果；实际值会由随后到的 AudioMode 确认
+                state.exclusive_active.store(false, Ordering::Relaxed);
+                state
+                    .audio_mode_note
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clear();
+            }
+        }
+    }
+
+    // 归一化开关：改完立即重算音量（不等下一曲）。Actor 持有 gain_db，
+    // 只需翻开关 + 把新音量送给引擎。
+    if let Some(on) = want_normalize {
+        if on != prev_normalize {
+            let mut actor = state
+                .player
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            actor.set_normalize(on);
+            let v = actor.engine_volume();
+            drop(actor);
+            engine_send(&state, aiya_audio::EngineCommand::SetVolume(v));
+        }
+    }
+    out
 }
 
 /// 诊断页。v1 第一切：统计字段真实，引擎/系统字段为占位（P2/P4 回填）。
@@ -191,6 +322,14 @@ fn app_diagnostics(state: State<'_, AppState>) -> Value {
     let smtc_active = state.smtc_active.load(Ordering::Relaxed);
     let sleep_prevented = state.sleep_prevented.load(Ordering::Relaxed);
     let tray_active = state.tray_active.load(Ordering::Relaxed);
+    let exclusive_active = state.exclusive_active.load(Ordering::Relaxed);
+    let mode_note = state
+        .audio_mode_note
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    // 必须在进入 db 闭包之前读（同一个 DB 线程，闭包里再 send 会死锁）
+    let exclusive_requested = state.setting_flag("exclusiveMode", false);
     let result: aiya_data::DbResult<Value> = state.db().send(move |conn| {
         let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
         let db_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0) as i64
@@ -202,6 +341,10 @@ fn app_diagnostics(state: State<'_, AppState>) -> Value {
             "electron": "tauri",
             "platform": std::env::consts::OS,
             "dataDir": db_path.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
+            // 日志位置：出问题时让用户直接把这两个路径发过来
+            "logDir": logging::dir().map(|p| p.to_string_lossy().into_owned()),
+            "logFile": logging::dir()
+                .map(|p| p.join(format!("aiya-{}.log", logging::today())).to_string_lossy().into_owned()),
             "schemaVersion": conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap_or(0),
             "dbBytes": db_bytes,
             "tracks": count("SELECT COUNT(*) FROM tracks"),
@@ -224,6 +367,13 @@ fn app_diagnostics(state: State<'_, AppState>) -> Value {
                 "type": if sleep_prevented { Some("SetThreadExecutionState") } else { None },
             },
             "tray": tray_active,
+            // 音频实际模式：requested 是设置项，exclusive 是设备真给了什么，
+            // note 说明回落原因（"独占可选且失败可解释"的落点）
+            "audioMode": {
+                "requested": exclusive_requested,
+                "exclusive": exclusive_active,
+                "note": mode_note,
+            },
         }))
     });
     result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
@@ -412,8 +562,13 @@ fn library_stats(state: State<'_, AppState>) -> Value {
             "tracks": count("SELECT COUNT(*) FROM tracks"),
             "albums": count("SELECT COUNT(*) FROM albums"),
             "artists": count("SELECT COUNT(*) FROM artists"),
-            "locations": 1,
-            "missingLocations": 0,
+            // locations / missingLocations 对应旧仓库的 media_locations 两列：
+            // 新 schema 把"文件位置"并进 tracks（一曲一位置），所以
+            // locations = 曲目数，missingLocations = 非 online 的位置数。
+            // 此前两个数都是写死的 0/1 → 侧栏永远不提示"位置缺失"，
+            // 用户看着满列表的歌，其实一半文件已经不在盘上了。
+            "locations": count("SELECT COUNT(*) FROM tracks"),
+            "missingLocations": count("SELECT COUNT(*) FROM tracks WHERE availability <> 'online'"),
             "totalDurationMs": count("SELECT COALESCE(SUM(duration_ms),0) FROM tracks"),
             "dbBytes": db_bytes,
             "schemaVersion": conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap_or(0),
@@ -598,22 +753,21 @@ fn library_ids_for_selection(state: State<'_, AppState>, request: Value) -> Valu
         .unwrap_or_default();
 
     let result: aiya_data::DbResult<Value> = state.db().send(move |conn| {
-        let mut q = query;
-        q.limit = 500;
-        let mut ids_out: Vec<String> = Vec::new();
-        loop {
-            let page = repo::list_tracks(conn, &q)?;
-            let fetched = page.items.len();
-            ids_out.extend(page.items.iter().map(|t| t.id.clone()));
-            match page.next_cursor {
-                Some(c) if fetched > 0 => q.cursor = Some(c),
-                _ => break,
-            }
+        // 批量取全量 ID 统一走 collect_track_ids：它按来源选择推进方式
+        // （library=游标 / 歌单等=offset）。此前这里只写 `q.cursor`，而 UI
+        // 传进来的 query 恒为 offset 模式 → cursor 被忽略 → 每轮同一页 →
+        // 死循环占死 DB 线程，任何一次多选批量操作都会冻死整个 App。
+        let collected = repo::collect_track_ids(conn, &query, ID_COLLECT_CAP)?;
+        if collected.truncated {
+            tracing::warn!(cap = ID_COLLECT_CAP, "选区 ID 收集达到上限，已截断");
         }
         let final_ids: Vec<String> = if select_all {
-            ids_out
+            collected.ids
         } else {
-            indices.into_iter().filter_map(|i| ids_out.get(i).cloned()).collect()
+            indices
+                .into_iter()
+                .filter_map(|i| collected.ids.get(i).cloned())
+                .collect()
         };
         serde_json::to_value(final_ids).map_err(|e| aiya_data::DbError::Custom(e.to_string()))
     });
@@ -634,50 +788,71 @@ fn library_remove_tracks(state: State<'_, AppState>, track_ids: Vec<String>) -> 
 
 /* ---------------- playlist 命令 ---------------- */
 
-fn playlist_summary(
-    conn: &rusqlite::Connection,
-    id: &str,
-    name: &str,
-    created: i64,
-    updated: i64,
-) -> rusqlite::Result<Value> {
-    let (track_count, duration, artwork): (i64, i64, Option<String>) = conn.query_row(
-        "SELECT
-           (SELECT COUNT(*) FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id
-             WHERE pi.playlist_id = ?1),
-           (SELECT COALESCE(SUM(t.duration_ms),0) FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id
-             WHERE pi.playlist_id = ?1),
-           (SELECT t2.artwork_id FROM playlist_items pi2 JOIN tracks t2 ON t2.id = pi2.track_id
-             WHERE pi2.playlist_id = ?1 ORDER BY pi2.position LIMIT 1)",
-        rusqlite::params![id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    )?;
+/// 摘要查询：行字段 + 3 个聚合子查询（曲目数 / 总时长 / 首个有封面的曲目）。
+/// 顺序由 `sort_position`（0002 迁移新增）承载 —— 侧栏拖动排序要能持久化，
+/// 靠 created_at 假装顺序的话重启就回到创建顺序。
+const PLAYLIST_SELECT: &str = "SELECT p.id, p.name, p.created_at, p.updated_at, p.sort_position,
+       (SELECT COUNT(*) FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id
+         WHERE pi.playlist_id = p.id),
+       (SELECT COALESCE(SUM(t.duration_ms),0) FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id
+         WHERE pi.playlist_id = p.id),
+       (SELECT t2.artwork_id FROM playlist_items pi2 JOIN tracks t2 ON t2.id = pi2.track_id
+         WHERE pi2.playlist_id = p.id ORDER BY pi2.position LIMIT 1)
+  FROM playlists p";
+
+fn playlist_row_to_summary(r: &rusqlite::Row) -> rusqlite::Result<Value> {
+    let id: String = r.get(0)?;
+    let name: String = r.get(1)?;
+    let created: i64 = r.get(2)?;
+    let updated: i64 = r.get(3)?;
+    let sort: i64 = r.get(4)?;
+    let count: i64 = r.get(5)?;
+    let duration: i64 = r.get(6)?;
+    let artwork: Option<String> = r.get(7)?;
     Ok(json!({
         "id": id, "name": name, "description": Value::Null,
-        "trackCount": track_count, "durationMs": duration,
+        "trackCount": count, "durationMs": duration,
         "artworkId": artwork, "createdAt": created, "updatedAt": updated,
-        "sortPosition": created,
+        "sortPosition": sort,
     }))
+}
+
+fn playlist_summary_by_id(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> rusqlite::Result<Option<Value>> {
+    let sql = format!("{PLAYLIST_SELECT} WHERE p.id = ?1");
+    match conn.query_row(&sql, [id], playlist_row_to_summary) {
+        Ok(v) => Ok(Some(v)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// 写命令统一骨架：闭包 `None` 表示"歌单不存在" → `E_NOT_FOUND`。
+/// UI 侧这 7 个方法没有 try/catch，只判 `result.ok`，所以必须走 `ok:false`
+/// 信封而不是抛（命令不存在时 Tauri 层直接 reject，连提示都走不到）。
+fn playlist_write<F>(state: State<'_, AppState>, f: F) -> Value
+where
+    F: FnOnce(&mut rusqlite::Connection) -> aiya_data::DbResult<Option<Value>> + Send + 'static,
+{
+    let result: aiya_data::DbResult<Option<Value>> = state.db().send(f);
+    match result {
+        Ok(Some(v)) => ok(v),
+        Ok(None) => fail("E_NOT_FOUND", "歌单不存在"),
+        Err(e) => fail("E_INTERNAL", &e.to_string()),
+    }
 }
 
 #[tauri::command]
 fn playlist_list(state: State<'_, AppState>) -> Value {
     let result: aiya_data::DbResult<Value> = state.db().send(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, created_at, updated_at FROM playlists ORDER BY created_at ASC",
-        )?;
-        let rows = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, i64>(3)?,
-            ))
-        })?;
+        let sql = format!("{PLAYLIST_SELECT} ORDER BY p.sort_position ASC, p.created_at ASC");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], playlist_row_to_summary)?;
         let mut out = Vec::new();
-        for row in rows {
-            let (id, name, created, updated) = row?;
-            out.push(playlist_summary(conn, &id, &name, created, updated)?);
+        for r in rows {
+            out.push(r?);
         }
         serde_json::to_value(out).map_err(|e| aiya_data::DbError::Custom(e.to_string()))
     });
@@ -686,73 +861,139 @@ fn playlist_list(state: State<'_, AppState>) -> Value {
 
 #[tauri::command]
 fn playlist_detail(state: State<'_, AppState>, id: String) -> Value {
-    let result: aiya_data::DbResult<Value> = state.db().send(move |conn| {
-        let row = conn.query_row(
-            "SELECT id, name, created_at, updated_at FROM playlists WHERE id = ?1",
-            [id],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, i64>(3)?,
-                ))
-            },
-        );
-        match row {
-            Ok((id, name, created, updated)) => {
-                playlist_summary(conn, &id, &name, created, updated).map_err(aiya_data::DbError::Sql)
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(Value::Null),
-            Err(e) => Err(aiya_data::DbError::Sql(e)),
-        }
+    let result: aiya_data::DbResult<Option<Value>> = state.db().send(move |conn| {
+        playlist_summary_by_id(conn, &id).map_err(aiya_data::DbError::Sql)
     });
-    result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
+    match result {
+        Ok(Some(v)) => ok(v),
+        Ok(None) => ok(Value::Null),
+        Err(e) => fail("E_INTERNAL", &e.to_string()),
+    }
 }
 
 #[tauri::command]
-fn playlist_create(state: State<'_, AppState>, name: String, track_ids: Option<Vec<String>>) -> Value {
-    let name = name.trim().to_string();
-    if name.is_empty() {
-        return fail("E_BAD_NAME", "歌单名不能为空");
-    }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    let pid = ids::playlist_id(&name);
+fn playlist_create(
+    state: State<'_, AppState>,
+    name: String,
+    track_ids: Option<Vec<String>>,
+) -> Value {
+    let name = match playlist_repo::sanitize_name(&name) {
+        Ok(n) => n,
+        Err(e) => return fail("E_BAD_NAME", &e.to_string()),
+    };
     let track_ids = track_ids.unwrap_or_default();
-    let count = track_ids.len();
-    let name_for_db = name.clone();
+    // 歌单 id 由名字派生（同名即同一歌单，重复创建不重复建行）
+    let pid = ids::playlist_id(&name);
+    let now = now_secs();
     let pid_for_db = pid.clone();
-
-    let result: aiya_data::DbResult<()> = state.db().send(move |conn| {
-        let tx = conn.transaction().map_err(aiya_data::DbError::Sql)?;
-        tx.execute(
-            "INSERT INTO playlists (id, name, name_norm, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)
-             ON CONFLICT(id) DO NOTHING",
-            rusqlite::params![pid_for_db, name_for_db, aiya_data::norm::norm(&name_for_db), now],
-        )
-        .map_err(aiya_data::DbError::Sql)?;
-        for (i, tid) in track_ids.iter().enumerate() {
-            tx.execute(
-                "INSERT OR IGNORE INTO playlist_items (id, playlist_id, track_id, position, added_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![ids::playlist_item_id(&pid_for_db, tid, i as i64), pid_for_db, tid, i as i64, now],
-            )
-            .map_err(aiya_data::DbError::Sql)?;
-        }
-        tx.commit().map_err(aiya_data::DbError::Sql)
+    let result: aiya_data::DbResult<Option<Value>> = state.db().send(move |conn| {
+        playlist_repo::create(conn, &pid_for_db, &name, &track_ids, now)?;
+        playlist_summary_by_id(conn, &pid_for_db).map_err(aiya_data::DbError::Sql)
     });
     match result {
-        Ok(()) => ok(json!({
-            "id": pid, "name": name, "description": Value::Null,
-            "trackCount": count, "durationMs": 0,
-            "artworkId": Value::Null,
-            "createdAt": now, "updatedAt": now, "sortPosition": now,
-        })),
+        Ok(Some(v)) => ok(v),
+        Ok(None) => fail("E_INTERNAL", "歌单创建后读不到"),
         Err(e) => fail("E_INTERNAL", &e.to_string()),
     }
+}
+
+#[tauri::command]
+fn playlist_rename(state: State<'_, AppState>, id: String, name: String) -> Value {
+    let name = match playlist_repo::sanitize_name(&name) {
+        Ok(n) => n,
+        Err(e) => return fail("E_BAD_NAME", &e.to_string()),
+    };
+    let now = now_secs();
+    playlist_write(state, move |conn| {
+        if !playlist_repo::rename(conn, &id, &name, now)? {
+            return Ok(None);
+        }
+        playlist_summary_by_id(conn, &id).map_err(aiya_data::DbError::Sql)
+    })
+}
+
+#[tauri::command]
+fn playlist_delete(state: State<'_, AppState>, id: String) -> Value {
+    playlist_write(state, move |conn| {
+        let deleted = playlist_repo::delete(conn, &id)?;
+        Ok(Some(json!({ "deleted": deleted })))
+    })
+}
+
+/// 侧栏拖动排序。返回排序后的完整列表（UI 直接替换，省一次 roundtrip）。
+#[tauri::command]
+fn playlist_reorder(state: State<'_, AppState>, from: i64, to: i64) -> Value {
+    playlist_write(state, move |conn| {
+        playlist_repo::reorder_playlists(conn, from, to)?;
+        let sql = format!("{PLAYLIST_SELECT} ORDER BY p.sort_position ASC, p.created_at ASC");
+        let mut stmt = conn.prepare(&sql).map_err(aiya_data::DbError::Sql)?;
+        let rows = stmt.query_map([], playlist_row_to_summary).map_err(aiya_data::DbError::Sql)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(aiya_data::DbError::Sql)?);
+        }
+        Ok(Some(Value::Array(out)))
+    })
+}
+
+#[tauri::command]
+fn playlist_add_tracks(
+    state: State<'_, AppState>,
+    id: String,
+    track_ids: Vec<String>,
+    mode: Option<String>,
+) -> Value {
+    let mode = match playlist_repo::AddMode::parse(mode.as_deref()) {
+        Ok(m) => m,
+        Err(e) => return fail("E_INVALID_ARG", &e.to_string()),
+    };
+    let now = now_secs();
+    playlist_write(state, move |conn| {
+        let Some(outcome) =
+            playlist_repo::add_tracks(conn, &id, &track_ids, mode, now)?
+        else {
+            return Ok(None);
+        };
+        let summary = playlist_summary_by_id(conn, &id)
+            .map_err(aiya_data::DbError::Sql)?
+            .ok_or_else(|| aiya_data::DbError::Custom("歌单在事务后消失".into()))?;
+        Ok(Some(json!({
+            "added": outcome.added, "skipped": outcome.skipped, "summary": summary,
+        })))
+    })
+}
+
+#[tauri::command]
+fn playlist_remove_at(state: State<'_, AppState>, id: String, position: i64) -> Value {
+    let now = now_secs();
+    playlist_write(state, move |conn| {
+        if playlist_repo::remove_at(conn, &id, position, now)?.is_none() {
+            return Ok(None);
+        }
+        playlist_summary_by_id(conn, &id).map_err(aiya_data::DbError::Sql)
+    })
+}
+
+#[tauri::command]
+fn playlist_move(state: State<'_, AppState>, id: String, from: i64, to: i64) -> Value {
+    let now = now_secs();
+    playlist_write(state, move |conn| {
+        if playlist_repo::move_item(conn, &id, from, to, now)?.is_none() {
+            return Ok(None);
+        }
+        playlist_summary_by_id(conn, &id).map_err(aiya_data::DbError::Sql)
+    })
+}
+
+#[tauri::command]
+fn playlist_clear(state: State<'_, AppState>, id: String) -> Value {
+    let now = now_secs();
+    playlist_write(state, move |conn| {
+        if !playlist_repo::clear(conn, &id, now)? {
+            return Ok(None);
+        }
+        playlist_summary_by_id(conn, &id).map_err(aiya_data::DbError::Sql)
+    })
 }
 
 /* ---------------- player：PlayerActor + 引擎适配（P2 真实现） ---------------- */
@@ -824,11 +1065,18 @@ fn smtc_notify(app: &AppHandle, state: &aiya_player::PlayerState) {
 /* ---------------- 队列持久化 ---------------- */
 
 /// 从 Actor 快照持久化状态行（节流落库 / 退出 flush 用）。
-fn queue_persist_from_actor(actor: &aiya_player::PlayerActor) -> aiya_data::QueuePersist {
+///
+/// `remember_position` = 设置项；关闭时进度恒写 0，于是下次启动（即使
+/// 读库读到旧值）也从 0 开始——比"读的时候再判断"更稳，库里的值与实际
+/// 行为永远一致。
+fn queue_persist_from_actor(
+    actor: &aiya_player::PlayerActor,
+    remember_position: bool,
+) -> aiya_data::QueuePersist {
     let s = actor.state();
     aiya_data::QueuePersist {
         current_index: s.index,
-        position_ms: s.position_ms as i64,
+        position_ms: if remember_position { s.position_ms as i64 } else { 0 },
         repeat_mode: match s.repeat {
             aiya_player::RepeatMode::All => "all",
             aiya_player::RepeatMode::One => "one",
@@ -844,7 +1092,7 @@ fn queue_persist_from_actor(actor: &aiya_player::PlayerActor) -> aiya_data::Queu
 
 /// 全量落库（queue_items 重写 + 状态行）：切歌/清空时调用。
 fn persist_queue_full(state: &AppState, actor: &aiya_player::PlayerActor) {
-    let p = queue_persist_from_actor(actor);
+    let p = queue_persist_from_actor(actor, state.setting_flag("rememberPosition", true));
     let ids = actor.queue_ids();
     let result: aiya_data::DbResult<()> = state
         .db()
@@ -856,7 +1104,7 @@ fn persist_queue_full(state: &AppState, actor: &aiya_player::PlayerActor) {
 
 /// 只落状态行（position/音量等，5s 节流）。
 fn persist_queue_state_handle(state: &AppState, actor: &aiya_player::PlayerActor) {
-    let p = queue_persist_from_actor(actor);
+    let p = queue_persist_from_actor(actor, state.setting_flag("rememberPosition", true));
     let result: aiya_data::DbResult<()> =
         state.db().send(move |conn| aiya_data::save_queue_state(conn, &p));
     if let Err(e) = result {
@@ -864,31 +1112,28 @@ fn persist_queue_state_handle(state: &AppState, actor: &aiya_player::PlayerActor
     }
 }
 
+/// 把 Actor 的"装载/停止"意图下发到引擎。
+///
+/// 三个调用点（命令路径 / 事件泵 / 启动恢复）此前各抄一遍，且都 `let _ = start_ms`
+/// 把起点丢弃 —— "记住播放进度"从未生效。下发逻辑本身在 `pump::apply_engine_intents`
+/// （纯逻辑、可注入出口，有单元测试锁定指令顺序），这里只负责接上引擎通道。
+fn apply_engine_intents(state: &AppState, actor: &mut aiya_player::PlayerActor) -> bool {
+    pump::apply_engine_intents(&mut |cmd| engine_send(state, cmd), actor)
+}
+
 /// Actor 归约后统一收尾：取 pending load → 发引擎；同步音量；推状态。
 /// 返回新快照（命令返回值用）。
 fn drive_and_emit(state: &State<'_, AppState>, app: &AppHandle) -> Value {
     let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    // 1) 引擎装载指令
-    if let Some((token, path, start_ms, autoplay)) = actor.take_pending_load() {
-        let volume = actor.volume().0 as f32;
-        let muted = actor_is_muted(&actor);
-        engine_send(&state, aiya_audio::EngineCommand::Load(path));
-        engine_send(&state, aiya_audio::EngineCommand::SetVolume(if muted { 0.0 } else { volume }));
-        if !autoplay {
-            engine_send(&state, aiya_audio::EngineCommand::Pause);
-        }
-        let _ = (token, start_ms);
-        // 切歌立即全量落库（队列结构可能变了；exit 时不必依赖节流尾巴）
+    let acted = apply_engine_intents(&state, &mut actor);
+    // 切歌/停止立即全量落库（队列结构可能变了；exit 时不必依赖节流尾巴）
+    if acted {
         persist_queue_full(state, &actor);
     }
     let snapshot = actor.state();
     drop(actor);
     emit_player_state(app, &snapshot);
     ok(serde_json::to_value(&snapshot).unwrap_or(Value::Null))
-}
-
-fn actor_is_muted(actor: &aiya_player::PlayerActor) -> bool {
-    actor.volume().1
 }
 
 /// 显示并聚焦主窗口（托盘左键 / 菜单共用）。
@@ -1019,15 +1264,18 @@ fn player_play_query(
         Ok(q) => q,
         Err(e) => return fail("E_INVALID", &format!("query 无效：{e}")),
     };
-    // 拉全量 id（source 过滤 + 排序一致；limit 放大到 10000 —— 播放全部场景）
-    let q = aiya_data::TrackWindowQuery { limit: 10_000, offset: None, ..q };
-    let ids: Vec<String> = state
+    // 拉全量 id：list_tracks 的 limit 硬钳 500（窗口化列表的正确行为），
+    // 此前把 limit 写成 10000 以为能拿全，实际只播了前 500 首。
+    let (ids, truncated): (Vec<String>, bool) = state
         .db()
         .send(move |conn| {
-            let page = aiya_data::repo::list_tracks(conn, &q)?;
-            Ok(page.items.into_iter().map(|t| t.id).collect())
+            let c = aiya_data::repo::collect_track_ids(conn, &q, ID_COLLECT_CAP)?;
+            Ok((c.ids, c.truncated))
         })
         .unwrap_or_default();
+    if truncated {
+        tracing::warn!(cap = ID_COLLECT_CAP, "播放全部：曲目数超过上限，已截断");
+    }
     if ids.is_empty() {
         return fail("E_NOT_FOUND", "查询结果为空");
     }
@@ -1079,18 +1327,7 @@ fn cmd_seek(state: &AppState, app: &AppHandle, position_ms: u64) -> Value {
 /// drive_and_emit 的 AppState 版本（SMTC 回调拿不到 State<'_>，语义相同）。
 fn drive_and_emit_inner(state: &AppState, app: &AppHandle) -> Value {
     let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((token, path, start_ms, autoplay)) = actor.take_pending_load() {
-        let volume = actor.volume().0 as f32;
-        let muted = actor.volume().1;
-        engine_send(state, aiya_audio::EngineCommand::Load(path));
-        engine_send(
-            state,
-            aiya_audio::EngineCommand::SetVolume(if muted { 0.0 } else { volume }),
-        );
-        if !autoplay {
-            engine_send(state, aiya_audio::EngineCommand::Pause);
-        }
-        let _ = (token, start_ms);
+    if apply_engine_intents(state, &mut actor) {
         persist_queue_full(state, &actor);
     }
     let snapshot = actor.state();
@@ -1127,10 +1364,8 @@ fn player_set_volume(app: AppHandle, state: State<'_, AppState>, volume: f64) ->
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::SetVolume { volume, muted: false });
-        let v = actor.volume();
-        engine_send(
-            &state,
-            aiya_audio::EngineCommand::SetVolume(if v.1 { 0.0 } else { v.0 as f32 }));
+        let v = actor.engine_volume();
+        engine_send(&state, aiya_audio::EngineCommand::SetVolume(v));
     }
     drive_and_emit(&state, &app)
 }
@@ -1141,9 +1376,8 @@ fn player_toggle_mute(app: AppHandle, state: State<'_, AppState>) -> Value {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (v, muted) = actor.volume();
         actor.reduce(aiya_player::PlayerCommand::SetVolume { volume: v, muted: !muted });
-        engine_send(
-            &state,
-            aiya_audio::EngineCommand::SetVolume(if !muted { 0.0 } else { v as f32 }));
+        let v = actor.engine_volume();
+        engine_send(&state, aiya_audio::EngineCommand::SetVolume(v));
     }
     drive_and_emit(&state, &app)
 }
@@ -1161,13 +1395,24 @@ fn player_set_rate(app: AppHandle, state: State<'_, AppState>, rate: f64) -> Val
 
 #[tauri::command]
 fn player_set_repeat(app: AppHandle, state: State<'_, AppState>, repeat: String) -> Value {
-    let mode = match repeat.as_str() {
-        "all" => aiya_player::RepeatMode::All,
-        "one" => aiya_player::RepeatMode::One,
-        _ => aiya_player::RepeatMode::Off,
-    };
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // `cycle` 是契约（contracts/ipc.ts）里的"轮转"语义：UI 只发 cycle，
+        // 由后端按 顺序 → 列表 → 单曲 推进。此前 `_ => Off` 把 cycle 打成
+        // Off 且 Off 幂等 —— 循环按钮永远停在"顺序播放"。
+        let mode = match repeat.as_str() {
+            "cycle" => match actor.state().repeat {
+                aiya_player::RepeatMode::Off => aiya_player::RepeatMode::All,
+                aiya_player::RepeatMode::All => aiya_player::RepeatMode::One,
+                aiya_player::RepeatMode::One => aiya_player::RepeatMode::Off,
+            },
+            "all" => aiya_player::RepeatMode::All,
+            "one" => aiya_player::RepeatMode::One,
+            "off" => aiya_player::RepeatMode::Off,
+            other => {
+                return fail("E_INVALID_ARG", &format!("未知 repeat 值：{other}"));
+            }
+        };
         actor.reduce(aiya_player::PlayerCommand::SetRepeat(mode));
     }
     drive_and_emit(&state, &app)
@@ -1239,11 +1484,15 @@ fn player_remove_at(app: AppHandle, state: State<'_, AppState>, index: usize) ->
 }
 
 #[tauri::command]
-fn player_move(_app: AppHandle, state: State<'_, AppState>, from: usize, to: usize) -> Value {
-    let actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let _ = (&from, &to);
-    // 队列重排在 P2 后期（UI 拖拽）接入；先原样返回状态
-    ok(serde_json::to_value(actor.state()).unwrap_or(Value::Null))
+fn player_move(app: AppHandle, state: State<'_, AppState>, from: usize, to: usize) -> Value {
+    {
+        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::Move {
+            from,
+            to,
+        }));
+    }
+    drive_and_emit(&state, &app)
 }
 
 #[tauri::command]
@@ -1261,20 +1510,16 @@ fn player_clear(app: AppHandle, state: State<'_, AppState>) -> Value {
 
 /// 播放历史：一曲播完（EngineEvent::Eof，自然结束或用户切走）记一条。
 /// seconds_played = 该曲播放时长（v1 记整曲；中途跳过不细分百分比）。
+///
+/// 具体写法在 `aiya_data::history::record`（history 行与 tracks 的
+/// play_count / last_played_at 同事务；此前 play_count 根本没人维护，
+/// mostPlayed 列表永远是空的）。
 fn record_history(state: &AppState, track_id: &str, seconds_played: u64) {
     let track_id = track_id.to_string();
-    let played_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    let result: aiya_data::DbResult<()> = state.db().send(move |conn| {
-        conn.execute(
-            "INSERT INTO history (track_id, played_at, seconds_played) VALUES (?1, ?2, ?3)",
-            rusqlite::params![track_id, played_at, seconds_played as i64],
-        )
-        .map(|_| ())
-        .map_err(aiya_data::DbError::from)
-    });
+    let played_at = now_secs();
+    let result: aiya_data::DbResult<()> = state
+        .db()
+        .send(move |conn| aiya_data::history::record(conn, &track_id, played_at, seconds_played));
     if let Err(e) = result {
         tracing::warn!(error = %e, "history 写入失败");
     }
@@ -1354,11 +1599,9 @@ fn history_stats(state: State<'_, AppState>) -> Value {
 
 #[tauri::command]
 fn history_clear(state: State<'_, AppState>) -> Value {
-    let result: aiya_data::DbResult<()> = state.db().send(|conn| {
-        conn.execute("DELETE FROM history", [])
-            .map(|_| ())
-            .map_err(aiya_data::DbError::Sql)
-    });
+    // 清历史必须与曲目统计列归零同事务（见 aiya_data::history::clear）
+    let result: aiya_data::DbResult<bool> =
+        state.db().send(|conn| aiya_data::history::clear(conn));
     result
         .map(|_| ok(json!({ "cleared": true })))
         .unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
@@ -1485,6 +1728,10 @@ pub fn run() {
             artwork_protocol(ctx.app_handle(), request)
         })
         .setup(|app| {
+            // 第一件事：日志。此后的任何失败（建库、起 sidecar）才有据可查，
+            // 否则 release 里所有 tracing 输出进虚空。
+            logging::init(&app.handle());
+
             let db_path = default_db_path(&app.handle());
             let db = aiya_data::open(&db_path)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
@@ -1493,6 +1740,16 @@ pub fn run() {
             let _ = std::fs::create_dir_all(artwork_dir.join("thumbs"));
             let engine = sidecar::SidecarHandle::launch()
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            // 设置缓存灌一次：此后泵/诊断/启动恢复都读内存，不查库。
+            // 必须在 manage 之前拿到，否则下面的独占偏好会读到空缓存。
+            let settings0: Value = {
+                let fallback = || -> Value {
+                    serde_json::from_str(DEFAULT_SETTINGS).unwrap_or_else(|_| json!({}))
+                };
+                let def = fallback();
+                db.send(move |conn| Ok(setting_get(conn, "app_settings").unwrap_or(def)))
+                    .unwrap_or_else(|_| fallback())
+            };
             app.manage(AppState {
                 db: Mutex::new(db),
                 db_path,
@@ -1507,7 +1764,29 @@ pub fn run() {
                 smtc_active: AtomicBool::new(false),
                 sleep_prevented: AtomicBool::new(false),
                 tray_active: AtomicBool::new(false),
+                exclusive_active: AtomicBool::new(false),
+                audio_mode_note: Mutex::new(String::new()),
+                settings: Mutex::new(settings0),
             });
+
+            // 独占偏好先下发：引擎未装载时只记录，首曲 Load 就用上。
+            // 设备拒绝时会回落共享并通过 AudioMode 事件说明原因。
+            {
+                let st = app.state::<AppState>();
+                if st.setting_flag("exclusiveMode", false) {
+                    engine_send(&st, aiya_audio::EngineCommand::SetExclusive(true));
+                }
+            }
+            // 音量归一化偏好同样先灌进 Actor：音量在 pump 里统一算，
+            // 不放在 UI（旧 UI 侧的 setNormalization 已是 no-op）
+            if let Some(state) = app.try_state::<AppState>() {
+                let on = state.setting_flag("normalizeVolume", false);
+                state
+                    .player
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .set_normalize(on);
+            }
 
             // SMTC：主窗口 HWND（COM 对象要求）；失败只记日志，不影响播放
             if let Some(main) = app.get_webview_window("main") {
@@ -1521,9 +1800,12 @@ pub fn run() {
                 }
             }
 
-            // 启动恢复：queue_state + queue_items → Actor hydrate → 引擎装载（暂停）。
-            // 恢复不自动播放；shuffle 开启时 Actor 内重新洗牌（排列不落库）。
+            // 启动恢复：queue_state + queue_items → Actor hydrate → 引擎装载。
+            // 默认恢复成"暂停"（用户点播放才出声）；`autoplayOnStart` 打开则立即续播。
+            // `rememberPosition` 关闭时起点强制 0（进度不跨会话记忆）。
             if let Some(state) = app.try_state::<AppState>() {
+                let remember_position = state.setting_flag("rememberPosition", true);
+                let autoplay_on_start = state.setting_flag("autoplayOnStart", false);
                 let loaded: Result<
                     Option<(aiya_data::QueuePersist, Vec<String>)>,
                     aiya_data::DbError,
@@ -1538,6 +1820,11 @@ pub fn run() {
                                 _ => aiya_player::RepeatMode::Off,
                             };
                             let current_id = ids.get(p.current_index.max(0) as usize).cloned();
+                            let start_ms = if remember_position {
+                                p.position_ms.max(0) as u64
+                            } else {
+                                0
+                            };
                             let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                             actor.hydrate(
                                 tracks,
@@ -1546,26 +1833,23 @@ pub fn run() {
                                 p.volume,
                                 p.muted,
                                 p.rate,
-                                p.position_ms.max(0) as u64,
+                                start_ms,
                                 current_id.as_deref(),
                             );
-                            if let Some((_, path, _, autoplay)) = actor.take_pending_load() {
-                                let muted = actor_is_muted(&actor);
-                                engine_send(
-                                    &state,
-                                    aiya_audio::EngineCommand::Load(path),
-                                );
-                                engine_send(
-                                    &state,
-                                    aiya_audio::EngineCommand::SetVolume(if muted {
-                                        0.0
-                                    } else {
-                                        p.volume as f32
-                                    }),
-                                );
-                                if !autoplay {
-                                    engine_send(&state, aiya_audio::EngineCommand::Pause);
-                                }
+                            // 恢复装载：起点（hydrate 传入的 position_ms）与
+                            // 倍速必须一起下发 —— 此前 `let _ = start_ms`
+                            // 直接丢弃，UI 显示 30:00、出声从 0 开始。
+                            apply_engine_intents(&state, &mut actor);
+                            // autoplayOnStart：hydrate 出的是 Paused（引擎已收到
+                            // Load + Pause），这里补一条 Resume 并翻转状态。
+                            // 只对"有当前曲且处于暂停"生效，避免空队列时误播。
+                            let status_now = actor.state().status;
+                            if autoplay_on_start
+                                && status_now == aiya_player::PlaybackStatus::Paused
+                            {
+                                engine_send(&state, aiya_audio::EngineCommand::Resume);
+                                actor.reduce(aiya_player::PlayerCommand::TogglePause);
+                                tracing::info!("autoplayOnStart: 启动即续播");
                             }
                             let snapshot = actor.state();
                             drop(actor);
@@ -1639,18 +1923,18 @@ pub fn run() {
 
             // 引擎事件泵：EngineEvent → Actor 归约 → player:state 事件。
             // Position 节流到 500ms（渲染循环节拍是 ~10ms，UI 不需要那么密）。
-            let pump = app.handle().clone();
+            let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                // 最近一次引擎上报的播放位置（毫秒）——历史记录的 seconds_played
-                // 数据源（P2：此前 Eof 一律记整曲时长，切走的歌也按听完整曲计）
-                let mut last_position_ms: u64 = 0;
                 // 防休眠标志由专用线程消费，这里只翻转 AtomicBool
                 let mut prevent_sleep_last = false;
+                // 泵的归约状态：位置估算 + 广播节流基准（泵私有，见 pump.rs）
+                let mut core = PumpCore::new();
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                    let Some(engine) = pump.try_state::<AppState>() else { continue };
-                    // 播放中防系统睡眠（不管屏幕）；状态变化才调系统 API
-                    let playing_now = {
+                    let Some(engine) = handle.try_state::<AppState>() else { continue };
+                    // 防系统睡眠：只在"播放中且设置开启"时置位。
+                    // 此前无条件按播放状态防休眠，用户在设置里关掉也没用。
+                    let playing_now = engine.setting_flag("preventSleep", true) && {
                         let actor = engine.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         actor.state().status == aiya_player::PlaybackStatus::Playing
                             && actor.state().current.is_some()
@@ -1673,106 +1957,69 @@ pub fn run() {
                     if events.is_empty() {
                         continue;
                     }
-                    let mut should_emit = false;
-                    // 频谱帧收集：emit 是同步 IPC 序列化，先在锁内收集、
-                    // 锁释放后统一发（P2：此前在 player 锁内 emit 拖长锁持有）
-                    let mut spectrum_frames: Vec<Vec<u8>> = Vec::new();
-                    {
-                        let mut actor = engine.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                        for ev in events {
-                            match ev {
-                                aiya_audio::EngineEvent::Loaded { duration_ms } => {
-                                    let token = actor.state().token;
-                                    actor.reduce(aiya_player::PlayerCommand::Loaded {
-                                        token,
-                                        duration_ms,
-                                    });
-                                    should_emit = true;
-                                }
-                                aiya_audio::EngineEvent::Position { position_ms } => {
-                                    // 全量记录（历史秒数用），广播才节流
-                                    last_position_ms = position_ms;
-                                    let last = actor.state().updated_at;
-                                    let now_ms = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis() as u64;
-                                    if now_ms >= last + 500 {
-                                        actor.reduce(aiya_player::PlayerCommand::Position {
-                                            position_ms,
-                                        });
-                                        should_emit = true;
-                                    }
-                                }
-                                aiya_audio::EngineEvent::Eof => {
-                                    let token = actor.state().token;
-                                    // 播放历史：seconds_played 用最近上报位置估算
-                                    // （P2：此前记 duration 全长，10 秒就跳过的歌
-                                    // 也算"听完整曲"，topTracks/totalMs 虚高）
-                                    let (tid, secs) = {
-                                        let s = actor.state();
-                                        (
-                                            s.current.as_ref().map(|c| c.id.clone()),
-                                            s.duration_ms.unwrap_or(0) / 1000,
-                                        )
-                                    };
-                                    let secs = secs.min(last_position_ms / 1000);
-                                    if let Some(tid) = tid {
-                                        record_history(&engine, &tid, secs);
-                                    }
-                                    actor.reduce(aiya_player::PlayerCommand::Ended { token });
-                                    should_emit = true;
-                                }
-                                aiya_audio::EngineEvent::StateChanged { playing } => {
-                                    // Pause/Resume 由命令路径处理；这里对齐引擎侧被动变化
-                                    let _ = playing;
-                                }
-                                aiya_audio::EngineEvent::Spectrum { bands } => {
-                                    // 频谱帧：不经 Actor，锁外统一转发 UI（~30fps）
-                                    spectrum_frames.push(bands);
-                                }
-                                aiya_audio::EngineEvent::Error { message } => {
-                                    actor.reduce(aiya_player::PlayerCommand::Failed { message });
-                                    should_emit = true;
-                                }
-                            }
+                    // 归约 + 旁路动作全在 PumpCore 里（可注入时钟与引擎出口，
+                    // 事件序列有单元测试锁定）。锁只在归约期间持有，
+                    // emit 是同步 IPC 序列化，一律放到锁外。
+                    let effects = {
+                        let mut actor = engine
+                            .player
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let mut sent: Vec<aiya_audio::EngineCommand> = Vec::new();
+                        let effects = core.ingest(events, &mut actor, now_ms_u64(), &mut |cmd| {
+                            sent.push(cmd)
+                        });
+                        // pending_load / pending_stop 的实际下发仍在锁内做完：
+                        // 引擎通道是有界的，正常消费下不会阻塞
+                        for cmd in sent {
+                            engine_send(&engine, cmd);
                         }
-                        // P0：自然播完时 Actor 归约 Ended 会产出 pending_load
-                        // （自动切下一曲 / repeat one 重播），但事件泵此前从不
-                        // 消费它 → UI 推进到下一曲而引擎收不到 Load，声音停住，
-                        // 手动 next 才能救活。与 drive_and_emit_inner 同序：
-                        // Load → SetVolume → (!autoplay) Pause，并全量落库。
-                        if let Some((token, path, start_ms, autoplay)) =
-                            actor.take_pending_load()
-                        {
-                            let volume = actor.volume().0 as f32;
-                            let muted = actor.volume().1;
-                            engine_send(&engine, aiya_audio::EngineCommand::Load(path));
-                            engine_send(
-                                &engine,
-                                aiya_audio::EngineCommand::SetVolume(if muted {
-                                    0.0
-                                } else {
-                                    volume
-                                }),
-                            );
-                            if !autoplay {
-                                engine_send(&engine, aiya_audio::EngineCommand::Pause);
-                            }
-                            let _ = (token, start_ms);
+                        if effects.iter().any(|e| *e == PumpEffect::EmitState) {
+                            // 意图下发可能改了队列结构 → 全量落库（与命令路径一致）
                             persist_queue_full(&engine, &actor);
                         }
+                        effects
+                    };
+                    // 频谱帧（~30fps）先转发，再广播状态：UI 的动画帧不该排在
+                    // 一次状态序列化之后
+                    let mut emit_state = false;
+                    for effect in effects {
+                        match effect {
+                            PumpEffect::Spectrum(bands) => {
+                                let _ = handle.emit("spectrum:frame", bands);
+                            }
+                            PumpEffect::History { track_id, seconds } => {
+                                record_history(&engine, &track_id, seconds);
+                            }
+                            PumpEffect::AudioMode { exclusive, reason } => {
+                                // 独占被拒/设备更换：更新诊断状态并转发 UI。
+                                // 这是"降级信息"不是错误，所以走独立事件，
+                                // 不混进 player:state 的 error 字段。
+                                engine.exclusive_active.store(exclusive, Ordering::Relaxed);
+                                *engine
+                                    .audio_mode_note
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                    reason.clone().unwrap_or_default();
+                                let _ = handle.emit(
+                                    "audio:mode",
+                                    json!({ "exclusive": exclusive, "reason": reason }),
+                                );
+                            }
+                            PumpEffect::EmitState => emit_state = true,
+                        }
                     }
-                    for bands in spectrum_frames {
-                        let _ = pump.emit("spectrum:frame", bands);
-                    }
-                    if should_emit {
+                    if emit_state {
                         // 统一出口 emit_player_state：player:state + SMTC 跟踪
                         // （P2：泵此前直接 emit，自动换曲后系统媒体浮层不更新）
-                        let actor = engine.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                        let snapshot = actor.state();
-                        drop(actor);
-                        emit_player_state(&pump, &snapshot);
+                        let snapshot = {
+                            let actor = engine
+                                .player
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            actor.state()
+                        };
+                        emit_player_state(&handle, &snapshot);
                     }
                     // 5s 节流落库状态行（position/音量等；队列结构变化在 drive_and_emit 立即落）
                     let now_ms = std::time::SystemTime::now()
@@ -1821,6 +2068,13 @@ pub fn run() {
             playlist_list,
             playlist_detail,
             playlist_create,
+            playlist_rename,
+            playlist_delete,
+            playlist_reorder,
+            playlist_add_tracks,
+            playlist_remove_at,
+            playlist_move,
+            playlist_clear,
             player_state,
             player_queue,
             player_play_tracks,
@@ -1844,6 +2098,23 @@ pub fn run() {
             history_stats,
             history_clear,
         ])
-        .run(tauri::generate_context!())
-        .expect("AIYA: Tauri 运行失败");
+        .build(tauri::generate_context!())
+        .expect("AIYA: Tauri 初始化失败")
+        .run(|app, event| {
+            // 退出前主动收 sidecar。
+            //
+            // 不在这里收会怎样：进程退出时 AppState 的 Drop 不保证跑到，
+            // 看门狗线程在最后几秒里看到 alive 不再刷新 → 判"心跳超时" →
+            // **再起一个 sidecar**（generation+1）。用户每次关窗都留一条
+            // 假 ERROR 日志 + 一个要等 8s 孤儿窗口才自退的多余进程。
+            if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<AppState>() {
+                    state
+                        .engine
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .shutdown();
+                }
+            }
+        });
 }

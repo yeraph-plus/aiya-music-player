@@ -17,6 +17,9 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParsedLyrics {
+    /// 契约（contracts/domain.ts Lyrics.found）要求必填：命中歌词恒 true。
+    /// 此前没这个字段，UI 判 `!lyrics?.found` 一律走空态 —— 有歌词也显示"暂无"。
+    pub found: bool,
     pub lines: Vec<LyricLine>,
     /// LRC `[offset:]` 标签原值（诊断展示）；已折进各行 timeMs
     pub offset_ms: i64,
@@ -25,7 +28,10 @@ pub struct ParsedLyrics {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LyricLine {
+    // 契约是 timeMs：snake_case 会让 UI 的 `line.timeMs <= positionMs`
+    // 恒为 false → 同步高亮永不亮起
     pub time_ms: i64,
     pub text: String,
 }
@@ -64,10 +70,10 @@ pub fn parse_lrc(bytes: &[u8]) -> ParsedLyrics {
     let synced = !timed.is_empty();
     if synced {
         timed.sort_by_key(|l| l.time_ms); // 稳定排序：同时间保持文件序
-        ParsedLyrics { lines: timed, offset_ms, synced: true, encoding }
+        ParsedLyrics { found: true, lines: timed, offset_ms, synced: true, encoding }
     } else {
         plain.retain(|l| !l.text.trim().is_empty());
-        ParsedLyrics { lines: plain, offset_ms, synced: false, encoding }
+        ParsedLyrics { found: true, lines: plain, offset_ms, synced: false, encoding }
     }
 }
 
@@ -212,6 +218,25 @@ fn is_bracket_tag_line(line: &str) -> bool {
     }
     let inner = &t[1..t.len() - 1];
     !inner.is_empty() && !inner.contains('[') && !inner.contains(']')
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use super::*;
+
+    /// 契约锚点：UI 读 found / timeMs。字段名错了歌词面板就恒空。
+    #[test]
+    fn lyrics_serialize_matches_contract() {
+        let parsed = parse_lrc(b"[00:01.50]hello\n[00:03.00]world\n");
+        let v = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(v["found"], true, "命中歌词必须带 found=true");
+        assert_eq!(v["synced"], true);
+        assert_eq!(v["offsetMs"], 0);
+        assert_eq!(v["lines"][0]["timeMs"], 1500, "LyricLine 必须是 timeMs");
+        assert_eq!(v["lines"][1]["timeMs"], 3000);
+        assert_eq!(v["lines"][0]["text"], "hello");
+        assert!(v["lines"][0].get("time_ms").is_none(), "不得下发 snake_case");
+    }
 }
 
 #[cfg(test)]

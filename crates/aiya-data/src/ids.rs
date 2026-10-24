@@ -29,9 +29,23 @@ pub fn playlist_id(name: &str) -> String {
     Uuid::new_v5(&NS_PLAYLIST, name.as_bytes()).to_string()
 }
 
-pub fn playlist_item_id(playlist_id: &str, track_id: &str, position: i64) -> String {
-    Uuid::new_v5(&NS_PLAYLIST_ITEM, format!("{playlist_id}|{track_id}|{position}").as_bytes())
-        .to_string()
+/// 歌单行 ID：**一次性身份，不参与任何派生**（旧仓库用 randomUUID，同此意）。
+///
+/// 为什么不能用 `playlist_item_id(pid, tid, position)` 这种位置派生：position
+/// 会随增删重排，而 id 一旦写入就不再变。于是"删掉第 0 项（B 从 1 挪到 0）、
+/// 再把 B 加回来"时，新行算出的 id == 旧行仍占用的 id → 主键冲突 →
+/// `INSERT OR IGNORE` 静默吞掉，表现为"加了但列表里没有"（`added` 还会是 1）。
+/// 这里用"纳秒时间戳 + 进程内自增"做盐走 v5，无需引入随机数依赖。
+pub fn playlist_item_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    // 同一纳秒内最多 65536 次插入仍不撞；跨进程重启靠 nanos 天然错开
+    Uuid::new_v5(&NS_PLAYLIST_ITEM, format!("{nanos}:{}", n & 0xffff).as_bytes()).to_string()
 }
 
 pub fn artwork_id(content_hash: &str) -> String {
@@ -48,5 +62,15 @@ mod tests {
         let b = track_id("D:/music/a.flac");
         assert_eq!(a, b);
         assert_ne!(track_id("D:/music/b.flac"), a);
+    }
+
+    /// 歌单行 id 必须每次调用都不同：它只能当行身份，不能当"位置/曲目"的
+    /// 派生键，否则重排后会与残留行撞主键（详见函数注释）。
+    #[test]
+    fn playlist_item_ids_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..2_000 {
+            assert!(seen.insert(playlist_item_id()), "歌单行 id 重复");
+        }
     }
 }

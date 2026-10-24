@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::Connection;
 use serde::Deserialize;
 
-use crate::db::DbResult;
+use crate::db::{DbError, DbResult};
 use crate::ids;
 use crate::norm::norm;
 
@@ -262,65 +262,130 @@ fn update_track(tx: &Connection, ex: &Existing, it: &BeetsItem) -> DbResult<()> 
     Ok(())
 }
 
-/// 对齐入口。`items` 来自 sidecar dump_items 事件流的收集结果。
-pub fn sync_items(conn: &mut Connection, items: &[BeetsItem], now: i64) -> DbResult<SyncStats> {
-    let tx = conn.transaction()?;
+/// 文件被 beets 移走后跟随新路径（行 id 与自有数据 —— play_count / 队列引用 —— 不动）。
+fn relocate_track(tx: &Connection, ex: &Existing, it: &BeetsItem) -> DbResult<()> {
+    tx.execute(
+        "UPDATE tracks SET path = ?2, path_lower = ?3 WHERE id = ?1",
+        rusqlite::params![ex.id, it.path, it.path.to_lowercase()],
+    )?;
+    Ok(())
+}
 
-    // 自有全表入内存（path 小写 → 行）。5 万行 ~15 列在几十 MB 内，比逐条回查快一个量级。
-    let mut existing: HashMap<String, Existing> = HashMap::with_capacity(items.len() * 2);
-    {
-        let mut stmt = tx.prepare(
-            "SELECT id, path, title, artist_id, album_id, duration_ms, track_no, disc_no, year,
-                    gain_db, codec, sample_rate, bits_per_sample, bitrate, channels, beets_item_id
-             FROM tracks",
-        )?;
-        let rows = stmt.query_map([], |r| {
-            Ok(Existing {
-                id: r.get(0)?,
-                path: r.get(1)?,
-                title: r.get(2)?,
-                artist_id: r.get(3)?,
-                album_id: r.get(4)?,
-                duration_ms: r.get(5)?,
-                track_no: r.get(6)?,
-                disc_no: r.get(7)?,
-                year: r.get(8)?,
-                gain_db: r.get(9)?,
-                codec: r.get(10)?,
-                sample_rate: r.get(11)?,
-                bits_per_sample: r.get(12)?,
-                bitrate: r.get(13)?,
-                channels: r.get(14)?,
-                beets_item_id: r.get(15)?,
-            })
-        })?;
-        for row in rows {
-            let row = row?;
-            existing.insert(row.path.to_lowercase(), row);
-        }
+/// 单块条目数。语义见 `sync_items` 头注：块与块之间让出写锁。
+const SYNC_CHUNK: usize = 500;
+
+/// 自有全表快照（path 小写 → 行）。5 万行 ~16 列在几十 MB 内，
+/// 比逐条回查快一个量级；WAL 下这条 SELECT 不持有写锁。
+fn load_existing(conn: &Connection) -> DbResult<HashMap<String, Existing>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path, title, artist_id, album_id, duration_ms, track_no, disc_no, year,
+                gain_db, codec, sample_rate, bits_per_sample, bitrate, channels, beets_item_id
+         FROM tracks",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Existing {
+            id: r.get(0)?,
+            path: r.get(1)?,
+            title: r.get(2)?,
+            artist_id: r.get(3)?,
+            album_id: r.get(4)?,
+            duration_ms: r.get(5)?,
+            track_no: r.get(6)?,
+            disc_no: r.get(7)?,
+            year: r.get(8)?,
+            gain_db: r.get(9)?,
+            codec: r.get(10)?,
+            sample_rate: r.get(11)?,
+            bits_per_sample: r.get(12)?,
+            bitrate: r.get(13)?,
+            channels: r.get(14)?,
+            beets_item_id: r.get(15)?,
+        })
+    })?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let row = row?;
+        out.insert(row.path.to_lowercase(), row);
     }
+    Ok(out)
+}
+
+/// 对齐入口。`items` 来自 sidecar dump_items 事件流的收集结果。
+///
+/// **分块提交**（每 `SYNC_CHUNK` 条一个 IMMEDIATE 事务），不是一个大事务：
+/// 首对齐 5 万条时单事务的写锁会持续好几秒，期间 `record_history` 只能
+/// 在 busy_timeout（5s）里等，等不到就只打一条 warn —— 用户侧表现是
+/// "一边听歌一边同步 beets，播放历史悄悄少了几条"。
+/// 分块后每次持锁只有几十毫秒，且对齐本身幂等：某块失败时前面已提交的块
+/// 保留，下次同步继续（比整批回滚更符合"读模型逐步收敛"的定位）。
+pub fn sync_items(conn: &mut Connection, items: &[BeetsItem], now: i64) -> DbResult<SyncStats> {
+    let mut existing = load_existing(conn)?;
+
+    // beets_item_id → 自有行 key。apply_move / apply_copy 会改 item.path，
+    // 只按 path 对账的话，"同一首被移动过"会被当成新曲目导入一份，
+    // 旧行则因为 beets item 仍在（id 相同）而永远不算 orphan —— 同一个文件
+    // 在库里裂成两行，播放计数/歌单引用全留在旧的死行上。
+    let mut by_beets_id: HashMap<i64, String> = existing
+        .iter()
+        .filter_map(|(key, ex)| ex.beets_item_id.map(|id| (id, key.clone())))
+        .collect();
 
     let mut stats = SyncStats::default();
     let mut seen_beets_ids: HashSet<i64> = HashSet::with_capacity(items.len());
 
-    for it in items {
-        seen_beets_ids.insert(it.id);
-        let key = it.path.to_lowercase();
-        match existing.get(&key) {
-            Some(ex) => {
-                stats.matched += 1;
-                if ex.differs_from(it) {
-                    update_track(&tx, ex, it)?;
-                    stats.updated += 1;
-                } else {
-                    stats.unchanged += 1;
-                }
-            }
-            None => {
+    for chunk in items.chunks(SYNC_CHUNK) {
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(DbError::Sql)?;
+        for it in chunk {
+            seen_beets_ids.insert(it.id);
+            let key = it.path.to_lowercase();
+            // path 命中优先；未命中再看 beets_item_id —— 命中后者说明文件被移走了
+            let hit = if existing.contains_key(&key) {
+                Some(key.clone())
+            } else {
+                by_beets_id.get(&it.id).cloned()
+            };
+            let Some(hit_key) = hit else {
                 insert_track(&tx, it, now)?;
                 stats.imported += 1;
+                continue;
+            };
+
+            stats.matched += 1;
+            // 先摘出来（改完再按新 key 放回，供 orphan 统计使用）
+            let mut ex = existing.remove(&hit_key).expect("hit key 来自 existing");
+            let mut path_changed = false;
+            if hit_key != key {
+                match relocate_track(&tx, &ex, it) {
+                    Ok(()) => {
+                        tracing::info!(
+                            from = %ex.path,
+                            to = %it.path,
+                            beets_id = it.id,
+                            "beets 侧文件已移动，自有行跟随新路径"
+                        );
+                        ex.path = it.path.clone();
+                        path_changed = true;
+                    }
+                    // 目标路径已被别的行占用（例如扫描器先按新路径建了行）：
+                    // 放弃跟随、继续更新字段，不让这一行影响整次同步
+                    Err(e) => tracing::warn!(
+                        error = %e, from = %ex.path, to = %it.path,
+                        "beets 移动跟随失败（目标路径可能已被其它行占用）"
+                    ),
+                }
             }
+            if path_changed || ex.differs_from(it) {
+                update_track(&tx, &ex, it)?;
+                stats.updated += 1;
+            } else {
+                stats.unchanged += 1;
+            }
+            existing.insert(it.path.to_lowercase(), ex);
+            by_beets_id.insert(it.id, it.path.to_lowercase());
         }
+        tx.commit().map_err(DbError::Sql)?;
     }
 
     // 自有行声称关联 beets，但该 item 已从 beets 库消失 → 只记账
@@ -329,7 +394,6 @@ pub fn sync_items(conn: &mut Connection, items: &[BeetsItem], now: i64) -> DbRes
         .filter(|ex| matches!(ex.beets_item_id, Some(id) if !seen_beets_ids.contains(&id)))
         .count();
 
-    tx.commit()?;
     Ok(stats)
 }
 
@@ -456,6 +520,45 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 2, "orphan 行不删，归扫描器管");
+    }
+
+    /// apply_move 之后 beets 的 item.path 变了，但 item.id 不变。
+    /// 只按 path 对账会"新导入一份 + 旧行留成孤行"，这里锁住按 id 跟随。
+    #[test]
+    fn moved_item_follows_new_path_without_duplicating() {
+        let mut conn = open_in_memory().unwrap();
+        sync_items(&mut conn, &[item(9, r"C:\in\a.mp3", "A")], 100).unwrap();
+        let old_id: String = conn
+            .query_row("SELECT id FROM tracks WHERE beets_item_id = 9", [], |r| r.get(0))
+            .unwrap();
+        // 自有数据（播放计数）必须跟着行走
+        conn.execute("UPDATE tracks SET play_count = 3 WHERE beets_item_id = 9", []).unwrap();
+
+        // beets 把它搬到库目录下，id 不变
+        let moved = item(9, r"C:\Music\A\a.mp3", "A");
+        let s = sync_items(&mut conn, &[moved], 101).unwrap();
+        assert_eq!((s.matched, s.imported, s.updated), (1, 0, 1), "移动算一次更新，不算新导入");
+        assert_eq!(s.orphaned, 0, "item 仍在 beets 库里，不该算 orphan");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "同一 beets item 不能裂成两行");
+
+        let (id, path, play): (String, String, i64) = conn
+            .query_row(
+                "SELECT id, path, play_count FROM tracks WHERE beets_item_id = 9",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(id, old_id, "行 id 不变，歌单/队列引用才不会断");
+        assert_eq!(path, r"C:\Music\A\a.mp3");
+        assert_eq!(play, 3);
+
+        // 再对齐一次 → unchanged（不会每次都被当成移动）
+        let s = sync_items(&mut conn, &[item(9, r"C:\Music\A\a.mp3", "A")], 102).unwrap();
+        assert_eq!((s.matched, s.updated, s.unchanged), (1, 0, 1));
     }
 
     #[test]

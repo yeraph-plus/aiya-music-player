@@ -7,9 +7,11 @@
 pub mod artwork;
 pub mod beets_sync;
 pub mod db;
+pub mod history;
 pub mod ids;
 pub mod lyrics;
 pub mod norm;
+pub mod playlist;
 pub mod queue;
 pub mod repo;
 pub mod scanner;

@@ -126,9 +126,7 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
 
     // 播放 2s WAV
     send(&mut writer, &HostToSidecar::Cmd(aiya_audio::EngineCommand::SetVolume(0.8)));
-    send(&mut writer, &HostToSidecar::Cmd(aiya_audio::EngineCommand::Load(
-        wav.to_string_lossy().into(),
-    )));
+    send(&mut writer, &HostToSidecar::Cmd(aiya_audio::EngineCommand::Load { path: wav.to_string_lossy().into(), start_ms: 0, token: 1 }));
 
     let start = Instant::now();
     let mut loaded = false;
@@ -138,18 +136,18 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         match recv(&mut reader, Duration::from_millis(500)) {
-            Some(SidecarToHost::Evt(aiya_audio::EngineEvent::Loaded { duration_ms })) => {
+            Some(SidecarToHost::Evt(aiya_audio::EngineEvent::Loaded { duration_ms, .. })) => {
                 println!("Loaded: {duration_ms}ms");
                 loaded = true;
             }
-            Some(SidecarToHost::Evt(aiya_audio::EngineEvent::Position { position_ms })) => {
+            Some(SidecarToHost::Evt(aiya_audio::EngineEvent::Position { position_ms, .. })) => {
                 max_pos = max_pos.max(position_ms);
             }
-            Some(SidecarToHost::Evt(aiya_audio::EngineEvent::Eof)) => {
+            Some(SidecarToHost::Evt(aiya_audio::EngineEvent::Eof { .. })) => {
                 saw_eof = true;
                 break;
             }
-            Some(SidecarToHost::Evt(aiya_audio::EngineEvent::Error { message })) => {
+            Some(SidecarToHost::Evt(aiya_audio::EngineEvent::Error { message, .. })) => {
                 eprintln!("ENGINE ERROR: {message}");
                 return false;
             }

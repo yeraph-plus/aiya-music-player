@@ -25,10 +25,43 @@ enum SessionEnd {
     Shutdown,
 }
 
+/// 本地时区时间戳（与宿主 `logging.rs` 同格式，方便两条日志按时间对齐）。
+struct LocalTime;
+
+impl tracing_subscriber::fmt::time::FormatTime for LocalTime {
+    fn format_time(
+        &self,
+        w: &mut tracing_subscriber::fmt::format::Writer<'_>,
+    ) -> std::fmt::Result {
+        let t = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+        write!(
+            w,
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}",
+            t.year(),
+            u8::from(t.month()),
+            t.day(),
+            t.hour(),
+            t.minute(),
+            t.second(),
+            t.millisecond()
+        )
+    }
+}
+
 fn main() {
+    // 日志走 stderr：宿主把本进程 stderr 重定向到 {app_data}/logs/sidecar.log。
+    // fmt() 默认写 **stdout**，而宿主把 stdout 置了 Stdio::null() —— 之前所有
+    // sidecar 日志其实都被丢掉了（文件是 0 字节）。
+    //
+    // 时间戳用本地时区：否则与宿主日志差 8 小时，排查时得自己做时区换算。
+    let filter = tracing_subscriber::EnvFilter::try_from_env("AIYA_LOG")
+        .or_else(|_| tracing_subscriber::EnvFilter::try_from_default_env())
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(filter)
         .with_target(false)
-        .with_max_level(tracing::Level::INFO)
+        .with_timer(LocalTime)
         .init();
 
     let mut pipe_name: Option<String> = None;
@@ -72,14 +105,28 @@ fn main() {
     }
 }
 
-/// 建管道 → 等连接 → 会话 →（ClientGone 则）断开重开。Shutdown 则正常返回退出。
+/// 建管道 → 等连接 → 会话 →（断开则）重开等重连；Shutdown 正常退出。
+///
+/// 为什么有 8s 退场窗口：host 崩溃/被任务管理器结束后，这里拿到的只是
+/// 管道断开。此前无条件 `disconnect()` + `connect()` 永久等待 —— 进程
+/// 常驻并占着 WASAPI 设备；PID 复用后还会让新 sidecar 建管道失败
+/// （FILE_FLAG_FIRST_PIPE_INSTANCE），连带新宿主起不来。
+/// host 真要重连会 spawn 全新进程（管道名带 PID），所以短暂等待后必须退出。
 fn serve_forever(pipe_name: &str) -> Result<(), String> {
     // FILE_FLAG_FIRST_PIPE_INSTANCE：名字被残留实例占用时直接失败，
     // 让 host 的 spawn 重试逻辑兜底（快速重启场景）。
     let server = NamedPipe::new(pipe_name).map_err(|e| format!("创建管道 {pipe_name} 失败：{e}"))?;
     tracing::info!(%pipe_name, "sidecar 管道已创建，等待 host 连接");
 
+    let mut orphan_deadline: Option<Instant> = None;
     loop {
+        // 孤儿退场：host 走了，不要在这里守夜
+        if let Some(d) = orphan_deadline {
+            if Instant::now() >= d {
+                tracing::warn!("host 已离开（8s 内无重连），sidecar 自动退出");
+                return Ok(());
+            }
+        }
         server.connect().map_err(|e| format!("等待连接失败：{e}"))?;
         tracing::info!("host 已连接，开始握手");
         match run_session(&server) {
@@ -87,9 +134,10 @@ fn serve_forever(pipe_name: &str) -> Result<(), String> {
                 tracing::info!("收到 Shutdown，正常退出");
                 return Ok(());
             }
-            // Err = 管道断开/会话异常：重开管道等待 host 重连
+            // Err = 管道断开/会话异常：留 8s 窗口等重连，超时即退出
             Err(e) => {
-                tracing::warn!(%e, "会话结束，重开管道等待重连");
+                tracing::warn!(%e, "会话结束，等待 host 重连（8s 后自动退出）");
+                orphan_deadline = Some(Instant::now() + Duration::from_secs(8));
                 let _ = server.disconnect();
             }
         }
