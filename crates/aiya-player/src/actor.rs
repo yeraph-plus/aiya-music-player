@@ -97,7 +97,7 @@ impl PlayerActor {
             error: self.error.clone(),
             current: self.current_track().cloned(),
             token: self.token,
-            updated_at: now_ms(),
+            updated_at_ms: now_ms(),
         }
     }
 

@@ -133,7 +133,7 @@ fn player_state_error_is_structured_and_path_is_hidden() {
             path: "D:/music/a.flac".into(),
         }),
         token: 3,
-        updated_at: 1_700_000_000_000,
+        updated_at_ms: 1_700_000_000_000,
     };
     let v = serde_json::to_value(&state).unwrap();
     // 错误：对象 + 分类字符串（v1 这里是一句话，UI 没法判断该不该跳过）
@@ -147,5 +147,217 @@ fn player_state_error_is_structured_and_path_is_hidden() {
     );
     // 数字一律 number
     assert!(v["queueVersion"].is_number());
-    assert!(v["updatedAt"].is_number());
+    assert!(v["updatedAtMs"].is_number(), "快照时间必须带 Ms 后缀且为 number");
+}
+
+/* ---------------- B2/B3：歌单 / 历史 / 歌词 / 扫描 / 选择 ---------------- */
+
+#[test]
+fn playlist_summary_converts_seconds_to_ms() {
+    // 造一个"库里是秒、出口是毫秒"的摘要，锁住换算方向：
+    // 写反了 UI 会把 1970 年当创建时间，而且是**静默**的。
+    let p = aiya_lib::dto::playlist::PlaylistSummary {
+        id: "pl_1".into(),
+        name: "通勤".into(),
+        description: None,
+        track_count: 12,
+        duration_ms: 3_600_000,
+        artwork_id: Some("a1".into()),
+        created_at_ms: 1_700_000_000_000,
+        updated_at_ms: 1_700_000_600_000,
+        sort_position: 3,
+    };
+    let v = serde_json::to_value(&p).unwrap();
+    assert_eq!(
+        keys(&v),
+        sorted(&[
+            "id",
+            "name",
+            "description",
+            "trackCount",
+            "durationMs",
+            "artworkId",
+            "createdAtMs",
+            "updatedAtMs",
+            "sortPosition",
+        ])
+    );
+    // 旧名必须消失：UI 那边只要还写着 createdAt 就是没跟上
+    assert!(v.get("createdAt").is_none(), "秒级旧字段必须消失");
+    assert!(v.get("updatedAt").is_none());
+    // 同结构里两个时间字段单位一致（都是毫秒），差别只在语义
+    assert_eq!(v["createdAtMs"], 1_700_000_000_000i64);
+    assert_eq!(v["durationMs"], 3_600_000i64);
+    assert!(v["description"].is_null(), "description 必须存在且为 null");
+}
+
+#[test]
+fn playlist_add_result_nests_summary() {
+    let r = aiya_lib::dto::playlist::PlaylistAddResult {
+        added: 2,
+        skipped: 1,
+        summary: aiya_lib::dto::playlist::PlaylistSummary {
+            id: "pl_1".into(),
+            name: "通勤".into(),
+            description: None,
+            track_count: 3,
+            duration_ms: 0,
+            artwork_id: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            sort_position: 0,
+        },
+    };
+    let v = serde_json::to_value(&r).unwrap();
+    assert_eq!(keys(&v), sorted(&["added", "skipped", "summary"]));
+    // 嵌套对象的字段名同样遵守 camelCase（serde 是逐层生效的）
+    assert!(v["summary"]["trackCount"].is_number());
+}
+
+#[test]
+fn history_stats_uses_ms_and_number_play_counts() {
+    let s = aiya_lib::dto::history::HistoryStats {
+        total_plays: 42,
+        total_ms: 2_520_000,
+        completed: 40,
+        skipped: 2,
+        first_play_at_ms: Some(1_600_000_000_000),
+        last_play_at_ms: Some(1_700_000_000_000),
+        top_tracks: vec![aiya_lib::dto::history::HistoryTopTrack {
+            id: "t1".into(),
+            title: "标题".into(),
+            artist: Some("艺人".into()),
+            play_count: 9,
+        }],
+    };
+    let v = serde_json::to_value(&s).unwrap();
+    assert_eq!(
+        keys(&v),
+        sorted(&[
+            "totalPlays",
+            "totalMs",
+            "completed",
+            "skipped",
+            "firstPlayAtMs",
+            "lastPlayAtMs",
+            "topTracks",
+        ])
+    );
+    assert!(v.get("firstPlayAt").is_none(), "秒级旧字段必须消失");
+    assert!(v["firstPlayAtMs"].is_number());
+    assert!(v["topTracks"][0]["playCount"].is_number());
+}
+
+#[test]
+fn lyrics_encoding_is_null_when_missing() {
+    let empty = aiya_lib::dto::lyrics::Lyrics::empty();
+    let v = serde_json::to_value(&empty).unwrap();
+    assert_eq!(keys(&v), sorted(&["found", "lines", "offsetMs", "synced", "encoding"]));
+    assert_eq!(v["found"], false);
+    assert!(v["lines"].as_array().unwrap().is_empty());
+    // 无歌词时 encoding 是 null（不是缺字段、不是空字符串）
+    assert!(v["encoding"].is_null(), "encoding 必须是 null 而不是空字符串");
+}
+
+#[test]
+fn lyrics_from_parsed_keeps_time_ms() {
+    let parsed = aiya_data::lyrics::ParsedLyrics {
+        found: true,
+        lines: vec![aiya_data::lyrics::LyricLine { time_ms: 12_345, text: "第一句".into() }],
+        offset_ms: -200,
+        synced: true,
+        encoding: "utf-8".into(),
+    };
+    let v = serde_json::to_value(aiya_lib::dto::lyrics::Lyrics::from(parsed)).unwrap();
+    // 契约字段是 timeMs：写成 time_ms 会让 UI 的 `line.timeMs <= position` 恒 false
+    assert_eq!(v["lines"][0]["timeMs"], 12_345);
+    assert!(v["lines"][0].get("time_ms").is_none());
+    assert_eq!(v["encoding"], "utf-8");
+    assert_eq!(v["offsetMs"], -200);
+}
+
+#[test]
+fn scan_result_sends_numbers_and_camel_case() {
+    let r = aiya_data::scanner::ScanResult {
+        scanned: 100,
+        imported: 90,
+        updated: 5,
+        unchanged: 4,
+        failed: 1,
+        walk_errors: 0,
+        cancelled: false,
+        errors: vec![aiya_data::scanner::ScanError {
+            path: "D:/m/bad.mp3".into(),
+            message: "解析失败".into(),
+        }],
+        elapsed_ms: 1234,
+    };
+    let v = serde_json::to_value(&r).unwrap();
+    assert_eq!(
+        keys(&v),
+        sorted(&[
+            "scanned",
+            "imported",
+            "updated",
+            "unchanged",
+            "failed",
+            "walkErrors",
+            "cancelled",
+            "errors",
+            "elapsedMs",
+        ])
+    );
+    assert!(v["elapsedMs"].is_number());
+    assert!(v["walkErrors"].is_number());
+    assert_eq!(v["errors"][0]["message"], "解析失败");
+}
+
+#[test]
+fn small_result_dtos_keep_their_exact_keys() {
+    // 这几条命令的返回值都只有一个布尔/数字，最容易"随手改名"而没人发现
+    let reveal = serde_json::to_value(aiya_lib::dto::library::RevealResult {
+        revealed: false,
+        reason: Some("曲目不在库中".into()),
+    })
+    .unwrap();
+    assert_eq!(keys(&reveal), sorted(&["revealed", "reason"]));
+    assert_eq!(reveal["reason"], "曲目不在库中");
+
+    let cancel = serde_json::to_value(aiya_lib::dto::library::ScanCancel { cancelled: true }).unwrap();
+    assert_eq!(keys(&cancel), sorted(&["cancelled"]));
+
+    let removed = serde_json::to_value(aiya_lib::dto::library::RemoveTracks { removed: 3 }).unwrap();
+    assert!(removed["removed"].is_number());
+
+    let job = serde_json::to_value(aiya_lib::dto::beets::JobStarted { started: true }).unwrap();
+    assert_eq!(keys(&job), sorted(&["started"]));
+
+    let req = serde_json::to_value(aiya_lib::dto::beets::CancelRequested { requested: false }).unwrap();
+    assert_eq!(keys(&req), sorted(&["requested"]));
+
+    let ack = serde_json::to_value(aiya_lib::dto::player::ReportAck { received: true }).unwrap();
+    assert_eq!(keys(&ack), sorted(&["received"]));
+}
+
+#[test]
+fn beets_status_protocol_version_is_number() {
+    let st = aiya_lib::dto::beets::BeetsStatus {
+        found: true,
+        interpreter: Some("python".into()),
+        script_path: None,
+        protocol_version: Some(3),
+        beets_version: Some("2.14.1".into()),
+        python_version: None,
+        library_path: None,
+        library_exists: Some(true),
+        plugins: Some(vec!["fetchart".into()]),
+        config_dir: None,
+        error_code: None,
+        error_message: None,
+    };
+    let v = serde_json::to_value(&st).unwrap();
+    // Option<u32> 在 ts-rs 里是 bigint，必须 number（挡回归）
+    assert!(v["protocolVersion"].is_number(), "protocolVersion 必须 number");
+    assert!(v["libraryExists"].is_boolean());
+    assert!(v["scriptPath"].is_null());
 }

@@ -174,8 +174,9 @@ export interface HistoryStats {
   totalMs: number;
   completed: number;
   skipped: number;
-  firstPlayAt: number | null;
-  lastPlayAt: number | null;
+  /** 最早/最近一条播放时间，毫秒 */
+  firstPlayAtMs: number | null;
+  lastPlayAtMs: number | null;
   topTracks: Array<{ id: string; title: string; artist: string | null; playCount: number }>;
 }
 

@@ -12,7 +12,7 @@
 //   --check  生成到临时目录并与现有文件比较，不写工作区（CI 用）
 
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,14 +49,22 @@ try {
   process.exit(1);
 }
 
-const files = readdirSync(target).filter((f) => f.endsWith('.ts')).sort();
+const files = readdirSync(target).filter((f) => f.endsWith('.ts') && f !== 'index.ts').sort();
 if (files.length === 0) {
   console.error('[gen-types] 没有生成任何文件——检查 #[ts(export)] 是否还在');
   process.exit(1);
 }
 
+// 桶文件也由本脚本生成：类型有 41 个之后，手写 `export * from './XXX'` 的清单
+// 一定会漏（漏了不报错，只是 `import { PlaylistSummary } from '$lib/ipc'` 找不到）。
+const BANNER = '// 由 npm run gen:types 生成，勿手改。\n';
+const indexSrc =
+  BANNER + files.map((f) => `export * from './${f.replace(/\.ts$/, '')}';`).join('\n') + '\n';
+writeFileSync(join(target, 'index.ts'), indexSrc);
+files.push('index.ts');
+
 if (!check) {
-  console.log(`[gen-types] ${files.length} 个类型 → ${outDir}`);
+  console.log(`[gen-types] ${files.length - 1} 个类型 + index.ts → ${outDir}`);
   process.exit(0);
 }
 
@@ -79,4 +87,4 @@ if (diffs.length) {
   for (const d of diffs) console.error(`  - ${d}`);
   process.exit(1);
 }
-console.log(`[gen-types] ✓ ${files.length} 个类型与 Rust 一致`);
+console.log(`[gen-types] ✓ ${files.length - 1} 个类型与 Rust 一致`);

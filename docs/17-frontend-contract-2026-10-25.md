@@ -162,10 +162,10 @@ pub struct AudioError { pub code: AudioErrorCode, pub message: String }
 | 字段命名 | Rust `snake_case` + `#[serde(rename_all = "camelCase")]` | 已是如此（`PlayerState`/`TrackRef` 都对） |
 | 枚举 | `#[serde(rename_all = "lowercase")]`（或 camelCase） | `RepeatMode`/`PlaybackStatus` 已 lowercase |
 | 命令名 | 保持 snake_case（Tauri 现状） | `library_list` 等 |
-| 时间 | 一律**毫秒** `*Ms: number`（epoch ms 或时长 ms），**不出现裸 `duration`** | 现状混用：`duration_ms` 毫秒，但 `added_at` 是 **UTC unix 秒**（`migrations/0001_init.sql:43` 注释明写），`last_played_at` 同为秒（`now_secs()`）。TS 侧 `addedAt: number` / `lastPlayedAt: number \| null` **没有任何单位标注** |
+| 时间 | 一律**毫秒** `*Ms: number`（epoch ms 或时长 ms），**不出现裸 `duration`** | ✓ 已落地：`addedAtMs` / `lastPlayedAtMs` / `createdAtMs` / `updatedAtMs` / `firstPlayAtMs` / `lastPlayAtMs` / `PlayerState.updatedAtMs`。DB 仍存 unix 秒，**换算只在 DTO 出口一处**（`row_to_track` / `playlist_row` / `history_stats_from`），游标回喂 SQL 时除回秒 |
 | 大整数 | JS number 安全区，`u64` 的 `version/token` 实际远小于 2^53，可直传 | 现状 `queueVersion: u64` 直传 |
 | id | 一律 `string`（不透明），**不要** number | 现状一致 |
-| 缺值 | `null`（`Option` → `null`），**禁止 -1 哨兵** | `PlayerState.index/cursor: i64 = -1` 表示空队列 ← 要改 `Option<u32>` |
+| 缺值 | `null`（`Option` → `null`），**禁止 -1 哨兵** | 部分：`Option` 字段一律 `null` ✓；`PlayerState.index/cursor` 仍是 `-1` 哨兵（§9.2 偏差 1，换 `Option` 要重写下标算术，单独一轮做） |
 | 分页 | 游标式 `{items, nextCursor: string|null, total?, tookMs}` | 现 `TrackPage{items,total,limit,mode:'cursor'\|'offset'}`，保留但去掉 `mode`（只留 cursor） |
 | 列表 vs 单曲 | 列表不带 audio spec，`library_tracks` 才带 | 已有约定（`docs/03`），保留 |
 | 队列 | `queueVersion` 单调递增，UI 只在变化时重拉 | 已落地（`player.svelte.ts`） |
@@ -199,7 +199,46 @@ pub struct TrackPage {
 **建议保留 Value 参数 + 立即反序列化**（现状做法是对的，只是错误码要换），
 理由：错误分类权留在我们手里，不被框架文案污染。
 
-### 3.1 时间单位的实例（这条现在就会咬人）
+### 3.1 参数侧不收口，返回值侧全收口（B2/B3 做完后定稿）
+
+最初想"参数也全部 typed"，实测下来是错的，理由是**错误分类权**：
+
+Tauri 在进入命令体之前就完成参数反序列化。参数类型不对 → 框架自己 reject，
+文案是 `invalid args \`query\` for command \`library_list\`: ...`，既不是我们的
+`ApiError`，也没有 `code`（`toApiError` 只能归到 `internal`）。结果：
+"查询参数不合法"这条**用户能看懂、UI 该提示改条件**的错误，变成了"内部错误"。
+
+所以定成两条规则：
+
+| 侧 | 规则 | 落地 |
+|---|---|---|
+| **返回值** | 一律 DTO + `derive(TS)`，生成到 `generated/` | 全部 54 命令 ✓（41 个类型） |
+| **参数** | 标量（`String`/`bool`/`f64`/`usize`/`Vec<String>`）直接 typed；**复合对象收 `Json` 再手动 `from_value`**，失败给 `invalid_arg` | `query` / `settings` / `uiState` / `options` / `request` / `report` / `decisions` |
+
+复合参数为什么不做成 DTO：它们的形状在 `ui/contracts` 里**已有唯一源**
+（`query.ts` 的 `TrackQuery` + zod schema、`domain.ts` 的 `ApplyDecision`），
+再生成一份等于制造第二个真相。等旧契约包删掉那天，再把它们搬成 DTO。
+
+`beets_apply(decisions)` 额外一层理由：`candidate` 是预览结果**原样回传**给
+sidecar 的深层对象，宿主只透传不解读。在宿主编译期钉死它的形状，等于让
+宿主依赖 beets 的返回结构——那份结构是 sidecar 的事。
+
+`library_ids_for_selection` 的 `indices: number[] | "all"` 用 untagged 枚举接住，
+不合法就 `invalidArg`。此前实现是"解析不出来就当空数组"，于是多选删歌会静默
+变成"一条都没选"（用户以为删掉了）。
+
+### 3.2 参数里唯一被钉死的联合类型：`indices`
+
+```rust
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum SelectionIndices { Tag(String), List(Vec<usize>) }
+```
+
+`Tag` 只接受字面量 `"all"`，其余字符串报 `invalidArg` 并回显收到的值。
+不用 `Value` 手工试：那样"传错了"和"没传"无法区分。
+
+### 3.3 时间单位的实例（这条真咬到过人）
 
 `Track` 同一个对象里混了两种时间单位：
 
@@ -241,35 +280,51 @@ TS 侧只有 `addedAt: number;`（`contracts/src/domain.ts:32`），**没有单�
 
 ---
 
-## 5. 迁移清单（54 命令分三批）
+## 5. 迁移清单（54 / 54 已完成）
 
-**B1 · 首屏必需（12）** —— 第一批做，做完就有了新壳能跑起来的最小集
-```
-app_info  app_get_settings  app_set_settings  app_diagnostics
-app_get_ui_state  app_set_ui_state
-library_list  library_tracks  library_stats
-player_state  player_queue  spectrum_set
-```
+勾选状态由测试守着，不靠"感觉都迁完了"：
+`ipc_contract.rs::new_client_covers_every_registered_command` 会在**任何**注册命令
+没有 typed 入口时失败（含以后新加的命令）。
 
-**B2 · 播放与队列（13）** —— 播放条 + 队列面板
+**B1 · 首屏（12）** ✓
 ```
-player_play_tracks  player_play_query  player_toggle  player_next  player_prev
-player_seek  player_set_volume  player_toggle_mute  player_set_rate
-player_set_repeat  player_set_shuffle  player_report  lyrics_get
+[x] app_info            [x] library_list         [x] player_state
+[x] app_get_settings    [x] library_tracks       [x] player_queue
+[x] app_set_settings    [x] library_stats        [x] spectrum_set
+[x] app_get_ui_state    [x] app_diagnostics
+[x] app_set_ui_state
 ```
 
-**B3 · 其余（29）** —— 按页面推进时逐个收口，不预先改
+**B2 · 播放与队列（13）** ✓
 ```
-playlist_*（10）：list detail create rename delete reorder add_tracks remove_at move clear
-beets_*（5）：status preview apply cancel sync
-library_*（6）：scan scan_cancel choose_root reveal_track ids_for_selection remove_tracks
-player_*（5）：enqueue insert_next remove_at move clear
-history_*（2）：stats clear
-app_open_data_dir（1）
+[x] player_play_tracks  [x] player_seek          [x] player_set_repeat
+[x] player_play_query   [x] player_set_volume    [x] player_set_shuffle
+[x] player_toggle       [x] player_toggle_mute   [x] player_report
+[x] player_next         [x] player_set_rate      [x] lyrics_get
+[x] player_prev
 ```
 
-迁移状态用一个显式清单维护（`docs/17` 的勾选表或代码里的 `// TODO(ipc-v2)` 标记 +
-`grep` 计数），**不允许"感觉都迁完了"**。
+**B3 · 其余（29）** ✓
+```
+playlist（10）[x] list detail create rename delete reorder add_tracks remove_at move clear
+beets（5）    [x] status preview apply cancel sync
+library（6）  [x] scan scan_cancel choose_root reveal_track ids_for_selection remove_tracks
+player（5）   [x] enqueue insert_next remove_at move clear
+history（2）  [x] stats clear
+app（1）      [x] open_data_dir
+```
+
+### 5.1 迁移后命令返回值的形状分布
+
+| 返回值 | 命令 |
+|---|---|
+| `PlayerState`（状态机快照，17 条） | `player_state` + 16 条 `player_*`（所有会改状态的操作） |
+| 队列视图 | `player_queue` → `QueueSnapshot` |
+| 单个 DTO | `app_info` / `library_stats` / `beets_status` / `library_scan` / `lyrics_get` / `history_stats` / `app_diagnostics` |
+| DTO 列表 | `library_tracks` / `playlist_list` / `playlist_reorder` / `library_ids_for_selection` |
+| 可空 DTO | `playlist_detail`（`null` = 不存在）/ `library_choose_root`（`null` = 用户取消） |
+| 小回执（单一布尔/计数） | `spectrum_set` / `playlist_delete` / `library_scan_cancel` / `library_remove_tracks` / `history_clear` / `beets_cancel` / `beets_preview` / `beets_apply` / `beets_sync` / `player_report` |
+| `void`（序列化为 `null`） | `app_open_data_dir` / `app_set_ui_state` |
 
 ---
 
@@ -281,6 +336,10 @@ app_open_data_dir（1）
    `npm run gen:types && git diff --exit-code` 挂进 `verify`。改 Rust 不改生成物 = CI 红。
 2. **Rust 侧快照测试**：每个新 DTO 加一条 `serde_json::to_value(...)` 字面量比对
    （与 `proto.rs` 的 `wire_shapes_are_stable` 同风格）。这样"字段名/嵌套形状"两端都锁死。
+   落点 `src-tauri/tests/dto_wire.rs`，第二批后共 12 条。
+2b. **装配测试**：`tests/ipc_contract.rs` 双向对齐——UI 调的命令必须注册、注册的命令
+   必须有 typed 入口（`new_client_covers_every_registered_command`）、UI 传的参数名
+   必须能映射到 Rust 参数名。它读源码文本，所以不需要跑起 Tauri。
 3. **dev 运行期校验**（zod，只在开发态）：
    - 对象：6 个 `Value` 参数命令 + 3 个动态边界（`settings`、`beets:import`、`scan:progress`）
    - 触发：`import.meta.env.DEV` 且 `VITE_IPC_VALIDATE=1`；每个通道**只校验前 20 次**，
@@ -298,53 +357,129 @@ app_open_data_dir（1）
 2. **不把信封带进新 UI**——只在 `compat/` 存活期内存在。
 3. **不引 router**——桌面播放器不需要 URL；沿用 view 状态机（现 `lib/view.ts` 思路）。
 4. **不自建 schema 语言 / 不上 gRPC / 不搞 OpenAPI**——Rust 是唯一源（ADR-0004）。
-5. **不在这一批做 `player:state` 的结构化错误**——它是独立任务（§2.4），但必须在写播放条前落地。
+5. **~~不在这一批做 `player:state` 的结构化错误~~** —— 已在第一批落地（§9.1），
+   因为写播放条前必须有它，晚做等于播放条先按 `string` 写完再返工。
+6. **不给 `player_report` 的 report 定形状**——它是 v1 `<audio>` 出口时代的遗留
+   回报通道，只剩诊断价值；钉死形状只会让还没升级的旧代码先挂。回执给 `{received}` 即可。
 
 ---
 
-## 8. 待拍板（3 项，附我的建议）
+## 8. 已拍板（原 3 项待定，全部按建议采纳并落地）
 
-| # | 问题 | 选项 | 建议 |
+| # | 问题 | 结论 | 落地 |
 |---|---|---|---|
-| 1 | `PlayerState.error` 是否升级为 `AudioError{code,message}` | 现在改 / 等 UI 稳定 | **现在改**。晚改等于 UI 先按 string 写完再返工 |
-| 2 | 命令名是否 camelCase（`libraryList`） | 保持 snake / 全改 | **保持 snake**。Tauri 生态默认如此，改只是风格收益，但会牵动 54 个命令 + 所有日志 |
-| 3 | `ts-rs` 生成物是否入库 | 入库 + diff 检查 / 构建时生成 | **入库**。CI 能发现"改了 Rust 忘了更新"，且 clone 后无需先跑 codegen 就能类型检查 |
+| 1 | `PlayerState.error` 是否升级为 `AudioError{code,message}` | **改**（晚改等于 UI 先按 string 写完再返工） | 第一批，随协议 v5 |
+| 2 | 命令名是否 camelCase（`libraryList`） | **保持 snake**（Tauri 生态默认；改只是风格收益，却牵动 54 命令 + 所有日志） | 未改，`ipc` 的 TS 方法名自己做 camelCase |
+| 3 | `ts-rs` 生成物是否入库 | **入库 + `gen:types:check`**（能发现"改了 Rust 忘了更新"，clone 后无需先跑 codegen 就能类型检查） | 第一批，已抓到过一次漂移 |
 
 ---
 
-## 9. 落地状态（2026-10-25 第一批已实施）
+## 9. 落地状态（2026-10-25，两批已完成）
 
-### 9.1 已完成
+### 9.1 第一批：基础设施 + B1（commit `3ae93db`）
 
 | 项 | 落点 | 证据 |
 |---|---|---|
-| 类型生成管道 | `tools/gen-types.mjs` + `npm run gen:types` / `gen:types:check`；生成物 23 个类型在 `ui/src/lib/ipc/generated/` | `gen:types:check` 已实际抓到过一次"改了 Rust 忘记重新生成"（TrackRef.ts 变更） |
-| `ApiError` 错误模型 | `src-tauri/src/dto.rs`，8 个分类 | `tests/dto_wire.rs::api_error_wire_shape` 断言键集合 + camelCase 码 + `detail` 恒为 null |
-| 播放错误结构化 | `aiya_player::{AudioError, AudioErrorCode}`；`PlayerState.error` 从 `Option<String>` 换成 `Option<AudioError>` | 分类在**引擎侧**由 `AudioError::kind()` 决定，随协议 v5 的 `kind` 字段传到宿主，宿主不解析文案 |
+| 类型生成管道 | `tools/gen-types.mjs` + `npm run gen:types` / `gen:types:check` | `gen:types:check` 实际抓到过"改了 Rust 忘记重新生成"（`TrackRef.ts` 变更） |
+| `ApiError` 错误模型 | `src-tauri/src/dto/`，8 个分类 | `dto_wire.rs::api_error_wire_shape` 断言键集合 + camelCase 码 + `detail` 恒为 null |
+| 播放错误结构化 | `aiya_player::{AudioError, AudioErrorCode}` | 分类在**引擎侧**由 `AudioError::kind()` 决定，随协议 v5 的 `kind` 传到宿主，宿主不解析文案 |
 | 协议 v5 | `EngineEvent::Error { token, kind, message }` | `proto.rs` wire 断言 `{"t":"error","token":5,"kind":"fileMissing",...}` |
 | B1 十二命令 | 全部 `Result<T, ApiError>` | 键集合测试 + 契约测试（命令名/参数名对齐） |
 | `TrackRef.path` 不再下发 | `#[serde(default, skip_serializing)] #[ts(skip)]` | `dto_wire.rs::player_state_error_is_structured_and_path_is_hidden` |
-| 时间统一毫秒 | `TrackRow.added_at_ms` / `last_played_at_ms`，DB 仍存秒 | `dto_wire.rs::track_row_has_no_path_and_uses_ms`；`repo.rs` 的 `MostPlayed` 测试把 `Some(600)` 改成 `Some(600_000)`，顺带锁住换算 |
-| 新旧契约唯一接缝 | `ui/src/compat/api.ts` 的 `tauriInvoke`：裸载荷→信封、reject→`{ok:false}` | 只在旧壳存在期间有效；旧壳删除时一并删 |
-| 契约测试扩展 | `tests/ipc_contract.rs` 现在同时扫 `compat/api.ts` 与新的 `lib/ipc/client.ts` | 4 条测试通过；解析器加了 `call<T>(` 泛型剥离 |
+| 时间统一毫秒（曲目） | `TrackRow.added_at_ms` / `last_played_at_ms` | `row_to_track` 出口 `*1000`；游标回喂 SQL 时 `/1000` |
+| 新旧契约唯一接缝 | `compat/api.ts` 的 `tauriInvoke` | 旧壳删除时一并删 |
 
-### 9.2 与本文原计划的偏差（都写明原因）
+### 9.2 第二批：B2 + B3 + 契约层收口（54 / 54）
 
-1. **`PlayerState.index/cursor` 仍是 `-1` 哨兵**，没换成 `Option`。原因：这两个值参与 `cursor`/`order` 的全部算术（advance、shuffle、repeat），换类型等于重写状态机的下标逻辑，风险远大于收益，且与前端无关。留给"状态机整理"单独一批。
-2. **`TrackPage.mode` 保留**（原计划只留 cursor）。offset 分页还在 `library_ids_for_selection` 等路径用，删字段要连带改 UI 选择逻辑。
-3. **zod 只落了 `settingsSchema` / `uiStateSchema`**，`beets:import` / `scan:progress` 的 schema 推迟到对应页面接入时再写——现在没有消费者，提前写等于猜形状。
-4. **`devValidate()` 只定义了函数**，还没接进 store：等新 UI 的 store 落地时在 3 个边界调用（现在没有新 store 可接）。
+**结构**：`dto.rs` 单文件 334 行拆成 8 个模块，按"哪个页面用"分：
+`mod`（错误）+ `app`（关于/诊断）+ `output`（输出模式子结构）+ `library`（列表/扫描/选择）
++ `playlist` + `player`（回执）+ `lyrics` + `history` + `beets`。
+`BeetsStatus` 从 `beets.rs` 搬进 `dto::beets` 并 `pub use` 回去——契约归 dto，
+探测逻辑留在 beets。
 
-### 9.3 验证
+**新增 18 个生成类型**（23 → 41）：
+
+| 域 | 类型 |
+|---|---|
+| 歌单 | `PlaylistSummary` `PlaylistAddResult` `PlaylistDeleted` |
+| 曲库 | `ScanCancel` `ChosenRoot` `RevealResult` `RemoveTracks` `ScanResult` `ScanError` |
+| 歌词 | `Lyrics` `LyricLine` |
+| 历史 | `HistoryStats` `HistoryTopTrack` `HistoryCleared` |
+| beets | `BeetsStatus` `JobStarted` `CancelRequested` |
+| 播放 | `ReportAck` |
+
+`ScanResult` / `ScanError` **就地** `derive(TS)`（在 `scanner.rs`），不复制到宿主：
+它们没有宿主私有字段，复制等于两份真相。与 `repo::TrackRow` 同一处理。
+
+**又有一批字段改名（时间单位统一）**：
+
+| 位置 | 旧 | 新 | 影响面 |
+|---|---|---|---|
+| 歌单摘要 | `createdAt` / `updatedAt`（秒） | `createdAtMs` / `updatedAtMs` | `contracts/domain.ts`、`compat/mock.ts` |
+| 历史统计 | `firstPlayAt` / `lastPlayAt`（秒） | `firstPlayAtMs` / `lastPlayAtMs` | `contracts/ipc.ts`、`compat/mock.ts` |
+| 播放快照 | `updatedAt`（本来就是毫秒） | `updatedAtMs` | `contracts/player.ts`、`compat/mock.ts` |
+
+`PlayerState.updatedAt` 本来就是毫秒，改名不是为了修 bug，是为了让规则可以
+`grep`——不然"哪些时间字段带 Ms"永远要靠记。mock 里的秒级 `Date.now()/1000`
+一并换成毫秒：预览是假后端，但单位不该说谎。
+
+### 9.3 顺手修掉的真 bug：`history_stats` 从来没成功过
+
+`history_stats` 的 SQL 查 `t.artist`，而 `tracks` 表**没有这一列**
+（艺人名在 `artists.name`，要 JOIN）。`prepare` 阶段就报 `no such column`
+→ 整个命令恒返回 `E_INTERNAL` → 历史页永远是空态。
+
+为什么一直没被发现：浏览器预览走 `compat/mock.ts`，那里造得出数据；真机上
+历史页是"暂无记录"，看起来就是"我还没听歌"。
+
+修法与防腐：SQL 主体抽成 `history_stats_from(&Connection)`，用真 schema 的
+内存库跑两条测试（有数据 / 空库）。`lib.rs` 里 `#[tauri::command]` 只剩转发。
+
+### 9.4 行为变化（旧壳可兼容，但码名变了）
+
+| 命令 | 旧码 | 新码 | 旧 UI 是否有分支 |
+|---|---|---|---|
+| `library_scan`（并发） | `E_SCAN_BUSY` | `busy` → `E_BUSY` | 无（`grep` 确认） |
+| `library_scan`（路径不存在） | `E_BAD_PATH` | `invalidArg` → `E_INVALID_ARG` | 无 |
+| `library_ids_for_selection`（query 坏） | `E_BAD_QUERY` | `invalidArg` → `E_INVALID_ARG` | 无 |
+| `beets_preview/apply`（没装） | `E_BEETS_NOT_FOUND` | `beetsMissing` → 仍映射成 `E_NOT_FOUND` | 无 |
+
+另外两处"从静默到报错"：
+1. `library_ids_for_selection` 的 `indices` 不合法以前**当空数组**处理（多选删歌静默
+   变成"没删"），现在 `invalidArg`。
+2. `player_play_query` 的 DB 查询失败以前 `unwrap_or_default()` → 报"查询结果为空"
+   （`notFound`），现在报 `internal`——失败原因不再被伪装成"没歌"。
+
+### 9.5 与本文原计划的偏差（都写明原因）
+
+1. **`PlayerState.index/cursor` 仍是 `-1` 哨兵**，没换 `Option`。这两个值参与
+   `cursor`/`order` 的全部算术（advance、shuffle、repeat），换类型等于重写状态机
+   的下标逻辑，风险远大于收益，且与前端无关。留给"状态机整理"单独一批。
+2. **`TrackPage.mode` 保留**。offset 分页还在 `library_ids_for_selection` 等路径用。
+3. **参数侧不做 DTO**（§3.1），只有返回值全 typed。这是实测后的修正，不是妥协。
+4. **zod 只落了 `settingsSchema` / `uiStateSchema`**，`beets:import` / `scan:progress`
+   的 schema 推迟到对应页面接入时写——现在没有消费者，提前写等于猜形状。
+5. **`devValidate()` 只定义了函数**，还没接进 store：新 UI 的 store 落地时在 3 个边界调。
+
+### 9.6 验证
 
 ```
-cargo test --workspace                  178 passed / 0 failed（+1 ignored perf_50k）
+cargo test --workspace                  208 passed / 0 failed（+1 ignored perf_50k）
 cargo build --workspace --all-targets   0 warning
 npm run check (svelte-check)            0 errors / 0 warnings
-npm run gen:types:check                 ✓ 23 个类型与 Rust 一致
+npm run gen:types:check                 ✓ 41 个类型与 Rust 一致
 npm run smoke:output                    六项全过（真机，协议 v5 握手）
-应用启动                                 无 ERROR/WARN，sidecar protocol=5
 ```
+
+第二批新增的测试：
+
+| 测试 | 守什么 |
+|---|---|
+| `ipc_contract::new_client_covers_every_registered_command` | 54 个命令**全部**有 typed 入口（以后新加命令漏写 client 也会红） |
+| `lib_tests::history_stats_query_works_against_real_schema` | `history_stats` 那套 SQL 能跑通、艺人名走 JOIN、时间换毫秒 |
+| `lib_tests::history_stats_handles_empty_library` | 空库不报错（初次启动） |
+| `lib_tests::playlist_summary_counts_items_and_converts_to_ms` | 歌单三个聚合子查询 + 秒→毫秒换算（写反会静默显示 1970 年） |
+| `dto_wire` 新增 8 条 | 歌单/历史/歌词/扫描/小回执/beets 的键集合与单位 |
 
 > 老 UI 的点击级验证没做（窗口截图被安全策略拦）。旧壳路径由「类型检查 + 契约测试 +
 > wire 快照 + 干净启动」覆盖；真正的端到端确认留给新 UI（新版走 `lib/ipc/client.ts`，

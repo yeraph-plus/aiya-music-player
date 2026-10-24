@@ -152,8 +152,11 @@ pub struct PlayerState {
     pub current: Option<TrackRef>,
     #[ts(type = "number")]
     pub token: u64,
+    /// 快照生成时间，**毫秒**。名字带 `Ms` 是硬要求：同结构里
+    /// `positionMs`/`durationMs` 都是毫秒，只让它一个叫 `updatedAt`
+    /// 等于留个坑给下一个人猜单位（docs/17 §3.1）。
     #[ts(type = "number")]
-    pub updated_at: u64,
+    pub updated_at_ms: u64,
 }
 
 /// 队列快照（对齐 QueueSnapshot：ids + tracks 最小字段 + 游标）。
@@ -248,7 +251,7 @@ mod tests {
                 path: "D:/m/a.flac".into(),
             }),
             token: 1,
-            updated_at: 0,
+            updated_at_ms: 0,
         };
         let v = serde_json::to_value(&st).unwrap();
         let cur = &v["current"];

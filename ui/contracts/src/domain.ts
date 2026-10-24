@@ -137,8 +137,10 @@ export interface PlaylistSummary {
   durationMs: number;
   /** 自定义封面优先，否则取第一首曲目的封面 */
   artworkId: string | null;
-  createdAt: number;
-  updatedAt: number;
+  /** 创建时间，毫秒（DB 存秒，DTO 已换算） */
+  createdAtMs: number;
+  /** 最后修改时间，毫秒 */
+  updatedAtMs: number;
   sortPosition: number;
 }
 

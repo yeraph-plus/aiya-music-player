@@ -316,3 +316,25 @@ fn registered_commands_have_callers() {
         unused.len()
     );
 }
+
+/// 新 client 的**完成度**：54 个注册命令必须全部有 typed 入口。
+///
+/// 这条是 docs/17 §5 勾选表的机器版。迁移是分批做的，最容易出的错不是
+/// "改错了"，而是"漏了一条没人发现"——漏掉的命令在新 UI 里等于不存在，
+/// 而老壳还能跑，所以不写这条测试就永远发现不了。
+///
+/// 它同时挡住"新加命令只往 lib.rs 里写"：注册了但 client 没入口 → 这里红。
+#[test]
+fn new_client_covers_every_registered_command() {
+    let called: BTreeSet<String> = parse_ui_calls(&strip_call_generics(CLIENT_TS))
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    let registered = parse_registered(LIB_RS);
+    assert!(registered.len() > 50, "注册命令解析失败：{}", registered.len());
+    let missing: Vec<&String> = registered.iter().filter(|n| !called.contains(*n)).collect();
+    assert!(
+        missing.is_empty(),
+        "新 client（ui/src/lib/ipc/client.ts）缺少这些命令的 typed 入口：{missing:?}"
+    );
+}

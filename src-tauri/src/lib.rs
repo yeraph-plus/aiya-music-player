@@ -1,8 +1,11 @@
 //! AIYA Music — Tauri 宿主壳。
 //!
 //! 边界约定（src-tauri/README.md）：命令注册、事件桥、协议注册；领域业务在 crates/。
-//! 本文件把 `aiya-data` 的能力暴露为 IPC 命令，返回与 `@aiya/contracts`
-//! 的 `IpcResult<T>` 同构 JSON —— UI 的 `result.ok` 分支零改动。
+//!
+//! 全部 54 个命令都是 `Result<T, dto::ApiError>`：成功返回**裸载荷**（形状定义在
+//! [`dto`]，由 ts-rs 生成到 `ui/src/lib/ipc/generated/`），失败时 Tauri 把
+//! `ApiError` 序列化后直接 reject。`{ok,data}` 信封已经不存在了 —— 旧 UI 那层
+//! 翻译只活在 `ui/src/compat/api.ts`（docs/17 §3.1）。
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -26,7 +29,7 @@ mod smtc;
 
 use pump::{PumpCore, PumpEffect};
 
-/* ---------------- IpcResult 信封（与 contracts/ipc.ts 同构） ---------------- */
+/* ---------------- 命令返回形状约定 ---------------- */
 
 /// 动态 JSON 的别名：用于 settings / ui_state 这类**没有固定形状**的载荷。
 ///
@@ -34,10 +37,6 @@ use pump::{PumpCore, PumpEffect};
 /// 由 UI 侧 zod schema 兜住（docs/17 §6）。写成 `Json` 而不是 `Value` 是为了
 /// 在签名上一眼看出"这里是故意的动态"，而不是"还没收口"。
 type Json = Value;
-
-fn ok(data: Value) -> Value {
-    json!({ "ok": true, "data": data })
-}
 
 fn now_ms_u64() -> u64 {
     std::time::SystemTime::now()
@@ -54,13 +53,98 @@ fn now_secs() -> i64 {
         .as_secs() as i64
 }
 
-fn fail(code: &str, message: &str) -> Value {
-    json!({ "ok": false, "error": { "code": code, "message": message } })
-}
-
 #[cfg(test)]
 mod lib_tests {
     use crate::pump::position_emit_due;
+
+    /// 历史统计的 SQL 曾经查 `t.artist`——tracks 表没有这一列，prepare 直接
+    /// 报 "no such column"，命令恒返回 internal，历史页永远是空态。这条测试
+    /// 用真 schema 跑一遍，锁住"能查出来 + 艺人名走 JOIN + 时间换毫秒"。
+    #[test]
+    fn history_stats_query_works_against_real_schema() {
+        let mut conn = aiya_data::db::open_in_memory().expect("内存库");
+        conn.execute("INSERT INTO artists (id, name, name_norm) VALUES ('ar1','艺人','艺人')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO tracks (id, title, title_norm, artist_id, added_at, path, path_lower)
+             VALUES ('t1','标题','标题','ar1', 0, 'D:/m/a.flac', 'd:/m/a.flac')",
+            [],
+        )
+        .unwrap();
+        // 两条：一条听完、一条 0 秒切走
+        aiya_data::history::record(&mut conn, "t1", 1_700_000_000, 30).unwrap();
+        aiya_data::history::record(&mut conn, "t1", 1_700_000_600, 0).unwrap();
+
+        let s = crate::history_stats_from(&conn).expect("历史统计不能报错");
+        assert_eq!(s.total_plays, 2);
+        assert_eq!(s.completed, 1, "seconds_played >= 1 才算完成");
+        assert_eq!(s.skipped, 1);
+        // played_at 存秒、出口毫秒 —— 换算只在这一处
+        assert_eq!(s.first_play_at_ms, Some(1_700_000_000_000));
+        assert_eq!(s.last_play_at_ms, Some(1_700_000_600_000));
+        assert_eq!(s.total_ms, 30_000);
+        assert_eq!(s.top_tracks.len(), 1, "同一首曲目只占一行");
+        assert_eq!(s.top_tracks[0].artist.as_deref(), Some("艺人"), "艺人名必须来自 JOIN");
+        assert_eq!(s.top_tracks[0].play_count, 2);
+    }
+
+    /// 空库也必须能查（初次启动、还没听过任何歌）。此前这里靠 `unwrap_or(None)`
+    /// 兜住 MIN/MAX，但 prepare 失败会直接上抛——所以这条一起锚住。
+    #[test]
+    fn history_stats_handles_empty_library() {
+        let conn = aiya_data::db::open_in_memory().expect("内存库");
+        let s = crate::history_stats_from(&conn).expect("空库也要能查");
+        assert_eq!(s.total_plays, 0);
+        assert_eq!(s.total_ms, 0);
+        assert!(s.first_play_at_ms.is_none());
+        assert!(s.top_tracks.is_empty());
+    }
+
+    /// 歌单摘要的三个聚合子查询 + 秒→毫秒换算。
+    ///
+    /// 这段 SQL 以前是手拼 `json!`，字段顺序靠人工对齐；换算写反的话
+    /// UI 会把 1970 年显示成"创建时间"，而且是静默的。
+    #[test]
+    fn playlist_summary_counts_items_and_converts_to_ms() {
+        let mut conn = aiya_data::db::open_in_memory().expect("内存库");
+        for (id, dur, art) in [("t1", 100_000i64, Some("art1")), ("t2", 20_000, None)] {
+            conn.execute(
+                "INSERT INTO tracks (id, title, title_norm, duration_ms, added_at, artwork_id,
+                                     path, path_lower)
+                 VALUES (?1, ?1, ?1, ?2, 0, ?3, ?4, ?4)",
+                rusqlite::params![id, dur, art, format!("D:/m/{id}.flac")],
+            )
+            .unwrap();
+        }
+        let now = 1_700_000_000i64; // unix 秒
+        aiya_data::playlist::create(
+            &mut conn,
+            "pl1",
+            "通勤",
+            &["t1".to_string(), "t2".to_string()],
+            now,
+        )
+        .unwrap();
+
+        let all = crate::playlist_list_all(&conn).expect("歌单列表不能报错");
+        assert_eq!(all.len(), 1);
+        let p = &all[0];
+        assert_eq!(p.name, "通勤");
+        // 聚合：两首、时长求和、封面取第一首有的那张
+        assert_eq!(p.track_count, 2);
+        assert_eq!(p.duration_ms, 120_000);
+        assert_eq!(p.artwork_id.as_deref(), Some("art1"));
+        // 时间：DB 存秒、出口毫秒
+        assert_eq!(p.created_at_ms, now * 1000);
+        assert!(p.updated_at_ms >= p.created_at_ms);
+
+        let one = crate::playlist_summary_by_id(&conn, "pl1")
+            .expect("单查不能报错")
+            .expect("歌单存在");
+        assert_eq!(one.id, "pl1");
+        // 不存在返回 None（命令层映射成 null，不是错误）
+        assert!(crate::playlist_summary_by_id(&conn, "nope").unwrap().is_none());
+    }
 
     /// P0-1 回归：节流基准必须是泵私有变量，不能被任何"刚刚被归约"的
     /// 时间戳影响。这里锁住三条性质。
@@ -462,12 +546,14 @@ fn app_diagnostics(state: State<'_, AppState>) -> Result<dto::Diagnostics, dto::
 
 }
 
+/// 在资源管理器中打开数据目录。打不开也不算失败（用户就是想看看文件在哪，
+/// 弹个错误框毫无帮助），所以恒返回 `Ok`。
 #[tauri::command]
-fn app_open_data_dir(state: State<'_, AppState>) -> Value {
+fn app_open_data_dir(state: State<'_, AppState>) -> Result<(), dto::ApiError> {
     if let Some(dir) = state.db_path.parent() {
         let _ = std::process::Command::new("explorer").arg(dir).spawn();
     }
-    ok(json!(null))
+    Ok(())
 }
 
 /* ---------------- library 命令 ---------------- */
@@ -475,79 +561,67 @@ fn app_open_data_dir(state: State<'_, AppState>) -> Value {
 /// beets 环境状态（设置页诊断区）。低频查询，每次现查（探测 + 一次 status 往返）。
 /// P1：非 async 命令在主线程执行——probe 逐候选解释器尝试最多 ~30s，
 /// 曾把主线程整个冻结。spawn_blocking 卸载。
+///
+/// 返回 `Result` 只是形态统一：`probe` 自己从不失败（失败信息进
+/// `error_code` / `error_message` 字段），这里唯一的错误源是工作线程崩了。
 #[tauri::command]
-async fn beets_status(app: AppHandle) -> Value {
-    let result = tauri::async_runtime::spawn_blocking(move || beets::probe(&app))
+async fn beets_status(app: AppHandle) -> Result<dto::beets::BeetsStatus, dto::ApiError> {
+    tauri::async_runtime::spawn_blocking(move || beets::probe(&app))
         .await
-        .unwrap_or_else(|e| beets::BeetsStatus {
-            found: false,
-            interpreter: None,
-            script_path: None,
-            protocol_version: None,
-            beets_version: None,
-            python_version: None,
-            library_path: None,
-            library_exists: None,
-            plugins: None,
-            config_dir: None,
-            error_code: Some("E_INTERNAL".into()),
-            error_message: Some(e.to_string()),
-        });
-    match serde_json::to_value(result) {
-        Ok(v) => ok(v),
-        Err(e) => fail("E_INTERNAL", &e.to_string()),
-    }
+        .map_err(dto::ApiError::internal)
 }
 
 /// 启动一次只读预览（B1）：事件流走 `beets:import`。
-/// 未装 beets → E_BEETS_NOT_FOUND（UI 显示指引）。
+/// 未装 beets → `beetsMissing`（UI 显示安装指引）。
 /// P1：探测（pick_interpreter）最多 ~30s 阻塞，spawn_blocking 卸载。
 #[tauri::command]
-async fn beets_preview(app: AppHandle, paths: Vec<String>) -> Value {
-    let result =
-        tauri::async_runtime::spawn_blocking(move || beets::start_preview(app, paths))
-            .await
-            .unwrap_or_else(|e| Err(e.to_string()));
-    match result {
-        Ok(()) => ok(json!({ "started": true })),
-        Err(e) => fail("E_BEETS_NOT_FOUND", &e),
-    }
+async fn beets_preview(
+    app: AppHandle,
+    paths: Vec<String>,
+) -> Result<dto::beets::JobStarted, dto::ApiError> {
+    tauri::async_runtime::spawn_blocking(move || beets::start_preview(app, paths))
+        .await
+        .map_err(dto::ApiError::internal)?
+        .map_err(dto::ApiError::beets_missing)?;
+    Ok(dto::beets::JobStarted { started: true })
 }
 
 /// B2：应用导入决策（写标签 + 入 beets 库，不移动文件）。
-/// decisions 形状见契约 ApplyDecision；完成后自动 beets 对齐读模型
-/// （自闭环：进度/汇总走 beets:import 的 librarySynced）。
+/// `decisions` 保持 `Vec<Json>`：它是预览结果**原样回传**给 sidecar 的载荷
+/// （含 `candidate` 深层对象），宿主只透传不解读——在这里定形状等于
+/// 让宿主编译期依赖 beets 的返回结构，而那份结构是 sidecar 的事（docs/17 §3.2）。
 /// P1：探测最多 ~30s 阻塞，spawn_blocking 卸载。
 #[tauri::command]
-async fn beets_apply(app: AppHandle, decisions: Vec<Value>) -> Value {
+async fn beets_apply(
+    app: AppHandle,
+    decisions: Vec<Json>,
+) -> Result<dto::beets::JobStarted, dto::ApiError> {
     let (db_path, scanning) = {
         let Some(state) = app.try_state::<AppState>() else {
-            return fail("E_INTERNAL", "app state 不可用");
+            return Err(dto::ApiError::internal("app state 不可用"));
         };
         (state.db_path.clone(), state.scanning.clone())
     };
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let refresh = beets::RefreshParams { db_path, scanning };
         beets::start_apply(app, decisions, Some(refresh))
     })
     .await
-    .unwrap_or_else(|e| Err(e.to_string()));
-    match result {
-        Ok(()) => ok(json!({ "started": true })),
-        Err(e) => fail("E_BEETS_NOT_FOUND", &e),
-    }
+    .map_err(dto::ApiError::internal)?
+    .map_err(dto::ApiError::beets_missing)?;
+    Ok(dto::beets::JobStarted { started: true })
 }
 
 /// 取消当前 beets 导入（preview/apply）：sidecar 在下个检查点收尾，
 /// 结果走 `cancelled` 事件（UI 据此解锁按钮）。
 #[tauri::command]
-fn beets_cancel() -> Value {
-    ok(json!({ "requested": beets::cancel_session() }))
+fn beets_cancel() -> Result<dto::beets::CancelRequested, dto::ApiError> {
+    Ok(dto::beets::CancelRequested { requested: beets::cancel_session() })
 }
 
 /// 手动触发一次 beets → 自有读模型的全量对齐（异步，结果走 librarySynced 事件）。
 #[tauri::command]
-fn beets_sync(app: AppHandle, state: State<'_, AppState>) -> Value {
+fn beets_sync(app: AppHandle, state: State<'_, AppState>) -> Result<dto::beets::JobStarted, dto::ApiError> {
     beets::sync_now(
         app,
         beets::RefreshParams {
@@ -555,7 +629,7 @@ fn beets_sync(app: AppHandle, state: State<'_, AppState>) -> Value {
             scanning: state.scanning.clone(),
         },
     );
-    ok(json!({ "started": true }))
+    Ok(dto::beets::JobStarted { started: true })
 }
 
 #[tauri::command]
@@ -659,19 +733,23 @@ fn library_stats(state: State<'_, AppState>) -> Result<dto::LibraryStats, dto::A
 
 /// 扫描：阻塞直到完成（进度经 `scan:progress` 事件推送，UI 侧节流渲染）。
 /// 用独立连接（WAL 下与主 DB 线程并行），不占用 DbHandle。
-/// Tauri 要求 async 命令带引用参数必须返回 Result —— 外面套 Ok。
+/// Tauri 要求 async 命令带引用参数（`State<'_, _>`）必须返回 Result。
 #[tauri::command]
 async fn library_scan(
     app: AppHandle,
     state: State<'_, AppState>,
-    options: Option<Value>,
-) -> Result<Value, ()> {
-    Ok(library_scan_body(app, &state, options).await)
+    options: Option<Json>,
+) -> Result<aiya_data::scanner::ScanResult, dto::ApiError> {
+    library_scan_body(app, &state, options).await
 }
 
-async fn library_scan_body(app: AppHandle, state: &State<'_, AppState>, options: Option<Value>) -> Value {
+async fn library_scan_body(
+    app: AppHandle,
+    state: &State<'_, AppState>,
+    options: Option<Json>,
+) -> Result<aiya_data::scanner::ScanResult, dto::ApiError> {
     if state.scanning.swap(true, Ordering::SeqCst) {
-        return fail("E_SCAN_BUSY", "已有扫描在进行");
+        return Err(dto::ApiError::busy("已有扫描在进行"));
     }
 
     // 路径优先级：显式 options.path > settings 里存的 library.root > 系统 Music 目录
@@ -696,7 +774,7 @@ async fn library_scan_body(app: AppHandle, state: &State<'_, AppState>, options:
 
     if !root.is_dir() {
         state.scanning.store(false, Ordering::SeqCst);
-        return fail("E_BAD_PATH", &format!("目录不存在：{}", root.display()));
+        return Err(dto::ApiError::invalid_arg(format!("目录不存在：{}", root.display())));
     }
 
     let db_path = state.db_path.clone();
@@ -706,63 +784,65 @@ async fn library_scan_body(app: AppHandle, state: &State<'_, AppState>, options:
     state.scan_cancel.store(false, Ordering::SeqCst);
     let scan_cancel = state.scan_cancel.clone();
 
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let mut conn = match aiya_data::open_conn(&db_path) {
-            Ok(c) => c,
-            Err(e) => return fail("E_INTERNAL", &e.to_string()),
-        };
-        let app2 = handle.clone();
-        // 宿主侧 100ms 节流（P2：此前每条目一次 IPC 序列化，10 万文件 =
-        // 10 万次跨进程 emit；UI 侧节流只省渲染不省传输）
-        let last_emit_ms = std::sync::atomic::AtomicU64::new(0);
-        let scan_result = scanner::scan_directory_ext(
-            &mut conn,
-            &root,
-            Some(&artwork_dir),
-            || scan_cancel.load(Ordering::Relaxed),
-            move |p| {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            let last = last_emit_ms.load(Ordering::Relaxed);
-            if now >= last + 100 {
-                last_emit_ms.store(now, Ordering::Relaxed);
-                if let Ok(v) = serde_json::to_value(&p) {
-                    let _ = app2.emit("scan:progress", v);
-                }
-            }
-        });
-        let _ = conn.close();
-        match scan_result {
-            Ok(r) => serde_json::to_value(r).map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string())),
-            Err(e) => fail("E_INTERNAL", &e.to_string()),
-        }
-    })
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> Result<aiya_data::scanner::ScanResult, dto::ApiError> {
+            let mut conn = aiya_data::open_conn(&db_path).map_err(dto::ApiError::internal)?;
+            let app2 = handle.clone();
+            // 宿主侧 100ms 节流（P2：此前每条目一次 IPC 序列化，10 万文件 =
+            // 10 万次跨进程 emit；UI 侧节流只省渲染不省传输）
+            let last_emit_ms = std::sync::atomic::AtomicU64::new(0);
+            let scan_result = scanner::scan_directory_ext(
+                &mut conn,
+                &root,
+                Some(&artwork_dir),
+                || scan_cancel.load(Ordering::Relaxed),
+                move |p| {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let last = last_emit_ms.load(Ordering::Relaxed);
+                    if now >= last + 100 {
+                        last_emit_ms.store(now, Ordering::Relaxed);
+                        if let Ok(v) = serde_json::to_value(&p) {
+                            let _ = app2.emit("scan:progress", v);
+                        }
+                    }
+                },
+            );
+            let _ = conn.close();
+            scan_result.map_err(dto::ApiError::internal)
+        },
+    )
     .await
-    .unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()));
+    .map_err(dto::ApiError::internal)?;
 
+    // 无论成功失败都要放开互斥，否则一次失败之后整个会话都扫不了库
     state.scanning.store(false, Ordering::SeqCst);
     result
 }
 
 #[tauri::command]
-fn library_scan_cancel(state: State<'_, AppState>) -> Value {
+fn library_scan_cancel(state: State<'_, AppState>) -> Result<dto::library::ScanCancel, dto::ApiError> {
     // 置位取消请求，扫描循环在 walk 每条目 / 每批事务边界自行收尾
     //（取消路径不执行 mark_missing，防止误标在线文件）。
     if state.scanning.load(Ordering::SeqCst) {
         state.scan_cancel.store(true, Ordering::SeqCst);
-        ok(json!({ "cancelled": true }))
+        Ok(dto::library::ScanCancel { cancelled: true })
     } else {
-        ok(json!({ "cancelled": false }))
+        Ok(dto::library::ScanCancel { cancelled: false })
     }
 }
 
 /// 选目录并持久化为 `library.root`（UI 的 startScan 不带 path，扫描时从这里取）。
 /// P1：blocking_pick_folder 在主线程调用有死锁风险（tauri-plugin-dialog
 /// 明确警告），spawn_blocking 卸载到工作线程。
+///
+/// 用户取消选择返回 `Ok(None)`（→ null），不是错误：取消是正常操作。
 #[tauri::command]
-async fn library_choose_root(app: AppHandle) -> Value {
+async fn library_choose_root(
+    app: AppHandle,
+) -> Result<Option<dto::library::ChosenRoot>, dto::ApiError> {
     use tauri_plugin_dialog::DialogExt;
     let dialog_app = app.clone();
     let picked = tauri::async_runtime::spawn_blocking(move || {
@@ -775,24 +855,25 @@ async fn library_choose_root(app: AppHandle) -> Value {
     .await
     .unwrap_or(None);
     let Some(p) = picked else {
-        return ok(json!(null));
+        return Ok(None);
     };
     let path_str = p.to_string_lossy().into_owned();
     let to_save = path_str.clone();
     let Some(state) = app.try_state::<AppState>() else {
-        return fail("E_INTERNAL", "app state 不可用");
+        return Err(dto::ApiError::internal("app state 不可用"));
     };
     let saved: aiya_data::DbResult<()> = state.db().send(move |conn| {
         setting_set(conn, "library.root", &json!(to_save)).map_err(aiya_data::DbError::Sql)
     });
-    match saved {
-        Ok(()) => ok(json!({ "path": path_str })),
-        Err(_) => fail("E_INTERNAL", "无法保存曲库目录"),
-    }
+    saved.map_err(|e| dto::ApiError::internal(format!("无法保存曲库目录：{e}")))?;
+    Ok(Some(dto::library::ChosenRoot { path: path_str }))
 }
 
 #[tauri::command]
-fn library_reveal_track(state: State<'_, AppState>, track_id: String) -> Value {
+fn library_reveal_track(
+    state: State<'_, AppState>,
+    track_id: String,
+) -> Result<dto::library::RevealResult, dto::ApiError> {
     let result: aiya_data::DbResult<Option<String>> = state.db().send(move |conn| {
         conn.query_row("SELECT path FROM tracks WHERE id = ?1", [track_id], |r| r.get(0))
             .map(Some)
@@ -807,63 +888,100 @@ fn library_reveal_track(state: State<'_, AppState>, track_id: String) -> Value {
                 .arg(format!("/select,{path}"))
                 .spawn()
                 .is_ok();
-            ok(json!({
-                "revealed": revealed,
-                "reason": if revealed { Value::Null } else { json!("explorer 启动失败") },
-            }))
+            Ok(dto::library::RevealResult {
+                revealed,
+                reason: if revealed { None } else { Some("explorer 启动失败".into()) },
+            })
         }
-        Ok(None) => ok(json!({ "revealed": false, "reason": "曲目不在库中" })),
-        Err(e) => fail("E_INTERNAL", &e.to_string()),
+        Ok(None) => Ok(dto::library::RevealResult {
+            revealed: false,
+            reason: Some("曲目不在库中".into()),
+        }),
+        Err(e) => Err(dto::ApiError::from(e)),
     }
+}
+
+/// `indices` 的两种形态：字符串 `"all"` 或 0 基下标数组。
+///
+/// 用 untagged 枚举接住而不是 `Value` 里手工试：解析失败会直接给出
+/// `invalidArg`，而不是"传错了就当没选"——后者会让多选删歌静默变成
+/// "一条都没选"（用户以为删掉了，其实什么都没发生）。
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum SelectionIndices {
+    Tag(String),
+    List(Vec<usize>),
+}
+
+/// 批量选择请求。`query` 形状是 `TrackWindowQuery`，与 `library_list` 共用。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectionRequest {
+    #[serde(default)]
+    query: Json,
+    #[serde(default)]
+    indices: Option<SelectionIndices>,
 }
 
 /// 批量选择 → ID。indices 为字符串 "all" 或下标数组。
 #[tauri::command]
-fn library_ids_for_selection(state: State<'_, AppState>, request: Value) -> Value {
-    let query: TrackWindowQuery =
-        match serde_json::from_value(request.get("query").cloned().unwrap_or(json!({}))) {
-            Ok(q) => q,
-            Err(e) => return fail("E_BAD_QUERY", &e.to_string()),
-        };
-    let select_all = request.get("indices").map(|i| i == "all").unwrap_or(false);
-    let indices: Vec<usize> = request
-        .get("indices")
-        .and_then(|i| i.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
-        .unwrap_or_default();
-
-    let result: aiya_data::DbResult<Value> = state.db().send(move |conn| {
-        // 批量取全量 ID 统一走 collect_track_ids：它按来源选择推进方式
-        // （library=游标 / 歌单等=offset）。此前这里只写 `q.cursor`，而 UI
-        // 传进来的 query 恒为 offset 模式 → cursor 被忽略 → 每轮同一页 →
-        // 死循环占死 DB 线程，任何一次多选批量操作都会冻死整个 App。
-        let collected = repo::collect_track_ids(conn, &query, ID_COLLECT_CAP)?;
-        if collected.truncated {
-            tracing::warn!(cap = ID_COLLECT_CAP, "选区 ID 收集达到上限，已截断");
+fn library_ids_for_selection(
+    state: State<'_, AppState>,
+    request: Json,
+) -> Result<Vec<String>, dto::ApiError> {
+    let req: SelectionRequest = serde_json::from_value(request)
+        .map_err(|e| dto::ApiError::invalid_arg(format!("选区请求不合法：{e}")))?;
+    let query: TrackWindowQuery = serde_json::from_value(req.query)
+        .map_err(|e| dto::ApiError::invalid_arg(format!("查询参数不合法：{e}")))?;
+    let (select_all, indices) = match req.indices {
+        None => (false, Vec::new()),
+        Some(SelectionIndices::Tag(tag)) if tag == "all" => (true, Vec::new()),
+        Some(SelectionIndices::Tag(other)) => {
+            return Err(dto::ApiError::invalid_arg(format!(
+                "indices 只接受 \"all\" 或下标数组，收到 \"{other}\""
+            )))
         }
-        let final_ids: Vec<String> = if select_all {
-            collected.ids
-        } else {
-            indices
-                .into_iter()
-                .filter_map(|i| collected.ids.get(i).cloned())
-                .collect()
-        };
-        serde_json::to_value(final_ids).map_err(|e| aiya_data::DbError::Custom(e.to_string()))
-    });
-    result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
+        Some(SelectionIndices::List(v)) => (false, v),
+    };
+
+    state
+        .db()
+        .send(move |conn| {
+            // 批量取全量 ID 统一走 collect_track_ids：它按来源选择推进方式
+            // （library=游标 / 歌单等=offset）。此前这里只写 `q.cursor`，而 UI
+            // 传进来的 query 恒为 offset 模式 → cursor 被忽略 → 每轮同一页 →
+            // 死循环占死 DB 线程，任何一次多选批量操作都会冻死整个 App。
+            let collected = repo::collect_track_ids(conn, &query, ID_COLLECT_CAP)?;
+            if collected.truncated {
+                tracing::warn!(cap = ID_COLLECT_CAP, "选区 ID 收集达到上限，已截断");
+            }
+            Ok(if select_all {
+                collected.ids
+            } else {
+                indices
+                    .into_iter()
+                    .filter_map(|i| collected.ids.get(i).cloned())
+                    .collect()
+            })
+        })
+        .map_err(dto::ApiError::from)
 }
 
 #[tauri::command]
-fn library_remove_tracks(state: State<'_, AppState>, track_ids: Vec<String>) -> Value {
-    let result: aiya_data::DbResult<Value> = state.db().send(move |conn| {
-        let mut removed = 0i64;
-        for id in &track_ids {
-            removed += conn.execute("DELETE FROM tracks WHERE id = ?1", [id]).unwrap_or(0) as i64;
-        }
-        Ok(json!({ "removed": removed }))
-    });
-    result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
+fn library_remove_tracks(
+    state: State<'_, AppState>,
+    track_ids: Vec<String>,
+) -> Result<dto::library::RemoveTracks, dto::ApiError> {
+    state
+        .db()
+        .send(move |conn| {
+            let mut removed = 0i64;
+            for id in &track_ids {
+                removed += conn.execute("DELETE FROM tracks WHERE id = ?1", [id]).unwrap_or(0) as i64;
+            }
+            Ok(dto::library::RemoveTracks { removed })
+        })
+        .map_err(dto::ApiError::from)
 }
 
 /* ---------------- playlist 命令 ---------------- */
@@ -880,75 +998,83 @@ const PLAYLIST_SELECT: &str = "SELECT p.id, p.name, p.created_at, p.updated_at, 
          WHERE pi2.playlist_id = p.id ORDER BY pi2.position LIMIT 1)
   FROM playlists p";
 
-fn playlist_row_to_summary(r: &rusqlite::Row) -> rusqlite::Result<Value> {
-    let id: String = r.get(0)?;
-    let name: String = r.get(1)?;
-    let created: i64 = r.get(2)?;
-    let updated: i64 = r.get(3)?;
-    let sort: i64 = r.get(4)?;
-    let count: i64 = r.get(5)?;
-    let duration: i64 = r.get(6)?;
-    let artwork: Option<String> = r.get(7)?;
-    Ok(json!({
-        "id": id, "name": name, "description": Value::Null,
-        "trackCount": count, "durationMs": duration,
-        "artworkId": artwork, "createdAt": created, "updatedAt": updated,
-        "sortPosition": sort,
-    }))
+/// 一行 → 摘要。时间列是 **unix 秒**，在出口处换毫秒并改名
+/// （`createdAtMs`）——DB 不动，换算只发生在这一处（docs/17 §3.1）。
+fn playlist_row(r: &rusqlite::Row) -> rusqlite::Result<dto::playlist::PlaylistSummary> {
+    Ok(dto::playlist::PlaylistSummary {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        // schema v1 没有 description 列，恒 null（字段留着是为了形状不变）
+        description: None,
+        created_at_ms: r.get::<_, i64>(2)? * 1000,
+        updated_at_ms: r.get::<_, i64>(3)? * 1000,
+        sort_position: r.get(4)?,
+        track_count: r.get(5)?,
+        duration_ms: r.get(6)?,
+        artwork_id: r.get(7)?,
+    })
 }
 
 fn playlist_summary_by_id(
     conn: &rusqlite::Connection,
     id: &str,
-) -> rusqlite::Result<Option<Value>> {
+) -> rusqlite::Result<Option<dto::playlist::PlaylistSummary>> {
     let sql = format!("{PLAYLIST_SELECT} WHERE p.id = ?1");
-    match conn.query_row(&sql, [id], playlist_row_to_summary) {
+    match conn.query_row(&sql, [id], playlist_row) {
         Ok(v) => Ok(Some(v)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e),
     }
 }
 
-/// 写命令统一骨架：闭包 `None` 表示"歌单不存在" → `E_NOT_FOUND`。
-/// UI 侧这 7 个方法没有 try/catch，只判 `result.ok`，所以必须走 `ok:false`
-/// 信封而不是抛（命令不存在时 Tauri 层直接 reject，连提示都走不到）。
-fn playlist_write<F>(state: State<'_, AppState>, f: F) -> Value
+fn playlist_list_all(
+    conn: &rusqlite::Connection,
+) -> aiya_data::DbResult<Vec<dto::playlist::PlaylistSummary>> {
+    let sql = format!("{PLAYLIST_SELECT} ORDER BY p.sort_position ASC, p.created_at ASC");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], playlist_row)?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+/// 写命令统一骨架：闭包 `None` 表示"歌单不存在" → `notFound`。
+///
+/// 歌单不存在是**可预期**的结果（另一个窗口删掉了、拖拽时列表过期），
+/// 所以走 `Err` 而不是 `Ok(null)`：UI 那边据此提示"歌单已被删除"，
+/// 而不是把 null 当成空歌单渲染出一堆 `undefined`。
+fn playlist_write<T, F>(state: &State<'_, AppState>, f: F) -> Result<T, dto::ApiError>
 where
-    F: FnOnce(&mut rusqlite::Connection) -> aiya_data::DbResult<Option<Value>> + Send + 'static,
+    F: FnOnce(&mut rusqlite::Connection) -> aiya_data::DbResult<Option<T>> + Send + 'static,
+    T: Send + 'static,
 {
-    let result: aiya_data::DbResult<Option<Value>> = state.db().send(f);
-    match result {
-        Ok(Some(v)) => ok(v),
-        Ok(None) => fail("E_NOT_FOUND", "歌单不存在"),
-        Err(e) => fail("E_INTERNAL", &e.to_string()),
+    match state.db().send(f) {
+        Ok(Some(v)) => Ok(v),
+        Ok(None) => Err(dto::ApiError::not_found("歌单不存在")),
+        Err(e) => Err(dto::ApiError::from(e)),
     }
 }
 
 #[tauri::command]
-fn playlist_list(state: State<'_, AppState>) -> Value {
-    let result: aiya_data::DbResult<Value> = state.db().send(|conn| {
-        let sql = format!("{PLAYLIST_SELECT} ORDER BY p.sort_position ASC, p.created_at ASC");
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map([], playlist_row_to_summary)?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r?);
-        }
-        serde_json::to_value(out).map_err(|e| aiya_data::DbError::Custom(e.to_string()))
-    });
-    result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
+fn playlist_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<dto::playlist::PlaylistSummary>, dto::ApiError> {
+    state.db().send(|conn| playlist_list_all(conn)).map_err(dto::ApiError::from)
 }
 
 #[tauri::command]
-fn playlist_detail(state: State<'_, AppState>, id: String) -> Value {
-    let result: aiya_data::DbResult<Option<Value>> = state.db().send(move |conn| {
-        playlist_summary_by_id(conn, &id).map_err(aiya_data::DbError::Sql)
-    });
-    match result {
-        Ok(Some(v)) => ok(v),
-        Ok(None) => ok(Value::Null),
-        Err(e) => fail("E_INTERNAL", &e.to_string()),
-    }
+fn playlist_detail(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<dto::playlist::PlaylistSummary>, dto::ApiError> {
+    state
+        .db()
+        .send(move |conn| {
+            playlist_summary_by_id(conn, &id).map_err(aiya_data::DbError::Sql)
+        })
+        .map_err(dto::ApiError::from)
 }
 
 #[tauri::command]
@@ -956,35 +1082,35 @@ fn playlist_create(
     state: State<'_, AppState>,
     name: String,
     track_ids: Option<Vec<String>>,
-) -> Value {
-    let name = match playlist_repo::sanitize_name(&name) {
-        Ok(n) => n,
-        Err(e) => return fail("E_BAD_NAME", &e.to_string()),
-    };
+) -> Result<dto::playlist::PlaylistSummary, dto::ApiError> {
+    let name = playlist_repo::sanitize_name(&name)
+        .map_err(|e| dto::ApiError::invalid_arg(e.to_string()))?;
     let track_ids = track_ids.unwrap_or_default();
     // 歌单 id 由名字派生（同名即同一歌单，重复创建不重复建行）
     let pid = ids::playlist_id(&name);
     let now = now_secs();
     let pid_for_db = pid.clone();
-    let result: aiya_data::DbResult<Option<Value>> = state.db().send(move |conn| {
+    playlist_write(&state, move |conn| {
         playlist_repo::create(conn, &pid_for_db, &name, &track_ids, now)?;
-        playlist_summary_by_id(conn, &pid_for_db).map_err(aiya_data::DbError::Sql)
-    });
-    match result {
-        Ok(Some(v)) => ok(v),
-        Ok(None) => fail("E_INTERNAL", "歌单创建后读不到"),
-        Err(e) => fail("E_INTERNAL", &e.to_string()),
-    }
+        // 建完读不到 = 事务里出了意料之外的事，不是"歌单不存在"
+        Ok(Some(
+            playlist_summary_by_id(conn, &pid_for_db)
+                .map_err(aiya_data::DbError::Sql)?
+                .ok_or_else(|| aiya_data::DbError::Custom("歌单创建后读不到".into()))?,
+        ))
+    })
 }
 
 #[tauri::command]
-fn playlist_rename(state: State<'_, AppState>, id: String, name: String) -> Value {
-    let name = match playlist_repo::sanitize_name(&name) {
-        Ok(n) => n,
-        Err(e) => return fail("E_BAD_NAME", &e.to_string()),
-    };
+fn playlist_rename(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+) -> Result<dto::playlist::PlaylistSummary, dto::ApiError> {
+    let name = playlist_repo::sanitize_name(&name)
+        .map_err(|e| dto::ApiError::invalid_arg(e.to_string()))?;
     let now = now_secs();
-    playlist_write(state, move |conn| {
+    playlist_write(&state, move |conn| {
         if !playlist_repo::rename(conn, &id, &name, now)? {
             return Ok(None);
         }
@@ -993,27 +1119,33 @@ fn playlist_rename(state: State<'_, AppState>, id: String, name: String) -> Valu
 }
 
 #[tauri::command]
-fn playlist_delete(state: State<'_, AppState>, id: String) -> Value {
-    playlist_write(state, move |conn| {
-        let deleted = playlist_repo::delete(conn, &id)?;
-        Ok(Some(json!({ "deleted": deleted })))
-    })
+fn playlist_delete(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<dto::playlist::PlaylistDeleted, dto::ApiError> {
+    state
+        .db()
+        .send(move |conn| {
+            let deleted = playlist_repo::delete(conn, &id)?;
+            Ok(dto::playlist::PlaylistDeleted { deleted })
+        })
+        .map_err(dto::ApiError::from)
 }
 
 /// 侧栏拖动排序。返回排序后的完整列表（UI 直接替换，省一次 roundtrip）。
 #[tauri::command]
-fn playlist_reorder(state: State<'_, AppState>, from: i64, to: i64) -> Value {
-    playlist_write(state, move |conn| {
-        playlist_repo::reorder_playlists(conn, from, to)?;
-        let sql = format!("{PLAYLIST_SELECT} ORDER BY p.sort_position ASC, p.created_at ASC");
-        let mut stmt = conn.prepare(&sql).map_err(aiya_data::DbError::Sql)?;
-        let rows = stmt.query_map([], playlist_row_to_summary).map_err(aiya_data::DbError::Sql)?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r.map_err(aiya_data::DbError::Sql)?);
-        }
-        Ok(Some(Value::Array(out)))
-    })
+fn playlist_reorder(
+    state: State<'_, AppState>,
+    from: i64,
+    to: i64,
+) -> Result<Vec<dto::playlist::PlaylistSummary>, dto::ApiError> {
+    state
+        .db()
+        .send(move |conn| {
+            playlist_repo::reorder_playlists(conn, from, to)?;
+            playlist_list_all(conn)
+        })
+        .map_err(dto::ApiError::from)
 }
 
 #[tauri::command]
@@ -1022,31 +1154,33 @@ fn playlist_add_tracks(
     id: String,
     track_ids: Vec<String>,
     mode: Option<String>,
-) -> Value {
-    let mode = match playlist_repo::AddMode::parse(mode.as_deref()) {
-        Ok(m) => m,
-        Err(e) => return fail("E_INVALID_ARG", &e.to_string()),
-    };
+) -> Result<dto::playlist::PlaylistAddResult, dto::ApiError> {
+    let mode = playlist_repo::AddMode::parse(mode.as_deref())
+        .map_err(|e| dto::ApiError::invalid_arg(e.to_string()))?;
     let now = now_secs();
-    playlist_write(state, move |conn| {
-        let Some(outcome) =
-            playlist_repo::add_tracks(conn, &id, &track_ids, mode, now)?
-        else {
+    playlist_write(&state, move |conn| {
+        let Some(outcome) = playlist_repo::add_tracks(conn, &id, &track_ids, mode, now)? else {
             return Ok(None);
         };
         let summary = playlist_summary_by_id(conn, &id)
             .map_err(aiya_data::DbError::Sql)?
             .ok_or_else(|| aiya_data::DbError::Custom("歌单在事务后消失".into()))?;
-        Ok(Some(json!({
-            "added": outcome.added, "skipped": outcome.skipped, "summary": summary,
-        })))
+        Ok(Some(dto::playlist::PlaylistAddResult {
+            added: outcome.added,
+            skipped: outcome.skipped,
+            summary,
+        }))
     })
 }
 
 #[tauri::command]
-fn playlist_remove_at(state: State<'_, AppState>, id: String, position: i64) -> Value {
+fn playlist_remove_at(
+    state: State<'_, AppState>,
+    id: String,
+    position: i64,
+) -> Result<dto::playlist::PlaylistSummary, dto::ApiError> {
     let now = now_secs();
-    playlist_write(state, move |conn| {
+    playlist_write(&state, move |conn| {
         if playlist_repo::remove_at(conn, &id, position, now)?.is_none() {
             return Ok(None);
         }
@@ -1055,9 +1189,14 @@ fn playlist_remove_at(state: State<'_, AppState>, id: String, position: i64) -> 
 }
 
 #[tauri::command]
-fn playlist_move(state: State<'_, AppState>, id: String, from: i64, to: i64) -> Value {
+fn playlist_move(
+    state: State<'_, AppState>,
+    id: String,
+    from: i64,
+    to: i64,
+) -> Result<dto::playlist::PlaylistSummary, dto::ApiError> {
     let now = now_secs();
-    playlist_write(state, move |conn| {
+    playlist_write(&state, move |conn| {
         if playlist_repo::move_item(conn, &id, from, to, now)?.is_none() {
             return Ok(None);
         }
@@ -1066,9 +1205,12 @@ fn playlist_move(state: State<'_, AppState>, id: String, from: i64, to: i64) -> 
 }
 
 #[tauri::command]
-fn playlist_clear(state: State<'_, AppState>, id: String) -> Value {
+fn playlist_clear(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<dto::playlist::PlaylistSummary, dto::ApiError> {
     let now = now_secs();
-    playlist_write(state, move |conn| {
+    playlist_write(&state, move |conn| {
         if !playlist_repo::clear(conn, &id, now)? {
             return Ok(None);
         }
@@ -1203,7 +1345,7 @@ fn apply_engine_intents(state: &AppState, actor: &mut aiya_player::PlayerActor) 
 
 /// Actor 归约后统一收尾：取 pending load → 发引擎；同步音量；推状态。
 /// 返回新快照（命令返回值用）。
-fn drive_and_emit(state: &State<'_, AppState>, app: &AppHandle) -> Value {
+fn drive_and_emit(state: &State<'_, AppState>, app: &AppHandle) -> aiya_player::PlayerState {
     let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let acted = apply_engine_intents(&state, &mut actor);
     // 切歌/停止立即全量落库（队列结构可能变了；exit 时不必依赖节流尾巴）
@@ -1213,7 +1355,7 @@ fn drive_and_emit(state: &State<'_, AppState>, app: &AppHandle) -> Value {
     let snapshot = actor.state();
     drop(actor);
     emit_player_state(app, &snapshot);
-    ok(serde_json::to_value(&snapshot).unwrap_or(Value::Null))
+    snapshot
 }
 
 /// 显示并聚焦主窗口（托盘左键 / 菜单共用）。
@@ -1321,19 +1463,20 @@ fn player_play_tracks(
     state: State<'_, AppState>,
     track_ids: Vec<String>,
     start_index: Option<usize>,
-) -> Value {
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
     let tracks = fetch_track_refs(&state, &track_ids);
     if tracks.is_empty() {
-        return fail("E_NOT_FOUND", "没有可播放的曲目");
+        return Err(dto::ApiError::not_found("没有可播放的曲目"));
     }
     let start = start_index.unwrap_or(0);
-    let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::ReplaceAll {
-        tracks,
-        start,
-    }));
-    drop(actor);
-    drive_and_emit(&state, &app)
+    {
+        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::ReplaceAll {
+            tracks,
+            start,
+        }));
+    }
+    Ok(drive_and_emit(&state, &app))
 }
 
 /// 按 TrackWindowQuery 语义播放查询结果（UI 的"播放全部/播放专辑"）。
@@ -1341,13 +1484,11 @@ fn player_play_tracks(
 fn player_play_query(
     app: AppHandle,
     state: State<'_, AppState>,
-    query: Value,
+    query: Json,
     start_index: Option<usize>,
-) -> Value {
-    let q: aiya_data::TrackWindowQuery = match serde_json::from_value(query) {
-        Ok(q) => q,
-        Err(e) => return fail("E_INVALID", &format!("query 无效：{e}")),
-    };
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
+    let q: aiya_data::TrackWindowQuery = serde_json::from_value(query)
+        .map_err(|e| dto::ApiError::invalid_arg(format!("query 无效：{e}")))?;
     // 拉全量 id：list_tracks 的 limit 硬钳 500（窗口化列表的正确行为），
     // 此前把 limit 写成 10000 以为能拿全，实际只播了前 500 首。
     let (ids, truncated): (Vec<String>, bool) = state
@@ -1356,27 +1497,27 @@ fn player_play_query(
             let c = aiya_data::repo::collect_track_ids(conn, &q, ID_COLLECT_CAP)?;
             Ok((c.ids, c.truncated))
         })
-        .unwrap_or_default();
+        .map_err(dto::ApiError::from)?;
     if truncated {
         tracing::warn!(cap = ID_COLLECT_CAP, "播放全部：曲目数超过上限，已截断");
     }
     if ids.is_empty() {
-        return fail("E_NOT_FOUND", "查询结果为空");
+        return Err(dto::ApiError::not_found("查询结果为空"));
     }
     let tracks = fetch_track_refs(&state, &ids);
     let start = start_index.unwrap_or(0);
-    let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::ReplaceAll {
-        tracks,
-        start,
-    }));
-    drop(actor);
-    drive_and_emit(&state, &app)
+    {
+        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::ReplaceAll {
+            tracks,
+            start,
+        }));
+    }
+    Ok(drive_and_emit(&state, &app))
 }
 
-#[tauri::command]
 /// 播放/暂停切换的内部实现（tauri command 与 SMTC 回调共用）。
-fn cmd_toggle(state: &AppState, app: &AppHandle) -> Value {
+fn cmd_toggle(state: &AppState, app: &AppHandle) -> aiya_player::PlayerState {
     let status_before = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state().status;
     use aiya_player::PlaybackStatus as PS;
     match status_before {
@@ -1394,12 +1535,15 @@ fn cmd_toggle(state: &AppState, app: &AppHandle) -> Value {
 }
 
 #[tauri::command]
-fn player_toggle(app: AppHandle, state: State<'_, AppState>) -> Value {
-    cmd_toggle(&state, &app)
+fn player_toggle(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
+    Ok(cmd_toggle(&state, &app))
 }
 
 /// Seek 的内部实现（tauri command 与 SMTC 回调共用）。
-fn cmd_seek(state: &AppState, app: &AppHandle, position_ms: u64) -> Value {
+fn cmd_seek(state: &AppState, app: &AppHandle, position_ms: u64) -> aiya_player::PlayerState {
     engine_send(state, aiya_audio::EngineCommand::Seek(position_ms));
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1408,8 +1552,11 @@ fn cmd_seek(state: &AppState, app: &AppHandle, position_ms: u64) -> Value {
     drive_and_emit_inner(state, app)
 }
 
-/// drive_and_emit 的 AppState 版本（SMTC 回调拿不到 State<'_>，语义相同）。
-fn drive_and_emit_inner(state: &AppState, app: &AppHandle) -> Value {
+/// `drive_and_emit` 的 AppState 版本（SMTC 回调拿不到 `State<'_>`，语义相同）。
+///
+/// 与前者唯一的差别是入参类型，所以逻辑必须**逐行一致**——两处一旦分叉，
+/// 走媒体键触发的那次状态更新就会少落一次库。改这里时记得同步改上面。
+fn drive_and_emit_inner(state: &AppState, app: &AppHandle) -> aiya_player::PlayerState {
     let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if apply_engine_intents(state, &mut actor) {
         persist_queue_full(state, &actor);
@@ -1417,45 +1564,62 @@ fn drive_and_emit_inner(state: &AppState, app: &AppHandle) -> Value {
     let snapshot = actor.state();
     drop(actor);
     emit_player_state(app, &snapshot);
-    ok(serde_json::to_value(&snapshot).unwrap_or(Value::Null))
+    snapshot
 }
 
 #[tauri::command]
-fn player_next(app: AppHandle, state: State<'_, AppState>) -> Value {
+fn player_next(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::Next);
     }
-    drive_and_emit(&state, &app)
+    Ok(drive_and_emit(&state, &app))
 }
 
 #[tauri::command]
-fn player_prev(app: AppHandle, state: State<'_, AppState>) -> Value {
+fn player_prev(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::Prev);
     }
-    drive_and_emit(&state, &app)
+    Ok(drive_and_emit(&state, &app))
 }
 
 #[tauri::command]
-fn player_seek(app: AppHandle, state: State<'_, AppState>, position_ms: u64) -> Value {
-    cmd_seek(&state, &app, position_ms)
+fn player_seek(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    position_ms: u64,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
+    Ok(cmd_seek(&state, &app, position_ms))
 }
 
 #[tauri::command]
-fn player_set_volume(app: AppHandle, state: State<'_, AppState>, volume: f64) -> Value {
+fn player_set_volume(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    volume: f64,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::SetVolume { volume, muted: false });
         let v = actor.engine_volume();
         engine_send(&state, aiya_audio::EngineCommand::SetVolume(v));
     }
-    drive_and_emit(&state, &app)
+    Ok(drive_and_emit(&state, &app))
 }
 
 #[tauri::command]
-fn player_toggle_mute(app: AppHandle, state: State<'_, AppState>) -> Value {
+fn player_toggle_mute(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (v, muted) = actor.volume();
@@ -1463,22 +1627,30 @@ fn player_toggle_mute(app: AppHandle, state: State<'_, AppState>) -> Value {
         let v = actor.engine_volume();
         engine_send(&state, aiya_audio::EngineCommand::SetVolume(v));
     }
-    drive_and_emit(&state, &app)
+    Ok(drive_and_emit(&state, &app))
 }
 
 #[tauri::command]
-fn player_set_rate(app: AppHandle, state: State<'_, AppState>, rate: f64) -> Value {
+fn player_set_rate(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    rate: f64,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
     // 引擎侧线性插值变速（0.5–2.0，v1 变速变调；WSOLA 不变调后补）
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::SetRate(rate));
         engine_send(&state, aiya_audio::EngineCommand::SetRate(actor.state().rate as f32));
     }
-    drive_and_emit(&state, &app)
+    Ok(drive_and_emit(&state, &app))
 }
 
 #[tauri::command]
-fn player_set_repeat(app: AppHandle, state: State<'_, AppState>, repeat: String) -> Value {
+fn player_set_repeat(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    repeat: String,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // `cycle` 是契约（contracts/ipc.ts）里的"轮转"语义：UI 只发 cycle，
@@ -1494,16 +1666,20 @@ fn player_set_repeat(app: AppHandle, state: State<'_, AppState>, repeat: String)
             "one" => aiya_player::RepeatMode::One,
             "off" => aiya_player::RepeatMode::Off,
             other => {
-                return fail("E_INVALID_ARG", &format!("未知 repeat 值：{other}"));
+                return Err(dto::ApiError::invalid_arg(format!("未知 repeat 值：{other}")));
             }
         };
         actor.reduce(aiya_player::PlayerCommand::SetRepeat(mode));
     }
-    drive_and_emit(&state, &app)
+    Ok(drive_and_emit(&state, &app))
 }
 
 #[tauri::command]
-fn player_set_shuffle(app: AppHandle, state: State<'_, AppState>, shuffle: bool) -> Value {
+fn player_set_shuffle(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    shuffle: bool,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let cur = actor.state().shuffle;
@@ -1511,7 +1687,7 @@ fn player_set_shuffle(app: AppHandle, state: State<'_, AppState>, shuffle: bool)
             actor.reduce(aiya_player::PlayerCommand::ToggleShuffle);
         }
     }
-    drive_and_emit(&state, &app)
+    Ok(drive_and_emit(&state, &app))
 }
 
 #[tauri::command]
@@ -1519,19 +1695,18 @@ fn player_enqueue(
     app: AppHandle,
     state: State<'_, AppState>,
     track_ids: Vec<String>,
-    options: Option<Value>,
-) -> Value {
+    options: Option<Json>,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
     let tracks = fetch_track_refs(&state, &track_ids);
     if tracks.is_empty() {
-        return fail("E_NOT_FOUND", "没有可播放的曲目");
+        return Err(dto::ApiError::not_found("没有可播放的曲目"));
     }
     // options: { mode: "next" | "end" }（contracts QueueInsertMode）
     let mode = options
         .as_ref()
         .and_then(|o| o.get("mode"))
         .and_then(|m| m.as_str())
-        .unwrap_or("end")
-        .to_string();
+        .unwrap_or("end");
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::Queue(if mode == "next" {
@@ -1540,35 +1715,48 @@ fn player_enqueue(
             aiya_player::QueueOp::Append { tracks }
         }));
     }
-    drive_and_emit(&state, &app)
+    Ok(drive_and_emit(&state, &app))
 }
 
 #[tauri::command]
-fn player_insert_next(app: AppHandle, state: State<'_, AppState>, track_id: String) -> Value {
+fn player_insert_next(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    track_id: String,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
     let tracks = fetch_track_refs(&state, &[track_id]);
     if tracks.is_empty() {
-        return fail("E_NOT_FOUND", "曲目不存在");
+        return Err(dto::ApiError::not_found("曲目不存在"));
     }
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::PlayNext { tracks }));
     }
-    drive_and_emit(&state, &app)
+    Ok(drive_and_emit(&state, &app))
 }
 
 #[tauri::command]
-fn player_remove_at(app: AppHandle, state: State<'_, AppState>, index: usize) -> Value {
+fn player_remove_at(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    index: usize,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::Remove {
             indices: vec![index],
         }));
     }
-    drive_and_emit(&state, &app)
+    Ok(drive_and_emit(&state, &app))
 }
 
 #[tauri::command]
-fn player_move(app: AppHandle, state: State<'_, AppState>, from: usize, to: usize) -> Value {
+fn player_move(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    from: usize,
+    to: usize,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::Move {
@@ -1576,11 +1764,14 @@ fn player_move(app: AppHandle, state: State<'_, AppState>, from: usize, to: usiz
             to,
         }));
     }
-    drive_and_emit(&state, &app)
+    Ok(drive_and_emit(&state, &app))
 }
 
 #[tauri::command]
-fn player_clear(app: AppHandle, state: State<'_, AppState>) -> Value {
+fn player_clear(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
     engine_send(&state, aiya_audio::EngineCommand::Stop);
     {
         let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1589,7 +1780,7 @@ fn player_clear(app: AppHandle, state: State<'_, AppState>) -> Value {
             start: 0,
         }));
     }
-    drive_and_emit(&state, &app)
+    Ok(drive_and_emit(&state, &app))
 }
 
 /// 播放历史：一曲播完（EngineEvent::Eof，自然结束或用户切走）记一条。
@@ -1611,17 +1802,23 @@ fn record_history(state: &AppState, track_id: &str, seconds_played: u64) {
 
 /// 旧 UI 的回报通道（<audio> 出口时代）；引擎在 Rust 后只剩诊断价值。
 #[tauri::command]
-fn player_report(state: State<'_, AppState>, report: Value) -> Value {
+fn player_report(
+    state: State<'_, AppState>,
+    report: Json,
+) -> Result<dto::player::ReportAck, dto::ApiError> {
     let kind = report.get("kind").and_then(|k| k.as_str()).unwrap_or("").to_string();
     tracing::debug!(kind, "player_report (legacy)");
     let _ = &state;
-    ok(json!({ "received": true }))
+    Ok(dto::player::ReportAck { received: true })
 }
 
-/// 歌词（P4）：同目录同名 .lrc → 解析。没找到回 found=false（UI 显示"暂无"，
+/// 歌词（P4）：同目录同名 .lrc → 解析。没找到回 `found=false`（UI 显示"暂无"，
 /// 不当错误）。trackId 是自有库的 tracks.id。
 #[tauri::command]
-fn lyrics_get(state: State<'_, AppState>, track_id: String) -> Value {
+fn lyrics_get(
+    state: State<'_, AppState>,
+    track_id: String,
+) -> Result<dto::lyrics::Lyrics, dto::ApiError> {
     let path: Option<String> = state
         .db()
         .send(move |conn| {
@@ -1629,66 +1826,81 @@ fn lyrics_get(state: State<'_, AppState>, track_id: String) -> Value {
                 .query_row("SELECT path FROM tracks WHERE id = ?1", [&track_id], |r| r.get(0))
                 .ok())
         })
-        .unwrap_or(None);
+        .map_err(dto::ApiError::from)?;
     let Some(path) = path else {
-        return ok(json!({
-            "found": false, "lines": [], "offsetMs": 0, "synced": false, "encoding": null,
-        }));
+        return Ok(dto::lyrics::Lyrics::empty());
     };
-    match aiya_data::lyrics::read_lyrics(std::path::Path::new(&path)) {
-        Some(parsed) => ok(serde_json::to_value(&parsed).unwrap_or_else(|_| json!(null))),
-        None => ok(json!({
-            "found": false, "lines": [], "offsetMs": 0, "synced": false, "encoding": null,
-        })),
-    }
+    Ok(match aiya_data::lyrics::read_lyrics(std::path::Path::new(&path)) {
+        Some(parsed) => parsed.into(),
+        None => dto::lyrics::Lyrics::empty(),
+    })
 }
 
 #[tauri::command]
-fn history_stats(state: State<'_, AppState>) -> Value {
-    let result: aiya_data::DbResult<Value> = state.db().send(|conn| {
-        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
-        let total_plays = count("SELECT COUNT(*) FROM history");
-        // completed：至少听了 1 秒；skipped：0 秒就切走的
-        let completed =
-            count("SELECT COUNT(*) FROM history WHERE seconds_played >= 1");
-        // topTracks：按播放次数前 10，JOIN 拿标题（已删曲目不计）
-        let mut stmt = conn.prepare(
-            "SELECT h.track_id, t.title, t.artist, COUNT(*) AS plays
-             FROM history h JOIN tracks t ON t.id = h.track_id
-             GROUP BY h.track_id ORDER BY plays DESC LIMIT 10",
-        )?;
-        let top: Vec<Value> = stmt
-            .query_map([], |r| {
-                Ok(json!({
-                    "id": r.get::<_, String>(0)?,
-                    "title": r.get::<_, String>(1)?,
-                    "artist": r.get::<_, Option<String>>(2)?,
-                    "playCount": r.get::<_, i64>(3)?,
-                }))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(json!({
-            "totalPlays": total_plays,
-            "totalMs": count("SELECT COALESCE(SUM(seconds_played),0) FROM history") * 1000,
-            "completed": completed,
-            "skipped": total_plays - completed,
-            "firstPlayAt": conn.query_row("SELECT MIN(played_at) FROM history", [], |r| r.get::<_, Option<i64>>(0)).unwrap_or(None),
-            "lastPlayAt": conn.query_row("SELECT MAX(played_at) FROM history", [], |r| r.get::<_, Option<i64>>(0)).unwrap_or(None),
-            "topTracks": top,
-        }))
-    });
-    result.map(ok).unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
+fn history_stats(state: State<'_, AppState>) -> Result<dto::history::HistoryStats, dto::ApiError> {
+    // 包一层闭包：`send` 给的是 `&mut Connection`，而 SQL 主体只要 `&Connection`
+    state.db().send(|conn| history_stats_from(conn)).map_err(dto::ApiError::from)
+}
+
+/// `history_stats` 的 SQL 主体。
+///
+/// 抽成独立函数是为了能直接喂一个内存库跑测试——这段 SQL 曾经查
+/// `t.artist`（tracks 表根本没有这一列），prepare 阶段就报
+/// "no such column"，于是命令恒返回 internal、历史页永远是空态；
+/// 而浏览器预览走 mock 有数据，界面上完全看不出来。
+fn history_stats_from(
+    conn: &rusqlite::Connection,
+) -> aiya_data::DbResult<dto::history::HistoryStats> {
+    let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
+    let total_plays = count("SELECT COUNT(*) FROM history");
+    // completed：至少听了 1 秒；skipped：0 秒就切走的
+    let completed = count("SELECT COUNT(*) FROM history WHERE seconds_played >= 1");
+    // topTracks：按播放次数前 10（已删曲目不计）。
+    // 艺人名必须 JOIN artists —— tracks 表**没有** artist 列。
+    let mut stmt = conn.prepare(
+        "SELECT h.track_id, t.title, ar.name, COUNT(*) AS plays
+         FROM history h
+         JOIN tracks t ON t.id = h.track_id
+         LEFT JOIN artists ar ON ar.id = t.artist_id
+         GROUP BY h.track_id ORDER BY plays DESC LIMIT 10",
+    )?;
+    let top: Vec<dto::history::HistoryTopTrack> = stmt
+        .query_map([], |r| {
+            Ok(dto::history::HistoryTopTrack {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                artist: r.get(2)?,
+                play_count: r.get(3)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    // played_at 存 unix 秒，出口换毫秒（与 totalMs 同单位）
+    let first = conn
+        .query_row("SELECT MIN(played_at) FROM history", [], |r| r.get::<_, Option<i64>>(0))
+        .unwrap_or(None);
+    let last = conn
+        .query_row("SELECT MAX(played_at) FROM history", [], |r| r.get::<_, Option<i64>>(0))
+        .unwrap_or(None);
+    Ok(dto::history::HistoryStats {
+        total_plays,
+        total_ms: count("SELECT COALESCE(SUM(seconds_played),0) FROM history") * 1000,
+        completed,
+        skipped: total_plays - completed,
+        first_play_at_ms: first.map(|s| s * 1000),
+        last_play_at_ms: last.map(|s| s * 1000),
+        top_tracks: top,
+    })
 }
 
 #[tauri::command]
-fn history_clear(state: State<'_, AppState>) -> Value {
+fn history_clear(state: State<'_, AppState>) -> Result<dto::history::HistoryCleared, dto::ApiError> {
     // 清历史必须与曲目统计列归零同事务（见 aiya_data::history::clear）
-    let result: aiya_data::DbResult<bool> =
-        state.db().send(|conn| aiya_data::history::clear(conn));
-    result
-        .map(|_| ok(json!({ "cleared": true })))
-        .unwrap_or_else(|e| fail("E_INTERNAL", &e.to_string()))
+    state
+        .db()
+        .send(|conn| aiya_data::history::clear(conn))
+        .map_err(dto::ApiError::from)?;
+    Ok(dto::history::HistoryCleared { cleared: true })
 }
 
 /* ---------------- aiya-artwork 协议 ---------------- */

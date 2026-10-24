@@ -14,6 +14,7 @@ use lofty::probe::Probe;
 use lofty::tag::{ItemKey, Tag};
 use rusqlite::Connection;
 use serde::Serialize;
+use ts_rs::TS;
 
 use crate::db::{DbError, DbResult};
 use crate::ids;
@@ -40,27 +41,40 @@ pub struct ScanProgress {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanError {
     pub path: String,
     pub message: String,
 }
 
-#[derive(Debug, Serialize)]
+/// 扫描结果（`library_scan` 的返回值，也是 UI 的"扫完了"汇总）。
+///
+/// `derive(TS)` 就地生成：扫描器改字段时 `gen:types:check` 会直接红，
+/// 不需要有人在宿主层再同步一份（`ScanResult` 没有宿主私有字段，没必要复制）。
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanResult {
+    #[ts(type = "number")]
     pub scanned: usize,
+    #[ts(type = "number")]
     pub imported: usize,
+    #[ts(type = "number")]
     pub updated: usize,
+    #[ts(type = "number")]
     pub unchanged: usize,
+    #[ts(type = "number")]
     pub failed: usize,
     /// 遍历目录时的 walkdir 错误条数（权限不足等）；只计数不中断。
     /// `#[serde(default)]` 保持对旧调用方（缺字段反序列化）兼容。
     #[serde(default)]
+    #[ts(type = "number")]
     pub walk_errors: usize,
     pub cancelled: bool,
     pub errors: Vec<ScanError>,
+    #[ts(type = "number")]
     pub elapsed_ms: u64,
 }
 

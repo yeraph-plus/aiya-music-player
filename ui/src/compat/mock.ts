@@ -103,7 +103,7 @@ function buildLibrary(): Track[] {
 }
 
 function buildPlaylists(tracks: Track[]): PlaylistSummary[] {
-  const now = Math.floor(Date.now() / 1000);
+  const now = Date.now();
   const names = ['华语偏爱', '深夜自习室', '运动节拍', '通勤路上'];
   return names.map((name, i) => {
     const slice = tracks.slice(i * 23, i * 23 + 12 + i * 5);
@@ -114,8 +114,8 @@ function buildPlaylists(tracks: Track[]): PlaylistSummary[] {
       trackCount: slice.length,
       durationMs: slice.reduce((sum, t) => sum + (t.durationMs ?? 0), 0),
       artworkId: null,
-      createdAt: now - 86400 * (10 - i),
-      updatedAt: now - 3600 * (i + 1),
+      createdAtMs: now - 86400_000 * (10 - i),
+      updatedAtMs: now - 3600_000 * (i + 1),
       sortPosition: i,
     };
   });
@@ -210,7 +210,7 @@ export class MockBackend {
     error: null,
     current: null,
     token: 0,
-    updatedAt: Math.floor(Date.now() / 1000),
+    updatedAtMs: Date.now(),
   };
   private queueIds: string[] = [];
 
@@ -329,7 +329,7 @@ export class MockBackend {
   }
 
   playlistCreate(name: string, trackIds?: string[]): PlaylistSummary {
-    const now = Math.floor(Date.now() / 1000);
+    const now = Date.now();
     const summary: PlaylistSummary = {
       id: `pl-${now}`,
       name,
@@ -337,8 +337,8 @@ export class MockBackend {
       trackCount: trackIds?.length ?? 0,
       durationMs: 0,
       artworkId: null,
-      createdAt: now,
-      updatedAt: now,
+      createdAtMs: now,
+      updatedAtMs: now,
       sortPosition: this.playlists.length,
     };
     this.playlists.push(summary);
@@ -349,7 +349,7 @@ export class MockBackend {
     const p = this.playlists.find((x) => x.id === id);
     if (!p) return null;
     p.name = name;
-    p.updatedAt = Math.floor(Date.now() / 1000);
+    p.updatedAtMs = Date.now();
     return p;
   }
 
@@ -372,7 +372,7 @@ export class MockBackend {
     if (!p) throw new Error('E_NOT_FOUND');
     const added = trackIds.length;
     p.trackCount += added;
-    p.updatedAt = Math.floor(Date.now() / 1000);
+    p.updatedAtMs = Date.now();
     void mode;
     return { added, skipped: 0, summary: p };
   }
@@ -381,7 +381,7 @@ export class MockBackend {
     const p = this.playlists.find((x) => x.id === id);
     if (!p) return null;
     p.trackCount = Math.max(0, p.trackCount - 1);
-    p.updatedAt = Math.floor(Date.now() / 1000);
+    p.updatedAtMs = Date.now();
     void position;
     return p;
   }
@@ -396,7 +396,7 @@ export class MockBackend {
     const p = this.playlists.find((x) => x.id === id);
     if (!p) return null;
     p.trackCount = 0;
-    p.updatedAt = Math.floor(Date.now() / 1000);
+    p.updatedAtMs = Date.now();
     return p;
   }
 
@@ -414,8 +414,8 @@ export class MockBackend {
       totalMs: played.reduce((s, t) => s + (t.durationMs ?? 0) * t.playCount, 0),
       completed: played.length,
       skipped: 0,
-      firstPlayAt: played.length ? Math.min(...played.map((t) => t.lastPlayedAtMs ?? Infinity)) : null,
-      lastPlayAt: played.length ? Math.max(...played.map((t) => t.lastPlayedAtMs ?? 0)) : null,
+      firstPlayAtMs: played.length ? Math.min(...played.map((t) => t.lastPlayedAtMs ?? Infinity)) : null,
+      lastPlayAtMs: played.length ? Math.max(...played.map((t) => t.lastPlayedAtMs ?? 0)) : null,
       topTracks: [...played]
         .sort((a, b) => b.playCount - a.playCount)
         .slice(0, 10)
@@ -431,7 +431,7 @@ export class MockBackend {
   /* ---------------- player ---------------- */
 
   private emitPlayer(): void {
-    this.playerState = { ...this.playerState, updatedAt: Math.floor(Date.now() / 1000) };
+    this.playerState = { ...this.playerState, updatedAtMs: Date.now() };
     this.emitter.emit('player:state', this.playerState);
   }
 

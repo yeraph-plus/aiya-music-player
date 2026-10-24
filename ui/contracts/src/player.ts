@@ -59,7 +59,8 @@ export interface PlayerState {
   current: Track | null;
   /** 装载令牌：渲染层回传时带上，主进程据此丢弃过期回报 */
   token: number;
-  updatedAt: number;
+  /** 快照生成时间，毫秒 */
+  updatedAtMs: number;
 }
 
 /**

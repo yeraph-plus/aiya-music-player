@@ -15,4 +15,10 @@ index: number,
 /**
  * 播放顺序位置（随机模式下与 index 不同）
  */
-cursor: number, repeat: RepeatMode, shuffle: boolean, status: PlaybackStatus, positionMs: number, durationMs: number | null, volume: number, muted: boolean, rate: number, error: AudioError | null, current: TrackRef | null, token: number, updatedAt: number, };
+cursor: number, repeat: RepeatMode, shuffle: boolean, status: PlaybackStatus, positionMs: number, durationMs: number | null, volume: number, muted: boolean, rate: number, error: AudioError | null, current: TrackRef | null, token: number, 
+/**
+ * 快照生成时间，**毫秒**。名字带 `Ms` 是硬要求：同结构里
+ * `positionMs`/`durationMs` 都是毫秒，只让它一个叫 `updatedAt`
+ * 等于留个坑给下一个人猜单位（docs/17 §3.1）。
+ */
+updatedAtMs: number, };

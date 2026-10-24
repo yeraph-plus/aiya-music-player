@@ -8,26 +8,12 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tauri::{Emitter, Manager};
 
-/// 设置页 beets 状态区数据源。serde 进 IPC：camelCase 契约（铁律）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BeetsStatus {
-    pub found: bool,
-    pub interpreter: Option<String>,
-    pub script_path: Option<String>,
-    pub protocol_version: Option<u32>,
-    pub beets_version: Option<String>,
-    pub python_version: Option<String>,
-    pub library_path: Option<String>,
-    pub library_exists: Option<bool>,
-    pub plugins: Option<Vec<String>>,
-    pub config_dir: Option<String>,
-    pub error_code: Option<String>,
-    pub error_message: Option<String>,
-}
+/// 设置页 beets 状态区数据源。形状定义搬去 `dto::beets`（契约归 dto），
+/// 这里 `pub use` 回来，本文件其余调用点不用改。
+pub use crate::dto::beets::BeetsStatus;
 
 const SIDECAR_SCRIPT: &str = include_str!("../../sidecar/beets_sidecar.py");
 
