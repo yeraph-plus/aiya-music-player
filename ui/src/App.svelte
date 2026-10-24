@@ -2,36 +2,27 @@
   import { onMount } from 'svelte';
   import type {
     AppSettings,
-    Diagnostics,
     PlaylistSummary,
-    PlayerState,
     Track,
     TrackQuery,
     TrackSort,
   } from '@aiya/contracts';
   import {
-    artworkUrl,
     AUDIO_RATE_STEP,
-    DEFAULT_SETTINGS,
     parseTrackQuery,
     resolveShortcutBindings,
     type ShortcutAction,
   } from '@aiya/contracts';
-  import Sidebar from './components/Sidebar.svelte';
+  import AppShell from './components/AppShell.svelte';
   import TopBar from './components/TopBar.svelte';
   import TrackList from './components/TrackList.svelte';
   import ViewHeader from './components/ViewHeader.svelte';
-  import PlayerBar from './components/PlayerBar.svelte';
-  import QueuePanel from './components/QueuePanel.svelte';
-  import ImportPanel from './components/ImportPanel.svelte';
-  import LyricsPanel from './components/LyricsPanel.svelte';
   import SettingsPanel from './components/SettingsPanel.svelte';
   import ContextMenu from './components/ContextMenu.svelte';
-  import BatchBar from './components/BatchBar.svelte';
   import PromptDialog from './components/PromptDialog.svelte';
   import ConfirmDialog from './components/ConfirmDialog.svelte';
   import PlaylistPicker from './components/PlaylistPicker.svelte';
-  import SpectrumPanel from './components/SpectrumPanel.svelte';
+  import { artworkUrl } from './lib/artwork';
   import { TrackWindow } from './lib/track-window';
   import { accentForArtwork } from './lib/accent';
   import { listKeyIntent } from './lib/list-keys';
@@ -88,8 +79,6 @@
   const albumId = $derived(ui.albumId);
   const settings = $derived(ui.settings);
   const playlists = $derived(ui.playlists);
-  const lyrics = $derived(ui.lyrics);
-  const lyricsLoading = $derived(ui.lyricsLoading);
   const diagnostics = $derived(ui.diagnostics);
   const settingsOpen = $derived(ui.settingsOpen);
   const sidePanel = $derived(ui.sidePanel);
@@ -97,9 +86,7 @@
   const playerState = $derived(player.state);
   const queueIds = $derived(player.queueIds);
 
-  const stats = $derived(library.stats);
   const scan = $derived(library.scan);
-  const dataDir = $derived(library.dataDir);
   const scanning = $derived(library.scanning);
 
   const selectionSet = $derived(selection.selection);
@@ -806,208 +793,143 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="app" class:side-open={sidePanel !== null}>
-  <Sidebar
-    {view}
-    {playlists}
-    {stats}
-    {dataDir}
+<AppShell
+  onview={setView}
+  onplaylist={openPlaylist}
+  oncreate={() => openCreatePlaylist()}
+  onplaylistmenu={openPlaylistMenu}
+  onqueueplay={(index) => void playQueueAt(index)}
+  onbatchplay={() => void batchPlay()}
+  onbatchenqueue={() => void batchEnqueue()}
+  onbatchaddto={(playlistId) => void batchAddToPlaylist(playlistId)}
+  onbatchremove={async () => {
+    const ids = await resolveSelectionIds();
+    if (ids.length > 0) dialog = { kind: 'removeTracks', ids };
+  }}
+  ontogglepanel={togglePanel}
+  onsynced={() => void reload()}
+  {spectrumSource}
+>
+  <TopBar
+    bind:this={topBar}
+    {search}
+    {sort}
+    {direction}
+    canSort={viewCanSort(view)}
+    {total}
     {scanning}
-    onview={setView}
-    onplaylist={openPlaylist}
-    oncreate={() => openCreatePlaylist()}
-    onplaylistmenu={openPlaylistMenu}
+    onsearch={onSearch}
+    onclearsearch={clearSearch}
+    onsort={() => changeSort('added')}
     onsettings={() => void ui.openSettings()}
+    onchooseroot={chooseRoot}
+    onscan={startScan}
+    onimport={() => togglePanel('import')}
   />
 
-  <main class="main">
-    <TopBar
-      bind:this={topBar}
-      {search}
+  <ViewHeader
+    {view}
+    playlist={currentPlaylist}
+    {total}
+    onplayall={playAll}
+    onrename={() => {
+      if (currentPlaylist) dialog = { kind: 'renamePlaylist', playlist: currentPlaylist };
+    }}
+    onclearitems={() => {
+      if (currentPlaylist) void clearPlaylistItems(currentPlaylist);
+    }}
+    ondelete={() => {
+      if (currentPlaylist) dialog = { kind: 'deletePlaylist', playlist: currentPlaylist };
+    }}
+    onclearhistory={() => void clearHistory()}
+  />
+
+  {#if artistId || albumId}
+    <div class="filters">
+      {#if artistId}<span class="filter">艺人筛选 <button class="link" onclick={clearFilter}>清除</button></span>{/if}
+      {#if albumId}<span class="filter">专辑筛选 <button class="link" onclick={clearFilter}>清除</button></span>{/if}
+    </div>
+  {/if}
+
+  {#if scan && scanning}
+    <div class="scan-bar">
+      <div class="progress">
+        <i style={`width:${scan.total ? Math.min(100, Math.round((scan.scanned / scan.total) * 100)) : 8}%`}></i>
+      </div>
+      <span>
+        {scan.phase === 'walking'
+          ? '正在遍历目录…'
+          : `${scan.scanned}/${scan.total ?? '?'} · 新增 ${scan.imported} · 跳过 ${scan.skipped} · 失败 ${scan.failed}`}
+      </span>
+      <button class="btn" onclick={() => library.cancelScan()}>取消</button>
+    </div>
+  {/if}
+
+  {#if error}
+    <div class="error" aria-live="assertive">
+      {error}
+      <button class="link" onclick={() => (error = null)}>关闭</button>
+    </div>
+  {/if}
+
+  {#if playerState?.status === 'error' && playerState.error}
+    <div class="error">
+      《{playerState.current?.title ?? '未知曲目'}》{playerState.error.message}
+      <button class="link" onclick={() => player.next()}>跳到下一首</button>
+    </div>
+  {/if}
+
+  {#if total > 0}
+    <TrackList
+      store={listStore}
+      version={storeVersion}
+      {total}
+      query={search}
       {sort}
       {direction}
       canSort={viewCanSort(view)}
-      {total}
-      {scanning}
-      onsearch={onSearch}
-      onclearsearch={clearSearch}
-      onsort={() => changeSort('added')}
-      onsettings={() => void ui.openSettings()}
-      onchooseroot={chooseRoot}
-      onscan={startScan}
-      onimport={() => togglePanel('import')}
-    />
-
-    <ViewHeader
-      {view}
-      playlist={currentPlaylist}
-      {total}
-      onplayall={playAll}
-      onrename={() => {
-        if (currentPlaylist) dialog = { kind: 'renamePlaylist', playlist: currentPlaylist };
-      }}
-      onclearitems={() => {
-        if (currentPlaylist) void clearPlaylistItems(currentPlaylist);
-      }}
-      ondelete={() => {
-        if (currentPlaylist) dialog = { kind: 'deletePlaylist', playlist: currentPlaylist };
-      }}
-      onclearhistory={() => void clearHistory()}
-    />
-
-    {#if artistId || albumId}
-      <div class="filters">
-        {#if artistId}<span class="filter">艺人筛选 <button class="link" onclick={clearFilter}>清除</button></span>{/if}
-        {#if albumId}<span class="filter">专辑筛选 <button class="link" onclick={clearFilter}>清除</button></span>{/if}
-      </div>
-    {/if}
-
-    {#if scan && scanning}
-      <div class="scan-bar">
-        <div class="progress">
-          <i style={`width:${scan.total ? Math.min(100, Math.round((scan.scanned / scan.total) * 100)) : 8}%`}></i>
-        </div>
-        <span>
-          {scan.phase === 'walking'
-            ? '正在遍历目录…'
-            : `${scan.scanned}/${scan.total ?? '?'} · 新增 ${scan.imported} · 跳过 ${scan.skipped} · 失败 ${scan.failed}`}
-        </span>
-        <button class="btn" onclick={() => library.cancelScan()}>取消</button>
-      </div>
-    {/if}
-
-    {#if error}
-      <div class="error" aria-live="assertive">
-        {error}
-        <button class="link" onclick={() => (error = null)}>关闭</button>
-      </div>
-    {/if}
-
-    {#if playerState?.status === 'error' && playerState.error}
-      <div class="error">
-        《{playerState.current?.title ?? '未知曲目'}》{playerState.error.message}
-        <button class="link" onclick={() => player.next()}>跳到下一首</button>
-      </div>
-    {/if}
-
-    {#if total > 0}
-      <TrackList
-        store={listStore}
-        version={storeVersion}
-        {total}
-        query={search}
-        {sort}
-        {direction}
-        canSort={viewCanSort(view)}
-        {showPlays}
-        onsort={(field) => changeSort(field)}
-        currentId={playerState?.current?.id ?? null}
-        {selectedIndex}
-        selection={selectionSet}
-        {restoreScrollTop}
-        rowHeight={settings.density === 'compact' ? 42 : 52}
-        playing={playerState?.status === 'playing'}
-        onplay={(index) => void playIndex(index)}
-        onselect={handleSelect}
-        onmenu={openMenu}
-        onscroll={onListScroll}
-        onrestored={() => (restoreScrollTop = null)}
-        onretry={() => void reload()}
-        onmove={view.kind === 'playlist' ? (from, to) => void movePlaylistItem(from, to) : undefined}
-      />
-    {:else if booted}
-      <div class="empty">
-        {#if search.trim()}
-          <strong>没有匹配的曲目</strong>
-          <span>换个关键词，或清除搜索条件</span>
-          <button class="btn" onclick={() => { ui.search = ''; void reload(); }}>清除搜索</button>
-        {:else if view.kind === 'recent'}
-          <strong>还没有播放记录</strong>
-          <span>听几首歌，这里会按时间倒序记录</span>
-        {:else if view.kind === 'mostPlayed'}
-          <strong>还没有常听曲目</strong>
-          <span>播放次数会从零开始积累</span>
-        {:else if view.kind === 'playlist'}
-          <strong>这个播放列表还是空的</strong>
-          <span>在曲库里选中歌曲，右键或批量操作加入这里</span>
-          <button class="btn" onclick={() => setView('library')}>去曲库看看</button>
-        {:else}
-          <strong>曲库还是空的</strong>
-          <span>选择一个音乐目录，AIYA 会扫描并建立索引</span>
-          <button class="btn primary" onclick={chooseRoot} disabled={scanning}>选择音乐目录</button>
-        {/if}
-      </div>
-    {:else}
-      <div class="empty"><strong>正在启动…</strong></div>
-    {/if}
-  </main>
-
-  {#if sidePanel === 'queue'}
-    <QueuePanel
-      ids={queueIds}
-      index={playerState?.index ?? -1}
-      onplay={(index) => void playQueueAt(index)}
-      onremove={(index) => player.removeAt(index)}
-      onmove={(from, to) => player.move(from, to)}
-      onclear={() => player.clear()}
-      onclose={() => (ui.sidePanel = null)}
-    />
-  {:else if sidePanel === 'lyrics'}
-    <LyricsPanel
-      {lyrics}
-      loading={lyricsLoading}
-      trackTitle={playerState?.current?.title ?? null}
-      positionMs={playerState?.positionMs ?? 0}
-      durationMs={playerState?.durationMs ?? 0}
+      {showPlays}
+      onsort={(field) => changeSort(field)}
+      currentId={playerState?.current?.id ?? null}
+      {selectedIndex}
+      selection={selectionSet}
+      {restoreScrollTop}
+      rowHeight={settings.density === 'compact' ? 42 : 52}
       playing={playerState?.status === 'playing'}
-      onseek={(ms) => player.seek(ms)}
-      onclose={() => (ui.sidePanel = null)}
+      onplay={(index) => void playIndex(index)}
+      onselect={handleSelect}
+      onmenu={openMenu}
+      onscroll={onListScroll}
+      onrestored={() => (restoreScrollTop = null)}
+      onretry={() => void reload()}
+      onmove={view.kind === 'playlist' ? (from, to) => void movePlaylistItem(from, to) : undefined}
     />
-  {:else if sidePanel === 'spectrum' && spectrumSource}
-    <SpectrumPanel
-      source={spectrumSource}
-      engine={settings.spectrumEngine}
-      onclose={() => (ui.sidePanel = null)}
-    />
-  {:else if sidePanel === 'import'}
-    <ImportPanel onclose={() => (ui.sidePanel = null)} onsynced={() => void reload()} />
+  {:else if booted}
+    <div class="empty">
+      {#if search.trim()}
+        <strong>没有匹配的曲目</strong>
+        <span>换个关键词，或清除搜索条件</span>
+        <button class="btn" onclick={() => { ui.search = ''; void reload(); }}>清除搜索</button>
+      {:else if view.kind === 'recent'}
+        <strong>还没有播放记录</strong>
+        <span>听几首歌，这里会按时间倒序记录</span>
+      {:else if view.kind === 'mostPlayed'}
+        <strong>还没有常听曲目</strong>
+        <span>播放次数会从零开始积累</span>
+      {:else if view.kind === 'playlist'}
+        <strong>这个播放列表还是空的</strong>
+        <span>在曲库里选中歌曲，右键或批量操作加入这里</span>
+        <button class="btn" onclick={() => setView('library')}>去曲库看看</button>
+      {:else}
+        <strong>曲库还是空的</strong>
+        <span>选择一个音乐目录，AIYA 会扫描并建立索引</span>
+        <button class="btn primary" onclick={chooseRoot} disabled={scanning}>选择音乐目录</button>
+      {/if}
+    </div>
+  {:else}
+    <div class="empty"><strong>正在启动…</strong></div>
   {/if}
-
-  {#if selectionSet.size > 0}
-    <BatchBar
-      count={selectionSet.size}
-      {playlists}
-      onplay={() => void batchPlay()}
-      onenqueue={() => void batchEnqueue()}
-      onaddto={(playlistId) => void batchAddToPlaylist(playlistId)}
-      onremove={async () => {
-        const ids = await resolveSelectionIds();
-        if (ids.length > 0) dialog = { kind: 'removeTracks', ids };
-      }}
-      onclear={clearSelection}
-    />
-  {/if}
-
-  <PlayerBar
-    player={playerState}
-    queueOpen={sidePanel === 'queue'}
-    lyricsOpen={sidePanel === 'lyrics'}
-    spectrumEnabled={settings.spectrum}
-    spectrumOpen={sidePanel === 'spectrum'}
-    ontoggle={() => player.toggle()}
-    onnext={() => player.next()}
-    onprev={() => player.prev()}
-    onseek={(ms) => player.seek(ms)}
-    onvolume={(value) => player.setVolume(value)}
-    onmute={() => player.toggleMute()}
-    onrate={(rate) => player.setRate(rate)}
-    onrepeat={() => player.cycleRepeat()}
-    onshuffle={() => player.setShuffle(!(playerState?.shuffle ?? false))}
-    onqueue={() => togglePanel('queue')}
-    ontogglelyrics={() => togglePanel('lyrics')}
-    ontogglespectrum={() => togglePanel('spectrum')}
-  />
-</div>
+</AppShell>
 
 {#if toast}
   <div class="toast" aria-live="polite">{toast}</div>

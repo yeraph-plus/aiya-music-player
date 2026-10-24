@@ -273,17 +273,14 @@ export interface AiyaApi {
   };
 }
 
-export const ARTWORK_SIZES = [96, 256, 512] as const;
-export type ArtworkSize = (typeof ARTWORK_SIZES)[number];
-
-export function artworkUrl(artworkId: string | null, size: number = 96): string | null {
-  if (!artworkId) return null;
-  const safe = ARTWORK_SIZES.includes(size as ArtworkSize) ? size : 96;
-  // Tauri 2 自定义协议在 Windows 上经 `http://<scheme>.localhost` 暴露。
-  // 后端注册 aiya-artwork scheme 并带 ACAO:* —— artwork-blob 的 fetch 与
-  // canvas 取色依赖它。v1 只发 Windows；跨平台时按 UA/平台切换前缀。
-  return `http://aiya-artwork.localhost/artwork/${encodeURIComponent(artworkId)}?size=${safe}`;
-}
+/**
+ * 封面 URL 只留一份实现：搬到 `src/lib/artwork.ts` 后这里改成 re-export。
+ *
+ * 为什么不各写一份：字符串拼装的漂移不会有类型报错，症状是"封面全空"，
+ * 排查成本远高于一次 import 违和感。`contracts/` 在批次 4 整体删除，
+ * 届时这个转发也一起消失。
+ */
+export { ARTWORK_SIZES, artworkUrl, type ArtworkSize } from '../../src/lib/artwork';
 
 export function trackMediaUrl(trackId: string): string {
   // 音频不再进 WebView（ADR-0001 边界 + ADR-0006 原生引擎）：

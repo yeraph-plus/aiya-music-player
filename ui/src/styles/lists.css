@@ -1,0 +1,236 @@
+/* lists.css — 曲目列表：表头、行、虚拟滚动占位、选中/播放中/拖拽态。 */
+
+/* ---------------- 列表 ---------------- */
+
+.list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  padding: 0 8px 12px;
+  position: relative;
+}
+
+.grid-head,
+.row {
+  display: grid;
+  grid-template-columns: 34px 42px minmax(150px, 2.2fr) minmax(100px, 1.4fr) minmax(100px, 1.4fr) 56px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+}
+
+.list.with-plays .grid-head,
+.list.with-plays .row {
+  grid-template-columns:
+    34px 42px minmax(140px, 2.2fr) minmax(90px, 1.4fr) minmax(90px, 1.4fr) 48px
+    56px;
+}
+
+.grid-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: 30px;
+  background: var(--bg-head);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.row {
+  height: var(--row-height);
+  border-radius: 8px;
+  cursor: default;
+}
+
+.row:not(.skeleton):not(.failed):hover {
+  background: var(--bg-hover);
+}
+
+.row.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-soft);
+}
+
+.row.focus {
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.row.selected.focus {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.row.active {
+  background: var(--bg-active);
+}
+
+.row.active .title {
+  color: var(--accent-text);
+}
+
+.row.drag-source {
+  opacity: 0.45;
+}
+
+.row .idx {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-size: 11.5px;
+}
+
+.cover {
+  width: 38px;
+  height: 38px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--bg-cover);
+  display: block;
+}
+
+.cover.sm {
+  width: 30px;
+  height: 30px;
+  border-radius: 5px;
+}
+
+.cover.lg {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+}
+
+.cover.placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+  font-size: 15px;
+  flex: none;
+}
+
+.cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell.dim {
+  color: var(--text-dim);
+}
+
+.cell.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+.cell mark {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.row.failed .cell {
+  color: var(--danger);
+  font-size: 11.5px;
+}
+
+.shimmer {
+  display: block;
+  height: 12px;
+  width: 60%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--bg-hover), var(--border-strong), var(--bg-hover));
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* 正在播放的跳动条 */
+.bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+}
+
+.bars i {
+  width: 2px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+
+.bars.animated i {
+  animation: bounce 0.9s ease-in-out infinite;
+}
+
+.bars i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.bars i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes bounce {
+  0%,
+  100% {
+    height: 5px;
+  }
+  50% {
+    height: 14px;
+  }
+}
+
+.empty {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1.8;
+}
+
+.empty strong {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* 拖拽插入线：贴在被拖到的行上方 */
+.drop-line {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.queue-list.dragging,
+.list.dragging {
+  cursor: grabbing;
+}
+
+body.is-dragging {
+  cursor: grabbing;
+}

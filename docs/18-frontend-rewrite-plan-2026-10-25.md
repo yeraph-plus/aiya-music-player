@@ -70,11 +70,38 @@ ui/src/
 ## 3. 分批落地（每批可独立验证）
 
 ### 批次 1 · 地基（无可见变化，但后面全部依赖它）
-- [ ] `styles/tokens.css` / `base.css` / `utilities.css` 三层拆开，`app.css` 只剩 `@import`
-- [ ] `lib/artwork.ts` 承接 `artworkUrl()`，`contracts/` 不再被新代码引用
-- [ ] `App.svelte` 拆壳：布局（侧栏 / 主区 / 播放条 / 队列）移入 `AppShell.svelte`，
-      `App.svelte` 只留视图切换 + 全局副作用
-- [ ] 验收：`svelte-check` 0/0；界面与拆之前**逐像素一致**（截图对比，见 §5）
+- [x] `app.css` 拆成 `styles/` 分层，`app.css` 只剩 `@import`
+      （实际拆成 6 个文件而非计划的 3 个，理由见 §3.1）
+- [x] `lib/artwork.ts` 承接 `artworkUrl()`，`contracts/` 不再被新代码引用
+      （`contracts/src/ipc.ts` 改成 re-export，不留第二份实现）
+- [x] `App.svelte` 拆壳：布局（侧栏 / 主区 / 侧面板 / 批量条 / 播放条）
+      移入 `components/AppShell.svelte`，`App.svelte` 只留视图切换 + 行为回调 + 全局副作用
+- [x] 验收：`svelte-check` 0/0；构建产物 CSS **逐字节一致**；`probe:ui` 无异常
+
+#### 3.1 与计划的偏差：`utilities.css` 实际没落地
+
+计划里写的是 `tokens / base / utilities` 三层，落地时改成
+`tokens / base / shell / lists / player / overlays`。原因是实测：1825 行里
+**没有**一组可复用的原子类（`.btn` 只有 3 个变体、`.cover` 只有 4 档尺寸，
+其余全是"某个组件的某个部件"），硬抽 utilities 只能抽出 20 行还更绕。
+真正的分区边界是组件，所以按组件切：
+
+| 文件 | 行数 | 内容 |
+|---|---|---|
+| `tokens.css` | 127 | `:root` / `[data-theme=light]` / 密度变量 —— 换皮只动这里 |
+| `base.css` | 184 | reset、`body`、滚动条、全局动效 |
+| `shell.css` | 266 | 顶栏、视图头（播放列表 / 统计） |
+| `lists.css` | 234 | 曲目列表 |
+| `player.css` | 555 | 队列 / 歌词面板、播放条、批量条 |
+| `overlays.css` | 452 | 右键菜单、弹层、设置、提示 |
+
+`app.css` 1825 → 18 行。
+
+**等价性证明**（不是"看着一样"）：把 HEAD 的 `app.css` 还原构建一次、
+换成分层版本再构建一次，两份 `dist/assets/index-*.css` **31845 字节逐字节相同**，
+连 content hash（`index--7pPwuck.css`）都一样。
+另有一层更细的检查：按"选择器 + 声明"把旧文件拆成 245 个规则块，
+与新文件合集做多重集比对，245 = 245 无差异。
 
 ### 批次 2 · 数据层换血（关键一步）
 - [ ] `player` store 改直连 `ipc.player.*` + `events.playerState`（10 Hz 合帧）
@@ -141,7 +168,28 @@ ui/src/
    - 设置：主题切换不闪、密度切换、输出模式切换后诊断页数字跟着变
    - 诊断：数值与设置页一致，beets 探测有结果
 4. 启动日志无 ERROR/WARN，sidecar `protocol=5`
-5. 窗口截图被安全策略拦（已知），视觉回归用**同一窗口尺寸下的手测**代替
+5. 窗口截图被安全策略拦（已知）→ 改用 `npm run probe:ui` 读真窗口的
+   DOM、console、未捕获异常、4xx 资源（见 §5.1）；纯手感类仍需手测
+
+### 5.1 UI 运行时探针 `probe:ui`
+
+`tools/cdp-probe.mjs` 走 WebView2 的远程调试端口（CDP），在**真窗口**里取证，
+不依赖截图权限、也不需要给应用加测试钩子：
+
+```bash
+WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 npm run dev
+npm run probe:ui                 # 结构 + console + 未捕获异常 + 4xx
+npm run probe:ui -- --actions    # 追加面板开关交互序列
+```
+
+判定：有未捕获异常 / 非 favicon 的 4xx / console.error → 退出码 1，可直接进 CI。
+
+关键实现细节：先 `Runtime.enable` 再 `Page.reload`——探针连上时页面早已加载完，
+不 reload 就抓不到**挂载期**的异常，而拆壳与换数据层最容易出问题的正是挂载期。
+
+能证明的：DOM 形状、面板开关链路、主题/密度是否落到 `<html>`、主色是否提取、
+错误条是否被误触发、有没有抛异常。
+证明不了的：间距/配色等纯视觉细节（这一项由 §3.1 的"构建产物逐字节一致"兜住）。
 
 ## 6. 风险
 
@@ -158,3 +206,45 @@ ui/src/
 - 不引 UI 组件库（现组件已够用，引入等于重画）
 - 不做 SSR / 多窗口
 - 不在这一轮做：gapless 可视化、快捷键自定义 UI（`ipc.app.setSettings` 已支持，页面后补）
+
+## 8. 进度
+
+| 批次 | 状态 | 验证 |
+|---|---|---|
+| 1 地基 | **完成** | `check` 0/0；CSS 构建产物 31845 字节逐字节一致；`probe:ui` 无异常、面板开关链路 4/4 |
+| 2 数据层换血 | 待开始 | — |
+| 3 拆 `App.svelte` | 待开始 | — |
+| 4 删旧壳 | 待开始 | — |
+
+### 8.1 批次 1 实际改了什么
+
+| 文件 | 变化 |
+|---|---|
+| `styles/tokens.css` 等 6 个 | 新增，1818 行规则从 `app.css` 迁出（见 §3.1） |
+| `app.css` | 1825 → 17 行，只剩 `@import` |
+| `lib/artwork.ts` | 新增 29 行；`artworkUrl` 的唯一实现，6 个组件 + `media-session.ts` 改从这里取 |
+| `contracts/src/ipc.ts` | 删掉自带实现，改成 re-export（避免两份字符串实现静默漂移） |
+| `components/AppShell.svelte` | 新增 157 行：`.app` 网格 + 侧栏 + 侧面板 + 批量条 + 播放条 |
+| `App.svelte` | 1149 → 1071 行（-204/+126，主区整体缩进减 2 层） |
+| `tools/cdp-probe.mjs` + `probe:ui` | 新增：截图被拦时的 UI 取证手段（§5.1） |
+
+**为什么 `App.svelte` 只降到 1071 而不是计划里说的 ~120**：批次 1 只搬"壳"，
+主区内容（顶栏 / 视图头 / 筛选 / 扫描条 / 错误条 / 曲目表 / 空态，约 180 行）
+按计划留给批次 3 的 `views/`。现在它作为 `AppShell` 的 children snippet 存在，
+批次 3 换成一个 `<LibraryView>` 即可，不用再动 `AppShell`。
+
+### 8.2 壳与 App 的边界（批次 3 沿用这个判据）
+
+`AppShell` 直接读 `ui` / `library` / `player` / `selection` 四个 store
+（容器可以依赖 store，依赖方向仍是 `components → stores → ipc`），
+只接收 12 个回调/数据 prop，且**只收那些依赖 App 本地状态的**：
+
+- 侧栏：`onview` / `onplaylist` / `oncreate` / `onplaylistmenu` —— 切视图要重载列表
+- 队列：`onqueueplay` —— 点队列行播放失败要写进 App 的错误条
+- 批量条：`onbatchplay` / `onbatchenqueue` / `onbatchaddto` / `onbatchremove` ——
+  选中集 → id 列表要当前查询上下文
+- 面板：`ontogglepanel` —— 开关要顺带落库滚动位置，防抖器在 App
+- 其它：`onsynced`（导入完要重载）、`spectrumSource`（建图只能在面板打开时）
+
+反面判据：如果某个回调在壳里能只用 store 实现（比如播放条 15 个按钮、
+队列的删除/拖拽/清空），就**不进 prop**，直接在壳里调 store。

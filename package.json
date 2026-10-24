@@ -15,6 +15,7 @@
     "gen:types": "node tools/gen-types.mjs",
     "gen:types:check": "node tools/gen-types.mjs --check",
     "check": "npm --prefix ui run check",
+    "probe:ui": "node tools/cdp-probe.mjs",
     "test": "node tools/run.mjs cargo test --workspace",
     "test:data": "node tools/run.mjs cargo test -p aiya-data",
     "test:audio": "node tools/run.mjs cargo test -p aiya-audio",

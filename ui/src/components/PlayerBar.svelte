@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { PlayerState } from '@aiya/contracts';
-  import { artworkUrl } from '@aiya/contracts';
+  import { artworkUrl } from '../lib/artwork';
   import {
     AUDIO_RATE_MAX,
     AUDIO_RATE_MIN,

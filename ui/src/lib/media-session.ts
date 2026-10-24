@@ -1,4 +1,5 @@
-import { ARTWORK_SIZES, artworkUrl, type PlayerState } from '@aiya/contracts';
+import type { PlayerState } from '@aiya/contracts';
+import { ARTWORK_SIZES, artworkUrl } from './artwork';
 import { artworkObjectUrl } from './artwork-blob.js';
 
 /**

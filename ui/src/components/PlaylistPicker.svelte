@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { PlaylistSummary } from '@aiya/contracts';
-  import { artworkUrl } from '@aiya/contracts';
+  import { artworkUrl } from '../lib/artwork';
   import Icon from './Icon.svelte';
 
   interface Props {

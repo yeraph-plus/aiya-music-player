@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { artworkUrl, type PlaylistSummary } from '@aiya/contracts';
+  import type { PlaylistSummary } from '@aiya/contracts';
+  import { artworkUrl } from '../lib/artwork';
   import { formatDurationLong } from '../lib/format';
   import { viewTitle, type View } from '../lib/view';
   import Icon from './Icon.svelte';

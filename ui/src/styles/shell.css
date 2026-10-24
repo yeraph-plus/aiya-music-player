@@ -1,0 +1,268 @@
+/* shell.css — 外壳与页头：顶栏（搜索/窗口控件）+ 视图头（标题/统计/操作）。 */
+
+/* ---------------- 顶栏 ---------------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px 10px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.search {
+  flex: 1 1 180px;
+  min-width: 120px;
+  max-width: 340px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-input);
+}
+
+.search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 12.5px;
+}
+
+.search input::placeholder {
+  color: var(--text-dim);
+}
+
+.search-icon {
+  display: inline-flex;
+  color: var(--text-dim);
+}
+
+.sort-head {
+  text-align: left;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sort-head:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.sort-head.on {
+  color: var(--accent-text);
+}
+
+.sort-head:disabled {
+  cursor: default;
+}
+
+.chip {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.chip:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.chip.on {
+  color: var(--accent-text);
+  border-color: var(--accent-soft);
+  background: var(--accent-soft);
+}
+
+.btn {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 12.5px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.btn.primary {
+  background: var(--accent-soft);
+  border-color: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.btn.danger {
+  color: var(--danger);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+}
+
+.stats {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+.link {
+  color: var(--accent);
+  font-size: inherit;
+  padding: 0 2px;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+/* ---------------- 视图头（播放列表 / 统计） ---------------- */
+
+.view-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 4px 18px 14px;
+  min-width: 0;
+}
+
+.view-head.compact {
+  padding-bottom: 10px;
+}
+
+.view-cover {
+  width: 92px;
+  height: 92px;
+  border-radius: 12px;
+  object-fit: cover;
+  background: var(--bg-cover);
+  flex: none;
+  box-shadow: 0 12px 30px var(--shadow);
+}
+
+.view-cover.placeholder {
+  display: grid;
+  place-items: center;
+  font-size: 30px;
+  color: var(--text-faint);
+}
+
+.view-meta {
+  min-width: 0;
+  flex: 1;
+}
+
+.view-kicker {
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.view-meta h1 {
+  margin: 3px 0 4px;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.filters {
+  display: flex;
+  gap: 10px;
+  padding: 0 18px 8px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.filter {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+}
+
+.scan-bar {
+  padding: 0 18px 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.progress {
+  flex: 1;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.progress > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+.error {
+  margin: 0 18px 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 122, 122, 0.35);
+  background: rgba(255, 122, 122, 0.1);
+  color: var(--danger);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.notice {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.7;
+  margin-bottom: 10px;
+}
+
+.notice.danger {
+  border: 1px solid rgba(255, 122, 122, 0.32);
+  background: rgba(255, 122, 122, 0.1);
+  color: var(--danger);
+}

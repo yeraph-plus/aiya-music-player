@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Track, TrackSort } from '@aiya/contracts';
-  import { artworkUrl } from '@aiya/contracts';
+  import { artworkUrl } from '../lib/artwork';
   import { startRowDrag, consumeClickSuppressed } from '../lib/drag';
   import { computeRange } from '../lib/virtual';
   import { formatTime, highlight } from '../lib/format';
