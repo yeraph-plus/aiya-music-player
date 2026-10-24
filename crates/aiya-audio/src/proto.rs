@@ -9,10 +9,14 @@ use serde::{Deserialize, Serialize};
 
 /// 协议版本。不匹配的握手直接失败，由调用方决定重启或退出。
 ///
+/// v4：`SetExclusive(bool)` → `SetOutputConfig(OutputConfig)`（模式/时钟/缓冲/
+///     暂停释放一组下发）；`AudioMode` 事件从"只有 exclusive 布尔"扩成
+///     `requested + mode + clock + bufferMs + format + reason` 的完整快照——
+///     用户需要知道"我选的独占·事件·10ms，设备实际给了什么"。
 /// v3：新增 `SetExclusive` 命令与 `AudioMode` 事件（独占可选 + 失败可解释）。
 /// v2：`Load` 携带 `start_ms` + `token`；所有事件回显 `token`
 /// （ADR-0003 generation，修"启动恢复从 0 播"与"曲尾切歌连跳两首"）。
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// host → sidecar 消息。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,7 +81,7 @@ mod tests {
             HostToSidecar::Cmd(EngineCommand::SetRate(1.25)),
             HostToSidecar::Cmd(EngineCommand::Pause),
             HostToSidecar::Cmd(EngineCommand::Stop),
-            HostToSidecar::Cmd(EngineCommand::SetExclusive(true)),
+            HostToSidecar::Cmd(EngineCommand::SetOutputConfig(Default::default())),
         ] {
             assert_eq!(format!("{:?}", roundtrip_in(m.clone())), format!("{:?}", m));
         }
@@ -92,7 +96,11 @@ mod tests {
             SidecarToHost::Evt(EngineEvent::Error { token: 1, message: "boom".into() }),
             SidecarToHost::Evt(EngineEvent::AudioMode {
                 token: 1,
-                exclusive: false,
+                requested: "exclusive".into(),
+                mode: "shared".into(),
+                clock: "events".into(),
+                buffer_ms: 200,
+                format: "f32".into(),
                 reason: Some("设备不支持".into()),
             }),
         ] {
@@ -103,8 +111,8 @@ mod tests {
     #[test]
     fn wire_shapes_are_stable() {
         // 形状锚点：协议字段改名会让旧 sidecar/host 互相对不上，必须显式发现
-        let hello = encode_line(&HostToSidecar::Hello { protocol: 3 }).unwrap();
-        assert_eq!(std::str::from_utf8(&hello).unwrap(), "{\"k\":\"hello\",\"m\":{\"protocol\":3}}\n");
+        let hello = encode_line(&HostToSidecar::Hello { protocol: 4 }).unwrap();
+        assert_eq!(std::str::from_utf8(&hello).unwrap(), "{\"k\":\"hello\",\"m\":{\"protocol\":4}}\n");
 
         let load = encode_line(&HostToSidecar::Cmd(EngineCommand::Load {
             path: "p".into(),
@@ -127,22 +135,35 @@ mod tests {
             "{\"k\":\"evt\",\"m\":{\"t\":\"position\",\"token\":3,\"positionMs\":7}}\n"
         );
 
-        // v3 的两个新形状：命令走相邻 tag，事件字段全部 camelCase
-        let excl = encode_line(&HostToSidecar::Cmd(EngineCommand::SetExclusive(true))).unwrap();
+        // v4 形状：配置整体下发（整体下发才能真正做到"一次改完只重建一次流"）
+        let cfg = encode_line(&HostToSidecar::Cmd(EngineCommand::SetOutputConfig(
+            crate::OutputConfig {
+                mode: crate::ModePref::ExclusiveRequired,
+                buffer_ms: 50,
+                clock: crate::ClockPref::Polling,
+                release_on_pause: true,
+            },
+        )))
+        .unwrap();
         assert_eq!(
-            std::str::from_utf8(&excl).unwrap(),
-            "{\"k\":\"cmd\",\"m\":{\"t\":\"setExclusive\",\"v\":true}}\n"
+            std::str::from_utf8(&cfg).unwrap(),
+            "{\"k\":\"cmd\",\"m\":{\"t\":\"setOutputConfig\",\"v\":{\"mode\":\"exclusiveRequired\",\"bufferMs\":50,\"clock\":\"polling\",\"releaseOnPause\":true}}}\n"
         );
 
+        // 事件是完整快照：requested 与 mode 必须能同时出现（回落时两者不同）
         let mode = encode_line(&SidecarToHost::Evt(EngineEvent::AudioMode {
             token: 4,
-            exclusive: false,
+            requested: "exclusive".into(),
+            mode: "shared".into(),
+            clock: "events".into(),
+            buffer_ms: 200,
+            format: "f32".into(),
             reason: Some("设备拒了".into()),
         }))
         .unwrap();
         assert_eq!(
             std::str::from_utf8(&mode).unwrap(),
-            "{\"k\":\"evt\",\"m\":{\"t\":\"audioMode\",\"token\":4,\"exclusive\":false,\"reason\":\"设备拒了\"}}\n"
+            "{\"k\":\"evt\",\"m\":{\"t\":\"audioMode\",\"token\":4,\"requested\":\"exclusive\",\"mode\":\"shared\",\"clock\":\"events\",\"bufferMs\":200,\"format\":\"f32\",\"reason\":\"设备拒了\"}}\n"
         );
     }
 

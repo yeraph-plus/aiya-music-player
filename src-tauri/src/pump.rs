@@ -61,7 +61,17 @@ pub enum PumpEffect {
     History { track_id: String, seconds: u64 },
     /// 实际音频模式变化（独占被拒回落共享 / 换设备后能力变化）：
     /// 宿主更新诊断状态并转发 `audio:mode`
-    AudioMode { exclusive: bool, reason: Option<String> },
+    /// 输出实际状态快照（模式/时钟/缓冲/格式 + 降级原因）。
+    /// 不叫 AudioMode 是为了跟引擎事件区分：这是"给 UI 的最终结论"，
+    /// 字段已展开成字符串，UI 不用再认识引擎的枚举。
+    OutputMode {
+        requested: String,
+        mode: String,
+        clock: String,
+        buffer_ms: u32,
+        format: String,
+        reason: Option<String>,
+    },
     /// 广播 `player:state`（+ SMTC 跟踪）
     EmitState,
 }
@@ -157,10 +167,25 @@ impl PumpCore {
                     // 频谱帧：不经 Actor，锁外统一转发 UI（~30fps）
                     effects.push(PumpEffect::Spectrum(bands));
                 }
-                EngineEvent::AudioMode { exclusive, reason, .. } => {
+                EngineEvent::AudioMode {
+                    requested,
+                    mode,
+                    clock,
+                    buffer_ms,
+                    format,
+                    reason,
+                    ..
+                } => {
                     // 模式是**设备/设置**的属性，与曲目身份无关：不按 token 过滤
                     // （设备恢复导致降级时，token 往往还是当前曲目，过滤反而漏报）
-                    effects.push(PumpEffect::AudioMode { exclusive, reason });
+                    effects.push(PumpEffect::OutputMode {
+                        requested,
+                        mode,
+                        clock,
+                        buffer_ms,
+                        format,
+                        reason,
+                    });
                 }
                 EngineEvent::Error { token, message } => {
                     // token=0 表示"装载前的错误"，仍要上报

@@ -14,3 +14,9 @@ serde_json.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+
+# MMCSS（AvSetMmThreadCharacteristicsW）：把渲染线程注册进 "Pro Audio" 任务组。
+# 不加这个，后台有编译/杀毒任务时渲染线程拿不到 CPU 就是欠载爆音——
+# 所有正经 Windows 播放器都做这一步。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Threading"] }

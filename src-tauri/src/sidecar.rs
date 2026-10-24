@@ -36,9 +36,10 @@ struct TrackState {
     rate: f32,
     position_ms: u64,
     playing: bool,
-    /// 独占偏好。sidecar 崩溃重启后是新进程，引擎内部的 pending_exclusive
-    /// 归零；不回放这条，用户开着独占会静默退回共享（设置页却显示已开）。
-    exclusive: bool,
+    /// 输出配置（模式/时钟/缓冲/暂停释放）。sidecar 崩溃重启后是新进程，
+    /// 引擎内部的 pending_cfg 归零；不回放这条，用户开着独占会静默退回共享
+    /// （设置页却显示已开）。
+    output: aiya_audio::OutputConfig,
 }
 
 /// 跨线程共享的 supervisor 状态。
@@ -126,7 +127,7 @@ impl SidecarHandle {
                 }
                 aiya_audio::EngineCommand::SetVolume(v) => t.volume = *v,
                 aiya_audio::EngineCommand::SetRate(r) => t.rate = *r,
-                aiya_audio::EngineCommand::SetExclusive(on) => t.exclusive = *on,
+                aiya_audio::EngineCommand::SetOutputConfig(c) => t.output = *c,
                 _ => {}
             }
         }
@@ -399,7 +400,7 @@ fn spawn_watchdog(
             // 独占偏好无条件回放（与是否装载无关）：引擎未装载时只暂存，
             // 首曲 Load 才真正开流。漏了这条，崩溃重启后会静默退回共享。
             if let Ok(b) = aiya_audio::encode_line(&aiya_audio::HostToSidecar::Cmd(
-                aiya_audio::EngineCommand::SetExclusive(t.exclusive),
+                aiya_audio::EngineCommand::SetOutputConfig(t.output),
             )) {
                 restore.extend_from_slice(&b);
             }
@@ -431,7 +432,8 @@ fn spawn_watchdog(
             tracing::info!(
                 position_ms = t.position_ms,
                 playing = t.playing,
-                exclusive = t.exclusive,
+                output_mode = t.output.mode.as_str(),
+                output_buffer_ms = t.output.buffer_ms,
                 "sidecar 恢复现场完成"
             );
             *shared.writer_slot.lock().unwrap() = Some(writer);

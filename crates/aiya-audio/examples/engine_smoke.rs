@@ -60,8 +60,8 @@ fn main() {
                 got_eof = true;
                 break;
             }
-            Some(aiya_audio::EngineEvent::AudioMode { exclusive, reason, .. }) => {
-                println!("AudioMode exclusive={exclusive} reason={reason:?}");
+            Some(aiya_audio::EngineEvent::AudioMode { requested, mode, clock, buffer_ms, format, reason, .. }) => {
+                println!("AudioMode requested={requested} actual={mode}/{clock}/{buffer_ms}ms/{format} reason={reason:?}");
             }
             Some(aiya_audio::EngineEvent::Error { message, .. }) => {
                 errored = Some(message);

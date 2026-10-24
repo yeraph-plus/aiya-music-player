@@ -6,6 +6,7 @@
 
 pub mod decoder;
 pub mod engine;
+pub mod mmcss;
 pub mod proto;
 pub mod spectrum;
 
@@ -22,7 +23,7 @@ pub enum AudioError {
 }
 
 pub use decoder::Decoder;
-pub use engine::{Engine, EngineCommand, EngineEvent};
+pub use engine::{ClockPref, Engine, EngineCommand, EngineEvent, ModePref, OutputConfig};
 pub use proto::{encode_line, HostToSidecar, SidecarToHost, PROTOCOL_VERSION};
 
 /// 设备自检（sidecar --selftest 用）：列出渲染设备名。

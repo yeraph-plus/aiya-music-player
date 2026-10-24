@@ -93,6 +93,21 @@ mod lib_tests {
 
 /* ---------------- 应用状态 ---------------- */
 
+/// 引擎回报的输出状态快照。
+///
+/// 与 `OutputConfig`（用户请求）分开存：用户要"独占 50ms 轮询"，设备可能给出
+/// "共享 200ms 事件"甚至"独占但一帧都不消费"，这三种状态对用户的含义完全不同。
+#[derive(Debug, Clone, Default)]
+struct AudioStateSnapshot {
+    requested: String,
+    mode: String,
+    clock: String,
+    buffer_ms: u32,
+    format: String,
+    /// 降级/回落/自愈的原因（空 = 完全按请求生效）
+    reason: String,
+}
+
 pub struct AppState {
     db: Mutex<aiya_data::DbHandle>,
     db_path: PathBuf,
@@ -118,11 +133,10 @@ pub struct AppState {
     sleep_prevented: AtomicBool,
     /// 托盘是否已创建（诊断页）
     tray_active: AtomicBool,
-    /// 实际生效的音频模式（独占是否真的拿到；诊断页/设置页展示）。
-    /// 与设置里的"请求值"分开：设备可能拒绝独占而回落共享。
-    exclusive_active: AtomicBool,
-    /// 回落/切换失败的原因（空串 = 无）
-    audio_mode_note: Mutex<String>,
+    /// 实际生效的输出状态（诊断页/设置页展示"设备到底给了什么"）。
+    /// 与设置里的"请求值"分开：设备可能拒绝独占而回落共享，也可能因为
+    /// 缓冲太深而跑不出数据（引擎会自动降级并把原因写进 reason）。
+    audio_state: Mutex<AudioStateSnapshot>,
     /// app_settings 的内存镜像。
     ///
     /// 为什么必须有：事件泵每 25ms 跑一拍，`preventSleep` / `normalizeVolume`
@@ -146,6 +160,30 @@ impl AppState {
             .get(key)
             .and_then(Value::as_bool)
             .unwrap_or(default)
+    }
+
+    /// 输出配置（设置缓存 → 引擎类型）。
+    ///
+    /// 兼容两代字段：老 `exclusiveMode: bool`（UI 尚未升级时仍会写它）与新
+    /// `output: { mode, bufferMs, clock, releaseOnPause }`。两代都读不到时用默认
+    /// （共享 200ms 事件驱动）——配置坏了不能变成"没声音"。
+    fn setting_output(&self) -> aiya_audio::OutputConfig {
+        let s = self
+            .settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(o) = s.get("output") {
+            return aiya_audio::OutputConfig::from_parts(
+                o.get("mode").and_then(Value::as_str).unwrap_or("shared"),
+                o.get("bufferMs").and_then(Value::as_i64).unwrap_or(0),
+                o.get("clock").and_then(Value::as_str).unwrap_or("auto"),
+                o.get("releaseOnPause").and_then(Value::as_bool).unwrap_or(true),
+            );
+        }
+        if s.get("exclusiveMode").and_then(Value::as_bool).unwrap_or(false) {
+            return aiya_audio::OutputConfig::from_parts("exclusive", 0, "auto", true);
+        }
+        aiya_audio::OutputConfig::default()
     }
 
     /// 用最新设置整体替换缓存（`app_set_settings` 落库成功后调用）
@@ -204,7 +242,7 @@ const DEFAULT_SETTINGS: &str = r#"{
   "spectrum": false,
   "spectrumEngine": "pro",
   "mediaKeys": true,
-  "exclusiveMode": false,
+  "output": { "mode": "shared", "bufferMs": 0, "clock": "auto", "releaseOnPause": true },
   "autoplayOnStart": false,
   "rememberPosition": true,
   "preventSleep": true,
@@ -265,8 +303,10 @@ fn app_get_settings(state: State<'_, AppState>) -> Value {
 fn app_set_settings(state: State<'_, AppState>, settings: Value) -> Value {
     // "改完立即生效"的项在这里做 diff：只写库不通知引擎的话，用户切了独占要等
     // 下次换曲才生效，体感是"设置没反应"。
-    let want_exclusive = settings.get("exclusiveMode").and_then(Value::as_bool);
-    let prev_exclusive = state.setting_flag("exclusiveMode", false);
+    //
+    // 输出配置**整体比对**：模式/时钟/缓冲是一组参数，分别下发会多重建一次流
+    // （每次重建都要丢掉设备缓冲里几十毫秒的音频），而且中间态没有意义。
+    let prev_output = state.setting_output();
     let want_normalize = settings.get("normalizeVolume").and_then(Value::as_bool);
     let prev_normalize = state.setting_flag("normalizeVolume", false);
 
@@ -283,18 +323,19 @@ fn app_set_settings(state: State<'_, AppState>, settings: Value) -> Value {
         state.refresh_settings(&settings);
     }
 
-    if let Some(on) = want_exclusive {
-        if on != prev_exclusive {
-            engine_send(&state, aiya_audio::EngineCommand::SetExclusive(on));
-            if !on {
-                // 切回共享是确定的结果；实际值会由随后到的 AudioMode 确认
-                state.exclusive_active.store(false, Ordering::Relaxed);
-                state
-                    .audio_mode_note
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clear();
-            }
+    // 落库成功后 setting_output() 读的就是新值，直接比对
+    let next_output = state.setting_output();
+    if next_output != prev_output {
+        engine_send(&state, aiya_audio::EngineCommand::SetOutputConfig(next_output));
+        // 切回共享/静音是确定的结果；实际状态会由随后到的 AudioMode 确认
+        if next_output.mode == aiya_audio::ModePref::Shared {
+            let mut st = state
+                .audio_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            st.mode = "shared".into();
+            st.requested = "shared".into();
+            st.reason.clear();
         }
     }
 
@@ -322,14 +363,13 @@ fn app_diagnostics(state: State<'_, AppState>) -> Value {
     let smtc_active = state.smtc_active.load(Ordering::Relaxed);
     let sleep_prevented = state.sleep_prevented.load(Ordering::Relaxed);
     let tray_active = state.tray_active.load(Ordering::Relaxed);
-    let exclusive_active = state.exclusive_active.load(Ordering::Relaxed);
-    let mode_note = state
-        .audio_mode_note
+    let audio = state
+        .audio_state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
     // 必须在进入 db 闭包之前读（同一个 DB 线程，闭包里再 send 会死锁）
-    let exclusive_requested = state.setting_flag("exclusiveMode", false);
+    let desired = state.setting_output();
     let result: aiya_data::DbResult<Value> = state.db().send(move |conn| {
         let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
         let db_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0) as i64
@@ -367,12 +407,23 @@ fn app_diagnostics(state: State<'_, AppState>) -> Value {
                 "type": if sleep_prevented { Some("SetThreadExecutionState") } else { None },
             },
             "tray": tray_active,
-            // 音频实际模式：requested 是设置项，exclusive 是设备真给了什么，
-            // note 说明回落原因（"独占可选且失败可解释"的落点）
+            // 音频实际状态：desired 是用户设置，actual 是设备真给了什么，
+            // note 说明回落/自愈原因（"独占可选且失败可解释"的落点）。
+            // 三档都列出来是因为"独占 50ms 轮询"与"共享 200ms 事件"的
+            // 听感差异远小于它们的配置差异，用户只能靠这里判断实际生效。
             "audioMode": {
-                "requested": exclusive_requested,
-                "exclusive": exclusive_active,
-                "note": mode_note,
+                "requested": audio.requested,
+                "mode": audio.mode,
+                "clock": audio.clock,
+                "bufferMs": audio.buffer_ms,
+                "format": audio.format,
+                "note": audio.reason,
+                "desired": {
+                    "mode": desired.mode.as_str(),
+                    "bufferMs": desired.buffer_ms,
+                    "clock": desired.clock.as_str(),
+                    "releaseOnPause": desired.release_on_pause,
+                },
             },
         }))
     });
@@ -1764,18 +1815,16 @@ pub fn run() {
                 smtc_active: AtomicBool::new(false),
                 sleep_prevented: AtomicBool::new(false),
                 tray_active: AtomicBool::new(false),
-                exclusive_active: AtomicBool::new(false),
-                audio_mode_note: Mutex::new(String::new()),
+                audio_state: Mutex::new(AudioStateSnapshot::default()),
                 settings: Mutex::new(settings0),
             });
 
-            // 独占偏好先下发：引擎未装载时只记录，首曲 Load 就用上。
-            // 设备拒绝时会回落共享并通过 AudioMode 事件说明原因。
+            // 输出配置先下发：引擎未装载时只记录，首曲 Load 就用上。
+            // 设备拒绝独占会回落共享、缓冲太深会自愈降级，两者都通过 AudioMode
+            // 事件把原因带回 UI（"设置没生效"必须可解释）。
             {
                 let st = app.state::<AppState>();
-                if st.setting_flag("exclusiveMode", false) {
-                    engine_send(&st, aiya_audio::EngineCommand::SetExclusive(true));
-                }
+                engine_send(&st, aiya_audio::EngineCommand::SetOutputConfig(st.setting_output()));
             }
             // 音量归一化偏好同样先灌进 Actor：音量在 pump 里统一算，
             // 不放在 UI（旧 UI 侧的 setNormalization 已是 no-op）
@@ -1991,19 +2040,40 @@ pub fn run() {
                             PumpEffect::History { track_id, seconds } => {
                                 record_history(&engine, &track_id, seconds);
                             }
-                            PumpEffect::AudioMode { exclusive, reason } => {
-                                // 独占被拒/设备更换：更新诊断状态并转发 UI。
+                            PumpEffect::OutputMode {
+                                requested,
+                                mode,
+                                clock,
+                                buffer_ms,
+                                format,
+                                reason,
+                            } => {
+                                // 回落/自愈/设备更换：更新诊断状态并转发 UI。
                                 // 这是"降级信息"不是错误，所以走独立事件，
                                 // 不混进 player:state 的 error 字段。
-                                engine.exclusive_active.store(exclusive, Ordering::Relaxed);
-                                *engine
-                                    .audio_mode_note
-                                    .lock()
-                                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                                    reason.clone().unwrap_or_default();
+                                let note = reason.unwrap_or_default();
+                                {
+                                    let mut st = engine
+                                        .audio_state
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                    st.requested = requested.clone();
+                                    st.mode = mode.clone();
+                                    st.clock = clock.clone();
+                                    st.buffer_ms = buffer_ms;
+                                    st.format = format.clone();
+                                    st.reason = note.clone();
+                                }
                                 let _ = handle.emit(
                                     "audio:mode",
-                                    json!({ "exclusive": exclusive, "reason": reason }),
+                                    json!({
+                                        "requested": requested,
+                                        "mode": mode,
+                                        "clock": clock,
+                                        "bufferMs": buffer_ms,
+                                        "format": format,
+                                        "reason": if note.is_empty() { Value::Null } else { Value::String(note) },
+                                    }),
                                 );
                             }
                             PumpEffect::EmitState => emit_state = true,
