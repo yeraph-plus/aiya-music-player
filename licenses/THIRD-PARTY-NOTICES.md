@@ -46,7 +46,6 @@ AIYA Music 本体以 **GPL-3.0-or-later** 发布（全文见仓库根 `LICENSE`�
 | Vite | 8.x | MIT |
 | Tailwind CSS | 4.x | MIT |
 | zod | 4.x | MIT |
-| audiomotion-analyzer | 4.5.x | MIT |
 | @tauri-apps/api | 2.9.x | Apache-2.0 OR MIT |
 
 ## 二、不随包分发、运行时按需调用的外部程序

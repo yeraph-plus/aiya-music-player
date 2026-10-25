@@ -21,12 +21,14 @@
   /**
    * 频谱面板（ADR-037）。
    *
-   * compact 引擎：数据来自 `source`（AudioSink 的 AnalyserSource），本组件只做绘制：
+   * compact 引擎：数据来自 `source`（48 带 tap），本组件只做绘制：
    * 单个 rAF 循环 + canvas。暂停/无数据时源返回平滑到 0 的历史值，
    * 呈现为"衰减归零"而不是冻结或跳变。
    *
-   * pro 引擎：audioMotion 直接挂接 `source.audioNode`（只读直通节点），
-   * 自带 rAF 循环与 HiDPI 处理；头部按钮循环切换形态。
+   * pro 引擎：自研五形态渲染器（audiomotion.ts），同样吃 `source` 的
+   * 48 带 tap，只是渲染更讲究（渐变/LED/镜像/径向/反射）。
+   * 2026-10-25 起两种引擎数据同源，差别只在渲染层——audioMotion 需要
+   * WebAudio 节点而 WebView 没有音频图（ADR-0006），已移除。
    */
   let canvas = $state<HTMLCanvasElement | null>(null);
   let proHost = $state<HTMLElement | null>(null);
@@ -35,19 +37,7 @@
   /** 引擎实例存在 effect 闭包里；这里只持引用供按钮回调使用（非响应式） */
   let proHandle: ProSpectrumHandle | null = null;
 
-  /**
-   * 能不能真的用 pro。
-   *
-   * audioMotion 必须挂一个**真实音频节点**（`source.audioNode`），而 ADR-0006
-   * 之后音频在 Rust sidecar 出声，`RemoteSpectrumSource.audioNode` 恒为
-   * `undefined`。默认设置又是 `spectrumEngine: 'pro'` —— 于是"开频谱"
-   * 曾经得到一个**完全空白**的面板（2026-10-25 在浏览器预览里实测到）。
-   *
-   * 判据放在这里而不是让用户去设置里改：注释本来就写着"audioNode 缺失时
-   * 静默降级"，现在把降级落到实处 —— 有数据（48 带 tap）就以 compact 画出来，
-   * 空面板才是真降级失败。
-   */
-  const usePro = $derived(engine === 'pro' && source.audioNode !== undefined);
+  const usePro = $derived(engine === 'pro');
 
   /** 峰值帽：每根柱子的当前峰值，无数据时缓慢下落 */
   let peaks: Float32Array = new Float32Array(0);
@@ -118,13 +108,14 @@
     };
   });
 
-  // pro 引擎随面板挂载/卸载建毁；没有 audioNode 时不会走到这里（usePro 已为 false）
+  // pro 引擎随面板挂载/卸载建毁。
+  // 注意 effect 里不能读 proMode（会变成依赖 → 每次切形态整个引擎重建），
+  // 形态由 handle 内部持有，这里只把 chip 状态与它对齐。
   $effect(() => {
     if (!usePro) return;
     const host = proHost;
-    const node = source.audioNode;
-    if (!host || !node) return;
-    const created = createProSpectrum(host, node);
+    if (!host) return;
+    const created = createProSpectrum(host, source, 'bars');
     proHandle = created;
     proMode = created.mode;
     return () => {

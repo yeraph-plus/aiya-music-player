@@ -335,12 +335,8 @@
         <div>
           <div class="setting-title">频谱风格</div>
           <div class="setting-hint">
-            专业：audioMotion 渲染，面板头部可循环切换径向 / LED / 镜像等形态；简洁：自研轻量条形
-            <br />
-            <span class="dim">
-              注意：当前版本两种风格画出来一样。pro 引擎要真实的 WebAudio 音频节点，而音频已搬到
-              Rust 进程，拿不到节点时会自动降级成简洁条形（详见 docs/18 §9 第 7 条）。
-            </span>
+            专业：五形态渲染（渐变条 / LED / 镜像 / 径向 / 反射），频谱面板头部可循环切换；简洁：自研轻量条形。
+            两种风格数据同源（48 分带实时频谱），差别只在渲染层。
           </div>
         </div>
         <div class="segmented">

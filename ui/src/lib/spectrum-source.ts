@@ -12,11 +12,6 @@ export interface SpectrumSource {
   readonly bandCount: number;
   /** 是否有实时数据（暂停/无数据时 UI 显示衰减或静态降级态） */
   readonly live: boolean;
-  /**
-   * 底层音频节点（可 absent）——供第三方渲染引擎挂接。
-   * WebView 内没有音频图，本实现恒为 undefined，`SpectrumPanel` 据此降级。
-   */
-  readonly audioNode?: AudioNode;
   start(): void;
   stop(): void;
   /** 取一帧：返回当前分带值（0–1）。未运行时返回全 0 */
@@ -37,8 +32,6 @@ export interface SpectrumSource {
  */
 export class RemoteSpectrumSource implements SpectrumSource {
   readonly bandCount: number;
-  /** 恒 undefined：WebView 内没有音频图，pro 引擎据此自动降级 */
-  readonly audioNode: undefined = undefined;
 
   private bands: Float32Array;
   private running = false;
