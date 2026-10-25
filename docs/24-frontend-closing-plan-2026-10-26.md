@@ -51,6 +51,13 @@
 依赖（`ui/package.json`）：`@lucide/svelte` `@tauri-apps/api` `bits-ui` `zod` + `tailwindcss`/`@tailwindcss/vite`（dev）+ `@playwright/test`（dev）。
 `audiomotion-analyzer` 已于 2026-10-25 随 pro 频谱自研一起移除。
 
+> **B3a 之后的同一组数字**（S1–S5 落地，2026-10-26 实测）：`components/` 仍是 **21** 个
+> （−TopBar −ViewHeader +PageHeader +PageToolbar）、`stores/` 12 → **13**（新增
+> `stores/nav.svelte.ts`，约 190 行）、`styles/` 2 472 → **2 205 行**（一部分迁进两个版式件
+> 的 scoped `<style>`，全局部分净减 267 行）、CSS 类名 207 → **181**
+> （`.titlebar*` `.topbar` `.search*` `.view-*` `.page-heading*` `.settings-jump`
+> `.chip*` `.filters` 全部消失）。上表保留动工前的基线，方便对比。
+
 ---
 
 ## 1. 问题清单（每条都有证据，不是印象）
@@ -450,7 +457,35 @@ active 状态只能靠 `IntersectionObserver` 反查后写回一个 `.chip.on` �
 
 验收：`npm run check` 0/0、`build:ui` 通过、`probe:ui` 无异常、`test:e2e` **4/4 绿**、
 真窗口实测 6 条：①顶栏四件位置正确 ②拖空白移动窗口 & 双击最大化 ③点输入框不拖窗 ④
-首页→歌单→返回回首页 ⑤搜索后返回还原搜索前状态 ⑥设置页标题与 tab 分两行。
+首页→曲库→返回回首页 ⑤搜索后返回还原搜索前状态 ⑥设置页标题与 tab 分两行。
+
+#### ✅ 已完成（2026-10-26，5 个提交）
+
+| 步 | commit | 内容 |
+|---|---|---|
+| S1 | `976fff9` | nav store + 10 处调用点迁移（视觉零变化，CSS 体积未变可证） |
+| S2 | `320bcfb` | 宽 TitleBar 吸收搜索与返回、删 TopBar |
+| S3 | `53907cd` | PageHeader + 三页落位、删 ViewHeader |
+| S4 | `be9f711` | PageToolbar + 曲库三 tab / 设置六区块 |
+| S5 | `4af54aa` | E2E 重写 5/5 绿 + B0 死代码清理 |
+
+**实测数据**
+
+| 项 | 结果 |
+|---|---|
+| `npm run check` | 0 errors / 0 warnings |
+| `npm run build` | CSS 40.76 → **41.10 kB**、JS 235.86 → **237.28 kB**（44 行 scoped 样式 + 两个零件的逻辑；删掉的全局样式 170 行抵消了一部分） |
+| `npm run test:e2e` | **5 passed**（原本 4 failed / 0 passed） |
+| `probe --nav` | 10 步全绿，无 console error / 无 4xx / 无未捕获异常 |
+| 顶栏几何（1280 宽） | 品牌 12..111 / 返回 119..147 / 搜索 155..515（360px）/ **拖拽余量 523..1140（617px）** / 窗控 1148..1280（3×44） |
+| 顶栏属性 | `barH=46`、`data-tauri-drag-region=deep`、搜索容器 `false`、四件齐全 |
+| 返回栈 | disabled → enabled → disabled 随栈切换；三次返回都落到正确页面；同页再点不压栈 |
+
+**没验的（需要真窗口手动操作，自动化判不了）**
+
+- 拖空白移动窗口、双击最大化 —— 探针只能读属性，拖拽是原生行为
+- 点输入框左右内边距不拖窗 —— 同上（`drag="false"` 已就位，但没手拖验证）
+- 搜索后按返回是否还原搜索前状态 —— 曲库为空时搜索无结果，等有数据再验
 
 ### B0 清场（无视觉变更）
 
@@ -627,7 +662,7 @@ E2E 补到 8–10 条（覆盖：拆页路由、批量、设置分组、kit 演�
 | 构建 | `npm run build:ui` | 通过；JS ≤ 240 KB、CSS 逐批下降 |
 | 契约 | `npm run gen:types:check` | 无漂移 |
 | 运行时 | `npm run probe:ui -- --play` | 无 console error / 无 4xx / 无未捕获异常 |
-| E2E | `npm run test:e2e` | **B3a 起 4/4**（原本全红），B6 起 10/10 |
+| E2E | `npm run test:e2e` | **B3a 起 5/5**（原本 0/4），B6 起 10/10 |
 | 视觉 | 真窗口 3 档 × 明暗 2 套 | 12 张目检图，记进本文档附录 |
 | 壳体（v2） | 真窗口手测 6 条 | ①顶栏四件位置正确 ②拖空白移动窗口、双击最大化 ③点搜索框内边距不拖窗 ④首页→歌单→返回回首页 ⑤搜索后返回还原搜索前状态 ⑥设置页标题与 tab 分两行 |
 | 版式件边界（v2） | `grep -rn "PageHeader\|PageToolbar" components views` | 引用方**只能是 `views/`**；出现在 `components/` 里就是被组合化了，打回 |
