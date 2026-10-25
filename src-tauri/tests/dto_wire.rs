@@ -112,6 +112,7 @@ fn player_state_error_is_structured_and_path_is_hidden() {
         repeat: aiya_player::RepeatMode::Off,
         shuffle: false,
         status: aiya_player::PlaybackStatus::Error,
+        source: aiya_player::AudioSource::File,
         position_ms: 1000,
         duration_ms: Some(2000),
         volume: 1.0,
@@ -165,6 +166,7 @@ fn player_state_empty_queue_sends_null_not_minus_one() {
         repeat: aiya_player::RepeatMode::Off,
         shuffle: false,
         status: aiya_player::PlaybackStatus::Idle,
+        source: aiya_player::AudioSource::File,
         position_ms: 0,
         duration_ms: None,
         volume: 0.85,
@@ -531,4 +533,18 @@ fn playlist_export_result_wire_shape() {
     .unwrap();
     assert_eq!(v["path"], "D:/out/x.m3u8");
     assert_eq!(v["count"], 12);
+}
+
+/// AudioSource 的 wire 值锁定（docs/22 G3）：`"file"` / `"stream"` 小写。
+/// UI 进度条按它禁拖/显示"直播中"，拼错就是静默失效。
+#[test]
+fn audio_source_wire_values() {
+    assert_eq!(
+        serde_json::to_value(aiya_player::AudioSource::File).unwrap(),
+        "file"
+    );
+    assert_eq!(
+        serde_json::to_value(aiya_player::AudioSource::Stream).unwrap(),
+        "stream"
+    );
 }

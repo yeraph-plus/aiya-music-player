@@ -12,6 +12,9 @@
 //!
 //! * **Symphonia 特性怎么加**：只动根 `Cargo.toml` 的 symphonia features
 //!   （docs/22 D1 只开主流格式；新格式 = 加 feature + 本文件 codec 名表补一行）。
+//! * **HLS 流怎么接**：`DecodedStream::open_hls(url)` → [`crate::hls::HlsStream`]
+//!   变体（docs/22 G3，ADTS AAC 路线）。对 engine 透明：duration=0 表示直播，
+//!   `seekable()=false`，engine 对不可 seek 的源直接忽略 Seek 命令。
 //! * **mpv 怎么插**：将来加 `DecodeBackend::Mpv`，实现为子进程
 //!   `mpv --no-video --ao=pcm --audio-format=s32le --really-quiet <file>`
 //!   读 stdout PCM 管道，包装成同一个 `DecodedStream` 形状（sample_rate /
@@ -36,6 +39,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 
+use crate::hls::HlsStream;
 use crate::AudioError;
 
 /// 解码后端。今天只有 Symphonia；mpv 将来从这里插入（见模块头注释），
@@ -48,16 +52,26 @@ pub enum DecodeBackend {
 
 /// 解码后的流：逐包交错 f32 + 元数据 + seek。
 ///
-/// 统一形状是 D4 的契约面——将来任何后端（Symphonia / mpv 子进程 / 远程流）
+/// 统一形状是 D4 的契约面——任何后端（Symphonia / mpv 子进程 / HLS 流）
 /// 都产出这个结构，engine 的渲染循环与 WASAPI 输出永远零改动。
 pub struct DecodedStream {
+    inner: Inner,
+}
+
+enum Inner {
+    Symphonia(SymphoniaStream),
+    Hls(HlsStream),
+}
+
+/// Symphonia 后端实现（本地文件 / 内存字节）。
+struct SymphoniaStream {
     format: Box<dyn FormatReader>,
     decoder: Box<dyn SymphoniaDecoder>,
     track_id: u32,
-    pub sample_rate: u32,
-    pub channels: usize,
+    sample_rate: u32,
+    channels: usize,
     /// 流信息推算的总时长（无标签时也能给进度条）
-    pub duration_ms: u64,
+    duration_ms: u64,
     /// 当前解码位置（毫秒），随包时间戳推进
     position_ms: u64,
     /// 交错样本复用缓冲
@@ -67,14 +81,13 @@ pub struct DecodedStream {
 
 impl std::fmt::Debug for DecodedStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // 内部的 FormatReader/Decoder 是 trait object，不实现 Debug；
-        // 元数据足够定位"哪条流、走到哪"。
+        // 内部是 trait object，不实现 Debug；元数据足够定位"哪条流、走到哪"。
         f.debug_struct("DecodedStream")
-            .field("sample_rate", &self.sample_rate)
-            .field("channels", &self.channels)
-            .field("duration_ms", &self.duration_ms)
-            .field("position_ms", &self.position_ms)
-            .field("eof", &self.eof)
+            .field("sample_rate", &self.sample_rate())
+            .field("channels", &self.channels())
+            .field("duration_ms", &self.duration_ms())
+            .field("position_ms", &self.position_ms())
+            .field("seekable", &self.seekable())
             .finish()
     }
 }
@@ -90,6 +103,12 @@ impl DecodedStream {
         Self::open_with_backend(Box::new(src), &hint, DecodeBackend::Symphonia)
     }
 
+    /// HLS (m3u8) 流（docs/22 G3）：ADTS AAC 路线，live 轮询 / VOD 顺序
+    /// 拉段都在 `HlsStream` 内部完成。直播流 duration=0、不可 seek。
+    pub fn open_hls(url: &str) -> Result<Self, AudioError> {
+        Ok(Self { inner: Inner::Hls(HlsStream::new(url)?) })
+    }
+
     /// **唯一构造入口**（docs/22 §2 D4）：engine 与未来调用方都从这里进，
     /// 后端选择只发生在此处。mpv 后端不吃 `MediaSource`（是子进程管道），
     /// 届时此签名会多一个入口或参数——但 `DecodedStream` 形状与 engine 不变。
@@ -99,12 +118,68 @@ impl DecodedStream {
         backend: DecodeBackend,
     ) -> Result<Self, AudioError> {
         match backend {
-            DecodeBackend::Symphonia => Self::open_symphonia(src, hint),
+            DecodeBackend::Symphonia => {
+                Ok(Self { inner: Inner::Symphonia(SymphoniaStream::open(src, hint)?) })
+            }
         }
     }
 
-    fn open_symphonia(src: Box<dyn MediaSource>, hint: &Hint) -> Result<Self, AudioError> {
-        let mss = MediaSourceStream::new(src, Default::default());
+    pub fn sample_rate(&self) -> u32 {
+        match &self.inner {
+            Inner::Symphonia(s) => s.sample_rate,
+            Inner::Hls(h) => h.sample_rate(),
+        }
+    }
+
+    pub fn channels(&self) -> usize {
+        match &self.inner {
+            Inner::Symphonia(s) => s.channels,
+            Inner::Hls(h) => h.channels(),
+        }
+    }
+
+    pub fn duration_ms(&self) -> u64 {
+        match &self.inner {
+            Inner::Symphonia(s) => s.duration_ms,
+            Inner::Hls(h) => h.duration_ms(),
+        }
+    }
+
+    pub fn position_ms(&self) -> u64 {
+        match &self.inner {
+            Inner::Symphonia(s) => s.position_ms,
+            Inner::Hls(h) => h.position_ms(),
+        }
+    }
+
+    /// 直播流不可 seek（engine 据此忽略 Seek 命令而不是报错杀播放）。
+    pub fn seekable(&self) -> bool {
+        match &self.inner {
+            Inner::Symphonia(_) => true,
+            Inner::Hls(h) => h.seekable(),
+        }
+    }
+
+    /// 下一包的交错 f32 样本。EOF 返回 Ok(None)。
+    /// 返回的切片在下次调用前有效。
+    pub fn next_packet(&mut self) -> Result<Option<&[f32]>, AudioError> {
+        match &mut self.inner {
+            Inner::Symphonia(s) => s.next_packet(),
+            Inner::Hls(h) => h.next_packet(),
+        }
+    }
+
+    /// 精确 seek 到毫秒位置。直播流返回 Err（engine 先查 [`Self::seekable`]）。
+    pub fn seek_ms(&mut self, ms: u64) -> Result<(), AudioError> {
+        match &mut self.inner {
+            Inner::Symphonia(s) => s.seek_ms(ms),
+            Inner::Hls(_) => Err(AudioError::Unsupported("直播流不支持拖动进度".into())),
+        }
+    }
+}
+
+impl SymphoniaStream {
+    fn open(src: Box<dyn MediaSource>, hint: &Hint) -> Result<Self, AudioError> {        let mss = MediaSourceStream::new(src, Default::default());
 
         let probed = symphonia::default::get_probe()
             .format(hint, mss, &FormatOptions::default(), &MetadataOptions::default())
@@ -163,13 +238,7 @@ impl DecodedStream {
         })
     }
 
-    pub fn position_ms(&self) -> u64 {
-        self.position_ms
-    }
-
-    /// 下一包的交错 f32 样本。EOF 返回 Ok(None)。
-    /// 返回的切片在下次调用前有效。
-    pub fn next_packet(&mut self) -> Result<Option<&[f32]>, AudioError> {
+    fn next_packet(&mut self) -> Result<Option<&[f32]>, AudioError> {
         if self.eof {
             return Ok(None);
         }
@@ -205,8 +274,7 @@ impl DecodedStream {
         }
     }
 
-    /// 精确 seek 到毫秒位置。
-    pub fn seek_ms(&mut self, ms: u64) -> Result<(), AudioError> {
+    fn seek_ms(&mut self, ms: u64) -> Result<(), AudioError> {
         // Time 的整数 From 是"秒"；毫秒要用 new(seconds, frac)
         let target = Time::new(ms / 1000, (ms % 1000) as f64 / 1000.0);
         self.format
@@ -262,7 +330,7 @@ mod tests {
 
     #[test]
     fn unsupported_codecs_have_readable_names() {
-        // 这些是"会被扫描入库但放不出"的高频格式（docs/21 格式矩阵），
+        // 这些是"会被装进库但放不出"的高频格式（docs/21 格式矩阵），
         // 名字必须说人话——UI 横幅直接展示这条消息。
         assert_eq!(codec_display_name(CODEC_TYPE_OPUS), "Opus");
         assert_eq!(codec_display_name(CODEC_TYPE_WMA), "WMA");

@@ -8,8 +8,8 @@
 //! （shuffle 开启时打乱）。`cursor` 在 order 里走，`index` 是 order[cursor]。
 
 use crate::state::{
-    AudioError, PlaybackStatus, PlayerCommand, PlayerState, QueueOp, QueueSnapshot, RepeatMode,
-    TrackRef,
+    AudioError, AudioSource, PlaybackStatus, PlayerCommand, PlayerState, QueueOp, QueueSnapshot,
+    RepeatMode, TrackRef,
 };
 
 pub struct PlayerActor {
@@ -35,6 +35,9 @@ pub struct PlayerActor {
     pending_stop: bool,
     /// Actor 自己维护的单调位置估计（无引擎回报时给 UI）
     last_reported_ms: u64,
+    /// 当前曲目音源类别（docs/22 G3）。instruct_load 时按路径前缀判定：
+    /// http(s) = Stream（FM 推流），否则 File。
+    source: AudioSource,
     /// ReplayGain 归一化开关（设置项 normalizeVolume）。放在 Actor 里而不是
     /// 宿主里：音量是 Actor 的状态，gain_db 也在 Actor 手里（current），
     /// 分两处算会重复且容易不同步（旧 UI 的 setNormalization 已废弃为 no-op）。
@@ -67,6 +70,7 @@ impl PlayerActor {
             pending_load: None,
             pending_stop: false,
             last_reported_ms: 0,
+            source: AudioSource::File,
             normalize: false,
         }
     }
@@ -92,6 +96,7 @@ impl PlayerActor {
             repeat: self.repeat,
             shuffle: self.shuffle,
             status: self.status,
+            source: self.source,
             // 不再 max(last_reported_ms)：那是"上一曲末尾"的残留值，
             // 切曲瞬间会把旧进度挂到新曲上（时长对不上，进度条跳回）。
             position_ms: self.position_ms,
@@ -267,6 +272,14 @@ impl PlayerActor {
         if let Some(track) = track {
             let token = self.next_token();
             self.pending_load = Some((token, track.path.clone(), start_ms, autoplay));
+            // 音源类别在产生处判定（docs/22 G3）：http(s) 路径 = 网络流。
+            // 引擎侧 open_source 用同一前缀规则开 HLS，两处必须一致。
+            self.source = if track.path.starts_with("http://") || track.path.starts_with("https://")
+            {
+                AudioSource::Stream
+            } else {
+                AudioSource::File
+            };
             self.status = if autoplay { PlaybackStatus::Loading } else { PlaybackStatus::Paused };
             self.position_ms = start_ms;
             self.last_reported_ms = start_ms; // 换曲必须重置，否则快照带上上一曲的残留进度
@@ -479,7 +492,9 @@ impl PlayerActor {
 
             PlayerCommand::Loaded { token, duration_ms } => {
                 if token == self.token {
-                    self.duration_ms = Some(duration_ms);
+                    // 0 = 直播流没有总时长（docs/22 G3）：对 UI 呈现 None
+                    // 而不是 Some(0)——进度条按 source=stream 显示"直播中"
+                    self.duration_ms = if duration_ms == 0 { None } else { Some(duration_ms) };
                     if self.status == PlaybackStatus::Loading {
                         self.status = PlaybackStatus::Playing;
                     }

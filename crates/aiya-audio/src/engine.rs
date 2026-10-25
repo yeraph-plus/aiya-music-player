@@ -316,6 +316,16 @@ fn render_loop(
 /// Null 输出的实时节拍（毫秒）：一次解码/推进一小批，避免忙转。
 const NULL_TICK_MS: u64 = 20;
 
+/// 按 Load 的 path 打开源：http(s) → HLS 流（docs/22 G3），否则本地文件。
+/// 判定放在 engine 入口一处，队列/UI 永远只递字符串。
+fn open_source(path: &str) -> Result<DecodedStream, AudioError> {
+    if path.starts_with("http://") || path.starts_with("https://") {
+        DecodedStream::open_hls(path)
+    } else {
+        DecodedStream::open_file(Path::new(path))
+    }
+}
+
 /// 无声渲染：解码、进度、变速、seek 全部照常，只是没有音频设备参与。
 ///
 /// 用途（不是"Tauri 原生后端"——Tauri 没有音频 API，WebView `<audio>` 会是
@@ -335,12 +345,13 @@ fn play_null(
     tap: &crate::spectrum::SpectrumTap,
     written: &AtomicU64,
 ) -> Result<LoadExit, AudioError> {
-    let mut decoder = DecodedStream::open_file(Path::new(path))?;
-    tap.set_sample_rate(decoder.sample_rate);
-    if start_ms > 0 {
+    let mut decoder = open_source(path)?;
+    tap.set_sample_rate(decoder.sample_rate());
+    // 直播流不可 seek：start_ms 忽略（UI 按 source=stream 禁拖，这里是保险）
+    if start_ms > 0 && decoder.seekable() {
         decoder.seek_ms(start_ms)?;
     }
-    send(EngineEvent::Loaded { token, duration_ms: decoder.duration_ms });
+    send(EngineEvent::Loaded { token, duration_ms: decoder.duration_ms() });
     send(EngineEvent::AudioMode {
         token,
         requested: initial_cfg.mode.as_str().to_string(),
@@ -351,7 +362,7 @@ fn play_null(
         reason: Some("已关闭音频输出（解码与进度照常推进）".to_string()),
     });
 
-    let channels = decoder.channels.max(1);
+    let channels = decoder.channels().max(1);
     let mut rate: f32 = initial_rate;
     let mut cfg = initial_cfg;
     let mut paused = false;
@@ -376,10 +387,13 @@ fn play_null(
                     send(EngineEvent::StateChanged { token, playing: true });
                 }
                 Ok(EngineCommand::Seek(ms)) => {
-                    if let Err(e) = decoder.seek_ms(ms) {
-                        return Err(e);
+                    // 直播流忽略 seek（UI 禁拖；误触发不能杀播放）
+                    if decoder.seekable() {
+                        if let Err(e) = decoder.seek_ms(ms) {
+                            return Err(e);
+                        }
+                        send(EngineEvent::Position { token, position_ms: decoder.position_ms() });
                     }
-                    send(EngineEvent::Position { token, position_ms: decoder.position_ms() });
                 }
                 Ok(EngineCommand::SetVolume(_)) => {}
                 Ok(EngineCommand::SetRate(r)) => rate = r.clamp(0.5, 2.0),
@@ -423,7 +437,7 @@ fn play_null(
         // 按真实时间推进：20ms 墙钟 → 20ms × rate 的源样本，解码后丢弃。
         // 这样 Position 的节奏和有声播放一致（UI 的时间轴、歌词滚动不跳）。
         let want_frames =
-            (decoder.sample_rate as f64 * elapsed.as_secs_f64() * rate as f64).round() as usize;
+            (decoder.sample_rate() as f64 * elapsed.as_secs_f64() * rate as f64).round() as usize;
         let mut got = 0usize;
         let mut eof = false;
         while got < want_frames {
@@ -447,7 +461,7 @@ fn play_null(
             position_ms: decoder.position_ms(),
         });
         if eof {
-            send(EngineEvent::Position { token, position_ms: decoder.duration_ms });
+            send(EngineEvent::Position { token, position_ms: decoder.duration_ms() });
             send(EngineEvent::StateChanged { token, playing: false });
             send(EngineEvent::Eof { token });
             return Ok(LoadExit::Finished { cfg });
@@ -567,13 +581,14 @@ fn play_file(
     tap: &crate::spectrum::SpectrumTap,
     written: &AtomicU64,
 ) -> Result<LoadExit, AudioError> {
-    let mut decoder = DecodedStream::open_file(Path::new(path))?;
-    tap.set_sample_rate(decoder.sample_rate); // 频谱分带按实际采样率标定
+    let mut decoder = open_source(path)?;
+    tap.set_sample_rate(decoder.sample_rate()); // 频谱分带按实际采样率标定
     // 起点必须在开流之前落定：先播再 seek 会有可闻的"从头闪一下"
-    if start_ms > 0 {
+    // （直播流不可 seek：忽略 start_ms，从 live 边缘起播）
+    if start_ms > 0 && decoder.seekable() {
         decoder.seek_ms(start_ms)?;
     }
-    send(EngineEvent::Loaded { token, duration_ms: decoder.duration_ms });
+    send(EngineEvent::Loaded { token, duration_ms: decoder.duration_ms() });
 
     // 配置意图与设备事实分开记：cfg 是用户设置，out.mode 是设备实际给的。
     // 回落不算错误（Error 会让 UI 弹红条），用 AudioMode 的 reason 说明。
@@ -595,7 +610,7 @@ fn play_file(
     // 暂停/seek/停止都是"波形突然截断"，不做淡出就是可闻的咔哒。
     let mut declick_target: f32 = 1.0;
     // 一个斜坡跨多少个样本（按源采样率标定，变速时斜坡时长略变，无感）
-    let ramp_samples = (decoder.sample_rate * VOLUME_RAMP_MS / 1000).max(1) as f32;
+    let ramp_samples = (decoder.sample_rate() * VOLUME_RAMP_MS / 1000).max(1) as f32;
     // 每样本最大增益变化量（0→1 恰好用满一个斜坡）
     let ramp_step = 1.0 / ramp_samples;
     let mut rate: f32 = initial_rate;
@@ -782,23 +797,28 @@ fn play_file(
                 declick_target = 1.0; // 新流淡入
             }
             if let Some(ms) = pending_seek.take() {
-                // stop（reset 要求 stopped 态）→ seek → 清池（旧样本作废）→ reset → 重启
-                out.stop();
-                if let Err(e) = decoder.seek_ms(ms) {
-                    result = Err(e);
-                } else {
-                    pool.clear();
-                    pool_pos = 0.0;
-                    decoder_eof = false;
-                    // 流可能正处于"已释放待重建"的窗口（切配置两次都失败）
-                    if out.is_live() {
-                        let _ = out.client.reset_stream();
-                        if let Err(e) = out.client.start_stream() {
-                            stream_err = Some(wasapi_err(e));
-                        }
-                    }
+                // 直播流不可 seek：整个动作丢弃（out 不能停在 stopped 态不重启）
+                if !decoder.seekable() {
                     send(EngineEvent::Position { token, position_ms: decoder.position_ms() });
-                    declick_target = 1.0; // seek 后淡入，避免落点处爆音
+                } else {
+                    // stop（reset 要求 stopped 态）→ seek → 清池（旧样本作废）→ reset → 重启
+                    out.stop();
+                    if let Err(e) = decoder.seek_ms(ms) {
+                        result = Err(e);
+                    } else {
+                        pool.clear();
+                        pool_pos = 0.0;
+                        decoder_eof = false;
+                        // 流可能正处于"已释放待重建"的窗口（切配置两次都失败）
+                        if out.is_live() {
+                            let _ = out.client.reset_stream();
+                            if let Err(e) = out.client.start_stream() {
+                                stream_err = Some(wasapi_err(e));
+                            }
+                        }
+                        send(EngineEvent::Position { token, position_ms: decoder.position_ms() });
+                        declick_target = 1.0; // seek 后淡入，避免落点处爆音
+                    }
                 }
             }
             if pending_stop {
@@ -939,7 +959,7 @@ fn play_file(
 
         let mut frames_to_write = available as usize;
         let mut eof_now = false;
-        let channels = decoder.channels.max(1);
+        let channels = decoder.channels().max(1);
 
         'fill: while frames_to_write > 0 {
             // 1) 补池：至少够本轮输出所需源帧（frames_to_write * rate + 1），除非解码到头
@@ -1100,7 +1120,7 @@ fn play_file(
                 send(EngineEvent::Eof { token });
                 return Ok(LoadExit::Finished { cfg });
             }
-            send(EngineEvent::Position { token, position_ms: decoder.duration_ms });
+            send(EngineEvent::Position { token, position_ms: decoder.duration_ms() });
             send(EngineEvent::StateChanged { token, playing: false });
             send(EngineEvent::Eof { token });
             // EOF 后回命令循环等下一条 Load
@@ -1378,8 +1398,8 @@ fn src_format(decoder: &DecodedStream) -> WaveFormat {
         32,
         32,
         &SampleType::Float,
-        decoder.sample_rate as usize,
-        decoder.channels,
+        decoder.sample_rate() as usize,
+        decoder.channels(),
         None,
     )
 }
@@ -1556,10 +1576,10 @@ fn open_shared(decoder: &DecodedStream, buffer_hns: i64, clock: Clock) -> Result
     finish_stream(
         client,
         OutputMode::Shared,
-        decoder.channels,
+        decoder.channels(),
         OutFormat::F32,
         clock,
-        decoder.sample_rate,
+        decoder.sample_rate(),
     )
 }
 
@@ -1599,8 +1619,8 @@ fn open_shared_with_note(
 /// 返回 `Err(原因)` 由调用方决定回落还是报错——"独占没生效"必须是可解释的，
 /// 不能只是静默变差。
 fn open_exclusive(decoder: &DecodedStream, cfg: &OutputConfig) -> Result<Output, String> {
-    let rate = decoder.sample_rate;
-    let channels = decoder.channels;
+    let rate = decoder.sample_rate();
+    let channels = decoder.channels();
     let mut best_reason: Option<String> = None;
     let default_period = new_client()
         .ok()
@@ -1827,8 +1847,8 @@ fn switch_output(out: &mut Output, decoder: &DecodedStream, cfg: &OutputConfig) 
 /// decoder.position_ms() 是最后解码包的起点，池中的样本还没进设备 ——
 /// 变速时池可能积压（rate<1），不修正的话进度条会领先于耳朵。
 fn play_position(decoder: &DecodedStream, pool: &[f32]) -> u64 {
-    let pool_frames = (pool.len() / decoder.channels.max(1)) as u64;
-    let pool_ms = (pool_frames * 1000) / (decoder.sample_rate as u64).max(1);
+    let pool_frames = (pool.len() / decoder.channels().max(1)) as u64;
+    let pool_ms = (pool_frames * 1000) / (decoder.sample_rate() as u64).max(1);
     decoder.position_ms().saturating_sub(pool_ms)
 }
 
@@ -1836,7 +1856,7 @@ fn play_position(decoder: &DecodedStream, pool: &[f32]) -> u64 {
 /// position = base + frames_written - latency_ms。不扣这段，进度条会比
 /// 耳朵超前最多一个缓冲深度（200ms），暂停瞬间停在"超前 200ms"处。
 fn padding_ms(decoder: &DecodedStream, padding_frames: u32) -> u64 {
-    (padding_frames as u64 * 1000) / (decoder.sample_rate as u64).max(1)
+    (padding_frames as u64 * 1000) / (decoder.sample_rate() as u64).max(1)
 }
 
 /// 本轮可写帧数。

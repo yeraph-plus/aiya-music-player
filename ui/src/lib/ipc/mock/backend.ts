@@ -259,6 +259,7 @@ export class MockBackend {
     repeat: 'off',
     shuffle: false,
     status: 'idle',
+    source: 'file',
     positionMs: 0,
     durationMs: null,
     volume: 0.85,

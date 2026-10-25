@@ -232,6 +232,16 @@ impl AudioError {
     }
 }
 
+/// 音源类别（docs/22 G3）：本地文件 vs 网络流。UI 据此对 stream 曲目
+/// 禁拖进度条、时长位显示"直播中"。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "lowercase")]
+pub enum AudioSource {
+    File,
+    Stream,
+}
+
 /// 播放状态快照（对齐 PlayerState 契约形状，camelCase serde）。
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
@@ -253,6 +263,9 @@ pub struct PlayerState {
     pub repeat: RepeatMode,
     pub shuffle: bool,
     pub status: PlaybackStatus,
+    /// 当前曲目音源类别。本地曲库 = File；队列里出现 http(s) 路径（FM 推流，
+    /// docs/20 远程版）= Stream。Actor 在 instruct_load 时由路径前缀判定。
+    pub source: AudioSource,
     #[ts(type = "number")]
     pub position_ms: u64,
     #[ts(type = "number | null")]
@@ -338,6 +351,7 @@ mod tests {
             repeat: RepeatMode::Off,
             shuffle: false,
             status: PlaybackStatus::Playing,
+            source: AudioSource::File,
             position_ms: 1000,
             duration_ms: Some(5000),
             volume: 0.8,

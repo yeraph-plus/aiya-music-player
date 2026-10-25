@@ -6,6 +6,7 @@ export * from './AudioError';
 export * from './AudioErrorCode';
 export * from './AudioModeEvent';
 export * from './AudioModeInfo';
+export * from './AudioSource';
 export * from './BeetsStatus';
 export * from './CancelRequested';
 export * from './ChosenRoot';

@@ -49,9 +49,9 @@ fn wav_decode_positions_and_seek() {
     write_test_wav(&path, 44_100, 5.0); // 5 秒
 
     let mut dec = DecodedStream::open_file(&path).unwrap();
-    assert_eq!(dec.sample_rate, 44_100);
-    assert_eq!(dec.channels, 1);
-    assert_eq!(dec.duration_ms, 5_000);
+    assert_eq!(dec.sample_rate(), 44_100);
+    assert_eq!(dec.channels(), 1);
+    assert_eq!(dec.duration_ms(), 5_000);
 
     // 读前 100ms：前 50ms 有信号、50ms 后（本测试的 1kHz 段只占前 2.5s，所以 100ms 内都有信号）
     let mut saw_signal = false;

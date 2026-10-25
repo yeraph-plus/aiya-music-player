@@ -6,6 +6,9 @@
 
 pub mod decoder;
 pub mod engine;
+/// HLS (m3u8) 流式源（docs/22 G3）。对 engine 透明——只以 `DecodedStream`
+/// 的 Hls 变体出现；模块内类型不进公共 API。
+pub mod hls;
 pub mod mmcss;
 pub mod proto;
 pub mod spectrum;

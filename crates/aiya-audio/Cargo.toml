@@ -11,6 +11,10 @@ thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# HLS（docs/22 G3）：ureq 同步阻塞 HTTP（引擎线程本来就是阻塞模型，
+# 不为拉段引入 tokio）；url 做 playlist→segment 的相对地址解析
+ureq.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

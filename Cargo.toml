@@ -28,6 +28,9 @@ symphonia = { version = "0.5.4", default-features = false, features = ["mp3", "f
 wasapi = "0.26.0"
 # 契约层：Rust 是唯一源，TS 类型由 derive(TS) 生成（docs/17）
 ts-rs = "12"
+# docs/22 G3：HLS 拉流（ureq 同步阻塞）与 URL 相对地址解析
+ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
+url = "2"
 
 [profile.release]
 strip = true
