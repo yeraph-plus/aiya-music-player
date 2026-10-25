@@ -2,11 +2,9 @@
   import type { Snippet } from 'svelte';
   import Sidebar from './Sidebar.svelte';
   import TitleBar from './TitleBar.svelte';
-  import TopBar from './TopBar.svelte';
   import PlayerBar from './PlayerBar.svelte';
   import QueuePanel from './QueuePanel.svelte';
   import BatchBar from './BatchBar.svelte';
-  import { registerSearchFocus } from '../lib/focus-search';
   import { errorMessage } from '../lib/errors';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
@@ -21,14 +19,7 @@
   type Props = { children: Snippet };
   let { children }: Props = $props();
 
-  let topBar = $state<{ focus: () => void } | null>(null);
   const playerState = $derived(player.state);
-
-  $effect(() => {
-    if (!topBar) return;
-    const instance = topBar;
-    return registerSearchFocus(() => instance.focus());
-  });
 
   function navigate(page: AppPage): void {
     nav.go(page === 'home' ? { kind: 'dashboard' } : { kind: 'page', page });
@@ -64,13 +55,6 @@
   />
 
   <main class="main">
-    <TopBar
-      bind:this={topBar}
-      search={ui.search}
-      onsearch={(value) => nav.search(value)}
-      onclearsearch={() => nav.clearSearch()}
-    />
-
     {#if notify.error}
       <div class="error" aria-live="assertive">
         {notify.error}

@@ -1,11 +1,14 @@
 /**
  * 搜索框聚焦：模块级注册表。
  *
- * 为什么需要它：快捷键 `focusSearch` 要拿到 TopBar 里的 `<input>`，而 TopBar
- * 实例是视图里的 `bind:this`。把实例一路传到键盘处理（App → keyboard）
+ * 为什么需要它：快捷键 `focusSearch`（`/`）要拿到 TitleBar 里的 `<input>`，
+ * 而实例在组件内部（`bind:this`）。把实例一路传到键盘处理（App → keyboard）
  * 意味着键盘层必须知道视图层——反过来才对。
  *
- * 注册表只有一个槽位：TopBar 是单例，挂载时注册、卸载时清空。
+ * 注册表只有一个槽位：TitleBar 是单例，挂载时注册、卸载时清空。
+ * 2026-10-26 壳体收口后注册点在 `components/TitleBar.svelte` 的 `onMount` 里
+ * （之前是 AppShell 用 `bind:this` 转一手 —— 搜索框与注册逻辑进了同一个组件，
+ * 那次转手就没有意义了）。
  */
 let focusFn: (() => void) | null = null;
 

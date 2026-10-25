@@ -1,7 +1,10 @@
-/* pages.css — 2026-10-25 信息架构重排：自定义标题栏、四个一级页面、播放队列抽屉。
+/* pages.css — 四个一级页面的版式：骨架容器、首页、正在播放、设置、电台。
  *
- * 骨架改为三行：标题栏 / 内容 / 播放条。侧栏与主区从第二行开始；
+ * 骨架是三行：TitleBar / 内容 / 播放条。侧栏与主区从第二行开始；
  * 队列是挂在 player-dock 上的绝对定位抽屉，不再参与网格（主布局不被推动）。
+ *
+ * 标题栏自己的样式在 `components/TitleBar.svelte` 的 `<style>` 里（scoped）——
+ * 2026-10-26 壳体收口：**零件的外观跟着零件走**，全局 CSS 只留版式与主题。
  */
 
 /* ---------------- 骨架 ---------------- */
@@ -20,7 +23,9 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 6px 22px 28px;
+  /* 顶栏从 36 提到 46 并吸收了 TopBar，页面顶部不再有那一层 14px 内边距，
+   * 这里补回来（原来 6 是叠在 TopBar 的 padding 上的） */
+  padding: 18px 22px 28px;
 }
 
 .player-dock {
@@ -28,88 +33,6 @@
   grid-column: 1 / -1;
   position: relative;
   z-index: 20;
-}
-
-/* ---------------- 自定义标题栏（无边框窗口） ---------------- */
-
-.titlebar {
-  grid-row: 1;
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0 0 0 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-panel);
-  user-select: none;
-}
-
-.titlebar-brand {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  letter-spacing: 0.14em;
-}
-
-.titlebar-brand .brand-mark {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
-  background: var(--accent);
-  color: var(--bg);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0;
-}
-
-.titlebar-brand strong {
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.titlebar-brand span:not(.brand-mark) {
-  font-size: 9px;
-  color: var(--text-dim);
-  letter-spacing: 0.22em;
-}
-
-.titlebar-caption {
-  font-size: 11px;
-  color: var(--text-faint);
-  flex: 1;
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.window-controls {
-  display: flex;
-  align-items: stretch;
-  align-self: stretch;
-}
-
-.window-controls button {
-  width: 44px;
-  display: grid;
-  place-items: center;
-  color: var(--text-dim);
-}
-
-.window-controls button:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.window-controls .window-close:hover:not(:disabled) {
-  background: #e81123;
-  color: #fff;
-}
-
-.window-controls button:disabled {
-  opacity: 0.35;
 }
 
 /* ---------------- 页面公共 ---------------- */

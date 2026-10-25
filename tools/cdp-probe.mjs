@@ -197,6 +197,8 @@ if (NAV) {
   const where = () =>
     evaluate(`(() => {
       const main = document.querySelector('.main');
+      const back = document.querySelector('.titlebar .tb-back');
+      const bar = document.querySelector('.titlebar');
       return {
         nav: document.querySelector('.sidebar .nav-item.active')?.textContent?.trim() ?? null,
         h1: main?.querySelector('h1')?.textContent?.trim() ?? null,
@@ -207,6 +209,14 @@ if (NAV) {
           main?.querySelector('.empty strong')?.textContent?.trim() ??
           main?.querySelector('.tt-empty')?.textContent?.trim() ??
           null,
+        back: back ? (back.disabled ? 'disabled' : 'enabled') : null,
+        barH: bar ? Math.round(bar.getBoundingClientRect().height) : null,
+        drag: bar?.getAttribute('data-tauri-drag-region') ?? null,
+        searchDrag:
+          document.querySelector('.titlebar .tb-search')?.getAttribute('data-tauri-drag-region') ?? null,
+        parts: ['tb-brand', 'tb-back', 'tb-search', 'window-controls'].filter((c) =>
+          document.querySelector('.titlebar .' + c),
+        ).length,
       };
     })()`);
 
@@ -225,14 +235,31 @@ if (NAV) {
     console.log(JSON.stringify({ label, clicked, ...(await where()) }));
   };
 
-  console.log('\n=== 导航链路（nav.go）===');
+  console.log('\n=== 导航链路（nav.go / nav.back）===');
+  // 顶栏四件的横向排布：品牌 | 返回 | 搜索 | 拖拽余量 | 窗口控制
+  const rects = await evaluate(`(() => {
+    const pick = (c) => {
+      const el = document.querySelector('.titlebar .' + c);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { c, x: Math.round(r.x), right: Math.round(r.right), w: Math.round(r.width) };
+    };
+    return {
+      winW: window.innerWidth,
+      items: ['tb-brand', 'tb-back', 'tb-search', 'tb-drag', 'window-controls']
+        .map(pick)
+        .filter(Boolean),
+    };
+  })()`);
+  console.log('顶栏几何:', JSON.stringify(rects));
   console.log(JSON.stringify({ label: '起点', ...(await where()) }));
   await step('侧栏→设置', '.sidebar .nav-item', '设置');
-  await step('侧栏→首页', '.sidebar .nav-item', '首页');
+  await step('顶栏←返回', '.titlebar .tb-back', '');
   await step('页内→浏览全部曲目', '.main button', '浏览全部曲目');
-  await step('侧栏→首页', '.sidebar .nav-item', '首页');
+  await step('顶栏←返回', '.titlebar .tb-back', '');
   await step('侧栏→正在播放', '.sidebar .nav-item', '正在播放');
-  await step('侧栏→首页', '.sidebar .nav-item', '首页');
+  await step('顶栏←返回', '.titlebar .tb-back', '');
+  await step('侧栏→首页（同页，不压栈）', '.sidebar .nav-item', '首页');
 }
 
 /**

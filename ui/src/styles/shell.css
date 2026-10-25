@@ -1,47 +1,7 @@
-/* shell.css — 外壳与页头：顶栏（搜索/窗口控件）+ 视图头（标题/统计/操作）。 */
-
-/* ---------------- 顶栏 ---------------- */
-
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 14px 22px 10px;
-  flex-wrap: nowrap;
-  min-width: 0;
-}
-
-.search {
-  flex: 1 1 180px;
-  min-width: 120px;
-  max-width: 340px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  height: 34px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-input);
-}
-
-.search input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: transparent;
-  font-size: 12.5px;
-}
-
-.search input::placeholder {
-  color: var(--text-dim);
-}
-
-.search-icon {
-  display: inline-flex;
-  color: var(--text-dim);
-}
+/* shell.css — 壳体剩余部分：视图头（标题/统计/操作）、筛选条、扫描条、链接与按钮基类。
+ *
+ * 顶栏（应用名/返回/搜索/窗口控制）已收进 `components/TitleBar.svelte`，连同它那 43 行
+ * 全局样式一起搬走（2026-10-26 壳体收口）。 */
 
 .sort-head {
   text-align: left;
@@ -146,7 +106,8 @@
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 4px 22px 14px;
+  /* 16 而不是 4：顶栏吸收 TopBar 后，页面顶部不再有那一层内边距 */
+  padding: 16px 22px 14px;
   min-width: 0;
 }
 

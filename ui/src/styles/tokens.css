@@ -34,7 +34,9 @@
   --radius: 10px;
   --player-height: 92px;
   --sidebar-width: 216px;
-  --titlebar-height: 36px;
+  /* 46px：36 塞不下 30px 高的搜索框 + 上下呼吸；也是 Windows 自定义标题栏
+   * 的常见值（系统标题栏 32 + 应用条 14） */
+  --titlebar-height: 46px;
   --row-height: 52px;
 }
 
