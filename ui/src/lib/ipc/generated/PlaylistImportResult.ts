@@ -3,8 +3,10 @@ import type { PlaylistImportUnmatched } from "./PlaylistImportUnmatched";
 import type { PlaylistSummary } from "./PlaylistSummary";
 
 /**
- * 导入结果。`playlist = null` 表示用户取消了文件选择——**正常分支**，
- * 不是错误（与 `library_choose_root` 返回 null 同一语义）。
+ * 导入结果。`playlist = null` 有两种含义，都**不是错误**：
+ * ① 用户在文件选择框里取消（`matched = 0`、`unmatched` 为空）；
+ * ② 文件解析出来了，但一条路径都没匹配到曲库（`unmatched` 有内容，
+ *    提示用户先扫描曲库，不建空歌单）。
  *
  * `matched` 是真正落库的条数（已去重），`duplicates` 是因"已在歌单里"
  * 被跳过的条数——两个数必须分开给：导入 10 条显示匹配 8 条时，用户要能

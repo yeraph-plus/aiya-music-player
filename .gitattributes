@@ -11,6 +11,7 @@
 *.m4a binary
 *.ogg binary
 *.opus binary
+*.aiff binary
 *.dll binary
 *.exe binary
 *.node binary

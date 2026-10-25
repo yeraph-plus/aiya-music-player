@@ -1299,7 +1299,9 @@ fn playlist_clear(
 /// - 非 UTF-8 → `unsupported`（GBK 不做自动探测，docs/22 D5）
 /// - 含 `#EXT-X-` 标签 → `unsupported`（HLS 流媒体 manifest 不是静态歌单，
 ///   该走 FM 频道功能）
-/// - 一条都匹配不上 → `notFound`（提示先扫描曲库；**不**建空歌单）
+/// - 一条都匹配不上 → **不是错误**，回 `playlist = null` + 完整 unmatched 清单
+///   （清单是用户唯一的排查依据，塞进 ApiError 的 detail 就送不到结构化字段了）。
+///   库里没扫过、路径全错、全被 `..` 之类坑过，都走这一条。
 #[tauri::command]
 async fn playlist_import(
     app: AppHandle,
@@ -1395,9 +1397,15 @@ async fn playlist_import(
             }
         }
         if matched_ids.is_empty() {
-            return Err(aiya_data::DbError::Custom(
-                "没有一条路径能匹配到曲库——请确认曲库已扫描且包含这些文件".into(),
-            ));
+            // 一条都没匹配上：这是**正常结果**不是库错误（早期版本借
+            // DbError::Custom 的文案再 contains 判回来，等于自己造了个
+            // "解析文案"的反模式）。不建空歌单，清单原样带回去让 UI 说话。
+            return Ok(dto::playlist::PlaylistImportResult {
+                playlist: None,
+                matched: 0,
+                duplicates: 0,
+                unmatched,
+            });
         }
 
         // 歌单名 = 文件名去扩展名（create 内部已做去重/幂等）
@@ -1415,12 +1423,7 @@ async fn playlist_import(
             unmatched,
         })
     });
-    result.map_err(|e| match e {
-        aiya_data::DbError::Custom(msg) if msg.contains("没有一条路径") => {
-            dto::ApiError::not_found(msg)
-        }
-        other => dto::ApiError::from(other),
-    })
+    result.map_err(dto::ApiError::from)
 }
 
 /// 文件名去扩展名，导入歌单名的唯一来源。
@@ -1431,13 +1434,19 @@ fn file_stem_name(file_path: &str) -> String {
         .unwrap_or_else(|| "导入的歌单".into())
 }
 
-/// 导出歌单为 m3u/m3u8。格式与风格都是宽进参数（非法值回默认），因为
-/// UI 现在只有隐藏入口（正式按钮随导出歌单需求一起做，docs/22 G2）：
-/// - `format`: "m3u8"（默认）| "m3u" —— 内容相同，都是 UTF-8（D5 不做 GBK）
+/// 导出歌单为 m3u/m3u8。
+/// - `format`: "m3u8"（默认）| "m3u" —— 内容相同，都是 UTF-8（D5 不做 GBK），
+///   只有扩展名约定不同，所以作者自己在 `path` 里给扩展名
 /// - `style`: "absolute"（默认）| "relative" —— 相对路径锚定导出文件所在目录
 /// - `encoding`: 只收 "utf8"（参数位留给将来 GBK，D5）
+///
+/// 越界值一律 `invalid_arg`（静默回默认更害人：用户以为导出成了 m3u8）。
+///
+/// 为什么是 `async`：Tauri 的同步命令在**主线程**执行（命令宏默认
+/// `ExecutionContext::Blocking`），而这个命令要跨线程等 DB worker 再写盘——
+/// 扫描跑着的时候点导出会把窗口冻住。改成 async 就落到达 async runtime 上。
 #[tauri::command]
-fn playlist_export(
+async fn playlist_export(
     state: State<'_, AppState>,
     id: String,
     path: String,
@@ -1457,7 +1466,7 @@ fn playlist_export(
         Some("relative") => true,
         Some(other) => return Err(dto::ApiError::invalid_arg(format!("未知的导出风格：{other}"))),
     };
-    let _ = match format.as_deref() {
+    match format.as_deref() {
         None | Some("m3u8") | Some("m3u") => (),
         Some(other) => return Err(dto::ApiError::invalid_arg(format!("未知的导出格式：{other}"))),
     };

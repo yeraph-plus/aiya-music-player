@@ -26,6 +26,8 @@ import type {
   Lyrics,
   PlayerState,
   PlaylistAddResult,
+  PlaylistExportResult,
+  PlaylistImportResult,
   PlaylistSummary,
   QueueSnapshot,
   RevealResult,
@@ -518,6 +520,37 @@ export class MockBackend {
     if (!this.playlistItems.has(id)) return this.playlistDetail(id);
     this.playlistItems.set(id, []);
     return this.syncPlaylist(id);
+  }
+
+  /* ---------------- m3u 导入导出（docs/22 G2） ---------------- */
+
+  /**
+   * 预览不吃真文件：不传 `path` 就按"用户取消"回（浏览器没有系统文件选择器，
+   * 与 `library_choose_root` 同语义）；传了就造一份**假导入结果**——真落一个
+   * 歌单、真带一条未匹配项，让 UI 的结果弹层（N 匹配 / M 未匹配）有东西可渲染。
+   * 假数据仅此一处，字段语义与真宿主一致。
+   */
+  playlistImport(path?: string): PlaylistImportResult {
+    if (!path) return { playlist: null, matched: 0, duplicates: 0, unmatched: [] };
+    const name = path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || '导入的歌单';
+    const picked = this.tracks.slice(0, 3).map((t) => t.id);
+    const summary = this.playlistCreate(name, picked);
+    return {
+      playlist: summary,
+      matched: picked.length,
+      duplicates: 0,
+      unmatched: [{ line: 4, raw: 'D:/music/预览专用-未匹配.flac', reason: 'notFound' }],
+    };
+  }
+
+  /**
+   * 预览不写盘（浏览器沙箱里没有任意路径写权限），只回正确的形状让 UI 的
+   * 成功提示/计数能验；`count` 取自当前歌单真实条数。
+   */
+  playlistExport(id: string, path: string): PlaylistExportResult {
+    const count = this.playlistItems.get(id)?.length ?? 0;
+    if (count === 0) throw new Error('歌单是空的，没有可导出的曲目');
+    return { path, count };
   }
 
   /* ---------------- lyrics / history ---------------- */

@@ -199,7 +199,7 @@ impl PlayerActor {
         }
         self.bump_queue_version();
         if self.queue.is_empty() {
-            self.status = PlaybackStatus::Idle;
+            self.go_idle();
         } else {
             // 装载到引擎但暂停（autoplay=false → status=Paused）
             self.instruct_load(false, position_ms);
@@ -211,7 +211,9 @@ impl PlayerActor {
         self.queue.iter().map(|t| t.id.clone()).collect()
     }
 
-    /* ---------------- 内部工具 ---------------- */    fn current_track(&self) -> Option<&TrackRef> {
+    /* ---------------- 内部工具 ---------------- */
+
+    fn current_track(&self) -> Option<&TrackRef> {
         self.order
             .get(self.cursor)
             .and_then(|&i| self.queue.get(i))
@@ -287,8 +289,18 @@ impl PlayerActor {
             self.duration_ms = track.duration_ms.map(|d| d.max(0) as u64);
             self.error = None;
         } else {
-            self.status = PlaybackStatus::Idle;
+            self.go_idle();
         }
+    }
+
+    /// 回到"没有当前曲目"：状态 Idle，**音源类别也复位**。
+    ///
+    /// 不复位就会留下一个假象：停掉一路 FM 之后队列空了，界面还按
+    /// `source = stream` 渲染（进度条只读、时长位写"直播中"），
+    /// 和一个已经不存在的主播绑在一起。
+    fn go_idle(&mut self) {
+        self.status = PlaybackStatus::Idle;
+        self.source = AudioSource::File;
     }
 
     /* ---------------- 命令归约 ---------------- */
@@ -317,7 +329,7 @@ impl PlayerActor {
                     self.instruct_load(autoplay, 0);
                 } else {
                     // 队列尽头：停住 —— 必须下发 Stop，否则引擎继续把这首放完
-                    self.status = PlaybackStatus::Idle;
+                    self.go_idle();
                     self.position_ms = 0;
                     self.last_reported_ms = 0;
                     self.pending_stop = true;
@@ -366,7 +378,7 @@ impl PlayerActor {
                     self.queue = tracks;
                     let n = self.queue.len();
                     if n == 0 {
-                        self.status = PlaybackStatus::Idle;
+                        self.go_idle();
                         self.position_ms = 0;
                         self.last_reported_ms = 0;
                         self.pending_stop = true;
@@ -461,7 +473,7 @@ impl PlayerActor {
                         // cursor 原地指向"下一首"；删的是末尾则回退一格
                         self.cursor = cur_pos.min(self.order.len().saturating_sub(1));
                         if self.order.is_empty() {
-                            self.status = PlaybackStatus::Idle;
+                            self.go_idle();
                             self.position_ms = 0;
                             self.last_reported_ms = 0;
                             self.pending_stop = true;
@@ -518,7 +530,7 @@ impl PlayerActor {
                 if self.advance() {
                     self.instruct_load(true, 0);
                 } else {
-                    self.status = PlaybackStatus::Idle;
+                    self.go_idle();
                     self.position_ms = 0;
                     self.last_reported_ms = 0;
                     self.pending_stop = true; // 队尾：引擎必须真的停
@@ -608,6 +620,23 @@ mod tests {
     }
 
     #[test]
+    fn stream_source_resets_when_queue_is_cleared() {
+        // 队列里放一路 FM（http 路径）→ source=Stream
+        let mut fm = track("fm");
+        fm.path = "http://fm.test/live/stream.m3u8".into();
+        fm.duration_ms = None;
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll { tracks: vec![fm], start: 0 }));
+        assert_eq!(p.state().source, AudioSource::Stream, "http 路径必须判成流");
+
+        // 清空队列 → 不能继续声称自己是 stream（否则 UI 一直"直播中"）
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll { tracks: vec![], start: 0 }));
+        let s = p.state();
+        assert_eq!(s.status, PlaybackStatus::Idle);
+        assert_eq!(s.source, AudioSource::File, "队列空了，source 必须复位");
+    }
+
+    #[test]
     fn replace_all_plays_first_track() {
         let mut p = PlayerActor::new();
         p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
@@ -625,6 +654,22 @@ mod tests {
 
         p.reduce(PlayerCommand::Loaded { token, duration_ms: 180_000 });
         assert_eq!(p.state().status, PlaybackStatus::Playing);
+    }
+
+    /// 直播的 `Loaded.duration_ms = 0` 必须呈现成 `duration_ms = null`：
+    /// UI 靠"有时长才画进度条"决定进度条形态，`Some(0)` 会画出一条永远 0% 的条。
+    #[test]
+    fn loaded_zero_duration_becomes_none_for_streams() {
+        let mut fm = track("fm");
+        fm.path = "http://fm.test/live/stream.m3u8".into();
+        fm.duration_ms = None;
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll { tracks: vec![fm], start: 0 }));
+        let (token, _, _, _) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded { token, duration_ms: 0 });
+        let s = p.state();
+        assert_eq!(s.duration_ms, None, "直播无总时长 → null");
+        assert_eq!(s.source, AudioSource::Stream);
     }
 
     #[test]

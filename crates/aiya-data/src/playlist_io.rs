@@ -10,6 +10,8 @@
 //! - HLS 流媒体 manifest（出现任何 `#EXT-X-` 标签）显式拒绝——它不是静态
 //!   播放列表，静默解析出一个只含一个 URL 的"歌单"更害人
 //! - `#EXTINF:<秒>,<artist> - <title>`，分隔容错：没有 " - " 就整段是标题
+//! - 相对路径按 m3u 所在目录展开后**做词法规范化**（`.`/`..`）：不规范化的话
+//!   `../a.flac` 与库里落账的绝对路径字符串不等，精确对账会把整份歌单报成未匹配
 
 use std::path::{Path, PathBuf};
 
@@ -104,7 +106,15 @@ fn parse_extinf(rest: &str) -> (Option<i64>, Option<String>, Option<String>) {
     (duration_sec, artist, title)
 }
 
-/// 条目行 → 目标路径：URL 解码 + 相对路径锚定 base_dir。
+/// 条目行 → 目标路径：URL 解码 + 相对路径锚定 base_dir + **词法规范化**。
+///
+/// 规范化不是洁癖，是正确性要求：`D:/m/playlists/../a.flac` 与扫描器落库的
+/// `D:/m/a.flac` 是同一个文件，但字符串不等 → 精确对账（path_lower）会把
+/// 整份"歌单放在子目录、条目写 `../`"的 m3u 全部报成未匹配。
+///
+/// 为什么用词法而不是 `fs::canonicalize`：① canonicalize 在 Windows 上返回
+/// `\\?\D:\...` 前缀，还得再剥一次；② 它要求文件存在，缺一个文件就把整条
+/// 路径变成不可解析；③ 我们只关心 `.`/`..`/分隔符，符号链接交给扫描器。
 fn entry_target(raw: &str, base_dir: &Path) -> PathBuf {
     let decoded = percent_decode(raw.trim());
     if let Some(rest) = decoded.strip_prefix("file://") {
@@ -114,14 +124,31 @@ fn entry_target(raw: &str, base_dir: &Path) -> PathBuf {
         } else {
             rest
         };
-        return PathBuf::from(p);
+        return normalize_lexical(Path::new(p));
     }
     let p = PathBuf::from(&decoded);
-    if p.is_absolute() {
-        p
-    } else {
-        base_dir.join(p)
+    normalize_lexical(&if p.is_absolute() { p } else { base_dir.join(p) })
+}
+
+/// 纯词法规范化：吃掉 `.`、消掉 `..`（前面有可消的普通段时），不动文件系统。
+/// 相对路径开头多余的 `..` 原样保留——那是真的上不去了。
+fn normalize_lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut parts: Vec<Component<'_>> = Vec::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => match parts.last() {
+                // 只吃普通段：`C:\..` 或 `/..` 或开头的 `..` 都保留（已到根）
+                Some(Component::Normal(_)) => {
+                    parts.pop();
+                }
+                _ => parts.push(c),
+            },
+            other => parts.push(other),
+        }
     }
+    parts.iter().map(|c| c.as_os_str()).collect()
 }
 
 /// 最小 %XX 解码器：非法序列（% 后不是两个十六进制位）原样保留。
@@ -211,6 +238,12 @@ mod tests {
         parse_playlist(text, Path::new("/m")).unwrap()
     }
 
+    /// 期望值也走一遍同样的规范化：components 重组会把 `/` 变成 `\`，
+    /// 直接写字面量比的是分隔符风格，不是语义。
+    fn p(s: &str) -> PathBuf {
+        normalize_lexical(Path::new(s))
+    }
+
     #[test]
     fn basic_extinf_artist_title() {
         let es = parse("#EXTM3U\n#EXTINF:180,周杰伦 - 晴天\nsongs/qing.mp3\n\n# 注释\nbare.flac\n");
@@ -219,9 +252,9 @@ mod tests {
         assert_eq!(es[0].duration_sec, Some(180));
         assert_eq!(es[0].artist.as_deref(), Some("周杰伦"));
         assert_eq!(es[0].title.as_deref(), Some("晴天"));
-        assert_eq!(es[0].target, PathBuf::from("/m/songs/qing.mp3"), "相对路径锚定 base_dir");
+        assert_eq!(es[0].target, p("/m/songs/qing.mp3"), "相对路径锚定 base_dir");
         assert_eq!(es[1].title, None, "裸路径没有 EXTINF 就没有标题");
-        assert_eq!(es[1].target, PathBuf::from("/m/bare.flac"));
+        assert_eq!(es[1].target, p("/m/bare.flac"));
     }
 
     #[test]
@@ -238,8 +271,40 @@ mod tests {
     #[test]
     fn url_and_percent_decoding() {
         let es = parse("file:///C:/My%20Music/a.flac\nC:/My%20Music/b.flac\n");
-        assert_eq!(es[0].target, PathBuf::from("C:/My Music/a.flac"));
-        assert_eq!(es[1].target, PathBuf::from("C:/My Music/b.flac"));
+        assert_eq!(es[0].target, p("C:/My Music/a.flac"));
+        assert_eq!(es[1].target, p("C:/My Music/b.flac"));
+    }
+
+    /// 相对路径必须规范化：`..` 不消掉的话，导入侧按 path_lower 精确对账
+    /// 永远匹配不上扫描器落库的绝对路径（这是"歌单放子目录"的常规形态）。
+    #[test]
+    fn parent_dir_is_normalized_against_playlist_dir() {
+        let base = Path::new("D:/m/playlists");
+        let es = parse_playlist(
+            "#EXTM3U\n../a.flac\n./b.flac\n../../c.flac\nsub/../d.flac\n",
+            base,
+        )
+        .unwrap();
+        assert_eq!(es[0].target, p("D:/m/a.flac"), ".. 要消掉");
+        assert_eq!(es[1].target, p("D:/m/playlists/b.flac"), ". 要吃掉");
+        assert_eq!(es[2].target, p("D:/c.flac"), "连级 .. 两个层级都要消");
+        assert_eq!(es[3].target, p("D:/m/playlists/d.flac"));
+    }
+
+    /// 规范化不越界：到根之后 `..` 保留原样，不许静默上移成别处。
+    #[test]
+    fn normalization_does_not_climb_past_root() {
+        // 相对 base 上不去的 .. 保留（消掉就等于凭空吞了真实层级）
+        assert_eq!(
+            parse_playlist("../../x.flac\n", Path::new("m")).unwrap()[0].target,
+            Path::new("..").join("x.flac")
+        );
+        let t = parse_playlist("D:/../x.flac\n", Path::new("m")).unwrap()[0].target.clone();
+        assert!(t.is_absolute(), "盘符根不可被 .. 吃掉：{t:?}");
+        assert!(
+            t.to_string_lossy().contains(".."),
+            "根之后的 .. 应保留而不是静默上移：{t:?}"
+        );
     }
 
     #[test]
@@ -319,6 +384,6 @@ mod tests {
         assert_eq!(es[0].duration_sec, Some(200));
         assert_eq!(es[0].artist.as_deref(), Some("歌手甲"));
         assert_eq!(es[0].title.as_deref(), Some("歌一"));
-        assert_eq!(es[1].target, PathBuf::from("D:/m/sub/b.mp3"), "相对路径回读要落回原位");
+        assert_eq!(es[1].target, p("D:/m/sub/b.mp3"), "相对路径回读要落回原位");
     }
 }

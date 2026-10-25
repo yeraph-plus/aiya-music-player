@@ -1,13 +1,17 @@
-//! 解码器测试：手工构造 WAV（symphonia 的 wav demuxer + pcm 解码器）。
-//! MP3/FLAC 路径结构相同（Probe→decode→seek），真文件在开窗验证时覆盖。
+//! 解码器测试，三块：
 //!
-//! 错误分类测试（docs/22 G1）也在这里：没有 ffmpeg 造不出 Vorbis/ALAC 之外的
-//! 高频"收了放不出"样本，但 **OGG-Opus 可以纯手工拼出来**（容器页 + OpusHead
-//! + OpusTags + 一页假数据，CRC32 是 15 行代码）——这正好走完整 probe→make
-//! 失败路径，锁定 codecUnsupported 的分类与格式名，不需要任何二进制 fixture。
+//! 1. **手工构造 WAV**（RIFF 十几行就能拼）：验 symphonia 的 wav demuxer +
+//!    pcm 解码器 + seek 语义。
+//! 2. **错误分类**（docs/22 G1）：OGG-Opus 可以纯手工拼出来（容器页 +
+//!    OpusHead + OpusTags + 一页假数据，CRC32 是 15 行代码），正好走完整
+//!    probe→make 失败路径，锁定 `codecUnsupported` 的分类与格式名。
+//! 3. **真文件 fixture**（Vorbis / ALAC / AAC / MP3 / AIFF）：熵编码拼不出来，
+//!    用 `tests/fixtures/gen_fixtures.py` 一次性生成并入库（约 111KB）。这几个
+//!    格式此前"编进来了但没有任何样本跑过"——只有真解码一遍才算验过。
+//!    ALAC/AAC 那份还顺手暴露了 MP4 容器不报通道数 → SampleBuffer 除零 panic。
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use aiya_audio::{AudioErrorKind, DecodedStream};
 
@@ -175,4 +179,172 @@ fn missing_file_classified_as_file_missing() {
     let path = dir.path().join("no-such-file.mp3");
     let err = DecodedStream::open_file(&path).unwrap_err();
     assert_eq!(err.kind(), AudioErrorKind::FileMissing);
+}
+
+/* ------------- 真文件 fixture：Vorbis / ALAC / AAC / MP3 / AIFF ------------- */
+
+/// fixture 的约定（与 gen_fixtures.py 顶部的常量一一对应）：
+/// 44.1kHz 单声道，0.6s，前 0.3s 是 1kHz 正弦（幅度 0.5），后 0.3s 静音。
+const FX_SR: u32 = 44_100;
+const FX_FRAMES: usize = 26_460; // 600ms × 44.1kHz
+const FX_TONE_END: usize = 300 * (FX_SR as usize) / 1000;
+const FX_TAIL_START: usize = 350 * (FX_SR as usize) / 1000;
+
+/// 每个 fixture 该报多少时长，以及**为什么是这个数**。
+///
+/// 这几个数字是这批 fixture 的直接产出：偏差全部来自容器/编码器口径，
+/// 但每一个都得能解释——否则下次有人（包括未来的我）会把它当 bug 重查一遍：
+///
+/// - vorbis 600：gapless 打开后按末页 granule 算，精确
+/// - alac   600：MP4 的 stts 精确
+/// - mp3    600：LAME 头 + gapless trim（576 样本编码器延迟）后精确
+/// - aiff   600：裸 PCM，data 字节数 / 帧长
+/// - aac    **623**：MP4 的 elst（prime/padding 裁剪表）symphonia 0.5.5 不读，
+///   多出 1188 样本。已知偏差——AAC 的进度条总长会多 4%，末尾多 27ms 静音；
+///   真要修得等 0.6（或者自己解析 elst），不在本批范围
+const FX_EXPECT: &[(&str, u64)] = &[
+    ("tone-vorbis.ogg", 600),
+    ("tone-alac.m4a", 600),
+    ("tone-mp3.mp3", 600),
+    ("tone-pcm.aiff", 600),
+    ("tone-aac.m4a", 623),
+];
+
+fn fixture(name: &str) -> PathBuf {
+    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
+    assert!(
+        p.exists(),
+        "缺 fixture {p:?}——在 tests/fixtures/ 下跑 gen_fixtures.py 生成（见那边的文件头）"
+    );
+    p
+}
+
+/// 把一条流读到底：返回 (总帧数, 正弦段峰值, 静音段峰值)。
+/// 取峰值而不是"有没有信号"：这几个都是有损/无损压缩，边界处有窗函数
+/// 过渡，只看 bool 会把"几乎全静音"的坏解码也判成通过。
+fn decode_stats(path: &Path) -> (usize, f32, f32) {
+    let mut dec = DecodedStream::open_file(path)
+        .unwrap_or_else(|e| panic!("{path:?} 打不开：{e}（kind={:?}）", e.kind()));
+    // 通道数在这里就是硬断言：MP4 容器不报通道数时，报错会变成 2ch
+    // （曾经直接除零 panic），单声道 fixture 正好锁死这条
+    assert_eq!(dec.sample_rate(), FX_SR, "{path:?} 采样率");
+    assert_eq!(dec.channels(), 1, "{path:?} 声道数");
+
+    let (mut frames, mut tone_peak, mut tail_peak) = (0usize, 0f32, 0f32);
+    while let Some(samples) = dec.next_packet().unwrap() {
+        for (i, v) in samples.iter().enumerate() {
+            let f = frames + i; // 单声道：sample 下标 == 帧下标
+            if f < FX_TONE_END {
+                tone_peak = tone_peak.max(v.abs());
+            } else if f >= FX_TAIL_START {
+                tail_peak = tail_peak.max(v.abs());
+            }
+        }
+        frames += samples.len();
+    }
+    (frames, tone_peak, tail_peak)
+}
+
+/// 共用的验收口径：**真的解出 0.6s、真的有两段不同内容**。
+///
+/// 帧数写成"不许少、最多多两包"而不是 ±1%：Vorbis 的 OGG demuxer 在 0.5.5
+/// 里没把尾部 end-trim 交到解码器手上（实测多 740 帧≈17ms），AAC 更是整段
+/// prime/padding 都在（多 1188 帧）。我们不按 duration 硬裁——那个值对没有
+/// Xing 头的 MP3 是估算的，硬裁会切掉真实音频。少一帧就说明丢音，必须失败。
+fn check_fixture(name: &str) {
+    let path = fixture(name);
+    let (frames, tone_peak, tail_peak) = decode_stats(&path);
+    assert!(
+        (FX_FRAMES..=FX_FRAMES + 2 * 1024).contains(&frames),
+        "{name} 解码出 {frames} 帧，期望 {FX_FRAMES}~{}",
+        FX_FRAMES + 2 * 1024
+    );
+    assert!(tone_peak > 0.3, "{name} 正弦段峰值只有 {tone_peak}——信号没解出来");
+    assert!(tail_peak < 0.02, "{name} 静音段峰值 {tail_peak}——尾部不是静音，解错了");
+}
+
+#[test]
+fn vorbis_fixture_decodes() {
+    check_fixture("tone-vorbis.ogg");
+}
+
+#[test]
+fn alac_fixture_decodes() {
+    // isomp4 demuxer + alac 解码器：这条曾经在打开阶段就 panic（容器不报通道数）
+    check_fixture("tone-alac.m4a");
+}
+
+#[test]
+fn aac_fixture_decodes() {
+    // 同一个 MP4 容器、另一条编码器路径（AAC 才是 Apple 生态的主力格式）
+    check_fixture("tone-aac.m4a");
+}
+
+#[test]
+fn mp3_fixture_decodes() {
+    // libmp3lame：这条验 gapless 的编码器延迟裁剪（前 576 样本静音）
+    check_fixture("tone-mp3.mp3");
+}
+
+#[test]
+fn aiff_fixture_decodes() {
+    // AIFF = 大端 PCM：这条同时验字节序（错的话峰值会变成噪声或者 0）
+    check_fixture("tone-pcm.aiff");
+}
+
+/// 五个格式都必须报告可 seek，且 seek 到位后内容对得上。
+/// 单独测是因为 seek 走各自不同的索引（Vorbis 用页 granule、MP4 用 stts、
+/// AIFF 直接算字节偏移）——解码对不代表能拖。
+#[test]
+fn all_fixtures_seek() {
+    for (name, _) in FX_EXPECT {
+        let mut dec = DecodedStream::open_file(&fixture(name)).unwrap();
+        assert!(dec.seekable(), "{name} 报不可 seek");
+
+        // 拖进正弦段：必须还有信号
+        dec.seek_ms(100).unwrap();
+        let mut tone_peak = 0f32;
+        for _ in 0..8 {
+            match dec.next_packet().unwrap() {
+                Some(s) => tone_peak = tone_peak.max(s.iter().fold(0f32, |a, v| a.max(v.abs()))),
+                None => break,
+            }
+        }
+        assert!(tone_peak > 0.3, "{name} seek 到 100ms 后峰值只有 {tone_peak}");
+
+        // 拖进静音段：必须安静。容差比 check_fixture 松，因为 seek 落点可能
+        // 落在窗函数过渡里，前一两包带一点余音属于正常（这也是我们不开
+        // "按 duration 硬裁"的同一个理由：边界本来就模糊）。
+        dec.seek_ms(500).unwrap();
+        let mut tail_peak = 0f32;
+        for _ in 0..8 {
+            match dec.next_packet().unwrap() {
+                Some(s) => tail_peak = tail_peak.max(s.iter().fold(0f32, |a, v| a.max(v.abs()))),
+                None => break,
+            }
+        }
+        assert!(tail_peak < 0.05, "{name} seek 到 500ms 后峰值 {tail_peak}——拖到静音区还在响");
+
+        // seek 之后位置只能前进：Ogg/MP4 的落点包可能早于目标，吐出去
+        // 就是"拖到 5:00 先听到 4:59"，所以 next_packet 会丢到目标之后
+        assert!(
+            dec.position_ms() >= 500,
+            "{name} seek 到 500ms 之后位置回退到 {}ms",
+            dec.position_ms()
+        );
+    }
+}
+
+/// duration_ms：能算就得算对。这个值直接决定进度条总长和"拖到最后 5 秒"
+/// 能不能用，报 0 就等于没有进度条。每个格式的期望值与理由见 [`FX_EXPECT`]。
+#[test]
+fn fixture_durations_are_known() {
+    for (name, expect) in FX_EXPECT {
+        let dec = DecodedStream::open_file(&fixture(name)).unwrap();
+        let d = dec.duration_ms();
+        assert!(
+            d.abs_diff(*expect) <= 15,
+            "{name} duration_ms = {d}，期望 {expect}±15（差太多就是容器时长没读对）"
+        );
+    }
 }

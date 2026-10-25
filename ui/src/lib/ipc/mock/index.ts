@@ -80,6 +80,10 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return mock.playlistMove(a.id as string, a.from as number, a.to as number);
     case 'playlist_clear':
       return mock.playlistClear(a.id as string);
+    case 'playlist_import':
+      return mock.playlistImport(a.path as string | undefined);
+    case 'playlist_export':
+      return mock.playlistExport(a.id as string, a.path as string);
 
     /* ---------------- player ---------------- */
     case 'player_state':

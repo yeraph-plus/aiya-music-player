@@ -183,7 +183,8 @@ export const ipc = {
     clear: (id: string) => call<PlaylistSummary>('playlist_clear', { id }),
     /**
      * 导入 m3u/m3u8 播放列表。不传 `path` 时由宿主弹原生文件选择框；
-     * 结果里 `playlist = null` 表示用户取消了选择——正常分支不是错误。
+     * `playlist = null` 有两种含义，都不是错误：用户取消（unmatched 为空），
+     * 或一条路径都没匹配到曲库（unmatched 有内容，提示先扫描）。
      * 未匹配条目带行号和原因（`notFound`），UI 自己决定怎么展示。
      */
     import: (path?: string) => call<PlaylistImportResult>('playlist_import', { path }),
