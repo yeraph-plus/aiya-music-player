@@ -4,4 +4,21 @@
  * 音频规格（播放条徽章/规格显示；对齐 contracts 的 AudioFormat）。
  * 列表查询不填（None），只有播放条数据源（单曲级查询）会带。
  */
-export type TrackAudio = { codec: string | null, container: string | null, sampleRate: number | null, bitsPerSample: number | null, bitrate: number | null, channels: number | null, };
+export type TrackAudio = { codec: string | null, container: string | null, sampleRate: number | null, bitsPerSample: number | null, 
+/**
+ * **单位 kbps**（不是 bps）。两条来源一致：lofty 的 `audio_bitrate()`
+ * 文档写 `(kbps)`，beets 的 `bitrate` 字段文档写 "in kilobits per second"。
+ * 展示时直接取整即可，别再除 1000（前端曾这么干，320 kbps 的 MP3 显示成 0）。
+ */
+bitrate: number | null, channels: number | null, 
+/**
+ * 三态：`Some(true)` 无损 / `Some(false)` 有损 / `None` 认不出来。
+ *
+ * UI 的规格文字、Hi-Res 高亮、tooltip 的「无损/有损」**只看这个字段**，
+ * 不看 `bits_per_sample`——有损编码也会报 16 bit（那是解码器输出位深），
+ * 按位深分支会把 m4a 标成「44.1 kHz / 16 bit / 无损」。
+ *
+ * 由 [`TrackAudio::infer_lossless`] 在出口派生，不落库（理由见该函数）。
+ * 2026-10-25 补：Tauri 重写时整个字段丢了，导致播放条徽章恒为「未知」。
+ */
+lossless: boolean | null, };

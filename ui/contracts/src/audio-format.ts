@@ -95,8 +95,13 @@ export function formatSampleRate(hz: number): string {
  * `bitsPerSample = 16`，那是"解码器输出位深"，不是文件精度。按位深分支
  * 会把 m4a 标成 "44.1 kHz / 16 bit"，是错的。
  *
- * 无损也不显示码率：FLAC 的 bitrate 是文件平均码率（44.1k/16 实测约 96 kbps），
+ * 无损也不显示码率：FLAC 的 bitrate 是文件平均码率（44.1k/16 实测约 900 kbps），
  * 拿它当音质展示会得出"FLAC 不如 320k MP3"的荒谬结论。
+ *
+ * **`bitrate` 的单位是 kbps，不是 bps**（Lofty 的 `audio_bitrate()` 文档写明
+ * `(kbps)`，beets 的 `bitrate` 字段文档也写 "in kilobits per second"）。
+ * 这里曾经写过 `/ 1000`，于是 320 kbps 的 MP3 显示成 "0 kbps"、
+ * 48k/32bit 的 WAV 显示成 "3 kbps" —— 2026-10-25 实测发现。
  */
 export function formatAudioSpec(audio: AudioFormat | null | undefined): string | null {
   if (!audio) return null;
@@ -109,7 +114,7 @@ export function formatAudioSpec(audio: AudioFormat | null | undefined): string |
     return parts.length > 0 ? parts.join(' / ') : null;
   }
 
-  if (audio.bitrate && audio.bitrate > 0) return `${Math.round(audio.bitrate / 1000)} kbps`;
+  if (audio.bitrate && audio.bitrate > 0) return `${Math.round(audio.bitrate)} kbps`;
   // 有损但没有码率（部分 Ogg/Opus 变码率文件）：退回采样率，比空着强
   return audio.sampleRate ? formatSampleRate(audio.sampleRate) : null;
 }
@@ -136,7 +141,8 @@ export function audioTooltip(audio: AudioFormat | null | undefined): string | nu
   if (audio.channels) parts.push(`${audio.channels} 声道`);
   parts.push(audio.lossless === true ? '无损' : audio.lossless === false ? '有损' : '未知');
   if (audio.bitrate && audio.bitrate > 0) {
-    const kbps = Math.round(audio.bitrate / 1000);
+    // 单位 kbps（见 formatAudioSpec 的注释），不需要再除 1000
+    const kbps = Math.round(audio.bitrate);
     parts.push(audio.lossless === true ? `平均码率 ${kbps} kbps` : `${kbps} kbps`);
   }
   return parts.join(' · ');

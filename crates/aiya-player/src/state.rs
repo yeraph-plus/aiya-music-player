@@ -38,10 +38,114 @@ pub struct TrackAudio {
     pub sample_rate: Option<i64>,
     #[ts(type = "number | null")]
     pub bits_per_sample: Option<i64>,
+    /// **单位 kbps**（不是 bps）。两条来源一致：lofty 的 `audio_bitrate()`
+    /// 文档写 `(kbps)`，beets 的 `bitrate` 字段文档写 "in kilobits per second"。
+    /// 展示时直接取整即可，别再除 1000（前端曾这么干，320 kbps 的 MP3 显示成 0）。
     #[ts(type = "number | null")]
     pub bitrate: Option<i64>,
     #[ts(type = "number | null")]
     pub channels: Option<i64>,
+    /// 三态：`Some(true)` 无损 / `Some(false)` 有损 / `None` 认不出来。
+    ///
+    /// UI 的规格文字、Hi-Res 高亮、tooltip 的「无损/有损」**只看这个字段**，
+    /// 不看 `bits_per_sample`——有损编码也会报 16 bit（那是解码器输出位深），
+    /// 按位深分支会把 m4a 标成「44.1 kHz / 16 bit / 无损」。
+    ///
+    /// 由 [`TrackAudio::infer_lossless`] 在出口派生，不落库（理由见该函数）。
+    /// 2026-10-25 补：Tauri 重写时整个字段丢了，导致播放条徽章恒为「未知」。
+    pub lossless: Option<bool>,
+}
+
+/// 按 codec / container 判断是否无损时用到的关键词表。
+///
+/// 为什么是 `contains` 而不是精确相等：两边来源的取值都很脏——
+/// 扫描器写 lofty 的 `FileType` Debug 名（`Flac` / `Mpeg` / `Wav`），
+/// beets 写 `format`（`FLAC` / `MP3` / `ALAC`），标签里还可能冒出来
+/// `MPEG 1 Layer 3`、`AAC (Advanced Audio Coding)` 这类长串。
+///
+/// 顺序要求：`aac` 必须在 `mpeg` 前判过（`MPEG-4 AAC` 同时含两个词，
+/// 但 AAC 有损、MPEG Layer 3 也有损，结论一致，故此处不敏感）；
+/// 真正敏感的是 `mp4`（ALAC 无损 / AAC 有损都可能），所以它**不在**这两张表里。
+const LOSSLESS_HINTS: &[&str] = &[
+    "flac",
+    "alac",
+    "pcm",
+    "linear",
+    "aiff",
+    "aif",
+    "wav",   // 同时覆盖 lofty 的 `Wav` 与标签里的 `WAVE`
+    "dsd",
+    "dsf",
+    "dff",
+    "wavpack",
+    "monkey", // Monkey's Audio
+    "ape",    // 同上：lofty 的 FileType::Ape 就写作 `Ape`，无其它 codec 名含此串
+    "tta",
+    "shorten",
+];
+
+const LOSSY_HINTS: &[&str] = &[
+    "mp3",
+    "mpeg",
+    "layer 3",
+    "layer iii",
+    "aac",
+    "opus",
+    "vorbis",
+    "wma",
+    "windows media",
+    "atrac",
+    "musepack",
+    "mpc",
+    "speex",
+    "ac-3",
+    "eac3",
+    "amr",
+];
+
+impl TrackAudio {
+    /// 按 codec / container 派生「是否无损」。认不出返回 `None`。
+    ///
+    /// **为什么不存一列 `lossless`**：它是 `codec`/`container` 的纯函数，
+    /// 加列等于让同一事实有两个来源（beets 改 codec 后列不跟着变，或者反过来），
+    /// 还要 schema 迁移 + 老库回填 + 扫描器/beets 两条写路径都记得维护它。
+    /// 派生则永远和 codec 一致，代价是每次查询算一次字符串匹配（微秒级）。
+    ///
+    /// **为什么必须保守**：用户在拿这个字段判断音质。误判 `true` 会把 AAC
+    /// 标成「无损 / 44.1 kHz / 16 bit」，比老实显示「未知」更糟。所以
+    /// - codec 认得出 → 按 codec 判；
+    /// - codec 缺失/不认识 → 只有「容器本身只承载无损编码」时才敢说 `true`；
+    /// - `Mp4`/`M4a` 这种同时装着 ALAC 与 AAC 的容器 → `None`，宁可不说。
+    pub fn infer_lossless(codec: Option<&str>, container: Option<&str>) -> Option<bool> {
+        fn hit(haystack: &str, hints: &[&str]) -> bool {
+            hints.iter().any(|h| haystack.contains(h))
+        }
+
+        let codec = codec.unwrap_or_default().trim().to_ascii_lowercase();
+        if !codec.is_empty() {
+            if hit(&codec, LOSSLESS_HINTS) {
+                return Some(true);
+            }
+            if hit(&codec, LOSSY_HINTS) {
+                return Some(false);
+            }
+        }
+
+        let container = container.unwrap_or_default().trim().to_ascii_lowercase();
+        if container.is_empty() {
+            return None;
+        }
+        // 容器兜底：扫描器不填 codec（`container` 才存 lofty 的 FileType），
+        // 所以这条分支是「只跑过扫描、还没跑 beets」时的**主路径**。
+        if hit(&container, LOSSLESS_HINTS) {
+            return Some(true);
+        }
+        if hit(&container, LOSSY_HINTS) {
+            return Some(false);
+        }
+        // Mp4 / M4a / Ogg 之类：容器底下无损有损都有，不猜
+        None
+    }
 }
 
 /// 队列元素：Track 的最小子集（**不含 path**，path 只在宿主内部流转）。
@@ -247,6 +351,7 @@ mod tests {
                     bits_per_sample: Some(24),
                     bitrate: None,
                     channels: Some(2),
+                    lossless: Some(true),
                 }),
                 path: "D:/m/a.flac".into(),
             }),
@@ -264,5 +369,66 @@ mod tests {
         assert!(v.get("positionMs").is_some());
         assert!(v.get("durationMs").is_some());
         assert!(v.get("queueLength").is_some());
+    }
+
+    /// `lossless` 必须真的出现在 wire 上。
+    ///
+    /// 这条断言存在的理由：2026-10-25 之前 `TrackAudio` 根本没有这个字段，
+    /// 而 TS 侧把它当存在（先是必填、后来被改成可选），于是播放条的
+    /// 无损/有损徽章恒显示「未知」，跨了一个多月没人发现——因为**没有任何
+    /// 测试在检查 payload 里有这个键**。形状断言比修 bug 本身更重要。
+    #[test]
+    fn audio_payload_carries_lossless() {
+        let audio = TrackAudio {
+            codec: Some("flac".into()),
+            container: Some("Flac".into()),
+            sample_rate: Some(44100),
+            bits_per_sample: Some(16),
+            bitrate: Some(900_000),
+            channels: Some(2),
+            lossless: TrackAudio::infer_lossless(Some("flac"), Some("Flac")),
+        };
+        let v = serde_json::to_value(&audio).unwrap();
+        assert_eq!(v["lossless"], true, "lossless 必须下发，否则 UI 只能显示「未知」");
+        assert_eq!(v["bitsPerSample"], 16);
+    }
+
+    /// 派生表：同一份数据来自两条写路径，取值风格完全不同，必须都能认。
+    ///
+    /// - 「只扫描」：`codec` 恒 NULL，`container` 是 lofty 的 `FileType` Debug 名
+    ///   （`Flac` / `Mpeg` / `Wav` / `Mp4`）→ 兜底分支才是这类用户的主路径
+    /// - 「跑过 beets」：`codec` 是 beets 的 `format`（`FLAC` / `MP3` / `ALAC`），
+    ///   可能带标签里的长名（`MPEG 1 Layer 3`）
+    #[test]
+    fn infer_lossless_covers_both_write_paths() {
+        let f = TrackAudio::infer_lossless;
+
+        // --- 只扫描（codec=NULL，container=lofty FileType）---
+        assert_eq!(f(None, Some("Flac")), Some(true), "FLAC 文件");
+        assert_eq!(f(None, Some("Wav")), Some(true), "WAV 文件");
+        assert_eq!(f(None, Some("Aiff")), Some(true), "AIFF 文件");
+        assert_eq!(f(None, Some("Dsf")), Some(true), "DSD 文件");
+        assert_eq!(f(None, Some("WavPack")), Some(true), "WavPack 文件");
+        assert_eq!(f(None, Some("Mpeg")), Some(false), "lofty 对 MP3 报 Mpeg");
+        assert_eq!(f(None, Some("Aac")), Some(false), "裸 AAC 文件");
+        assert_eq!(f(None, Some("Opus")), Some(false), "lofty 已把 Opus 从 Ogg 里分出");
+        assert_eq!(f(None, Some("Vorbis")), Some(false));
+        assert_eq!(f(None, Some("Mpc")), Some(false), "Musepack 是有损");
+
+        // --- Mp4 必须拒答：ALAC 无损 / AAC 有损共用这个容器 ---
+        assert_eq!(f(None, Some("Mp4")), None, "Mp4 里可能是 ALAC 也可能是 AAC，不猜");
+
+        // --- 跑过 beets（codec=beets format）---
+        assert_eq!(f(Some("FLAC"), None), Some(true));
+        assert_eq!(f(Some("ALAC"), None), Some(true), "ALAC 靠 codec 才能判，容器只说 Mp4");
+        assert_eq!(f(Some("MP3"), None), Some(false));
+        assert_eq!(f(Some("AAC"), None), Some(false));
+        assert_eq!(f(Some("MPEG 1 Layer 3"), None), Some(false), "标签里的长名");
+        assert_eq!(f(Some("PCM"), Some("Mpeg")), Some(true), "codec 优先于容器");
+
+        // --- 认不出就 None，不许猜 ---
+        assert_eq!(f(None, None), None);
+        assert_eq!(f(Some(""), Some("  ")), None, "空白串等于没有");
+        assert_eq!(f(Some("SomeNewCodec2027"), Some("Ogg")), None);
     }
 }

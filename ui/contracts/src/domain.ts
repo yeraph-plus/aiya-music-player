@@ -61,19 +61,18 @@ export interface AudioFormat {
   bitrate: number | null;
   channels: number | null;
   /**
-   * 三态：true 无损 / false 有损 / null 未补算。
+   * 三态：true 无损 / false 有损 / null 认不出来。
    *
    * 无损/有损的分流**只能看这个字段**：有损容器（AAC）也会报
    * `bitsPerSample = 16`（解码器输出位深），按位深判断会把 m4a 标成
    * "44.1 kHz / 16 bit"。
    *
-   * **`?` 是 2026-10-25 补的，不是手滑**：Rust 生成的 `TrackAudio`
-   * （`crates/aiya-player/src/state.rs`）**没有这个字段** —— Tauri 重写时
-   * 丢了，所以运行期它恒为 `undefined`，判断一律落到"未知"。
-   * 把这里改成可选，是让类型如实反映 payload，而不是继续假装后端有值。
-   * 真正的修法是在 Rust 侧按 codec 派生并加进 DTO（待办见 docs/18 §9）。
+   * 由后端 `TrackAudio::infer_lossless` 在出口按 codec/container 派生，
+   * 不落库（`crates/aiya-player/src/state.rs` 里写了为什么不加列）。
+   * 2026-10-25 之前 Rust 侧整个字段缺失（Tauri 重写时丢了），这里曾一度
+   * 被改成可选来"如实反映 payload"——那是治标。现在后端补齐，这里回到必填。
    */
-  lossless?: boolean | null;
+  lossless: boolean | null;
 }
 
 export interface AlbumSummary {

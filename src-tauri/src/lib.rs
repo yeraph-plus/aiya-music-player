@@ -675,18 +675,22 @@ fn library_tracks(
                     |r| {
                         let track = aiya_data::repo::row_to_track(r)?;
                         let codec: Option<String> = r.get(17)?;
+                        let container: Option<String> = r.get(18)?;
                         let sample_rate: Option<i64> = r.get(19)?;
                         // 全空 → None（标签里没有规格信息），而不是发一堆 null
                         let audio = if codec.is_none() && sample_rate.is_none() {
                             None
                         } else {
+                            let lossless =
+                                aiya_player::TrackAudio::infer_lossless(codec.as_deref(), container.as_deref());
                             Some(aiya_player::TrackAudio {
                                 codec,
-                                container: r.get::<_, Option<String>>(18)?,
+                                container,
                                 sample_rate,
                                 bits_per_sample: r.get::<_, Option<i64>>(20)?,
                                 bitrate: r.get::<_, Option<i64>>(21)?,
                                 channels: r.get::<_, Option<i64>>(22)?,
+                                lossless,
                             })
                         };
                         Ok(dto::TrackDetail::new(track, audio))
@@ -1409,6 +1413,10 @@ fn fetch_track_refs(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_pla
                     let codec: Option<String> = r.get(8)?;
                     let container: Option<String> = r.get(9)?;
                     let audio = if codec.is_some() || container.is_some() {
+                        let lossless = aiya_player::TrackAudio::infer_lossless(
+                            codec.as_deref(),
+                            container.as_deref(),
+                        );
                         Some(aiya_player::TrackAudio {
                             codec,
                             container,
@@ -1416,6 +1424,7 @@ fn fetch_track_refs(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_pla
                             bits_per_sample: r.get(11)?,
                             bitrate: r.get(12)?,
                             channels: r.get(13)?,
+                            lossless,
                         })
                     } else {
                         None

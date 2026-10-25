@@ -150,6 +150,57 @@ fn player_state_error_is_structured_and_path_is_hidden() {
     assert!(v["updatedAtMs"].is_number(), "快照时间必须带 Ms 后缀且为 number");
 }
 
+/// 播放条的音频规格：`lossless` 必须在 payload 里，且三个值都要能表达。
+///
+/// 这条测试是补历史的窟窿——`TrackAudio` 曾经**根本没有** `lossless` 字段，
+/// 而 UI 的规格文字/Hi-Res 高亮/tooltip 全靠它，于是徽章恒显示「未知」，
+/// 跨了一个多月没人发现：类型检查（TS 侧写成可选）和运行期（字段缺失渲染
+/// 成空）都不会报错。所以要在这里锁死 wire 形状。
+#[test]
+fn track_audio_wire_carries_three_state_lossless() {
+    use aiya_player::TrackAudio;
+
+    let flac = TrackAudio {
+        codec: Some("flac".into()),
+        container: Some("Flac".into()),
+        sample_rate: Some(44_100),
+        bits_per_sample: Some(16),
+        // 单位 kbps：FLAC 44.1k/16 实测约 900 kbps（写 900_000 就是踩了 bps 的坑）
+        bitrate: Some(900),
+        channels: Some(2),
+        lossless: TrackAudio::infer_lossless(Some("flac"), Some("Flac")),
+    };
+    let v = serde_json::to_value(&flac).unwrap();
+    assert_eq!(
+        keys(&v),
+        sorted(&[
+            "codec",
+            "container",
+            "sampleRate",
+            "bitsPerSample",
+            "bitrate",
+            "channels",
+            "lossless",
+        ]),
+        "键集合变了就要同步前端 AudioFormat"
+    );
+    assert_eq!(v["lossless"], true, "FLAC 必须判无损");
+
+    let aac = TrackAudio {
+        codec: None,
+        container: Some("Mp4".into()),
+        sample_rate: Some(44_100),
+        bits_per_sample: Some(16),
+        bitrate: Some(256), // kbps
+        channels: Some(2),
+        lossless: TrackAudio::infer_lossless(None, Some("Mp4")),
+    };
+    let v = serde_json::to_value(&aac).unwrap();
+    // 三态里的第三态：Mp4 可能是 ALAC 也可能是 AAC，必须发 null 而不是 false。
+    // 发 false 会把无损的 ALAC 标成「有损」——错得比不说更糟。
+    assert!(v["lossless"].is_null(), "认不出来时要发 null：{v}");
+}
+
 /* ---------------- B2/B3：歌单 / 历史 / 歌词 / 扫描 / 选择 ---------------- */
 
 #[test]

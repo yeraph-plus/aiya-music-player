@@ -162,11 +162,49 @@ WebView 里早就没有音频图）。留着不仅浪费打包体积，还会让
    而 contracts 把它当必填，`isHiRes()` / `audioTooltip()` 全靠它分流
    —— 于是 Tauri 版播放条的无损/有损徽章**一直是"未知"**，
    这是从 v1 重写时丢掉的功能，被类型分叉藏了一个多月。
-   本批只把类型改成可选（如实反映 payload），**功能恢复记在 §9 待办**。
+   批次 2 先把类型改成可选（如实反映 payload），**已于同日后端补齐**，见 §2.5。
 
 这两处都验证了 §1 表格里那句"`ui/contracts/` 与生成类型重复且已分叉"——
 分叉的方向是旧类型「更乐观」，正好是最容易静默错误的那个方向。
 不做这批，批次 4 删 `contracts/` 时会一次性炸掉，而那时更难分辨是重构错还是类型错。
+
+### 2.5 后端补齐 `lossless`，顺带挖出 `bitrate` 单位 bug（批次 3 之前单独一批）
+
+**修法：派生，不落库。** `TrackAudio::infer_lossless(codec, container)` 是纯函数，
+在 DTO 出口算一次（`crates/aiya-player/src/state.rs`，两处构造点调用）。
+
+- 不加 DB 列的理由：`lossless` 是 `codec`/`container` 的纯函数，加列等于让同一事实
+  有两个来源（beets 改 codec 后列不跟着变，或者反过来），还要 schema 迁移 +
+  老库回填 + 扫描器/beets 两条写路径都记得维护它。
+- **不改扫描器**的理由：`container` 列存的本来就是 lofty 的 `FileType`
+  （`Flac` / `Wav` / `Mpeg` / `Aac` / `Opus` / `Vorbis`），足够判掉绝大多数文件。
+  唯一判不了的是 `Mp4`（ALAC 无损 / AAC 有损共用），所以返回 `None` 而不是猜。
+  要分它得读 MP4 box 结构，或等 beets 的 `format` 填进 `codec`（现已覆盖）。
+
+**必须保守**：用户在拿这个字段判断音质。误判 `true` 会把 AAC 标成
+「无损 / 44.1 kHz / 16 bit」，比老实显示「未知」更糟。所以三态齐全：
+codec 认得出按 codec；codec 缺失按容器；容器也说不了 `Mp4/Ogg` 就 `None`。
+
+**顺带发现的第二个静默 bug：`bitrate` 单位是 kbps，不是 bps。**
+前端 `formatAudioSpec` / `audioTooltip` 都写了 `Math.round(bitrate / 1000)`，
+于是 320 kbps 的 MP3 显示成 **`0 kbps`**、48k/32bit 的 WAV 显示成 **`3 kbps`**。
+权威依据：lofty 源码 `pub fn audio_bitrate(&self) -> Option<u32>` 的文档注释写
+`/// Audio bitrate (kbps)`；beets 文档 §Path Formats 写
+`bitrate (in kilobits per second, with units: e.g., "192kbps")`。
+**后端两条写路径本来就一致，错的是前端的换算**——已改掉两处 `/1000`。
+
+真窗口实测（`test-music/` 的 WAV，再手工把一首的 DB 行改成 MP3/320 走有损分支）：
+
+| 分支 | `current.audio` | 徽章 | tooltip |
+|---|---|---|---|
+| 无损（container=`Wav`，codec 为 NULL） | `lossless: true` | `WAV`（Hi-Res 高亮） | `WAV · 48 kHz · 32 bit · 2 声道 · 无损 · 平均码率 3072 kbps` |
+| 有损（codec=`MP3`, bitrate=320） | `lossless: false` | `MP3`（不高亮） | `MP3 · 44.1 kHz · 16 bit · 2 声道 · 有损 · 320 kbps` |
+
+第二条同时证明码率换算已修（`320 kbps`，不是 `0 kbps`）。
+测试侧加了三条：`infer_lossless_covers_both_write_paths`（两条写路径 + 三态）、
+`audio_payload_carries_lossless`、`track_audio_wire_carries_three_state_lossless`
+（第 3 条在 `tests/dto_wire.rs`，锁 wire 键集合——形状断言比修 bug 本身更重要，
+这次正是因为**没有任何测试检查 payload 里有这个键**才藏了一个多月）。
 
 ### 批次 3 · 拆 `App.svelte`
 - [ ] 视图路由改成 `views/`（`LibraryView` 先行：曲目表 + 表头 + 批量栏）
@@ -271,6 +309,7 @@ npm run probe:ui -- --actions    # 追加面板开关交互序列
 |---|---|---|
 | 1 地基 | **完成** | `check` 0/0；CSS 构建产物 31845 字节逐字节一致；`probe:ui` 无异常、面板开关链路 4/4 |
 | 2 数据层换血 | **完成** | `window.api` 业务代码归零；208 测试 / 0 警告；真窗口走通设置读写 + 事件链路（见 §8.3） |
+| 2.5 后端补 `lossless` | **完成** | 211 测试 / 0 失败；真窗口两分支都对：无损 `3072 kbps`、有损 `320 kbps`（见 §2.5） |
 | 3 拆 `App.svelte` | 待开始 | — |
 | 4 删旧壳 | 待开始 | — |
 
@@ -321,7 +360,7 @@ npm run probe:ui -- --actions    # 追加面板开关交互序列
 | `lib/lyrics-loader.ts` | 取数签名 `Promise<IpcResult<Lyrics>>` → `Promise<Lyrics>` |
 | `main.ts` | 去掉 `window.api.app.initialLook`（顺带修正注释：`__AIYA_LOOK__` 后端从来没注入过） |
 | 删除 | `lib/spectrum.ts`、`lib/audio-sink.ts`、`compat/audio-sink.ts`、`compat/spectrum.ts`（死链） |
-| 类型 | `PlayerState` / `Diagnostics` 改用生成类型；`AudioFormat.lossless` 改为可选（见 §2.4） |
+| 类型 | `PlayerState` / `Diagnostics` 改用生成类型；`AudioFormat.lossless` 改为可选（见 §2.4），**随后端补齐已回到必填**（§2.5） |
 
 **真窗口验证证据**（`probe:ui` + 脚本点击，不是"看着对"）：
 
@@ -344,10 +383,9 @@ npm run probe:ui -- --actions    # 追加面板开关交互序列
 
 ## 9. 遗留（本轮明确不做，别忘）
 
-1. **`TrackAudio.lossless` 功能缺失**（§2.4 第 2 条）：Rust 侧按 codec 派生
-   无损/有损并加进 DTO，然后 `npm run gen:types` 重新生成、把
-   `AudioFormat.lossless` 的 `?` 去掉。涉及 `crates/aiya-player/src/state.rs`
-   + 两处 `TrackAudio` 构造点（`src-tauri/src/lib.rs`）。
+1. ~~**`TrackAudio.lossless` 功能缺失**~~ —— **已修**，见 §2.5。
+   残留子项：`Mp4` 容器（ALAC vs AAC）判不出来，返回 `null`。
+   要修得读 MP4 box 结构（`alac` atom），或依赖 beets 的 `format` 填进 `codec`（已覆盖）。
 2. **诊断页三个数组恒为空**：`list_timings / recent_errors / shortcut_conflicts`
    在 `lib.rs` 里是 `Vec::new()`，DTO 只能导出 `unknown[]`，
    `SettingsPanel` 目前用本地视图类型 + 一次显式转换顶上。等真的做采集时补 DTO。
