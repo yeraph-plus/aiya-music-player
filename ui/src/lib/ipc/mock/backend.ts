@@ -163,13 +163,29 @@ function buildLibrary(): TrackRow[] {
   return tracks;
 }
 
-function buildPlaylists(tracks: TrackRow[]): PlaylistSummary[] {
+/**
+ * 歌单种子：摘要 + **内容**（playlistId → trackId[]）。
+ *
+ * 2026-10-25 之前只造摘要，歌单视图直接把全库按同一排序展示，拖动/移除只
+ * 改计数不动内容 —— 版面能看，但"歌单语义"验不了。真实库是 playlist_items
+ * 表，预览也建一份对应结构，代价只是一个 Map。
+ */
+function buildPlaylistSeed(tracks: TrackRow[]): {
+  summaries: PlaylistSummary[];
+  items: Map<string, string[]>;
+} {
   const now = Date.now();
   const names = ['华语偏爱', '深夜自习室', '运动节拍', '通勤路上'];
-  return names.map((name, i) => {
+  const items = new Map<string, string[]>();
+  const summaries = names.map((name, i) => {
+    const id = `pl-${i + 1}`;
     const slice = tracks.slice(i * 23, i * 23 + 12 + i * 5);
+    items.set(
+      id,
+      slice.map((t) => t.id),
+    );
     return {
-      id: `pl-${i + 1}`,
+      id,
       name,
       description: null,
       trackCount: slice.length,
@@ -180,6 +196,7 @@ function buildPlaylists(tracks: TrackRow[]): PlaylistSummary[] {
       sortPosition: i,
     };
   });
+  return { summaries, items };
 }
 
 /* ---------------- localStorage 小工具 ---------------- */
@@ -223,7 +240,10 @@ export class MockBackend {
   readonly emitter = new Emitter();
 
   private tracks: TrackRow[] = buildLibrary();
-  private playlists: PlaylistSummary[] = buildPlaylists(this.tracks);
+  private readonly playlistSeed = buildPlaylistSeed(this.tracks);
+  private playlists: PlaylistSummary[] = this.playlistSeed.summaries;
+  /** 歌单内容（真实库对应 playlist_items 表） */
+  private playlistItems: Map<string, string[]> = new Map(this.playlistSeed.items);
   private settings: AppSettings = loadJson('aiya.settings', DEFAULT_SETTINGS);
   private uiState: UiState = loadJson('aiya.uiState', {} as UiState);
   private look: { theme: ThemeMode; density: ListDensity } = loadJson('aiya.look', {
@@ -265,6 +285,15 @@ export class MockBackend {
     const started = performance.now();
     const q: TrackQueryParsed = parseTrackQuery(rawQuery ?? { mode: 'cursor' });
     let rows = this.filter(q);
+    const src = q.source;
+    if (src.kind === 'playlist') {
+      // 先按歌单内容过滤，再按用户拖出来的顺序铺底（sortForSource 会在其上覆盖排序）
+      const ids = this.playlistItems.get(src.playlistId) ?? [];
+      const order = new Map(ids.map((id, i) => [id, i]));
+      rows = rows
+        .filter((t) => order.has(t.id))
+        .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+    }
     rows = this.sortForSource(rows, q);
     const total = rows.length;
     let start = 0;
@@ -412,8 +441,21 @@ export class MockBackend {
       updatedAtMs: now,
       sortPosition: this.playlists.length,
     };
+    this.playlistItems.set(summary.id, [...(trackIds ?? [])]);
     this.playlists.push(summary);
-    return summary;
+    return this.syncPlaylist(summary.id) ?? summary;
+  }
+
+  /** 按内容表重算计数/时长（真实库是 DB 侧维护，预览手算） */
+  private syncPlaylist(id: string): PlaylistSummary | null {
+    const p = this.playlists.find((x) => x.id === id);
+    if (!p) return null;
+    const ids = this.playlistItems.get(id) ?? [];
+    const byId = new Map(this.tracks.map((t) => [t.id, t]));
+    p.trackCount = ids.length;
+    p.durationMs = ids.reduce((sum, tid) => sum + (byId.get(tid)?.durationMs ?? 0), 0);
+    p.updatedAtMs = Date.now();
+    return p;
   }
 
   playlistRename(id: string, name: string): PlaylistSummary | null {
@@ -427,7 +469,9 @@ export class MockBackend {
   playlistRemove(id: string): { deleted: boolean } {
     const before = this.playlists.length;
     this.playlists = this.playlists.filter((p) => p.id !== id);
-    return { deleted: this.playlists.length < before };
+    const deleted = this.playlists.length < before;
+    if (deleted) this.playlistItems.delete(id);
+    return { deleted };
   }
 
   playlistReorder(from: number, to: number): PlaylistSummary[] {
@@ -441,34 +485,38 @@ export class MockBackend {
   playlistAddTracks(id: string, trackIds: string[], mode?: 'append' | 'next'): PlaylistAddResult {
     const p = this.playlists.find((x) => x.id === id);
     if (!p) throw new Error('E_NOT_FOUND');
-    const added = trackIds.length;
-    p.trackCount += added;
-    p.updatedAtMs = Date.now();
-    void mode;
-    return { added, skipped: 0, summary: p };
+    const current = this.playlistItems.get(id) ?? [];
+    const known = new Set(current);
+    // 去重语义与宿主一致：已在歌单里的算 skipped，不重复插入
+    const fresh = trackIds.filter((tid) => !known.has(tid));
+    const next = mode === 'next' ? [...fresh, ...current] : [...current, ...fresh];
+    this.playlistItems.set(id, next);
+    const summary = this.syncPlaylist(id) ?? p;
+    return { added: fresh.length, skipped: trackIds.length - fresh.length, summary };
   }
 
   playlistRemoveAt(id: string, position: number): PlaylistSummary | null {
-    const p = this.playlists.find((x) => x.id === id);
-    if (!p) return null;
-    p.trackCount = Math.max(0, p.trackCount - 1);
-    p.updatedAtMs = Date.now();
-    void position;
-    return p;
+    const ids = this.playlistItems.get(id);
+    if (!ids) return this.playlistDetail(id);
+    if (position < 0 || position >= ids.length) return this.playlistDetail(id);
+    ids.splice(position, 1);
+    return this.syncPlaylist(id);
   }
 
   playlistMove(id: string, from: number, to: number): PlaylistSummary | null {
-    void from;
-    void to;
-    return this.playlistDetail(id);
+    const ids = this.playlistItems.get(id);
+    if (!ids) return this.playlistDetail(id);
+    if (from < 0 || from >= ids.length) return this.playlistDetail(id);
+    const [moved] = ids.splice(from, 1);
+    // to 是"移动后应处的下标"：删掉 from 之后长度少一，所以上限是 length
+    if (moved !== undefined) ids.splice(Math.max(0, Math.min(to, ids.length)), 0, moved);
+    return this.syncPlaylist(id);
   }
 
   playlistClear(id: string): PlaylistSummary | null {
-    const p = this.playlists.find((x) => x.id === id);
-    if (!p) return null;
-    p.trackCount = 0;
-    p.updatedAtMs = Date.now();
-    return p;
+    if (!this.playlistItems.has(id)) return this.playlistDetail(id);
+    this.playlistItems.set(id, []);
+    return this.syncPlaylist(id);
   }
 
   /* ---------------- lyrics / history ---------------- */

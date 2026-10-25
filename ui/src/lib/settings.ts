@@ -8,12 +8,13 @@
  * - `schema.ts`：**读磁盘时**的 zod 校验（字段全 optional + passthrough，
  *   因为老配置文件缺字段是常态）。
  *
- * 已知偏差：磁盘上有 `output`（输出模式/缓冲/时钟，2026-10 加的），
- * 但这套类型还没跟上（`mergeSettings` 靠 passthrough 把它原样带进来，
- * 类型上看不见）。设置页目前不编辑 `output`，所以没有实际影响——
- * 接设置页的"输出"分区时要把字段补进 `AppSettings`。
+ * `output`（2026-10-25 补）：输出模式/缓冲/时钟。形状直接用 Rust 生成的
+ * `DesiredOutput` —— 枚举取值（`shared` / `exclusive` / `exclusiveRequired` /
+ * `null`、`auto` / `events` / `polling`）由 `aiya-audio` 的 `parse` 定义，
+ * 前端抄一份字符串常量迟早对不上。
  */
 
+import type { DesiredOutput } from './ipc/generated/DesiredOutput';
 import type { ShortcutAction } from './shortcuts';
 
 export type ThemeMode = 'dark' | 'light';
@@ -58,6 +59,11 @@ export interface AppSettings {
   closeToTray: boolean;
   /** 只存覆盖项：没写的动作走 `DEFAULT_SHORTCUTS`（改默认值不冲用户自定义） */
   shortcuts: Partial<Record<ShortcutAction, string>>;
+  /**
+   * 输出偏好（"我想要什么"）。设备实际给了什么在诊断页的 `audioMode` 里，
+   * 两者刻意分开：请求独占而设备拒绝时，这里仍是 `exclusive`。
+   */
+  output: DesiredOutput;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -79,4 +85,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // 默认关：关窗即退出是既有行为，不制造意外
   closeToTray: false,
   shortcuts: {},
+  // 共享 + 200ms + 事件驱动：最不容易出事的组合。独占要用户主动开，
+  // 因为它会锁住设备（别的程序放不出声）。
+  output: { mode: 'shared', bufferMs: 200, clock: 'auto', releaseOnPause: true },
 };

@@ -104,6 +104,37 @@
     onclose();
   }
 
+  /**
+   * 输出选项的取值**必须**与 `aiya-audio` 的 `ModePref::parse` /
+   * `ClockPref::parse` 对得上（`crates/aiya-audio/src/engine.rs`）。
+   * 后端对未知值一律按 `shared` / `auto` 处理——写错不会报错，只会静默失效，
+   * 所以这里刻意只列后端认的字符串，不给"看起来更自然"的别名。
+   */
+  const OUTPUT_MODES: Array<{ value: string; label: string; hint: string }> = [
+    { value: 'shared', label: '共享', hint: '与系统混音，其他程序照常出声' },
+    { value: 'exclusive', label: '独占', hint: '优先独占，设备拒绝时自动回落共享' },
+    {
+      value: 'exclusiveRequired',
+      label: '独占(强)',
+      hint: '必须独占，设备拒绝就报错——不静默降级',
+    },
+    { value: 'null', label: '静音', hint: '不开音频设备：进度照常走但不出声（排查用）' },
+  ];
+
+  /** 0 = 交给引擎按模式取默认（共享 200ms、独占按设备周期） */
+  const BUFFER_OPTIONS: Array<{ value: number; label: string }> = [
+    { value: 0, label: '自动' },
+    { value: 50, label: '50ms' },
+    { value: 100, label: '100ms' },
+    { value: 200, label: '200ms' },
+  ];
+
+  const CLOCK_OPTIONS: Array<{ value: string; label: string }> = [
+    { value: 'auto', label: '自动' },
+    { value: 'events', label: '事件' },
+    { value: 'polling', label: '轮询' },
+  ];
+
   const TABS: Array<{ id: Tab; label: string }> = [
     { id: 'appearance', label: '外观' },
     { id: 'playback', label: '播放' },
@@ -171,6 +202,83 @@
     {:else if tab === 'playback'}
       <div class="setting-row">
         <div>
+          <div class="setting-title">输出模式</div>
+          <div class="setting-hint">
+            {OUTPUT_MODES.find((m) => m.value === settings.output.mode)?.hint ??
+              '共享：与系统混音，其他程序照常出声'}
+          </div>
+        </div>
+        <div class="segmented">
+          {#each OUTPUT_MODES as mode (mode.value)}
+            <button
+              class:on={settings.output.mode === mode.value}
+              onclick={() => apply({ output: { ...settings.output, mode: mode.value } })}
+              title={mode.hint}
+            >
+              {mode.label}
+            </button>
+          {/each}
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">缓冲</div>
+          <div class="setting-hint">
+            越深越抗抖、延迟越大；「自动」按模式取默认（共享 200ms，独占按设备周期）
+          </div>
+        </div>
+        <div class="segmented">
+          {#each BUFFER_OPTIONS as opt (opt.value)}
+            <button
+              class:on={settings.output.bufferMs === opt.value}
+              onclick={() => apply({ output: { ...settings.output, bufferMs: opt.value } })}
+            >
+              {opt.label}
+            </button>
+          {/each}
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">时钟</div>
+          <div class="setting-hint">
+            自动 = 独占先试事件、失败再试轮询；共享固定用事件（更省电、延迟更稳）
+          </div>
+        </div>
+        <div class="segmented">
+          {#each CLOCK_OPTIONS as opt (opt.value)}
+            <button
+              class:on={settings.output.clock === opt.value}
+              onclick={() => apply({ output: { ...settings.output, clock: opt.value } })}
+            >
+              {opt.label}
+            </button>
+          {/each}
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">暂停时释放设备</div>
+          <div class="setting-hint">
+            暂停就关流，让独占设备回到系统；再播放会重新打开（有几十毫秒空白）
+          </div>
+        </div>
+        <button
+          class="switch"
+          class:on={settings.output.releaseOnPause}
+          onclick={() =>
+            apply({ output: { ...settings.output, releaseOnPause: !settings.output.releaseOnPause } })}
+          aria-label="暂停时释放设备"
+        >
+          <i></i>
+        </button>
+      </div>
+
+      <div class="setting-row">
+        <div>
           <div class="setting-title">启动时自动播放</div>
           <div class="setting-hint">打开应用就接着放上次那一首；关闭则停在暂停状态</div>
         </div>
@@ -228,6 +336,11 @@
           <div class="setting-title">频谱风格</div>
           <div class="setting-hint">
             专业：audioMotion 渲染，面板头部可循环切换径向 / LED / 镜像等形态；简洁：自研轻量条形
+            <br />
+            <span class="dim">
+              注意：当前版本两种风格画出来一样。pro 引擎要真实的 WebAudio 音频节点，而音频已搬到
+              Rust 进程，拿不到节点时会自动降级成简洁条形（详见 docs/18 §9 第 7 条）。
+            </span>
           </div>
         </div>
         <div class="segmented">
