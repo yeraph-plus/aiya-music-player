@@ -9,7 +9,8 @@
 
   interface Props {
     ids: string[];
-    index: number;
+    /** 当前播放位置（播放顺序下标）；空队列 = null（契约：不用 -1 哨兵） */
+    index: number | null;
     onplay: (index: number) => void;
     onremove: (index: number) => void;
     onmove: (from: number, to: number) => void;
@@ -116,7 +117,7 @@
   // 队列换了（重新播放）时把面板滚回当前曲目附近
   $effect(() => {
     const target = index;
-    if (!scroller || target < 0) return;
+    if (!scroller || target == null) return;
     const top = target * ROW_HEIGHT;
     if (top < scroller.scrollTop || top > scroller.scrollTop + scroller.clientHeight - ROW_HEIGHT) {
       scroller.scrollTop = Math.max(0, top - scroller.clientHeight / 3);

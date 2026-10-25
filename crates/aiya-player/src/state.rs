@@ -236,12 +236,16 @@ pub struct PlayerState {
     pub queue_length: usize,
     #[ts(type = "number")]
     pub queue_version: u64,
-    /// 队列下标；-1 = 空队列
-    #[ts(type = "number")]
-    pub index: i64,
-    /// 播放顺序位置（随机模式下与 index 不同）
-    #[ts(type = "number")]
-    pub cursor: i64,
+    /// 当前曲目在播放顺序（order）中的下标；空队列 = `null`。
+    ///
+    /// 为什么不用 -1 哨兵（docs/17 §9.2 偏差 1 的偿还）：`null` 在 TS 侧
+    /// 无法与合法下标 0 混淆，`-1` 可以（漏判 `>= 0` 就是越界写）。缺值
+    /// 一律 `null` 是本契约的既定规则，index/cursor 是最后两个例外。
+    #[ts(type = "number | null")]
+    pub index: Option<usize>,
+    /// 播放顺序位置（随机模式下与 index 不同）；空队列 = `null`。
+    #[ts(type = "number | null")]
+    pub cursor: Option<usize>,
     pub repeat: RepeatMode,
     pub shuffle: bool,
     pub status: PlaybackStatus,
@@ -325,8 +329,8 @@ mod tests {
         let st = PlayerState {
             queue_length: 1,
             queue_version: 1,
-            index: 0,
-            cursor: 0,
+            index: Some(0),
+            cursor: Some(0),
             repeat: RepeatMode::Off,
             shuffle: false,
             status: PlaybackStatus::Playing,

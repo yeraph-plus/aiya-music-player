@@ -165,7 +165,7 @@ pub struct AudioError { pub code: AudioErrorCode, pub message: String }
 | 时间 | 一律**毫秒** `*Ms: number`（epoch ms 或时长 ms），**不出现裸 `duration`** | ✓ 已落地：`addedAtMs` / `lastPlayedAtMs` / `createdAtMs` / `updatedAtMs` / `firstPlayAtMs` / `lastPlayAtMs` / `PlayerState.updatedAtMs`。DB 仍存 unix 秒，**换算只在 DTO 出口一处**（`row_to_track` / `playlist_row` / `history_stats_from`），游标回喂 SQL 时除回秒 |
 | 大整数 | JS number 安全区，`u64` 的 `version/token` 实际远小于 2^53，可直传 | 现状 `queueVersion: u64` 直传 |
 | id | 一律 `string`（不透明），**不要** number | 现状一致 |
-| 缺值 | `null`（`Option` → `null`），**禁止 -1 哨兵** | 部分：`Option` 字段一律 `null` ✓；`PlayerState.index/cursor` 仍是 `-1` 哨兵（§9.2 偏差 1，换 `Option` 要重写下标算术，单独一轮做） |
+| 缺值 | `null`（`Option` → `null`），**禁止 -1 哨兵** | ✓ 已全部落地：`PlayerState.index/cursor` 也换成 `Option`（空队列 = `null`，2026-10-25 偿还 §9.5 偏差 1；DB `queue_state.current_index` 的 -1 只在存储层保留，`queue_persist_from_actor` 一处换算） |
 | 分页 | 游标式 `{items, nextCursor: string|null, total?, tookMs}` | 现 `TrackPage{items,total,limit,mode:'cursor'\|'offset'}`，保留但去掉 `mode`（只留 cursor） |
 | 列表 vs 单曲 | 列表不带 audio spec，`library_tracks` 才带 | 已有约定（`docs/03`），保留 |
 | 队列 | `queueVersion` 单调递增，UI 只在变化时重拉 | 已落地（`player.svelte.ts`） |
@@ -452,9 +452,14 @@ app（1）      [x] open_data_dir
 
 ### 9.5 与本文原计划的偏差（都写明原因）
 
-1. **`PlayerState.index/cursor` 仍是 `-1` 哨兵**，没换 `Option`。这两个值参与
-   `cursor`/`order` 的全部算术（advance、shuffle、repeat），换类型等于重写状态机
-   的下标逻辑，风险远大于收益，且与前端无关。留给"状态机整理"单独一批。
+1. ~~**`PlayerState.index/cursor` 仍是 `-1` 哨兵**，没换 `Option`~~
+   **2026-10-25 已偿还**：`index/cursor` 改为 `Option<usize>`（wire 上
+   `number | null`，空队列 = `null`）。实际改动的面比预想小：Actor 内部
+   `cursor: usize` 本来就没用 -1，只有 `state()` 出口一处换算；UI 侧消费点
+   只有 AppShell→QueuePanel 一条线。DB `queue_state.current_index` 的 -1 是
+   存储层表示，保留（`queue_persist_from_actor` 一处 `map_or(-1, …)` 换算）。
+   顺带修了旧行为的一处不一致：空队列时旧实现 `index=-1` 而 `cursor=0`，
+   现在两者语义一致（都是 `null`）。
 2. **`TrackPage.mode` 保留**。offset 分页还在 `library_ids_for_selection` 等路径用。
 3. **参数侧不做 DTO**（§3.1），只有返回值全 typed。这是实测后的修正，不是妥协。
 4. **zod 只落了 `settingsSchema` / `uiStateSchema`**，`beets:import` / `scan:progress`

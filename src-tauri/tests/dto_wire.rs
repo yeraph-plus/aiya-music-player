@@ -107,8 +107,8 @@ fn player_state_error_is_structured_and_path_is_hidden() {
     let state = aiya_player::PlayerState {
         queue_length: 2,
         queue_version: 7,
-        index: 0,
-        cursor: 0,
+        index: Some(0),
+        cursor: Some(0),
         repeat: aiya_player::RepeatMode::Off,
         shuffle: false,
         status: aiya_player::PlaybackStatus::Error,
@@ -148,6 +148,36 @@ fn player_state_error_is_structured_and_path_is_hidden() {
     // 数字一律 number
     assert!(v["queueVersion"].is_number());
     assert!(v["updatedAtMs"].is_number(), "快照时间必须带 Ms 后缀且为 number");
+    // index/cursor 是 Option：非空队列走 number，不许再出现 -1 哨兵
+    assert_eq!(v["index"], 0);
+    assert_eq!(v["cursor"], 0);
+}
+
+/// 空队列的 index/cursor 必须是 `null`（而不是 -1 哨兵）——
+/// docs/17 §9.2 偏差 1 的偿还，wire 上锁死，防止有人改回 `-1`。
+#[test]
+fn player_state_empty_queue_sends_null_not_minus_one() {
+    let state = aiya_player::PlayerState {
+        queue_length: 0,
+        queue_version: 0,
+        index: None,
+        cursor: None,
+        repeat: aiya_player::RepeatMode::Off,
+        shuffle: false,
+        status: aiya_player::PlaybackStatus::Idle,
+        position_ms: 0,
+        duration_ms: None,
+        volume: 0.85,
+        muted: false,
+        rate: 1.0,
+        error: None,
+        current: None,
+        token: 0,
+        updated_at_ms: 0,
+    };
+    let v = serde_json::to_value(&state).unwrap();
+    assert!(v["index"].is_null(), "空队列 index=null，wire 值：{}", v["index"]);
+    assert!(v["cursor"].is_null(), "空队列 cursor=null，wire 值：{}", v["cursor"]);
 }
 
 /// 播放条的音频规格：`lossless` 必须在 payload 里，且三个值都要能表达。

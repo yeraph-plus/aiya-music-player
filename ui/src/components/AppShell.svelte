@@ -106,7 +106,7 @@
   {#if sidePanel === 'queue'}
     <QueuePanel
       ids={player.queueIds}
-      index={playerState?.index ?? -1}
+      index={playerState?.index ?? null}
       onplay={(index) => void playQueueAt(index)}
       onremove={(index) => player.removeAt(index)}
       onmove={(from, to) => player.move(from, to)}

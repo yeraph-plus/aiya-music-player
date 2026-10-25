@@ -74,16 +74,21 @@ impl PlayerActor {
     /* ---------------- 对外查询 ---------------- */
 
     pub fn state(&self) -> PlayerState {
-        let index = if self.queue.is_empty() {
-            -1
+        // 空队列 → index/cursor 都是 None（不用 -1 哨兵，见 PlayerState 注释）。
+        // 队列非空时 order 与 queue 同步重建，order[cursor] 必然存在；
+        // 仍用 get() 防御而不是 unwrap，让"不可能"只降级成 null 而不是 panic。
+        let has_queue = !self.queue.is_empty();
+        let index = if has_queue {
+            self.order.get(self.cursor).copied()
         } else {
-            self.order.get(self.cursor).copied().unwrap_or(0) as i64
+            None
         };
+        let cursor = if has_queue { Some(self.cursor) } else { None };
         PlayerState {
             queue_length: self.queue.len(),
             queue_version: self.queue_version,
             index,
-            cursor: self.cursor as i64,
+            cursor,
             repeat: self.repeat,
             shuffle: self.shuffle,
             status: self.status,
@@ -578,6 +583,16 @@ mod tests {
     }
 
     #[test]
+    fn empty_queue_state_uses_none_not_minus_one() {
+        let p = PlayerActor::new();
+        let s = p.state();
+        assert_eq!(s.index, None, "空队列 index=null（不用 -1 哨兵）");
+        assert_eq!(s.cursor, None, "空队列 cursor=null");
+        assert!(s.current.is_none());
+        assert_eq!(s.queue_length, 0);
+    }
+
+    #[test]
     fn replace_all_plays_first_track() {
         let mut p = PlayerActor::new();
         p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
@@ -589,7 +604,7 @@ mod tests {
         assert!(autoplay);
         assert_eq!(start, 0);
         let s = p.state();
-        assert_eq!(s.index, 0);
+        assert_eq!(s.index, Some(0));
         assert_eq!(s.status, PlaybackStatus::Loading);
         assert_eq!(s.token, token);
 
@@ -683,7 +698,7 @@ mod tests {
             start: 3,
         }));
         let _ = p.take_pending_load().unwrap();
-        assert_eq!(p.state().index, 3);
+        assert_eq!(p.state().index, Some(3));
 
         p.reduce(PlayerCommand::ToggleShuffle);
         let s = p.state();
@@ -785,7 +800,7 @@ mod tests {
         assert_eq!(s.rate, 1.25);
         assert_eq!(s.position_ms, 30_000);
         assert_eq!(s.token, token);
-        assert_eq!(s.index, 1);
+        assert_eq!(s.index, Some(1));
         assert_eq!(p.queue_ids(), vec!["a", "b", "c"], "queue_ids 是原序");
 
         // 恢复后点播放：Paused → Playing，不再触发新 load

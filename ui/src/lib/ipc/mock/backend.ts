@@ -254,8 +254,8 @@ export class MockBackend {
   private playerState: PlayerState = {
     queueLength: 0,
     queueVersion: 0,
-    index: -1,
-    cursor: -1,
+    index: null,
+    cursor: null,
     repeat: 'off',
     shuffle: false,
     status: 'idle',
@@ -563,8 +563,10 @@ export class MockBackend {
   playerQueue(): QueueSnapshot {
     return {
       ids: this.queueIds,
-      index: this.playerState.index,
-      cursor: this.playerState.cursor,
+      // QueueSnapshot 的 index/cursor 是 order 位置（number）；空队列时 ids
+      // 本来就是空的，兜底 0 无观察者。
+      index: this.playerState.index ?? 0,
+      cursor: this.playerState.cursor ?? 0,
       version: this.playerState.queueVersion,
       tookMs: 0,
     };
@@ -577,8 +579,8 @@ export class MockBackend {
       ...this.playerState,
       queueLength: ids.length,
       queueVersion: this.playerState.queueVersion + 1,
-      index: ids.length ? startIndex : -1,
-      cursor: ids.length ? startIndex : -1,
+      index: ids.length ? startIndex : null,
+      cursor: ids.length ? startIndex : null,
       status: ids.length ? 'paused' : 'idle',
       current: current ? toRef(current) : null,
       durationMs: current?.durationMs ?? null,
@@ -620,7 +622,9 @@ export class MockBackend {
 
   private step(delta: number): PlayerState {
     if (!this.queueIds.length) return this.playerState;
-    let next = this.playerState.index + delta;
+    // index 现在是 number | null（空队列=null）；走到这 queueIds 非空，
+    // 但防御式兜底 0，别让 null 参与算术得 NaN。
+    let next = (this.playerState.index ?? 0) + delta;
     if (next < 0) next = 0;
     if (next >= this.queueIds.length) {
       next = this.playerState.repeat === 'all' ? 0 : this.queueIds.length - 1;
@@ -665,7 +669,7 @@ export class MockBackend {
   }
 
   enqueue(trackIds: string[], options?: QueueInsertMode): PlayerState {
-    if (options?.mode === 'next' && this.playerState.index >= 0) {
+    if (options?.mode === 'next' && this.playerState.index != null) {
       this.queueIds.splice(this.playerState.index + 1, 0, ...trackIds);
     } else {
       this.queueIds.push(...trackIds);
@@ -685,11 +689,20 @@ export class MockBackend {
 
   removeAt(index: number): PlayerState {
     this.queueIds.splice(index, 1);
+    const cur = this.playerState.index;
     this.playerState = {
       ...this.playerState,
       queueLength: this.queueIds.length,
       queueVersion: this.playerState.queueVersion + 1,
-      index: index < this.playerState.index ? this.playerState.index - 1 : this.playerState.index,
+      // 删掉当前之前的行 → 当前下标左移一格；删后队列空则 null
+      index:
+        cur == null
+          ? null
+          : this.queueIds.length === 0
+            ? null
+            : index < cur
+              ? Math.max(0, cur - 1)
+              : Math.min(cur, this.queueIds.length - 1),
     };
     this.emitPlayer();
     return this.playerState;
@@ -709,8 +722,8 @@ export class MockBackend {
       ...this.playerState,
       queueLength: 0,
       queueVersion: this.playerState.queueVersion + 1,
-      index: -1,
-      cursor: -1,
+      index: null,
+      cursor: null,
       status: 'idle',
       current: null,
     };

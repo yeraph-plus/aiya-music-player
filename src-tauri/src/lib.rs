@@ -1367,7 +1367,9 @@ fn queue_persist_from_actor(
 ) -> aiya_data::QueuePersist {
     let s = actor.state();
     aiya_data::QueuePersist {
-        current_index: s.index,
+        // PlayerState.index 现在是 Option（空队列=null）；DB 的 -1 哨兵
+        // 只在 queue_state 存储层保留，这里做唯一一次换算。
+        current_index: s.index.map_or(-1, |i| i as i64),
         position_ms: if remember_position { s.position_ms as i64 } else { 0 },
         repeat_mode: match s.repeat {
             aiya_player::RepeatMode::All => "all",

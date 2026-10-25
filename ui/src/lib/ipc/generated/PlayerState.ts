@@ -9,13 +9,17 @@ import type { TrackRef } from "./TrackRef";
  */
 export type PlayerState = { queueLength: number, queueVersion: number, 
 /**
- * 队列下标；-1 = 空队列
+ * 当前曲目在播放顺序（order）中的下标；空队列 = `null`。
+ *
+ * 为什么不用 -1 哨兵（docs/17 §9.2 偏差 1 的偿还）：`null` 在 TS 侧
+ * 无法与合法下标 0 混淆，`-1` 可以（漏判 `>= 0` 就是越界写）。缺值
+ * 一律 `null` 是本契约的既定规则，index/cursor 是最后两个例外。
  */
-index: number, 
+index: number | null, 
 /**
- * 播放顺序位置（随机模式下与 index 不同）
+ * 播放顺序位置（随机模式下与 index 不同）；空队列 = `null`。
  */
-cursor: number, repeat: RepeatMode, shuffle: boolean, status: PlaybackStatus, positionMs: number, durationMs: number | null, volume: number, muted: boolean, rate: number, error: AudioError | null, current: TrackRef | null, token: number, 
+cursor: number | null, repeat: RepeatMode, shuffle: boolean, status: PlaybackStatus, positionMs: number, durationMs: number | null, volume: number, muted: boolean, rate: number, error: AudioError | null, current: TrackRef | null, token: number, 
 /**
  * 快照生成时间，**毫秒**。名字带 `Ms` 是硬要求：同结构里
  * `positionMs`/`durationMs` 都是毫秒，只让它一个叫 `updatedAt`
