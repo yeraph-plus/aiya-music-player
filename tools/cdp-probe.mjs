@@ -28,6 +28,8 @@
 const ENDPOINT = 'http://127.0.0.1:9222/json';
 const ACTIONS = process.argv.includes('--actions');
 const PLAY = process.argv.includes('--play');
+/** 走一遍导航链（侧栏 / 页内入口 → nav.go） */
+const NAV = process.argv.includes('--nav');
 /** 可选：`--url=<子串>` 精确挑页面（多开时用） */
 const URL_FILTER = process.argv.find((a) => a.startsWith('--url='))?.slice('--url='.length) ?? null;
 
@@ -182,6 +184,55 @@ if (ACTIONS) {
     // 队列开 → 切歌词 → 切回队列 → 关队列
     console.log(JSON.stringify(await click(label)));
   }
+}
+
+/**
+ * `--nav`：走一遍导航链，验证 `nav.go()` 的接线（S1 收口后新增）。
+ *
+ * 曲库为空也能跑：列表页会落空态，导航高亮与标题照常。
+ * 每步之间等 650ms —— 窗口被遮挡时 WebView2 的 DOM 更新会明显滞后，
+ * 早期几次"点了没反应"都是读早了一帧。
+ */
+if (NAV) {
+  const where = () =>
+    evaluate(`(() => {
+      const main = document.querySelector('.main');
+      return {
+        nav: document.querySelector('.sidebar .nav-item.active')?.textContent?.trim() ?? null,
+        h1: main?.querySelector('h1')?.textContent?.trim() ?? null,
+        kicker: main?.querySelector('.page-kicker')?.textContent?.trim() ?? null,
+        rows: main?.querySelectorAll('.list .row').length ?? 0,
+        hasList: !!main?.querySelector('.list'),
+        empty:
+          main?.querySelector('.empty strong')?.textContent?.trim() ??
+          main?.querySelector('.tt-empty')?.textContent?.trim() ??
+          null,
+      };
+    })()`);
+
+  const clickText = (selector, text) =>
+    evaluate(`(() => {
+      const els = [...document.querySelectorAll(${JSON.stringify(selector)})];
+      const el = els.find((e) => (e.textContent || '').includes(${JSON.stringify(text)}));
+      if (!el) return 'MISSING';
+      el.click();
+      return 'CLICKED';
+    })()`);
+
+  const step = async (label, selector, text) => {
+    const clicked = await clickText(selector, text);
+    await wait(650);
+    console.log(JSON.stringify({ label, clicked, ...(await where()) }));
+  };
+
+  console.log('\n=== 导航链路（nav.go）===');
+  console.log(JSON.stringify({ label: '起点', ...(await where()) }));
+  await step('侧栏→设置', '.sidebar .nav-item', '设置');
+  await step('侧栏→首页', '.sidebar .nav-item', '首页');
+  await step('页内→浏览全部曲目', '.main button', '浏览全部曲目');
+  await step('侧栏→首页', '.sidebar .nav-item', '首页');
+  await step('侧栏→正在播放', '.sidebar .nav-item', '正在播放');
+  await step('侧栏→首页', '.sidebar .nav-item', '首页');
 }
 
 /**

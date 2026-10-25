@@ -6,6 +6,7 @@
   import { history } from '../stores/history.svelte';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
+  import { nav } from '../stores/nav.svelte';
   import { overlay } from '../stores/overlay.svelte';
   import { playlists } from '../stores/playlists.svelte';
   import { player } from '../stores/player.svelte';
@@ -127,7 +128,7 @@
     {:else if view.kind === 'playlist'}
       <strong>这个播放列表还是空的</strong>
       <span>在曲库里选中歌曲，右键或批量操作加入这里</span>
-      <button class="btn" onclick={() => list.openBuiltinView('library')}>去曲库看看</button>
+      <button class="btn" onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>去曲库看看</button>
     {:else}
       <strong>曲库还是空的</strong>
       <span>选择一个音乐目录，AIYA 会扫描并建立索引</span>

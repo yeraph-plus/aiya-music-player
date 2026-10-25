@@ -2,6 +2,7 @@ import type { PlaylistSummary } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
 import { LIBRARY_VIEW } from '../lib/view';
 import { list } from './list.svelte';
+import { nav } from './nav.svelte';
 import { notify } from './notify.svelte';
 import { selection } from './selection.svelte';
 import { ui } from './ui.svelte';
@@ -171,7 +172,7 @@ class PlaylistsStore {
 
   /** 打开歌单（切视图 + 重载 + 存状态） */
   open(id: string): void {
-    list.openPlaylist(id);
+    nav.go({ kind: 'playlist', id });
   }
 }
 

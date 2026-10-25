@@ -10,6 +10,7 @@
   import { errorMessage } from '../lib/errors';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
+  import { nav } from '../stores/nav.svelte';
   import { notify } from '../stores/notify.svelte';
   import { overlay } from '../stores/overlay.svelte';
   import { player } from '../stores/player.svelte';
@@ -30,8 +31,7 @@
   });
 
   function navigate(page: AppPage): void {
-    if (page === 'home') list.openHome();
-    else ui.openPage(page);
+    nav.go(page === 'home' ? { kind: 'dashboard' } : { kind: 'page', page });
   }
 
   async function playQueueAt(index: number): Promise<void> {
@@ -57,7 +57,7 @@
     stats={library.stats}
     dataDir={library.dataDir}
     onpage={navigate}
-    onplaylist={(id) => list.openPlaylist(id)}
+    onplaylist={(id) => nav.go({ kind: 'playlist', id })}
     oncreate={() => (overlay.dialog = { kind: 'createPlaylist' })}
     onplaylistmenu={(event, playlist) =>
       overlay.openPlaylistMenu(event.clientX, event.clientY, playlist)}
@@ -67,8 +67,8 @@
     <TopBar
       bind:this={topBar}
       search={ui.search}
-      onsearch={(value) => list.setSearch(value)}
-      onclearsearch={() => list.clearSearch()}
+      onsearch={(value) => nav.search(value)}
+      onclearsearch={() => nav.clearSearch()}
     />
 
     {#if notify.error}
@@ -127,7 +127,7 @@
       onrepeat={() => player.cycleRepeat()}
       onshuffle={() => player.setShuffle(!(playerState?.shuffle ?? false))}
       onqueue={() => ui.toggleQueue()}
-      onshownowplaying={() => ui.openPage('nowPlaying')}
+      onshownowplaying={() => nav.go({ kind: 'page', page: 'nowPlaying' })}
     />
   </div>
 </div>

@@ -2,6 +2,7 @@ import { AUDIO_RATE_STEP } from './audio-format';
 import { resolveShortcutBindings, type ShortcutAction } from './shortcuts';
 import { capture } from '../stores/capture.svelte';
 import { list } from '../stores/list.svelte';
+import { nav } from '../stores/nav.svelte';
 import { overlay } from '../stores/overlay.svelte';
 import { player } from '../stores/player.svelte';
 import { selection } from '../stores/selection.svelte';
@@ -81,7 +82,7 @@ export function runShortcut(action: ShortcutAction): void {
       ui.toggleQueue();
       return;
     case 'toggleLyrics':
-      ui.openPage('nowPlaying');
+      nav.go({ kind: 'page', page: 'nowPlaying' });
       if (currentTrackId()) ui.loadLyrics(currentTrackId()!);
       return;
     case 'toggleShuffle':
@@ -94,7 +95,7 @@ export function runShortcut(action: ShortcutAction): void {
       selection.selectAll(list.total);
       return;
     case 'openSettings':
-      void ui.openSettings();
+      nav.go({ kind: 'page', page: 'settings' });
       return;
   }
 }

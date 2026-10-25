@@ -8,6 +8,7 @@
   import { errorMessage } from '../lib/errors';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
+  import { nav } from '../stores/nav.svelte';
   import { notify } from '../stores/notify.svelte';
   import { overlay } from '../stores/overlay.svelte';
   import { player } from '../stores/player.svelte';
@@ -146,7 +147,7 @@
       <h1>首页</h1>
       <p>回到常听的音乐，或继续整理你的本地曲库。</p>
     </div>
-    <button class="btn" onclick={() => list.openBuiltinView('library')}>
+    <button class="btn" onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>
       浏览全部曲目 <ArrowRight size={14} />
     </button>
   </header>
@@ -159,13 +160,13 @@
       <span>{ui.playlists.length} 个</span>
     </div>
     <div class="playlist-grid">
-      <button class="playlist-card library-card" onclick={() => list.openBuiltinView('library')}>
+      <button class="playlist-card library-card" onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>
         <span class="playlist-card-icon"><LibraryBig size={23} /></span>
         <strong>全部曲目</strong>
         <span>{library.stats?.tracks ?? 0} 首</span>
       </button>
       {#each ui.playlists as playlist (playlist.id)}
-        <button class="playlist-card" onclick={() => list.openPlaylist(playlist.id)}>
+        <button class="playlist-card" onclick={() => nav.go({ kind: 'playlist', id: playlist.id })}>
           {#if playlist.artworkId}
             <img src={artworkUrl(playlist.artworkId, 160) ?? ''} alt="" loading="lazy" />
           {:else}
@@ -183,7 +184,7 @@
   <section class="home-section">
     <div class="section-heading">
       <div><Clock3 size={17} /><h2>最近播放</h2></div>
-      <button class="section-link" onclick={() => list.openBuiltinView('recent')}>查看全部 <ArrowRight size={13} /></button>
+      <button class="section-link" onclick={() => nav.go({ kind: 'builtin', view: 'recent' })}>查看全部 <ArrowRight size={13} /></button>
     </div>
     <TrackTable
       rows={recent}
@@ -200,7 +201,7 @@
   <section class="home-section">
     <div class="section-heading">
       <div><Flame size={17} /><h2>常听</h2></div>
-      <button class="section-link" onclick={() => list.openBuiltinView('mostPlayed')}>查看全部 <ArrowRight size={13} /></button>
+      <button class="section-link" onclick={() => nav.go({ kind: 'builtin', view: 'mostPlayed' })}>查看全部 <ArrowRight size={13} /></button>
     </div>
     <TrackTable
       rows={frequent}
@@ -217,7 +218,7 @@
   <section class="home-section">
     <div class="section-heading">
       <div><Sparkles size={17} /><h2>最近添加</h2></div>
-      <button class="section-link" onclick={() => list.openBuiltinView('library', { field: 'added', direction: 'desc' })}>
+      <button class="section-link" onclick={() => nav.go({ kind: 'builtin', view: 'library', sort: { field: 'added', direction: 'desc' } })}>
         查看全部 <ArrowRight size={13} />
       </button>
     </div>
