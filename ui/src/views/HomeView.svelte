@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ArrowRight, Clock3, Flame, LibraryBig, ListMusic, Sparkles } from '@lucide/svelte';
   import BatchBar from '../components/BatchBar.svelte';
+  import PageHeader from '../components/PageHeader.svelte';
   import TrackTable from '../components/TrackTable.svelte';
   import type { TrackRow } from '../lib/ipc';
   import type { TrackSource } from '../lib/query';
@@ -141,16 +142,17 @@
 </script>
 
 <div class="page-scroll home-page">
-  <header class="page-heading">
-    <div>
-      <span class="page-kicker">YOUR LIBRARY</span>
-      <h1>首页</h1>
-      <p>回到常听的音乐，或继续整理你的本地曲库。</p>
-    </div>
-    <button class="btn" onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>
-      浏览全部曲目 <ArrowRight size={14} />
-    </button>
-  </header>
+  <PageHeader
+    kicker="YOUR LIBRARY"
+    title="首页"
+    subtitle="回到常听的音乐，或继续整理你的本地曲库。"
+  >
+    {#snippet actions()}
+      <button class="btn" onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>
+        浏览全部曲目 <ArrowRight size={14} />
+      </button>
+    {/snippet}
+  </PageHeader>
 
   {#if loadError}<div class="error">{loadError}</div>{/if}
 

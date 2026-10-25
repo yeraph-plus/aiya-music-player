@@ -100,68 +100,6 @@
   text-decoration: underline;
 }
 
-/* ---------------- 视图头（播放列表 / 统计） ---------------- */
-
-.view-head {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  /* 16 而不是 4：顶栏吸收 TopBar 后，页面顶部不再有那一层内边距 */
-  padding: 16px 22px 14px;
-  min-width: 0;
-}
-
-.view-head.compact {
-  padding-bottom: 10px;
-}
-
-.view-cover {
-  width: 92px;
-  height: 92px;
-  border-radius: 12px;
-  object-fit: cover;
-  background: var(--bg-cover);
-  flex: none;
-  box-shadow: 0 12px 30px var(--shadow);
-}
-
-.view-cover.placeholder {
-  display: grid;
-  place-items: center;
-  font-size: 30px;
-  color: var(--text-faint);
-}
-
-.view-meta {
-  min-width: 0;
-  flex: 1;
-}
-
-.view-kicker {
-  font-size: 10.5px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-}
-
-.view-meta h1 {
-  margin: 3px 0 4px;
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.view-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
 .filters {
   display: flex;
   gap: 10px;

@@ -14,6 +14,7 @@
   import { formatBytes, formatDateTime, formatDurationLong, shortenPath } from '../lib/format';
   import Icon from './Icon.svelte';
   import LibraryTools from './LibraryTools.svelte';
+  import PageHeader from './PageHeader.svelte';
   import { capture } from '../stores/capture.svelte';
 
   interface Props {
@@ -129,19 +130,18 @@
 <svelte:window onkeydown={onWindowKey} />
 
 <div class="page-scroll settings-page" bind:this={root}>
-  <header class="page-heading settings-heading">
-    <div>
-      <span class="page-kicker">PREFERENCES</span>
-      <h1>设置</h1>
-    </div>
-    <nav class="settings-jump" aria-label="设置区块">
-      {#each SECTIONS as item (item.id)}
-        <button class="chip" class:on={active === item.id} onclick={() => jumpTo(item.id)}>
-          {item.label}
-        </button>
-      {/each}
-    </nav>
-  </header>
+  <PageHeader kicker="PREFERENCES" title="设置" />
+
+  <!-- 锚点条从标题 header 里搬出来（2026-10-26 壳体收口）：标题归 PageHeader，
+       跳转 chip 是一行独立工具条。挤在一行时 active 只能靠滚动反查写回
+       `.chip.on`，标题区在兼职承载导航状态。 -->
+  <nav class="settings-jump" aria-label="设置区块">
+    {#each SECTIONS as item (item.id)}
+      <button class="chip" class:on={active === item.id} onclick={() => jumpTo(item.id)}>
+        {item.label}
+      </button>
+    {/each}
+  </nav>
 
   <section class="settings-section" id="settings-library">
     <div class="section-heading">

@@ -1,8 +1,11 @@
 <script lang="ts">
+  import Icon from '../components/Icon.svelte';
+  import PageHeader from '../components/PageHeader.svelte';
   import TrackList from '../components/TrackList.svelte';
-  import ViewHeader from '../components/ViewHeader.svelte';
+  import { artworkUrl } from '../lib/artwork';
+  import { formatDurationLong } from '../lib/format';
   import { SELECTION_CAP } from '../lib/selection';
-  import { viewCanSort } from '../lib/view';
+  import { viewCanSort, viewTitle } from '../lib/view';
   import { history } from '../stores/history.svelte';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
@@ -27,6 +30,50 @@
   const showPlays = $derived(view.kind === 'recent' || view.kind === 'mostPlayed');
   const playerState = $derived(player.state);
 
+  /**
+   * 标题区数据。
+   *
+   * 三个视图的头部形状原本分成两套（歌单有一张 92px 封面，统计只有文字），
+   * 分别写在 ViewHeader 的两个 `{#if}` 分支里。现在归一到 PageHeader 的
+   * 「有封面 / 无封面」两态，差别只剩数据。
+   */
+  const header = $derived.by(() => {
+    if (view.kind === 'playlist') {
+      const playlist = currentPlaylist;
+      return {
+        kicker: '播放列表',
+        title: playlist?.name ?? '播放列表',
+        subtitle: undefined as string | undefined,
+        meta: playlist
+          ? `${playlist.trackCount} 首 · ${formatDurationLong(playlist.durationMs)}`
+          : '',
+        cover: playlist?.artworkId ? (artworkUrl(playlist.artworkId, 256) ?? null) : null,
+        playDisabled: !playlist || playlist.trackCount === 0,
+      };
+    }
+    if (view.kind === 'recent' || view.kind === 'mostPlayed') {
+      return {
+        kicker: '播放统计',
+        title: viewTitle(view),
+        subtitle:
+          view.kind === 'recent'
+            ? '按最后一次播放排序，只统计真正听过的曲目'
+            : '按播放次数排序，用于快速回到最近常听的歌',
+        meta: `${list.total} 首`,
+        cover: undefined as string | null | undefined,
+        playDisabled: list.total === 0,
+      };
+    }
+    return {
+      kicker: '曲库',
+      title: '全部曲目',
+      subtitle: ui.search.trim() ? `搜索「${ui.search.trim()}」` : undefined,
+      meta: `${list.total} 首`,
+      cover: undefined as string | null | undefined,
+      playDisabled: list.total === 0,
+    };
+  });
+
   function handleSelect(index: number, event: MouseEvent | KeyboardEvent): void {
     if (selection.handleSelect(index, event) === 'capped') {
       notify.showToast(`单次最多选择 ${SELECTION_CAP} 首，已截取刚点中的一段`);
@@ -41,22 +88,50 @@
   }
 </script>
 
-<ViewHeader
-  {view}
-  playlist={currentPlaylist}
-  total={list.total}
-  onplayall={() => void list.playAll()}
-  onrename={() => {
-    if (currentPlaylist) overlay.dialog = { kind: 'renamePlaylist', playlist: currentPlaylist };
-  }}
-  onclearitems={() => {
-    if (currentPlaylist) void playlists.clear(currentPlaylist);
-  }}
-  ondelete={() => {
-    if (currentPlaylist) overlay.dialog = { kind: 'deletePlaylist', playlist: currentPlaylist };
-  }}
-  onclearhistory={() => void history.clear()}
-/>
+<div class="page-pad">
+  <PageHeader
+    kicker={header.kicker}
+    title={header.title}
+    subtitle={header.subtitle}
+    meta={header.meta}
+    cover={header.cover}
+  >
+    {#snippet actions()}
+      <button class="btn primary" onclick={() => void list.playAll()} disabled={header.playDisabled}>
+        <Icon name="play" size={12} /> 播放全部
+      </button>
+      {#if view.kind === 'playlist' && currentPlaylist}
+        <button
+          class="btn"
+          onclick={() => {
+            if (currentPlaylist) overlay.dialog = { kind: 'renamePlaylist', playlist: currentPlaylist };
+          }}
+        >
+          <Icon name="edit" size={12} /> 重命名
+        </button>
+        <button
+          class="btn"
+          disabled={currentPlaylist.trackCount === 0}
+          onclick={() => {
+            if (currentPlaylist) void playlists.clear(currentPlaylist);
+          }}
+        >
+          清空
+        </button>
+        <button
+          class="btn danger"
+          onclick={() => {
+            if (currentPlaylist) overlay.dialog = { kind: 'deletePlaylist', playlist: currentPlaylist };
+          }}
+        >
+          <Icon name="trash" size={12} /> 删除
+        </button>
+      {:else if view.kind === 'recent'}
+        <button class="btn" onclick={() => void history.clear()}>清空历史</button>
+      {/if}
+    {/snippet}
+  </PageHeader>
+</div>
 
 {#if ui.artistId || ui.albumId}
   <div class="filters">

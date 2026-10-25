@@ -28,6 +28,13 @@
   padding: 18px 22px 28px;
 }
 
+/* 固定头（不随列表滚动）的页面用它给零件补横向 padding：
+ * PageHeader / PageToolbar 自己不带宽边距 —— 这样同一个零件既能放进
+ * `.page-scroll`（已带 22px），也能放在这里。 */
+.page-pad {
+  padding: 4px 22px 0;
+}
+
 .player-dock {
   grid-row: 3;
   grid-column: 1 / -1;
@@ -37,31 +44,10 @@
 
 /* ---------------- 页面公共 ---------------- */
 
-.page-heading {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 0 18px;
-}
-
 .page-kicker {
   font-size: 10.5px;
   letter-spacing: 0.14em;
   color: var(--text-faint);
-}
-
-.page-heading h1 {
-  margin: 3px 0 4px;
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.page-heading p {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-dim);
 }
 
 .section-heading {
@@ -405,14 +391,12 @@
 
 /* ---------------- 设置单页 ---------------- */
 
-.settings-heading {
-  flex-wrap: wrap;
-}
-
 .settings-jump {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+  /* 独立成行（不再寄生在标题 header 右侧）：下边距给下面的区块留气口 */
+  padding-bottom: 14px;
 }
 
 .settings-section {
