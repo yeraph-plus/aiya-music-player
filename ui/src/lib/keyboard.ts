@@ -1,5 +1,6 @@
 import { AUDIO_RATE_STEP } from './audio-format';
 import { resolveShortcutBindings, type ShortcutAction } from './shortcuts';
+import { capture } from '../stores/capture.svelte';
 import { list } from '../stores/list.svelte';
 import { overlay } from '../stores/overlay.svelte';
 import { player } from '../stores/player.svelte';
@@ -77,10 +78,11 @@ export function runShortcut(action: ShortcutAction): void {
       focusSearch();
       return;
     case 'toggleQueue':
-      ui.togglePanel('queue');
+      ui.toggleQueue();
       return;
     case 'toggleLyrics':
-      ui.togglePanel('lyrics', currentTrackId());
+      ui.openPage('nowPlaying');
+      if (currentTrackId()) ui.loadLyrics(currentTrackId()!);
       return;
     case 'toggleShuffle':
       player.setShuffle(!(state?.shuffle ?? false));
@@ -98,6 +100,11 @@ export function runShortcut(action: ShortcutAction): void {
 }
 
 export function onKeydown(event: KeyboardEvent): void {
+  // 正在设置页录制快捷键：**所有**全局快捷键让路。
+  // 两个 listener 都在 window 上，录制侧 stopPropagation 拦不住这一条，
+  // 只能靠共享标志判断（见 stores/capture.svelte.ts）。
+  if (capture.active) return;
+
   if (isTyping(event.target)) {
     // 输入框里只接管 Esc（退出输入），其余按键留给输入法/光标
     if (event.key === 'Escape') (event.target as HTMLElement).blur();
@@ -108,9 +115,9 @@ export function onKeydown(event: KeyboardEvent): void {
     total: list.total,
     selectedIndex: selection.selectedIndex,
     hasSelection: selection.size > 0,
-    hasPanel: ui.sidePanel !== null,
+    hasPanel: ui.queueOpen,
     // 有模态时吞掉全局快捷键：否则在「确认删除」弹窗上敲空格会顺手播放
-    modalOpen: ui.settingsOpen || overlay.hasModal,
+    modalOpen: overlay.hasModal,
     bindings: resolveShortcutBindings(ui.settings.shortcuts),
   });
   if (!intent) return;
@@ -128,7 +135,7 @@ export function onKeydown(event: KeyboardEvent): void {
       selection.clear();
       return;
     case 'closePanel':
-      ui.sidePanel = null;
+      ui.closeQueue();
       return;
     case 'action':
       event.preventDefault();

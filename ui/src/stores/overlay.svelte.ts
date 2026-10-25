@@ -39,8 +39,8 @@ class OverlayStore {
   /**
    * 有任何模态/菜单开着吗。
    *
-   * 不含设置面板（那是 `ui.settingsOpen`）：这个标记被键盘用来决定
-   * 要不要吞掉全局快捷键，而设置面板里还要能用 Esc 关闭，调用方自己叠。
+   * 不含设置页：设置已经是**一级页面**而不是浮层，进设置页不该吞掉全局
+   * 快捷键（只有"正在录制快捷键"时才让路，那个标志在 `stores/capture`）。
    */
   get hasModal(): boolean {
     return this.dialog !== null || this.trackMenu !== null || this.playlistMenu !== null;

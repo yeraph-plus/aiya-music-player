@@ -8,6 +8,9 @@ import { devValidate, settingsSchema, uiStateSchema, type UiState } from '../lib
 import { LIBRARY_VIEW, parseViewKey, viewKey, type View } from '../lib/view';
 import { LyricsLoader } from '../lib/lyrics-loader';
 import { readLook } from '../lib/look';
+import { notify } from './notify.svelte';
+
+export type AppPage = 'home' | 'nowPlaying' | 'radio' | 'settings';
 
 /**
  * 界面状态 store：视图、搜索排序、筛选、面板、设置、歌单列表、歌词、诊断。
@@ -22,12 +25,15 @@ import { readLook } from '../lib/look';
  */
 class UiStore {
   view = $state<View>(LIBRARY_VIEW);
+  page = $state<AppPage>('home');
+  /** 首页内部是仪表盘还是完整曲目列表；与四个一级页面分开持久化 */
+  libraryDetail = $state(false);
+  queueOpen = $state(false);
   search = $state('');
   sort = $state<TrackSort>('title');
   direction = $state<'asc' | 'desc'>('asc');
   artistId = $state<string | null>(null);
   albumId = $state<string | null>(null);
-  sidePanel = $state<'queue' | 'lyrics' | 'spectrum' | 'import' | null>(null);
 
   /**
    * 初始值不是纯 `DEFAULT_SETTINGS`：主题/密度先取 localStorage 镜像
@@ -40,7 +46,6 @@ class UiStore {
   settings = $state<AppSettings>({ ...DEFAULT_SETTINGS, ...readLook() });
   playlists = $state<PlaylistSummary[]>([]);
   diagnostics = $state<Diagnostics | null>(null);
-  settingsOpen = $state(false);
   beets = $state<BeetsStatus | null>(null);
 
   /**
@@ -102,7 +107,8 @@ class UiStore {
         artistId: this.artistId,
         albumId: this.albumId,
         view: viewKey(this.view),
-        sidePanel: this.sidePanel,
+        page: this.page,
+        libraryDetail: this.libraryDetail,
       };
       // 视图状态丢失不影响可用性，失败只记日志（别打断滚动）
       void ipc.app.setUiState(state as DynamicJson).catch((e) => {
@@ -121,27 +127,32 @@ class UiStore {
     if (data.direction) this.direction = data.direction;
     this.artistId = data.artistId ?? null;
     this.albumId = data.albumId ?? null;
-    this.sidePanel = data.sidePanel ?? null;
+    this.page = data.page ?? 'home';
+    this.libraryDetail = data.libraryDetail ?? false;
     this.view = parseViewKey(data.view);
+    // 启动就落在设置页时**不会**经过 openPage，诊断块会一直空着
+    // （显示"正在读取…"直到用户手动点刷新）。这里补一次。
+    if (this.page === 'settings') void this.refreshDiagnostics();
   }
 
-  /* ---------------- 侧面板 ---------------- */
+  /* ---------------- 一级页面与队列抽屉 ---------------- */
 
-  /**
-   * 开关侧面板（队列 / 歌词 / 频谱 / 导入）。同一个按钮再按一次 = 收起。
-   *
-   * 为什么 `currentTrackId` 由调用方传：打开歌词面板要立刻取词，而当前曲目
-   * 在 player store 上。让 ui 去 import player 会把"界面状态"绑到"播放状态"，
-   * 传一个 id 更省事，且调用方本来就有。
-   */
-  togglePanel(
-    panel: NonNullable<UiStore['sidePanel']>,
-    currentTrackId: string | null = null,
-  ): void {
-    const next = this.sidePanel === panel ? null : panel;
-    this.sidePanel = next;
+  openPage(page: AppPage): void {
+    this.page = page;
+    this.queueOpen = false;
     this.scheduleUiSave();
-    if (next === 'lyrics' && currentTrackId) this.loadLyrics(currentTrackId);
+    if (page === 'settings') {
+      this.diagnostics = null;
+      void this.refreshDiagnostics();
+    }
+  }
+
+  toggleQueue(): void {
+    this.queueOpen = !this.queueOpen;
+  }
+
+  closeQueue(): void {
+    this.queueOpen = false;
   }
 
   /* ---------------- 设置 ---------------- */
@@ -153,25 +164,26 @@ class UiStore {
    *
    * 先用新值本地生效（主题切换要跟手），再以后端返回的为准：
    * 后端会补齐默认值/拒绝非法值，这一步是"以磁盘为准"的对账。
+   *
+   * 失败**默认落到全局错误条**（不再收一个可选回调）：漏传回调的调用点会让
+   * 写盘失败静默吞掉，症状是"设置看着生效、重启就回滚"——比不生效更难查。
    */
-  applySettings(next: AppSettings, onError?: (message: string) => void): void {
+  applySettings(next: AppSettings): void {
     this.settings = next;
     void ipc.app
       .setSettings($state.snapshot(next) as DynamicJson)
       .then((raw) => {
         this.settings = mergeSettings(raw);
       })
-      .catch((e) => onError?.(errorMessage(e)));
+      .catch((e) => notify.showError(errorMessage(e)));
   }
 
   openDataDir(): void {
     void ipc.app.openDataDir().catch((e) => console.warn('openDataDir failed:', errorMessage(e)));
   }
 
-  async openSettings(): Promise<void> {
-    this.settingsOpen = true;
-    this.diagnostics = null;
-    await this.refreshDiagnostics();
+  openSettings(): void {
+    this.openPage('settings');
   }
 
   async refreshDiagnostics(): Promise<void> {

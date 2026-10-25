@@ -12,7 +12,7 @@
     durationMs: number;
     playing: boolean;
     onseek: (ms: number) => void;
-    onclose: () => void;
+    onclose?: () => void;
   }
 
   let { lyrics, loading, trackTitle, positionMs, durationMs, playing, onseek, onclose }: Props =
@@ -90,7 +90,7 @@
   <header>
     <strong>歌词</strong>
     <span class="dim">{lyrics?.found ? (lyrics.synced ? '同步歌词' : '纯文本') : '暂无'}</span>
-    <button class="icon-btn" onclick={onclose} aria-label="关闭歌词"><Icon name="close" size={14} /></button>
+    {#if onclose}<button class="icon-btn" onclick={onclose} aria-label="关闭歌词"><Icon name="close" size={14} /></button>{/if}
   </header>
 
   <div

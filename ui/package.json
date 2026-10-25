@@ -15,7 +15,9 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@lucide/svelte": "^1.61.0",
     "@tauri-apps/api": "^2.9.6",
+    "bits-ui": "^2.20.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {

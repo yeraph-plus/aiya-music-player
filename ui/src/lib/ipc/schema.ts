@@ -51,7 +51,8 @@ export const uiStateSchema = z
     artistId: z.string().nullable().optional(),
     albumId: z.string().nullable().optional(),
     view: z.string().optional(),
-    sidePanel: z.enum(['queue', 'lyrics', 'spectrum', 'import']).nullable().optional(),
+    page: z.enum(['home', 'nowPlaying', 'radio', 'settings']).optional(),
+    libraryDetail: z.boolean().optional(),
   })
   .passthrough();
 

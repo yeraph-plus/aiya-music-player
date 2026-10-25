@@ -3,9 +3,7 @@
   import ContextMenu from './ContextMenu.svelte';
   import PlaylistPicker from './PlaylistPicker.svelte';
   import PromptDialog from './PromptDialog.svelte';
-  import SettingsPanel from './SettingsPanel.svelte';
   import { playlistMenuItems, trackMenuItems } from '../lib/menu';
-  import { history } from '../stores/history.svelte';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
   import { notify } from '../stores/notify.svelte';
@@ -182,18 +180,5 @@
       overlay.dialog = { kind: 'createPlaylist', seedIds: ids };
     }}
     onclose={() => overlay.closeDialog()}
-  />
-{/if}
-
-{#if ui.settingsOpen}
-  <SettingsPanel
-    settings={ui.settings}
-    diagnostics={ui.diagnostics}
-    beets={ui.beets}
-    onclose={() => (ui.settingsOpen = false)}
-    onsave={(next) => ui.applySettings(next, (message) => notify.showError(message))}
-    onrefresh={() => void ui.refreshDiagnostics()}
-    onclearhistory={() => void history.clear()}
-    onopendatadir={() => ui.openDataDir()}
   />
 {/if}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import type { BeetsStatus, Diagnostics } from '../lib/ipc';
   import type { AppSettings } from '../lib/settings';
   import {
@@ -12,50 +13,58 @@
   import { bindingFromEvent } from '../lib/keys';
   import { formatBytes, formatDateTime, formatDurationLong, shortenPath } from '../lib/format';
   import Icon from './Icon.svelte';
+  import LibraryTools from './LibraryTools.svelte';
+  import { capture } from '../stores/capture.svelte';
 
   interface Props {
     settings: AppSettings;
     diagnostics: Diagnostics | null;
     beets: BeetsStatus | null;
-    onclose: () => void;
     onsave: (next: AppSettings) => void;
     onrefresh: () => void;
     onclearhistory: () => void;
     onopendatadir: () => void;
   }
 
-  let {
-    settings,
-    diagnostics,
-    beets,
-    onclose,
-    onsave,
-    onrefresh,
-    onclearhistory,
-    onopendatadir,
-  }: Props =
+  let { settings, diagnostics, beets, onsave, onrefresh, onclearhistory, onopendatadir }: Props =
     $props();
 
-  /**
-   * 诊断页两张表直接消费 Rust 生成类型（`ListTiming` / `RecentError`）。
-   *
-   * 2026-10-25 之前这里是本地视图类型 + 一次显式转换，因为后端两个数组
-   * 恒为 `Vec::new()`、DTO 只能导出 `unknown[]`。现在后端真采集了，
-   * 类型从 Rust 来，这一层转换连同它的注释一起删掉。
-   *
-   * 第三个数组成员 `shortcut_conflicts` 从 DTO 删了：action 清单与绑定解析
-   * 规则只在前端（`lib/shortcuts.ts`），后端算等于抄一份必然漂移。下面
-   * 诊断区直接用 `conflicts`（与设置页冲突提示同一个 `findConflicts`）。
-   */
   const listTimings = $derived(diagnostics?.listTimings ?? []);
   const recentErrors = $derived(diagnostics?.recentErrors ?? []);
 
-  type Tab = 'appearance' | 'playback' | 'system' | 'shortcuts' | 'diagnostics';
-  let tab = $state<Tab>('appearance');
-  let capturing = $state<ShortcutAction | null>(null);
+  /**
+   * 设置是单页分区块布局：顶部按钮只做锚点跳转，所有区块始终渲染。
+   * 不再用 tab 条件切换——扫描/beets 任务必须挂在常驻区块里，
+   * 否则切到别的 tab 任务进度就卸载了。
+   */
+  type Section = 'library' | 'appearance' | 'playback' | 'system' | 'shortcuts' | 'diagnostics';
+  let active = $state<Section>('library');
+  let root = $state<HTMLElement | null>(null);
+
+  /**
+   * 录制态**不放在组件里**：全局快捷键的 listener 也挂在 window 上，
+   * 组件内 stopPropagation 拦不住它（同节点按注册顺序触发）。
+   * 状态进 `stores/capture`，`lib/keyboard.ts` 自己看这个标志让路。
+   */
+  const capturing = $derived(capture.action);
+  onDestroy(() => capture.stop());
 
   const bindings = $derived(resolveShortcutBindings(settings.shortcuts));
   const conflicts = $derived(findConflicts(bindings));
+
+  const SECTIONS: Array<{ id: Section; label: string }> = [
+    { id: 'library', label: '音乐库与任务' },
+    { id: 'appearance', label: '外观' },
+    { id: 'playback', label: '播放' },
+    { id: 'system', label: '系统' },
+    { id: 'shortcuts', label: '快捷键' },
+    { id: 'diagnostics', label: '诊断' },
+  ];
+
+  function jumpTo(id: Section): void {
+    active = id;
+    root?.querySelector(`#settings-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 
   function apply(patch: Partial<AppSettings>): void {
     onsave({ ...settings, ...patch });
@@ -68,40 +77,25 @@
     apply({ shortcuts });
   }
 
-  function onCaptureKey(event: KeyboardEvent): void {
-    if (!capturing) return;
+  /** 录制快捷键时接管按键；Esc 只取消录制，不再有关闭面板语义（设置已是页面） */
+  function onWindowKey(event: KeyboardEvent): void {
+    const action = capture.action;
+    if (!action) return;
     event.preventDefault();
     event.stopPropagation();
-
     if (event.key === 'Escape') {
-      capturing = null;
+      capture.stop();
       return;
     }
     if (event.key === 'Backspace' || event.key === 'Delete') {
-      setShortcut(capturing, '');
-      capturing = null;
+      setShortcut(action, '');
+      capture.stop();
       return;
     }
-
     const binding = bindingFromEvent(event);
     if (!binding) return;
-    setShortcut(capturing, binding);
-    capturing = null;
-  }
-
-  /** 模态 Escape 语义：录制快捷键时交给 onCaptureKey（Esc 只取消录制）；输入态只失焦；其余关闭面板 */
-  function onWindowKey(event: KeyboardEvent): void {
-    if (capturing) {
-      onCaptureKey(event);
-      return;
-    }
-    if (event.key !== 'Escape') return;
-    const el = event.target as HTMLElement | null;
-    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
-      el.blur();
-      return;
-    }
-    onclose();
+    setShortcut(action, binding);
+    capture.stop();
   }
 
   /**
@@ -113,11 +107,7 @@
   const OUTPUT_MODES: Array<{ value: string; label: string; hint: string }> = [
     { value: 'shared', label: '共享', hint: '与系统混音，其他程序照常出声' },
     { value: 'exclusive', label: '独占', hint: '优先独占，设备拒绝时自动回落共享' },
-    {
-      value: 'exclusiveRequired',
-      label: '独占(强)',
-      hint: '必须独占，设备拒绝就报错——不静默降级',
-    },
+    { value: 'exclusiveRequired', label: '独占(强)', hint: '必须独占，设备拒绝就报错——不静默降级' },
     { value: 'null', label: '静音', hint: '不开音频设备：进度照常走但不出声（排查用）' },
   ];
 
@@ -134,434 +124,445 @@
     { value: 'events', label: '事件' },
     { value: 'polling', label: '轮询' },
   ];
-
-  const TABS: Array<{ id: Tab; label: string }> = [
-    { id: 'appearance', label: '外观' },
-    { id: 'playback', label: '播放' },
-    { id: 'system', label: '系统' },
-    { id: 'shortcuts', label: '快捷键' },
-    { id: 'diagnostics', label: '诊断' },
-  ];
 </script>
 
 <svelte:window onkeydown={onWindowKey} />
 
-<div class="modal-backdrop" role="presentation" onclick={onclose}></div>
-<div class="modal settings" role="dialog" aria-label="设置">
-  <header>
-    <strong>设置</strong>
-    <div class="tabs">
-      {#each TABS as item (item.id)}
-        <button class="chip" class:on={tab === item.id} onclick={() => (tab = item.id)}>{item.label}</button>
-      {/each}
+<div class="page-scroll settings-page" bind:this={root}>
+  <header class="page-heading settings-heading">
+    <div>
+      <span class="page-kicker">PREFERENCES</span>
+      <h1>设置</h1>
     </div>
-    <button class="icon-btn" onclick={onclose} aria-label="关闭设置"><Icon name="close" size={14} /></button>
+    <nav class="settings-jump" aria-label="设置区块">
+      {#each SECTIONS as item (item.id)}
+        <button class="chip" class:on={active === item.id} onclick={() => jumpTo(item.id)}>
+          {item.label}
+        </button>
+      {/each}
+    </nav>
   </header>
 
-  <div class="modal-body">
-    {#if tab === 'appearance'}
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">主题</div>
-          <div class="setting-hint">浅色主题适合白天与投影，切换即时生效</div>
+  <section class="settings-section" id="settings-library">
+    <div class="section-heading">
+      <div><h2>音乐库与任务</h2></div>
+    </div>
+    <LibraryTools />
+  </section>
+
+  <section class="settings-section" id="settings-appearance">
+    <div class="section-heading"><div><h2>外观</h2></div></div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">主题</div>
+        <div class="setting-hint">浅色主题适合白天与投影，切换即时生效</div>
+      </div>
+      <div class="segmented">
+        <button class:on={settings.theme === 'dark'} onclick={() => apply({ theme: 'dark' })}>
+          <Icon name="moon" size={13} /> 深色
+        </button>
+        <button class:on={settings.theme === 'light'} onclick={() => apply({ theme: 'light' })}>
+          <Icon name="sun" size={13} /> 浅色
+        </button>
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">列表密度</div>
+        <div class="setting-hint">紧凑模式一屏多显示约 20%，适合大曲库浏览</div>
+      </div>
+      <div class="segmented">
+        <button class:on={settings.density === 'comfortable'} onclick={() => apply({ density: 'comfortable' })}>
+          标准
+        </button>
+        <button class:on={settings.density === 'compact'} onclick={() => apply({ density: 'compact' })}>
+          紧凑
+        </button>
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">封面主色</div>
+        <div class="setting-hint">从封面提取强调色；关掉则使用固定蓝色</div>
+      </div>
+      <button class="switch" class:on={settings.accentFromArtwork} onclick={() => apply({ accentFromArtwork: !settings.accentFromArtwork })} aria-label="封面主色">
+        <i></i>
+      </button>
+    </div>
+  </section>
+
+  <section class="settings-section" id="settings-playback">
+    <div class="section-heading"><div><h2>播放</h2></div></div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">输出模式</div>
+        <div class="setting-hint">
+          {OUTPUT_MODES.find((m) => m.value === settings.output.mode)?.hint ??
+            '共享：与系统混音，其他程序照常出声'}
         </div>
-        <div class="segmented">
-          <button class:on={settings.theme === 'dark'} onclick={() => apply({ theme: 'dark' })}>
-            <Icon name="moon" size={13} /> 深色
+      </div>
+      <div class="segmented">
+        {#each OUTPUT_MODES as mode (mode.value)}
+          <button
+            class:on={settings.output.mode === mode.value}
+            onclick={() => apply({ output: { ...settings.output, mode: mode.value } })}
+            title={mode.hint}
+          >
+            {mode.label}
           </button>
-          <button class:on={settings.theme === 'light'} onclick={() => apply({ theme: 'light' })}>
-            <Icon name="sun" size={13} /> 浅色
+        {/each}
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">缓冲</div>
+        <div class="setting-hint">
+          越深越抗抖、延迟越大；「自动」按模式取默认（共享 200ms，独占按设备周期）
+        </div>
+      </div>
+      <div class="segmented">
+        {#each BUFFER_OPTIONS as opt (opt.value)}
+          <button
+            class:on={settings.output.bufferMs === opt.value}
+            onclick={() => apply({ output: { ...settings.output, bufferMs: opt.value } })}
+          >
+            {opt.label}
           </button>
+        {/each}
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">时钟</div>
+        <div class="setting-hint">
+          自动 = 独占先试事件、失败再试轮询；共享固定用事件（更省电、延迟更稳）
         </div>
       </div>
-
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">列表密度</div>
-          <div class="setting-hint">紧凑模式一屏多显示约 20%，适合大曲库浏览</div>
-        </div>
-        <div class="segmented">
-          <button class:on={settings.density === 'comfortable'} onclick={() => apply({ density: 'comfortable' })}>
-            标准
+      <div class="segmented">
+        {#each CLOCK_OPTIONS as opt (opt.value)}
+          <button
+            class:on={settings.output.clock === opt.value}
+            onclick={() => apply({ output: { ...settings.output, clock: opt.value } })}
+          >
+            {opt.label}
           </button>
-          <button class:on={settings.density === 'compact'} onclick={() => apply({ density: 'compact' })}>
-            紧凑
-          </button>
+        {/each}
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">暂停时释放设备</div>
+        <div class="setting-hint">
+          暂停就关流，让独占设备回到系统；再播放会重新打开（有几十毫秒空白）
         </div>
       </div>
+      <button
+        class="switch"
+        class:on={settings.output.releaseOnPause}
+        onclick={() =>
+          apply({ output: { ...settings.output, releaseOnPause: !settings.output.releaseOnPause } })}
+        aria-label="暂停时释放设备"
+      >
+        <i></i>
+      </button>
+    </div>
 
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">封面主色</div>
-          <div class="setting-hint">从封面提取强调色；关掉则使用固定蓝色</div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">启动时自动播放</div>
+        <div class="setting-hint">打开应用就接着放上次那一首；关闭则停在暂停状态</div>
+      </div>
+      <button class="switch" class:on={settings.autoplayOnStart} onclick={() => apply({ autoplayOnStart: !settings.autoplayOnStart })} aria-label="启动时自动播放">
+        <i></i>
+      </button>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">记住播放进度</div>
+        <div class="setting-hint">下次启动从上次停下的位置继续；关闭则每次从头开始</div>
+      </div>
+      <button class="switch" class:on={settings.rememberPosition} onclick={() => apply({ rememberPosition: !settings.rememberPosition })} aria-label="记住播放进度">
+        <i></i>
+      </button>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">播放时阻止系统休眠</div>
+        <div class="setting-hint">只阻止系统睡眠，屏幕仍会按系统设置熄掉</div>
+      </div>
+      <button class="switch" class:on={settings.preventSleep} onclick={() => apply({ preventSleep: !settings.preventSleep })} aria-label="播放时阻止系统休眠">
+        <i></i>
+      </button>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">音量归一化</div>
+        <div class="setting-hint">
+          按 ReplayGain 标签换算音量系数。近似实现：不改变你设置的音量，只做播放时的补偿
         </div>
-        <button class="switch" class:on={settings.accentFromArtwork} onclick={() => apply({ accentFromArtwork: !settings.accentFromArtwork })} aria-label="封面主色">
-          <i></i>
+      </div>
+      <button class="switch" class:on={settings.normalizeVolume} onclick={() => apply({ normalizeVolume: !settings.normalizeVolume })} aria-label="音量归一化">
+        <i></i>
+      </button>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">频谱可视化</div>
+        <div class="setting-hint">在「正在播放」页显示实时频谱（ADR-037：开启后启用渲染层音频图）</div>
+      </div>
+      <button class="switch" class:on={settings.spectrum} onclick={() => apply({ spectrum: !settings.spectrum })} aria-label="频谱可视化">
+        <i></i>
+      </button>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">频谱风格</div>
+        <div class="setting-hint">
+          专业：五形态渲染（渐变条 / LED / 镜像 / 径向 / 反射）；简洁：自研轻量条形。
+          两种风格数据同源（48 分带实时频谱），差别只在渲染层。
+        </div>
+      </div>
+      <div class="segmented">
+        <button class:on={settings.spectrumEngine === 'pro'} onclick={() => apply({ spectrumEngine: 'pro' })}>
+          专业
+        </button>
+        <button class:on={settings.spectrumEngine === 'compact'} onclick={() => apply({ spectrumEngine: 'compact' })}>
+          简洁
         </button>
       </div>
-    {:else if tab === 'playback'}
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">输出模式</div>
-          <div class="setting-hint">
-            {OUTPUT_MODES.find((m) => m.value === settings.output.mode)?.hint ??
-              '共享：与系统混音，其他程序照常出声'}
-          </div>
-        </div>
-        <div class="segmented">
-          {#each OUTPUT_MODES as mode (mode.value)}
-            <button
-              class:on={settings.output.mode === mode.value}
-              onclick={() => apply({ output: { ...settings.output, mode: mode.value } })}
-              title={mode.hint}
-            >
-              {mode.label}
-            </button>
-          {/each}
-        </div>
-      </div>
+    </div>
+  </section>
 
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">缓冲</div>
-          <div class="setting-hint">
-            越深越抗抖、延迟越大；「自动」按模式取默认（共享 200ms，独占按设备周期）
-          </div>
-        </div>
-        <div class="segmented">
-          {#each BUFFER_OPTIONS as opt (opt.value)}
-            <button
-              class:on={settings.output.bufferMs === opt.value}
-              onclick={() => apply({ output: { ...settings.output, bufferMs: opt.value } })}
-            >
-              {opt.label}
-            </button>
-          {/each}
+  <section class="settings-section" id="settings-system">
+    <div class="section-heading"><div><h2>系统</h2></div></div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">关闭窗口时最小化到托盘</div>
+        <div class="setting-hint">
+          打开后点关闭只是隐藏窗口，播放继续；要退出请用托盘菜单或 Ctrl+Q
         </div>
       </div>
+      <button class="switch" class:on={settings.closeToTray} onclick={() => apply({ closeToTray: !settings.closeToTray })} aria-label="关闭窗口时最小化到托盘">
+        <i></i>
+      </button>
+    </div>
 
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">时钟</div>
-          <div class="setting-hint">
-            自动 = 独占先试事件、失败再试轮询；共享固定用事件（更省电、延迟更稳）
-          </div>
-        </div>
-        <div class="segmented">
-          {#each CLOCK_OPTIONS as opt (opt.value)}
-            <button
-              class:on={settings.output.clock === opt.value}
-              onclick={() => apply({ output: { ...settings.output, clock: opt.value } })}
-            >
-              {opt.label}
-            </button>
-          {/each}
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">系统媒体键</div>
+        <div class="setting-hint">
+          播放器的标题、封面与播放状态同步到系统媒体面板，媒体键由系统路由，失焦也生效
         </div>
       </div>
+      <button class="switch" class:on={settings.mediaKeys} onclick={() => apply({ mediaKeys: !settings.mediaKeys })} aria-label="系统媒体键">
+        <i></i>
+      </button>
+    </div>
+  </section>
 
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">暂停时释放设备</div>
-          <div class="setting-hint">
-            暂停就关流，让独占设备回到系统；再播放会重新打开（有几十毫秒空白）
-          </div>
-        </div>
-        <button
-          class="switch"
-          class:on={settings.output.releaseOnPause}
-          onclick={() =>
-            apply({ output: { ...settings.output, releaseOnPause: !settings.output.releaseOnPause } })}
-          aria-label="暂停时释放设备"
-        >
-          <i></i>
-        </button>
-      </div>
-
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">启动时自动播放</div>
-          <div class="setting-hint">打开应用就接着放上次那一首；关闭则停在暂停状态</div>
-        </div>
-        <button class="switch" class:on={settings.autoplayOnStart} onclick={() => apply({ autoplayOnStart: !settings.autoplayOnStart })} aria-label="启动时自动播放">
-          <i></i>
-        </button>
-      </div>
-
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">记住播放进度</div>
-          <div class="setting-hint">下次启动从上次停下的位置继续；关闭则每次从头开始</div>
-        </div>
-        <button class="switch" class:on={settings.rememberPosition} onclick={() => apply({ rememberPosition: !settings.rememberPosition })} aria-label="记住播放进度">
-          <i></i>
-        </button>
-      </div>
-
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">播放时阻止系统休眠</div>
-          <div class="setting-hint">只阻止系统睡眠，屏幕仍会按系统设置熄掉</div>
-        </div>
-        <button class="switch" class:on={settings.preventSleep} onclick={() => apply({ preventSleep: !settings.preventSleep })} aria-label="播放时阻止系统休眠">
-          <i></i>
-        </button>
-      </div>
-
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">音量归一化</div>
-          <div class="setting-hint">
-            按 ReplayGain 标签换算音量系数。近似实现：不改变你设置的音量，只做播放时的补偿
-          </div>
-        </div>
-        <button class="switch" class:on={settings.normalizeVolume} onclick={() => apply({ normalizeVolume: !settings.normalizeVolume })} aria-label="音量归一化">
-          <i></i>
-        </button>
-      </div>
-
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">频谱可视化</div>
-          <div class="setting-hint">
-            播放条出现频谱按钮，实时显示正在播放的声音（ADR-037：开启后会启用渲染层音频图）
-          </div>
-        </div>
-        <button class="switch" class:on={settings.spectrum} onclick={() => apply({ spectrum: !settings.spectrum })} aria-label="频谱可视化">
-          <i></i>
-        </button>
-      </div>
-
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">频谱风格</div>
-          <div class="setting-hint">
-            专业：五形态渲染（渐变条 / LED / 镜像 / 径向 / 反射），频谱面板头部可循环切换；简洁：自研轻量条形。
-            两种风格数据同源（48 分带实时频谱），差别只在渲染层。
-          </div>
-        </div>
-        <div class="segmented">
-          <button class:on={settings.spectrumEngine === 'pro'} onclick={() => apply({ spectrumEngine: 'pro' })}>
-            专业
-          </button>
-          <button class:on={settings.spectrumEngine === 'compact'} onclick={() => apply({ spectrumEngine: 'compact' })}>
-            简洁
-          </button>
-        </div>
-      </div>
-    {:else if tab === 'system'}
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">关闭窗口时最小化到托盘</div>
-          <div class="setting-hint">
-            打开后点关闭只是隐藏窗口，播放继续；要退出请用托盘菜单或 Ctrl+Q
-          </div>
-        </div>
-        <button class="switch" class:on={settings.closeToTray} onclick={() => apply({ closeToTray: !settings.closeToTray })} aria-label="关闭窗口时最小化到托盘">
-          <i></i>
-        </button>
-      </div>
-
-      <div class="setting-row">
-        <div>
-          <div class="setting-title">系统媒体键</div>
-          <div class="setting-hint">
-            播放器的标题、封面与播放状态同步到系统媒体面板，媒体键由系统路由，失焦也生效
-          </div>
-        </div>
-        <button class="switch" class:on={settings.mediaKeys} onclick={() => apply({ mediaKeys: !settings.mediaKeys })} aria-label="系统媒体键">
-          <i></i>
-        </button>
-      </div>
-    {:else if tab === 'shortcuts'}
-      {#if conflicts.length > 0}
-        <div class="notice danger">
-          {#each conflicts as conflict (conflict.binding)}
-            <div>
-              {formatBinding(conflict.binding)} 同时绑定了
-              {conflict.actions.map((action) => SHORTCUT_LABELS[action as ShortcutAction]).join('、')}
-            </div>
-          {/each}
-        </div>
-      {/if}
-
-      <div class="shortcut-list">
-        {#each SHORTCUT_ACTIONS as action (action)}
-          <div class="shortcut-row">
-            <span class="shortcut-label">{SHORTCUT_LABELS[action]}</span>
-            <button
-              class="binding"
-              class:capturing={capturing === action}
-              class:unset={!bindings[action]}
-              onclick={() => (capturing = action)}
-            >
-              {capturing === action ? '按下新键…' : formatBinding(bindings[action])}
-            </button>
+  <section class="settings-section" id="settings-shortcuts">
+    <div class="section-heading"><div><h2>快捷键</h2></div></div>
+    {#if conflicts.length > 0}
+      <div class="notice danger">
+        {#each conflicts as conflict (conflict.binding)}
+          <div>
+            {formatBinding(conflict.binding)} 同时绑定了
+            {conflict.actions.map((action) => SHORTCUT_LABELS[action as ShortcutAction]).join('、')}
           </div>
         {/each}
       </div>
-      <div class="setting-foot">
-        <span class="dim">Esc 取消录制，Backspace 清空绑定。↑/↓ 与 Enter 是列表导航，不占用快捷键。</span>
-        <button class="btn" onclick={() => apply({ shortcuts: {} })}>恢复默认</button>
+    {/if}
+
+    <div class="shortcut-list">
+      {#each SHORTCUT_ACTIONS as action (action)}
+        <div class="shortcut-row">
+          <span class="shortcut-label">{SHORTCUT_LABELS[action]}</span>
+          <button
+            class="binding"
+            class:capturing={capturing === action}
+            class:unset={!bindings[action]}
+            onclick={() => capture.start(action)}
+          >
+            {capturing === action ? '按下新键…' : formatBinding(bindings[action])}
+          </button>
+        </div>
+      {/each}
+    </div>
+    <div class="setting-foot">
+      <span class="dim">Esc 取消录制，Backspace 清空绑定。↑/↓ 与 Enter 是列表导航，不占用快捷键。</span>
+      <button class="btn" onclick={() => apply({ shortcuts: {} })}>恢复默认</button>
+    </div>
+  </section>
+
+  <section class="settings-section" id="settings-diagnostics">
+    <div class="section-heading"><div><h2>诊断</h2></div></div>
+    <div class="diag-actions">
+      <button class="btn" onclick={onrefresh}><Icon name="refresh" size={13} /> 刷新</button>
+      <button class="btn" onclick={onopendatadir}>打开数据目录</button>
+      <button class="btn" onclick={onclearhistory}>清空播放历史</button>
+    </div>
+
+    {#if diagnostics}
+      <div class="diag-grid">
+        <div><span>版本</span><b>{diagnostics.version}</b></div>
+        <div><span>Electron</span><b>{diagnostics.electron}</b></div>
+        <div><span>平台</span><b>{diagnostics.platform}</b></div>
+        <div><span>Schema</span><b>v{diagnostics.schemaVersion}</b></div>
+        <div><span>曲库</span><b>{diagnostics.tracks} 首</b></div>
+        <div><span>时长</span><b>{formatDurationLong(diagnostics.totalDurationMs)}</b></div>
+        <div><span>专辑 / 艺人</span><b>{diagnostics.albums} / {diagnostics.artists}</b></div>
+        <div><span>播放列表</span><b>{diagnostics.playlists}</b></div>
+        <div><span>历史记录</span><b>{diagnostics.historyRows}</b></div>
+        <div><span>数据库</span><b>{formatBytes(diagnostics.dbBytes)}</b></div>
+        <div class="wide"><span>数据目录</span><b class="path" title={diagnostics.dataDir}>{shortenPath(diagnostics.dataDir)}</b></div>
+      </div>
+
+      <div class="diag-block">
+        <div class="diag-head">
+          媒体流
+          <span class:danger={diagnostics.streams.active !== 0}>
+            打开 {diagnostics.streams.opened} / 关闭 {diagnostics.streams.closed} / 未关闭 {diagnostics.streams.active}
+          </span>
+        </div>
+        <div class="dim">连续切歌后"未关闭"应始终为 0；不为 0 说明协议层有泄漏。</div>
+      </div>
+
+      <div class="diag-block">
+        <div class="diag-head">
+          系统媒体控制
+          <span>
+            {#if !diagnostics.mediaKeys.enabled}
+              已关闭
+            {:else if diagnostics.mediaKeys.active.length > 0}
+              已启用
+            {:else}
+              未生效
+            {/if}
+          </span>
+        </div>
+        <div class="dim">
+          标题、封面与播放状态会同步到 Windows 媒体面板 / 锁屏 / 蓝牙耳机；
+          只在播放时出现会话。
+        </div>
+      </div>
+
+      <div class="diag-block">
+        <div class="diag-head">
+          系统集成
+          <span>防休眠 {diagnostics.power.active ? '已拦截' : '未拦截'} · 托盘 {diagnostics.tray ? '已创建' : '未创建'}</span>
+        </div>
+        <div class="dim">
+          播放中不应休眠（允许熄屏）；托盘图标只在"关闭窗口时最小化到托盘"打开时存在。
+        </div>
+      </div>
+
+      <div class="diag-block">
+        <div class="diag-head">
+          beets 集成
+          {#if beets === null}
+            <span class="dim">探测中…</span>
+          {:else if beets.found}
+            <span>beets {beets.beetsVersion} · Python {beets.pythonVersion}</span>
+          {:else}
+            <span class="danger">未找到 beets</span>
+          {/if}
+        </div>
+        {#if beets?.found}
+          <div class="diag-grid">
+            <div class="wide"><span>曲库</span><b class="path" title={beets.libraryPath ?? ''}>{beets.libraryExists ? shortenPath(beets.libraryPath ?? '') : '尚未创建（首次导入时生成）'}</b></div>
+            <div class="wide"><span>插件</span><b>{beets.plugins?.length ? beets.plugins.join(', ') : '无'}</b></div>
+            <div class="wide"><span>配置目录</span><b class="path" title={beets.configDir ?? ''}>{shortenPath(beets.configDir ?? '')}</b></div>
+          </div>
+          <div class="dim">标签匹配/候选/diff 由 beets 完成（写权威）；未安装时播放功能不受影响。</div>
+        {:else if beets}
+          <div class="dim">
+            安装后重启应用即可启用导入整理功能：
+            <code>pipx install beets</code> 或 <code>uv tool install beets</code>（推荐），
+            或 <code>pip install beets</code>。
+            {#if beets.errorMessage}
+              <br /><span class="danger">{beets.errorMessage}</span>
+            {/if}
+          </div>
+        {/if}
+      </div>
+
+      <div class="diag-block">
+        <div class="diag-head">最近查询<span class="dim">越多越慢时说明该看索引了</span></div>
+        {#if listTimings.length === 0}
+          <div class="dim">还没有记录</div>
+        {:else}
+          <table class="diag-table">
+            <thead><tr><th>时间</th><th>来源</th><th>行数</th><th>总数</th><th>命令耗时</th><th>SQL</th></tr></thead>
+            <tbody>
+              {#each listTimings.slice(-8).reverse() as timing}
+                <tr>
+                  <td>{formatDateTime(timing.atMs)}</td>
+                  <td>{timing.source}</td>
+                  <td>{timing.rows}</td>
+                  <td>{timing.total}</td>
+                  <td class:slow={timing.tookMs > 50}>{timing.tookMs.toFixed(1)}ms</td>
+                  <td class:slow={timing.dbTookMs > 50}>{timing.dbTookMs.toFixed(1)}ms</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {/if}
+      </div>
+
+      <div class="diag-block">
+        <div class="diag-head">
+          快捷键冲突
+          {#if conflicts.length === 0}
+            <span class="dim">无</span>
+          {:else}
+            <span class="danger">{conflicts.length} 组</span>
+          {/if}
+        </div>
+        {#if conflicts.length === 0}
+          <div class="dim">同一组按键绑了多个动作时会出现在这里，到「快捷键」区块可以改。</div>
+        {:else}
+          <ul class="error-list">
+            {#each conflicts as conflict (conflict.binding)}
+              <li>
+                <b>{formatBinding(conflict.binding)}</b>
+                {conflict.actions.map((action) => SHORTCUT_LABELS[action as ShortcutAction]).join('、')}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+
+      <div class="diag-block">
+        <div class="diag-head">最近错误<span class="dim">最多保留 30 条，新的在上</span></div>
+        {#if recentErrors.length === 0}
+          <div class="dim">没有错误</div>
+        {:else}
+          <ul class="error-list">
+            {#each recentErrors.slice().reverse() as item}
+              <li>
+                <span class="dim">{formatDateTime(item.atMs)}</span>
+                <span class="danger">{item.code}</span>
+                {item.message}
+                {#if item.detail}
+                  <span class="dim" title={item.detail}>（有详情）</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
       </div>
     {:else}
-      <div class="diag-actions">
-        <button class="btn" onclick={onrefresh}><Icon name="refresh" size={13} /> 刷新</button>
-        <button class="btn" onclick={onopendatadir}>打开数据目录</button>
-        <button class="btn" onclick={onclearhistory}>清空播放历史</button>
-      </div>
-
-      {#if diagnostics}
-        <div class="diag-grid">
-          <div><span>版本</span><b>{diagnostics.version}</b></div>
-          <div><span>Electron</span><b>{diagnostics.electron}</b></div>
-          <div><span>平台</span><b>{diagnostics.platform}</b></div>
-          <div><span>Schema</span><b>v{diagnostics.schemaVersion}</b></div>
-          <div><span>曲库</span><b>{diagnostics.tracks} 首</b></div>
-          <div><span>时长</span><b>{formatDurationLong(diagnostics.totalDurationMs)}</b></div>
-          <div><span>专辑 / 艺人</span><b>{diagnostics.albums} / {diagnostics.artists}</b></div>
-          <div><span>播放列表</span><b>{diagnostics.playlists}</b></div>
-          <div><span>历史记录</span><b>{diagnostics.historyRows}</b></div>
-          <div><span>数据库</span><b>{formatBytes(diagnostics.dbBytes)}</b></div>
-          <div class="wide"><span>数据目录</span><b class="path" title={diagnostics.dataDir}>{shortenPath(diagnostics.dataDir)}</b></div>
-        </div>
-
-        <div class="diag-block">
-          <div class="diag-head">
-            媒体流
-            <span class:danger={diagnostics.streams.active !== 0}>
-              打开 {diagnostics.streams.opened} / 关闭 {diagnostics.streams.closed} / 未关闭 {diagnostics.streams.active}
-            </span>
-          </div>
-          <div class="dim">连续切歌后"未关闭"应始终为 0；不为 0 说明协议层有泄漏。</div>
-        </div>
-
-        <div class="diag-block">
-          <div class="diag-head">
-            系统媒体控制
-            <span>
-              {#if !diagnostics.mediaKeys.enabled}
-                已关闭
-              {:else if diagnostics.mediaKeys.active.length > 0}
-                已启用
-              {:else}
-                未生效
-              {/if}
-            </span>
-          </div>
-          <div class="dim">
-            标题、封面与播放状态会同步到 Windows 媒体面板 / 锁屏 / 蓝牙耳机；
-            只在播放时出现会话。
-          </div>
-        </div>
-
-        <div class="diag-block">
-          <div class="diag-head">
-            系统集成
-            <span>防休眠 {diagnostics.power.active ? '已拦截' : '未拦截'} · 托盘 {diagnostics.tray ? '已创建' : '未创建'}</span>
-          </div>
-          <div class="dim">
-            播放中不应休眠（允许熄屏）；托盘图标只在"关闭窗口时最小化到托盘"打开时存在。
-          </div>
-        </div>
-
-        <div class="diag-block">
-          <div class="diag-head">
-            beets 集成
-            {#if beets === null}
-              <span class="dim">探测中…</span>
-            {:else if beets.found}
-              <span>beets {beets.beetsVersion} · Python {beets.pythonVersion}</span>
-            {:else}
-              <span class="danger">未找到 beets</span>
-            {/if}
-          </div>
-          {#if beets?.found}
-            <div class="diag-grid">
-              <div class="wide"><span>曲库</span><b class="path" title={beets.libraryPath ?? ''}>{beets.libraryExists ? shortenPath(beets.libraryPath ?? '') : '尚未创建（首次导入时生成）'}</b></div>
-              <div class="wide"><span>插件</span><b>{beets.plugins?.length ? beets.plugins.join(', ') : '无'}</b></div>
-              <div class="wide"><span>配置目录</span><b class="path" title={beets.configDir ?? ''}>{shortenPath(beets.configDir ?? '')}</b></div>
-            </div>
-            <div class="dim">标签匹配/候选/diff 由 beets 完成（写权威）；未安装时播放功能不受影响。</div>
-          {:else if beets}
-            <div class="dim">
-              安装后重启应用即可启用导入整理功能：
-              <code>pipx install beets</code> 或 <code>uv tool install beets</code>（推荐），
-              或 <code>pip install beets</code>。
-              {#if beets.errorMessage}
-                <br /><span class="danger">{beets.errorMessage}</span>
-              {/if}
-            </div>
-          {/if}
-        </div>
-
-        <div class="diag-block">
-          <div class="diag-head">最近查询<span class="dim">越多越慢时说明该看索引了</span></div>
-          {#if listTimings.length === 0}
-            <div class="dim">还没有记录</div>
-          {:else}
-            <table class="diag-table">
-              <thead><tr><th>时间</th><th>来源</th><th>行数</th><th>总数</th><th>耗时</th><th>SQL</th></tr></thead>
-              <tbody>
-                {#each listTimings.slice(-8).reverse() as timing (timing.atMs + String(timing.rows))}
-                  <tr>
-                    <td>{formatDateTime(timing.atMs)}</td>
-                    <td>{timing.source}</td>
-                    <td>{timing.rows}</td>
-                    <td>{timing.total}</td>
-                    <td class:slow={timing.tookMs > 50}>{timing.tookMs.toFixed(1)}ms</td>
-                    <td class:slow={timing.dbTookMs > 50}>{timing.dbTookMs.toFixed(1)}ms</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          {/if}
-        </div>
-
-        <div class="diag-block">
-          <div class="diag-head">
-            快捷键冲突
-            {#if conflicts.length === 0}
-              <span class="dim">无</span>
-            {:else}
-              <span class="danger">{conflicts.length} 组</span>
-            {/if}
-          </div>
-          {#if conflicts.length === 0}
-            <div class="dim">同一组按键绑了多个动作时会出现在这里，到「快捷键」页可以改。</div>
-          {:else}
-            <ul class="error-list">
-              {#each conflicts as conflict (conflict.binding)}
-                <li>
-                  <b>{formatBinding(conflict.binding)}</b>
-                  {conflict.actions.map((action) => SHORTCUT_LABELS[action as ShortcutAction]).join('、')}
-                </li>
-              {/each}
-            </ul>
-          {/if}
-        </div>
-
-        <div class="diag-block">
-          <div class="diag-head">最近错误<span class="dim">最多保留 30 条，新的在上</span></div>
-          {#if recentErrors.length === 0}
-            <div class="dim">没有错误</div>
-          {:else}
-            <ul class="error-list">
-              {#each recentErrors.slice().reverse() as item (item.atMs + item.message)}
-                <li>
-                  <span class="dim">{formatDateTime(item.atMs)}</span>
-                  <span class="danger">{item.code}</span>
-                  {item.message}
-                  {#if item.detail}
-                    <span class="dim" title={item.detail}>（有详情）</span>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
-          {/if}
-        </div>
-      {:else}
-        <div class="dim">正在读取…</div>
-      {/if}
+      <div class="dim">正在读取…</div>
     {/if}
-  </div>
+  </section>
 </div>

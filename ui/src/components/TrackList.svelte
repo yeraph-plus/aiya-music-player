@@ -1,11 +1,14 @@
 <script lang="ts">
+  import { Check, Minus } from '@lucide/svelte';
+  import { Checkbox } from 'bits-ui';
   import type { TrackRow } from '../lib/ipc';
   import type { TrackSort } from '../lib/query';
   import { artworkUrl } from '../lib/artwork';
   import { startRowDrag, consumeClickSuppressed } from '../lib/drag';
   import { computeRange } from '../lib/virtual';
-  import { formatTime, highlight } from '../lib/format';
+  import { formatDay, formatTime, highlight } from '../lib/format';
   import type { TrackWindow } from '../lib/track-window';
+  import { SELECTION_CAP } from '../lib/selection';
 
   interface Props {
     store: TrackWindow;
@@ -28,6 +31,10 @@
     onplay: (index: number) => void;
     /** Ctrl / Shift / ⌘ 点击时走选择而不是播放 */
     onselect: (index: number, event: MouseEvent | KeyboardEvent) => void;
+    /** 勾选框：点=切换、Shift=连选（与 ctrl+点击的语义不同） */
+    oncheck: (index: number, event: MouseEvent) => void;
+    /** 表头三态全选 */
+    oncheckall: () => void;
     onmenu: (event: MouseEvent, index: number, track: TrackRow | null) => void;
     onscroll: (scrollTop: number, firstVisible: number) => void;
     onrestored: () => void;
@@ -55,6 +62,8 @@
     playing,
     onplay,
     onselect,
+    oncheck,
+    oncheckall,
     onmenu,
     onscroll,
     onrestored,
@@ -65,6 +74,14 @@
 
   const ROW_HEIGHT = $derived(rowHeight);
   const OVERSCAN = 6;
+
+  /**
+   * 表头三态：全选的上限与 `lib/selection.ts` 的 SELECTION_CAP 一致，
+   * 否则 5 万首的视图点全选后表头还显示"半选"（只选了前 5000）。
+   */
+  const selectableTotal = $derived(Math.min(total, SELECTION_CAP));
+  const allSelected = $derived(selectableTotal > 0 && selection.size >= selectableTotal);
+  const someSelected = $derived(selection.size > 0 && !allSelected);
 
   let scroller = $state<HTMLDivElement | null>(null);
   let viewportHeight = $state(640);
@@ -160,6 +177,24 @@
   aria-rowcount={total}
 >
   <div class="grid-head" role="row">
+    <!-- 点击处理放在包装层而不是 Checkbox 上：bits-ui 自己的 click 处理器会同时跑，
+         内部 checked 与我们的受控 prop 各翻一次，结果正好反相（实测：勾了的行
+         显示未勾）。键盘可达性由内层 button 提供，这两条 a11y 提示是误报。 -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- tabindex=-1：可编程聚焦但不进 Tab 序列，真正的键盘入口是内层 button -->
+    <span class="check" role="columnheader" tabindex="-1" onclick={oncheckall}>
+      <Checkbox.Root
+        class="tt-box"
+        checked={allSelected}
+        indeterminate={someSelected}
+        aria-label={allSelected ? '取消全选' : '全选'}
+        disabled={total === 0}
+      >
+        {#snippet children({ checked, indeterminate })}
+          {#if indeterminate}<Minus size={11} />{:else if checked}<Check size={11} />{/if}
+        {/snippet}
+      </Checkbox.Root>
+    </span>
     <span class="idx">#</span>
     <span></span>
     <button class="sort-head" class:on={sort === 'title'} onclick={() => canSort && onsort('title')} disabled={!canSort}>
@@ -170,6 +205,9 @@
     </button>
     <button class="sort-head" class:on={sort === 'album'} onclick={() => canSort && onsort('album')} disabled={!canSort}>
       专辑{sort === 'album' && canSort ? (direction === 'asc' ? ' ↑' : ' ↓') : ''}
+    </button>
+    <button class="sort-head" class:on={sort === 'added'} onclick={() => canSort && onsort('added')} disabled={!canSort}>
+      添加{sort === 'added' && canSort ? (direction === 'asc' ? ' ↑' : ' ↓') : ''}
     </button>
     {#if showPlays}<span class="num">次数</span>{/if}
     <span class="num">时长</span>
@@ -195,6 +233,10 @@
               event.stopPropagation();
               return;
             }
+            // 勾选列里的点击不是"播放"。**这个判断不能省**：Svelte 5 把 click
+            // 委托到根节点统一派发，`stopPropagation` 拦不住同一批委托 handler，
+            // 所以由行自己认出"点的是勾选框"才是可靠的那道闸。
+            if ((event.target as HTMLElement | null)?.closest('.check')) return;
             if (event.ctrlKey || event.metaKey || event.shiftKey) onselect(row.index, event);
             else onplay(row.index);
           }}
@@ -211,6 +253,19 @@
             onmenu(event, row.index, row.track ?? null);
           }}
         >
+          <!-- 同上：点选框由包装层接管，键盘可达性在 button 上 -->
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <span class="check" role="cell" tabindex="-1" onclick={(event) => oncheck(row.index, event)}>
+            <Checkbox.Root
+              class="tt-box"
+              checked={selection.has(row.index)}
+              aria-label={`选择第 ${row.index + 1} 行`}
+            >
+              {#snippet children({ checked })}
+                {#if checked}<Check size={11} />{/if}
+              {/snippet}
+            </Checkbox.Root>
+          </span>
           <span class="idx">
             {#if row.track.id === currentId}
               <span class="bars" class:animated={playing} aria-label="正在播放">
@@ -232,6 +287,7 @@
           </span>
           <span class="cell dim" title={row.track.artist ?? ''}>{row.track.artist ?? '未知艺人'}</span>
           <span class="cell dim" title={row.track.album ?? ''}>{row.track.album ?? '—'}</span>
+          <span class="cell num" title={formatDay(row.track.addedAtMs)}>{formatDay(row.track.addedAtMs)}</span>
           {#if showPlays}
             <span class="cell num">{row.track.playCount > 0 ? row.track.playCount : '—'}</span>
           {/if}
@@ -239,9 +295,11 @@
         </div>
       {:else if row.error}
         <div class="row failed" role="row">
+          <span class="check"></span>
           <span class="idx">{row.index + 1}</span>
           <span class="cover placeholder">!</span>
           <span class="cell">{row.error}</span>
+          <span class="cell"></span>
           <span class="cell"></span>
           <span class="cell"></span>
           {#if showPlays}<span class="cell"></span>{/if}
@@ -249,9 +307,11 @@
         </div>
       {:else}
         <div class="row skeleton" role="row" aria-busy="true">
+          <span class="check"></span>
           <span class="idx">{row.index + 1}</span>
           <span class="cover placeholder"></span>
           <span class="cell shimmer"></span>
+          <span class="cell"></span>
           <span class="cell"></span>
           <span class="cell"></span>
           {#if showPlays}<span class="cell"></span>{/if}

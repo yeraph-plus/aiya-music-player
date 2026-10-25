@@ -19,6 +19,10 @@
   import AppShell from './components/AppShell.svelte';
   import OverlayHost from './components/OverlayHost.svelte';
   import LibraryView from './views/LibraryView.svelte';
+  import HomeView from './views/HomeView.svelte';
+  import NowPlayingView from './views/NowPlayingView.svelte';
+  import RadioView from './views/RadioView.svelte';
+  import SettingsView from './views/SettingsView.svelte';
   import { accentForArtwork } from './lib/accent';
   import { artworkUrl } from './lib/artwork';
   import { boot } from './lib/boot';
@@ -98,10 +102,10 @@
     mediaSession.update(player.state);
   });
 
-  // 歌词面板打开且换歌时重新取词（面板关闭时不预取，省一次读盘）
+  // 正在播放页打开且换歌时重新取词；离开页面不预取，省一次读盘。
   $effect(() => {
     const trackId = player.state?.current?.id ?? null;
-    if (ui.sidePanel !== 'lyrics' || !trackId) return;
+    if (ui.page !== 'nowPlaying' || !trackId) return;
     ui.loadLyrics(trackId);
   });
 
@@ -124,7 +128,15 @@
 <svelte:window onkeydown={onKeydown} />
 
 <AppShell>
-  <LibraryView />
+  {#if ui.page === 'home'}
+    {#if ui.libraryDetail}<LibraryView />{:else}<HomeView />{/if}
+  {:else if ui.page === 'nowPlaying'}
+    <NowPlayingView />
+  {:else if ui.page === 'radio'}
+    <RadioView />
+  {:else}
+    <SettingsView />
+  {/if}
 </AppShell>
 
 <OverlayHost />

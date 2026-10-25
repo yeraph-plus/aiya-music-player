@@ -35,7 +35,7 @@ class HistoryStore {
     const view = ui.view;
     if (view.kind === 'recent' || view.kind === 'mostPlayed') await list.reload();
     // 设置页开着：诊断块里的历史相关数字要跟着变
-    if (ui.settingsOpen) await ui.refreshDiagnostics();
+    if (ui.page === 'settings') await ui.refreshDiagnostics();
   }
 }
 

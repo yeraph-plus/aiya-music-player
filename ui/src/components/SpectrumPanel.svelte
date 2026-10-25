@@ -13,7 +13,7 @@
     source: SpectrumSource;
     /** compact：自研轻量条形；pro：audioMotion 专业渲染（形态可循环切换） */
     engine: 'compact' | 'pro';
-    onclose: () => void;
+    onclose?: () => void;
   }
 
   let { source, engine, onclose }: Props = $props();
@@ -140,9 +140,11 @@
     {:else}
       <span class="dim">实时</span>
     {/if}
-    <button class="icon-btn" onclick={onclose} aria-label="关闭频谱">
-      <Icon name="close" size={14} />
-    </button>
+    {#if onclose}
+      <button class="icon-btn" onclick={onclose} aria-label="关闭频谱">
+        <Icon name="close" size={14} />
+      </button>
+    {/if}
   </header>
   {#if usePro}
     <div class="spectrum-body pro-body">

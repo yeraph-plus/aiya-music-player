@@ -17,7 +17,7 @@
    */
 
   interface Props {
-    onclose: () => void;
+    onclose?: () => void;
     /** 读模型对齐完成（曲库数据可能变了），主视图应重拉列表 */
     onsynced?: () => void;
   }
@@ -108,7 +108,7 @@
 <div class="side-panel">
   <header class="panel-head">
     <h2>导入整理（beets）</h2>
-    <button class="icon-btn" onclick={onclose} aria-label="关闭">✕</button>
+    {#if onclose}<button class="icon-btn" onclick={onclose} aria-label="关闭">✕</button>{/if}
   </header>
 
   <div class="import-body">

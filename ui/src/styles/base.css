@@ -1,48 +1,25 @@
 /* base.css — 骨架：reset、body、滚动条、字体、全局动效。 */
 
-/* ---------------- 骨架 ---------------- */
-
+/* 三行骨架：标题栏 / 内容 / 播放条。**只有这一处定义**，
+ * pages.css 不再重复覆盖（两处写行号时改一行忘一行，是布局错位的经典来源）。 */
 .app {
   display: grid;
   grid-template-columns: var(--sidebar-width) 1fr;
-  grid-template-rows: 1fr var(--player-height);
+  grid-template-rows: var(--titlebar-height) 1fr var(--player-height);
   height: 100%;
 }
 
-.app.side-open {
-  grid-template-columns: var(--sidebar-width) 1fr var(--queue-width);
-}
-
 .sidebar {
-  grid-row: 1 / 2;
+  grid-row: 2 / 3;
   grid-column: 1;
   border-right: 1px solid var(--border);
-  padding: 18px 10px 12px;
+  padding: 8px 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 6px;
   min-height: 0;
   background: var(--bg-panel);
   backdrop-filter: blur(18px);
-}
-
-.brand {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 2px 8px 14px;
-  letter-spacing: 0.14em;
-}
-
-.brand strong {
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.brand span {
-  font-size: 10px;
-  color: var(--text-dim);
-  letter-spacing: 0.22em;
 }
 
 .nav {
@@ -146,6 +123,9 @@
   color: var(--text-faint);
 }
 
+/* 侧栏底部统计：块内是"数字 / 专辑艺人 / 缺失 / 数据目录"四行，
+ * 必须显式 flex-column —— 之前的 `<br />` 已经删掉，靠行内排版会把
+ * 四段拼成一行（`<span>` 是 inline 的，`display:block` 只给了 .path）。 */
 .sidebar-footer {
   margin-top: auto;
   padding: 10px 8px 0;
@@ -154,6 +134,19 @@
   font-size: 11px;
   line-height: 1.7;
   word-break: break-all;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar-footer strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sidebar-footer .library-stats {
+  color: var(--text-dim);
 }
 
 .sidebar-footer .warn {
@@ -168,14 +161,11 @@
   white-space: nowrap;
 }
 
-.settings-entry {
-  margin-top: 6px;
-  padding: 5px 4px;
-  font-size: 11.5px;
-}
+/* 注意：`.library-stats` / `.warn` 在此之前**没有任何定义** ——
+ * 上一版删了 `<br />` 却没补样式，视觉上四行挤成一段。 */
 
 .main {
-  grid-row: 1 / 2;
+  grid-row: 2 / 3;
   grid-column: 2;
   /* 用 flex 而不是 grid-template-rows：横幅、筛选条、扫描条都是可选的，
      固定行数会在它们出现时把列表挤到隐式行里，高度塌掉 */

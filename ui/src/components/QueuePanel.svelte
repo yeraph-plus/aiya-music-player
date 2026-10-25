@@ -28,6 +28,7 @@
   const META_FAILURE_CAP = 1000;
 
   let scroller = $state<HTMLDivElement | null>(null);
+  let root = $state<HTMLElement | null>(null);
   let viewportHeight = $state(520);
   let scrollTop = $state(0);
   let metaVersion = $state(0);
@@ -146,9 +147,22 @@
       onDrop: (from, to) => onmove(from, to),
     });
   }
+
+  function onWindowPointerDown(event: PointerEvent): void {
+    if (!(event.target instanceof Node)) return;
+    if (root?.contains(event.target)) return;
+    if (event.target instanceof Element && event.target.closest('[data-queue-trigger]')) return;
+    onclose();
+  }
+
+  function onWindowKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') onclose();
+  }
 </script>
 
-<aside class="queue-panel" aria-label="播放队列">
+<svelte:window onpointerdown={onWindowPointerDown} onkeydown={onWindowKeydown} />
+
+<aside class="queue-panel" aria-label="播放队列" bind:this={root}>
   <header>
     <strong>播放队列</strong>
     <span class="dim">{ids.length} 首{totalMs > 0 ? ` · ${formatDurationLong(totalMs)}` : ''}</span>

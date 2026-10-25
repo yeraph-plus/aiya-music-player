@@ -99,6 +99,19 @@ export function formatPlays(count: number): string {
 }
 
 /**
+ * 只要日期（`YYYY-MM-DD`）。
+ *
+ * 「最近添加」那一列回答的是"哪天入库的"，带时分秒会撑爆列宽；
+ * 完整时间放 `title`。
+ */
+export function formatDay(timestamp: number): string {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '—';
+  const date = new Date(timestamp);
+  const pad = (value: number): string => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/**
  * 路径只留末尾几段。
  *
  * 界面上要回答的是"这是哪个目录"，不是完整路径；完整值放在 title 里。

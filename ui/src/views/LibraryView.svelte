@@ -1,8 +1,6 @@
 <script lang="ts">
-  import TopBar from '../components/TopBar.svelte';
   import TrackList from '../components/TrackList.svelte';
   import ViewHeader from '../components/ViewHeader.svelte';
-  import { registerSearchFocus } from '../lib/focus-search';
   import { SELECTION_CAP } from '../lib/selection';
   import { viewCanSort } from '../lib/view';
   import { history } from '../stores/history.svelte';
@@ -17,24 +15,9 @@
   import { ui } from '../stores/ui.svelte';
 
   /**
-   * 曲库主区：顶栏 + 视图头 + 筛选/扫描/错误条 + 曲目表（或空态）。
-   *
-   * 从 `App.svelte` 拆出来的（批次 3）。**这里不取数、不拼队列**——所有
-   * 状态从 store 读，所有动作调 store 的方法。剩下真正属于"视图"的只有：
-   * TopBar 实例（聚焦要 bind:this）、空态分支的文案、TrackList 的连线。
-   *
-   * 依赖方向：components → stores → ipc。本文件 import 了 9 个 store，
-   * 但没有一个 store 反过来知道它存在。
+   * 曲库主区：视图头 + 筛选/扫描/错误条 + 曲目表（或空态）。
+   * 顶栏（搜索）已上移到 AppShell，全局唯一；扫描与导入入口在设置页。
    */
-
-  let topBar = $state<{ focus: () => void } | null>(null);
-
-  // 快捷键 focusSearch 需要一个"把焦点给输入框"的入口；实例是这里的 bind:this。
-  $effect(() => {
-    if (!topBar) return;
-    const instance = topBar;
-    return registerSearchFocus(() => instance.focus());
-  });
 
   const view = $derived(ui.view);
   const currentPlaylist = $derived(
@@ -48,24 +31,14 @@
       notify.showToast(`单次最多选择 ${SELECTION_CAP} 首，已截取刚点中的一段`);
     }
   }
-</script>
 
-<TopBar
-  bind:this={topBar}
-  search={ui.search}
-  sort={ui.sort}
-  direction={ui.direction}
-  canSort={viewCanSort(view)}
-  total={list.total}
-  scanning={library.scanning}
-  onsearch={(value) => list.setSearch(value)}
-  onclearsearch={() => list.clearSearch()}
-  onsort={() => list.setSort('added')}
-  onsettings={() => void ui.openSettings()}
-  onchooseroot={() => void scan.pickRootAndScan()}
-  onscan={() => void scan.start()}
-  onimport={() => ui.togglePanel('import')}
-/>
+  /** 勾选框：点=切换、Shift=连选（与 ctrl+点行的语义不同） */
+  function handleCheck(index: number, event: MouseEvent): void {
+    if (selection.handleCheck(index, event) === 'capped') {
+      notify.showToast(`单次最多选择 ${SELECTION_CAP} 首，已截取刚点中的一段`);
+    }
+  }
+</script>
 
 <ViewHeader
   {view}
@@ -106,20 +79,6 @@
   </div>
 {/if}
 
-{#if notify.error}
-  <div class="error" aria-live="assertive">
-    {notify.error}
-    <button class="link" onclick={() => notify.clearError()}>关闭</button>
-  </div>
-{/if}
-
-{#if playerState?.status === 'error' && playerState.error}
-  <div class="error">
-    《{playerState.current?.title ?? '未知曲目'}》{playerState.error.message}
-    <button class="link" onclick={() => player.next()}>跳到下一首</button>
-  </div>
-{/if}
-
 {#if list.total > 0}
   <TrackList
     store={list.trackWindow}
@@ -139,6 +98,8 @@
     playing={playerState?.status === 'playing'}
     onplay={(index) => void list.playIndex(index)}
     onselect={handleSelect}
+    oncheck={handleCheck}
+    oncheckall={() => selection.toggleAll(list.total)}
     onmenu={(event, index, track) => overlay.openTrackMenu(event.clientX, event.clientY, index, track)}
     onscroll={(top) => list.setScroll(top)}
     onrestored={() => (list.restoreScrollTop = null)}
@@ -147,7 +108,13 @@
   />
 {:else if list.booted}
   <div class="empty">
-    {#if ui.search.trim()}
+    {#if notify.error}
+      <!-- 查询失败时 total 也是 0，但这时候说"曲库还是空的"是错的：
+           用户会去设置页重新扫描，而真正该做的是重试查询 -->
+      <strong>列表加载失败</strong>
+      <span>上方错误条里有原因</span>
+      <button class="btn" onclick={() => void list.reload()}>重试</button>
+    {:else if ui.search.trim()}
       <strong>没有匹配的曲目</strong>
       <span>换个关键词，或清除搜索条件</span>
       <button class="btn" onclick={() => list.clearSearch()}>清除搜索</button>

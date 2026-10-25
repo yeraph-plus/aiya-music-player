@@ -14,14 +14,12 @@
   } from '../lib/audio-format';
   import { formatTime, repeatLabel } from '../lib/format';
   import Icon from './Icon.svelte';
+  import { AudioLines } from '@lucide/svelte';
 
   interface Props {
     player: PlayerState | null;
     queueOpen: boolean;
-    lyricsOpen: boolean;
-    /** 频谱功能是否在设置里开启；关闭时按钮整个不出现 */
-    spectrumEnabled: boolean;
-    spectrumOpen: boolean;
+    nowPlayingActive: boolean;
     ontoggle: () => void;
     onnext: () => void;
     onprev: () => void;
@@ -32,16 +30,13 @@
     onrepeat: () => void;
     onshuffle: () => void;
     onqueue: () => void;
-    ontogglelyrics: () => void;
-    ontogglespectrum: () => void;
+    onshownowplaying: () => void;
   }
 
   let {
     player,
     queueOpen,
-    lyricsOpen,
-    spectrumEnabled,
-    spectrumOpen,
+    nowPlayingActive,
     ontoggle,
     onnext,
     onprev,
@@ -52,8 +47,7 @@
     onrepeat,
     onshuffle,
     onqueue,
-    ontogglelyrics,
-    ontogglespectrum,
+    onshownowplaying,
   }: Props = $props();
 
   let dragging = $state(false);
@@ -232,28 +226,18 @@
   <div class="right">
     <button
       class="icon-btn"
-      class:on={lyricsOpen}
-      onclick={ontogglelyrics}
-      aria-label="歌词"
-      title="歌词"
+      class:on={nowPlayingActive}
+      onclick={onshownowplaying}
+      aria-label="正在播放"
+      title="正在播放：歌词与频谱"
     >
-      <Icon name="lyrics" />
+      <AudioLines size={17} />
     </button>
-    {#if spectrumEnabled}
-      <button
-        class="icon-btn"
-        class:on={spectrumOpen}
-        onclick={ontogglespectrum}
-        aria-label="频谱"
-        title="频谱"
-      >
-        <Icon name="spectrum" />
-      </button>
-    {/if}
     <button
       class="icon-btn"
       class:on={queueOpen}
       onclick={onqueue}
+      data-queue-trigger
       aria-label="播放队列"
       title={`播放队列（${player?.queueLength ?? 0} 首）`}
     >

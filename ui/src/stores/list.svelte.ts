@@ -144,6 +144,15 @@ class ListStore {
    * 但只有停顿 120 ms 才发查询 —— 否则 5 首/字的连打会排队等 IPC。
    */
   setSearch(value: string): void {
+    // 搜索始终针对全库。第一次输入时离开仪表盘/歌单详情，避免把关键词
+    // 错套到当前歌单；后续每个字符只更新查询，不再重置视图。
+    if (value.trim() && (!ui.libraryDetail || ui.page !== 'home' || !ui.search.trim())) {
+      ui.page = 'home';
+      ui.libraryDetail = true;
+      ui.view = { kind: 'library' };
+      ui.artistId = null;
+      ui.albumId = null;
+    }
     ui.search = value;
     clearTimeout(this.searchTimer);
     this.searchTimer = setTimeout(() => void this.reload(), SEARCH_DEBOUNCE_MS);
@@ -245,13 +254,50 @@ class ListStore {
    * 切到内置视图。**同一个视图再点一次 = 重新拉**（用户手滑点错了想刷新，
    * 不该毫无反应）。
    */
-  openBuiltinView(kind: 'library' | 'recent' | 'mostPlayed'): void {
+  openHome(): void {
+    clearTimeout(this.searchTimer);
+    ui.search = '';
+    ui.artistId = null;
+    ui.albumId = null;
+    ui.view = { kind: 'library' };
+    ui.libraryDetail = false;
+    selection.clear();
+    ui.openPage('home');
+  }
+
+  /**
+   * 切到内置视图。
+   *
+   * `sort` 用于"最近添加 → 查看全部"这类**带排序语义的入口**：以前它只能
+   * 打开「全部曲目」，排序用的是上一次留下的字段，用户看到的并不是最近
+   * 添加的顺序。同一个视图再点一次仍然重新拉（手滑点错了想刷新）。
+   */
+  openBuiltinView(
+    kind: 'library' | 'recent' | 'mostPlayed',
+    sort?: { field: TrackSort; direction: 'asc' | 'desc' },
+  ): void {
+    clearTimeout(this.searchTimer);
+    ui.page = 'home';
+    ui.libraryDetail = true;
+    ui.search = '';
+    ui.artistId = null;
+    ui.albumId = null;
+    if (sort) {
+      ui.sort = sort.field;
+      ui.direction = sort.direction;
+    }
     if (ui.view.kind !== kind) ui.view = { kind };
     void this.reload();
     ui.scheduleUiSave();
   }
 
   openPlaylist(id: string): void {
+    clearTimeout(this.searchTimer);
+    ui.page = 'home';
+    ui.libraryDetail = true;
+    ui.search = '';
+    ui.artistId = null;
+    ui.albumId = null;
     ui.view = { kind: 'playlist', id };
     void this.reload();
     ui.scheduleUiSave();

@@ -7,14 +7,20 @@
   overflow-y: auto;
   overflow-x: hidden;
   min-height: 0;
-  padding: 0 8px 12px;
+  /* 10px + 行的 12px = 22px，与页面标题的左边距对齐 */
+  padding: 0 10px 12px;
   position: relative;
 }
 
+/* 列序：选框 / 序号 / 封面 / 标题 / 艺人 / 专辑 / 添加日期 / [次数] / 时长。
+ * 「添加」列是为了让 `sort: added` 有一个**看得见的入口** —— 之前排序支持
+ * added，但表头只有标题/艺人/专辑三个按钮，用户根本点不到它。 */
 .grid-head,
 .row {
   display: grid;
-  grid-template-columns: 34px 42px minmax(150px, 2.2fr) minmax(100px, 1.4fr) minmax(100px, 1.4fr) 56px;
+  grid-template-columns:
+    22px 34px 42px minmax(150px, 2.2fr) minmax(100px, 1.4fr) minmax(100px, 1.4fr) 78px
+    56px;
   align-items: center;
   gap: 10px;
   padding: 0 12px;
@@ -23,8 +29,8 @@
 .list.with-plays .grid-head,
 .list.with-plays .row {
   grid-template-columns:
-    34px 42px minmax(140px, 2.2fr) minmax(90px, 1.4fr) minmax(90px, 1.4fr) 48px
-    56px;
+    22px 34px 42px minmax(140px, 2.2fr) minmax(90px, 1.4fr) minmax(90px, 1.4fr) 78px
+    48px 56px;
 }
 
 .grid-head {
@@ -80,6 +86,44 @@
   font-variant-numeric: tabular-nums;
   text-align: right;
   font-size: 11.5px;
+}
+
+/* ---------------- 多选勾选框 ----------------
+ *
+ * bits-ui 的 `Checkbox.Root` 渲染成 `<button role="checkbox" data-state=...>`，
+ * 尺寸与配色由这里定。主列表与首页表格共用同一套（`.tt-box`）。
+ */
+.check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tt-box {
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--bg);
+  flex: none;
+}
+
+.tt-box:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.tt-box[data-state='checked'],
+.tt-box[data-state='indeterminate'] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.tt-box:disabled {
+  opacity: 0.4;
 }
 
 .cover {

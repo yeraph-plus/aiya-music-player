@@ -1,60 +1,54 @@
 <script lang="ts">
   import type { LibraryStats, PlaylistSummary } from '../lib/ipc';
-  import { artworkUrl } from '../lib/artwork';
+  import type { AppPage } from '../stores/ui.svelte';
   import type { View } from '../lib/view';
+  import { artworkUrl } from '../lib/artwork';
   import { shortenPath } from '../lib/format';
-  import Icon from './Icon.svelte';
+  import { AudioLines, House, ListMusic, Plus, Radio, Settings } from '@lucide/svelte';
 
   interface Props {
+    page: AppPage;
     view: View;
     playlists: PlaylistSummary[];
     stats: LibraryStats | null;
     dataDir: string | null;
-    scanning: boolean;
-    onview: (kind: 'library' | 'recent' | 'mostPlayed') => void;
+    onpage: (page: AppPage) => void;
     onplaylist: (id: string) => void;
     oncreate: () => void;
     onplaylistmenu: (event: MouseEvent, playlist: PlaylistSummary) => void;
-    onsettings: () => void;
   }
 
-  let {
-    view,
-    playlists,
-    stats,
-    dataDir,
-    scanning,
-    onview,
-    onplaylist,
-    oncreate,
-    onplaylistmenu,
-    onsettings,
-  }: Props = $props();
+  let { page, view, playlists, stats, dataDir, onpage, onplaylist, oncreate, onplaylistmenu }: Props =
+    $props();
+
+  const pages = [
+    { id: 'home' as const, label: '首页', icon: House },
+    { id: 'nowPlaying' as const, label: '正在播放', icon: AudioLines },
+    { id: 'radio' as const, label: 'FM 电台', icon: Radio },
+    { id: 'settings' as const, label: '设置', icon: Settings },
+  ];
 </script>
 
 <aside class="sidebar">
-  <div class="brand"><strong>AIYA</strong><span>MUSIC</span></div>
-
-  <nav class="nav">
-    <button class="nav-item" class:active={view.kind === 'library'} onclick={() => onview('library')}>
-      <Icon name="list" size={15} />
-      <span>全部曲目</span>
-    </button>
-    <button class="nav-item" class:active={view.kind === 'recent'} onclick={() => onview('recent')}>
-      <Icon name="clock" size={15} />
-      <span>最近播放</span>
-    </button>
-    <button class="nav-item" class:active={view.kind === 'mostPlayed'} onclick={() => onview('mostPlayed')}>
-      <Icon name="flame" size={15} />
-      <span>常听</span>
-    </button>
+  <nav class="nav" aria-label="主导航">
+    {#each pages as item (item.id)}
+      <button
+        class="nav-item"
+        class:active={page === item.id}
+        aria-current={page === item.id ? 'page' : undefined}
+        onclick={() => onpage(item.id)}
+      >
+        <item.icon size={16} strokeWidth={1.8} />
+        <span>{item.label}</span>
+      </button>
+    {/each}
   </nav>
 
   <div class="side-section">
     <div class="side-head">
-      <span>播放列表</span>
-      <button class="icon-btn tiny" onclick={oncreate} title="新建播放列表" aria-label="新建播放列表">
-        <Icon name="plus" size={13} />
+      <span>歌单</span>
+      <button class="icon-btn tiny" onclick={oncreate} title="新建歌单" aria-label="新建歌单">
+        <Plus size={14} />
       </button>
     </div>
 
@@ -62,7 +56,7 @@
       {#each playlists as playlist (playlist.id)}
         <button
           class="nav-item playlist-item"
-          class:active={view.kind === 'playlist' && view.id === playlist.id}
+          class:active={page === 'home' && view.kind === 'playlist' && view.id === playlist.id}
           onclick={() => onplaylist(playlist.id)}
           oncontextmenu={(event) => {
             event.preventDefault();
@@ -73,33 +67,29 @@
           {#if playlist.artworkId}
             <img class="cover xs" src={artworkUrl(playlist.artworkId, 96) ?? ''} alt="" loading="lazy" />
           {:else}
-            <span class="cover xs placeholder">♪</span>
+            <span class="cover xs placeholder"><ListMusic size={12} /></span>
           {/if}
           <span class="pl-name">{playlist.name}</span>
           <span class="pl-count">{playlist.trackCount}</span>
         </button>
       {:else}
-        <div class="side-empty">还没有播放列表</div>
+        <div class="side-empty">还没有歌单</div>
       {/each}
     </div>
   </div>
 
   <div class="sidebar-footer">
     {#if stats}
-      {stats.tracks} 首 · {stats.albums} 张专辑<br />
-      {stats.artists} 位艺人
+      <strong>{stats.tracks}</strong> 首曲目
+      <span class="library-stats">{stats.albums} 张专辑 · {stats.artists} 位艺人</span>
       {#if stats.missingLocations > 0}
-        <br /><span class="warn">{stats.missingLocations} 个位置缺失</span>
+        <span class="warn">{stats.missingLocations} 个位置缺失</span>
       {/if}
     {:else}
       尚未建立曲库
     {/if}
     {#if dataDir}
-      <br /><span class="dim path" title={dataDir}>{shortenPath(dataDir, 2)}</span>
+      <span class="dim path" title={dataDir}>{shortenPath(dataDir, 2)}</span>
     {/if}
-    <button class="nav-item settings-entry" onclick={onsettings} disabled={scanning}>
-      <Icon name="settings" size={14} />
-      <span>设置与诊断</span>
-    </button>
   </div>
 </aside>
