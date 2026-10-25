@@ -12,6 +12,7 @@
 //! Rust 后前端从没调用过、后端 `let _ = &state` 空转，2026-10-25 整条删除。
 
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -233,6 +234,11 @@ pub struct AppState {
     /// 与设置里的"请求值"分开：设备可能拒绝独占而回落共享，也可能因为
     /// 缓冲太深而跑不出数据（引擎会自动降级并把原因写进 reason）。
     audio_state: Mutex<AudioStateSnapshot>,
+    /// 列表查询耗时环（诊断页"最近查询"）。
+    ///
+    /// 为什么是固定 20 条：这张表只用来判断"最近是不是变慢了"，不是审计。
+    /// 留多了要滚动、要分页，反而没人看。
+    timings: Mutex<VecDeque<dto::ListTiming>>,
     /// app_settings 的内存镜像。
     ///
     /// 为什么必须有：事件泵每 25ms 跑一拍，`preventSleep` / `normalizeVolume`
@@ -241,7 +247,32 @@ pub struct AppState {
     settings: Mutex<Value>,
 }
 
+/// 列表耗时环的容量。UI 只展示最近 8 条，留 20 条给"翻两页才看出趋势"。
+const TIMING_LIMIT: usize = 20;
+
 impl AppState {
+    /// 记一条列表耗时（环形，满了丢最旧）。
+    fn push_timing(&self, timing: dto::ListTiming) {
+        let mut cell = self
+            .timings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cell.len() == TIMING_LIMIT {
+            cell.pop_front();
+        }
+        cell.push_back(timing);
+    }
+
+    /// 诊断页快照（旧 → 新）。
+    fn timings_recent(&self) -> Vec<dto::ListTiming> {
+        self.timings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
     fn db(&self) -> std::sync::MutexGuard<'_, aiya_data::DbHandle> {
         self.db
             .lock()
@@ -478,6 +509,9 @@ fn app_diagnostics(state: State<'_, AppState>) -> Result<dto::Diagnostics, dto::
         .clone();
     // 必须在进入 db 闭包之前读（同一个 DB 线程，闭包里再 send 会死锁）
     let desired = state.setting_output();
+    // 同样必须在 db 闭包之前取：闭包跑在 DB 单 worker 上，不能再回头锁别的
+    let timings = state.timings_recent();
+    let recent = dto::recent_errors();
     state
         .db()
         .send(move |conn| {
@@ -513,9 +547,8 @@ fn app_diagnostics(state: State<'_, AppState>) -> Result<dto::Diagnostics, dto::
                 total_duration_ms: count("SELECT COALESCE(SUM(duration_ms),0) FROM tracks"),
                 // 引擎侧目前只暴露 written_frames，没有流计数；保留结构不编数字
                 streams: dto::StreamsInfo { opened: 0, closed: 0, active: 0 },
-                list_timings: Vec::new(),
-                recent_errors: Vec::new(),
-                shortcut_conflicts: Vec::new(),
+                list_timings: timings,
+                recent_errors: recent,
                 media_keys: dto::MediaKeysInfo {
                     enabled: smtc_active,
                     active: if smtc_active { vec!["SMTC".into()] } else { Vec::new() },
@@ -641,14 +674,43 @@ fn library_list(
     state: State<'_, AppState>,
     query: Json,
 ) -> Result<aiya_data::repo::TrackPage, dto::ApiError> {
+    // 端到端计时起点：含 DB 线程排队（TrackPage::took_ms 只含 SQL）
+    let started = std::time::Instant::now();
     // 参数仍然是 Value + 手动反序列化：形状不对时由我们给出 `invalidArg`
     // 分类，而不是把 Tauri 自己的反序列化文案抛给 UI（分类权要留在自己手里）。
     let q: TrackWindowQuery = serde_json::from_value(query)
         .map_err(|e| dto::ApiError::invalid_arg(format!("查询参数不合法：{e}")))?;
-    state
+    // 埋点要用的元信息必须在 `q` 被 move 进闭包之前取出
+    let source = source_label(&q.source);
+    let cursor = q.cursor.clone();
+    let page = state
         .db()
         .send(move |conn| repo::list_tracks(conn, &q))
-        .map_err(dto::ApiError::from)
+        .map_err(dto::ApiError::from)?;
+    state.push_timing(dto::ListTiming {
+        at_ms: now_ms_u64() as i64,
+        source,
+        rows: page.items.len() as i64,
+        total: page.total,
+        took_ms: started.elapsed().as_secs_f64() * 1000.0,
+        db_took_ms: page.took_ms as f64,
+        cursor,
+    });
+    Ok(page)
+}
+
+/// `TrackSource` → 诊断页"来源"那一列的短标签。
+///
+/// 不走 serde：序列化出来是 `{"kind":"playlist","playlistId":"..."}` 一整坨，
+/// 而这张表只留一列。歌单视图下知道"是 playlist"就够，具体哪个看界面。
+fn source_label(source: &aiya_data::repo::TrackSource) -> String {
+    use aiya_data::repo::TrackSource;
+    match source {
+        TrackSource::Library => "library".into(),
+        TrackSource::Playlist { .. } => "playlist".into(),
+        TrackSource::Recent => "recent".into(),
+        TrackSource::MostPlayed => "mostPlayed".into(),
+    }
 }
 
 /// 单曲/多曲查询（播放条数据源）：带出音频规格。列表查询不带（契约约定）。
@@ -2062,6 +2124,7 @@ pub fn run() {
                 sleep_prevented: AtomicBool::new(false),
                 tray_active: AtomicBool::new(false),
                 audio_state: Mutex::new(AudioStateSnapshot::default()),
+                timings: Mutex::new(VecDeque::with_capacity(TIMING_LIMIT)),
                 settings: Mutex::new(settings0),
             });
 

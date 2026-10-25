@@ -409,3 +409,58 @@ fn beets_status_protocol_version_is_number() {
     assert!(v["libraryExists"].is_boolean());
     assert!(v["scriptPath"].is_null());
 }
+
+/// 诊断页两张表的 wire 形状。
+///
+/// 这两个数组以前是 `Vec<serde_json::Value>`（恒空），UI 只能靠本地视图类型 +
+/// 一次 `as` 转换硬顶。现在有真 DTO 了，字段名必须锁住：`tookMs`/`dbTookMs`
+/// 少一个下划线都变 `took_ms`，TS 侧就是 `undefined`，而类型检查看不出来。
+#[test]
+fn diagnostics_timing_and_error_wire_shape() {
+    let timing = aiya_lib::dto::ListTiming {
+        at_ms: 1_700_000_000_000,
+        source: "library".into(),
+        rows: 50,
+        total: 50_000,
+        took_ms: 2.6,
+        db_took_ms: 2.3,
+        cursor: None,
+    };
+    let v = serde_json::to_value(&timing).unwrap();
+    assert_eq!(
+        keys(&v),
+        sorted(&["atMs", "source", "rows", "total", "tookMs", "dbTookMs", "cursor"])
+    );
+    assert!(v["atMs"].is_number(), "i64 必须发 number（不是 bigint/string）");
+    assert!(v["tookMs"].is_f64(), "耗时是小数毫秒，别退化成整数");
+    assert!(v["cursor"].is_null(), "首屏游标是 null 而不是缺字段");
+
+    let err = aiya_lib::dto::RecentError {
+        at_ms: 1_700_000_000_001,
+        code: aiya_lib::dto::ApiErrorCode::Io,
+        message: "读不到文件".into(),
+        detail: Some("os error 5".into()),
+    };
+    let v = serde_json::to_value(&err).unwrap();
+    assert_eq!(keys(&v), sorted(&["atMs", "code", "message", "detail"]));
+    assert_eq!(v["code"], serde_json::json!("io"), "枚举走 camelCase");
+    assert!(v["detail"].is_string());
+}
+
+/// `Diagnostics` 不再有 `shortcutConflicts`（改由前端 `findConflicts` 算）。
+/// 这条防的是"顺手把它加回来"——那会让同一件事有两个可能不一致的来源。
+#[test]
+fn diagnostics_has_no_shortcut_conflicts_field() {
+    // 两侧都查：DTO 源码（它是真相）与已入库的 TS 生成物（漂移会被看见）
+    // 查字段声明而不是任意出现：注释里解释"为什么删掉"时会写出这个词
+    let src = include_str!("../../src-tauri/src/dto/app.rs");
+    assert!(
+        !src.contains("pub shortcut_conflicts"),
+        "shortcut_conflicts 已从 Diagnostics 删除（改由前端 findConflicts 算），别加回来"
+    );
+    let ts = include_str!("../../ui/src/lib/ipc/generated/Diagnostics.ts");
+    assert!(
+        !ts.contains("shortcutConflicts"),
+        "生成的 Diagnostics 类型里还有 shortcutConflicts —— 跑 npm run gen:types"
+    );
+}

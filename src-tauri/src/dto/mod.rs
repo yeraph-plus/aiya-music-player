@@ -30,6 +30,9 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use std::collections::VecDeque;
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
 pub mod app;
 pub mod beets;
 pub mod history;
@@ -38,7 +41,7 @@ pub mod lyrics;
 pub mod output;
 pub mod playlist;
 
-pub use app::{AppInfo, Diagnostics, SpectrumToggle};
+pub use app::{AppInfo, Diagnostics, ListTiming, RecentError, SpectrumToggle};
 pub use library::{LibraryStats, TrackDetail};
 pub use output::{AudioModeEvent, AudioModeInfo, DesiredOutput, MediaKeysInfo, PowerInfo, StreamsInfo};
 
@@ -90,7 +93,9 @@ pub enum ApiErrorCode {
 
 impl ApiError {
     pub fn new(code: ApiErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), detail: None, retryable: false }
+        let err = Self { code, message: message.into(), detail: None, retryable: false };
+        record(&err);
+        err
     }
 
     /// 参数非法：不重试
@@ -105,12 +110,14 @@ impl ApiError {
 
     /// 正忙：`retryable = true`——等对方结束再点一次确实可能成功
     pub fn busy(message: impl Into<String>) -> Self {
-        Self {
+        let err = Self {
             code: ApiErrorCode::Busy,
             message: message.into(),
             detail: None,
             retryable: true,
-        }
+        };
+        record(&err);
+        err
     }
 
     /// 没装 beets：引导用户去设置页，不是"出错"
@@ -120,17 +127,125 @@ impl ApiError {
 
     /// 内部错误：把技术细节塞进 `detail`，`message` 保持可读
     pub fn internal(detail: impl std::fmt::Display) -> Self {
-        Self {
+        let err = Self {
             code: ApiErrorCode::Internal,
             message: "内部错误".into(),
             detail: Some(detail.to_string()),
             retryable: false,
-        }
+        };
+        record(&err);
+        err
     }
 }
 
 impl From<aiya_data::DbError> for ApiError {
     fn from(e: aiya_data::DbError) -> Self {
         ApiError::internal(e)
+    }
+}
+
+/* ---------------- 最近错误台账（诊断页） ---------------- */
+
+/// 环形容量。UI 文案写的是"最多保留 30 条"，改这里要同步改那句。
+const RECENT_ERROR_LIMIT: usize = 30;
+
+/// 进程级环形缓冲。
+///
+/// 为什么用全局静态而不是 `AppState` 字段：采集点在 `ApiError` 的构造函数里，
+/// 那里拿不到任何 `State`（它是个纯值类型，还在被 `aiya-data` 之类的
+/// crate 间接构造）。挂在全局是"零散埋点"的替代方案 —— 一个点覆盖 53 个命令。
+///
+/// 错误路径不是热路径（正常操作一年也撞不到几次），Mutex 争用可以忽略。
+static RECENT_ERRORS: OnceLock<Mutex<VecDeque<RecentError>>> = OnceLock::new();
+
+fn recent_errors_cell() -> MutexGuard<'static, VecDeque<RecentError>> {
+    RECENT_ERRORS
+        .get_or_init(|| Mutex::new(VecDeque::with_capacity(RECENT_ERROR_LIMIT)))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+fn record(err: &ApiError) {
+    let mut cell = recent_errors_cell();
+    if cell.len() == RECENT_ERROR_LIMIT {
+        cell.pop_front();
+    }
+    cell.push_back(RecentError {
+        at_ms: now_millis(),
+        code: err.code,
+        message: err.message.clone(),
+        detail: err.detail.clone(),
+    });
+}
+
+/// 诊断页用：按时间正序（旧 → 新）快照。
+pub fn recent_errors() -> Vec<RecentError> {
+    recent_errors_cell().iter().cloned().collect()
+}
+
+/// 测试用：清空台账（否则用例之间互相污染）。
+#[doc(hidden)]
+pub fn clear_recent_errors() {
+    recent_errors_cell().clear();
+}
+
+#[cfg(test)]
+mod ring_tests {
+    use super::*;
+
+    /// 环形缓冲的两个性质：容量封顶、只留最新的。
+    ///
+    /// 全局静态被其它测试共享（并行跑），所以**不清空、不假设总长度**，
+    /// 只断言与本次写入序列相关的性质：标记开头的被挤掉了，标记结尾的还在。
+    #[test]
+    fn recent_errors_ring_caps_and_keeps_newest() {
+        let marker = format!("ring-test-{}", std::process::id());
+        let total = RECENT_ERROR_LIMIT * 2;
+        for i in 0..total {
+            let _ = ApiError::new(ApiErrorCode::Io, format!("{marker}-{i}"));
+        }
+
+        let got = recent_errors();
+        assert!(
+            got.len() <= RECENT_ERROR_LIMIT,
+            "环形缓冲超过上限：{} > {}",
+            got.len(),
+            RECENT_ERROR_LIMIT
+        );
+        assert!(
+            got.iter().any(|e| e.message == format!("{marker}-{}", total - 1)),
+            "最新一条应留在环里"
+        );
+        assert!(
+            !got.iter().any(|e| e.message == format!("{marker}-0")),
+            "最早一条应被挤掉"
+        );
+        assert_eq!(
+            got.iter()
+                .find(|e| e.message == format!("{marker}-{}", total - 1))
+                .map(|e| e.code),
+            Some(ApiErrorCode::Io)
+        );
+    }
+
+    /// `internal()` 走的是另一条构造路径（不经 `new`），别漏记。
+    #[test]
+    fn internal_errors_record_detail() {
+        let marker = format!("boom-{}", std::process::id());
+        let _ = ApiError::internal(&marker);
+        let got = recent_errors();
+        let hit = got
+            .iter()
+            .find(|e| e.detail.as_deref() == Some(marker.as_str()))
+            .expect("internal 错误必须进台账");
+        assert_eq!(hit.code, ApiErrorCode::Internal);
+        assert_eq!(hit.message, "内部错误");
     }
 }

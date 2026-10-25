@@ -22,6 +22,7 @@ import type {
   Diagnostics,
   HistoryStats,
   LibraryStats,
+  ListTiming,
   Lyrics,
   PlayerState,
   PlaylistAddResult,
@@ -251,10 +252,17 @@ export class MockBackend {
   private queueIds: string[] = [];
   /** 频谱假帧定时器：只在 `spectrum_set(true)` 期间跑 */
   private spectrumTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * 列表耗时环（诊断页）。真记录而不是塞假数据：预览里翻两页就能看到
+   * 来源/行数/耗时列有值，验收"表格接上真值"这件事。
+   * 最多 20 条，与宿主侧 `TIMING_LIMIT` 同口径。
+   */
+  private timings: ListTiming[] = [];
 
   /* ---------------- library ---------------- */
 
   libraryList(rawQuery: TrackQuery | undefined): TrackPage {
+    const started = performance.now();
     const q: TrackQueryParsed = parseTrackQuery(rawQuery ?? { mode: 'cursor' });
     let rows = this.filter(q);
     rows = this.sortForSource(rows, q);
@@ -277,6 +285,19 @@ export class MockBackend {
       q.mode === 'cursor' && start + q.limit < total && items.length > 0
         ? encodeCursorId(items[items.length - 1]!.id)
         : null;
+    const tookMs = performance.now() - started;
+    this.pushTiming({
+      atMs: Date.now(),
+      source: q.source.kind,
+      rows: items.length,
+      total,
+      tookMs,
+      // 预览没有 DB，SQL 耗时按六成编一个**成比例**的值（保持"排队成本"这一列
+      // 有意义的形状），并在 UI 上无从区分——所以这段只在 mock chunk 里。
+      dbTookMs: tookMs * 0.6,
+      // 游标只在 cursor 模式的判别联合里存在（offset 模式没有这个字段）
+      cursor: q.mode === 'cursor' ? (q.cursor ?? null) : null,
+    });
     return {
       items,
       total,
@@ -285,8 +306,13 @@ export class MockBackend {
       nextCursor,
       // 契约里 offset 是必填的 `number | null`（不是可选字段）
       offset: q.mode === 'offset' ? q.offset : null,
-      tookMs: 1,
+      tookMs: Math.max(1, Math.round(tookMs)),
     };
+  }
+
+  private pushTiming(timing: ListTiming): void {
+    if (this.timings.length >= 20) this.timings.shift();
+    this.timings.push(timing);
   }
 
   libraryTracks(ids: string[]): TrackDetail[] {
@@ -724,9 +750,8 @@ export class MockBackend {
       historyRows: 0,
       totalDurationMs: stats.totalDurationMs,
       streams: { opened: 0, closed: 0, active: 0 },
-      listTimings: [],
+      listTimings: this.timings,
       recentErrors: [],
-      shortcutConflicts: [],
       mediaKeys: { enabled: false, active: [], failed: [] },
       power: { active: false, type: null },
       tray: false,
