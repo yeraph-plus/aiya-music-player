@@ -33,6 +33,23 @@ class UiStore {
   settingsOpen = $state(false);
   beets = $state<BeetsStatus | null>(null);
 
+  /**
+   * 列表滚动位置。**普通字段不是 `$state`**：只用于持久化与"重载后恢复"，
+   * 没有任何视图按它渲染（滚动位置由 TrackList 自己的 DOM 状态决定）。
+   */
+  scrollTop = 0;
+
+  /** UiState 防抖句柄（scheduleUiSave 内部用） */
+  private readonly saveTimer = {
+    handle: undefined as ReturnType<typeof setTimeout> | undefined,
+    clear() {
+      clearTimeout(this.handle);
+    },
+    arm(fn: () => void) {
+      this.handle = setTimeout(fn, 600);
+    },
+  };
+
   lyrics = $state<Lyrics | null>(null);
   lyricsLoading = $state(false);
   /**
@@ -53,14 +70,25 @@ class UiStore {
 
   /* ---------------- 视图状态持久化 ---------------- */
 
-  /** lastScrollTop 由列表持有；保存时通过 getter 注入 */
-  scheduleUiSave(getScrollTop: () => number, timer: { clear(): void; arm(fn: () => void): void }): void {
-    timer.clear();
-    timer.arm(() => {
+  /**
+   * 防抖写 UiState。
+   *
+   * 定时器与 `scrollTop` 都归这里（批次 3 之前定时器挂在 App.svelte，调用方
+   * 还得传一个 timer 对象进来 —— 三个调用点各写一遍 clear/arm，纯搬砖）。
+   *
+   * `scrollTop` 放在 ui 而不是列表 store：它本来就是 UiState 的字段，而
+   * 列表 store 依赖 ui（不能反向 import），放这边 store 才不用为了一个整数
+   * 在每层传 getter。列表滚动时调 `ui.scrollTop = n` 再 `scheduleUiSave()`。
+   *
+   * 600 ms 是"滚动停下就存"的经验值：再短会每滚一屏写一次库。
+   */
+  scheduleUiSave(): void {
+    this.saveTimer.clear();
+    this.saveTimer.arm(() => {
       const state: UiState = {
         sort: this.sort,
         direction: this.direction,
-        scrollTop: Math.round(getScrollTop()),
+        scrollTop: Math.round(this.scrollTop),
         artistId: this.artistId,
         albumId: this.albumId,
         view: viewKey(this.view),
@@ -73,6 +101,11 @@ class UiStore {
     });
   }
 
+  /** 清理：组件卸载时取消未落盘的写入 */
+  dispose(): void {
+    this.saveTimer.clear();
+  }
+
   restore(data: UiState): void {
     if (data.sort) this.sort = data.sort;
     if (data.direction) this.direction = data.direction;
@@ -80,6 +113,25 @@ class UiStore {
     this.albumId = data.albumId ?? null;
     this.sidePanel = data.sidePanel ?? null;
     this.view = parseViewKey(data.view);
+  }
+
+  /* ---------------- 侧面板 ---------------- */
+
+  /**
+   * 开关侧面板（队列 / 歌词 / 频谱 / 导入）。同一个按钮再按一次 = 收起。
+   *
+   * 为什么 `currentTrackId` 由调用方传：打开歌词面板要立刻取词，而当前曲目
+   * 在 player store 上。让 ui 去 import player 会把"界面状态"绑到"播放状态"，
+   * 传一个 id 更省事，且调用方本来就有。
+   */
+  togglePanel(
+    panel: NonNullable<UiStore['sidePanel']>,
+    currentTrackId: string | null = null,
+  ): void {
+    const next = this.sidePanel === panel ? null : panel;
+    this.sidePanel = next;
+    this.scheduleUiSave();
+    if (next === 'lyrics' && currentTrackId) this.loadLyrics(currentTrackId);
   }
 
   /* ---------------- 设置 ---------------- */

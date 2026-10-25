@@ -1,17 +1,17 @@
 <script lang="ts">
   /**
-   * 应用外壳：只负责「版面」。
+   * 应用外壳：版面 + 跨视图的容器行为。
    *
-   * 边界约定（批次 1 落地，批次 3 继续沿用的判据）：
+   * 边界判据（批次 1 定的，批次 3 收紧了一档）：
    * - **版面归壳**：`.app` 网格、侧栏、主区、侧面板、批量条、播放条的位置与层级；
-   * - **数据归 store**：壳直接读 `ui` / `library` / `player` / `selection`，
-   *   不通过 App 中转（壳是容器，依赖方向仍是 components → stores → ipc）；
-   * - **行为归 App**：凡是需要 App 本地状态的（列表重载、选中集解析成 id、
-   *   面板开关的落库防抖），一律由 App 以回调注入，壳里不复制一份逻辑。
+   * - **数据归 store**：壳直接读 `ui` / `library` / `player` / `selection` /
+   *   `list` / `playlists` / `overlay`，依赖方向仍是 components → stores → ipc；
+   * - **不收 prop**：批次 1 时壳还接了 12 个回调（理由是"要 App 的本地状态"），
+   *   批次 3 把那些状态搬进 store 之后，**壳自己就能闭环**——切视图是
+   *   `list.openBuiltinView`、面板开关是 `ui.togglePanel`、批量操作是
+   *   `list.batchPlay`。留着回调等于在壳和 App 之间留一排空管道。
    *
-   * 为什么现在只搬版面：批次 3 才把 `views/` 拆出来，那时主区内容会整体变成
-   * 一个 snippet 之外的独立组件；先把壳定下来，后续加视图不用再动 App.svelte
-   * 的布局部分。
+   * 唯一 `children`：主区内容（`views/*`）。壳不该知道当前是哪个视图。
    */
   import type { Snippet } from 'svelte';
   import Sidebar from './Sidebar.svelte';
@@ -21,57 +21,67 @@
   import SpectrumPanel from './SpectrumPanel.svelte';
   import ImportPanel from './ImportPanel.svelte';
   import BatchBar from './BatchBar.svelte';
-  import { player } from '../stores/player.svelte';
-  import { ui } from '../stores/ui.svelte';
-  import { library } from '../stores/library.svelte';
-  import { selection } from '../stores/selection.svelte';
   import type { SpectrumSource } from '../lib/spectrum-source';
-
-  type SidePanel = NonNullable<typeof ui.sidePanel>;
+  import { errorMessage } from '../lib/errors';
+  import { library } from '../stores/library.svelte';
+  import { list } from '../stores/list.svelte';
+  import { notify } from '../stores/notify.svelte';
+  import { overlay } from '../stores/overlay.svelte';
+  import { player } from '../stores/player.svelte';
+  import { playlists } from '../stores/playlists.svelte';
+  import { selection } from '../stores/selection.svelte';
+  import { ui } from '../stores/ui.svelte';
 
   type Props = {
-    /** 主区内容（视图区），批次 3 会换成 `views/*` 组件 */
+    /** 主区内容（`views/*`），由 App 决定挂哪个视图 */
     children: Snippet;
-    /* 侧栏：视图切换与歌单操作要重载列表，只能由 App 提供 */
-    onview: (kind: 'library' | 'recent' | 'mostPlayed') => void;
-    onplaylist: (id: string) => void;
-    oncreate: () => void;
-    onplaylistmenu: (event: MouseEvent, playlist: (typeof ui.playlists)[number]) => void;
-    /* 队列：点某一行要播「当前队列的第 N 首」，失败要写进 App 的错误条 */
-    onqueueplay: (index: number) => void;
-    /* 批量条：选中集 → id 列表的解析要 App 的查询上下文 */
-    onbatchplay: () => void;
-    onbatchenqueue: () => void;
-    onbatchaddto: (playlistId: string) => void;
-    onbatchremove: () => void;
-    /* 面板开关：切换要顺带落库滚动位置，防抖器在 App 里 */
-    ontogglepanel: (panel: SidePanel) => void;
-    /* 导入完成后曲库变了，需要 App 重载当前视图 */
-    onsynced: () => void;
-    /** 频谱数据源由 App 管理（建图 = 音频路径切换，只能在面板打开时创建） */
-    spectrumSource: SpectrumSource | null;
   };
 
-  let {
-    children,
-    onview,
-    onplaylist,
-    oncreate,
-    onplaylistmenu,
-    onqueueplay,
-    onbatchplay,
-    onbatchenqueue,
-    onbatchaddto,
-    onbatchremove,
-    ontogglepanel,
-    onsynced,
-    spectrumSource,
-  }: Props = $props();
+  let { children }: Props = $props();
 
   const view = $derived(ui.view);
   const sidePanel = $derived(ui.sidePanel);
   const settings = $derived(ui.settings);
   const playerState = $derived(player.state);
+
+  /**
+   * 频谱数据源：**只在面板真的打开时才创建**。
+   *
+   * `RemoteSpectrumSource` 构造时会订阅 `spectrum:frame` 并打开引擎的
+   * tap —— 那是给音频链加一条采样复制的路径。提前建等于让所有用户
+   * 常驻一条他们没在看的回调。
+   *
+   * 放在这里而不是 App：面板是壳的一部分，源的生命周期跟着面板走。
+   */
+  let spectrumSource = $state<SpectrumSource | null>(null);
+  $effect(() => {
+    if (sidePanel !== 'spectrum' || !settings.spectrum) {
+      spectrumSource = null;
+      return;
+    }
+    try {
+      spectrumSource = player.getSpectrumSource();
+    } catch (err) {
+      // 拿不到源不致命：面板会不渲染，控制台留一句
+      console.warn('spectrum source failed:', errorMessage(err));
+      spectrumSource = null;
+    }
+  });
+
+  /** 队列里点某一行：失败要写错误条（这是用户显式动作） */
+  async function playQueueAt(index: number): Promise<void> {
+    try {
+      await player.playTracks(player.queueIds, index);
+    } catch (err) {
+      notify.showError(errorMessage(err));
+    }
+  }
+
+  /** 批量「移除」：先把选中集换成 id，再开确认框（数量要显示给用户） */
+  async function askRemoveSelection(): Promise<void> {
+    const ids = await list.selectionIds();
+    if (ids.length > 0) overlay.dialog = { kind: 'removeTracks', ids };
+  }
 </script>
 
 <div class="app" class:side-open={sidePanel !== null}>
@@ -81,10 +91,11 @@
     stats={library.stats}
     dataDir={library.dataDir}
     scanning={library.scanning}
-    {onview}
-    {onplaylist}
-    {oncreate}
-    {onplaylistmenu}
+    onview={(kind) => list.openBuiltinView(kind)}
+    onplaylist={(id) => list.openPlaylist(id)}
+    oncreate={() => (overlay.dialog = { kind: 'createPlaylist' })}
+    onplaylistmenu={(event, playlist) =>
+      overlay.openPlaylistMenu(event.clientX, event.clientY, playlist)}
     onsettings={() => void ui.openSettings()}
   />
 
@@ -96,7 +107,7 @@
     <QueuePanel
       ids={player.queueIds}
       index={playerState?.index ?? -1}
-      onplay={onqueueplay}
+      onplay={(index) => void playQueueAt(index)}
       onremove={(index) => player.removeAt(index)}
       onmove={(from, to) => player.move(from, to)}
       onclear={() => player.clear()}
@@ -120,17 +131,17 @@
       onclose={() => (ui.sidePanel = null)}
     />
   {:else if sidePanel === 'import'}
-    <ImportPanel onclose={() => (ui.sidePanel = null)} {onsynced} />
+    <ImportPanel onclose={() => (ui.sidePanel = null)} onsynced={() => void list.reload()} />
   {/if}
 
   {#if selection.size > 0}
     <BatchBar
       count={selection.size}
       playlists={ui.playlists}
-      onplay={onbatchplay}
-      onenqueue={onbatchenqueue}
-      onaddto={onbatchaddto}
-      onremove={onbatchremove}
+      onplay={() => void list.batchPlay()}
+      onenqueue={() => void list.batchEnqueue()}
+      onaddto={(playlistId) => void playlists.addSelection(playlistId)}
+      onremove={() => void askRemoveSelection()}
       onclear={() => selection.clear()}
     />
   {/if}
@@ -150,8 +161,8 @@
     onrate={(rate) => player.setRate(rate)}
     onrepeat={() => player.cycleRepeat()}
     onshuffle={() => player.setShuffle(!(playerState?.shuffle ?? false))}
-    onqueue={() => ontogglepanel('queue')}
-    ontogglelyrics={() => ontogglepanel('lyrics')}
-    ontogglespectrum={() => ontogglepanel('spectrum')}
+    onqueue={() => ui.togglePanel('queue')}
+    ontogglelyrics={() => ui.togglePanel('lyrics', playerState?.current?.id ?? null)}
+    ontogglespectrum={() => ui.togglePanel('spectrum')}
   />
 </div>

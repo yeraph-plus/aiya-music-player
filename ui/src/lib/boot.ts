@@ -1,0 +1,68 @@
+import { errorMessage } from './errors';
+import type { PlayerState } from './ipc/generated/PlayerState';
+import { library } from '../stores/library.svelte';
+import { list } from '../stores/list.svelte';
+import { scan } from '../stores/scan.svelte';
+import { player } from '../stores/player.svelte';
+import { ui } from '../stores/ui.svelte';
+
+/**
+ * 启动引导。
+ *
+ * 从 `App.svelte` 的 `onMount` 搬出来（批次 3）：这段是**一次性编排**
+ * （订阅 → 并发拉取 → 首屏 → 对齐播放器快照），一个组件生命周期方法里
+ * 塞 60 行 async 会盖住 App 真正该做的事（装配）。
+ *
+ * **签名刻意做成"同步返回清理函数 + 内部异步"**：`onMount` 必须在返回的
+ * 那一拍就拿到清理函数。如果做成 `async function boot(): Promise<() => void>`，
+ * 组件在引导完成前卸载就会泄漏订阅（老代码没错，因为它是手写在一个
+ * 同步 `onMount` 里先 push 再 async）。
+ */
+export function boot(options: { onState: (state: PlayerState) => void }): () => void {
+  const cleanups: Array<() => void> = [];
+
+  // player:state 事件是否已到过。晚到的 fetchState 结果不能盖回旧状态。
+  let stateEventSeen = false;
+
+  cleanups.push(
+    player.init({
+      onState: (next) => {
+        stateEventSeen = true;
+        options.onState(next);
+      },
+    }),
+  );
+
+  // 扫描进度：`done` 时由 scan store 统一收尾（统计/歌单/列表）
+  cleanups.push(scan.watch());
+
+  void (async () => {
+    // 三件事并发：应用信息（dataDir）、播放器快照、界面状态/设置/歌单
+    const [dataDir, playerResult] = await Promise.all([library.fetchInfo(), player.fetchState()]);
+    const restoredScrollTop = await ui.bootstrap();
+
+    if (dataDir) library.dataDir = dataDir;
+    ui.scrollTop = restoredScrollTop;
+    // 频谱面板若被恢复，`AppShell` 的 effect 会自己拿源（sidePanel 已就位）
+
+    await library.loadStats();
+    await list.reload({ restore: true });
+
+    // fetchState 与 player:state 事件并发：事件已先到时 store 里已是新状态，
+    // 丢弃这份晚到的快照，避免把界面盖回旧值。
+    if (playerResult && !stateEventSeen) {
+      player.state = playerResult;
+      options.onState(playerResult);
+      // 装载由主进程补发的 load 指令完成（attach 时一次性发出）；
+      // 音量/静音/归一化全部以后端状态为准，UI 不再"对齐"一遍。
+      await player.refreshQueue(playerResult.queueVersion);
+    }
+  })().catch((err) => {
+    // 引导失败不致命：设置/歌单走默认值，界面仍可用
+    console.warn('boot failed:', errorMessage(err));
+  });
+
+  return () => {
+    for (const cleanup of cleanups) cleanup();
+  };
+}

@@ -35,36 +35,40 @@
 
 ```
 ui/src/
-  main.ts                 只做 mount（现在 17 行，保持）
-  App.svelte              ~120 行：只负责布局骨架 + 视图切换
-  styles/
-    tokens.css            从 app.css 抽：:root / [data-theme=light] 变量
-    base.css              reset + 排版 + 滚动条
-    utilities.css         .panel / .btn / .row 这类原子类
+  main.ts                 只做 mount（17 行）
+  App.svelte              127 行：装配 + 4 个 document 级副作用（批次 3 落地）
+  styles/                 tokens / base / shell / lists / player / overlays（批次 1）
   lib/
-    ipc/                  ✓ 已完成（client/schema/events/generated）
-    format.ts  virtual.ts  selection.ts  view.ts  ...（纯函数，原样保留）
-    artwork.ts            artworkUrl()（从 contracts 搬来，唯一源）
-    keyboard/             快捷键注册表 + 冲突检测（从 App.svelte 抽出）
-  stores/
-    player.svelte.ts      直连 ipc.player.* + events.playerState（rAF 合帧）✓
-    library.svelte.ts     直连 ipc.library.* + events.scanProgress ✓
-    ui.svelte.ts          view / 侧栏 / 面板 / 设置 / 歌单 / 歌词 / 诊断 ✓
-    selection.svelte.ts   纯内存，原样保留 ✓
-    beets-session.svelte.ts  直连 ipc.beets.* + events.beetsImport ✓
-    history.svelte.ts     批次 3 接历史视图时再拆（现在只有 clear 一个调用）
+    ipc/                  ✓ 完整（client 54 命令 / schema / events / generated 41 类型）
+    artwork.ts            artworkUrl()（唯一源）
+    keyboard.ts           快捷键**执行层**（判断层是 list-keys.ts 的纯函数）
+    boot.ts               启动引导：同步注册订阅 + 异步首屏
+    focus-search.ts       搜索框聚焦的模块级注册表
+    errors.ts             ApiError → 可显示文案（它不是 Error 实例）
+    spectrum-source.ts    RemoteSpectrumSource（订阅 spectrum:frame）
+    format/selection/view/track-window/list-keys/media-session/menu/drag ...
+  stores/                 依赖可多向，但**必须无环**（详见 §3 批次 3 的判据）
+    ui.svelte.ts          视图/筛选/面板/设置/歌单/歌词/诊断 + scrollTop
+                          ★ 不依赖任何其他 store（被最多 store 依赖）
+    library.svelte.ts     统计/扫描进度/分页取数（只依赖 ipc，最底层）
+    player.svelte.ts      快照 + 队列 + 频谱源（rAF 合帧）
+    selection.svelte.ts   纯内存选择集
+    list.svelte.ts        查询 + 分页窗口 + reload + 播放当前列表 + 批量 + 搜索排序
+    playlists.svelte.ts   歌单组合动作（CRUD → 刷新 → 视情况重载 → toast）
+    scan.svelte.ts        选目录 → 扫描 → 收尾（3 个入口共用）
+    history.svelte.ts     清空历史 + 连带刷新
+    overlay.svelte.ts     右键菜单 / 对话框（两份菜单互斥）
+    notify.svelte.ts      错误条（常驻）+ toast（2.6s）
+    beets-session.svelte.ts  直连 ipc.beets.* + events.beetsImport
   views/
-    LibraryView.svelte    曲目表（TrackList 的宿主）
-    PlaylistView.svelte
-    HistoryView.svelte
-    SettingsView.svelte
-    DiagnosticsView.svelte
-    BeetsView.svelte
-  components/             保留，但改成 props in / events out（不取数）
+    LibraryView.svelte    主区（顶栏 + 视图头 + 表 + 空态），不收 prop
+    （PlaylistView / HistoryView 不拆了：它们与曲库共用同一张表，
+      差别只在 `view.kind` → `source`，拆开等于复制一遍 TrackList 的接线）
+  components/             非视图组件；AppShell 零 prop，OverlayHost 自己读 store
 ```
 
 **依赖方向铁律**：`components → stores → ipc`。组件里出现 `ipc.` 或 `window.api`
-就是错的，`grep` 可查。
+就是错的，`grep` 可查。store 之间按"依赖别人者承担编排"排布（§3 批次 3）。
 
 ## 3. 分批落地（每批可独立验证）
 
@@ -206,11 +210,56 @@ codec 认得出按 codec；codec 缺失按容器；容器也说不了 `Mp4/Ogg` 
 （第 3 条在 `tests/dto_wire.rs`，锁 wire 键集合——形状断言比修 bug 本身更重要，
 这次正是因为**没有任何测试检查 payload 里有这个键**才藏了一个多月）。
 
-### 批次 3 · 拆 `App.svelte`
-- [ ] 视图路由改成 `views/`（`LibraryView` 先行：曲目表 + 表头 + 批量栏）
-- [ ] 快捷键从 `App.svelte` 移到 `lib/keyboard/`（含 `E_SHORTCUT_CONFLICT` 检测）
-- [ ] 拖拽/批量/右键菜单归位（`lib/drag.ts`、`components/BatchBar`、`ContextMenu`）
-- [ ] 验收：`App.svelte` < 150 行；六视图切换 + 快捷键全通
+### 批次 3 · 拆 `App.svelte`（**完成**，`App.svelte` 1070 → 127 行）
+
+- [x] 视图路由改成 `views/`：`views/LibraryView.svelte`（顶栏 + 视图头 + 筛选/扫描/
+      错误条 + 曲目表 + 空态），**不收 prop**，直接读 store
+- [x] 快捷键从 `App.svelte` 移到 `lib/keyboard.ts`（判断/执行分两层，见下）
+- [x] 拖拽/批量/右键菜单归位：批量条与菜单的**动作**进 store，`components/OverlayHost.svelte`
+      收口所有浮层
+- [x] 验收：`App.svelte` 127 行；真窗口 20 项交互全通（见 §8.5）
+
+**拆法（关键：先搬状态，再搬视图）**
+
+| 新文件 | 行数 | 承接什么 |
+|---|---|---|
+| `stores/list.svelte.ts` | 271 | 查询构造 + `TrackWindow` 分页 + `reload` + 播放当前列表 + 搜索防抖/排序/筛选 + 批量操作 |
+| `stores/playlists.svelte.ts` | 170 | 歌单的**组合动作**（CRUD → 刷新侧栏 → 视情况重载 → toast） |
+| `stores/scan.svelte.ts` | 67 | 选目录 → 扫描 → 统计/歌单/列表收尾（3 个入口共用） |
+| `stores/history.svelte.ts` | 42 | 清空历史 + 连带刷新 |
+| `stores/overlay.svelte.ts` | 67 | 右键菜单与对话框的开合状态（两份菜单**互斥**） |
+| `stores/notify.svelte.ts` | 39 | 错误条（常驻）与 toast（2.6s）两条通道 |
+| `lib/keyboard.ts` | 137 | 快捷键执行层（判断层仍是 `lib/list-keys.ts` 的纯函数） |
+| `lib/boot.ts` | 68 | 启动引导：同步注册订阅 + 异步首屏 |
+| `lib/focus-search.ts` | 24 | 搜索框聚焦的模块级注册表 |
+| `views/LibraryView.svelte` | 174 | 主区全部标记 |
+| `components/OverlayHost.svelte` | 199 | toast + 2 菜单 + 5 对话框 + 设置面板 |
+| `components/AppShell.svelte` | 168 | 版面（**从 12 个 prop 降到 0 个**） |
+| `App.svelte` | **127** | 装配 + 4 个 `document` 级副作用 |
+
+**两条结构性决定（后面别回退）**
+
+1. **`scrollTop` 从列表 store 搬到 `ui` store。** 它本来就是 `UiState` 的字段，
+   而 `list → ui` 的依赖方向决定了 ui 不能 import list（会成环）。搬过去之后
+   `ui.scheduleUiSave()` 不用再收一个 getter 参数，`togglePanel` 也不用——
+   之前为了一个整数在每层传回调。
+2. **`AppShell` 零 prop。** 批次 1 留了 12 个回调（理由是"要 App 本地状态"），
+   批次 3 把状态搬进 store 后这些回调全部消失：切视图 `list.openBuiltinView`、
+   面板 `ui.togglePanel`、批量 `list.batchPlay` / `playlists.addSelection`。
+   判据升级为：**能在壳里用 store 实现的，一律不进 prop；壳只收 `children`。**
+
+**编排层的归属（新增判据，批次 4 沿用）**
+
+`stores/*` 之间可以有依赖，但**必须无环**。所以「跨 store 的组合动作」放在
+**依赖别人**、而不是被依赖的那一侧：
+
+- `library` 是最底层（只依赖 ipc）→ 扫描的编排不能放它，另建 `scan`
+- `list` 依赖 ui/library/player/selection → 批量与「播放当前列表」放它
+- `playlists` 依赖 list/ui → 歌单"加完歌要重载列表"放它
+- `history` 依赖 list → 清空历史后重载放它
+
+`ui` store 保持**不依赖任何其他 store**（只依赖 ipc/schema/loader）：它是被
+最多 store 依赖的那个，一旦它反过来 import player 就成环。
 
 ### 批次 4 · 删旧壳（等新 UI 自给自足才做）
 - [ ] 删 `ui/src/compat/`（含 `mock.ts` —— 浏览器预览改用 `ipc` 的 mock 适配）
@@ -310,7 +359,7 @@ npm run probe:ui -- --actions    # 追加面板开关交互序列
 | 1 地基 | **完成** | `check` 0/0；CSS 构建产物 31845 字节逐字节一致；`probe:ui` 无异常、面板开关链路 4/4 |
 | 2 数据层换血 | **完成** | `window.api` 业务代码归零；208 测试 / 0 警告；真窗口走通设置读写 + 事件链路（见 §8.3） |
 | 2.5 后端补 `lossless` | **完成** | 211 测试 / 0 失败；真窗口两分支都对：无损 `3072 kbps`、有损 `320 kbps`（见 §2.5） |
-| 3 拆 `App.svelte` | 待开始 | — |
+| 3 拆 `App.svelte` | **完成** | `App.svelte` 1070 → **127 行**；真窗口 20 项交互全通，新增 2 个 bug 的回归验证（见 §8.5） |
 | 4 删旧壳 | 待开始 | — |
 
 ### 8.1 批次 1 实际改了什么
@@ -380,6 +429,48 @@ npm run probe:ui -- --actions    # 追加面板开关交互序列
 新 `ipc` 客户端只走 `invoke`，非 Tauri 环境必失败。这是**有意接受**的过渡状态，
 批次 4 把 `MockBackend` 搬到 `lib/ipc/mock` 下做一次派发表再接上。
 日常开发/验收一律用 `npm run dev`（真窗口）+ `npm run probe:ui`。
+
+### 8.5 批次 3 真窗口验证（20 项，全程 CDP 读真 DOM）
+
+拆 1070 行不留回归，靠的是逐项点出来的证据，不是"看着一样"：
+
+| 类别 | 验证项 | 结果 |
+|---|---|---|
+| 版面 | `.app` 直接子元素 | `aside.sidebar` / `main.main` / `footer.player`（+ 侧面板按需） |
+| 列表 | 曲库行数 / 首行 / 顶栏计数 | 3 行；`1 ♪ 中音测试 440Hz 未知艺人 — 0:05`；`3 首` |
+| 快捷键 | `Ctrl+A` 全选 | 批量条出现：`已选 3 首 | 播放 | 加入队列 | 加入播放列表 | 移出曲库` |
+| 快捷键 | `Escape` | 清空选择 → 批量条消失；再按关侧面板 |
+| 快捷键 | `↓` | `.row.focus` 出现（键盘选中移动） |
+| 快捷键 | `空格` | 起播，播放条换曲（`player:state` → UI） |
+| 浮层 | 曲目右键 | 8 项：播放 / 下一首播放 / 加入播放队列 / 添加到播放列表… / 按此艺人筛选 / 按此专辑筛选 / 在文件夹中显示 / 从曲库移除 |
+| 浮层 | 歌单右键 | 6 项：播放 / 重命名 / 上移 / 下移 / 清空 / 删除 |
+| 浮层 | 设置面板 | 打开正常（真值已在 §8.3 验过） |
+| 浮层 | 新建歌单对话框 | `aria-label=新建播放列表`，提交后侧栏出现、视图跳到新歌单（`0 首 · 0 分钟`） |
+| 歌单 | 批量加歌 | 下拉 → 点歌单 → toast `新增 3 首，跳过 0 首`；侧栏计数 `3`；选择集清空 |
+| 歌单 | 加完歌切过去 | 3 行；视图头 `播放列表 | 加歌验证 | 3 首 · 0 分钟` |
+| 歌单 | 歌单内右键移除 | 菜单第 8 项变成「从播放列表移除」；移除后 2 行、侧栏计数 `2` |
+| 歌单 | 删除（当前正在看） | toast `已删除「加歌验证」`；**主区立刻回到 3 行**（见下面的 bug 1） |
+| 搜索 | 输入 `440` | 3 行 → 1 行 |
+| 排序 | 点「标题」两次 | `标题 ↑` → `标题 ↓`；表头 `.sort-head.on` 唯一 |
+| 运行期 | console / 未捕获异常 | 0 error、0 未捕获异常 |
+
+**这轮抓到的两个 bug（都不是重构引入的，是搬代码时照抄了旧写法）**
+
+1. **删掉正在看的歌单后，主区不刷新。**
+   `ui.refreshPlaylists()` 内部发现当前歌单不在新列表里时，会**自己**把
+   `ui.view` 改成 `LIBRARY_VIEW`。之后代码再判断
+   `ui.view.kind === 'playlist' && ui.view.id === playlist.id` 恒为假 →
+   `reload()` 被跳过 → 侧栏已切回「全部曲目」，主区却停在空态，用户得
+   手点一下侧栏才出数据。
+   旧实现在 `App.svelte` 里是 `const view = $derived(ui.view)`，**读的同样是
+   刷新后的值**，所以刷新前就存在。
+   修法：进函数第一行先把"是否正在看它"存成布尔。
+2. **两个右键菜单能同时挂在屏幕上。** 右键曲目行之后再右键侧栏歌单，
+   `.context-menu` 会有两个（真窗口截图为证）。
+   修法：`overlay.openTrackMenu` / `openPlaylistMenu` 互斥清空对方。
+
+第 2 个是新增的 `overlay` store 顺手就能修的（旧代码里两个 `$state` 变量
+也是各管各的，同样有这个毛病），这也是把浮层状态收口到一处的好处。
 
 ## 9. 遗留（本轮明确不做，别忘）
 
