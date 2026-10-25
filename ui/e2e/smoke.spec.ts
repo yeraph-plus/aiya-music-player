@@ -1,15 +1,24 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * E2E 冒烟（docs/18 §9 大件 C）：UI 装配 + 关键交互链路。
+ * E2E 冒烟（2026-10-26 按新壳体重写）。
  *
- * 跑在浏览器预览的 mock 后端上（vite preview + 无 Tauri 自动装 mock）。
- * 判据刻意压在「坏了必炸」的锚点上：曲目行渲染、双击播放链路（mock 的
- * playTracks → 状态广播 → 播放条/队列面板联动）、设置分区、频谱 pro 渲染。
- * 另有一条全局哨兵：任何 console.error / pageerror 直接失败。
+ * **选择器原则：认语义与稳定类名，不认版式类名。**
+ * 上一版 4 条全红，就是钉在了重构前的版式上：
+ * - `.main .list .row` → 首页改表格后那段是 `.tt-row`（`.list` 只在曲库/歌单页）
+ * - `'设置与诊断'` → 现在就叫「设置」
+ * - `.tabs button` → 设置已改成一页常驻区块 + PageToolbar 锚点，没有 tab 切换
+ *
+ * 这一版使用：
+ * - 壳体：`.titlebar`（唯一全局条）、`.sidebar .nav-item`（一级导航）
+ * - 页内：`.page-header h1`（PageHeader 标题）、`.page-toolbar .pt-tab`（工具条）
+ * - 列表：`.list .row`（虚拟列表）、`.tt-row`（首页紧凑表）
+ * 版式细节（`.page-pad`、`.tt-*`、间距）**不参与断言** —— 那些会继续变。
+ *
+ * 跑在浏览器预览的 mock 后端上（无 Tauri 时 main.ts 自动装 mock），
+ * 真引擎行为归 Rust 单测与真窗口探针（tools/cdp-probe.mjs）。
  */
 
-/** 每个用例的运行时错误收集（beforeEach 清零、afterEach 断言） */
 let runtimeErrors: string[] = [];
 
 test.beforeEach(async ({ page }) => {
@@ -18,75 +27,106 @@ test.beforeEach(async ({ page }) => {
   page.on('console', (m) => {
     if (m.type() === 'error') runtimeErrors.push(`console.error: ${m.text()}`);
   });
-  // 频谱开关默认关（mock 设置默认值），冒烟里要开频谱面板 → 种好设置
-  await page.addInitScript(() => {
-    const raw = localStorage.getItem('aiya.settings');
-    const s = raw ? JSON.parse(raw) : {};
-    s.spectrum = true;
-    s.spectrumEngine = 'pro';
-    localStorage.setItem('aiya.settings', JSON.stringify(s));
-  });
 });
 
 test.afterEach(async () => {
   expect(runtimeErrors, '页面运行期错误').toEqual([]);
 });
 
-/** 双击第一行触发播放（行有拖拽系统，需要完整指针序列 + dblclick） */
-async function playFirstRow(page: Page): Promise<void> {
-  const row = page.locator('.main .list .row').first();
-  await row.waitFor({ state: 'visible' });
-  await row.dispatchEvent('pointerdown', { pointerId: 1, pointerType: 'mouse', isPrimary: true });
-  await row.dispatchEvent('pointerup', { pointerId: 1, pointerType: 'mouse', isPrimary: true });
-  await row.dblclick();
-  // 等播放条出歌名（"未在播放"消失）
-  await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
+/** 列表里第一行真实数据（排除加载骨架与失败行） */
+function firstRow(page: Page) {
+  return page.locator('.main .list .row:not(.skeleton):not(.failed)').first();
 }
 
-test('启动装配：曲库渲染 + 播放条在位', async ({ page }) => {
+/** 首页 → PageHeader 的「浏览全部曲目」→ 曲库列表 */
+async function openLibrary(page: Page): Promise<void> {
   await page.goto('/');
-  // 侧边栏与主列表
-  await expect(page.locator('.nav-item').first()).toBeVisible();
-  await expect(page.locator('.main .list .row').first()).toBeVisible();
-  // 233 首 mock 曲库：视图头应显示总数（曲目行是虚拟滚动，别数 DOM）
-  await expect(page.locator('.main')).toContainText('233');
-  // 播放条空态
+  await page.locator('.main button', { hasText: '浏览全部曲目' }).click();
+  await expect(page.locator('.main .page-header h1')).toHaveText('全部曲目');
+  await firstRow(page).waitFor({ state: 'visible' });
+}
+
+test('启动装配：顶栏四件 + 首页标题 + 播放条空态', async ({ page }) => {
+  await page.goto('/');
+  // 宽 TitleBar：搜索框在位、返回键此时无历史所以 disabled
+  await expect(page.locator('.titlebar .tb-search input')).toBeVisible();
+  await expect(page.locator('.titlebar .tb-back')).toBeDisabled();
+  // 页内标题归 PageHeader（不是顶栏）
+  await expect(page.locator('.main .page-header h1')).toHaveText('首页');
+  await expect(page.locator('.main .page-header .page-kicker')).toHaveText('YOUR LIBRARY');
+  // 首页三段都是紧凑表（TrackTable），不是虚拟列表
+  await expect(page.locator('.main .tt-row').first()).toBeVisible();
+  await expect(page.locator('.main .list')).toHaveCount(0);
   await expect(page.locator('footer')).toContainText('未在播放');
 });
 
-test('播放链路：双击播放 → 队列面板激活行', async ({ page }) => {
-  await page.goto('/');
-  await playFirstRow(page);
-  // 播放条有曲目名与时长
+test('导航链：曲库 → 工具条切最近播放 → 顶栏返回', async ({ page }) => {
+  await openLibrary(page);
+  // 曲库三个内置视图互切（这是本轮补上的缺口）
+  const tabs = page.locator('.main .page-toolbar .pt-tab');
+  await expect(tabs).toHaveCount(3);
+  await expect(page.locator('.main .page-toolbar .pt-tab.active')).toHaveText('全部曲目');
+
+  await tabs.filter({ hasText: '最近播放' }).click();
+  await expect(page.locator('.main .page-header h1')).toHaveText('最近播放');
+  await expect(page.locator('.main .page-toolbar .pt-tab.active')).toHaveText('最近播放');
+
+  // 返回栈：这一步把「最近播放」退掉，回到「全部曲目」
+  await page.locator('.titlebar .tb-back').click();
+  await expect(page.locator('.main .page-header h1')).toHaveText('全部曲目');
+  await expect(page.locator('.titlebar .tb-back')).toBeEnabled();
+
+  // 再退一步回到首页仪表盘，此时栈空 → 返回键 disabled
+  await page.locator('.titlebar .tb-back').click();
+  await expect(page.locator('.main .page-header h1')).toHaveText('首页');
+  await expect(page.locator('.titlebar .tb-back')).toBeDisabled();
+});
+
+test('播放链路：点行播放 → 播放条与队列激活行', async ({ page }) => {
+  await openLibrary(page);
+  await firstRow(page).click();
+  // 播放条出歌名与时长（mock 的 playTracks → 状态广播 → store → 渲染）
+  await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
   await expect(page.locator('footer')).toContainText(/\d+:\d{2}/);
-  // 打开队列面板：当前曲有 ▶ 标记
+
   await page.locator('footer button[aria-label="播放队列"]').click();
   const active = page.locator('.queue-panel .queue-row.active');
   await expect(active).toHaveCount(1);
   await expect(active.locator('.q-index')).toHaveText('▶');
 });
 
-test('设置分区：播放 tab 输出分区在位 + 主题切换生效', async ({ page }) => {
+test('设置页：标题与工具条分两行 + 区块 tab + 主题切换生效', async ({ page }) => {
   await page.goto('/');
-  await page.locator('.nav-item', { hasText: '设置与诊断' }).click();
-  await page.locator('.tabs button', { hasText: '播放' }).click();
-  // 大件 A 之后 output 分区是播放 tab 顶部的四行
-  await expect(page.locator('.setting-title', { hasText: '输出模式' })).toBeVisible();
-  await expect(page.locator('.setting-title', { hasText: '缓冲' })).toBeVisible();
-  await expect(page.locator('.setting-title', { hasText: '时钟' })).toBeVisible();
-  await expect(page.locator('.setting-title', { hasText: '暂停时释放设备' })).toBeVisible();
-  // 主题切换：外观 tab → 浅色 → html 属性变
-  await page.locator('.tabs button', { hasText: '外观' }).click();
-  await page.locator('.setting-row', { hasText: '主题' }).locator('button', { hasText: '浅色' }).click();
+  await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
+  await expect(page.locator('.main .page-header h1')).toHaveText('设置');
+  await expect(page.locator('.main .page-header .page-kicker')).toHaveText('PREFERENCES');
+
+  // 标题与工具条是两个零件、两行：标题不再装导航，tab 也不在标题里
+  const tabs = page.locator('.main .page-toolbar .pt-tab');
+  await expect(tabs).toHaveCount(6);
+  await expect(tabs.first()).toHaveAttribute('aria-current', 'true');
+
+  // 主题切换即时生效（写到 <html data-theme>）
+  await page
+    .locator('.setting-row', { hasText: '主题' })
+    .locator('button', { hasText: '浅色' })
+    .click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });
 
-test('频谱 pro：面板打开 + 五形态 chip 循环', async ({ page }) => {
-  await page.goto('/');
-  await playFirstRow(page);
-  await page.locator('footer button[aria-label="频谱"]').click();
+test('正在播放页：开启频谱后出现 pro 五形态 chip', async ({ page }) => {
+  await openLibrary(page);
+  await firstRow(page).click();
+  await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
+
+  // 频谱默认关（settings.ts：不订阅 tap，保持最简出口路径），先到设置页开
+  await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
+  await page.locator('button.switch[aria-label="频谱可视化"]').click();
+
+  await page.locator('.sidebar .nav-item', { hasText: '正在播放' }).click();
   const panel = page.locator('.spectrum-panel');
   await expect(panel).toBeVisible();
+
   // pro 引擎分支的标志：头部有形态 chip（compact 分支没有）
   const chip = panel.locator('.mode-chip');
   await expect(chip).toBeVisible();
@@ -95,6 +135,5 @@ test('频谱 pro：面板打开 + 五形态 chip 循环', async ({ page }) => {
     await expect(chip).toHaveText(label);
     await chip.click();
   }
-  // 循环一整圈回到起点
   await expect(chip).toHaveText(labels[0]!);
 });

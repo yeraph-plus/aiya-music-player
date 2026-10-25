@@ -182,10 +182,6 @@ class UiStore {
     void ipc.app.openDataDir().catch((e) => console.warn('openDataDir failed:', errorMessage(e)));
   }
 
-  openSettings(): void {
-    this.openPage('settings');
-  }
-
   async refreshDiagnostics(): Promise<void> {
     try {
       this.diagnostics = await ipc.app.diagnostics();

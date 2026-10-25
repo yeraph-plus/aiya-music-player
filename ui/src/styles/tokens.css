@@ -32,6 +32,8 @@
   --glow-1: rgba(90, 120, 255, 0.16);
   --glow-2: rgba(255, 110, 180, 0.09);
   --radius: 10px;
+  /* 等宽：诊断表数字/路径、时间轴 */
+  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
   --player-height: 92px;
   --sidebar-width: 216px;
   /* 46px：36 塞不下 30px 高的搜索框 + 上下呼吸；也是 Windows 自定义标题栏

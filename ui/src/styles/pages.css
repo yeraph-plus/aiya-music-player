@@ -500,8 +500,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .spinning,
-  .home-skeleton {
+  .spinning {
     animation: none;
   }
 }

@@ -379,7 +379,7 @@
     color: var(--text);
   }
   .fail-line.conflict {
-    color: var(--warning, #d90);
+    color: var(--warn, #d90);
   }
   .mode-select {
     width: auto;
