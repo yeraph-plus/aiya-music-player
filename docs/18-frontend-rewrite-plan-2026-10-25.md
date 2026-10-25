@@ -325,6 +325,12 @@ const usePro = $derived(engine === 'pro' && source.audioNode !== undefined);
 真机验证：默认 pro 设置下开面板，`litPixels` 从 0 → 14617（有数据在画）。
 `audioNode` 真的存在时（将来的 WASAPI 回环）自动回到 pro，无需再改。
 
+> **2026-10-25 收尾批更新**：这段降级已是历史。pro 的最终解法是**自研五形态
+> canvas 渲染器**替代 audioMotion（见 §9 第 7 条），`audioNode` 判据随
+> `SpectrumSource` 契约收紧一并删除，`usePro = engine === 'pro'`。
+> "将来的 WASAPI 回环"也不会发生——loopback 数据仍落在 Rust 侧，
+> 喂给 UI 引擎照样要传 PCM（ADR-0003）。
+
 ## 4. 关键设计决定
 
 ### 4.1 组件不取数
@@ -426,6 +432,7 @@ npm run probe:ui -- --play
 | 2.5 后端补 `lossless` | **完成** | 211 测试 / 0 失败；真窗口两分支都对：无损 `3072 kbps`、有损 `320 kbps`（见 §2.5） |
 | 3 拆 `App.svelte` | **完成** | `App.svelte` 1070 → **127 行**；真窗口 20 项交互全通，新增 2 个 bug 的回归验证（见 §8.5） |
 | 4 删旧壳 | **完成** | `compat/` + `contracts/` 删除；211 测试 / `check` 0/0；真窗口与预览两条线全通（见 §8.6），顺手修 pro 频谱空白面板（见 §4.3） |
+| 5 清理遗留 + 收尾 | **完成** | §9 十条：7 清 1 留（`complex` 参数按设计保持）；`PlayerState` 哨兵改 Option（docs/17 §9.5 偏差 1 偿还）；pro 频谱五形态自研渲染器（audioMotion 卸载，包体 202→174kB）；mock 歌单真按内容；E2E Playwright 4/4；cargo test 219 全绿 / `check` 0/0 / gen:types 无漂移 |
 
 ### 8.1 批次 1 实际改了什么
 
@@ -581,26 +588,58 @@ mock 证明的是"UI 在无后端时也能成立"，不是"后端对了"。
 
 ## 9. 遗留（本轮明确不做，别忘）
 
+> 2026-10-25 收尾批次逐条处理过一轮，台账见每条末尾的状态标注。
+> 已清掉的保留原文+处理记录（为什么这么处理），没清的才是活债。
+
 1. ~~**`TrackAudio.lossless` 功能缺失**~~ —— **已修**，见 §2.5。
-   残留子项：`Mp4` 容器（ALAC vs AAC）判不出来，返回 `null`。
-   要修得读 MP4 box 结构（`alac` atom），或依赖 beets 的 `format` 填进 `codec`（已覆盖）。
-2. **诊断页三个数组恒为空**：`list_timings / recent_errors / shortcut_conflicts`
-   在 `lib.rs` 里是 `Vec::new()`，DTO 只能导出 `unknown[]`，
-   `SettingsPanel` 目前用本地视图类型 + 一次显式转换顶上。等真的做采集时补 DTO。
-3. **`PlayerState.index/cursor` 的 `-1` 哨兵**：换 `Option` 要重写状态机的下标算术。
-4. **`__AIYA_LOOK__` 没有注入**：浅色主题启动会闪一帧深色（`main.ts` 注释已改成实情）。
-5. **`player_report` 的形状未定**：v1 遗留诊断通道，`ipc.player.report` 收 `DynamicJson`。
+   真正的根因是 Tauri 重写时整个 `lossless` 字段丢了（不是 §4.3 之前猜的
+   Mp4 分支问题），补字段 + 出口派生后徽章恢复。
+   残留子项（**仍开着**）：`Mp4` 容器（ALAC vs AAC）判不出来，返回 `null`。
+   这是刻意的保守：容器下两种编码都有，猜错比显示「未知」更糟。要收窄得读
+   MP4 box 结构（`alac` atom），或依赖 beets 的 `format` 填进 `codec`（beets
+   路径已覆盖 ALAC）。**状态：已修主项，Mp4 残留维持设计不变。**
+2. ~~**诊断页三个数组恒为空**~~ —— **已清**（快清 B）。
+   `list_timings` / `recent_errors` 接了真数据（`AppState.timings` 环 20 条 +
+   `ApiError` 构造点统一记账，DTO 强类型）；`shortcut_conflicts` **删除**——
+   Rust 侧没有任何快捷键定义，后端算 = 抄一份 action 表 + 规范化算法，
+   双源必漂移，语义本属前端，诊断页调与设置页同一个 `findConflicts`。
+3. ~~**`PlayerState.index/cursor` 的 `-1` 哨兵**~~ —— **已清**（大件 A）。
+   改 `Option<usize>`（wire `number|null`，空队列 = `null`）。实际改动面比
+   预想小：Actor 内部 cursor 本来就是 usize，只有 `state()` 出口一处换算；
+   DB `queue_state.current_index` 的 -1 是存储层表示，保留。顺带修了旧行为
+   不一致（空队列 index=-1 而 cursor=0）。见 docs/17 §9.5 偏差 1 的偿还记录。
+4. ~~**浅色主题启动闪一帧深色**~~ —— **已清**（快清 A）。
+   根因有两层，只有一层在 `__AIYA_LOOK__` 注入缺失：主题真值在 SQLite，
+   bootstrap 要一次 IPC；mirror（`aiya.look` localStorage）+ main.ts 早于
+   mount 应用只解决了第一层。第二层是 `UiStore.settings` 初始值
+   `DEFAULT_SETTINGS`（dark）——App 的主题 effect 首跑会用它把 mirror 写回
+   深色（CDP 探针实测 `["light","dark","light"]` 跳变）。修法是 settings
+   初始值也接镜像：`{...DEFAULT_SETTINGS, ...readLook()}`，修后
+   `["light","light","light"]`。`__AIYA_LOOK__` 全局注入没做——mirror 够用，
+   多一条全局通道多一个漂移点。
+5. ~~**`player_report` 的形状未定**~~ —— **已清**（快清 A）：整条链删除。
+   v1 `<audio>` 出口的诊断通道，Rust 化之后前端零调用、后端空转。
+   诊断数据如今走 §9.2 的 timings/errors，53 条命令。
 6. **`complex` 参数仍收 `Json`**：`query` / `settings` / `options` / `decisions`
-   是刻意不收紧的（docs/17 §3.1），别"顺手"改成强类型。
-7. **audioMotion（pro 引擎）目前形同虚设**。它必须挂真实 `AudioNode`，而 ADR-0006
-   之后音频在 Rust sidecar，`RemoteSpectrumSource.audioNode` 恒 `undefined`。
-   §4.3 的降级只是让它**不再是空白**（画 compact 那套 canvas），pro 的径向/LED/
-   镜像形态依然用不到。要真用上，得让宿主走 WASAPI loopback 把 PCM 回灌给
-   WebAudio（`MediaStreamAudioDestinationNode` 之类），或干脆在 Rust 侧做多形态
-   渲染只推视觉参数。**在那之前，设置页「频谱风格」的专业/简洁其实没有差别**——
-   这条要么实现、要么把选项藏起来，别让它当摆设。
-8. **mock 不建 `playlist_items` 表**：预览里"歌单视图"就是全库按同一排序展示，
-   拖动排序/移除之类只改计数不动内容。够用来验版面，不要拿它验歌单语义。
-9. **`AppSettings` 未含 `output`**：磁盘上有（输出模式/缓冲/时钟，2026-10 加的），
-   `mergeSettings` 靠 passthrough 带进来但类型看不见。接设置页"输出"分区时要补。
-10. **快捷键设置页 / 主题密度逐项核对 / E2E** —— P4 未验小项，仍在台账上。
+   是刻意不收紧的（docs/17 §3.1），别"顺手"改成强类型。**仍开着（设计如此）。**
+7. ~~**audioMotion（pro 引擎）形同虚设**~~ —— **已清**（大件 B），路线与原文
+   设想不同：原文提的 WASAPI loopback 回灌 WebAudio **不可行**——loopback
+   数据仍落在 Rust 侧，喂给 UI 里的 audioMotion 照样要传 PCM（ADR-0003）；
+   独占模式下 loopback 还捕获不到自身输出（已知陷阱）。实际解法：自研
+   canvas 渲染器实现五形态（渐变条/LED/镜像/径向/反射），同一份 48 带 tap，
+   pro 的差异在渲染层；audiomotion-analyzer 依赖卸载，notices 清单减一项。
+   设置页 hint 已更正（不再写"两种风格画出来一样"）。
+8. ~~**mock 不建 `playlist_items` 表**~~ —— **已清**（快清 C）。
+   mock 建 `playlistItems: Map<playlistId, trackId[]>`（对齐真实库
+   playlist_items 形状），歌单视图真按内容过滤，计数/时长重算、去重与宿主
+   同语义。CDP 实测：四个 mock 歌单 12/17/22/27 首各不相同（此前全是全库
+   同一排序）。**现在可以拿预览验歌单语义了。**
+9. ~~**`AppSettings` 未含 `output`**~~ —— **已清**（快清 C）。
+   `AppSettings.output: DesiredOutput`（generated 类型），设置页播放 tab
+   顶部四行（模式/缓冲/时钟/暂停释放设备），取值与 `aiya-audio` 的
+   `ModePref::parse` 对齐。
+10. ~~**快捷键设置页 / 主题密度逐项核对 / E2E**~~ —— **已清**（P4 + 收尾批）。
+    快捷键页 P4 已完成（含冲突检测与设置页同源）；主题×密度四组合 CDP
+    实测（dark/light × comfortable 52px / compact 42px，行高由设置驱动、
+    无异常）；E2E 冒烟 Playwright 4 条全绿（`npm run test:e2e`，系统 Edge，
+    不起 Tauri）。**仍开着的小项**：无。
