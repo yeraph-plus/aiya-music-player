@@ -48,7 +48,10 @@ export type { ApiError, ApiErrorCode };
 
 /**
  * 命令参数里的 TrackQuery 形状（Rust `TrackWindowQuery`，B1 起一直是动态 Value）。
- * 与 `@aiya/contracts` 的 `TrackQuery` 同构；新 UI 直接用它，不再引旧契约包。
+ *
+ * **这个类型是源头**：`lib/query.ts` 的 `TrackQuery` 是它的别名，那边的 zod
+ * schema 负责补齐默认值与拒绝非法值。所以入参形状只有一处定义，改这里等于
+ * 同时改了三处调用（list / playQuery / idsForSelection）。
  */
 export type TrackQueryInput = {
   sort?: 'title' | 'added' | 'artist' | 'album';
