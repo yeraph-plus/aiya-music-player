@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "dev.aiya.music",
   "build": {
-    "beforeDevCommand": "npm --prefix ui run dev",
+    "beforeDevCommand": "node tools/build-sidecar.mjs --debug && npm --prefix ui run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm --prefix ui run build && node tools/build-sidecar.mjs",
     "frontendDist": "../ui/dist"
