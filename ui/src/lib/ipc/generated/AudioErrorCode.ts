@@ -6,4 +6,4 @@
  * 为什么不用字符串：v1 的 `error: Option<String>` 只有一句话，UI 无法判断
  * "文件没了（跳过就行）"和"声卡拔了（必须提示）"，只能靠人肉看文案。
  */
-export type AudioErrorCode = "fileMissing" | "io" | "decode" | "deviceLost" | "unsupportedFormat" | "unknown";
+export type AudioErrorCode = "fileMissing" | "io" | "decode" | "codecUnsupported" | "deviceLost" | "unsupportedFormat" | "unknown";

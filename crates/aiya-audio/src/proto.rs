@@ -10,8 +10,11 @@ use serde::{Deserialize, Serialize};
 /// 协议版本。不匹配的握手直接失败，由调用方决定重启或退出。
 ///
 /// v5：`EngineEvent::Error` 加 `kind` 分类（`fileMissing`/`io`/`decode`/
-/// `deviceLost`/`unsupportedFormat`/`unknown`）。此前只有一句话，宿主无法区分
-/// "文件没了该跳过"和"设备断了该提示"，只能解析文案前缀。
+/// `codecUnsupported`/`deviceLost`/`unsupportedFormat`/`unknown`）。此前只有
+/// 一句话，宿主无法区分"文件没了该跳过"和"设备断了该提示"，只能解析文案前缀。
+/// v5.1（无版本号递增的**加值**）：kind 新增 `codecUnsupported`（docs/22 G1，
+/// 容器认识但编码没编进 features）。旧宿主 parse 不认识会落到 `unknown`，
+/// 向后兼容，故不 bump 协议版本。
 ///
 /// v4：`SetExclusive(bool)` → `SetOutputConfig(OutputConfig)`（模式/时钟/缓冲/
 ///     暂停释放一组下发）；`AudioMode` 事件从"只有 exclusive 布尔"扩成

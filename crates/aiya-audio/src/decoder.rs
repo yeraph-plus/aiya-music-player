@@ -1,24 +1,56 @@
-//! Symphonia 解码：文件 → 交错 f32 样本流。
+//! 解码：媒体源 → 交错 f32 样本流（`DecodedStream`）。
 //!
 //! 为什么 f32：WASAPI 共享模式引擎 mix format 通常是 f32，
 //! 且 AUTOCONVERTPCM 打开后引擎负责源格式 → 引擎格式转换（含 SRC）。
 //! 位置时钟：包时间戳（ts）÷ 采样率 = 毫秒，seek 后以 seek 目标为锚。
+//!
+//! # 后端扩展指南（docs/22 D4 插入缝，G1 落锤）
+//!
+//! engine / WASAPI 输出 / 队列**永远只认 [`DecodedStream`]**：构造收敛在
+//! [`DecodedStream::open_with_backend`] 单入口，后端用 [`DecodeBackend`] 枚举
+//! 表达。engine.rs 里没有任何 probe/codec 知识。
+//!
+//! * **Symphonia 特性怎么加**：只动根 `Cargo.toml` 的 symphonia features
+//!   （docs/22 D1 只开主流格式；新格式 = 加 feature + 本文件 codec 名表补一行）。
+//! * **mpv 怎么插**：将来加 `DecodeBackend::Mpv`，实现为子进程
+//!   `mpv --no-video --ao=pcm --audio-format=s32le --really-quiet <file>`
+//!   读 stdout PCM 管道，包装成同一个 `DecodedStream` 形状（sample_rate /
+//!   channels / duration_ms / next_packet / seek_ms / position_ms）。mpv 场景
+//!   `duration_ms`/`seek_ms` 由 mpv 的属性/命令应答填充，`next_packet` 返回
+//!   定长 PCM 块。engine/output/queue 零改动。
+//! * **错误怎么分类**：probe 失败（容器不认识/文件坏）→ `Decode`；
+//!   probe 成功但 `get_codecs().make()` 失败 → `CodecUnsupported { codec }`
+//!   （在产生处查 [`codec_display_name`]，说人话，UI 直接展示）。
 
 use std::fs::File;
 use std::path::Path;
 
 use symphonia::core::audio::{SampleBuffer, SignalSpec};
-use symphonia::core::codecs::{Decoder as SymphoniaDecoder, DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::{
+    Decoder as SymphoniaDecoder, DecoderOptions, CodecType, CODEC_TYPE_NULL,
+};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 
 use crate::AudioError;
 
-pub struct Decoder {
+/// 解码后端。今天只有 Symphonia；mpv 将来从这里插入（见模块头注释），
+/// engine 对后端无感知——这是"想引入 mpv 也可以从中插入"的全部保障。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodeBackend {
+    /// 纯 Rust 进程内解码（docs/22 D1：主流格式，无 ffmpeg / 无内置 mpv）
+    Symphonia,
+}
+
+/// 解码后的流：逐包交错 f32 + 元数据 + seek。
+///
+/// 统一形状是 D4 的契约面——将来任何后端（Symphonia / mpv 子进程 / 远程流）
+/// 都产出这个结构，engine 的渲染循环与 WASAPI 输出永远零改动。
+pub struct DecodedStream {
     format: Box<dyn FormatReader>,
     decoder: Box<dyn SymphoniaDecoder>,
     track_id: u32,
@@ -33,18 +65,50 @@ pub struct Decoder {
     eof: bool,
 }
 
-impl Decoder {
-    pub fn open(path: &Path) -> Result<Self, AudioError> {
-        let src = File::open(path).map_err(AudioError::Io)?;
-        let mss = MediaSourceStream::new(Box::new(src), Default::default());
+impl std::fmt::Debug for DecodedStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 内部的 FormatReader/Decoder 是 trait object，不实现 Debug；
+        // 元数据足够定位"哪条流、走到哪"。
+        f.debug_struct("DecodedStream")
+            .field("sample_rate", &self.sample_rate)
+            .field("channels", &self.channels)
+            .field("duration_ms", &self.duration_ms)
+            .field("position_ms", &self.position_ms)
+            .field("eof", &self.eof)
+            .finish()
+    }
+}
 
+impl DecodedStream {
+    /// 便捷入口：打开本地文件（engine 的全部用法）。
+    pub fn open_file(path: &Path) -> Result<Self, AudioError> {
+        let src = File::open(path).map_err(AudioError::Io)?;
         let mut hint = Hint::new();
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             hint.with_extension(ext);
         }
+        Self::open_with_backend(Box::new(src), &hint, DecodeBackend::Symphonia)
+    }
+
+    /// **唯一构造入口**（docs/22 §2 D4）：engine 与未来调用方都从这里进，
+    /// 后端选择只发生在此处。mpv 后端不吃 `MediaSource`（是子进程管道），
+    /// 届时此签名会多一个入口或参数——但 `DecodedStream` 形状与 engine 不变。
+    pub fn open_with_backend(
+        src: Box<dyn MediaSource>,
+        hint: &Hint,
+        backend: DecodeBackend,
+    ) -> Result<Self, AudioError> {
+        match backend {
+            DecodeBackend::Symphonia => Self::open_symphonia(src, hint),
+        }
+    }
+
+    fn open_symphonia(src: Box<dyn MediaSource>, hint: &Hint) -> Result<Self, AudioError> {
+        let mss = MediaSourceStream::new(src, Default::default());
 
         let probed = symphonia::default::get_probe()
-            .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+            .format(hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+            // probe 失败 = 容器不认识 / 文件损坏 → decodeFailed（docs/22 D3）
             .map_err(|e| AudioError::Decode(e.to_string()))?;
 
         let format = probed.format;
@@ -68,9 +132,15 @@ impl Decoder {
             .map(|f| (f as u64 * 1000) / (sample_rate as u64).max(1))
             .unwrap_or(0);
 
+        let codec = track.codec_params.codec;
         let decoder = symphonia::default::get_codecs()
             .make(&track.codec_params, &DecoderOptions::default())
-            .map_err(|e| AudioError::Decode(e.to_string()))?;
+            // probe 认识容器、但编码器没编进 features（Opus/WMA/APE/WavPack/DSD…）
+            // → 单独分类：用户该做的是换文件/转码，不是重试（docs/22 D3）
+            .map_err(|e| match codec {
+                CODEC_TYPE_NULL => AudioError::Decode(e.to_string()),
+                _ => AudioError::CodecUnsupported { codec: codec_display_name(codec) },
+            })?;
 
         // 复用缓冲容量：P1——此前按 100ms 固定分配，但 FLAC 允许单包最大
         // 65535 帧，容量不足时 copy_interleaved_ref 的 assert 直接 panic
@@ -145,5 +215,61 @@ impl Decoder {
         self.position_ms = ms;
         self.eof = false;
         Ok(())
+    }
+}
+
+/// `CodecType` → 用户可读格式名（docs/22 D3：错误信息说人话）。
+///
+/// 只需要覆盖"会被装进库但解码不了"的那些；能正常解码的格式永远走不到
+/// 这里。没收录的落 Debug 格式兜底，至少诊断页里能对回常量。
+fn codec_display_name(codec: CodecType) -> String {
+    use symphonia::core::codecs::*;
+    match codec {
+        CODEC_TYPE_OPUS => "Opus".into(),
+        CODEC_TYPE_WMA => "WMA".into(),
+        CODEC_TYPE_MONKEYS_AUDIO => "Monkey's Audio (APE)".into(),
+        CODEC_TYPE_WAVPACK => "WavPack".into(),
+        CODEC_TYPE_TTA => "TTA".into(),
+        CODEC_TYPE_SPEEX => "Speex".into(),
+        CODEC_TYPE_MUSEPACK => "Musepack".into(),
+        CODEC_TYPE_ATRAC1 => "ATRAC1".into(),
+        CODEC_TYPE_ATRAC3 => "ATRAC3".into(),
+        CODEC_TYPE_ATRAC3PLUS => "ATRAC3+".into(),
+        CODEC_TYPE_ATRAC9 => "ATRAC9".into(),
+        CODEC_TYPE_DCA => "DTS".into(),
+        CODEC_TYPE_EAC3 => "E-AC-3".into(),
+        CODEC_TYPE_AC4 => "AC-4".into(),
+        CODEC_TYPE_MP1 => "MPEG Layer I".into(),
+        CODEC_TYPE_MP2 => "MPEG Layer II".into(),
+        CODEC_TYPE_VORBIS => "Vorbis".into(),
+        CODEC_TYPE_ALAC => "ALAC".into(),
+        CODEC_TYPE_ADPCM_G722
+        | CODEC_TYPE_ADPCM_G726
+        | CODEC_TYPE_ADPCM_G726LE
+        | CODEC_TYPE_ADPCM_MS
+        | CODEC_TYPE_ADPCM_IMA_WAV
+        | CODEC_TYPE_ADPCM_IMA_QT => "ADPCM".into(),
+        CODEC_TYPE_PCM_ALAW => "A-law PCM".into(),
+        CODEC_TYPE_PCM_MULAW => "μ-law PCM".into(),
+        other => format!("{other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use symphonia::core::codecs::*;
+
+    #[test]
+    fn unsupported_codecs_have_readable_names() {
+        // 这些是"会被扫描入库但放不出"的高频格式（docs/21 格式矩阵），
+        // 名字必须说人话——UI 横幅直接展示这条消息。
+        assert_eq!(codec_display_name(CODEC_TYPE_OPUS), "Opus");
+        assert_eq!(codec_display_name(CODEC_TYPE_WMA), "WMA");
+        assert_eq!(codec_display_name(CODEC_TYPE_MONKEYS_AUDIO), "Monkey's Audio (APE)");
+        assert_eq!(codec_display_name(CODEC_TYPE_WAVPACK), "WavPack");
+        assert_eq!(codec_display_name(CODEC_TYPE_ADPCM_MS), "ADPCM");
+        // 兜底不能 panic：MP3 走不到分类路径（能正常解码），拿它验证兜底输出
+        assert_eq!(codec_display_name(CODEC_TYPE_MP3), format!("{:?}", CODEC_TYPE_MP3));
     }
 }

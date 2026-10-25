@@ -16,6 +16,13 @@ pub enum AudioError {
     Io(#[from] std::io::Error),
     #[error("decode: {0}")]
     Decode(String),
+    /// 容器认识、但编码不支持（Opus/WMA/APE/WavPack/DSD…）。
+    ///
+    /// 与 `Decode` 分开的理由（docs/22 D3）：这不是"文件坏了"而是"格式没编进来"——
+    /// 用户换文件/转码有用，重试没用。`codec` 是用户可读的格式名（如 "Opus"），
+    /// 消息会原样进 UI 横幅，所以说人话。
+    #[error("不支持的音频编码（{codec}）：播放器未内置该格式的解码器")]
+    CodecUnsupported { codec: String },
     #[error("wasapi: {0}")]
     Wasapi(String),
     /// 设备/输出流层面的失败：流为空、不消费数据、恢复失败
@@ -39,8 +46,10 @@ pub enum AudioErrorKind {
     FileMissing,
     /// 其他 IO：权限、占用、磁盘
     Io,
-    /// 解码失败：编码不支持、文件损坏
+    /// 解码失败：文件损坏、容器不认识（probe 都过不去）
     Decode,
+    /// 编码不支持：容器认识但解码器没编进来（Opus/WMA/APE/WavPack/DSD…）
+    CodecUnsupported,
     /// 输出设备：打不开、断开、不消费数据
     Device,
     /// 设备不支持所请求的格式/模式（如必须独占被拒）
@@ -56,6 +65,7 @@ impl AudioErrorKind {
             AudioErrorKind::FileMissing => "fileMissing",
             AudioErrorKind::Io => "io",
             AudioErrorKind::Decode => "decode",
+            AudioErrorKind::CodecUnsupported => "codecUnsupported",
             AudioErrorKind::Device => "deviceLost",
             AudioErrorKind::Unsupported => "unsupportedFormat",
             AudioErrorKind::Unknown => "unknown",
@@ -71,6 +81,7 @@ impl AudioError {
             }
             AudioError::Io(_) => AudioErrorKind::Io,
             AudioError::Decode(_) => AudioErrorKind::Decode,
+            AudioError::CodecUnsupported { .. } => AudioErrorKind::CodecUnsupported,
             AudioError::Wasapi(_) | AudioError::Device(_) => AudioErrorKind::Device,
             AudioError::Unsupported(_) => AudioErrorKind::Unsupported,
             AudioError::Custom(_) => AudioErrorKind::Unknown,
@@ -78,7 +89,7 @@ impl AudioError {
     }
 }
 
-pub use decoder::Decoder;
+pub use decoder::{DecodeBackend, DecodedStream};
 pub use engine::{ClockPref, Engine, EngineCommand, EngineEvent, ModePref, OutputConfig};
 pub use proto::{encode_line, HostToSidecar, SidecarToHost, PROTOCOL_VERSION};
 

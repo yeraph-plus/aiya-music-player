@@ -188,8 +188,11 @@ pub enum AudioErrorCode {
     FileMissing,
     /// 其他 IO：权限、占用、磁盘
     Io,
-    /// 解码失败：编码不支持、文件损坏
+    /// 解码失败：文件损坏、容器不认识
     Decode,
+    /// 编码不支持：容器认识但解码器没编进来（Opus/WMA/APE/WavPack/DSD…）。
+    /// 语义与 `Decode` 分开：用户该做的是换文件/转码，不是重试（docs/22 D3）。
+    CodecUnsupported,
     /// 输出设备：打不开、断开、不消费数据
     DeviceLost,
     /// 设备/格式不支持（如"必须独占"被拒）
@@ -206,6 +209,7 @@ impl AudioErrorCode {
             "fileMissing" => AudioErrorCode::FileMissing,
             "io" => AudioErrorCode::Io,
             "decode" => AudioErrorCode::Decode,
+            "codecUnsupported" => AudioErrorCode::CodecUnsupported,
             "deviceLost" => AudioErrorCode::DeviceLost,
             "unsupportedFormat" => AudioErrorCode::UnsupportedFormat,
             _ => AudioErrorCode::Unknown,
@@ -434,5 +438,17 @@ mod tests {
         assert_eq!(f(None, None), None);
         assert_eq!(f(Some(""), Some("  ")), None, "空白串等于没有");
         assert_eq!(f(Some("SomeNewCodec2027"), Some("Ogg")), None);
+    }
+
+    /// `codecUnsupported` 全链路：wire 串 → 枚举 → serde 值必须自洽
+    /// （docs/22 G1：宿主按 kind 字符串翻译，UI 按 code 判断"提示而非重试"）。
+    #[test]
+    fn codec_unsupported_roundtrips() {
+        // 引擎侧 as_str 与 parse 互逆（两端分别定义，必须显式锁）
+        assert_eq!(AudioErrorCode::parse("codecUnsupported"), AudioErrorCode::CodecUnsupported);
+        let v = serde_json::to_value(AudioErrorCode::CodecUnsupported).unwrap();
+        assert_eq!(v, "codecUnsupported");
+        // 旧宿主收到不认识的分类必须落 Unknown，不许崩（加值向后兼容的前提）
+        assert_eq!(AudioErrorCode::parse("someFutureKind"), AudioErrorCode::Unknown);
     }
 }

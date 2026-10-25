@@ -19,7 +19,7 @@ use std::time::Duration;
 use wasapi::DeviceEnumerator;
 use wasapi::{Direction, SampleType, StreamMode, WaveFormat};
 
-use crate::decoder::Decoder;
+use crate::decoder::DecodedStream;
 use crate::AudioError;
 
 /// 引擎线程收到的命令。
@@ -99,9 +99,10 @@ pub enum EngineEvent {
         /// 回落/降级原因（空 = 完全按请求生效）
         reason: Option<String>,
     },
-    /// 播放失败。`kind` 是**分类**（`fileMissing`/`io`/`decode`/`deviceLost`/
-    /// `unsupportedFormat`/`unknown`），在错误产生处由 `AudioError::kind()` 定，
-    /// 不经宿主猜——UI 要靠它决定"跳下一首"还是"提示/亮灰标"。
+    /// 播放失败。`kind` 是**分类**（`fileMissing`/`io`/`decode`/
+    /// `codecUnsupported`/`deviceLost`/`unsupportedFormat`/`unknown`），在错误
+    /// 产生处由 `AudioError::kind()` 定，不经宿主猜——UI 要靠它决定
+    /// "跳下一首"还是"提示/亮灰标"。
     Error { token: u64, kind: String, message: String },
 }
 
@@ -334,7 +335,7 @@ fn play_null(
     tap: &crate::spectrum::SpectrumTap,
     written: &AtomicU64,
 ) -> Result<LoadExit, AudioError> {
-    let mut decoder = Decoder::open(Path::new(path))?;
+    let mut decoder = DecodedStream::open_file(Path::new(path))?;
     tap.set_sample_rate(decoder.sample_rate);
     if start_ms > 0 {
         decoder.seek_ms(start_ms)?;
@@ -566,7 +567,7 @@ fn play_file(
     tap: &crate::spectrum::SpectrumTap,
     written: &AtomicU64,
 ) -> Result<LoadExit, AudioError> {
-    let mut decoder = Decoder::open(Path::new(path))?;
+    let mut decoder = DecodedStream::open_file(Path::new(path))?;
     tap.set_sample_rate(decoder.sample_rate); // 频谱分带按实际采样率标定
     // 起点必须在开流之前落定：先播再 seek 会有可闻的"从头闪一下"
     if start_ms > 0 {
@@ -925,7 +926,7 @@ fn play_file(
         // 位置要扣掉设备缓冲里还没播的部分，否则进度条领先耳朵最多 200ms。
         // 独占事件下 padding 恒等于 buffer，正好等于"在途一整个缓冲"的估值，
         // 所以这条公式在两个模式下都成立（不必换成 IAudioClock，它比写入超前 5%）。
-        let position_now = |decoder: &Decoder, pool: &[f32], latency: u32| -> u64 {
+        let position_now = |decoder: &DecodedStream, pool: &[f32], latency: u32| -> u64 {
             play_position(decoder, pool).saturating_sub(padding_ms(decoder, latency))
         };
         send(EngineEvent::Position {
@@ -1372,7 +1373,7 @@ impl Output {
 
 }
 
-fn src_format(decoder: &Decoder) -> WaveFormat {
+fn src_format(decoder: &DecodedStream) -> WaveFormat {
     WaveFormat::new(
         32,
         32,
@@ -1537,7 +1538,7 @@ fn shared_clock(cfg: &OutputConfig) -> Clock {
 }
 
 /// 共享模式：交给引擎做格式转换（autoconvert），我们只交源格式 f32。
-fn open_shared(decoder: &Decoder, buffer_hns: i64, clock: Clock) -> Result<Output, AudioError> {
+fn open_shared(decoder: &DecodedStream, buffer_hns: i64, clock: Clock) -> Result<Output, AudioError> {
     let mut client = new_client()?;
     let mode = match clock {
         Clock::Events => StreamMode::EventsShared {
@@ -1568,7 +1569,7 @@ fn open_shared(decoder: &Decoder, buffer_hns: i64, clock: Clock) -> Result<Outpu
 /// 退回自动而不是报错，是因为"缓冲没调成"不该让用户没音乐听；但原因必须
 /// 带出去——否则设置页写着 10ms、实际 200ms，等于骗人。
 fn open_shared_with_note(
-    decoder: &Decoder,
+    decoder: &DecodedStream,
     cfg: &OutputConfig,
 ) -> Result<(Output, Option<String>), AudioError> {
     let clock = shared_clock(cfg);
@@ -1597,7 +1598,7 @@ fn open_shared_with_note(
 ///
 /// 返回 `Err(原因)` 由调用方决定回落还是报错——"独占没生效"必须是可解释的，
 /// 不能只是静默变差。
-fn open_exclusive(decoder: &Decoder, cfg: &OutputConfig) -> Result<Output, String> {
+fn open_exclusive(decoder: &DecodedStream, cfg: &OutputConfig) -> Result<Output, String> {
     let rate = decoder.sample_rate;
     let channels = decoder.channels;
     let mut best_reason: Option<String> = None;
@@ -1697,7 +1698,7 @@ fn open_exclusive(decoder: &Decoder, cfg: &OutputConfig) -> Result<Output, Strin
 /// `ExclusiveRequired` 失败时返回 `Err` 而不是回落：用户明确要了"没独占就别放"，
 /// 这时切到共享等于骗他。错误里带设备原话，UI 直接展示。
 fn open_output(
-    decoder: &Decoder,
+    decoder: &DecodedStream,
     cfg: &OutputConfig,
 ) -> Result<(Output, Option<String>), AudioError> {
     match cfg.mode {
@@ -1752,7 +1753,7 @@ fn matches_config(out: &Output, cfg: &OutputConfig) -> bool {
 /// `cfg` 是用户请求的配置（不是上一次的实际模式）：换设备后可能从共享变独占。
 fn reopen_output(
     out: &mut Output,
-    decoder: &Decoder,
+    decoder: &DecodedStream,
     attempt: u32,
     cfg: &OutputConfig,
 ) -> Result<Option<String>, AudioError> {
@@ -1782,7 +1783,7 @@ enum SwitchOutcome {
 /// 顺序不能反：独占期间设备被本进程独占，一边持有 IAudioClient 一边开共享流会
 /// 撞 `AUDCLNT_E_DEVICE_IN_USE(0x8889000A)`（只 `stop_stream` 不够，实测仍失败，
 /// 必须 drop 掉句柄）。代价是新流建立期间有几十毫秒空档，由调用方的淡出盖住。
-fn switch_output(out: &mut Output, decoder: &Decoder, cfg: &OutputConfig) -> SwitchOutcome {
+fn switch_output(out: &mut Output, decoder: &DecodedStream, cfg: &OutputConfig) -> SwitchOutcome {
     // 记下原配置用于退回：不能只记模式，时钟/缓冲也要回到原样。
     // 流可能已被释放（独占暂停让出设备后用户改设置），这时没有"原配置"，
     // 直接按新配置开——退回目标就是新配置本身。
@@ -1825,7 +1826,7 @@ fn switch_output(out: &mut Output, decoder: &Decoder, cfg: &OutputConfig) -> Swi
 /// 播放位置（源时间轴毫秒）：解码位置减去池内未播样本的源时长。
 /// decoder.position_ms() 是最后解码包的起点，池中的样本还没进设备 ——
 /// 变速时池可能积压（rate<1），不修正的话进度条会领先于耳朵。
-fn play_position(decoder: &Decoder, pool: &[f32]) -> u64 {
+fn play_position(decoder: &DecodedStream, pool: &[f32]) -> u64 {
     let pool_frames = (pool.len() / decoder.channels.max(1)) as u64;
     let pool_ms = (pool_frames * 1000) / (decoder.sample_rate as u64).max(1);
     decoder.position_ms().saturating_sub(pool_ms)
@@ -1834,7 +1835,7 @@ fn play_position(decoder: &Decoder, pool: &[f32]) -> u64 {
 /// 设备缓冲区里尚未播出的时长（毫秒）。docs/04 §3.5：
 /// position = base + frames_written - latency_ms。不扣这段，进度条会比
 /// 耳朵超前最多一个缓冲深度（200ms），暂停瞬间停在"超前 200ms"处。
-fn padding_ms(decoder: &Decoder, padding_frames: u32) -> u64 {
+fn padding_ms(decoder: &DecodedStream, padding_frames: u32) -> u64 {
     (padding_frames as u64 * 1000) / (decoder.sample_rate as u64).max(1)
 }
 

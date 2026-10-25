@@ -19,7 +19,12 @@ uuid = { version = "1", features = ["v5"] }
 base64 = "0.22"
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
-symphonia = { version = "0.5.4", default-features = false, features = ["mp3", "flac", "ogg", "wav", "aac", "isomp4", "pcm"] }
+# docs/22 G1：主流格式全集（D1 拍板）。
+# - 补 vorbis（修 OGG Vorbis 收了放不出）、alac（m4a-ALAC）、aiff（.aiff/.aif）
+# - 开 x86 SIMD（mp3/flac/vorbis 解码免费提速；symphonia 默认关）
+# - 刻意不开：adpcm/mp1/mp2/mpa/mkv/caf（非主流，维持最小面）
+# - 永不支持（0.5.x 无实现，报 codecUnsupported）：opus/wma/ape/wavpack/dsd
+symphonia = { version = "0.5.4", default-features = false, features = ["mp3", "flac", "ogg", "wav", "aiff", "aac", "isomp4", "pcm", "vorbis", "alac", "opt-simd-sse", "opt-simd-avx"] }
 wasapi = "0.26.0"
 # 契约层：Rust 是唯一源，TS 类型由 derive(TS) 生成（docs/17）
 ts-rs = "12"
