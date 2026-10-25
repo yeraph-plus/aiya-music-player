@@ -391,14 +391,6 @@
 
 /* ---------------- 设置单页 ---------------- */
 
-.settings-jump {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  /* 独立成行（不再寄生在标题 header 右侧）：下边距给下面的区块留气口 */
-  padding-bottom: 14px;
-}
-
 .settings-section {
   max-width: 860px;
   padding-bottom: 8px;

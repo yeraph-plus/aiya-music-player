@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from '../components/Icon.svelte';
   import PageHeader from '../components/PageHeader.svelte';
+  import PageToolbar from '../components/PageToolbar.svelte';
   import TrackList from '../components/TrackList.svelte';
   import { artworkUrl } from '../lib/artwork';
   import { formatDurationLong } from '../lib/format';
@@ -80,6 +81,24 @@
     }
   }
 
+  /** 三个内置视图的 tab。歌单页不显示（它不是内置视图，标题已经说明在哪） */
+  const BUILTIN_TABS = [
+    { id: 'library', label: '全部曲目' },
+    { id: 'recent', label: '最近播放' },
+    { id: 'mostPlayed', label: '常听' },
+  ];
+
+  const filterChips = $derived([
+    ...(ui.artistId ? [{ label: '艺人筛选', onclear: () => list.clearFilter() }] : []),
+    ...(ui.albumId ? [{ label: '专辑筛选', onclear: () => list.clearFilter() }] : []),
+  ]);
+
+  function switchView(id: string): void {
+    if (id === 'library' || id === 'recent' || id === 'mostPlayed') {
+      nav.go({ kind: 'builtin', view: id });
+    }
+  }
+
   /** 勾选框：点=切换、Shift=连选（与 ctrl+点行的语义不同） */
   function handleCheck(index: number, event: MouseEvent): void {
     if (selection.handleCheck(index, event) === 'capped') {
@@ -131,14 +150,14 @@
       {/if}
     {/snippet}
   </PageHeader>
-</div>
 
-{#if ui.artistId || ui.albumId}
-  <div class="filters">
-    {#if ui.artistId}<span class="filter">艺人筛选 <button class="link" onclick={() => list.clearFilter()}>清除</button></span>{/if}
-    {#if ui.albumId}<span class="filter">专辑筛选 <button class="link" onclick={() => list.clearFilter()}>清除</button></span>{/if}
-  </div>
-{/if}
+  <PageToolbar
+    tabs={view.kind === 'playlist' ? undefined : BUILTIN_TABS}
+    active={view.kind}
+    ontab={switchView}
+    filters={filterChips}
+  />
+</div>
 
 {#if library.scan && library.scanning}
   {@const progress = library.scan}

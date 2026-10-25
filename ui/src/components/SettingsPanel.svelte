@@ -15,6 +15,7 @@
   import Icon from './Icon.svelte';
   import LibraryTools from './LibraryTools.svelte';
   import PageHeader from './PageHeader.svelte';
+  import PageToolbar from './PageToolbar.svelte';
   import { capture } from '../stores/capture.svelte';
 
   interface Props {
@@ -66,6 +67,14 @@
     active = id;
     root?.querySelector(`#settings-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
+
+  /** PageToolbar 的 tab id 是 string，这里窄化回 Section（非法 id 静默忽略） */
+  function jumpToId(id: string): void {
+    const section = SECTIONS.find((item) => item.id === id);
+    if (section) jumpTo(section.id);
+  }
+
+  const toolbarTabs = SECTIONS.map((item) => ({ id: item.id, label: item.label }));
 
   function apply(patch: Partial<AppSettings>): void {
     onsave({ ...settings, ...patch });
@@ -133,15 +142,9 @@
   <PageHeader kicker="PREFERENCES" title="设置" />
 
   <!-- 锚点条从标题 header 里搬出来（2026-10-26 壳体收口）：标题归 PageHeader，
-       跳转 chip 是一行独立工具条。挤在一行时 active 只能靠滚动反查写回
-       `.chip.on`，标题区在兼职承载导航状态。 -->
-  <nav class="settings-jump" aria-label="设置区块">
-    {#each SECTIONS as item (item.id)}
-      <button class="chip" class:on={active === item.id} onclick={() => jumpTo(item.id)}>
-        {item.label}
-      </button>
-    {/each}
-  </nav>
+       跳转是 PageToolbar 上的 tab。挤在一行时 `.chip.on` 的 active 只能靠滚动
+       反查写回，标题区在兼职承载导航状态；现在反查结果只是这个 prop 的值。 -->
+  <PageToolbar tabs={toolbarTabs} active={active} ontab={jumpToId} />
 
   <section class="settings-section" id="settings-library">
     <div class="section-heading">

@@ -217,6 +217,10 @@ if (NAV) {
         parts: ['tb-brand', 'tb-back', 'tb-search', 'window-controls'].filter((c) =>
           document.querySelector('.titlebar .' + c),
         ).length,
+        tabs: [...document.querySelectorAll('.main .page-toolbar .pt-tab')].map((b) => ({
+          t: b.textContent.trim(),
+          on: b.getAttribute('aria-current') === 'true',
+        })),
       };
     })()`);
 
@@ -256,6 +260,8 @@ if (NAV) {
   await step('侧栏→设置', '.sidebar .nav-item', '设置');
   await step('顶栏←返回', '.titlebar .tb-back', '');
   await step('页内→浏览全部曲目', '.main button', '浏览全部曲目');
+  await step('工具条→最近播放', '.main .page-toolbar .pt-tab', '最近播放');
+  await step('顶栏←返回', '.titlebar .tb-back', '');
   await step('顶栏←返回', '.titlebar .tb-back', '');
   await step('侧栏→正在播放', '.sidebar .nav-item', '正在播放');
   await step('顶栏←返回', '.titlebar .tb-back', '');
