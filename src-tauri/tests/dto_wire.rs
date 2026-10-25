@@ -494,3 +494,41 @@ fn diagnostics_has_no_shortcut_conflicts_field() {
         "生成的 Diagnostics 类型里还有 shortcutConflicts —— 跑 npm run gen:types"
     );
 }
+
+/* ---------------- m3u/m3u8 导入导出（docs/22 G2） ---------------- */
+
+/// 导入结果的 wire 形状：`playlist` 可空（用户取消是正常分支）、
+/// matched/duplicates 分开、未匹配条目带行号。
+#[test]
+fn playlist_import_result_wire_shape() {
+    use aiya_lib::dto::playlist::{PlaylistImportResult, PlaylistImportUnmatched};
+    let r = PlaylistImportResult {
+        playlist: None, // 用户取消
+        matched: 0,
+        duplicates: 0,
+        unmatched: vec![PlaylistImportUnmatched {
+            line: 7,
+            raw: "D:/lost/song.flac".into(),
+            reason: "notFound".into(),
+        }],
+    };
+    let v = serde_json::to_value(&r).unwrap();
+    assert!(v["playlist"].is_null(), "取消时 playlist=null，wire：{v}");
+    assert_eq!(v["unmatched"][0]["line"], 7);
+    assert_eq!(v["unmatched"][0]["raw"], "D:/lost/song.flac");
+    assert_eq!(v["unmatched"][0]["reason"], "notFound");
+    assert!(v["matched"].is_number());
+}
+
+/// 导出结果的 wire 形状。
+#[test]
+fn playlist_export_result_wire_shape() {
+    use aiya_lib::dto::playlist::PlaylistExportResult;
+    let v = serde_json::to_value(PlaylistExportResult {
+        path: "D:/out/x.m3u8".into(),
+        count: 12,
+    })
+    .unwrap();
+    assert_eq!(v["path"], "D:/out/x.m3u8");
+    assert_eq!(v["count"], 12);
+}

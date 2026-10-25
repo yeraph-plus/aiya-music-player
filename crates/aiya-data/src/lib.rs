@@ -12,6 +12,7 @@ pub mod ids;
 pub mod lyrics;
 pub mod norm;
 pub mod playlist;
+pub mod playlist_io;
 pub mod queue;
 pub mod repo;
 pub mod scanner;

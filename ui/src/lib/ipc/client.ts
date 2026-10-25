@@ -30,6 +30,8 @@ import type {
   PlayerState,
   PlaylistAddResult,
   PlaylistDeleted,
+  PlaylistExportResult,
+  PlaylistImportResult,
   PlaylistSummary,
   QueueSnapshot,
   RemoveTracks,
@@ -179,6 +181,22 @@ export const ipc = {
     move: (id: string, from: number, to: number) =>
       call<PlaylistSummary>('playlist_move', { id, from, to }),
     clear: (id: string) => call<PlaylistSummary>('playlist_clear', { id }),
+    /**
+     * 导入 m3u/m3u8 播放列表。不传 `path` 时由宿主弹原生文件选择框；
+     * 结果里 `playlist = null` 表示用户取消了选择——正常分支不是错误。
+     * 未匹配条目带行号和原因（`notFound`），UI 自己决定怎么展示。
+     */
+    import: (path?: string) => call<PlaylistImportResult>('playlist_import', { path }),
+    /**
+     * 导出歌单为 m3u/m3u8。缺省 format=m3u8、style=absolute、encoding=utf8
+     * （encoding 目前只收 utf8，参数位留给将来 GBK）。
+     */
+    export: (
+      id: string,
+      path: string,
+      format?: 'm3u' | 'm3u8',
+      style?: 'absolute' | 'relative',
+    ) => call<PlaylistExportResult>('playlist_export', { id, path, format, style }),
   },
 
   player: {

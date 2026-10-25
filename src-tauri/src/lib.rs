@@ -2,7 +2,7 @@
 //!
 //! 边界约定（src-tauri/README.md）：命令注册、事件桥、协议注册；领域业务在 crates/。
 //!
-//! 全部 53 个命令都是 `Result<T, dto::ApiError>`：成功返回**裸载荷**（形状定义在
+//! 全部 55 个命令都是 `Result<T, dto::ApiError>`：成功返回**裸载荷**（形状定义在
 //! [`dto`]，由 ts-rs 生成到 `ui/src/lib/ipc/generated/`），失败时 Tauri 把
 //! `ApiError` 序列化后直接 reject。`{ok,data}` 信封已经不存在了 —— 旧 UI 那层
 //! 翻译（`ui/src/compat/`）已于 2026-10-25 批次 4 删除，UI 侧只剩
@@ -10,6 +10,7 @@
 //!
 //! 53 而不是 54：`player_report` 是 v1 `<audio>` 出口的回报通道，引擎搬到
 //! Rust 后前端从没调用过、后端 `let _ = &state` 空转，2026-10-25 整条删除。
+//! 55 = 53 + `playlist_import`/`playlist_export`（docs/22 G2）。
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -1288,6 +1289,218 @@ fn playlist_clear(
     })
 }
 
+/* ---------------- m3u / m3u8 导入导出（docs/22 G2） ---------------- */
+
+/// 导入 m3u/m3u8 为歌单。`path = None` 时弹系统文件选择框（UI 默认路径），
+/// `Some(path)` 直接导入（测试与恢复用）。歌单名 = 文件名去扩展名，
+/// 与 `playlist_create` 同规则派生 id——同名重复导入 = 追加 + 去重，不重复建行。
+///
+/// 错误语义：
+/// - 非 UTF-8 → `unsupported`（GBK 不做自动探测，docs/22 D5）
+/// - 含 `#EXT-X-` 标签 → `unsupported`（HLS 流媒体 manifest 不是静态歌单，
+///   该走 FM 频道功能）
+/// - 一条都匹配不上 → `notFound`（提示先扫描曲库；**不**建空歌单）
+#[tauri::command]
+async fn playlist_import(
+    app: AppHandle,
+    path: Option<String>,
+) -> Result<dto::playlist::PlaylistImportResult, dto::ApiError> {
+    use tauri_plugin_dialog::DialogExt;
+
+    // 文件选择必须离开主线程（tauri-plugin-dialog 的 blocking API 主线程死锁，
+    // 同 library_choose_root 的 P1 修正）
+    let picked = match path {
+        Some(p) => Some(PathBuf::from(p)),
+        None => {
+            let dialog_app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                dialog_app
+                    .dialog()
+                    .file()
+                    .add_filter("播放列表 (m3u/m3u8)", &["m3u", "m3u8"])
+                    .blocking_pick_file()
+                    .and_then(|p| p.as_path().map(|pp| pp.to_path_buf()))
+            })
+            .await
+            .unwrap_or(None)
+        }
+    };
+    let Some(file) = picked else {
+        return Ok(dto::playlist::PlaylistImportResult {
+            playlist: None,
+            matched: 0,
+            duplicates: 0,
+            unmatched: Vec::new(),
+        });
+    };
+
+    let bytes = std::fs::read(&file).map_err(|e| {
+        dto::ApiError::new(dto::ApiErrorCode::Io, format!("读不到播放列表文件：{e}"))
+    })?;
+    let text = String::from_utf8(bytes).map_err(|_| {
+        dto::ApiError::new(
+            dto::ApiErrorCode::Unsupported,
+            "播放列表不是 UTF-8 编码：m3u8 请保存为 UTF-8（GBK 编码暂不支持）",
+        )
+    })?;
+
+    let base_dir = file.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+    let entries = aiya_data::playlist_io::parse_playlist(&text, &base_dir).map_err(|e| match e {
+        aiya_data::playlist_io::ParseFailure::HlsManifest { tag } => dto::ApiError::new(
+            dto::ApiErrorCode::Unsupported,
+            format!("这是流媒体 manifest（HLS，#{tag}），不是静态播放列表——请用 FM 频道功能"),
+        ),
+        aiya_data::playlist_io::ParseFailure::Empty => {
+            dto::ApiError::invalid_arg("文件里没有任何曲目条目")
+        }
+    })?;
+
+    // 匹配：path_lower 精确对账（对账键与扫描器一致，见 0003 迁移）。
+    // 斜杠方向都收：m3u 里常见的 "D:/m/a.flac" 与扫描落库的 "D:\m\a.flac"
+    // 是同一个文件，失败在斜杠上等于白匹配。
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| dto::ApiError::internal("app state 不可用"))?;
+    let file_for_ids = file.to_string_lossy().into_owned();
+    let result: aiya_data::DbResult<dto::playlist::PlaylistImportResult> = state.db().send(move |conn| {
+        let mut by_path_lower: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        {
+            let mut stmt =
+                conn.prepare("SELECT path_lower, id FROM tracks")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            for row in rows {
+                let (k, v) = row?;
+                by_path_lower.insert(k, v);
+            }
+        }
+        let lookup = |target: &std::path::Path| -> Option<String> {
+            let s = target.to_string_lossy();
+            by_path_lower.get(&s.to_lowercase())
+                .cloned()
+                .or_else(|| by_path_lower.get(&s.replace('/', "\\").to_lowercase()).cloned())
+                .or_else(|| by_path_lower.get(&s.replace('\\', "/").to_lowercase()).cloned())
+        };
+
+        let mut matched_ids: Vec<String> = Vec::new();
+        let mut unmatched = Vec::new();
+        for e in &entries {
+            match lookup(&e.target) {
+                Some(id) => matched_ids.push(id),
+                None => unmatched.push(dto::playlist::PlaylistImportUnmatched {
+                    line: e.line as i64,
+                    raw: e.raw.clone(),
+                    reason: "notFound".into(),
+                }),
+            }
+        }
+        if matched_ids.is_empty() {
+            return Err(aiya_data::DbError::Custom(
+                "没有一条路径能匹配到曲库——请确认曲库已扫描且包含这些文件".into(),
+            ));
+        }
+
+        // 歌单名 = 文件名去扩展名（create 内部已做去重/幂等）
+        let name = file_stem_name(&file_for_ids);
+        let pid = ids::playlist_id(&name);
+        let now = now_secs();
+        let outcome = playlist_repo::create(conn, &pid, &name, &matched_ids, now)?;
+        let summary = playlist_summary_by_id(conn, &pid)
+            .map_err(aiya_data::DbError::Sql)?
+            .ok_or_else(|| aiya_data::DbError::Custom("歌单导入后读不到".into()))?;
+        Ok(dto::playlist::PlaylistImportResult {
+            playlist: Some(summary),
+            matched: outcome.added,
+            duplicates: outcome.skipped,
+            unmatched,
+        })
+    });
+    result.map_err(|e| match e {
+        aiya_data::DbError::Custom(msg) if msg.contains("没有一条路径") => {
+            dto::ApiError::not_found(msg)
+        }
+        other => dto::ApiError::from(other),
+    })
+}
+
+/// 文件名去扩展名，导入歌单名的唯一来源。
+fn file_stem_name(file_path: &str) -> String {
+    std::path::Path::new(file_path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "导入的歌单".into())
+}
+
+/// 导出歌单为 m3u/m3u8。格式与风格都是宽进参数（非法值回默认），因为
+/// UI 现在只有隐藏入口（正式按钮随导出歌单需求一起做，docs/22 G2）：
+/// - `format`: "m3u8"（默认）| "m3u" —— 内容相同，都是 UTF-8（D5 不做 GBK）
+/// - `style`: "absolute"（默认）| "relative" —— 相对路径锚定导出文件所在目录
+/// - `encoding`: 只收 "utf8"（参数位留给将来 GBK，D5）
+#[tauri::command]
+fn playlist_export(
+    state: State<'_, AppState>,
+    id: String,
+    path: String,
+    format: Option<String>,
+    style: Option<String>,
+    encoding: Option<String>,
+) -> Result<dto::playlist::PlaylistExportResult, dto::ApiError> {
+    if let Some(enc) = encoding.as_deref() {
+        if enc != "utf8" {
+            return Err(dto::ApiError::invalid_arg(format!(
+                "不支持的导出编码：{enc}（目前只有 utf8）"
+            )));
+        }
+    }
+    let relative = match style.as_deref() {
+        None | Some("absolute") => false,
+        Some("relative") => true,
+        Some(other) => return Err(dto::ApiError::invalid_arg(format!("未知的导出风格：{other}"))),
+    };
+    let _ = match format.as_deref() {
+        None | Some("m3u8") | Some("m3u") => (),
+        Some(other) => return Err(dto::ApiError::invalid_arg(format!("未知的导出格式：{other}"))),
+    };
+
+    let out_path = PathBuf::from(&path);
+    let base_dir = out_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let items: Vec<aiya_data::playlist_io::ExportItem> = state
+        .db()
+        .send(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT t.path, t.title, t.duration_ms, ar.name
+                 FROM playlist_items pi
+                 JOIN tracks t ON t.id = pi.track_id
+                 LEFT JOIN artists ar ON ar.id = t.artist_id
+                 WHERE pi.playlist_id = ?1
+                 ORDER BY pi.position ASC, pi.id ASC",
+            )?;
+            let rows = stmt.query_map([id], |r| {
+                Ok(aiya_data::playlist_io::ExportItem {
+                    path: r.get(0)?,
+                    title: r.get(1)?,
+                    duration_ms: r.get(2)?,
+                    artist: r.get(3)?,
+                })
+            })?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .map_err(dto::ApiError::from)?;
+
+    if items.is_empty() {
+        return Err(dto::ApiError::invalid_arg("歌单是空的，没有可导出的曲目"));
+    }
+    let text = aiya_data::playlist_io::render_playlist(&items, &base_dir, relative);
+    let count = items.len() as i64;
+    std::fs::write(&out_path, text).map_err(|e| {
+        dto::ApiError::new(dto::ApiErrorCode::Io, format!("写不进导出文件：{e}"))
+    })?;
+    Ok(dto::playlist::PlaylistExportResult { path, count })
+}
+
 /* ---------------- player：PlayerActor + 引擎适配（P2 真实现） ---------------- */
 
 /// 把引擎/Actor 的状态推给 UI。所有状态变化都经此出口。
@@ -2456,6 +2669,8 @@ pub fn run() {
             playlist_remove_at,
             playlist_move,
             playlist_clear,
+            playlist_import,
+            playlist_export,
             player_state,
             player_queue,
             player_play_tracks,

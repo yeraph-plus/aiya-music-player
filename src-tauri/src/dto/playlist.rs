@@ -56,3 +56,46 @@ pub struct PlaylistAddResult {
 pub struct PlaylistDeleted {
     pub deleted: bool,
 }
+
+/// 导入时一条没匹配上的路径（m3u/m3u8 导入，docs/22 G2）。
+/// 形状对齐扫描错误报告：`line` 能指回原文件第几行，`raw` 原样展示。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistImportUnmatched {
+    /// 原文件中的行号（1 基）
+    #[ts(type = "number")]
+    pub line: i64,
+    /// 原始文本（URL 解码前）
+    pub raw: String,
+    /// 未匹配原因：`notFound`（曲库中没有这个路径）
+    pub reason: String,
+}
+
+/// 导入结果。`playlist = null` 表示用户取消了文件选择——**正常分支**，
+/// 不是错误（与 `library_choose_root` 返回 null 同一语义）。
+///
+/// `matched` 是真正落库的条数（已去重），`duplicates` 是因"已在歌单里"
+/// 被跳过的条数——两个数必须分开给：导入 10 条显示匹配 8 条时，用户要能
+/// 分清"少的是没找到"还是"本来就有"。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistImportResult {
+    pub playlist: Option<PlaylistSummary>,
+    #[ts(type = "number")]
+    pub matched: i64,
+    #[ts(type = "number")]
+    pub duplicates: i64,
+    pub unmatched: Vec<PlaylistImportUnmatched>,
+}
+
+/// 导出结果。`count` 是写进文件的条目数（= 歌单当前曲目数）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistExportResult {
+    pub path: String,
+    #[ts(type = "number")]
+    pub count: i64,
+}
