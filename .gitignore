@@ -12,6 +12,10 @@ src-tauri/gen/
 src-tauri/target/
 *.tsbuildinfo
 
+# Playwright（E2E 产物）
+ui/test-results/
+ui/playwright-report/
+
 # Local data / logs / caches
 /data/
 /backups/
