@@ -134,9 +134,18 @@ playlist_export(id, path, format: 'm3u8' | 'm3u', encoding: 'utf8' | 'gbk')
 | F4（独立） | Symphonia 0.6.1 升级（顺路切 fMP4 路线 B） | 单独回归，不与 F3 捆绑 |
 | F5 | GBK m3u 导出/导入（若拍板要）、歌单→FM 频道 | 随远程版批次走 |
 
-## 6. 决策点
+## 6. 决策点（2026-10-25 G1–G4 执行后回写）
 
 1. 永不支持格式（opus/wma/ape/wv/dsf）：**收+标注**（推荐）还是不收？
+   → **已落地「收+标注」**（G1）：扫描照收，播放时报 `codecUnsupported`，
+   错误消息带人话格式名（Opus/WMA/Monkey's Audio (APE)…），UI 横幅直接展示。
 2. GBK m3u：首期要不要（车机场景）？
+   → **首期不做，参数位已留**（G2）：`playlist_export` 的 `encoding` 只收
+   `utf8`，越界值 `invalid_arg`；GBK 解码/写出等真实车机需求出现再加。
 3. F3 本体 HLS 的优先级：紧跟远程版（同一条 ADTS 管线，建议紧跟）还是独立排期？
+   → **独立排期已完成**（G3，先于远程版）：`hls.rs` + 引擎分流 +
+   `PlayerState.source` 全部落地；端到端验收吃远程版 R2 的 Liquidsoap
+   真流 soak（Liquidsoap 出 adts 段，桌面与浏览器同源）。
 4. Symphonia 0.6.1 升级窗口：建议在 F3 之后、远程版打包前，单独一批。
+   → **维持冻结**：0.5.4 交付主流格式够用；0.6.1（fMP4 段 + live 泄漏
+   #586 修复）按原窗口——远程版打包前单独一批，不与 G 批次混。
