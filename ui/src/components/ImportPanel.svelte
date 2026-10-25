@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { AlbumPreview, ApplyDecision, CandidatePreview } from '@aiya/contracts';
+  import type { AlbumPreview, CandidatePreview } from '../lib/beets';
+  import type { ApplyDecision } from '../lib/ipc';
   import { beetsSession as beets } from '../stores/beets-session.svelte';
   import Icon from './Icon.svelte';
 

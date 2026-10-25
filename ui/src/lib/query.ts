@@ -1,4 +1,16 @@
 import { z } from 'zod';
+import type { TrackQueryInput } from './ipc/client';
+
+/**
+ * 列表查询：排序、数据来源、分页协议（游标 / offset 双模式）。
+ *
+ * 2026-10-25 批次 4：从已删除的 `@aiya/contracts` 搬来。
+ *
+ * 为什么还留 zod：`TrackQuery` 是**命令入参**，Rust 侧收 `Json` 再手动解析
+ * （docs/17 §3.2 的取舍），所以没有生成类型可依赖。这里的 schema 既做
+ * 前端解析（补齐默认值、拒绝非法 mode），也是"入参形状"的唯一文字来源。
+ * 返回值不走 zod —— 那是 `generated/` 的事。
+ */
 
 export const trackSortSchema = z.enum(['title', 'added', 'artist', 'album']);
 export type TrackSort = z.infer<typeof trackSortSchema>;
@@ -52,7 +64,14 @@ export const trackQuerySchema = z.discriminatedUnion('mode', [
   }),
 ]);
 
-export type TrackQuery = z.input<typeof trackQuerySchema>;
+/**
+ * `TrackQuery` = 命令入参形状（`client.ts` 的 `TrackQueryInput`）。
+ *
+ * 不复用 `z.input<>`：那个推断在 `source` / `mode` 上会带出 zod 的
+ * 可选化细节，而 `ipc.library.list()` 收的是手写结构类型。两者同构，
+ * 但以 `client.ts` 为准可以避免"类型看着一样、赋值报错"的噪音。
+ */
+export type TrackQuery = TrackQueryInput;
 export type TrackQueryParsed = z.output<typeof trackQuerySchema>;
 
 /** 给缺省 mode 的调用方补齐默认值后再校验 */

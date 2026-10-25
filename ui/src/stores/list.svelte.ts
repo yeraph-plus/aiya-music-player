@@ -1,5 +1,4 @@
-import type { TrackQuery, TrackSort } from '@aiya/contracts';
-import { parseTrackQuery } from '@aiya/contracts';
+import { parseTrackQuery, type TrackQuery, type TrackSort } from '../lib/query';
 import { errorMessage } from '../lib/errors';
 import { TrackWindow } from '../lib/track-window';
 import { sourceOf } from '../lib/view';

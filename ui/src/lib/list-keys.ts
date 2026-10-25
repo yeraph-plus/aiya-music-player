@@ -1,5 +1,5 @@
-import type { ShortcutAction } from '@aiya/contracts';
-import type { KeyEventLike } from '@aiya/contracts';
+import type { ShortcutAction } from './shortcuts';
+import type { KeyEventLike } from './shortcuts';
 import { actionForEvent } from './keys.js';
 
 /**

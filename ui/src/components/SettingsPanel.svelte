@@ -1,13 +1,14 @@
 <script lang="ts">
-  import type { AppSettings, BeetsStatus, ShortcutAction } from '@aiya/contracts';
-  import type { Diagnostics } from '../lib/ipc/generated/Diagnostics';
+  import type { BeetsStatus, Diagnostics } from '../lib/ipc';
+  import type { AppSettings } from '../lib/settings';
   import {
     SHORTCUT_ACTIONS,
     SHORTCUT_LABELS,
     findConflicts,
     formatBinding,
     resolveShortcutBindings,
-  } from '@aiya/contracts';
+    type ShortcutAction,
+  } from '../lib/shortcuts';
   import { bindingFromEvent } from '../lib/keys';
   import { formatBytes, formatDateTime, formatDurationLong, shortenPath } from '../lib/format';
   import Icon from './Icon.svelte';

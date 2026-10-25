@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { Lyrics } from '@aiya/contracts';
-  import { findActiveLine } from '@aiya/contracts';
+  import type { Lyrics } from '../lib/ipc';
+  import { findActiveLine } from '../lib/lyrics';
   import { anchorAt, projectPosition } from '../lib/lyrics-clock';
   import Icon from './Icon.svelte';
 

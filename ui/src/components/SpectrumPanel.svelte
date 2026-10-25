@@ -35,6 +35,20 @@
   /** 引擎实例存在 effect 闭包里；这里只持引用供按钮回调使用（非响应式） */
   let proHandle: ProSpectrumHandle | null = null;
 
+  /**
+   * 能不能真的用 pro。
+   *
+   * audioMotion 必须挂一个**真实音频节点**（`source.audioNode`），而 ADR-0006
+   * 之后音频在 Rust sidecar 出声，`RemoteSpectrumSource.audioNode` 恒为
+   * `undefined`。默认设置又是 `spectrumEngine: 'pro'` —— 于是"开频谱"
+   * 曾经得到一个**完全空白**的面板（2026-10-25 在浏览器预览里实测到）。
+   *
+   * 判据放在这里而不是让用户去设置里改：注释本来就写着"audioNode 缺失时
+   * 静默降级"，现在把降级落到实处 —— 有数据（48 带 tap）就以 compact 画出来，
+   * 空面板才是真降级失败。
+   */
+  const usePro = $derived(engine === 'pro' && source.audioNode !== undefined);
+
   /** 峰值帽：每根柱子的当前峰值，无数据时缓慢下落 */
   let peaks: Float32Array = new Float32Array(0);
   const PEAK_DROP = 0.008;
@@ -94,7 +108,7 @@
   // 数据源与 compact 绘制循环的生命周期（pro 模式下引擎自带循环）
   $effect(() => {
     source.start();
-    if (engine !== 'compact') {
+    if (usePro) {
       return () => source.stop();
     }
     frameId = requestAnimationFrame(draw);
@@ -104,9 +118,9 @@
     };
   });
 
-  // pro 引擎随面板挂载/卸载建毁；audioNode 缺失（未来 WASAPI 回环实现）时静默降级
+  // pro 引擎随面板挂载/卸载建毁；没有 audioNode 时不会走到这里（usePro 已为 false）
   $effect(() => {
-    if (engine !== 'pro') return;
+    if (!usePro) return;
     const host = proHost;
     const node = source.audioNode;
     if (!host || !node) return;
@@ -128,7 +142,7 @@
 <aside class="spectrum-panel" aria-label="频谱">
   <header>
     <strong>频谱</strong>
-    {#if engine === 'pro'}
+    {#if usePro}
       <button class="mode-chip" onclick={cycleProMode} title="点击切换形态">
         {PRO_MODE_LABEL[proMode]}
       </button>
@@ -139,7 +153,7 @@
       <Icon name="close" size={14} />
     </button>
   </header>
-  {#if engine === 'pro'}
+  {#if usePro}
     <div class="spectrum-body pro-body">
       <div class="pro-host" bind:this={proHost}></div>
     </div>

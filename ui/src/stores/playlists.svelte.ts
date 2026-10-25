@@ -1,4 +1,4 @@
-import type { PlaylistSummary } from '@aiya/contracts';
+import type { PlaylistSummary } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
 import { LIBRARY_VIEW } from '../lib/view';
 import { list } from './list.svelte';

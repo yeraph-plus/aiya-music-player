@@ -1,4 +1,4 @@
-import type { PlaylistSummary, Track } from '@aiya/contracts';
+import type { PlaylistSummary, TrackRow } from '../lib/ipc';
 
 /**
  * 浮层状态：右键菜单 + 模态对话框。
@@ -22,7 +22,7 @@ export interface TrackMenu {
   x: number;
   y: number;
   index: number;
-  track: Track | null;
+  track: TrackRow | null;
 }
 
 export interface PlaylistMenu {
@@ -50,7 +50,7 @@ class OverlayStore {
    * 两个菜单**互斥**：右键曲目行之后再去右键侧栏歌单，不该两个都挂在屏幕上
    * （2026-10-25 真窗口验证时看到过两个 `.context-menu` 同时存在）。
    */
-  openTrackMenu(x: number, y: number, index: number, track: Track | null): void {
+  openTrackMenu(x: number, y: number, index: number, track: TrackRow | null): void {
     this.playlistMenu = null;
     this.trackMenu = { x, y, index, track };
   }

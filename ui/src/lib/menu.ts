@@ -1,4 +1,5 @@
-import type { PlaylistSummary, Track } from '@aiya/contracts';
+import type { PlaylistSummary } from './ipc/generated/PlaylistSummary';
+import type { TrackRow } from './ipc/generated/TrackRow';
 import type { View } from './view.js';
 
 /**
@@ -29,7 +30,7 @@ export interface TrackMenuActions {
 }
 
 export function trackMenuItems(
-  track: Track | null,
+  track: TrackRow | null,
   view: View,
   actions: TrackMenuActions,
 ): MenuItem[] {

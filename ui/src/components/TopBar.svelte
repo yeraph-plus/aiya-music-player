@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { TrackSort } from '@aiya/contracts';
+  import type { TrackSort } from '../lib/query';
   import Icon from './Icon.svelte';
 
   /**

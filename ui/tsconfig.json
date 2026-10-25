@@ -7,10 +7,7 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "strict": true,
-    "types": ["svelte", "vite/client"],
-    "paths": {
-      "@aiya/contracts": ["./contracts/src/index.ts"]
-    }
+    "types": ["svelte", "vite/client"]
   },
-  "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte", "contracts/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte"]
 }

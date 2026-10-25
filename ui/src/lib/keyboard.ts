@@ -1,4 +1,5 @@
-import { AUDIO_RATE_STEP, resolveShortcutBindings, type ShortcutAction } from '@aiya/contracts';
+import { AUDIO_RATE_STEP } from './audio-format';
+import { resolveShortcutBindings, type ShortcutAction } from './shortcuts';
 import { list } from '../stores/list.svelte';
 import { overlay } from '../stores/overlay.svelte';
 import { player } from '../stores/player.svelte';

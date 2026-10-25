@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { Track, TrackSort } from '@aiya/contracts';
+  import type { TrackRow } from '../lib/ipc';
+  import type { TrackSort } from '../lib/query';
   import { artworkUrl } from '../lib/artwork';
   import { startRowDrag, consumeClickSuppressed } from '../lib/drag';
   import { computeRange } from '../lib/virtual';
@@ -27,7 +28,7 @@
     onplay: (index: number) => void;
     /** Ctrl / Shift / ⌘ 点击时走选择而不是播放 */
     onselect: (index: number, event: MouseEvent | KeyboardEvent) => void;
-    onmenu: (event: MouseEvent, index: number, track: Track | null) => void;
+    onmenu: (event: MouseEvent, index: number, track: TrackRow | null) => void;
     onscroll: (scrollTop: number, firstVisible: number) => void;
     onrestored: () => void;
     onretry: (index: number) => void;
@@ -83,7 +84,7 @@
   const rows = $derived.by(() => {
     // 读一下版本号，让 store 更新时这段重新计算
     void version;
-    const out: Array<{ index: number; track: Track | undefined; error: string | null }> = [];
+    const out: Array<{ index: number; track: TrackRow | undefined; error: string | null }> = [];
     for (let i = range.start; i < range.end; i += 1) {
       out.push({ index: i, track: store.get(i), error: store.errorAt(i) });
     }

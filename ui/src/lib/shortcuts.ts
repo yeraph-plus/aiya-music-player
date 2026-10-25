@@ -1,13 +1,100 @@
 /**
- * 快捷键的解析、匹配与冲突检测。
+ * 快捷键的清单、默认键位与解析/匹配逻辑。
  *
- * 放在 contracts 里是因为两边都要用：渲染层负责按键匹配，
- * 主进程负责在诊断页报出冲突。纯函数、不碰 DOM，可以单测。
+ * 2026-10-25 批次 4：合并自已删除的 `@aiya/contracts`（原来的 `shortcuts.ts`
+ * 解码 + `domain.ts` 的常量），三块放在一起是因为"改一个键位"经常同时动
+ * 清单、默认值和展示文案。
  *
  * 绑定字符串格式：`Ctrl+Shift+Q`、`Space`、`ArrowLeft`、`Ctrl+,`
  * 修饰键顺序固定为 Ctrl → Alt → Shift → Meta，比较前统一规范化，
  * 所以 `Shift+Ctrl+Q` 与 `Ctrl+Shift+Q` 视为同一个键位。
+ *
+ * 纯函数、不碰 DOM —— 渲染层拿它做按键匹配，设置页拿它做冲突检测。
  */
+
+/* ---------------- 动作清单与默认键位 ---------------- */
+
+export const SHORTCUT_ACTIONS = [
+  'playPause',
+  'next',
+  'prev',
+  // 快退在前：设置页两列排布，读起来才是"快退 → 快进"
+  'seekBackward',
+  'seekForward',
+  'volumeUp',
+  'volumeDown',
+  // 倍速紧挨音量：设置页两列排布读起来是"音量组 → 速率组 → 静音"
+  'rateUp',
+  'rateDown',
+  'mute',
+  'focusSearch',
+  'toggleQueue',
+  'toggleLyrics',
+  'toggleShuffle',
+  'cycleRepeat',
+  'selectAll',
+  'openSettings',
+] as const;
+
+export type ShortcutAction = (typeof SHORTCUT_ACTIONS)[number];
+
+/**
+ * 默认键位。改键只存覆盖项（`AppSettings.shortcuts`），
+ * 这样后续调整默认值不会把用户自定义过的键位冲掉。
+ */
+export const DEFAULT_SHORTCUTS: Record<ShortcutAction, string> = {
+  playPause: 'Space',
+  next: 'Shift+ArrowRight',
+  prev: 'Shift+ArrowLeft',
+  seekForward: 'ArrowRight',
+  seekBackward: 'ArrowLeft',
+  volumeUp: 'Ctrl+ArrowUp',
+  volumeDown: 'Ctrl+ArrowDown',
+  rateUp: ']',
+  rateDown: '[',
+  mute: 'M',
+  focusSearch: '/',
+  toggleQueue: 'Ctrl+Shift+Q',
+  toggleLyrics: 'Ctrl+Shift+L',
+  toggleShuffle: 'S',
+  cycleRepeat: 'R',
+  selectAll: 'Ctrl+A',
+  openSettings: 'Ctrl+,',
+};
+
+/** 覆盖项合并到默认键位；空字符串表示用户主动禁用该动作 */
+export function resolveShortcutBindings(
+  overrides: Partial<Record<ShortcutAction, string>> = {},
+): Record<ShortcutAction, string> {
+  const out = { ...DEFAULT_SHORTCUTS };
+  for (const action of SHORTCUT_ACTIONS) {
+    const value = overrides[action];
+    if (typeof value === 'string') out[action] = value;
+  }
+  return out;
+}
+
+export const SHORTCUT_LABELS: Record<ShortcutAction, string> = {
+  playPause: '播放 / 暂停',
+  next: '下一首',
+  prev: '上一首',
+  seekForward: '快进 5 秒',
+  seekBackward: '快退 5 秒',
+  volumeUp: '音量 +5%',
+  volumeDown: '音量 -5%',
+  rateUp: '加速 0.1×',
+  rateDown: '减速 0.1×',
+  mute: '静音切换',
+  focusSearch: '聚焦搜索框',
+  toggleQueue: '播放队列面板',
+  toggleLyrics: '歌词面板',
+  toggleShuffle: '随机播放切换',
+  cycleRepeat: '循环模式轮转',
+  selectAll: '全选当前视图',
+  openSettings: '打开设置',
+};
+
+/* ---------------- 解析与匹配 ---------------- */
 
 export interface KeyEventLike {
   key: string;
@@ -146,7 +233,12 @@ export function findConflicts<T extends string>(
   return conflicts;
 }
 
-/** 展示用：把 'Ctrl+Shift+Q' 排成 'Ctrl ⇧ Q' 这类紧凑形式 */
+/**
+ * 展示用：把 'Ctrl+Shift+Q' 排成 'Ctrl + Shift + Q'。
+ *
+ * 旧注释说排成 `Ctrl ⇧ Q` 这类紧凑形式，实际实现是全写 + " + " 分隔
+ * （2026-10-25 核对后改注释，代码行为未变 —— 设置页两列布局宽度足够）。
+ */
 export function formatBinding(binding: string): string {
   const parsed = parseBinding(binding);
   if (!parsed) return '未设置';

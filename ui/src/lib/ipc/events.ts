@@ -4,11 +4,15 @@
  * 载荷类型全部来自 Rust（`generated/`），除了两条动态增量事件：
  * `scan:progress` 与 `beets:import` —— 它们的形状会演化，走 zod（后续页面接
  * 入时补 schema），这里先给 `DynamicJson` 让调用方显式处理。
+ *
+ * 实际通道来自 `transport()`：Tauri 用真 `listen`，浏览器预览用 mock 的
+ * 内存事件总线（`spectrum:frame` / `player:state` 都能跑）。
  */
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { UnlistenFn } from '@tauri-apps/api/event';
 import type { AudioModeEvent } from './generated/AudioModeEvent';
 import type { PlayerState } from './generated/PlayerState';
 import type { DynamicJson } from './client';
+import { transport } from './transport';
 
 export type { AudioModeEvent };
 
@@ -16,7 +20,8 @@ export type { AudioModeEvent };
 function sub<T>(event: string, cb: (payload: T) => void): () => void {
   let un: UnlistenFn | null = null;
   let closed = false;
-  void listen<T>(event, (e) => cb(e.payload))
+  void transport()
+    .listen<T>(event, (payload) => cb(payload))
     .then((u) => {
       if (closed) u();
       else un = u;

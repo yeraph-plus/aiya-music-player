@@ -7,8 +7,10 @@
   </head>
   <body>
     <div id="app"></div>
-    <!-- install 必须先于 main：window.api 在 mount 之前就要存在 -->
-    <script type="module" src="/src/compat/install.ts"></script>
+    <!--
+      单一入口：预览后端的装配在 main.ts 里（动态 import，Tauri 下不加载）。
+      旧的 `/src/compat/install.ts`（window.api 巨型对象）批次 4 已删除。
+    -->
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

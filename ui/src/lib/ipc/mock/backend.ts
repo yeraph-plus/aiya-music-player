@@ -1,39 +1,65 @@
+/**
+ * 浏览器预览的假后端（docs/07 §5 第 1–2 步）。
+ *
+ * 目的：不接 Rust 也能渲染完整 UI、验证样式/布局/交互回归。
+ * 实现是有意的"假"：数据在内存里生成（固定 seed，每次刷新都一样），
+ * 设置/视图状态进 localStorage。**不是**模拟器——它不假装能出声。
+ *
+ * 2026-10-25 批次 4：从 `compat/mock.ts` 搬来并适配新契约：
+ * - `Track` 换成生成的 `TrackRow`（列表）与 `TrackDetail`（补 audio spec），
+ *   玩家状态里的 `current` 用 `TrackRef`（不含 playCount 等列表字段）；
+ * - 补齐 Rust 侧新增的必填字段（`availability` / `walkErrors` / `cursor` /
+ *   `logDir` / `audioMode`）—— 少一个字段 TS 就红，这正是"生成类型当唯一来源"
+ *   的好处。
+ */
+import type { AppSettings, ListDensity, ThemeMode } from '../../settings';
+import { DEFAULT_SETTINGS } from '../../settings';
+import type { TrackQuery, TrackQueryParsed } from '../../query';
+import { parseTrackQuery } from '../../query';
+import type { SelectionIdsQuery, QueueInsertMode } from '../client';
+import type { UiState } from '../schema';
 import type {
-  AppSettings,
   Diagnostics,
   HistoryStats,
   LibraryStats,
   Lyrics,
+  PlayerState,
   PlaylistAddResult,
   PlaylistSummary,
-  ScanProgress,
+  QueueSnapshot,
+  RevealResult,
   ScanResult,
-  Track,
-} from '@aiya/contracts';
-import {
-  DEFAULT_SETTINGS,
-  parseTrackQuery,
-  type PlayerReport,
-  type PlayerState,
-  type QueueInsertMode,
-  type QueueSnapshot,
-  type RevealResult,
-  type SelectionIdsQuery,
-  type ThemeMode,
-  type ListDensity,
-  type TrackQuery,
-  type TrackQueryParsed,
-  type UiState,
-} from '@aiya/contracts';
+  TrackAudio,
+  TrackDetail,
+  TrackPage,
+  TrackRef,
+  TrackRow,
+} from '../generated';
 
-/**
- * 浏览器预览后端（docs/07 §5 第 1–2 步）。
- *
- * 目的：不接 Rust 也能渲染完整 UI、验证样式/布局/交互回归。
- * 实现是有意的"假"：数据在内存里生成，设置/视图状态进 localStorage。
- * Tauri 真实命令接通后（compat/api.ts 的 IS_TAURI 分支），本文件整体退役，
- * 不留任何分支在 UI 代码里。
- */
+/* ---------------- 事件总线 ---------------- */
+
+type Listener = (payload: unknown) => void;
+
+/** 预览用内存事件总线：签名对齐 `transport().listen` 的底层（同步 unsubscribe） */
+export class Emitter {
+  private readonly listeners = new Map<string, Set<Listener>>();
+
+  on(event: string, fn: Listener): () => void {
+    let set = this.listeners.get(event);
+    if (!set) {
+      set = new Set();
+      this.listeners.set(event, set);
+    }
+    set.add(fn);
+    return () => {
+      set.delete(fn);
+    };
+  }
+
+  emit(event: string, payload: unknown): void {
+    this.listeners.get(event)?.forEach((fn) => fn(payload));
+  }
+}
 
 /* ---------------- 确定性假数据 ---------------- */
 
@@ -66,9 +92,41 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-function buildLibrary(): Track[] {
+/**
+ * 假音频规格：按 id 序号取模，让预览页能同时看到**无损 / Hi-Res / 有损 /
+ * 未知**四种徽章形态（批次 3 修好的 `lossless` 与 kbps 单位，正好靠它肉眼验）。
+ */
+function audioFor(id: string): TrackAudio {
+  const n = Number.parseInt(id.slice(2), 10) || 0;
+  switch (n % 4) {
+    case 0:
+      return { codec: 'FLAC', container: 'Flac', sampleRate: 44100, bitsPerSample: 16, bitrate: 900, channels: 2, lossless: true };
+    case 1:
+      return { codec: 'MPEG 1 Layer 3', container: 'Mpeg', sampleRate: 44100, bitsPerSample: 16, bitrate: 320, channels: 2, lossless: false };
+    case 2:
+      return { codec: 'FLAC', container: 'Flac', sampleRate: 96000, bitsPerSample: 24, bitrate: 2300, channels: 2, lossless: true };
+    default:
+      // 认不出（ALAC/AAC 共用 M4A 容器）：lossless = null，UI 显示"未知"
+      return { codec: 'AAC', container: 'Mp4', sampleRate: 48000, bitsPerSample: 16, bitrate: 256, channels: 2, lossless: null };
+  }
+}
+
+function toRef(track: TrackRow): TrackRef {
+  return {
+    id: track.id,
+    title: track.title,
+    artist: track.artist,
+    album: track.album,
+    durationMs: track.durationMs,
+    artworkId: track.artworkId,
+    gainDb: track.gainDb,
+    audio: audioFor(track.id),
+  };
+}
+
+function buildLibrary(): TrackRow[] {
   const rand = mulberry32(20261023);
-  const tracks: Track[] = [];
+  const tracks: TrackRow[] = [];
   const base = Date.UTC(2026, 8, 1) / 1000;
   let n = 0;
   ARTIST_POOL.forEach((entry, ai) => {
@@ -95,6 +153,8 @@ function buildLibrary(): Track[] {
           playCount: played ? Math.floor(rand() * 60) : 0,
           lastPlayedAtMs: played ? Math.floor(base - rand() * 86400 * 60) : null,
           gainDb: null,
+          // 假数据全部"在线"：预览里不需要模拟灰标，那要看真库的 missing 状态
+          availability: 'online',
         });
       }
     });
@@ -102,7 +162,7 @@ function buildLibrary(): Track[] {
   return tracks;
 }
 
-function buildPlaylists(tracks: Track[]): PlaylistSummary[] {
+function buildPlaylists(tracks: TrackRow[]): PlaylistSummary[] {
   const now = Date.now();
   const names = ['华语偏爱', '深夜自习室', '运动节拍', '通勤路上'];
   return names.map((name, i) => {
@@ -121,36 +181,12 @@ function buildPlaylists(tracks: Track[]): PlaylistSummary[] {
   });
 }
 
-/* ---------------- 事件总线 ---------------- */
-
-type Listener = (payload: unknown) => void;
-
-export class Emitter {
-  private readonly listeners = new Map<string, Set<Listener>>();
-
-  on(event: string, fn: Listener): () => void {
-    let set = this.listeners.get(event);
-    if (!set) {
-      set = new Set();
-      this.listeners.set(event, set);
-    }
-    set.add(fn);
-    return () => {
-      set.delete(fn);
-    };
-  }
-
-  emit(event: string, payload: unknown): void {
-    this.listeners.get(event)?.forEach((fn) => fn(payload));
-  }
-}
-
 /* ---------------- localStorage 小工具 ---------------- */
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
-    return raw ? { ...fallback, ...(JSON.parse(raw) as object) } as T : fallback;
+    return raw ? ({ ...fallback, ...(JSON.parse(raw) as object) } as T) : fallback;
   } catch {
     return fallback;
   }
@@ -185,7 +221,7 @@ function decodeCursorId(cursor: string): string {
 export class MockBackend {
   readonly emitter = new Emitter();
 
-  private tracks: Track[] = buildLibrary();
+  private tracks: TrackRow[] = buildLibrary();
   private playlists: PlaylistSummary[] = buildPlaylists(this.tracks);
   private settings: AppSettings = loadJson('aiya.settings', DEFAULT_SETTINGS);
   private uiState: UiState = loadJson('aiya.uiState', {} as UiState);
@@ -213,10 +249,12 @@ export class MockBackend {
     updatedAtMs: Date.now(),
   };
   private queueIds: string[] = [];
+  /** 频谱假帧定时器：只在 `spectrum_set(true)` 期间跑 */
+  private spectrumTimer: ReturnType<typeof setInterval> | null = null;
 
   /* ---------------- library ---------------- */
 
-  libraryList(rawQuery: TrackQuery | undefined) {
+  libraryList(rawQuery: TrackQuery | undefined): TrackPage {
     const q: TrackQueryParsed = parseTrackQuery(rawQuery ?? { mode: 'cursor' });
     let rows = this.filter(q);
     rows = this.sortForSource(rows, q);
@@ -237,7 +275,7 @@ export class MockBackend {
     const items = rows.slice(start, start + q.limit);
     const nextCursor =
       q.mode === 'cursor' && start + q.limit < total && items.length > 0
-        ? encodeCursorId(items[items.length - 1].id)
+        ? encodeCursorId(items[items.length - 1]!.id)
         : null;
     return {
       items,
@@ -245,14 +283,20 @@ export class MockBackend {
       limit: q.limit,
       mode: q.mode,
       nextCursor,
-      ...(q.mode === 'offset' ? { offset: q.offset } : {}),
+      // 契约里 offset 是必填的 `number | null`（不是可选字段）
+      offset: q.mode === 'offset' ? q.offset : null,
       tookMs: 1,
     };
   }
 
-  libraryTracks(ids: string[]): Track[] {
+  libraryTracks(ids: string[]): TrackDetail[] {
     const byId = new Map(this.tracks.map((t) => [t.id, t]));
-    return ids.map((id) => byId.get(id)).filter((t): t is Track => t !== undefined);
+    const out: TrackDetail[] = [];
+    for (const id of ids) {
+      const row = byId.get(id);
+      if (row) out.push({ ...row, audio: audioFor(row.id) });
+    }
+    return out;
   }
 
   libraryStats(): LibraryStats {
@@ -262,11 +306,11 @@ export class MockBackend {
       tracks: this.tracks.length,
       albums: albums.size,
       artists: artists.size,
-      locations: 1,
+      locations: this.tracks.length,
       missingLocations: 0,
       totalDurationMs: this.tracks.reduce((s, t) => s + (t.durationMs ?? 0), 0),
       dbBytes: 0,
-      schemaVersion: 1,
+      schemaVersion: 2,
     };
   }
 
@@ -292,7 +336,7 @@ export class MockBackend {
 
   async scan(): Promise<ScanResult> {
     const started = Date.now();
-    const phases: ScanProgress['phase'][] = ['walking', 'parsing', 'artwork', 'done'];
+    const phases = ['walking', 'parsing', 'artwork', 'done'] as const;
     for (let i = 0; i < phases.length; i++) {
       this.emitter.emit('scan:progress', {
         phase: phases[i],
@@ -312,6 +356,7 @@ export class MockBackend {
       updated: 0,
       unchanged: 0,
       failed: 0,
+      walkErrors: 0,
       cancelled: false,
       errors: [],
       elapsedMs: Date.now() - started,
@@ -362,7 +407,7 @@ export class MockBackend {
   playlistReorder(from: number, to: number): PlaylistSummary[] {
     if (from < 0 || from >= this.playlists.length) return this.playlists;
     const [moved] = this.playlists.splice(from, 1);
-    this.playlists.splice(Math.max(0, Math.min(to, this.playlists.length)), 0, moved);
+    if (moved) this.playlists.splice(Math.max(0, Math.min(to, this.playlists.length)), 0, moved);
     this.playlists.forEach((p, i) => (p.sortPosition = i));
     return this.playlists;
   }
@@ -414,7 +459,9 @@ export class MockBackend {
       totalMs: played.reduce((s, t) => s + (t.durationMs ?? 0) * t.playCount, 0),
       completed: played.length,
       skipped: 0,
-      firstPlayAtMs: played.length ? Math.min(...played.map((t) => t.lastPlayedAtMs ?? Infinity)) : null,
+      firstPlayAtMs: played.length
+        ? Math.min(...played.map((t) => t.lastPlayedAtMs ?? Number.POSITIVE_INFINITY))
+        : null,
       lastPlayAtMs: played.length ? Math.max(...played.map((t) => t.lastPlayedAtMs ?? 0)) : null,
       topTracks: [...played]
         .sort((a, b) => b.playCount - a.playCount)
@@ -440,7 +487,13 @@ export class MockBackend {
   }
 
   playerQueue(): QueueSnapshot {
-    return { ids: this.queueIds, index: this.playerState.index, version: this.playerState.queueVersion };
+    return {
+      ids: this.queueIds,
+      index: this.playerState.index,
+      cursor: this.playerState.cursor,
+      version: this.playerState.queueVersion,
+      tookMs: 0,
+    };
   }
 
   private playQueue(ids: string[], startIndex: number): PlayerState {
@@ -453,7 +506,7 @@ export class MockBackend {
       index: ids.length ? startIndex : -1,
       cursor: ids.length ? startIndex : -1,
       status: ids.length ? 'paused' : 'idle',
-      current,
+      current: current ? toRef(current) : null,
       durationMs: current?.durationMs ?? null,
       positionMs: 0,
       token: this.playerState.token + 1,
@@ -495,7 +548,9 @@ export class MockBackend {
     if (!this.queueIds.length) return this.playerState;
     let next = this.playerState.index + delta;
     if (next < 0) next = 0;
-    if (next >= this.queueIds.length) next = this.playerState.repeat === 'all' ? 0 : this.queueIds.length - 1;
+    if (next >= this.queueIds.length) {
+      next = this.playerState.repeat === 'all' ? 0 : this.queueIds.length - 1;
+    }
     return this.playQueue(this.queueIds, next);
   }
 
@@ -541,7 +596,11 @@ export class MockBackend {
     } else {
       this.queueIds.push(...trackIds);
     }
-    this.playerState = { ...this.playerState, queueLength: this.queueIds.length, queueVersion: this.playerState.queueVersion + 1 };
+    this.playerState = {
+      ...this.playerState,
+      queueLength: this.queueIds.length,
+      queueVersion: this.playerState.queueVersion + 1,
+    };
     this.emitPlayer();
     return this.playerState;
   }
@@ -585,8 +644,8 @@ export class MockBackend {
     return this.playerState;
   }
 
-  report(_report: PlayerReport): void {
-    /* mock 出口不发指令，也不会有回报 */
+  report(_report: unknown): void {
+    /* mock 没有引擎回报；宿主的 player_report 只剩诊断价值 */
   }
 
   /* ---------------- app ---------------- */
@@ -597,8 +656,8 @@ export class MockBackend {
 
   appInfo(): { version: string; electron: string; platform: string; dataDir: string } {
     return {
-      version: '0.1.0',
-      electron: 'n/a（Tauri 2 预览）',
+      version: '0.1.0-preview',
+      electron: 'n/a（Tauri 2 浏览器预览）',
       platform: navigator.platform || 'web',
       dataDir: '（浏览器预览：localStorage）',
     };
@@ -626,14 +685,41 @@ export class MockBackend {
     return this.settings;
   }
 
+  /**
+   * 频谱假帧：正弦叠加，形状像个会跳的频谱但**不来自音频**（预览不出声）。
+   * 30fps，48 带，0–255 —— 与 `spectrum:frame` 的契约一致。
+   */
+  setSpectrum(on: boolean): { enabled: boolean } {
+    if (on && this.spectrumTimer === null) {
+      let tick = 0;
+      this.spectrumTimer = setInterval(() => {
+        tick += 1;
+        const bands = new Array<number>(48);
+        for (let i = 0; i < 48; i += 1) {
+          const shape = Math.exp(-i / 18);
+          const wave = 0.5 + 0.5 * Math.sin(tick / 6 + i / 5);
+          const jitter = 0.5 + 0.5 * Math.sin(tick / 2.3 + i);
+          bands[i] = Math.round(255 * Math.min(1, shape * (0.35 + 0.65 * wave * jitter)));
+        }
+        this.emitter.emit('spectrum:frame', bands);
+      }, 33);
+    } else if (!on && this.spectrumTimer !== null) {
+      clearInterval(this.spectrumTimer);
+      this.spectrumTimer = null;
+    }
+    return { enabled: on };
+  }
+
   diagnostics(): Diagnostics {
     const stats = this.libraryStats();
     return {
-      version: '0.1.0',
-      electron: 'n/a（Tauri 2 预览）',
+      version: '0.1.0-preview',
+      electron: 'n/a（Tauri 2 浏览器预览）',
       platform: navigator.platform || 'web',
-      dataDir: '（浏览器预览）',
-      schemaVersion: 1,
+      dataDir: '（浏览器预览：localStorage）',
+      logDir: null,
+      logFile: null,
+      schemaVersion: stats.schemaVersion,
       dbBytes: 0,
       tracks: stats.tracks,
       albums: stats.albums,
@@ -648,19 +734,21 @@ export class MockBackend {
       mediaKeys: { enabled: false, active: [], failed: [] },
       power: { active: false, type: null },
       tray: false,
-      platformCapabilities: {
-        os: 'web',
-        mediaIntegration: 'none',
-        mediaKeysRoute: 'none',
-        traySupported: false,
-        systemLoopback: false,
+      audioMode: {
+        requested: 'shared',
+        mode: 'shared',
+        clock: 'events',
+        bufferMs: 200,
+        format: 'n/a（预览无音频）',
+        note: '浏览器预览不建音频流',
+        desired: { mode: 'shared', bufferMs: 200, clock: 'auto', releaseOnPause: false },
       },
     };
   }
 
   /* ---------------- 查询实现 ---------------- */
 
-  private filter(q: TrackQueryParsed): Track[] {
+  private filter(q: TrackQueryParsed): TrackRow[] {
     const needle = q.search?.trim().toLowerCase();
     return this.tracks.filter((t) => {
       if (needle) {
@@ -673,10 +761,10 @@ export class MockBackend {
     });
   }
 
-  private sortForSource(rows: Track[], q: TrackQueryParsed): Track[] {
+  private sortForSource(rows: TrackRow[], q: TrackQueryParsed): TrackRow[] {
     const dir = q.direction === 'desc' ? -1 : 1;
     /** 文本键取 localeCompare 的符号再乘方向，数值键直接相减乘方向；id 恒升序保稳定 */
-    const cmp = (a: Track, b: Track): number => {
+    const cmp = (a: TrackRow, b: TrackRow): number => {
       const tie = a.id.localeCompare(b.id);
       switch (q.sort) {
         case 'added':
@@ -692,11 +780,6 @@ export class MockBackend {
     };
 
     const source = q.source;
-    if (source.kind === 'playlist') {
-      const summary = this.playlists.find((p) => p.id === source.playlistId);
-      void summary;
-      return rows;
-    }
     if (source.kind === 'recent') {
       return [...rows]
         .filter((t) => t.lastPlayedAtMs !== null)
@@ -707,6 +790,7 @@ export class MockBackend {
         .filter((t) => t.playCount > 0)
         .sort((a, b) => b.playCount - a.playCount || a.id.localeCompare(b.id));
     }
+    // library / playlist：mock 不建 playlist_items 表，歌单视图就用同一批曲目
     return [...rows].sort(cmp);
   }
 }

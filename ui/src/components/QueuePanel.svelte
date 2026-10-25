@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Track } from '@aiya/contracts';
+  import type { TrackDetail } from '../lib/ipc';
   import { artworkUrl } from '../lib/artwork';
   import { startRowDrag, consumeClickSuppressed } from '../lib/drag';
   import { computeRange } from '../lib/virtual';
@@ -34,7 +34,7 @@
 
   // 队列可能上万首，面板里也只渲染可见的那几十行。
   // 元数据按可见区间批量取，而不是"拉全队列的曲目"。
-  const meta = new Map<string, Track>();
+  const meta = new Map<string, TrackDetail>();
   const pending = new Set<string>();
   /** trackId → 已失败次数：返回缺失（可能已从曲库删除）或请求异常时累加 */
   const failedAttempts = new Map<string, number>();
@@ -50,7 +50,7 @@
 
   const visible = $derived.by(() => {
     void metaVersion;
-    const out: Array<{ index: number; id: string; track: Track | undefined }> = [];
+    const out: Array<{ index: number; id: string; track: TrackDetail | undefined }> = [];
     for (let i = range.start; i < range.end; i += 1) {
       const id = ids[i];
       if (!id) continue;

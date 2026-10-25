@@ -11,9 +11,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-const API_TS: &str = include_str!("../../ui/src/compat/api.ts");
-/// 新 IPC 客户端（docs/17）：`call<T>('cmd', {...})`。类型参数必须先剥掉，
-/// 否则下面的解析器只认 `call('`。
+/// UI 侧的**唯一**调用源（docs/17）：`call<T>('cmd', {...})`。
+/// 类型参数必须先剥掉，否则下面的解析器只认 `call('`。
+///
+/// 批次 4 删掉了 `ui/src/compat/api.ts`（旧信封壳）与 `ui/contracts`，
+/// 所以这里不再需要合并两份源码——扫描面收敛成这一个文件。
 const CLIENT_TS: &str = include_str!("../../ui/src/lib/ipc/client.ts");
 const LIB_RS: &str = include_str!("../src/lib.rs");
 
@@ -126,11 +128,9 @@ fn strip_call_generics(src: &str) -> String {
     out
 }
 
-/// 两个 UI 层（旧 compat 壳 + 新 typed client）的全部调用，合并后统一校验。
+/// 新 typed client 的全部调用。
 fn all_ui_calls() -> Vec<UiCall> {
-    let mut calls = parse_ui_calls(API_TS);
-    calls.extend(parse_ui_calls(&strip_call_generics(CLIENT_TS)));
-    calls
+    parse_ui_calls(&strip_call_generics(CLIENT_TS))
 }
 
 /// Rust 侧注册的命令名（`generate_handler![...]` 里的标识符）
@@ -283,7 +283,7 @@ fn every_ui_argument_maps_to_a_rust_parameter() {
 
 #[test]
 fn parser_smoke() {
-    // 解析器自身的锚点：这两段形状就是 api.ts 里的真实写法
+    // 解析器自身的锚点：这两段形状就是 client.ts 里的真实写法
     let calls = parse_ui_calls("call('a', { id });\ncall('b');\ncall('c', { trackIds, mode })");
     assert_eq!(
         calls,
@@ -306,7 +306,7 @@ fn parser_smoke() {
 /// 这里同时守住反向：注册了却没人用，说明契约里多了个死命令。
 #[test]
 fn registered_commands_have_callers() {
-    let calls: BTreeSet<String> = parse_ui_calls(API_TS).into_iter().map(|c| c.name).collect();
+    let calls: BTreeSet<String> = all_ui_calls().into_iter().map(|c| c.name).collect();
     let registered = parse_registered(LIB_RS);
     let unused: Vec<&String> = registered.iter().filter(|n| !calls.contains(*n)).collect();
     // 允许内部/诊断用的命令存在，但数量必须可控（否则是契约漂移）

@@ -1,4 +1,4 @@
-import type { AlbumPreview, BeetsImportEvent } from '@aiya/contracts';
+import type { AlbumPreview, BeetsImportEvent } from '../lib/beets';
 import { events, ipc, type ApplyDecision } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
 

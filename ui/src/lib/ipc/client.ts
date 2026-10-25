@@ -1,12 +1,12 @@
 /**
  * 新 IPC 客户端（docs/17）：**类型来自 Rust**，错误是结构化对象。
  *
- * 与老 `compat/api.ts` 的区别：
- * - 老壳：`invoke` 后返回 `{ok,data}` 信封，错误在返回值里；
- * - 新壳：命令返回 `Result<T, ApiError>`，失败时 Tauri 直接 **reject**，
- *   这里把 reject 值归一化成 `ApiError`（它不是 `Error` 实例，没有 stack）。
+ * 命令返回 `Result<T, ApiError>`，失败时宿主直接 **reject**，
+ * 这里把 reject 值归一化成 `ApiError`（它不是 `Error` 实例，没有 stack）。
  *
- * 54 个命令全部覆盖。老 UI 仍走 `compat/api.ts`，两者共存到旧壳删除为止。
+ * 54 个命令全部覆盖。实际下发走 `transport()`（默认 Tauri invoke，
+ * 浏览器预览时被 `lib/ipc/mock` 整体替换）—— 所以这个文件里没有任何
+ * "是不是预览环境"的分支。
  *
  * 参数侧的约定（docs/17 §3.2）：`query` / `settings` / `options` / `decisions`
  * 这类复合对象在 Rust 侧收 `Json` 再手动解析，所以这里用结构类型而不是
@@ -14,7 +14,6 @@
  * 之前，用强类型参数会让"参数不合法"变成 Tauri 自己的一句话 reject，
  * 绕开 `ApiError` 的分类。
  */
-import { invoke } from '@tauri-apps/api/core';
 import type {
   ApiError,
   ApiErrorCode,
@@ -43,6 +42,7 @@ import type {
   TrackDetail,
   TrackPage,
 } from './generated';
+import { transport } from './transport';
 
 export type { ApiError, ApiErrorCode };
 
@@ -120,7 +120,7 @@ export function toApiError(e: unknown): ApiError {
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   try {
-    return await invoke<T>(cmd, args);
+    return await transport().invoke<T>(cmd, args);
   } catch (e) {
     throw toApiError(e);
   }

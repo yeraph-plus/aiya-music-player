@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { PlaylistSummary } from '@aiya/contracts';
+  import type { PlaylistSummary } from '../lib/ipc';
   import Icon from './Icon.svelte';
 
   interface Props {

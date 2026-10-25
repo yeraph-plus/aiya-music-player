@@ -11,7 +11,7 @@
     formatAudioSpec,
     formatRate,
     isHiRes,
-  } from '@aiya/contracts';
+  } from '../lib/audio-format';
   import { formatTime, repeatLabel } from '../lib/format';
   import Icon from './Icon.svelte';
 

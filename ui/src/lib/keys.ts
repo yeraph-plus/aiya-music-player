@@ -1,4 +1,4 @@
-import { SHORTCUT_ACTIONS, matchBinding, type KeyEventLike, type ShortcutAction } from '@aiya/contracts';
+import { SHORTCUT_ACTIONS, matchBinding, type KeyEventLike, type ShortcutAction } from './shortcuts';
 
 /**
  * 按键 ↔ 动作的桥接。

@@ -1,6 +1,7 @@
-import type { AppSettings, BeetsStatus, Lyrics, PlaylistSummary, TrackSort } from '@aiya/contracts';
-import type { Diagnostics } from '../lib/ipc/generated/Diagnostics';
-import { DEFAULT_SETTINGS } from '@aiya/contracts';
+import type { BeetsStatus, Diagnostics, Lyrics, PlaylistSummary } from '../lib/ipc';
+import type { TrackSort } from '../lib/query';
+import type { AppSettings } from '../lib/settings';
+import { DEFAULT_SETTINGS } from '../lib/settings';
 import { ipc, type DynamicJson } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
 import { devValidate, settingsSchema, uiStateSchema, type UiState } from '../lib/ipc/schema';

@@ -1,4 +1,4 @@
-import type { Lyrics } from '@aiya/contracts';
+import type { Lyrics } from './ipc/generated/Lyrics';
 
 /**
  * 歌词加载状态机。

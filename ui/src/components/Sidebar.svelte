@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { LibraryStats, PlaylistSummary } from '@aiya/contracts';
+  import type { LibraryStats, PlaylistSummary } from '../lib/ipc';
   import { artworkUrl } from '../lib/artwork';
   import type { View } from '../lib/view';
   import { shortenPath } from '../lib/format';

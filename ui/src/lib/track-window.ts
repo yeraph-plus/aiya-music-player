@@ -1,4 +1,4 @@
-import type { Track } from '@aiya/contracts';
+import type { TrackRow } from './ipc/generated/TrackRow';
 
 /**
  * 稀疏分页窗口。
@@ -12,7 +12,7 @@ import type { Track } from '@aiya/contracts';
  */
 
 export interface PageResult {
-  items: Track[];
+  items: TrackRow[];
   total: number;
 }
 
@@ -30,7 +30,7 @@ export class TrackWindow {
   private readonly pageSize: number;
   private readonly maxPages: number;
 
-  private pages = new Map<number, Track[]>();
+  private pages = new Map<number, TrackRow[]>();
   private inflight = new Set<number>();
   private errors = new Map<number, string>();
   private totalValue = 0;
@@ -62,7 +62,7 @@ export class TrackWindow {
   }
 
   /** 用它已经拿到的一页预热缓存，避免 reset 后立刻重复请求同一页 */
-  primePage(pageIndex: number, items: Track[]): void {
+  primePage(pageIndex: number, items: TrackRow[]): void {
     if (items.length === 0) return;
     this.pages.set(pageIndex, items);
     this.notify();
@@ -74,7 +74,7 @@ export class TrackWindow {
     this.notify();
   }
 
-  get(index: number): Track | undefined {
+  get(index: number): TrackRow | undefined {
     if (index < 0 || index >= this.totalValue) return undefined;
     const page = Math.floor(index / this.pageSize);
     return this.pages.get(page)?.[index % this.pageSize];

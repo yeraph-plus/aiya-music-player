@@ -35,11 +35,19 @@
 
 ```
 ui/src/
-  main.ts                 只做 mount（17 行）
+  main.ts                 只做两件事：非 Tauri 时动态装 mock + mount（~40 行）
   App.svelte              127 行：装配 + 4 个 document 级副作用（批次 3 落地）
   styles/                 tokens / base / shell / lists / player / overlays（批次 1）
   lib/
-    ipc/                  ✓ 完整（client 54 命令 / schema / events / generated 41 类型）
+    ipc/                  ✓ 完整（client 54 命令 / schema / events / transport / generated 41 类型）
+      transport.ts        命令+事件的唯一换气口（批次 4：预览靠替换它，UI 零分支）
+      mock/               浏览器预览假后端（backend 类 + 54 命令派发表，独立 chunk）
+    audio-format.ts       速率夹取 + 格式徽章/规格/tooltip（批次 4 从 contracts 搬来）
+    beets.ts              beets:import 事件与预览形状（手写镜像 sidecar 协议）
+    query.ts              zod 查询 schema + TrackSort/TrackSource + 游标编解码
+    settings.ts           AppSettings + DEFAULT_SETTINGS（与 schema.ts 分工见文件头）
+    shortcuts.ts          快捷键清单/默认键位/解析匹配/冲突检测
+    lyrics.ts             findActiveLine（二分）
     artwork.ts            artworkUrl()（唯一源）
     keyboard.ts           快捷键**执行层**（判断层是 list-keys.ts 的纯函数）
     boot.ts               启动引导：同步注册订阅 + 异步首屏
@@ -261,14 +269,61 @@ codec 认得出按 codec；codec 缺失按容器；容器也说不了 `Mp4/Ogg` 
 `ui` store 保持**不依赖任何其他 store**（只依赖 ipc/schema/loader）：它是被
 最多 store 依赖的那个，一旦它反过来 import player 就成环。
 
-### 批次 4 · 删旧壳（等新 UI 自给自足才做）
-- [ ] 删 `ui/src/compat/`（含 `mock.ts` —— 浏览器预览改用 `ipc` 的 mock 适配）
-- [ ] 删 `ui/contracts/`（类型全部来自 `lib/ipc/generated/`）
-- [ ] `ipc_contract.rs` 的双层扫描收敛成只扫 `lib/ipc/client.ts`
-- [ ] 验收：`gen:types:check` + `cargo test` + `svelte-check` 全绿
+### 批次 4 · 删旧壳（**完成**，`compat/` 与 `contracts/` 已零引用）
+- [x] 删 `ui/src/compat/`（含 `mock.ts` —— 浏览器预览改用 `ipc` 的 mock 适配）
+- [x] 删 `ui/contracts/`（类型全部来自 `lib/ipc/generated/`）
+- [x] `ipc_contract.rs` 的双层扫描收敛成只扫 `lib/ipc/client.ts`
+- [x] 验收：`gen:types:check` + `cargo test` + `svelte-check` 全绿
 
 批次 1–3 完成前，`compat/` 与 `contracts/` **不动**——它们让旧界面继续可用，
 是本轮重构的"安全网"。这也是为什么批次 4 排在最后。
+
+#### 4.1 这一步的真实工作量：不是 `git rm`，是「把 contracts 消化掉」
+
+`ui/contracts` 里混着三类东西，只有第一类能直接删：
+
+| 类别 | 处理 |
+|---|---|
+| **与 Rust 生成物重复的类型**（`Track` / `Lyrics` / `PlaylistSummary` / `PlayerState` / `LibraryStats` / `BeetsStatus` / `Diagnostics` …） | 删，改引 `lib/ipc/generated`。`Track` 拆成 `TrackRow`（列表）与 `TrackDetail`（补 audio）/`TrackRef`（队列） |
+| **纯前端逻辑**（`audio-format` / `lyrics` / `query` / `shortcuts` / `settings` / beets 事件形状） | 搬到 `lib/` 对应文件，只改入参类型 |
+| **只服务旧壳的东西**（`AiyaApi` / `IpcResult`/`ok`/`fail` / `CH` 通道名 / `PlayerCommand` / `PersistedPlayer` / `trackMediaUrl`） | 删。`window.api` 与 `env.d.ts` 里的 `AiyaApi` 声明一起删 |
+
+`vite.config.ts` / `tsconfig.json` 的 `@aiya/contracts` 别名同步移除；
+`index.html` 里 `/src/compat/install.ts` 那个 `<script>` 也删掉（单一入口 `main.ts`）。
+
+#### 4.2 mock 复活的两个设计点
+
+1. **`transport` 注入，而不是 `if (preview)` 撒在业务里。**
+   `lib/ipc/transport.ts` 是命令 + 事件的唯一出口，默认实现是 Tauri
+   `invoke`/`listen`；预览时 `installMock()` 整体替换。好处是
+   `client.ts` / `events.ts` / store / 组件**全都不知道**自己头顶是真宿主还是假数据，
+   Tauri 包里也不留死分支。mock 只在 `main.ts` 里 `await import()`，
+   构建产物里是独立 chunk（17 KB，真宿主永不加载）。
+2. **派发表一对一。** 54 个命令名与 Rust 侧 snake_case 完全一致，漏一条的表现是
+   "预览里某按钮报 internal"；反过来 `ipc_contract.rs` 继续守
+   "注册了但 client 没入口"。两者合起来覆盖两个方向。
+3. 假数据顺手补了四种音频规格（FLAC 16/44.1、MP3 320、FLAC 24/96、lossless
+   未知的 M4A），让 §2.5 修好的 `lossless` + kbps 单位能在预览里肉眼验。
+
+#### 4.3 顺手修掉的真缺陷：`spectrumEngine: 'pro'` 开出空白面板
+
+默认设置是 `spectrumEngine: 'pro'`，而 audioMotion **必须挂真实音频节点**；
+ADR-0006 之后音频在 Rust sidecar，`RemoteSpectrumSource.audioNode` 恒为
+`undefined`。于是"开频谱"得到的是一个 `pro-host` 空 div —— 面板在、数据也有
+（48 带 `spectrum:frame` 在推），就是**一个像素都不画**（2026-10-25 在预览与
+真窗口都复现）。
+
+修法不是改默认值（那只是把问题藏起来），而是把注释里早就写着、代码却没做的
+"静默降级"落到实处：
+
+```ts
+// SpectrumPanel.svelte
+const usePro = $derived(engine === 'pro' && source.audioNode !== undefined);
+```
+
+`usePro` 假 → 走 compact 的 canvas 绘制，头部把"形态切换"换成"实时"。
+真机验证：默认 pro 设置下开面板，`litPixels` 从 0 → 14617（有数据在画）。
+`audioNode` 真的存在时（将来的 WASAPI 回环）自动回到 pro，无需再改。
 
 ## 4. 关键设计决定
 
@@ -322,15 +377,25 @@ codec 认得出按 codec；codec 缺失按容器；容器也说不了 `Mp4/Ogg` 
 不依赖截图权限、也不需要给应用加测试钩子：
 
 ```bash
+# 真窗口
 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 npm run dev
 npm run probe:ui                 # 结构 + console + 未捕获异常 + 4xx
 npm run probe:ui -- --actions    # 追加面板开关交互序列
+npm run probe:ui -- --play       # 追加"点第一行 → 读播放条"链路
+
+# 浏览器预览（没有 Tauri 运行时，靠 lib/ipc/mock）
+npm run dev:ui                                   # 另一个终端
+msedge --headless=new --remote-debugging-port=9222 http://localhost:1420/
+npm run probe:ui -- --play
 ```
 
 判定：有未捕获异常 / 非 favicon 的 4xx / console.error → 退出码 1，可直接进 CI。
 
-关键实现细节：先 `Runtime.enable` 再 `Page.reload`——探针连上时页面早已加载完，
-不 reload 就抓不到**挂载期**的异常，而拆壳与换数据层最容易出问题的正是挂载期。
+两条实现要点（都踩过）：
+- 先 `Runtime.enable` 再 `Page.reload`——探针连上时页面早已加载完，不 reload
+  就抓不到**挂载期**的异常，而拆壳与换数据层最容易出问题的正是挂载期。
+- **选目标只认 `http(s)` 页面**：浏览器会带 `edge://`、扩展后台页等杂项，
+  盲取 `targets[0]` 会连到同步确认弹窗上（实测）。多开时用 `--url=<子串>` 指定。
 
 能证明的：DOM 形状、面板开关链路、主题/密度是否落到 `<html>`、主色是否提取、
 错误条是否被误触发、有没有抛异常。
@@ -360,7 +425,7 @@ npm run probe:ui -- --actions    # 追加面板开关交互序列
 | 2 数据层换血 | **完成** | `window.api` 业务代码归零；208 测试 / 0 警告；真窗口走通设置读写 + 事件链路（见 §8.3） |
 | 2.5 后端补 `lossless` | **完成** | 211 测试 / 0 失败；真窗口两分支都对：无损 `3072 kbps`、有损 `320 kbps`（见 §2.5） |
 | 3 拆 `App.svelte` | **完成** | `App.svelte` 1070 → **127 行**；真窗口 20 项交互全通，新增 2 个 bug 的回归验证（见 §8.5） |
-| 4 删旧壳 | 待开始 | — |
+| 4 删旧壳 | **完成** | `compat/` + `contracts/` 删除；211 测试 / `check` 0/0；真窗口与预览两条线全通（见 §8.6），顺手修 pro 频谱空白面板（见 §4.3） |
 
 ### 8.1 批次 1 实际改了什么
 
@@ -423,12 +488,22 @@ npm run probe:ui -- --actions    # 追加面板开关交互序列
 | `player:state` → rAF → UI | 点「静音」：按钮 title `静音 → 取消静音 → 静音`（事件链路 + 合帧端到端） |
 | console / 异常 | 0 error、0 warning、0 未捕获异常 |
 
-### 8.4 浏览器预览从此没有数据
+### 8.4 浏览器预览：批次 2 起没数据，**批次 4 已恢复**
 
-按拍板结论，批次 2 起 `npm run dev:ui`（只跑 vite，不是 Tauri）会渲染出空列表：
-新 `ipc` 客户端只走 `invoke`，非 Tauri 环境必失败。这是**有意接受**的过渡状态，
-批次 4 把 `MockBackend` 搬到 `lib/ipc/mock` 下做一次派发表再接上。
-日常开发/验收一律用 `npm run dev`（真窗口）+ `npm run probe:ui`。
+批次 2 把数据层换成 typed `invoke` 之后，`npm run dev:ui`（只跑 vite，不是
+Tauri）渲染出空列表——这是有意接受的过渡状态。
+
+批次 4 用 `transport` 注入补回来了：`main.ts` 检测到没有
+`__TAURI_INTERNALS__` 就 `await import('./lib/ipc/mock')` 装假后端，
+**命令与事件一起替换**（`player:state` / `scan:progress` / `spectrum:frame`
+都能跑）。实测：曲库 13 行、首行 `薄荷变奏`、4 个歌单；点第一行 →
+播放条 `薄荷变奏 / 林俊杰` + 徽章 `FLAC` + `96 kHz / 24 bit` +
+tooltip `… 无损 · 平均码率 2300 kbps`；侧面板开关正常；频谱 canvas
+有 17823 个不透明像素。
+
+`?failCmd=<命令名>` 可以注入一条命令失败，用来手验错误条渲染。
+日常验收仍以 `npm run dev`（真窗口）+ `npm run probe:ui` 为准——
+mock 证明的是"UI 在无后端时也能成立"，不是"后端对了"。
 
 ### 8.5 批次 3 真窗口验证（20 项，全程 CDP 读真 DOM）
 
@@ -472,6 +547,38 @@ npm run probe:ui -- --actions    # 追加面板开关交互序列
 第 2 个是新增的 `overlay` store 顺手就能修的（旧代码里两个 `$state` 变量
 也是各管各的，同样有这个毛病），这也是把浮层状态收口到一处的好处。
 
+### 8.6 批次 4 验证（真窗口 + 浏览器预览两条线）
+
+删壳这一步的风险集中在"契约被接错"，所以两条线都要过：真窗口证明后端还通，
+预览证明 UI 在没有后端时也成立。
+
+| 线 | 验证项 | 结果 |
+|---|---|---|
+| 门禁 | `cargo test --workspace` | **211 passed / 0 failed**（+1 ignored），含 `ipc_contract` 三条 |
+| 门禁 | `svelte-check` | 0 error / 0 warning |
+| 门禁 | `vite build` | 通过；mock 独立 chunk `17.09 kB`，主 bundle 不变 |
+| 门禁 | `gen:types:check` | 41 类型与 Rust 一致 |
+| 真窗口 | 结构 | `aside.sidebar` / `main.main` / `footer.player`；侧栏 4 项；3 行曲库 |
+| 真窗口 | 播放链路 | 点第一行 → 标题 `高音测试 880Hz`；状态 `播放`→`暂停`（引擎真的在跑） |
+| 真窗口 | 音频规格 | 徽章 `WAV`；`44.1 kHz / 32 bit`；tooltip `无损 · 平均码率 2822 kbps` |
+| 真窗口 | 频谱（默认 pro 设置） | 面板 canvas `287×629`，`litPixels` 0（暂停）→ **14617（播放中）** |
+| 真窗口 | 设置页 | 5 个 tab（外观/播放/系统/快捷键/诊断）；「频谱可视化」开关可切 |
+| 真窗口 | console / 未捕获异常 | 0 error、0 未捕获异常（favicon 404 除外，dev server 既有） |
+| 预览 | 结构 | 13 行曲库、首行 `薄荷变奏`、4 个歌单、8 个 `nav-item` |
+| 预览 | 播放链路 | 点第一行 → `薄荷变奏 / 林俊杰`、`FLAC`、`96 kHz / 24 bit`、tooltip 带 `2300 kbps` |
+| 预览 | 侧面板 | 队列开 → 歌词 → 回队列 → 关，`side-open` 与 DOM 同步 |
+| 预览 | 频谱（compact） | canvas `287×317`，`litPixels: 17823` |
+
+**探针本身在这一轮也修了两处**（否则结果会骗人）：
+
+1. **选目标不能盲目取 `[0]`**。浏览器会带 `edge://`、扩展后台页等杂项，
+   盲取会连到"同步确认弹窗"上。改成只认 `http(s)` 页面，并支持
+   `--url=<子串>` 精确挑。
+2. **`trackRows` 选择器过时**。批次 1 之后行是 `.main .list .row`
+   （不是 `.track-row`），且要排除 `.failed` / `.skeleton` 两种占位行。
+   另外新增 `--play`：点第一行后读播放条（标题/艺人/徽章/规格/tooltip/播放键），
+   一条命令覆盖"点击 → 命令 → 事件 → store → 渲染"整条链。
+
 ## 9. 遗留（本轮明确不做，别忘）
 
 1. ~~**`TrackAudio.lossless` 功能缺失**~~ —— **已修**，见 §2.5。
@@ -485,3 +592,15 @@ npm run probe:ui -- --actions    # 追加面板开关交互序列
 5. **`player_report` 的形状未定**：v1 遗留诊断通道，`ipc.player.report` 收 `DynamicJson`。
 6. **`complex` 参数仍收 `Json`**：`query` / `settings` / `options` / `decisions`
    是刻意不收紧的（docs/17 §3.1），别"顺手"改成强类型。
+7. **audioMotion（pro 引擎）目前形同虚设**。它必须挂真实 `AudioNode`，而 ADR-0006
+   之后音频在 Rust sidecar，`RemoteSpectrumSource.audioNode` 恒 `undefined`。
+   §4.3 的降级只是让它**不再是空白**（画 compact 那套 canvas），pro 的径向/LED/
+   镜像形态依然用不到。要真用上，得让宿主走 WASAPI loopback 把 PCM 回灌给
+   WebAudio（`MediaStreamAudioDestinationNode` 之类），或干脆在 Rust 侧做多形态
+   渲染只推视觉参数。**在那之前，设置页「频谱风格」的专业/简洁其实没有差别**——
+   这条要么实现、要么把选项藏起来，别让它当摆设。
+8. **mock 不建 `playlist_items` 表**：预览里"歌单视图"就是全库按同一排序展示，
+   拖动排序/移除之类只改计数不动内容。够用来验版面，不要拿它验歌单语义。
+9. **`AppSettings` 未含 `output`**：磁盘上有（输出模式/缓冲/时钟，2026-10 加的），
+   `mergeSettings` 靠 passthrough 带进来但类型看不见。接设置页"输出"分区时要补。
+10. **快捷键设置页 / 主题密度逐项核对 / E2E** —— P4 未验小项，仍在台账上。

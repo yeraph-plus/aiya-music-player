@@ -1,4 +1,4 @@
-import type { TrackSource } from '@aiya/contracts';
+import type { TrackSource } from './query';
 
 /**
  * 视图模型。

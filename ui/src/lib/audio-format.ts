@@ -1,14 +1,14 @@
-import type { AudioFormat } from './domain.js';
+import type { TrackAudio } from './ipc/generated/TrackAudio';
 
 /**
- * 播放速率与音频规格的展示规则。
+ * 播放速率与音频规格的展示规则（纯函数，可表驱动单测）。
  *
- * 放在 contracts 里是因为三边都要用同一份：
- * - 状态机要按同样的网格夹取速率（否则 UI 显示 1.5×、实际 1.4×）
- * - 主进程校验 IPC 入参要用同一组上下限
- * - 渲染层渲染徽章要用同一张映射表
+ * 为什么在这里而不在 Rust：`TrackAudio` 的徽章/规格/提示全是**展示规则**，
+ * 后端只负责给出事实（codec / 采样率 / 位深 / 码率 / 三态 lossless）。
+ * 放在前端是因为换文案、换阈值（Hi-Res 门槛）不该动编译 Rust。
  *
- * 全是纯函数，不碰 DOM、不碰 fs，可以表驱动单测。
+ * 2026-10-25 批次 4：从已删除的 `@aiya/contracts` 包搬来，入参类型由旧的
+ * `AudioFormat` 换成 Rust 生成的 `TrackAudio`（两者字段一一对应）。
  */
 
 /* ---------------- 速率 ---------------- */
@@ -103,7 +103,7 @@ export function formatSampleRate(hz: number): string {
  * 这里曾经写过 `/ 1000`，于是 320 kbps 的 MP3 显示成 "0 kbps"、
  * 48k/32bit 的 WAV 显示成 "3 kbps" —— 2026-10-25 实测发现。
  */
-export function formatAudioSpec(audio: AudioFormat | null | undefined): string | null {
+export function formatAudioSpec(audio: TrackAudio | null | undefined): string | null {
   if (!audio) return null;
 
   if (audio.lossless === true) {
@@ -123,13 +123,13 @@ export function formatAudioSpec(audio: AudioFormat | null | undefined): string |
  * 是否算 "Hi-Res"：无损且 24bit 以上或 88.2kHz 以上。
  * 只用来决定徽章是否高亮，不作为任何播放决策。
  */
-export function isHiRes(audio: AudioFormat | null | undefined): boolean {
+export function isHiRes(audio: TrackAudio | null | undefined): boolean {
   if (!audio || audio.lossless !== true) return false;
   return (audio.bitsPerSample ?? 0) >= 24 || (audio.sampleRate ?? 0) >= 88_200;
 }
 
 /** 悬停提示：把播放条放不下的信息一次性给全 */
-export function audioTooltip(audio: AudioFormat | null | undefined): string | null {
+export function audioTooltip(audio: TrackAudio | null | undefined): string | null {
   if (!audio) return null;
   const parts: string[] = [];
   const badge = audioBadge(audio.codec, audio.container);
