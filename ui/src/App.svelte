@@ -24,6 +24,7 @@
   import { boot } from './lib/boot';
   import { onKeydown } from './lib/keyboard';
   import { createMediaSession, type MediaSessionBridge } from './lib/media-session';
+  import { applyLook, writeLook } from './lib/look';
   import { list } from './stores/list.svelte';
   import { notify } from './stores/notify.svelte';
   import { player } from './stores/player.svelte';
@@ -50,10 +51,12 @@
     );
   }
 
-  // 主题与密度：写在 <html> 的 data 属性上，CSS 变量随之切换，无需重建组件
+  // 主题与密度：写在 <html> 的 data 属性上，CSS 变量随之切换，无需重建组件。
+  // 同时写一份 localStorage 镜像，供下次启动首帧使用（否则浅色主题会先闪一帧深色）。
   $effect(() => {
-    document.documentElement.dataset.theme = ui.settings.theme;
-    document.documentElement.dataset.density = ui.settings.density;
+    const look = { theme: ui.settings.theme, density: ui.settings.density };
+    applyLook(look);
+    writeLook(look);
   });
 
   // 封面主色：切歌或开关变化时重新提取；异步结果带取消标记，防止旧封面覆盖新颜色

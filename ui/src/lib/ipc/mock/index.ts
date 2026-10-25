@@ -121,9 +121,6 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return mock.move(a.from as number, a.to as number);
     case 'player_clear':
       return mock.clear();
-    case 'player_report':
-      mock.report(a.report as DynamicJson);
-      return { received: true };
 
     /* ---------------- lyrics / history ---------------- */
     case 'lyrics_get':

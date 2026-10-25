@@ -7,6 +7,7 @@ import { errorMessage } from '../lib/errors';
 import { devValidate, settingsSchema, uiStateSchema, type UiState } from '../lib/ipc/schema';
 import { LIBRARY_VIEW, parseViewKey, viewKey, type View } from '../lib/view';
 import { LyricsLoader } from '../lib/lyrics-loader';
+import { readLook } from '../lib/look';
 
 /**
  * 界面状态 store：视图、搜索排序、筛选、面板、设置、歌单列表、歌词、诊断。
@@ -28,7 +29,15 @@ class UiStore {
   albumId = $state<string | null>(null);
   sidePanel = $state<'queue' | 'lyrics' | 'spectrum' | 'import' | null>(null);
 
-  settings = $state<AppSettings>({ ...DEFAULT_SETTINGS });
+  /**
+   * 初始值不是纯 `DEFAULT_SETTINGS`：主题/密度先取 localStorage 镜像
+   * （`lib/look.ts`）。否则 `main.ts` 已经把首帧设成浅色，这里却是深色，
+   * `App` 的主题 effect 首次运行会把 `data-theme` 写回深色，等 bootstrap
+   * 返回真值再改回来——实测就是 `light → dark → light` 三次跳变。
+   *
+   * 其余字段仍走默认值：它们不影响首帧观感，bootstrap 一回来就覆盖。
+   */
+  settings = $state<AppSettings>({ ...DEFAULT_SETTINGS, ...readLook() });
   playlists = $state<PlaylistSummary[]>([]);
   diagnostics = $state<Diagnostics | null>(null);
   settingsOpen = $state(false);

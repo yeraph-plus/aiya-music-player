@@ -2,10 +2,14 @@
 //!
 //! 边界约定（src-tauri/README.md）：命令注册、事件桥、协议注册；领域业务在 crates/。
 //!
-//! 全部 54 个命令都是 `Result<T, dto::ApiError>`：成功返回**裸载荷**（形状定义在
+//! 全部 53 个命令都是 `Result<T, dto::ApiError>`：成功返回**裸载荷**（形状定义在
 //! [`dto`]，由 ts-rs 生成到 `ui/src/lib/ipc/generated/`），失败时 Tauri 把
 //! `ApiError` 序列化后直接 reject。`{ok,data}` 信封已经不存在了 —— 旧 UI 那层
-//! 翻译只活在 `ui/src/compat/api.ts`（docs/17 §3.1）。
+//! 翻译（`ui/src/compat/`）已于 2026-10-25 批次 4 删除，UI 侧只剩
+//! `ui/src/lib/ipc/client.ts` 一层（docs/17 §3.1）。
+//!
+//! 53 而不是 54：`player_report` 是 v1 `<audio>` 出口的回报通道，引擎搬到
+//! Rust 后前端从没调用过、后端 `let _ = &state` 空转，2026-10-25 整条删除。
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -1809,18 +1813,6 @@ fn record_history(state: &AppState, track_id: &str, seconds_played: u64) {
     }
 }
 
-/// 旧 UI 的回报通道（<audio> 出口时代）；引擎在 Rust 后只剩诊断价值。
-#[tauri::command]
-fn player_report(
-    state: State<'_, AppState>,
-    report: Json,
-) -> Result<dto::player::ReportAck, dto::ApiError> {
-    let kind = report.get("kind").and_then(|k| k.as_str()).unwrap_or("").to_string();
-    tracing::debug!(kind, "player_report (legacy)");
-    let _ = &state;
-    Ok(dto::player::ReportAck { received: true })
-}
-
 /// 歌词（P4）：同目录同名 .lrc → 解析。没找到回 `found=false`（UI 显示"暂无"，
 /// 不当错误）。trackId 是自有库的 tracks.id。
 #[tauri::command]
@@ -2417,7 +2409,6 @@ pub fn run() {
             player_remove_at,
             player_move,
             player_clear,
-            player_report,
             lyrics_get,
             history_stats,
             history_clear,

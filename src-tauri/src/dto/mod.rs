@@ -18,7 +18,6 @@
 //! - [`app`]：关于页/诊断页（含输出模式的子结构在 [`output`]）
 //! - [`library`]：曲库列表/扫描/选择/移除
 //! - [`playlist`]：歌单
-//! - [`player`]：播放控制回执（状态本体在 `aiya-player`）
 //! - [`lyrics`]：歌词
 //! - [`history`]：播放历史
 //! - [`beets`]：beets 环境与导入回执
@@ -37,7 +36,6 @@ pub mod history;
 pub mod library;
 pub mod lyrics;
 pub mod output;
-pub mod player;
 pub mod playlist;
 
 pub use app::{AppInfo, Diagnostics, SpectrumToggle};

@@ -644,10 +644,6 @@ export class MockBackend {
     return this.playerState;
   }
 
-  report(_report: unknown): void {
-    /* mock 没有引擎回报；宿主的 player_report 只剩诊断价值 */
-  }
-
   /* ---------------- app ---------------- */
 
   get initialLook(): { theme: ThemeMode; density: ListDensity } {

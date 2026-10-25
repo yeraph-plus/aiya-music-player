@@ -385,9 +385,6 @@ fn small_result_dtos_keep_their_exact_keys() {
 
     let req = serde_json::to_value(aiya_lib::dto::beets::CancelRequested { requested: false }).unwrap();
     assert_eq!(keys(&req), sorted(&["requested"]));
-
-    let ack = serde_json::to_value(aiya_lib::dto::player::ReportAck { received: true }).unwrap();
-    assert_eq!(keys(&ack), sorted(&["received"]));
 }
 
 #[test]

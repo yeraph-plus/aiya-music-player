@@ -34,7 +34,6 @@ import type {
   QueueSnapshot,
   RemoveTracks,
   RepeatMode,
-  ReportAck,
   RevealResult,
   ScanCancel,
   ScanResult,
@@ -208,8 +207,6 @@ export const ipc = {
     removeAt: (index: number) => call<PlayerState>('player_remove_at', { index }),
     move: (from: number, to: number) => call<PlayerState>('player_move', { from, to }),
     clear: () => call<PlayerState>('player_clear'),
-    /** v1 旧回报通道（`<audio>` 时代）；引擎在 Rust 后只剩诊断价值 */
-    report: (report: DynamicJson) => call<ReportAck>('player_report', { report }),
   },
 
   lyrics: {

@@ -28,7 +28,6 @@ export * from './PowerInfo';
 export * from './QueueSnapshot';
 export * from './RemoveTracks';
 export * from './RepeatMode';
-export * from './ReportAck';
 export * from './RevealResult';
 export * from './ScanCancel';
 export * from './ScanError';
