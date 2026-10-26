@@ -24,8 +24,10 @@ export interface SpectrumSource {
  * Rust 在 PCM 链内做 FFT → 48 对数分带 → u8[48]，经 `spectrum:frame` 推送；
  * 这里只做 0-255 → 0-1 的归一化，不碰任何音频节点。
  *
- * 订阅是**按需**的：`start()` 时才 `ipc.app.spectrumSet(true)` 打开引擎 tap
- * （关闭时引擎内零开销），`stop()` 时关掉。面板没打开就不该有 FFT 开销。
+ * 订阅是**按需 + 引用计数**的：引擎 tap（`spectrum_set`）是**全局**开关，
+ * 而消费方可能有多个（AppShell 的背景环境层、正在播放页的可视化），共享
+ * 同一个实例。`start()/stop()` 按引用计数叠放——第一个 start 打开 tap，
+ * 最后一个 stop 才关闭；否则页面层卸载会把背景层的 tap 一起带走（T4h）。
  *
  * 引擎未就绪时永远收不到帧：`live` 为 false、分带恒 0，面板呈现静态空态 ——
  * 这是预期的降级，不是 bug。
@@ -35,6 +37,7 @@ export class RemoteSpectrumSource implements SpectrumSource {
 
   private bands: Float32Array;
   private running = false;
+  private refs = 0;
   private disposed = false;
   private unsubscribe: (() => void) | null = null;
 
@@ -48,7 +51,9 @@ export class RemoteSpectrumSource implements SpectrumSource {
   }
 
   start(): void {
-    if (this.running || this.disposed) return;
+    if (this.disposed) return;
+    this.refs += 1;
+    if (this.running) return;
     this.running = true;
     // tap 开关失败不影响空态：面板照样打开，只是没有数据
     void ipc.app.spectrumSet(true).catch(() => undefined);
@@ -60,6 +65,9 @@ export class RemoteSpectrumSource implements SpectrumSource {
   }
 
   stop(): void {
+    this.refs = Math.max(0, this.refs - 1);
+    // 还有别的消费方挂着：只减计数，不动 tap
+    if (this.refs > 0) return;
     // 只在曾 start 过时退订，避免面板没开就发一条多余的 IPC
     if (this.running) void ipc.app.spectrumSet(false).catch(() => undefined);
     this.running = false;

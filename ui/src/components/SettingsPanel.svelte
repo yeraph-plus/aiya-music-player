@@ -248,6 +248,36 @@
             onchange={(value) => apply({ ambient: value as AmbientScheme })}
           />
         </div>
+
+        <div class="setting-row">
+          <div>
+            <div class="setting-title">频谱可视化</div>
+            <div class="setting-hint">
+              背景环境频谱总开关：开启后整个应用背景有随音乐起伏的环境光；关闭时引擎 tap 停止、零开销
+            </div>
+          </div>
+          <Switch
+            label="频谱可视化"
+            checked={settings.spectrum}
+            onchange={(checked) => apply({ spectrum: checked })}
+          />
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <div class="setting-title">频谱风格</div>
+            <div class="setting-hint">
+              专业（五形态渲染）当前无生效入口——唯一消费方（正在播放页频谱面板）已随页面改版移除，
+              选项保留待正在播放页新可视化接入后启用；背景环境光不受此项影响
+            </div>
+          </div>
+          <SegmentedControl
+            label="频谱风格"
+            value={settings.spectrumEngine}
+            options={SPECTRUM_ENGINE_OPTIONS}
+            onchange={(value) => apply({ spectrumEngine: value as 'compact' | 'pro' })}
+          />
+        </div>
       </section>
 
       <section class="settings-section" id="settings-playback">
@@ -360,34 +390,6 @@
             label="音量归一化"
             checked={settings.normalizeVolume}
             onchange={(checked) => apply({ normalizeVolume: checked })}
-          />
-        </div>
-
-        <div class="setting-row">
-          <div>
-            <div class="setting-title">频谱可视化</div>
-            <div class="setting-hint">在「正在播放」页显示实时频谱（ADR-037：开启后启用渲染层音频图）</div>
-          </div>
-          <Switch
-            label="频谱可视化"
-            checked={settings.spectrum}
-            onchange={(checked) => apply({ spectrum: checked })}
-          />
-        </div>
-
-        <div class="setting-row">
-          <div>
-            <div class="setting-title">频谱风格</div>
-            <div class="setting-hint">
-              专业：五形态渲染（渐变条 / LED / 镜像 / 径向 / 反射）；简洁：自研轻量条形。
-              两种风格数据同源（48 分带实时频谱），差别只在渲染层。
-            </div>
-          </div>
-          <SegmentedControl
-            label="频谱风格"
-            value={settings.spectrumEngine}
-            options={SPECTRUM_ENGINE_OPTIONS}
-            onchange={(value) => apply({ spectrumEngine: value as 'compact' | 'pro' })}
           />
         </div>
       </section>
