@@ -4,7 +4,8 @@
  * 命令返回 `Result<T, ApiError>`，失败时宿主直接 **reject**，
  * 这里把 reject 值归一化成 `ApiError`（它不是 `Error` 实例，没有 stack）。
  *
- * 54 个命令全部覆盖。实际下发走 `transport()`（默认 Tauri invoke，
+ * 命令全量覆盖（条目数以本文件与方法为准，别在注释里写死 —— 这个数字在
+ * 54/55 两个版本上腐烂过一次）。实际下发走 `transport()`（默认 Tauri invoke，
  * 浏览器预览时被 `lib/ipc/mock` 整体替换）—— 所以这个文件里没有任何
  * "是不是预览环境"的分支。
  *

@@ -5,8 +5,11 @@
 // `export_bindings_<type>` 测试，跑测试就是把文件写出来。好处是不用另建二进制、
 // 也不用手写序列化器；代价是必须先编译一遍测试（debug 增量，几秒）。
 //
-// 生成物**入库**：CI 里跑 `gen:types` 后比对 `git diff --exit-code`，
+// 生成物**入库**：`npm run gen:types:check` 先生成到临时目录再逐文件比对现有产物，
 // "改了 Rust 忘了更新类型"会直接红，而不是等到运行期字段对不上。
+//
+// 注意：仓库目前**没有 CI**（`.github/` 不存在），这条门禁只在本地 `npm run verify`
+// 里跑。接入 CI 后应把 verify（含本检查）设为 PR 必过项 —— 见 docs/30 §3 P1-6。
 //
 // 用法：node tools/gen-types.mjs [--check]
 //   --check  生成到临时目录并与现有文件比较，不写工作区（CI 用）

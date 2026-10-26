@@ -2,11 +2,12 @@
  * 封面字节的共享加载层。
  *
  * 为什么需要一层：`MediaMetadata.artwork` 只接受 http/https/data/blob 四种 scheme，
- * 而我们的封面走自定义 `media://`。直接塞 `media://` 会被 Blink 拒绝
+ * 而我们的封面走自定义 `aiya-artwork://`（Rust 侧 `ARTWORK_SCHEME`，Electron 时代的
+ * `media://` 已废弃）。直接塞自定义 scheme 会被 Blink 拒绝
  * （"MediaImage src can only be of http/https/data/blob scheme"），
  * 结果就是系统媒体中心没有封面。
  *
- * 所以统一在渲染层把 `media://artwork/...` fetch 成 Blob，再转成 blob: URL：
+ * 所以统一在渲染层把 `aiya-artwork://...` fetch 成 Blob，再转成 blob: URL：
  * - Media Session 用 blob: URL 才能被接受
  * - 主色提取本来就要 fetch 一次，复用同一份 Blob，不重复请求
  *

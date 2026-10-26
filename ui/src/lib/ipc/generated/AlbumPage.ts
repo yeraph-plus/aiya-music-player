@@ -6,6 +6,6 @@ import type { AlbumFacet } from "./AlbumFacet";
  */
 export type AlbumPage = { items: Array<AlbumFacet>, 
 /**
- * LIKE 过滤后的总条数（不受 [`FACET_LIMIT]` 截断影响）
+ * LIKE 过滤后的总条数（不受 [`FACET_LIMIT`] 截断影响）
  */
 total: number, };

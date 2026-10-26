@@ -480,7 +480,7 @@ npm run smoke:output                    六项全过（真机，协议 v5 握手
 
 | 测试 | 守什么 |
 |---|---|
-| `ipc_contract::new_client_covers_every_registered_command` | 54 个命令**全部**有 typed 入口（以后新加命令漏写 client 也会红） |
+| `ipc_contract::new_client_covers_every_registered_command` | 注册命令**全部**有 typed 入口（数量随 `generate_handler!` 走，不在文档/注释里写死；新加命令漏写 client 会红） |
 | `lib_tests::history_stats_query_works_against_real_schema` | `history_stats` 那套 SQL 能跑通、艺人名走 JOIN、时间换毫秒 |
 | `lib_tests::history_stats_handles_empty_library` | 空库不报错（初次启动） |
 | `lib_tests::playlist_summary_counts_items_and_converts_to_ms` | 歌单三个聚合子查询 + 秒→毫秒换算（写反会静默显示 1970 年） |

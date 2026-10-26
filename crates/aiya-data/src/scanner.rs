@@ -2,7 +2,8 @@
 //!
 //! 设计要点（docs/02 §5.4）：
 //!   * 失败隔离：单个文件解析失败只记 error，不中断整批
-//!   * 事务分批：每 BATCH 个文件一提交（简化为每文件一事务，批量优化见 pass 2）
+//!   * 事务分批：每 BATCH 个文件一个 IMMEDIATE 事务（批内任一 upsert 失败 →
+//!     回滚整批、整批计入 failed，继续下一批）
 //!   * 稳定 ID：track id 从规范化路径派生（ids.rs），重扫不换 ID
 //!   * unchanged 判定：mtime+size 都没变就跳过解析（重扫大头收益）
 
@@ -234,7 +235,8 @@ fn upsert(
     now: i64,
     artwork_cache: Option<&Path>,
 ) -> DbResult<bool> {
-    // 对账键 = path_lower（Windows 大小写不敏感语义，见 0003 迁移）
+    // 对账键 = path_lower（Windows 大小写不敏感语义；该列是 0001 基线里的
+    // `path_lower TEXT NOT NULL UNIQUE`，早期编号 0003 的迁移已在压平基线时并入）
     let path_lower = t.path.to_lowercase();
     let existing: Option<(String, i64, i64, String)> = conn
         .query_row(

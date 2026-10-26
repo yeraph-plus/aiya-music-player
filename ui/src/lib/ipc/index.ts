@@ -5,7 +5,7 @@
  * `index.ts` 桶文件）；其余是薄封装：客户端、错误归一化、动态边界的 zod
  * schema、事件订阅。
  *
- * 全部 54 个命令都是 `Result<T, ApiError>`，返回值类型全部来自 Rust。
+ * 所有命令都是 `Result<T, ApiError>`，返回值类型全部来自 Rust。
  * 参数里的 query / settings 仍是动态形状——理由见 docs/17 §3.2。
  */
 export * from './generated';

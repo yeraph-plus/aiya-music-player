@@ -2,15 +2,21 @@
 //!
 //! 边界约定（src-tauri/README.md）：命令注册、事件桥、协议注册；领域业务在 crates/。
 //!
-//! 全部 55 个命令都是 `Result<T, dto::ApiError>`：成功返回**裸载荷**（形状定义在
+//! 所有命令都是 `Result<T, dto::ApiError>`：成功返回**裸载荷**（形状定义在
 //! [`dto`]，由 ts-rs 生成到 `ui/src/lib/ipc/generated/`），失败时 Tauri 把
 //! `ApiError` 序列化后直接 reject。`{ok,data}` 信封已经不存在了 —— 旧 UI 那层
 //! 翻译（`ui/src/compat/`）已于 2026-10-25 批次 4 删除，UI 侧只剩
 //! `ui/src/lib/ipc/client.ts` 一层（docs/17 §3.1）。
 //!
-//! 53 而不是 54：`player_report` 是 v1 `<audio>` 出口的回报通道，引擎搬到
-//! Rust 后前端从没调用过、后端 `let _ = &state` 空转，2026-10-25 整条删除。
-//! 55 = 53 + `playlist_import`/`playlist_export`（docs/22 G2）。
+//! **命令数别在这里写死**：这段注释先后写过 53/54/55，实际已到 62 —— 唯一的事实源
+//! 是文末那处命令注册宏调用（本文件的 `generate_handler` 唯一出现点），
+//! `tests/ipc_contract.rs` 会核对它与 `client.ts` 的双向覆盖。
+//! （注意：别在注释里写出带方括号的宏调用形态 —— 那个测试是文本扫描，
+//! 会锚到第一个匹配，注释里写一次就会让解析结果变成 0 条。）
+//!
+//! 历史：`player_report` 是 v1 `<audio>` 出口的回报通道，引擎搬到 Rust 后前端
+//! 从没调用过、后端 `let _ = &state` 空转，2026-10-25 整条删除；
+//! `playlist_import`/`playlist_export` 于 docs/22 G2 加入。
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
