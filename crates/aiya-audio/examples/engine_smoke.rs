@@ -40,7 +40,7 @@ fn main() {
     write_wav(&wav, 48_000, 2.0);
 
     let mut engine = Engine::spawn().expect("engine spawn");
-    engine.send(EngineCommand::Load { path: wav.to_string_lossy().into(), start_ms: 0, token: 1 });
+    engine.send(EngineCommand::Load { path: wav.to_string_lossy().into(), start_ms: 0, token: 1, paused: false });
 
     let mut loaded = false;
     let mut max_pos = 0u64;

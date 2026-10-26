@@ -24,7 +24,7 @@ use crate::AudioError;
 
 /// 引擎线程收到的命令。
 ///
-/// wire 侧（ADR-0002 sidecar）用相邻 tag：`{"t":"load","v":{"path":…,"startMs":…,"token":…}}`。
+/// wire 侧（ADR-0002 sidecar）用相邻 tag：`{"t":"load","v":{"path":…,"startMs":…,"token":…,"paused":…}}`。
 /// `rename_all_fields` 与 `EngineEvent` 对齐：不加它时字段名是 Rust 原样
 /// （`start_ms`），同一份协议里出现 `start_ms` / `positionMs` 两种拼法。
 ///
@@ -42,7 +42,18 @@ pub enum EngineCommand {
     ///
     /// `start_ms` 修掉"启动恢复永远从 0 秒出声"：此前 Actor 算出起点却被
     /// 适配层 `let _ = start_ms` 丢弃，引擎侧无从得知。
-    Load { path: String, start_ms: u64, token: u64 },
+    ///
+    /// `paused`（协议 v7）修掉"启动恢复先响一下"：此前"装载但暂停"要靠
+    /// Load 后紧跟一条 Pause 实现，而引擎在 Load 的开流期间就开始出声，
+    /// Pause 要等渲染循环第一次收命令才生效——启动恢复必有几百毫秒残声。
+    /// 现在装载意图自带暂停态，开流前就知道不该出声。
+    Load {
+        path: String,
+        start_ms: u64,
+        token: u64,
+        #[serde(default)]
+        paused: bool,
+    },
     Pause,
     Resume,
     /// 跳到指定毫秒（若未装载则忽略）
@@ -245,10 +256,10 @@ fn render_loop(
     let mut pending_eq = crate::eq::EqParams::default();
     'outer: loop {
         // 命令循环：等 Load 或 Shutdown（Load 前到的 SetRate/SetSpectrum 暂存生效）
-        let (mut path, mut start_ms, mut token) = loop {
+        let (mut path, mut start_ms, mut token, mut load_paused) = loop {
             match cmd_rx.recv() {
-                Ok(EngineCommand::Load { path, start_ms, token }) => {
-                    break (path, start_ms, token)
+                Ok(EngineCommand::Load { path, start_ms, token, paused }) => {
+                    break (path, start_ms, token, paused)
                 }
                 Ok(EngineCommand::SetRate(r)) => pending_rate = r.clamp(0.5, 2.0),
                 Ok(EngineCommand::SetSpectrum(on)) => tap.set_enabled(on),
@@ -280,6 +291,7 @@ fn render_loop(
                     &path,
                     start_ms,
                     token,
+                    load_paused,
                     pending_rate,
                     pending_cfg,
                     pending_eq,
@@ -293,6 +305,7 @@ fn render_loop(
                     &path,
                     start_ms,
                     token,
+                    load_paused,
                     pending_rate,
                     pending_cfg,
                     pending_eq,
@@ -306,13 +319,14 @@ fn render_loop(
                     pending_eq = eq;
                     break; // EOF/Stop/错误恢复：回顶层等下一条 Load
                 }
-                Ok(LoadExit::NewLoad { path: p, rate, start_ms: s, token: t, cfg, eq }) => {
+                Ok(LoadExit::NewLoad { path: p, rate, start_ms: s, token: t, cfg, eq, paused }) => {
                     path = p;
                     pending_rate = rate;
                     start_ms = s;
                     token = t;
                     pending_cfg = cfg;
                     pending_eq = eq;
+                    load_paused = paused;
                 }
                 Ok(LoadExit::Shutdown) => break 'outer,
                 Err(e) => {
@@ -359,6 +373,7 @@ fn play_null(
     path: &str,
     start_ms: u64,
     token: u64,
+    initial_paused: bool,
     initial_rate: f32,
     initial_cfg: OutputConfig,
     initial_eq: crate::eq::EqParams,
@@ -387,8 +402,8 @@ fn play_null(
     let mut cfg = initial_cfg;
     // 静音模式不滤波（没有输出），但参数要记账：切回真实输出时经 LoadExit 带回
     let mut eq_params = initial_eq;
-    let mut paused = false;
-    send(EngineEvent::StateChanged { token, playing: true });
+    let mut paused = initial_paused;
+    send(EngineEvent::StateChanged { token, playing: !initial_paused });
 
     let mut last_tick = std::time::Instant::now();
     loop {
@@ -434,6 +449,7 @@ fn play_null(
                             token,
                             cfg: c,
                             eq: eq_params,
+                            paused,
                         });
                     }
                     cfg = c;
@@ -443,7 +459,7 @@ fn play_null(
                     send(EngineEvent::Eof { token });
                     return Ok(LoadExit::Finished { cfg, eq: eq_params });
                 }
-                Ok(EngineCommand::Load { path: p, start_ms: s, token: t }) => {
+                Ok(EngineCommand::Load { path: p, start_ms: s, token: t, paused: np }) => {
                     return Ok(LoadExit::NewLoad {
                         path: p,
                         rate,
@@ -451,6 +467,7 @@ fn play_null(
                         token: t,
                         cfg,
                         eq: eq_params,
+                        paused: np,
                     });
                 }
                 Ok(EngineCommand::Shutdown) => return Ok(LoadExit::Shutdown),
@@ -503,6 +520,8 @@ enum LoadExit {
     /// 带回最新配置与 EQ 参数（播放中用户可能改过设置）
     Finished { cfg: OutputConfig, eq: crate::eq::EqParams },
     /// 播放中收到新 Load：直接换曲续播。
+    ///
+    /// `paused` 随新 Load 的暂停态走（协议 v7）：装载自带暂停时续播也保持暂停。
     NewLoad {
         path: String,
         rate: f32,
@@ -510,6 +529,7 @@ enum LoadExit {
         token: u64,
         cfg: OutputConfig,
         eq: crate::eq::EqParams,
+        paused: bool,
     },
     /// 收到 Shutdown：终止渲染线程
     Shutdown,
@@ -595,6 +615,7 @@ const DEVICE_RECOVERY_ATTEMPTS: u32 = 5;
 
 /// 打开文件并进入渲染循环直到 Stop/Shutdown/新 Load/EOF。
 /// `start_ms`：装载起点（启动恢复/崩溃恢复用；0 = 从头）。
+/// `initial_paused`：装载即暂停（协议 v7；启动恢复"暂停态装载"不再先响一下）。
 /// `token`：本曲装载代数，原样回显进所有事件。
 /// `initial_rate`：Load 前收到的变速指令（如启动恢复/恢复会话）。
 /// `initial_cfg`：输出配置（模式/时钟/缓冲/暂停释放）。
@@ -606,6 +627,7 @@ fn play_file(
     path: &str,
     start_ms: u64,
     token: u64,
+    initial_paused: bool,
     initial_rate: f32,
     initial_cfg: OutputConfig,
     initial_eq: crate::eq::EqParams,
@@ -629,6 +651,12 @@ fn play_file(
     let mut eq = crate::eq::Eq::new(eq_params, decoder.sample_rate(), decoder.channels());
     let (mut out, mut mode_note) = open_output(&decoder, &cfg)?;
     send(mode_event(token, &cfg, &out, mode_note.take()));
+    // 装载即暂停（协议 v7）：开流后立即让出独占设备（与播放中暂停同一语义），
+    // 否则启动恢复会握着声卡不放；共享模式下流空转不出声（渲染循环见 paused 分支）
+    if initial_paused && cfg.release_on_pause && out.mode == OutputMode::Exclusive {
+        out.release();
+        tracing::debug!("装载即暂停（独占）：已释放音频设备");
+    }
 
     // 已解码未播的交错样本池：变速插值的数据源（rate=1 时等价于直通）
     let mut pool: Vec<f32> = Vec::new();
@@ -648,7 +676,7 @@ fn play_file(
     // 每样本最大增益变化量（0→1 恰好用满一个斜坡）
     let ramp_step = 1.0 / ramp_samples;
     let mut rate: f32 = initial_rate;
-    let mut paused = false;
+    let mut paused = initial_paused;
     let mut user_stopped = false;
     // 淡出完成后要执行的动作（保证"先静音再动"）
     let mut pending_pause = false;
@@ -663,7 +691,7 @@ fn play_file(
     // 重采样后的 f32 输出暂存（乘过增益），随后按设备位深编码成字节。
     // 独占降位深时要两趟：一趟算术、一趟取整，避免在插值内联两套写字节逻辑。
     let mut out_f32: Vec<f32> = Vec::new();
-    send(EngineEvent::StateChanged { token, playing: true });
+    send(EngineEvent::StateChanged { token, playing: !initial_paused });
 
     let mut result: Result<(), AudioError> = Ok(());
     // 流式阶段（padding/write/start）捕获的设备错误；恢复见循环尾部
@@ -764,6 +792,7 @@ fn play_file(
                         token,
                         cfg: next,
                         eq: eq_params,
+                        paused,
                     });
                 }
                 Ok(EngineCommand::SetOutputConfig(next)) => {
@@ -787,7 +816,7 @@ fn play_file(
                     pending_stop = true;
                     declick_target = 0.0;
                 }
-                Ok(EngineCommand::Load { path: p, start_ms: s, token: t }) => {
+                Ok(EngineCommand::Load { path: p, start_ms: s, token: t, paused: np }) => {
                     // 换曲：停流后把新 path/起点/代数带回外层续播（绝不能在此丢弃）
                     out.stop();
                     return Ok(LoadExit::NewLoad {
@@ -797,6 +826,7 @@ fn play_file(
                         token: t,
                         cfg,
                         eq: eq_params,
+                        paused: np,
                     });
                 }
                 Ok(EngineCommand::Shutdown) => {
@@ -1118,7 +1148,7 @@ fn play_file(
                         out.stop();
                         return Ok(LoadExit::Shutdown);
                     }
-                    Ok(EngineCommand::Load { path: p, start_ms: s, token: t }) => {
+                    Ok(EngineCommand::Load { path: p, start_ms: s, token: t, paused: np }) => {
                         out.stop();
                         return Ok(LoadExit::NewLoad {
                             path: p,
@@ -1127,6 +1157,7 @@ fn play_file(
                             token: t,
                             cfg,
                             eq: eq_params,
+                            paused: np,
                         });
                     }
                     Ok(EngineCommand::Stop) => {

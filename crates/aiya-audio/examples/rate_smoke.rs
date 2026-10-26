@@ -40,7 +40,7 @@ fn main() {
 
     let mut engine = Engine::spawn().expect("engine spawn");
     engine.send(EngineCommand::SetRate(2.0));
-    engine.send(EngineCommand::Load { path: wav.to_string_lossy().into(), start_ms: 0, token: 1 });
+    engine.send(EngineCommand::Load { path: wav.to_string_lossy().into(), start_ms: 0, token: 1, paused: false });
 
     let start = Instant::now();
     let mut loaded = false;

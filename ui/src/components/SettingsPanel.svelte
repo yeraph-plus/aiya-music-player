@@ -262,7 +262,7 @@
           <div>
             <div class="setting-title">频谱风格</div>
             <div class="setting-hint">
-              「正在播放」页居中可视化的形态，切换即时生效；背景环境光固定为山形，不受此项影响
+              「正在播放」页居中可视化的形态，切换即时生效；关闭 = 本页不画、只剩背景环境光
             </div>
           </div>
           <SegmentedControl

@@ -44,15 +44,17 @@ export const AMBIENT_SCHEMES: Array<{ value: AmbientScheme; label: string }> = [
  *
  * 取代旧 `spectrumEngine`（compact/pro）——它的唯一消费方（SpectrumPanel
  * 五形态）已随 T4a 页面改版移除，且 pro 需要渲染层 AudioNode、原生引擎
- * 架构（ADR-0006）下本就无法成立。背景环境光固定为山形，不受此项影响。
+ * 架构（ADR-0006）下本就无法成立。背景环境光固定为山形，不受此项影响；
+ * `off` = 正在播放页不画居中可视化（只剩背景环境光）。
  */
-export type SpectrumStyle = 'mirror' | 'radial' | 'wave';
+export type SpectrumStyle = 'mirror' | 'radial' | 'wave' | 'off';
 
 /** 设置页与 NowPlayingSpectrum 共用的形态清单（id 顺序即展示顺序） */
 export const SPECTRUM_STYLES: Array<{ value: SpectrumStyle; label: string }> = [
   { value: 'mirror', label: '镜像曲线' },
   { value: 'radial', label: '径向环形' },
-  { value: 'wave', label: '示波线' },
+  { value: 'wave', label: '心电图' },
+  { value: 'off', label: '关闭' },
 ];
 
 export interface AppSettings {

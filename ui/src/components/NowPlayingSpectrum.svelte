@@ -21,7 +21,9 @@
    * - `mirror` 镜像曲线：水平中线上一条平滑贝塞尔曲线随频谱呼吸，上下
    *   对称，描边发光 + 半透明透镜填充（T4h 用户拍板的首发形态）；
    * - `radial` 径向环形：频谱绕圆一周向外呼吸，慢速旋转，圆环结构感强；
-   * - `wave` 示波线：单条连续曲线沿频带起伏，技术感、最克制。
+   * - `wave` 心电图：基线上一串锐利折线波群（上冲+下折）随频带起落，
+   *   安静段落塌回基线像心跳间歇（用户反馈：示波线只有上波，改成
+   *   心电图式上下折线）。
    *
    * 共同画法：48 带时间平滑（起音跟手、衰减绵长）→ 中点二次贝塞尔平滑 →
    * accent 色 shadowBlur 发光描边 + 低透明度填充（不抢歌词可读性）。
@@ -176,6 +178,13 @@
     ctx.shadowBlur = 0;
   }
 
+  /**
+   * 心电图式折线（wave，用户反馈改版）：不再是单条平滑曲线，而是沿基线
+   * 排布的一串"心电波群"——每带一个：平基线 → 上冲尖峰（R 波，随频带
+   * 能量起落）→ 下折（S 波，幅度取上冲的 ~45%）→ 回基线。直 lineTo
+   * 折线（不走贝塞尔），尖峰保持锐利才是心电图的味道；频带安静的段落
+   * 自然塌回基线，像心跳间歇。
+   */
   function drawWave(
     ctx: CanvasRenderingContext2D,
     vals: number[],
@@ -184,27 +193,12 @@
     accent: string,
   ): void {
     const cy = height / 2;
-    const amp = height * 0.2;
+    const amp = height * 0.24;
     const n = vals.length;
-    const px = (i: number): number => (i / (n - 1)) * width;
-    const line: Array<[number, number]> = vals.map((v, i) => [px(i), cy - v * amp]);
+    const slot = width / n;
 
-    // 曲线下方的"声面"填充：曲线浓、向下淡出，给出单线的体积感
-    const fill = ctx.createLinearGradient(0, cy - amp, 0, cy + amp * 0.4);
-    fill.addColorStop(0, accent);
-    fill.addColorStop(1, 'transparent');
-    ctx.globalAlpha = 0.12;
-    ctx.fillStyle = fill;
-    ctx.beginPath();
-    smoothPath(ctx, line);
-    ctx.lineTo(width, cy + amp * 0.4);
-    ctx.lineTo(0, cy + amp * 0.4);
-    ctx.closePath();
-    ctx.fill();
-    ctx.globalAlpha = 1;
-
-    // 中线基线（极淡）+ 发光主曲线
-    ctx.globalAlpha = 0.12;
+    // 极淡基线：给波群一个"静息参照"，间歇段不显空洞
+    ctx.globalAlpha = 0.14;
     ctx.lineWidth = 1;
     ctx.strokeStyle = accent;
     ctx.beginPath();
@@ -213,13 +207,24 @@
     ctx.stroke();
     ctx.globalAlpha = 1;
 
-    ctx.shadowColor = accent;
-    ctx.shadowBlur = 14;
-    ctx.lineWidth = 1.8;
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = accent;
+    // 波群折线：每带四段（基线段 / 上冲 / 下折 / 回基线），直角转折
     ctx.beginPath();
-    smoothPath(ctx, line);
+    ctx.moveTo(0, cy);
+    for (let i = 0; i < n; i += 1) {
+      const x = i * slot;
+      const v = Math.min(1, Math.max(0, vals[i] as number));
+      ctx.lineTo(x + slot * 0.22, cy); // 静息段
+      ctx.lineTo(x + slot * 0.5, cy - v * amp); // 上冲（R 波）
+      ctx.lineTo(x + slot * 0.74, cy + v * amp * 0.45); // 下折（S 波）
+      ctx.lineTo(x + slot * 0.96, cy); // 回基线
+    }
+    ctx.lineTo(width, cy);
+
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 12;
+    ctx.lineWidth = 1.6;
+    ctx.lineJoin = 'miter';
+    ctx.strokeStyle = accent;
     ctx.stroke();
     ctx.shadowBlur = 0;
   }

@@ -126,7 +126,7 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
 
     // 播放 2s WAV
     send(&mut writer, &HostToSidecar::Cmd(aiya_audio::EngineCommand::SetVolume(0.8)));
-    send(&mut writer, &HostToSidecar::Cmd(aiya_audio::EngineCommand::Load { path: wav.to_string_lossy().into(), start_ms: 0, token: 1 }));
+    send(&mut writer, &HostToSidecar::Cmd(aiya_audio::EngineCommand::Load { path: wav.to_string_lossy().into(), start_ms: 0, token: 1, paused: false }));
 
     let start = Instant::now();
     let mut loaded = false;

@@ -16,8 +16,13 @@ use aiya_player::{PlayerActor, PlayerCommand};
 ///
 /// 三个调用点（命令路径 / 事件泵 / 启动恢复）此前各抄一遍，且都 `let _ = start_ms`
 /// 把起点丢弃 —— "记住播放进度"从未生效。顺序固定：
-/// SetRate（先落 pending_rate，首帧就用对速率）→ Load(含起点与 token)
-/// → SetVolume → 非自动播放则 Pause。
+/// SetRate（先落 pending_rate，首帧就用对速率）→ Load(含起点/token/**paused**)
+/// → SetVolume。
+///
+/// `paused` 随 Load 下发（协议 v7）：此前"装载但暂停"要再发一条 Pause，而
+/// 引擎在 Load 的开流期间就开始出声、Pause 要等渲染循环第一次收命令才生效
+/// ——启动恢复必有几百毫秒残声（用户实测）。现在装载意图自带暂停态，
+/// 引擎开流前就知道不该喂数据。
 ///
 /// `send` 是引擎出口（生产环境写进引擎通道，测试里塞进 Vec）。
 /// 返回是否真的下了命令（调用方据此决定要不要全量落库）。
@@ -36,11 +41,9 @@ where
             path,
             start_ms,
             token,
+            paused: !autoplay,
         });
         send(EngineCommand::SetVolume(volume));
-        if !autoplay {
-            send(EngineCommand::Pause);
-        }
         acted = true;
     }
     // 队尾停住 / 队列清空：此前只有 pending_load，这两条迁移对引擎完全静默，
@@ -274,9 +277,45 @@ mod tests {
         out
     }
 
+    /// 协议 v7：暂停态随 Load 下发，不再有独立的 Pause 命令——
+    /// 启动恢复不能"先响一下"（引擎在开流期间就开始出声，Pause 迟到）。
     #[test]
-    fn load_volume_carries_replaygain() {
-        // 归一化开 + gain_db=-6：装载下发的 SetVolume 必须是 0.85×0.501，
+    fn load_carries_paused_flag_without_extra_pause() {
+        let mut actor = PlayerActor::new();
+        // 播放路径（ReplaceAll 默认自动播放）
+        actor.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![track("x")],
+            start: 0,
+        }));
+        let cmds = cmds_for(&mut actor);
+        assert!(
+            matches!(&cmds[1], EngineCommand::Load { paused: false, .. }),
+            "播放路径装载不打暂停: {cmds:?}"
+        );
+        assert!(!cmds.contains(&EngineCommand::Pause));
+
+        // hydrate：装载但暂停（instruct_load(false, _)，启动恢复路径）
+        let mut actor = PlayerActor::new();
+        actor.hydrate(
+            vec![track("x")],
+            aiya_player::RepeatMode::Off,
+            false,
+            0.8,
+            false,
+            1.0,
+            5_000,
+            Some("x"),
+        );
+        let cmds = cmds_for(&mut actor);
+        assert!(
+            matches!(&cmds[1], EngineCommand::Load { paused: true, .. }),
+            "暂停装载必须带 paused:true: {cmds:?}"
+        );
+        assert!(!cmds.contains(&EngineCommand::Pause), "暂停态不单独发 Pause");
+    }
+
+    #[test]
+    fn load_volume_carries_replaygain() {        // 归一化开 + gain_db=-6：装载下发的 SetVolume 必须是 0.85×0.501，
         // 否则"归一化"只体现在 UI 上、耳朵听不到
         let mut actor = PlayerActor::new();
         let mut t = track("x");
@@ -456,7 +495,7 @@ mod tests {
         assert!(fx.iter().any(|e| *e == PumpEffect::EmitState));
         // 自动换曲：SetRate → Load(第二首, 起点 0, 新 token) → SetVolume
         match &sent[..] {
-            [EngineCommand::SetRate(_), EngineCommand::Load { path, start_ms, token: t }, EngineCommand::SetVolume(_)] => {
+            [EngineCommand::SetRate(_), EngineCommand::Load { path, start_ms, token: t, .. }, EngineCommand::SetVolume(_)] => {
                 assert_eq!(path, "D:/music/b.flac");
                 assert_eq!(*start_ms, 0);
                 assert_eq!(*t, token + 1);

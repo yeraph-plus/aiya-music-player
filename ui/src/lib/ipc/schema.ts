@@ -20,7 +20,7 @@ export const settingsSchema = z
     normalizeVolume: z.boolean().optional(),
     spectrum: z.boolean().optional(),
     /** 频谱风格（2026-10-26 起取代 spectrumEngine；旧字段不再写） */
-    spectrumStyle: z.enum(['mirror', 'radial', 'wave']).optional(),
+    spectrumStyle: z.enum(['mirror', 'radial', 'wave', 'off']).optional(),
     mediaKeys: z.boolean().optional(),
     autoplayOnStart: z.boolean().optional(),
     rememberPosition: z.boolean().optional(),

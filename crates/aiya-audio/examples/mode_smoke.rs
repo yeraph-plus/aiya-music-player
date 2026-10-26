@@ -119,7 +119,7 @@ fn main() {
     // ---------- 1. 共享 + 事件 ----------
     println!("[1] 共享 / 事件 / 自动缓冲");
     engine.send(EngineCommand::SetOutputConfig(cfg(ModePref::Shared, 0, ClockPref::Events)));
-    engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token });
+    engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token, paused: false });
     let (m, err, delta) = drain(&engine, 1200);
     assert!(err.is_none(), "共享模式不该报错：{err:?}");
     let m = m.expect("装载必须回报 AudioMode");
@@ -158,7 +158,7 @@ fn main() {
     assert_sound(delta, 1500, "独占/事件");
     // reload 一次，确认配置在换曲后仍然生效（不是只在切流时有效）
     token += 1;
-    engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token });
+    engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token, paused: false });
     let (m2, err2, delta2) = drain(&engine, 1500);
     assert!(err2.is_none(), "换曲后不该报错：{err2:?}");
     let m2 = m2.expect("换曲后必须回报 AudioMode（配置要持续生效）");
@@ -240,7 +240,7 @@ fn main() {
             // 报错后引擎回到等 Load 状态：切回共享应能恢复出声
             engine.send(EngineCommand::SetOutputConfig(cfg(ModePref::Shared, 0, ClockPref::Events)));
             token += 1;
-            engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token });
+            engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token, paused: false });
             let (m, err, delta) = drain(&engine, 1500);
             assert!(err.is_none(), "切回共享后应能恢复：{err:?}");
             assert_eq!(m.expect("恢复后应有 AudioMode").mode, "shared");
@@ -257,7 +257,7 @@ fn main() {
     println!("[8] null 输出");
     token += 1;
     engine.send(EngineCommand::SetOutputConfig(cfg(ModePref::Null, 0, ClockPref::Auto)));
-    engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token });
+    engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token, paused: false });
     let (m, err, delta) = drain(&engine, 1500);
     assert!(err.is_none(), "null 模式不该报错：{err:?}");
     let m = m.expect("null 模式必须回报 AudioMode");
@@ -270,7 +270,7 @@ fn main() {
     println!("[9] null → 共享");
     token += 1;
     engine.send(EngineCommand::SetOutputConfig(cfg(ModePref::Shared, 0, ClockPref::Events)));
-    engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token });
+    engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token, paused: false });
     let (m, err, delta) = drain(&engine, 1500);
     assert!(err.is_none(), "从 null 切回共享不该报错：{err:?}");
     assert_eq!(m.expect("切回共享应有 AudioMode").mode, "shared");

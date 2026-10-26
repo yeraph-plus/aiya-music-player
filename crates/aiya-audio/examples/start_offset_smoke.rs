@@ -56,6 +56,7 @@ fn main() {
         path: wav.to_string_lossy().into(),
         start_ms: START_MS,
         token: 1,
+        paused: false,
     });
 
     let mut duration = 0u64;

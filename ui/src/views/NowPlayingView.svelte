@@ -27,7 +27,9 @@
   let spectrumSource = $state<SpectrumSource | null>(null);
 
   $effect(() => {
-    if (!ui.settings.spectrum) {
+    // 「关闭」= 本页不画居中可视化（只剩背景环境光）：source 为 null 时
+    // 组件整个不渲染，tap 引用计数也不会被本页持有
+    if (!ui.settings.spectrum || ui.settings.spectrumStyle === 'off') {
       spectrumSource = null;
       return;
     }

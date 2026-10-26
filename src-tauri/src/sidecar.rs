@@ -418,21 +418,17 @@ fn spawn_watchdog(
                 for c in [
                     aiya_audio::EngineCommand::SetVolume(t.volume),
                     aiya_audio::EngineCommand::SetRate(t.rate),
-                    // 起点直接进 Load：不再先 Load 再 Seek（那会先出声再从 0 跳）
+                    // 起点与暂停态直接进 Load（协议 v7）：不再先 Load 再 Seek/Pause
+                    // （那会先出声再从 0 跳/先响一下再停——恢复现场同样受
+                    // "装载即出声"之害，只是发生在 sidecar 崩溃重启时）
                     aiya_audio::EngineCommand::Load {
                         path,
                         start_ms: t.position_ms,
                         token: t.last_token,
+                        paused: !t.playing,
                     },
                 ] {
                     if let Ok(b) = aiya_audio::encode_line(&aiya_audio::HostToSidecar::Cmd(c)) {
-                        restore.extend_from_slice(&b);
-                    }
-                }
-                if !t.playing {
-                    if let Ok(b) = aiya_audio::encode_line(&aiya_audio::HostToSidecar::Cmd(
-                        aiya_audio::EngineCommand::Pause,
-                    )) {
                         restore.extend_from_slice(&b);
                     }
                 }

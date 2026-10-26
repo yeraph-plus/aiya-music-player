@@ -95,6 +95,17 @@
 
   const positionMs = $derived(dragging ? dragMs : (player?.positionMs ?? 0));
   const durationMs = $derived(player?.durationMs ?? 0);
+  /**
+   * bits-ui Slider 的吸附坑（真机实测冻结进度条，mock 测不出来）：
+   * value 不在 step 网格上时，SliderRootState 内部的 watch 会把它吸附到
+   * 最近网格点——这次写入走的是 `onValueChange` 通道，于是**程序化的
+   * 位置更新也会回调 oninput**，`dragging` 被卡成 true，`positionMs`
+   * 从此钉死在 dragMs（引擎继续报位置，但拖动镜像把它全盖住）。
+   * 播放位置的毫秒值对 step=100 几乎总是非法 → 必现；mock 后端按整秒
+   * 推位置、恰好合法 → e2e 全绿。解法：传入前自己吸附到网格，内部
+   * watch 看到的永远是合法值，不会触发那次写入。
+   */
+  const sliderMs = $derived(Math.round(positionMs / 100) * 100);
   const playing = $derived(player?.status === 'playing');
   const loading = $derived(player?.status === 'loading');
   const hasTrack = $derived(Boolean(player?.current));
@@ -214,7 +225,7 @@
       <span class="t">{formatTime(positionMs)}</span>
       <Slider
         label="播放进度"
-        value={positionMs}
+        value={sliderMs}
         min={0}
         max={durationMs || 1}
         step={100}

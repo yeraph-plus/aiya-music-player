@@ -186,6 +186,7 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
         path: wav.to_string_lossy().into(),
         start_ms: 0,
         token: 1,
+        paused: false,
     });
     let shared = c.wait_mode(Duration::from_secs(4));
     let (s_req, s_mode, s_clock, s_buf) = match &shared {

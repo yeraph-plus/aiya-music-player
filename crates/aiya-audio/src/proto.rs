@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 
 /// 协议版本。不匹配的握手直接失败，由调用方决定重启或退出。
 ///
+/// v7：`Load` 增加 `paused` 字段——装载意图自带暂停态。此前"装载但暂停"
+/// 靠 Load 后紧跟 Pause 实现，引擎在 Load 开流期间就开始出声、Pause 要等
+/// 渲染循环第一次收命令才生效，启动恢复必有几百毫秒残声（用户实测）。
+/// 旧字段 `startMs`/`token` 不变；`#[serde(default)]` 让缺字段按 false 处理。
+///
 /// v6：新增 `SetEq(EqParams)` 命令与 `EngineEvent::EqApplied`（docs/24 B5b，
 /// 10 段 biquad）。EQ 是设置而非曲目属性：恢复序列在 SetOutputConfig 之后
 /// 无条件回放。`EqApplied` 带生效值（clamp 后），UI 以它为准而非自己发的值。
@@ -27,7 +32,7 @@ use serde::{Deserialize, Serialize};
 /// v3：新增 `SetExclusive` 命令与 `AudioMode` 事件（独占可选 + 失败可解释）。
 /// v2：`Load` 携带 `start_ms` + `token`；所有事件回显 `token`
 /// （ADR-0003 generation，修"启动恢复从 0 播"与"曲尾切歌连跳两首"）。
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// host → sidecar 消息。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,7 +87,12 @@ mod tests {
 
     #[test]
     fn wire_roundtrips() {
-        let load = EngineCommand::Load { path: "D:/m/a.flac".into(), start_ms: 0, token: 1 };
+        let load = EngineCommand::Load {
+            path: "D:/m/a.flac".into(),
+            start_ms: 0,
+            token: 1,
+            paused: false,
+        };
         for m in [
             HostToSidecar::Hello { protocol: PROTOCOL_VERSION },
             HostToSidecar::Ping,
@@ -138,11 +148,12 @@ mod tests {
             path: "p".into(),
             start_ms: 0,
             token: 7,
+            paused: false,
         }))
         .unwrap();
         assert_eq!(
             std::str::from_utf8(&load).unwrap(),
-            "{\"k\":\"cmd\",\"m\":{\"t\":\"load\",\"v\":{\"path\":\"p\",\"startMs\":0,\"token\":7}}}\n"
+            "{\"k\":\"cmd\",\"m\":{\"t\":\"load\",\"v\":{\"path\":\"p\",\"startMs\":0,\"token\":7,\"paused\":false}}}\n"
         );
 
         let pos = encode_line(&SidecarToHost::Evt(EngineEvent::Position {
