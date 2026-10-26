@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { ChevronLeft, Copy, Minus, Search, Square, X } from '@lucide/svelte';
+  import Tooltip from './ui/Tooltip.svelte';
   import { registerSearchFocus } from '../lib/focus-search';
   import { nav } from '../stores/nav.svelte';
   import { ui } from '../stores/ui.svelte';
@@ -57,15 +58,25 @@
     <span class="tb-sub">MUSIC</span>
   </div>
 
-  <button
-    class="tb-back"
-    aria-label="返回上一页"
-    title="返回上一页"
-    disabled={!nav.canGoBack}
-    onclick={() => nav.back()}
-  >
-    <ChevronLeft size={16} />
-  </button>
+  <!--
+    提示走 Tooltip（bits-ui）而不是 `title`：原生 title 的延迟由系统决定（约 1s），
+    而且它和我们的深色皮完全不搭。**接了就删 `title`** —— 两者并存时
+    会先弹原生气泡再弹我们的，看起来像卡顿。
+    见 `components/ui/Tooltip.svelte` 的两条分工约定。
+  -->
+  <Tooltip label={nav.canGoBack ? '返回上一页' : '没有上一页'}>
+    {#snippet trigger(props)}
+      <button
+        {...props}
+        class="tb-back"
+        aria-label="返回上一页"
+        disabled={!nav.canGoBack}
+        onclick={() => nav.back()}
+      >
+        <ChevronLeft size={16} />
+      </button>
+    {/snippet}
+  </Tooltip>
 
   <!--
     `data-tauri-drag-region="false"` 是**必须的**：胶囊容器是个 div（不是可点元素），
@@ -99,31 +110,38 @@
   <div class="tb-drag"></div>
 
   <div class="window-controls">
-    <button
-      aria-label="最小化"
-      title="最小化"
-      disabled={!native}
-      onclick={() => void appWindow?.minimize()}
-    >
-      <Minus size={15} />
-    </button>
-    <button
-      aria-label={maximized ? '还原' : '最大化'}
-      title={maximized ? '还原' : '最大化'}
-      disabled={!native}
-      onclick={() => void appWindow?.toggleMaximize()}
-    >
-      {#if maximized}<Copy size={13} />{:else}<Square size={12} />{/if}
-    </button>
-    <button
-      class="window-close"
-      aria-label="关闭"
-      title="关闭"
-      disabled={!native}
-      onclick={() => void appWindow?.close()}
-    >
-      <X size={15} />
-    </button>
+    <Tooltip label="最小化">
+      {#snippet trigger(props)}
+        <button {...props} aria-label="最小化" disabled={!native} onclick={() => void appWindow?.minimize()}>
+          <Minus size={15} />
+        </button>
+      {/snippet}
+    </Tooltip>
+    <Tooltip label={maximized ? '还原' : '最大化'}>
+      {#snippet trigger(props)}
+        <button
+          {...props}
+          aria-label={maximized ? '还原' : '最大化'}
+          disabled={!native}
+          onclick={() => void appWindow?.toggleMaximize()}
+        >
+          {#if maximized}<Copy size={13} />{:else}<Square size={12} />{/if}
+        </button>
+      {/snippet}
+    </Tooltip>
+    <Tooltip label="关闭">
+      {#snippet trigger(props)}
+        <button
+          {...props}
+          class="window-close"
+          aria-label="关闭"
+          disabled={!native}
+          onclick={() => void appWindow?.close()}
+        >
+          <X size={15} />
+        </button>
+      {/snippet}
+    </Tooltip>
   </div>
 </header>
 

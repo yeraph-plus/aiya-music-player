@@ -29,6 +29,8 @@
     icon?: Snippet;
     children?: Snippet;
     onclick?: (event: MouseEvent) => void;
+    /** 元素引用：对话框拿它把初始焦点放到「取消」上（组件没有别的办法拿到内层 DOM） */
+    ref?: HTMLButtonElement | null;
   }
 
   let {
@@ -41,10 +43,12 @@
     icon,
     children,
     onclick,
+    ref = $bindable(null),
   }: Props = $props();
 </script>
 
 <button
+  bind:this={ref}
   type="button"
   class="k-btn"
   class:primary={variant === 'primary'}

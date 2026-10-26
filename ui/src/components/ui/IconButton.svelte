@@ -24,6 +24,7 @@
     disabled?: boolean;
     children: Snippet;
     onclick?: (event: MouseEvent) => void;
+    ref?: HTMLButtonElement | null;
   }
 
   let {
@@ -34,10 +35,12 @@
     disabled = false,
     children,
     onclick,
+    ref = $bindable(null),
   }: Props = $props();
 </script>
 
 <button
+  bind:this={ref}
   type="button"
   class="k-icon-btn"
   class:sm={size === 'sm'}

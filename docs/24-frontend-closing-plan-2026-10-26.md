@@ -13,6 +13,18 @@
 >
 > 一句话结论：**先把"清场 + token + kit"做完，再动页面；播放区（含 EQ）独立成批，因为它要后端。**
 
+### 修订 v4（2026-10-26 夜，B3b 拆三刀 + 两处记账更正）
+
+1. **B3b 拆成三刀**：B3b-1 浮层四件（✅ 完成）/ B3b-2 壳体换皮 / B3b-3 Content 与设置页。
+   理由是 B3b-1 会改**事件与焦点**，和"只换视觉"的壳体换皮混在一起时，出问题无法归因。
+2. **§4.5 坑 4 重写**：原判断"`ContextMenu` 的锚点会随行回收丢失"**是错的** ——
+   它用的是指针虚拟元素。真正原因是**坐标只能由它自己的 Trigger 捕获**，
+   所以改用 `DropdownMenu` + 0×0 固定锚点。同时补坑 11–13（`data-highlighted`、
+   `snippet` + `{...props}`、Dialog 的 Description）。
+3. **B2 的体积记账更正**：kit 在 B2 之后**没有进生产包**（只被 dev-only 的 `KitView` 引用，被摇掉）。
+   所以 B1 那 +4.4 kB 全在 token 轴与 `layout.css` 上；kit 是 B3b-1 才第一次进包（CSS +7.4 kB、JS +155 kB）。
+4. **侧栏「专辑/艺人」入口推迟到 B4**：它要的是 group-by 查询，不是换皮。
+
 ### 修订 v3（2026-10-26 深夜，Content 层归位 + 组件引用规划）
 
 1. **`PageHeader` / `PageToolbar` 改名**：→ `Header` / `Toolbar`，移到 `components/content/`。
@@ -508,10 +520,21 @@ active 状态只能靠 `IntersectionObserver` 反查后写回一个 `.chip.on` �
 3. **`Slider` 的两个回调分工不同**：`onValueChange` 每次指针移动都来（音量实时生效可以），
    `onValueCommit` 只在松手/键盘结束时来。**进度条必须用 commit** —— 拖动中每帧 seek 会让
    Rust 侧反复 flush，实测有咔哒声；音量可以用 change（用户期待拖的时候就听到）。
-4. **`ContextMenu` 不要包在虚拟列表的行上**。行节点会被回收/复用，菜单开着时滚动一下锚点就没了。
-   保留现有「事件坐标 → 单例菜单」的模型：在 `OverlayHost` 里放一个 1×1 的定位锚点，
-   用 `ContextMenu.Root open` + 锚点 Trigger 让 bits-ui 负责算位置与碰撞翻转，删掉手写的
-   `Math.min` 翻转、backdrop、`svelte:window` 的 Esc（这三样它都有）。
+4. **右键菜单用 `DropdownMenu` + 0×0 锚点，不要用 `ContextMenu`**（B3b-1 实测，原判断错了一半）。
+   原文写「`ContextMenu` 的定位基准是行节点，行被回收就会丢锚点」——**这条是错的**：
+   `ContextMenu.Root` 用的是**指针虚拟元素**（`menu.svelte.js` 里 `watch(#point)` 造一个
+   `getBoundingClientRect()` 返回点击坐标的对象），行怎么回收都影响不到它。
+
+   真正的问题在另一头：**那个坐标只能由它自己的 `Trigger.oncontextmenu` 捕获**
+   （`#handleOpen(e)` 读 `clientX/clientY`，没有对外暴露 `point` 入参）。我们的模型是
+   「**事件在行上收，菜单在宿主里画**」—— 要用 `ContextMenu` 就得把 Trigger 挂到每一行，
+   而虚拟列表的行节点本来就不该长菜单（会跟回收、拖拽选择、双击播放打架）。
+
+   所以改用 `DropdownMenu`：它的定位基准是**触发元素的 rect**，于是放一个
+   `position:fixed; width:0; height:0` 的锚点摆在点击坐标上，菜单就长在那里；
+   碰撞翻转、外点关闭、Esc、键盘导航、`data-highlighted` 全由它负责。
+   代价：锚点是个隐藏元素，菜单关闭时随组件卸载 —— 所以 **Esc 后的焦点还给 BODY**
+   （触发它的行元素已经不在了）。可接受：菜单是瞬态浮层，不像对话框那样需要还原焦点。
 5. **`Dialog` 必须有 `Title`**，否则运行时 a11y 警告；`Description` 可省但要显式 `aria-describedby={undefined}`。
 6. **bits-ui 渲染出来的 DOM 不在你的 scoped 作用域里**（B2 实测，此前"哈希会带上"的判断是错的）。
    `<Switch.Root class="k-switch">` 里的 `class` 是普通属性，**不会带 scoped 哈希**；写在父组件
@@ -529,6 +552,14 @@ active 状态只能靠 `IntersectionObserver` 反查后写回一个 `.chip.on` �
 10. **不要给包装组件加泛型**：`<script generics="T extends string">` 配 `options` 数组字面量时，
     推导结果是 `string` 而不是联合类型（数组先被推成 `string[]`），最后还是要在调用点断言。
     直接把 `value` 声明成 `string`、断言写在调用处更诚实（`SegmentedControl` 最终就是这么定的）。
+11. **菜单项高亮只认 `data-highlighted`**，不能只写 `:hover`。bits-ui 的键盘导航（↑↓/Home/End/首字母）
+    移动时只改这个属性、不移动鼠标 —— 只写 `:hover` 的话，用户按方向键会看到"选中项没变"。
+12. **`snippet` + `{...props}` 是接原语触发器的唯一姿势**：`Popover` / `Tooltip` / `DropdownMenu` 的
+    `Trigger` 都提供 `child={({ props }) => ...}`，把 props 展开到**调用方自己的元素**上，
+    组件样式才留在调用方。类型只能写 `Record<string, any>`（bits-ui 没导出合并后的公共类型，
+    写成 `unknown` 会让 `{...props}` 在 svelte-check 里报"不能展开到该元素"）。
+13. **`Dialog` 的标题必填、说明可选**：没有 `Description` 时不要留一个空的 `Dialog.Description`，
+    读屏会把空节点当成描述。`Dialog.svelte` 里是"给了才渲染"。
 
 #### 五、图标与样式的引用规则
 
@@ -662,9 +693,11 @@ import 它们做 reload/playAll）→ 会成环，而全仓在此之前实测是
 | `grep -E "\-\-(bg|border|text|accent-soft|fg-play|player-h...)([^-a-z]|$)"` | 0 命中 |
 | `grep "rgba(255, *122"` | 0 命中 |
 | 密度分档 | `data-density=compact` 时 `--row-h` 读到 `42px`（CSS 单点定义） |
-| CSS 体积 | 35 278 → **39 690 B**（+3.2 kB kit 组件 + ~1.2 kB 新增变量轴）。B1 本身**不是**下降批 —— 它把散落的字面量换成了变量，压缩率反而略降；真正的下降在 B3b/B4 删旧全局 CSS 时发生 |
+| CSS 体积 | 35 278 → **39 690 B**（+4.4 kB 全部来自 token 轴重写与 `layout.css`，**不含 kit** —— 见下方更正）。B1 本身**不是**下降批 —— 它把散落的字面量换成了变量，压缩率反而略降；真正的下降在 B3b/B4 删旧全局 CSS 时发生 |
 | JS | 239.41 → **239.72 kB** |
 
+> **更正（B3b-1 实测，2026-10-26）**：上面把 +3.2 kB 记在 kit 头上是错的。B2 结束时 kit 只被 `KitView` 引用，而 `KitView` 是 `import.meta.env.DEV` 门控的 dev-only 页 —— 生产构建里整棵子树（含 14 个组件的 CSS/JS）被摇掉，`.k-btn` / `.k-field-box` / `.k-cover` 在 dist 里**一条都没有**。所以「kit +3.2 kB」当时是错的，实际是 0；这批把 kit 接进真实路径（Dialog/Field/Cover/Button）后才第一次进包。
+>
 > 已知遗留：`base.css` 尾部的侧栏零件样式（`.nav-item/.side-*/.sidebar-footer`）与
 > `.sidebar` 自身的 border/background 还没进组件 —— 按 §5.5 的"结构就地改、视觉隔离试"，
 > 它们随 B3b 换皮一起搬，避免同一批既改结构又改皮。
@@ -709,12 +742,15 @@ import 它们做 reload/playAll）→ 会成环，而全仓在此之前实测是
 > 设置页/首页/列表页的 `.btn`/`.icon-btn` 替换放在 B3b（换皮批）一起做 ——
 > 替换时视觉会变，和壳体换皮放同一批才能一次目检完。
 
-### B3b 壳体换皮与播放条（原 B3）
+### B3b 壳体换皮与播放条（原 B3）→ 已拆三刀，见本节末尾「B3b 壳体换皮（分三刀）」
+
+> 下面这段是最初的一刀式描述，保留原文以便对照；实际执行拆成 B3b-1/-2/-3，
+> 因为浮层那一刀会改事件与焦点，混在换皮里出问题分不清是谁的锅。
 
 B3a 定好的结构**不再动**，这一批只换零件实现：
 TitleBar（返回键与窗控换 `IconButton`、搜索框换 `Field`）/ Sidebar / PlayerDock 用 kit 重写（含 Popover、Tooltip）；
 Header / Toolbar 内部改用 `Button`/`Chip`/`Cover`，对外的 props 一行不改。
-侧栏加"专辑/艺人"入口与分组；电台入口移出；统计区改用 `StatBlock`。
+侧栏加"专辑/艺人"入口与分组（**实测后推迟到 B4**：需要 group-by 查询，不是换皮）；电台入口移出；统计区改用 `StatBlock`。
 播放条：EQ/倍速/输出状态三个 Popover 的**壳**（EQ 内容在 B5）。
 
 验收：1280×800 / 1440×900 / 960×700 三档目检；`grep 'class="btn'` 在 shell 组件里降到 0；
@@ -752,6 +788,68 @@ E2E 补到 8–10 条（覆盖：拆页路由、批量、设置分组、kit 演�
 验收：`npm run verify`（test + check + build + gen:types:check）全绿；`test:e2e` 10/10（B0 后基线 6/6）；真窗口 12 步走查表。
 
 ---
+
+### B3b 壳体换皮（分三刀）
+
+原计划一刀做完，实测后拆成三条 —— 理由见每条末尾的"为什么单独提交"。
+
+#### B3b-1 浮层四件 ✅ 已完成（2026-10-26）
+
+| 零件 | 内核 | 取代了什么 | 白捡的能力 |
+|---|---|---|---|
+| `ui/Menu.svelte` | `DropdownMenu` + 0×0 锚点 | `components/ContextMenu.svelte`（已删） | 键盘导航（↑↓/Home/End/首字母）、碰撞翻转、焦点进菜单 |
+| `ui/Dialog.svelte` | `Dialog` + `FocusScope` | 三个对话框各写一遍的 backdrop + 手写焦点环 | 焦点陷阱 + 还原、Esc、滚动锁、`aria-modal` |
+| `ui/Popover.svelte` | `Popover` | PlayerBar 里 `box.contains` + `window` Esc | 碰撞翻转、`aria-expanded`、Esc 后焦点回触发点 |
+| `ui/Tooltip.svelte` | `Tooltip` + 顶层 `Provider` | TitleBar 四个 `title` 属性 | 统一 400ms 延迟、相邻共享跳过延迟、主题化外观 |
+
+调用点迁移：`OverlayHost`（两个菜单）、`ConfirmDialog` / `PromptDialog` / `PlaylistPicker`（三个对话框，共 −96 行手写逻辑）、
+`PlayerBar` 倍速面板（手写开关 → `Popover` + `Slider`）、`TitleBar`（返回键 + 三窗控 → `Tooltip`）。
+
+**实测（CDP，dev 预览 + mock 传输）**
+
+| 断言 | 结果 |
+|---|---|
+| 菜单落点 | 右键 (346, 228) → 菜单 rect `left 346 / top 230`（`sideOffset=2`），190×254，8 项、2 项禁用 |
+| 菜单键盘 | 打开后焦点在菜单内容（`activeTag=DIV`）；按 ↓ → `[data-highlighted]` = 播放 |
+| 菜单关闭 | Esc → `.k-menu` 消失；焦点回 BODY（锚点已卸载，见 §4.5 坑 4） |
+| 对话框 | `aria-modal=true`、`aria-labelledby` 有值；焦点落 `input.k-field-input`（PromptDialog 的 `autofocus`） |
+| 对话框关闭 | Esc → 关闭且焦点**还原到侧栏「新建歌单」按钮** |
+| Field 关联 | `label[for]` === `input#id`（`k-field-c32` / `k-field-c32`）—— 顺手修了 B2 遗留：`<input {id}>` 用的是未填的 prop，label 的 `for` 一直指向不存在的 id |
+| 倍速面板 | chip (726,716) → 面板 (642,615)，`bottom ≤ chip.top`，`aria-expanded=true`，内含 `.k-slider`（`aria-valuenow=1`） |
+| 面板关闭 | Esc → 消失且焦点回 `.rate-chip` |
+| Tooltip | hover 最大化键 → 400ms 后 `.k-tip` 文本「最大化」，路径为"顶栏无空间 → 翻到下方" |
+| 运行时 | console error 0 / 未捕获异常 0 |
+
+**体积**（这一条要单独说，因为它推翻了我上一批的记账）
+
+| 产物 | B2 之后 | B3b-1 之后 | 差 |
+|---|---|---|---|
+| CSS | 39 692 B（gz 8.44 k） | 47 134 B（gz 9.46 k） | +7.4 kB |
+| JS | 354 012 B | 508 696 B（gz 152 k） | +155 kB |
+
+两笔都是有原因的、不是泄漏：
+- **CSS +7.4 kB**：`.k-btn / .k-field-box / .k-cover / .k-icon-btn` 等 88 条 scoped 规则**第一次进生产包**。B2 时 kit 只被 dev-only 的 `KitView` 引用，整棵子树被摇掉（dist 里 `.k-btn` 一条都没有），所以"kit +3.2 kB"当时记错了，见 B1 节的更正。
+- **JS +155 kB**：bits-ui 的浮层栈（Dialog/Portal/FocusScope/DismissibleLayer/ScrollLock/Popover/DropdownMenu + floating-ui）第一次进包。桌面应用从本地加载，这笔是**一次性的、无网络成本**；换来的是焦点陷阱、碰撞翻转、ARIA 状态机这些手写容易错的东西。
+
+> **为什么单独提交**：这一刀会改**事件与焦点**（菜单从手算坐标改到浮层、对话框从自有 backdrop 改到 Portal）。
+> 和壳体换皮放一起，出问题时无法判断是"换皮错了"还是"浮层错了"。
+
+#### B3b-2 壳体换皮（待做）
+
+`components/shell/` 归位（`TitleBar` / `Sidebar` / `PlayerBar`），三者的皮从 `styles/{layout,player,shell}.css`
+收进组件 scoped；`TitleBar` 搜索换 `Field`、窗控与返回换 `IconButton`；`PlayerBar` 三段滑块换 `Slider`
+（进度用 `oncommit`）、八个图标键换 `IconButton` + `Tooltip`；`Sidebar` 补「曲库」三段入口、
+电台移出、统计换 `StatBlock`、歌单封面换 `Cover`。
+
+**专辑 / 艺人入口不在本刀**：两者需要"按专辑/艺人聚合"的查询（现在只有 `artistId`/`albumId` 单值筛选
+`TrackQuery`，没有 group-by 命令）。做入口等于做 B4 拆页的数据层，不在换皮批里夹带。
+
+#### B3b-3 Content 内部与设置页（待做）
+
+`Header` / `Toolbar` 内部换 `Button` / `Chip` / `Cover`（**对外 props 不变**），
+`SettingsPanel` 571 行里的 `.btn` / `.switch` / `.segmented` 换 kit。
+门槛：`grep -c 'class="btn'` 在 `components/` 降到 0。
+
 
 ## 5.5 改动方式评估：就地改，还是隔离重做？（v2 新增）
 

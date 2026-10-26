@@ -16,6 +16,7 @@
    * 既不属于某个视图，也不该塞进 store（store 不碰 DOM）。
    */
   import { onMount } from 'svelte';
+  import { Tooltip } from 'bits-ui';
   import AppShell from './components/AppShell.svelte';
   import OverlayHost from './components/OverlayHost.svelte';
   import KitView from './views/KitView.svelte';
@@ -141,18 +142,25 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<AppShell>
-  {#if showKit}
-    <KitView />
-  {:else if ui.page === 'home'}
-    {#if ui.libraryDetail}<LibraryView />{:else}<HomeView />{/if}
-  {:else if ui.page === 'nowPlaying'}
-    <NowPlayingView />
-  {:else if ui.page === 'radio'}
-    <RadioView />
-  {:else}
-    <SettingsView />
-  {/if}
-</AppShell>
+<!--
+  `Tooltip.Provider` **只放这一处**：它统一 `delayDuration`，并让相邻 tooltip 之间
+  共享"刚从别的按钮移过来就不用再等"的计时。每个 Tooltip 自带一份的话，
+  鼠标横扫一排图标每次都要等满延迟。
+-->
+<Tooltip.Provider delayDuration={400} skipDelayDuration={300}>
+  <AppShell>
+    {#if showKit}
+      <KitView />
+    {:else if ui.page === 'home'}
+      {#if ui.libraryDetail}<LibraryView />{:else}<HomeView />{/if}
+    {:else if ui.page === 'nowPlaying'}
+      <NowPlayingView />
+    {:else if ui.page === 'radio'}
+      <RadioView />
+    {:else}
+      <SettingsView />
+    {/if}
+  </AppShell>
 
-<OverlayHost />
+  <OverlayHost />
+</Tooltip.Provider>

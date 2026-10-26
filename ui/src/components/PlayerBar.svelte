@@ -14,6 +14,8 @@
   } from '../lib/audio-format';
   import { formatTime, repeatLabel } from '../lib/format';
   import Icon from './Icon.svelte';
+  import Popover from './ui/Popover.svelte';
+  import Slider from './ui/Slider.svelte';
   import { AudioLines } from '@lucide/svelte';
 
   interface Props {
@@ -53,7 +55,6 @@
   let dragging = $state(false);
   let dragMs = $state(0);
   let rateOpen = $state(false);
-  let rateBox = $state<HTMLDivElement | null>(null);
 
   const positionMs = $derived(dragging ? dragMs : (player?.positionMs ?? 0));
   const durationMs = $derived(player?.durationMs ?? 0);
@@ -78,24 +79,14 @@
     onseek(dragMs);
   }
 
-  function onRateInput(event: Event): void {
-    onrate(Number((event.currentTarget as HTMLInputElement).value));
+  /** 拖动即生效：倍速变化用户期待立刻听到，不需要松手才提交 */
+  function onRateInput(value: number): void {
+    onrate(value);
   }
 
-  function onRatePointerDown(event: PointerEvent): void {
-    // 点击面板外部时收起；面板内部（滑块/按钮）不算
-    const box = rateBox;
-    if (!box || !rateOpen) return;
-    if (event.target instanceof Node && box.contains(event.target)) return;
-    rateOpen = false;
-  }
-
-  function onRateKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') rateOpen = false;
-  }
+  // 面板的"点外面关闭 / Esc 关闭 / 焦点还原"全交给 Popover（bits-ui），
+  // 这里不再有 window 级监听 —— 原来那两行是每个浮层都要抄一遍的东西。
 </script>
-
-<svelte:window onpointerdown={onRatePointerDown} onkeydown={onRateKeydown} />
 
 <footer class="player">
   <div class="now">
@@ -167,42 +158,46 @@
       >
         <Icon name={player?.repeat === 'one' ? 'repeatOne' : 'repeat'} />
       </button>
-      <div class="rate-box" bind:this={rateBox}>
-        <button
-          class="rate-chip"
-          class:on={rate !== 1}
-          class:open={rateOpen}
-          onclick={() => (rateOpen = !rateOpen)}
-          ondblclick={() => onrate(1)}
-          aria-label="播放速度"
-          title={`播放速度 ${formatRate(rate)}（双击复位 1.0×）`}
-        >
-          {formatRate(rate)}
-        </button>
-        {#if rateOpen}
-          <div class="rate-pop" role="dialog" aria-label="播放速度">
-            <div class="rate-head">
-              <span>播放速度</span>
-              <button class="rate-reset" onclick={() => onrate(1)}>复位</button>
-            </div>
-            <input
-              class="rate-slider"
-              type="range"
-              min={AUDIO_RATE_MIN}
-              max={AUDIO_RATE_MAX}
-              step={AUDIO_RATE_STEP}
-              value={rate}
-              oninput={onRateInput}
-              aria-label="播放速度"
-            />
-            <div class="rate-scale">
-              <span>{formatRate(AUDIO_RATE_MIN)}</span>
-              <span>1.0×</span>
-              <span>{formatRate(AUDIO_RATE_MAX)}</span>
-            </div>
+      <Popover
+        open={rateOpen}
+        onopenchange={(value) => (rateOpen = value)}
+        side="top"
+        align="center"
+        sideOffset={12}
+      >
+        {#snippet trigger(props)}
+          <button
+            {...props}
+            class={`rate-chip${rate !== 1 ? ' on' : ''}`}
+            ondblclick={() => onrate(1)}
+            aria-label="播放速度"
+            title={`播放速度 ${formatRate(rate)}（双击复位 1.0×）`}
+          >
+            {formatRate(rate)}
+          </button>
+        {/snippet}
+
+        <div class="rate-panel">
+          <div class="rate-head">
+            <span>播放速度</span>
+            <button class="rate-reset" onclick={() => onrate(1)}>复位</button>
           </div>
-        {/if}
-      </div>
+          <Slider
+            label="播放速度"
+            value={rate}
+            min={AUDIO_RATE_MIN}
+            max={AUDIO_RATE_MAX}
+            step={AUDIO_RATE_STEP}
+            oninput={onRateInput}
+            width="100%"
+          />
+          <div class="rate-scale">
+            <span>{formatRate(AUDIO_RATE_MIN)}</span>
+            <span>1.0×</span>
+            <span>{formatRate(AUDIO_RATE_MAX)}</span>
+          </div>
+        </div>
+      </Popover>
     </div>
 
     <div class="timeline">
@@ -258,3 +253,69 @@
     />
   </div>
 </footer>
+
+<style>
+  /* ---------------- 倍速面板 ----------------
+   * 从 `styles/player.css` 搬来。唯一改动：不再自带
+   * `position:absolute; bottom; right` —— 定位由 Popover（bits-ui）做，
+   * 留着那三行会和浮层的 transform 叠在一起，面板会飘到窗口外。
+   */
+
+  .rate-chip {
+    flex: none;
+    height: 22px;
+    min-width: 44px;
+    padding: 0 7px;
+    border-radius: var(--radius-pill);
+    font-size: var(--fs-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-2);
+    border: 1px solid transparent;
+    display: grid;
+    place-items: center;
+  }
+
+  .rate-chip:hover {
+    color: var(--text-1);
+    background: var(--surface-hover);
+  }
+
+  /* 非 1× 高亮：和 shuffle / repeat 的开启态同一套语义 */
+  .rate-chip.on {
+    color: var(--accent);
+    background: var(--accent-weak);
+  }
+
+  .rate-panel {
+    width: 186px;
+  }
+
+  .rate-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11.5px;
+    margin-bottom: 10px;
+  }
+
+  .rate-reset {
+    font-size: 11px;
+    color: var(--text-2);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+
+  .rate-reset:hover {
+    color: var(--text-1);
+    background: var(--surface-hover);
+  }
+
+  .rate-scale {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+    margin-top: 6px;
+  }
+</style>

@@ -32,6 +32,10 @@
     id?: string;
     /** 视觉上隐藏标签（标题栏搜索框这种"位置已说明用途"的场景） */
     hideLabel?: boolean;
+    /** 最大字符数（歌单名 80、搜索词 200 这类由业务决定，零件只负责转达） */
+    maxlength?: number;
+    /** 输入框元素，用于 `autofocus` / `select()`（对话框拿到后自己决定要不要选中全文） */
+    ref?: HTMLInputElement | null;
   }
 
   const uid = $props.id();
@@ -49,6 +53,8 @@
     trailing,
     id,
     hideLabel = false,
+    maxlength,
+    ref = $bindable(null),
   }: Props = $props();
 
   const fieldId = $derived(id ?? `k-field-${uid}`);
@@ -59,9 +65,11 @@
   <label for={fieldId} class="k-field-label" class:sr-only={hideLabel}>{label}</label>
   <div class="k-field-box">
     <input
-      {id}
+      bind:this={ref}
+      id={fieldId}
       {type}
       {placeholder}
+      {maxlength}
       {disabled}
       value={value}
       class="k-field-input"

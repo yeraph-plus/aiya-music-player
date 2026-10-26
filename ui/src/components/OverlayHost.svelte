@@ -1,6 +1,6 @@
 <script lang="ts">
   import ConfirmDialog from './ConfirmDialog.svelte';
-  import ContextMenu from './ContextMenu.svelte';
+  import Menu from './ui/Menu.svelte';
   import PlaylistPicker from './PlaylistPicker.svelte';
   import PromptDialog from './PromptDialog.svelte';
   import { playlistMenuItems, trackMenuItems } from '../lib/menu';
@@ -91,7 +91,7 @@
 
 {#if overlay.trackMenu}
   {@const menu = overlay.trackMenu}
-  <ContextMenu
+  <Menu
     x={menu.x}
     y={menu.y}
     onclose={() => (overlay.trackMenu = null)}
@@ -101,7 +101,7 @@
 
 {#if overlay.playlistMenu}
   {@const menu = overlay.playlistMenu}
-  <ContextMenu
+  <Menu
     x={menu.x}
     y={menu.y}
     onclose={() => (overlay.playlistMenu = null)}

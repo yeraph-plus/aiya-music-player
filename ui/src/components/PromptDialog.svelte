@@ -1,5 +1,21 @@
 <script lang="ts">
   import { untrack } from 'svelte';
+  import Button from './ui/Button.svelte';
+  import Dialog from './ui/Dialog.svelte';
+  import Field from './ui/Field.svelte';
+
+  /**
+   * 输入框对话框（新建 / 重命名播放列表）。
+   *
+   * 与 `ConfirmDialog` 同构：`Dialog` 负责模态语义，这里只剩"一个字段 + 两个按钮"。
+   * 原来那个 `<form onsubmit>` 也删了 —— 回车提交由 `Field.onenter` 提供，
+   * 而提交按钮在 footer 里、根本不在 form 内，留着 form 只会让人以为它能
+   * 接住回车（实际上接不住，回车走的是 form 内第一个 input 的隐式提交，
+   * 那时按钮还是 `type=submit`，两处语义重叠）。
+   *
+   * `text` 用 `untrack` 初始化：`value` 只在打开那一刻有意义，
+   * 否则父组件重渲染（例如歌单列表刷新）会把用户正在输的字覆盖掉。
+   */
 
   interface Props {
     title: string;
@@ -17,42 +33,44 @@
   let text = $state(untrack(() => value));
   let input = $state<HTMLInputElement | null>(null);
 
-  $effect(() => {
-    input?.focus();
-    input?.select();
-  });
+  const trimmed = $derived(text.trim());
 
-  function submit(event: Event): void {
-    event.preventDefault();
-    const trimmed = text.trim();
+  function submit(): void {
     if (!trimmed) return;
     onconfirm(trimmed);
   }
 </script>
 
-<div class="modal-backdrop" role="presentation" onclick={oncancel}></div>
-<div class="modal prompt" role="dialog" aria-label={title}>
-  <header>
-    <strong>{title}</strong>
-    <button class="icon-btn" onclick={oncancel} aria-label="关闭">×</button>
-  </header>
-  <form onsubmit={submit}>
-    {#if label}<label class="field-label" for="prompt-input">{label}</label>{/if}
-    <input
-      id="prompt-input"
-      class="text-input"
-      bind:this={input}
-      bind:value={text}
-      maxlength="80"
-      spellcheck="false"
-      onkeydown={(event) => {
-        if (event.key === 'Escape') oncancel();
-        event.stopPropagation();
-      }}
+<Dialog
+  {title}
+  onclose={oncancel}
+  autofocus={() => {
+    input?.focus();
+    // 重命名场景是「改已有名字」，全选后直接输入比让用户先删更快
+    input?.select();
+  }}
+>
+  <div class="prompt-body">
+    <Field
+      label={label || title}
+      bind:ref={input}
+      value={text}
+      maxlength={80}
+      oninput={(next) => (text = next)}
+      onenter={submit}
     />
-    <div class="modal-actions">
-      <button type="button" class="btn" onclick={oncancel}>取消</button>
-      <button type="submit" class="btn primary" class:danger disabled={!text.trim()}>{confirmText}</button>
-    </div>
-  </form>
-</div>
+  </div>
+
+  {#snippet actions()}
+    <Button onclick={oncancel}>取消</Button>
+    <Button variant={danger ? 'danger' : 'primary'} disabled={!trimmed} onclick={submit}>
+      {confirmText}
+    </Button>
+  {/snippet}
+</Dialog>
+
+<style>
+  .prompt-body {
+    padding: 14px 16px 2px;
+  }
+</style>
