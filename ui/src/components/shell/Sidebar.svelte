@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AudioLines, Clock, Disc, Flame, House, Library, ListMusic, Mic2, Plus, Settings } from '@lucide/svelte';
+  import { AudioLines, Clock, Flame, House, Library, ListMusic, Plus, Radio, Settings } from '@lucide/svelte';
   import { artworkUrl } from '../../lib/artwork';
   import { shortenPath } from '../../lib/format';
   import { library } from '../../stores/library.svelte';
@@ -19,19 +19,25 @@
    * 用 prop 传回调时，AppShell 得给每一条入口写一个转发函数 —— 那次改名的教训是
    * "入口散在模板里，漏一个就变成点了没反应"。现在"我要去哪"直接说给 nav。
    *
-   * ### 一级导航的八项
-   *
-   * 首页 / 曲库 / 最近播放 / 常听 / 专辑 / 艺人 / 正在播放 / 设置。
-   * - **曲库三视图直接进侧栏**：以前要先回首页、再点卡片才能到"最近播放"，
-   *   而这三者是曲库的**主要浏览方式**，不是首页的预览延伸。
-   * - **专辑 / 艺人（B4-3b 加入）**：宫格浏览页，曲库的两条主浏览路径
-   *   （docs/24 §2 P10——此前只能在右键菜单里"按艺人筛选"）。
-   * - **FM 电台移出**：`RadioView` 是 10 行占位，占着一级导航等于给用户一个死入口（docs/24 §2 P10）。
-   *   路由与组件暂留（`AppPage` 里还有 `'radio'`），等后端决定是删还是做。
-   */
+  * ### 一级导航的七项（docs/25 §3 重排）
+
+  * 正在播放 / 推荐 / 曲库 / 最近播放 / 常听 / FM 电台 / 设置。
+  * - **正在播放置顶**：它是播放态的第一入口，不只在底部播放条。
+  * - **「首页」改名「推荐」**：歌单宫格 + 三段预览本来就是推荐位，名字跟上。
+  * - **专辑 / 艺人撤出一级导航**（docs/25 §3）：浏览宫格归入曲库页的 tab
+  *   （全部曲目 / 专辑 / 艺人，导航式复用 browse 页），一级导航不再给它们
+  *   两个常驻席位。可达性不变：曲库 tab + 搜索结果聚合卡 + 右键菜单。
+  * - **FM 电台回归**：占位页也给出入口比死链接消失好——用户知道这功能在规划里。
+  */
 
   const PAGES = [
-    { key: 'home', label: '首页', icon: House, go: () => nav.go({ kind: 'dashboard' }) },
+    {
+      key: 'nowPlaying',
+      label: '正在播放',
+      icon: AudioLines,
+      go: () => nav.go({ kind: 'page', page: 'nowPlaying' }),
+    },
+    { key: 'home', label: '推荐', icon: House, go: () => nav.go({ kind: 'dashboard' }) },
     {
       key: 'library',
       label: '曲库',
@@ -51,22 +57,10 @@
       go: () => nav.go({ kind: 'builtin', view: 'mostPlayed' }),
     },
     {
-      key: 'albums',
-      label: '专辑',
-      icon: Disc,
-      go: () => nav.go({ kind: 'browse', view: 'albums' }),
-    },
-    {
-      key: 'artists',
-      label: '艺人',
-      icon: Mic2,
-      go: () => nav.go({ kind: 'browse', view: 'artists' }),
-    },
-    {
-      key: 'nowPlaying',
-      label: '正在播放',
-      icon: AudioLines,
-      go: () => nav.go({ kind: 'page', page: 'nowPlaying' }),
+      key: 'radio',
+      label: 'FM 电台',
+      icon: Radio,
+      go: () => nav.go({ kind: 'page', page: 'radio' }),
     },
     {
       key: 'settings',
@@ -83,8 +77,15 @@
    * `page === 'home' && libraryDetail && view.kind === key`，因为四个列表视图
    * 全挤在 `home` 上。判断从"三个字段的组合"退化成一个相等比较，是拆页
    * 顺带赚到的可读性。
+   *
+   * docs/25 §3 的一个例外：专辑/艺人宫格页并入了曲库 tab（导航式），
+   * 它们没有自己的侧栏席位——曲库项要吸收这两个页面，否则宫格页上
+   * 侧栏零高亮（e2e「高亮恰好一个」会抓住）。
    */
   function isActive(key: (typeof PAGES)[number]['key']): boolean {
+    if (key === 'library') {
+      return ui.page === 'library' || ui.page === 'albums' || ui.page === 'artists';
+    }
     return ui.page === key;
   }
 

@@ -16,7 +16,7 @@
   import { playlists } from '../stores/playlists.svelte';
 
   /**
-   * 首页：歌单宫格 + 三段曲目预览（最近播放 / 常听 / 最近添加）。
+   * 推荐页（原「首页」，docs/25 §3 改名）：歌单宫格 + 三段曲目预览（最近播放 / 常听 / 最近添加）。
    *
    * 三段都走 `TrackTable`（真表头 + 勾选列 + 三态全选），所以首页也能
    * **批量管理**：选中 → 底部批量条（播放 / 加入队列 / 加入歌单 / 移出曲库）。
@@ -84,7 +84,7 @@
 <div class="page-scroll home-page">
   <Header
     kicker="YOUR LIBRARY"
-    title="首页"
+    title="推荐"
     subtitle="回到常听的音乐，或继续整理你的本地曲库。"
   >
     {#snippet actions()}

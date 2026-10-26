@@ -64,11 +64,11 @@ test('旧 UiState：home + libraryDetail + recent → 落到最近播放', async
   expect(await activeSidebar(page)).toEqual(['最近播放']);
 });
 
-test('旧 UiState：home 且无 libraryDetail → 首页仪表盘', async ({ page }) => {
+test('旧 UiState：home 且无 libraryDetail → 推荐页', async ({ page }) => {
   await seedState(page, { page: 'home', libraryDetail: false, view: 'library' });
   await page.goto('/');
-  await expect(page.locator('.main h1')).toHaveText('首页');
-  expect(await activeSidebar(page)).toEqual(['首页']);
+  await expect(page.locator('.main h1')).toHaveText('推荐');
+  expect(await activeSidebar(page)).toEqual(['推荐']);
 });
 
 test('新形状往返：切到常听 → 落盘 page=mostPlayed → 刷新仍在常听', async ({ page }) => {
@@ -85,12 +85,12 @@ test('新形状往返：切到常听 → 落盘 page=mostPlayed → 刷新仍在
 test('八值路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => {
   await page.goto('/');
   const cases: Array<{ via: 'initial' | 'nav' | 'playlist'; text: string; title: string }> = [
-    { via: 'initial', text: '', title: '首页' },
+    { via: 'initial', text: '', title: '推荐' },
     { via: 'nav', text: '曲库', title: '全部曲目' },
     { via: 'nav', text: '最近播放', title: '最近播放' },
     { via: 'nav', text: '常听', title: '常听' },
-    { via: 'nav', text: '专辑', title: '专辑' },
-    { via: 'nav', text: '艺人', title: '艺人' },
+    // docs/25 §3：FM 电台回归一级导航（占位页）
+    { via: 'nav', text: 'FM 电台', title: 'FM 电台' },
     { via: 'playlist', text: '', title: '' }, // 标题动态取歌单名
     { via: 'nav', text: '正在播放', title: '未在播放' },
     { via: 'nav', text: '设置', title: '设置' },
@@ -119,9 +119,12 @@ test('八值路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => 
 
 test('B4-3b：专辑宫格 → 卡片 → 专辑详情 → 顶栏返回回宫格', async ({ page }) => {
   await page.goto('/');
-  await page.locator('.sidebar .nav-item', { hasText: '专辑' }).click();
+  // docs/25 §3：专辑宫格从曲库页 tab 进（一级导航已撤）
+  await page.locator('.sidebar .nav-item', { hasText: '曲库' }).click();
+  await page.locator('.main .content-toolbar .pt-tab', { hasText: '专辑' }).click();
   await expect(page.locator('.main h1')).toHaveText('专辑');
-  await expect(page.locator('.sidebar .active')).toHaveText(/专辑/);
+  // 侧栏高亮落在「曲库」——专辑已并入曲库 tab，不再是独立一级项
+  expect(await activeSidebar(page)).toEqual(['曲库']);
 
   const card = page.locator('.main .k-card').first();
   const albumTitle = await card.locator('.k-card-title').textContent();
@@ -133,15 +136,17 @@ test('B4-3b：专辑宫格 → 卡片 → 专辑详情 → 顶栏返回回宫格
   // 曲目列表是同一查询路径（albumId 筛选），行数 > 0
   await expect(page.locator('.main .list .row').first()).toBeVisible();
 
-  // 返回：回宫格，高亮回到「专辑」
+  // 返回：回宫格，tab 高亮回「专辑」、侧栏高亮「曲库」
   await page.getByRole('button', { name: '返回上一页' }).click();
   await expect(page.locator('.main h1')).toHaveText('专辑');
-  expect(await activeSidebar(page)).toEqual(['专辑']);
+  expect(await activeSidebar(page)).toEqual(['曲库']);
 });
 
 test('B4-3b：艺人详情页列出该艺人的曲目', async ({ page }) => {
   await page.goto('/');
-  await page.locator('.sidebar .nav-item', { hasText: '艺人' }).click();
+  // docs/25 §3：艺人宫格从曲库页 tab 进（一级导航已撤）
+  await page.locator('.sidebar .nav-item', { hasText: '曲库' }).click();
+  await page.locator('.main .content-toolbar .pt-tab', { hasText: '艺人' }).click();
   await expect(page.locator('.main h1')).toHaveText('艺人');
 
   const card = page.locator('.main .k-card').first();

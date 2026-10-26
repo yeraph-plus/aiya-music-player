@@ -67,3 +67,17 @@ export function viewTitle(view: View, playlistName?: string | null): string {
 export function viewCanSort(view: View): boolean {
   return view.kind === 'library';
 }
+
+/**
+ * 曲库页的内置 tab（docs/25 §3 重排后）：全部曲目 / 专辑 / 艺人。
+ *
+ * 最近播放 / 常听从 tab 里摘出（它们在侧栏有一级席位，不再是曲库的子视图）；
+ * 专辑 / 艺人是**导航式** tab——点击走 `nav.go({ kind: 'browse' })` 到宫格页，
+ * 不嵌进曲库页内部，所以 `AppPage`/路由快照零改动。这份常量被 LibraryView
+ * （曲库页）与 BrowseView（专辑/艺人宫格页）共用，三页的 tab 条长得一样。
+ */
+export const LIB_TABS = [
+  { id: 'library', label: '全部曲目' },
+  { id: 'albums', label: '专辑' },
+  { id: 'artists', label: '艺人' },
+] as const;

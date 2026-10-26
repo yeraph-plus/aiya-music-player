@@ -46,13 +46,13 @@ async function openLibrary(page: Page): Promise<void> {
   await firstRow(page).waitFor({ state: 'visible' });
 }
 
-test('启动装配：顶栏四件 + 首页标题 + 播放条空态', async ({ page }) => {
+test('启动装配：顶栏四件 + 推荐页标题 + 播放条空态', async ({ page }) => {
   await page.goto('/');
   // 宽 TitleBar：搜索框在位、返回键此时无历史所以 disabled
   await expect(page.locator('.titlebar .tb-search input')).toBeVisible();
   await expect(page.getByRole('button', { name: '返回上一页' })).toBeDisabled();
-  // 页内标题归 PageHeader（不是顶栏）
-  await expect(page.locator('.main h1')).toHaveText('首页');
+  // 页内标题归 PageHeader（不是顶栏）。docs/25 §3：「首页」改名「推荐」
+  await expect(page.locator('.main h1')).toHaveText('推荐');
   await expect(page.locator('.main .ch-kicker')).toHaveText('YOUR LIBRARY');
   // 首页三段都是紧凑表（TrackTable），不是虚拟列表
   await expect(page.locator('.main .tt-row').first()).toBeVisible();
@@ -75,25 +75,27 @@ test('歌单：侧栏点开 → 标题与列表来自该歌单', async ({ page }
   await expect(page.locator('.main .content-toolbar')).toHaveCount(0);
 });
 
-test('导航链：曲库 → 工具条切最近播放 → 顶栏返回', async ({ page }) => {
+test('导航链：曲库 → 工具条切专辑（导航式 tab）→ 顶栏返回', async ({ page }) => {
   await openLibrary(page);
-  // 曲库三个内置视图互切（这是本轮补上的缺口）
+  // docs/25 §3 重排后的曲库 tab：全部曲目 / 专辑 / 艺人（最近播放/常听已升侧栏一级页）
   const tabs = page.locator('.main .content-toolbar .pt-tab');
   await expect(tabs).toHaveCount(3);
   await expect(page.locator('.main .content-toolbar .pt-tab.active')).toHaveText('全部曲目');
 
-  await tabs.filter({ hasText: '最近播放' }).click();
-  await expect(page.locator('.main h1')).toHaveText('最近播放');
-  await expect(page.locator('.main .content-toolbar .pt-tab.active')).toHaveText('最近播放');
+  // 专辑是导航式 tab：进 browse 宫格页，tab 条仍在原位且 active 跟过去
+  await tabs.filter({ hasText: '专辑' }).click();
+  await expect(page.locator('.main h1')).toHaveText('专辑');
+  await expect(page.locator('.main .content-toolbar .pt-tab.active')).toHaveText('专辑');
 
-  // 返回栈：这一步把「最近播放」退掉，回到「全部曲目」
+  // 返回栈：这一步把「专辑」退掉，回到「全部曲目」
   await page.getByRole('button', { name: '返回上一页' }).click();
   await expect(page.locator('.main h1')).toHaveText('全部曲目');
+  await expect(page.locator('.main .content-toolbar .pt-tab.active')).toHaveText('全部曲目');
   await expect(page.getByRole('button', { name: '返回上一页' })).toBeEnabled();
 
-  // 再退一步回到首页仪表盘，此时栈空 → 返回键 disabled
+  // 再退一步回到推荐页（原首页），此时栈空 → 返回键 disabled
   await page.getByRole('button', { name: '返回上一页' }).click();
-  await expect(page.locator('.main h1')).toHaveText('首页');
+  await expect(page.locator('.main h1')).toHaveText('推荐');
   await expect(page.getByRole('button', { name: '返回上一页' })).toBeDisabled();
 });
 

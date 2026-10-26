@@ -8,7 +8,7 @@
   import { artworkUrl } from '../lib/artwork';
   import { formatDurationLong } from '../lib/format';
   import { SELECTION_CAP } from '../lib/selection';
-  import { viewCanSort, viewTitle } from '../lib/view';
+  import { LIB_TABS, viewCanSort, viewTitle } from '../lib/view';
   import { history } from '../stores/history.svelte';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
@@ -183,19 +183,12 @@
   }
 
   /**
-   * 三个内置视图的 tab。歌单/专辑/艺人详情页不显示——它们不是内置视图，
-   * 标题已经说明在哪（active 用 ui.page 而不是 view.kind：详情页的 view
-   * 是 LIBRARY_VIEW，按 kind 算会把"全部曲目"高亮出来）。
+   * 曲库页的 tab（docs/25 §3 重排后）。最近播放 / 常听已升级为侧栏一级页，
+   * 不再寄居曲库 tab 行；专辑 / 艺人是导航式 tab（进 browse 宫格页）。
+   * tab 条只在曲库页显示——专辑/艺人**宫格页**的 tab 条在 BrowseView 里
+   * （共用 LIB_TABS）；歌单/详情页不显示（标题已经说明在哪）。
    */
-  const BUILTIN_TABS = [
-    { id: 'library', label: '全部曲目' },
-    { id: 'recent', label: '最近播放' },
-    { id: 'mostPlayed', label: '常听' },
-  ];
-
-  const showBuiltinTabs = $derived(
-    ui.page === 'library' || ui.page === 'recent' || ui.page === 'mostPlayed',
-  );
+  const showBuiltinTabs = $derived(ui.page === 'library');
 
   /**
    * 筛选 chip 只在曲库页显示。专辑/艺人详情页的"筛选"就是页面本身
@@ -212,8 +205,10 @@
   );
 
   function switchView(id: string): void {
-    if (id === 'library' || id === 'recent' || id === 'mostPlayed') {
-      nav.go({ kind: 'builtin', view: id });
+    if (id === 'library') {
+      nav.go({ kind: 'builtin', view: 'library' });
+    } else if (id === 'albums' || id === 'artists') {
+      nav.go({ kind: 'browse', view: id });
     }
   }
 
@@ -271,7 +266,7 @@
   </Header>
 
   <Toolbar
-    tabs={showBuiltinTabs ? BUILTIN_TABS : undefined}
+    tabs={showBuiltinTabs ? [...LIB_TABS] : undefined}
     active={ui.page}
     ontab={switchView}
     filters={filterChips}
