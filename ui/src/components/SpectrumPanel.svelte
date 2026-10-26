@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
+  import IconButton from './ui/IconButton.svelte';
   import type { SpectrumSource } from '../lib/spectrum-source';
   import {
     createProSpectrum,
@@ -141,9 +142,9 @@
       <span class="dim">实时</span>
     {/if}
     {#if onclose}
-      <button class="icon-btn" onclick={onclose} aria-label="关闭频谱">
-        <Icon name="close" size={14} />
-      </button>
+      <IconButton label="关闭频谱" size="sm" onclick={onclose}>
+        <Icon name="close" size={13} />
+      </IconButton>
     {/if}
   </header>
   {#if usePro}

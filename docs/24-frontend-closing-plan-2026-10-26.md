@@ -890,14 +890,46 @@ ListPage 与 DataTable 的取舍见 §5 B4-2 末尾的决策修订。
 **ListPage 细壳：不做（决策）**。B4-1 拆页后四个列表路由共用 `LibraryView`，
 它就是那个"细壳"；再加一层只有转发。§3.2 的布局契约（页面自己拼三段）维持原样。
 
-### B5 播放区与 EQ（含后端子批）
+### B5 播放区与 EQ（含后端子批）✅ 已完成（2026-10-26，两个提交）
 
-**B5a UI**：QueueDrawer 改用 kit 重写；「正在播放」页三块可切（歌词/频谱/EQ）。
-**B5b 后端**（独立可并行）：`aiya-audio` 加 10 段 biquad（峰值/低架/高架）+ 预设表 + 增益限制；
-协议 `PROTOCOL_VERSION` 5 → 6（`SetEq{bands,pregain,enabled}` + `EngineEvent::EqApplied`）；`cargo build -p aiya-audio-host` 必跑；
-`player_set_eq` 命令 + ts-rs 生成；smoke：EQ 全 0dB 时输出与关 EQ 逐样本一致（旁路证明）。
+**B5b 后端**（先做，协议 v5 → v6）：
+- `aiya-audio/src/eq.rs`：RBJ cookbook 直 I 型 biquad ×10（低架 / 8 峰值 / 高架），**无外部依赖**。
+  增益 ±12 dB、pregain ±12 dB，入口与引擎各 clamp 一次（持久化的就是生效值）。
+- **全 0 dB 或关闭 = 硬旁路**：逐样本直通。旁路证明（docs/24 验收）不靠浮点巧合——
+  RBJ 公式在 A=1 时数学上退化为恒等，但浮点等式依赖"逐项相等"，硬旁路是零风险承诺。
+- 插入点：`resample_take` 内 **插值后 → EQ → 音量斜坡**（提升增益不顶爆输出电平）；
+  频谱 tap 改吃**滤波后**单声道（频谱反映耳朵听到的）。
+- **系数热切不重建延迟线**：切预设只重算系数，延迟线保留（重建会在切换点引入直流瞬态）。
+  20 次连切预设的测试断言输出有界且无 NaN（自动化的"无爆音"代理指标）。
+- 超 Nyquist 频段跳过（32 kHz 下 16 kHz 段公式出 NaN，clamp 救不了）。
+- `SetEq(EqParams{bands,pregain,enabled})` + `EngineEvent::EqApplied{token,params}`，
+  **EqApplied 带 clamp 后生效值**，UI 以它为准。`aiya-audio-host` 已显式重建（协议改动铁律）。
+- `player_set_eq`（Json 手动解析 + clamp）+ `player_get_eq`（面板回读）。
+  **持久化独立键 `eq`，不进 `app_settings`**：EQ 滑杆是 300ms 一次的高频连调，
+  设置页是低频整体写，分键天然互不覆盖（diff 两边字段的方案已否——复杂度换不来正确性）。
+- sidecar 崩溃恢复序列在 `SetOutputConfig` 之后**无条件回放 `SetEq`**（设置项，与装载无关）；
+  `LoadExit` 携带 eq 记账（与 rate/cfg 同一套账法），play_null 只记账不滤波。
 
-验收：旁路一致性测试；EQ 调整时无爆音（20 次连切预设无 click）；设置持久化。
+**B5a UI**：
+- `stores/eq.svelte.ts`：回读一次 + 300ms 防抖下发，**以返回的生效值回写**
+  （拖到 +20 被 clamp 成 +12 时画面跟着回弹）；7 预设 + 命中检测。
+- `EqPanel.svelte`：kit Switch（开关）+ kit Menu（预设下拉，点击坐标锚点，命中打 ✓）
+  + 10 段竖向滑杆 + 前置增益。kit `Slider` 加 `orientation="vertical"`（bits-ui 原生支持）。
+- 正在播放页三块可切（kit SegmentedControl：歌词/频谱/均衡器），一次只渲染一块、独占整行；
+  选中值存页面本地——纯 UI 偏好不进设置 schema。
+- **队列抽屉换 kit Popover**：触发键 = 播放条队列键，aria-expanded / Esc / 外点关闭 /
+  焦点还原全归 bits-ui；删 QueuePanel 的 `svelte:window` 两件套与
+  `data-queue-trigger` 自防（双触发问题由 Popover 的受控模型天然消除）。
+  触发键用裸 button + scoped 样式——IconButton 是固定签名组件，接不住 bits-ui 的
+  props 展开（rate-chip 已有同款先例）。kit `Popover` 加 `contentClass` 附加类。
+  几何从 `.player-dock` 绝对定位迁到 `.queue-float`（portal 后旧锚点失效）。
+  LyricsPanel / SpectrumPanel 的关闭键同步换 kit IconButton——全局 `.icon-btn` 清零
+  （player.css 里只剩定义，随 B6 删）。
+
+实测：aiya-audio 61 绿（eq 5 条：旁路位级一致 / +6 dB 频响≈2× / 20 次连切有界 /
+超 Nyquist 跳过 / clamp）、workspace 全绿、ipc_contract 5/5、gen:types 49 类型一致、
+check 0/0、check:deps 0 环（102 模块）、e2e **18/18**（+nowplaying 两条常驻：三块可切、
+抽屉 Esc+焦点还原）；CSS 52.6 kB / JS 423 kB。
 
 ### B6 设置与浮层 + 收尾
 

@@ -3,6 +3,7 @@
   import { findActiveLine } from '../lib/lyrics';
   import { anchorAt, projectPosition } from '../lib/lyrics-clock';
   import Icon from './Icon.svelte';
+  import IconButton from './ui/IconButton.svelte';
 
   interface Props {
     lyrics: Lyrics | null;
@@ -90,7 +91,7 @@
   <header>
     <strong>歌词</strong>
     <span class="dim">{lyrics?.found ? (lyrics.synced ? '同步歌词' : '纯文本') : '暂无'}</span>
-    {#if onclose}<button class="icon-btn" onclick={onclose} aria-label="关闭歌词"><Icon name="close" size={14} /></button>{/if}
+    {#if onclose}<IconButton label="关闭歌词" size="sm" onclick={onclose}><Icon name="close" size={13} /></IconButton>{/if}
   </header>
 
   <div
