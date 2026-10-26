@@ -56,6 +56,14 @@ export type NavTarget =
       sort?: { field: TrackSort; direction: 'asc' | 'desc' };
     }
   | { kind: 'playlist'; id: string }
+  /**
+   * 专辑/艺人宫格浏览页（B4-3b）。一级页，无参数。
+   */
+  | { kind: 'browse'; view: 'albums' | 'artists' }
+  /** 专辑详情（曲目列表 = 曲库查询 + albumId 筛选，见 ui.enterFacet） */
+  | { kind: 'album'; id: string }
+  /** 艺人详情 */
+  | { kind: 'artist'; id: string }
   /** 一级整页：正在播放 / 电台 / 设置 */
   | { kind: 'page'; page: AppPage };
 
@@ -139,6 +147,12 @@ class NavStore {
         return ui.page === target.view;
       case 'playlist':
         return ui.page === 'playlist' && ui.playlistId === target.id;
+      case 'browse':
+        return ui.page === target.view;
+      case 'album':
+        return ui.page === 'album' && ui.albumId === target.id;
+      case 'artist':
+        return ui.page === 'artist' && ui.artistId === target.id;
       case 'page':
         return ui.page === target.page;
     }
@@ -154,6 +168,15 @@ class NavStore {
         break;
       case 'playlist':
         list.openPlaylist(target.id);
+        break;
+      case 'browse':
+        ui.openPage(target.view);
+        break;
+      case 'album':
+        list.openFacet('album', target.id);
+        break;
+      case 'artist':
+        list.openFacet('artist', target.id);
         break;
       case 'page':
         ui.openPage(target.page);

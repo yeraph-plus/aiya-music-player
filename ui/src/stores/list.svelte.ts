@@ -264,6 +264,18 @@ class ListStore {
   }
 
   /**
+   * 进专辑/艺人详情页（B4-3b）。参数复用筛选字段的原因见 `ui.enterFacet`；
+   * 查询照常走 `library_list`（source=library + albumId/artistId 过滤），
+   * 所以重载/滚动恢复/批量动作与其它列表页**同一条路径**，零特判。
+   */
+  openFacet(kind: 'album' | 'artist', id: string): void {
+    clearTimeout(this.searchTimer);
+    ui.enterFacet(kind, id);
+    void this.reload();
+    ui.scheduleUiSave();
+  }
+
+  /**
    * 滚动位置：由 TrackList 的 onscroll 写，位置本身存在 ui store
    * （它是 UiState 的字段），这里只负责排一次防抖落盘。
    */

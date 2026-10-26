@@ -11,6 +11,7 @@
   import { history } from '../stores/history.svelte';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
+  import { facets } from '../stores/facets.svelte';
   import { nav } from '../stores/nav.svelte';
   import { overlay } from '../stores/overlay.svelte';
   import { playlists } from '../stores/playlists.svelte';
@@ -31,6 +32,28 @@
   );
   const showPlays = $derived(view.kind === 'recent' || view.kind === 'mostPlayed');
   const playerState = $derived(player.state);
+
+  /**
+   * 专辑/艺人详情页（B4-3b）的头部数据。曲目列表与曲库页共用一条查询路径
+   * （source=library + albumId/artistId 筛选，见 `ui.enterFacet`），差别只在头部。
+   *
+   * 详情页可能被启动恢复直接命中（facets 缓存还是空），所以这里负责补拉
+   * 一次聚合列表再查单条；查不到（条目刚被移除）时 title 用 id 兜底。
+   */
+  const facet = $derived.by(() => {
+    if (ui.page === 'album') {
+      return { kind: 'album' as const, data: facets.albumById(ui.albumId ?? '') };
+    }
+    if (ui.page === 'artist') {
+      return { kind: 'artist' as const, data: facets.artistById(ui.artistId ?? '') };
+    }
+    return null;
+  });
+
+  $effect(() => {
+    if (ui.page === 'album' && facets.albums === null) void facets.loadAlbums();
+    if (ui.page === 'artist' && facets.artists === null) void facets.loadArtists();
+  });
 
   /**
    * 标题区数据。
@@ -66,6 +89,37 @@
         playDisabled: list.total === 0,
       };
     }
+    if (facet) {
+      if (facet.kind === 'album') {
+        const al = facet.data;
+        return {
+          kicker: '专辑',
+          title: al?.title ?? ui.albumId ?? '专辑',
+          subtitle: al?.artist ?? undefined,
+          meta:
+            al === null
+              ? `${list.total} 首`
+              : `${al.trackCount} 首` +
+                (al.year ? ` · ${al.year}` : '') +
+                (al.totalDurationMs > 0 ? ` · ${formatDurationLong(al.totalDurationMs)}` : ''),
+          cover: al?.artworkId ? (artworkUrl(al.artworkId, 320) ?? null) : null,
+          playDisabled: list.total === 0,
+        };
+      }
+      const ar = facet.data;
+      return {
+        kicker: '艺人',
+        title: ar?.name ?? ui.artistId ?? '艺人',
+        subtitle: undefined,
+        meta:
+          ar === null
+            ? `${list.total} 首`
+            : `${ar.trackCount} 首 · ${ar.albumCount} 张专辑` +
+              (ar.totalDurationMs > 0 ? ` · ${formatDurationLong(ar.totalDurationMs)}` : ''),
+        cover: ar?.artworkId ? (artworkUrl(ar.artworkId, 320) ?? null) : null,
+        playDisabled: list.total === 0,
+      };
+    }
     return {
       kicker: '曲库',
       title: '全部曲目',
@@ -82,17 +136,34 @@
     }
   }
 
-  /** 三个内置视图的 tab。歌单页不显示（它不是内置视图，标题已经说明在哪） */
+  /**
+   * 三个内置视图的 tab。歌单/专辑/艺人详情页不显示——它们不是内置视图，
+   * 标题已经说明在哪（active 用 ui.page 而不是 view.kind：详情页的 view
+   * 是 LIBRARY_VIEW，按 kind 算会把"全部曲目"高亮出来）。
+   */
   const BUILTIN_TABS = [
     { id: 'library', label: '全部曲目' },
     { id: 'recent', label: '最近播放' },
     { id: 'mostPlayed', label: '常听' },
   ];
 
-  const filterChips = $derived([
-    ...(ui.artistId ? [{ label: '艺人筛选', onclear: () => list.clearFilter() }] : []),
-    ...(ui.albumId ? [{ label: '专辑筛选', onclear: () => list.clearFilter() }] : []),
-  ]);
+  const showBuiltinTabs = $derived(
+    ui.page === 'library' || ui.page === 'recent' || ui.page === 'mostPlayed',
+  );
+
+  /**
+   * 筛选 chip 只在曲库页显示。专辑/艺人详情页的"筛选"就是页面本身
+   * （ui.albumId/ui.artistId 是路由参数），显示"专辑筛选 ×"chip 等于
+   * 让用户能把当前页面拆掉——点 × 会清掉路由参数却不换页。
+   */
+  const filterChips = $derived(
+    ui.page === 'library'
+      ? [
+          ...(ui.artistId ? [{ label: '艺人筛选', onclear: () => list.clearFilter() }] : []),
+          ...(ui.albumId ? [{ label: '专辑筛选', onclear: () => list.clearFilter() }] : []),
+        ]
+      : [],
+  );
 
   function switchView(id: string): void {
     if (id === 'library' || id === 'recent' || id === 'mostPlayed') {
@@ -154,8 +225,8 @@
   </Header>
 
   <Toolbar
-    tabs={view.kind === 'playlist' ? undefined : BUILTIN_TABS}
-    active={view.kind}
+    tabs={showBuiltinTabs ? BUILTIN_TABS : undefined}
+    active={ui.page}
     ontab={switchView}
     filters={filterChips}
   />
@@ -221,6 +292,14 @@
     {:else if view.kind === 'mostPlayed'}
       <strong>还没有常听曲目</strong>
       <span>播放次数会从零开始积累</span>
+    {:else if ui.page === 'album'}
+      <strong>这张专辑里没有曲目</strong>
+      <span>曲目可能已被移出曲库</span>
+      <Button onclick={() => nav.go({ kind: 'browse', view: 'albums' })}>返回专辑</Button>
+    {:else if ui.page === 'artist'}
+      <strong>这位艺人没有曲目</strong>
+      <span>曲目可能已被移出曲库</span>
+      <Button onclick={() => nav.go({ kind: 'browse', view: 'artists' })}>返回艺人</Button>
     {:else if view.kind === 'playlist'}
       <strong>这个播放列表还是空的</strong>
       <span>在曲库里选中歌曲，右键或批量操作加入这里</span>

@@ -6,6 +6,7 @@
   import { playlistMenuItems, trackMenuItems } from '../lib/menu';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
+  import { nav } from '../stores/nav.svelte';
   import { notify } from '../stores/notify.svelte';
   import { overlay } from '../stores/overlay.svelte';
   import { playlists } from '../stores/playlists.svelte';
@@ -44,16 +45,15 @@
         if (menu.track?.id) overlay.dialog = { kind: 'addToPlaylist', ids: [menu.track.id] };
       },
       filterByArtist: () => {
+        // B4-3b 升级：从"列表 + 筛选 chip"改成直达艺人详情页（docs/24 §2 B4）
         const id = menu.track?.artistId;
         if (!id) return;
-        ui.artistId = id;
-        void list.reload();
+        nav.go({ kind: 'artist', id });
       },
       filterByAlbum: () => {
         const id = menu.track?.albumId;
         if (!id) return;
-        ui.albumId = id;
-        void list.reload();
+        nav.go({ kind: 'album', id });
       },
       reveal: () => void revealTrack(menu.track?.id),
       remove: () => {

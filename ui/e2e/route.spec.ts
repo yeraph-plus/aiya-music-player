@@ -89,6 +89,8 @@ test('八值路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => 
     { via: 'nav', text: '曲库', title: '全部曲目' },
     { via: 'nav', text: '最近播放', title: '最近播放' },
     { via: 'nav', text: '常听', title: '常听' },
+    { via: 'nav', text: '专辑', title: '专辑' },
+    { via: 'nav', text: '艺人', title: '艺人' },
     { via: 'playlist', text: '', title: '' }, // 标题动态取歌单名
     { via: 'nav', text: '正在播放', title: '未在播放' },
     { via: 'nav', text: '设置', title: '设置' },
@@ -113,4 +115,41 @@ test('八值路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => 
       await expect(page.locator('.main h1')).toHaveText('全部曲目');
     }
   }
+});
+
+test('B4-3b：专辑宫格 → 卡片 → 专辑详情 → 顶栏返回回宫格', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('.sidebar .nav-item', { hasText: '专辑' }).click();
+  await expect(page.locator('.main h1')).toHaveText('专辑');
+  await expect(page.locator('.sidebar .active')).toHaveText(/专辑/);
+
+  const card = page.locator('.main .k-card').first();
+  const albumTitle = await card.locator('.k-card-title').textContent();
+  await card.click();
+
+  // 详情页：标题 = 专辑名，meta 带曲目数（B4-3a 聚合的字段）
+  await expect(page.locator('.main h1')).toHaveText(albumTitle!.trim());
+  await expect(page.locator('.content-header, .main').first()).toContainText(/首/);
+  // 曲目列表是同一查询路径（albumId 筛选），行数 > 0
+  await expect(page.locator('.main .list .row').first()).toBeVisible();
+
+  // 返回：回宫格，高亮回到「专辑」
+  await page.getByRole('button', { name: '返回上一页' }).click();
+  await expect(page.locator('.main h1')).toHaveText('专辑');
+  expect(await activeSidebar(page)).toEqual(['专辑']);
+});
+
+test('B4-3b：艺人详情页列出该艺人的曲目', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('.sidebar .nav-item', { hasText: '艺人' }).click();
+  await expect(page.locator('.main h1')).toHaveText('艺人');
+
+  const card = page.locator('.main .k-card').first();
+  const artistName = (await card.locator('.k-card-title').textContent())!.trim();
+  await card.click();
+
+  await expect(page.locator('.main h1')).toHaveText(artistName);
+  // 曲目列表（查询走 artistId 筛选）首行内容含这位艺人——不猜列下标，
+  // 列顺序属于 TrackList 的实现细节
+  await expect(page.locator('.main .list .row').first()).toContainText(artistName);
 });

@@ -19,6 +19,7 @@
   import { Tooltip } from 'bits-ui';
   import AppShell from './components/AppShell.svelte';
   import OverlayHost from './components/OverlayHost.svelte';
+  import BrowseView from './views/BrowseView.svelte';
   import KitView from './views/KitView.svelte';
   import LibraryView from './views/LibraryView.svelte';
   import HomeView from './views/HomeView.svelte';
@@ -159,6 +160,8 @@
       <KitView />
     {:else if ui.page === 'home'}
       <HomeView />
+    {:else if ui.page === 'albums' || ui.page === 'artists'}
+      <BrowseView />
     {:else if isListPage(ui.page)}
       <LibraryView />
     {:else if ui.page === 'nowPlaying'}

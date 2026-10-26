@@ -50,9 +50,22 @@ export const uiStateSchema = z
     scrollTop: z.number().optional(),
     artistId: z.string().nullable().optional(),
     albumId: z.string().nullable().optional(),
-    /** 一级路由（B4-1 拆页后 8 值）。旧文件的 `home` 仍合法 */
+    /** 一级路由（B4-1 拆页 8 值；B4-3b 加专辑/艺人浏览与详情共 12 值）。旧文件的 `home` 仍合法 */
     page: z
-      .enum(['home', 'library', 'recent', 'mostPlayed', 'playlist', 'nowPlaying', 'settings', 'radio'])
+      .enum([
+        'home',
+        'library',
+        'recent',
+        'mostPlayed',
+        'playlist',
+        'albums',
+        'artists',
+        'album',
+        'artist',
+        'nowPlaying',
+        'settings',
+        'radio',
+      ])
       .optional(),
     /** `page === 'playlist'` 的参数 */
     playlistId: z.string().nullable().optional(),

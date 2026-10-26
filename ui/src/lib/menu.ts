@@ -40,8 +40,9 @@ export function trackMenuItems(
     { label: '下一首播放', action: actions.insertNext, disabled: !track },
     { label: '加入播放队列', action: actions.enqueue, disabled: !track },
     { label: '添加到播放列表…', action: actions.addToPlaylist, disabled: !track },
-    { label: '按此艺人筛选', action: actions.filterByArtist, disabled: !track?.artistId },
-    { label: '按此专辑筛选', action: actions.filterByAlbum, disabled: !track?.albumId },
+    // B4-3b 起直达艺人/专辑详情页（不再是"筛选 chip"），文案随之改为浏览语义
+    { label: '查看艺人', action: actions.filterByArtist, disabled: !track?.artistId },
+    { label: '查看专辑', action: actions.filterByAlbum, disabled: !track?.albumId },
     { label: '在文件夹中显示', action: actions.reveal, disabled: !track },
     {
       label: inPlaylist ? '从播放列表移除' : '从曲库移除',

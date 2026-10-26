@@ -16,7 +16,7 @@ import { readLook } from '../lib/look';
 import { notify } from './notify.svelte';
 
 /**
- * 一级路由。**8 值**，每个值对应 `App.svelte` 里的一个分支（docs/24 §3.2）。
+ * 一级路由。**12 值**，每个值对应 `App.svelte` 里的一个分支（docs/24 §3.2）。
  *
  * 2026-10-26 B4-1 拆页：此前是 `home | nowPlaying | radio | settings` 四个值，
  * 六个列表视图全都寄居在 `home` 上，靠 `libraryDetail: boolean` + `view` 两个
@@ -25,7 +25,15 @@ import { notify } from './notify.svelte';
  * 就是这个双字段组合的化石。列表视图升级成一级值之后，`libraryDetail` 删掉，
  * 那句嵌套判断变成一行一个分支。
  *
- * `playlist` 是唯一带参数的路由，参数在 `ui.playlistId`。
+ * 2026-10-26 B4-3b 再扩 4 值：`albums`/`artists` 是宫格浏览页（非列表页），
+ * `album`/`artist` 是详情页（列表页）。**详情页的参数复用 `albumId`/`artistId`
+ * 两个筛选字段**，不新增 `facetId`：详情页的曲目列表本来就是"曲库查询 +
+ * albumId 过滤"（`list.query()` 已从这两个字段取筛选），复用意味着查询、
+ * 返回栈快照、UiState 持久化三处**零改动**——新字段则三处都要跟着加。
+ * 代价是"page=album 的参数"与"library 页的筛选 chip"共享一个存储位，但
+ * 两者永远不会同时可见（不同路由值），语义不冲突。
+ *
+ * `playlist` / `album` / `artist` 是带参数的路由，参数见上。
  */
 export type AppPage =
   | 'home'
@@ -33,6 +41,10 @@ export type AppPage =
   | 'recent'
   | 'mostPlayed'
   | 'playlist'
+  | 'albums'
+  | 'artists'
+  | 'album'
+  | 'artist'
   | 'nowPlaying'
   | 'settings'
   | 'radio';
@@ -40,7 +52,12 @@ export type AppPage =
 /** 哪些路由是"列表页"（共用 `ListStore` 的查询与虚拟列表） */
 export function isListPage(page: AppPage): boolean {
   return (
-    page === 'library' || page === 'recent' || page === 'mostPlayed' || page === 'playlist'
+    page === 'library' ||
+    page === 'recent' ||
+    page === 'mostPlayed' ||
+    page === 'playlist' ||
+    page === 'album' ||
+    page === 'artist'
   );
 }
 
@@ -80,6 +97,10 @@ class UiStore {
   get view(): View {
     switch (this.page) {
       case 'library':
+      case 'album':
+      case 'artist':
+        // 专辑/艺人详情页的曲目列表 = 曲库查询 + albumId/artistId 筛选，
+        // 数据形状与曲库页完全相同（见类头注释"参数复用筛选字段"）
         return LIBRARY_VIEW;
       case 'recent':
         return RECENT_VIEW;
@@ -252,6 +273,25 @@ class UiStore {
     this.search = '';
     this.artistId = null;
     this.albumId = null;
+    this.queueOpen = false;
+  }
+
+  /**
+   * 进入专辑/艺人详情页（B4-3b）。
+   *
+   * 参数复用 `albumId`/`artistId` 筛选字段（AppPage 注释说明了为什么不加
+   * 独立字段），所以**不能**先调 `enterList` 再覆盖——enterList 会把两个
+   * 筛选字段清空，顺序错了就是"详情页显示全库"。清理语义与 enterList
+   * 一致（从别处点进来，旧搜索词与另一侧筛选不该跟着），只是目标值不同。
+   *
+   * 它不负责落盘与重载（同 enterList：调用方决定）。
+   */
+  enterFacet(kind: 'album' | 'artist', id: string): void {
+    this.search = '';
+    this.artistId = kind === 'artist' ? id : null;
+    this.albumId = kind === 'album' ? id : null;
+    this.page = kind;
+    this.playlistId = null;
     this.queueOpen = false;
   }
 

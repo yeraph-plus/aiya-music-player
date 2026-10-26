@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AudioLines, Clock, Flame, House, Library, ListMusic, Plus, Settings } from '@lucide/svelte';
+  import { AudioLines, Clock, Disc, Flame, House, Library, ListMusic, Mic2, Plus, Settings } from '@lucide/svelte';
   import { artworkUrl } from '../../lib/artwork';
   import { shortenPath } from '../../lib/format';
   import { library } from '../../stores/library.svelte';
@@ -19,15 +19,15 @@
    * 用 prop 传回调时，AppShell 得给每一条入口写一个转发函数 —— 那次改名的教训是
    * "入口散在模板里，漏一个就变成点了没反应"。现在"我要去哪"直接说给 nav。
    *
-   * ### 一级导航的六项
+   * ### 一级导航的八项
    *
-   * 首页 / 曲库 / 最近播放 / 常听 / 正在播放 / 设置。
+   * 首页 / 曲库 / 最近播放 / 常听 / 专辑 / 艺人 / 正在播放 / 设置。
    * - **曲库三视图直接进侧栏**：以前要先回首页、再点卡片才能到"最近播放"，
    *   而这三者是曲库的**主要浏览方式**，不是首页的预览延伸。
+   * - **专辑 / 艺人（B4-3b 加入）**：宫格浏览页，曲库的两条主浏览路径
+   *   （docs/24 §2 P10——此前只能在右键菜单里"按艺人筛选"）。
    * - **FM 电台移出**：`RadioView` 是 10 行占位，占着一级导航等于给用户一个死入口（docs/24 §2 P10）。
-   *   路由与组件暂留（`AppPage` 里还有 `'radio'`），等 B4 决定是删还是做。
-   * - **专辑 / 艺人不在这一批**：它们要的是 group-by 查询（现在 `TrackQuery` 只有单值
-   *   `artistId`/`albumId` 筛选），做入口等于做 B4 的数据层。
+   *   路由与组件暂留（`AppPage` 里还有 `'radio'`），等后端决定是删还是做。
    */
 
   const PAGES = [
@@ -49,6 +49,18 @@
       label: '常听',
       icon: Flame,
       go: () => nav.go({ kind: 'builtin', view: 'mostPlayed' }),
+    },
+    {
+      key: 'albums',
+      label: '专辑',
+      icon: Disc,
+      go: () => nav.go({ kind: 'browse', view: 'albums' }),
+    },
+    {
+      key: 'artists',
+      label: '艺人',
+      icon: Mic2,
+      go: () => nav.go({ kind: 'browse', view: 'artists' }),
     },
     {
       key: 'nowPlaying',
