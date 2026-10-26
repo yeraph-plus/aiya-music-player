@@ -16,7 +16,8 @@
   import type { TrackRow } from '../lib/ipc';
   import { artworkUrl } from '../lib/artwork';
   import { formatDay, formatPlays, formatTime } from '../lib/format';
-  import { rangeSelection, selectAll, toggleSelection } from '../lib/selection';
+  import { SELECTION_CAP } from '../lib/selection';
+  import { applyIdSelection, classifyRowClick, classifyRowCheck } from '../lib/row-selection';
 
   interface Props {
     rows: TrackRow[];
@@ -60,12 +61,9 @@
   const allSelected = $derived(rows.length > 0 && selectedIndices.length === rows.length);
   const someSelected = $derived(selectedIndices.length > 0 && !allSelected);
 
-  function emit(indices: Set<number>): void {
-    onchange(new Set([...indices].map((index) => rows[index]?.id).filter((id): id is string => !!id)));
-  }
-
   /**
-   * 点选框。
+   * 点选框：Shift=连选、其余=切换累加（`classifyRowCheck` + `applyIdSelection`，
+   * 语义与主列表的下标版同源）。
    *
    * 不给 Checkbox 传 `onCheckedChange`：它只回一个 boolean，拿不到 `shiftKey`
    * （连选要用）。勾选态**完全由 `checked` prop 决定**（受控，无本地副本），
@@ -76,42 +74,37 @@
    * 统一派发，同一批 handler 之间 `stopPropagation` 不保证顺序。
    * 这里仍然 stop 一次，是为了不把事件继续交给外层的其它委托 handler。
    */
-  function toggle(index: number, event: MouseEvent | KeyboardEvent): void {
+  function checkRow(index: number, event: MouseEvent | KeyboardEvent): void {
     event.stopPropagation();
-    if (event.shiftKey && anchor >= 0) {
-      emit(rangeSelection(anchor, index));
-    } else {
-      emit(toggleSelection(new Set(selectedIndices), index));
-      anchor = index;
-    }
+    const next = applyIdSelection(selected, rows, anchor, classifyRowCheck(event), index);
+    onchange(next.ids);
+    anchor = next.anchor;
   }
 
   function toggleAll(event: MouseEvent | KeyboardEvent): void {
     event.stopPropagation();
-    emit(allSelected ? new Set<number>() : selectAll(rows.length));
+    // 全选映射成 ID，上限与下标版同源（SELECTION_CAP）
+    onchange(
+      allSelected ? new Set<string>() : new Set(rows.slice(0, SELECTION_CAP).map((row) => row.id)),
+    );
     anchor = allSelected ? -1 : 0;
   }
 
   /**
    * 点行 = 选中（B4-1 交互语义，与 `TrackList` 一致）。
    *
-   * 裸点=只选这行（emit 一个全新的 Set，天然"清别的"）、Ctrl=切换、
-   * Shift=连选；**播放只由双击 / Enter 触发**。选择集是 ID（见组件头注释），
-   * 下标只在本表内做锚点。
+   * 裸点=只选这行、Ctrl=切换、Shift=连选；**播放只由双击 / Enter 触发**。
+   * Shift 在没有锚点时保持 B4-1 原行为（=单选），不回退成 toggle —— 与
+   * 点勾选框的回退方向相反，因为这里用户点的是"行"，意图是"看这行"。
    */
   function rowClick(index: number, event: MouseEvent): void {
     // 勾选取的是"点勾选框"，不是"点这一行"。Svelte 5 的 click 是委托到根
     // 节点派发的，`stopPropagation` 拦不住同一批 handler —— 行自己判一次来源才可靠。
     if ((event.target as HTMLElement | null)?.closest('.tt-check')) return;
-    if (event.shiftKey && anchor >= 0) {
-      emit(rangeSelection(anchor, index));
-    } else if (event.ctrlKey || event.metaKey) {
-      emit(toggleSelection(new Set(selectedIndices), index));
-      anchor = index;
-    } else {
-      emit(new Set([index]));
-      anchor = index;
-    }
+    const intent = event.shiftKey && anchor >= 0 ? 'range' : classifyRowClick(event);
+    const next = applyIdSelection(selected, rows, anchor, intent, index);
+    onchange(next.ids);
+    anchor = next.anchor;
   }
 
   function value(row: TrackRow): string {
@@ -188,7 +181,7 @@
     >
       <!-- 同上：点选框由包装层接管，键盘可达性在 button 上 -->
       <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <span class="tt-check" role="cell" tabindex="-1" onclick={(event) => toggle(index, event)}>
+      <span class="tt-check" role="cell" tabindex="-1" onclick={(event) => checkRow(index, event)}>
         <Checkbox.Root
           class="tt-box"
           checked={selected.has(track.id)}
@@ -199,7 +192,7 @@
             if (event.key === ' ' || event.key === 'Enter') {
               event.preventDefault();
               event.stopPropagation();
-              toggle(index, event);
+              checkRow(index, event);
             }
           }}
         >

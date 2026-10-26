@@ -2,7 +2,7 @@
   import type { TrackDetail } from '../lib/ipc';
   import { artworkUrl } from '../lib/artwork';
   import { startRowDrag, consumeClickSuppressed } from '../lib/drag';
-  import { computeRange } from '../lib/virtual';
+  import { createVirtualWindow } from '../lib/create-virtual-window.svelte';
   import { formatDurationLong, formatTime } from '../lib/format';
   import { library as libraryStore } from '../stores/library.svelte';
   import Icon from './Icon.svelte';
@@ -27,10 +27,7 @@
   /** 负缓存条数上限，超过整体清空（曲目可能重新上架，允许再试） */
   const META_FAILURE_CAP = 1000;
 
-  let scroller = $state<HTMLDivElement | null>(null);
   let root = $state<HTMLElement | null>(null);
-  let viewportHeight = $state(520);
-  let scrollTop = $state(0);
   let metaVersion = $state(0);
   let dragState = $state<{ from: number; to: number; active: boolean } | null>(null);
 
@@ -46,9 +43,14 @@
     failedAttempts.set(id, (failedAttempts.get(id) ?? 0) + 1);
   }
 
-  const range = $derived(
-    computeRange({ scrollTop, viewportHeight, rowHeight: ROW_HEIGHT, total: ids.length, overscan: 4 }),
-  );
+  /** 滚动水管与 TrackList 共用（scroller/视口测量/区间），这里只接业务 effect */
+  const vw = createVirtualWindow({
+    rowHeight: () => ROW_HEIGHT,
+    total: () => ids.length,
+    overscan: 4,
+  });
+
+  const range = $derived(vw.range);
 
   const visible = $derived.by(() => {
     void metaVersion;
@@ -118,22 +120,12 @@
   // 队列换了（重新播放）时把面板滚回当前曲目附近
   $effect(() => {
     const target = index;
-    if (!scroller || target == null) return;
+    if (!vw.scroller || target == null) return;
     const top = target * ROW_HEIGHT;
-    if (top < scroller.scrollTop || top > scroller.scrollTop + scroller.clientHeight - ROW_HEIGHT) {
-      scroller.scrollTop = Math.max(0, top - scroller.clientHeight / 3);
-      scrollTop = scroller.scrollTop;
+    if (top < vw.scroller.scrollTop || top > vw.scroller.scrollTop + vw.viewportHeight - ROW_HEIGHT) {
+      vw.scroller.scrollTop = Math.max(0, top - vw.viewportHeight / 3);
+      vw.scrollTop = vw.scroller.scrollTop;
     }
-  });
-
-  $effect(() => {
-    if (!scroller) return;
-    const observer = new ResizeObserver(() => {
-      viewportHeight = scroller?.clientHeight ?? 520;
-    });
-    observer.observe(scroller);
-    viewportHeight = scroller.clientHeight;
-    return () => observer.disconnect();
   });
 
   function handlePointerDown(event: PointerEvent, rowIndex: number): void {
@@ -142,7 +134,7 @@
       index: rowIndex,
       count: ids.length,
       rowHeight: ROW_HEIGHT,
-      scroller,
+      scroller: vw.scroller,
       onState: (next) => (dragState = next),
       onDrop: (from, to) => onmove(from, to),
     });
@@ -173,10 +165,8 @@
   <div
     class="queue-list"
     class:dragging={dragState?.active}
-    bind:this={scroller}
-    onscroll={() => {
-      if (scroller) scrollTop = scroller.scrollTop;
-    }}
+    bind:this={vw.scroller}
+    onscroll={vw.handleScroll}
   >
     {#if ids.length === 0}
       <div class="queue-empty">队列是空的<br /><span class="dim">右键曲目可加入队列</span></div>

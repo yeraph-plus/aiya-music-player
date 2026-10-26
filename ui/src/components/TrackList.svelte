@@ -5,7 +5,8 @@
   import type { TrackSort } from '../lib/query';
   import { artworkUrl } from '../lib/artwork';
   import { startRowDrag, consumeClickSuppressed } from '../lib/drag';
-  import { computeRange } from '../lib/virtual';
+  import { createVirtualWindow } from '../lib/create-virtual-window.svelte';
+  import { scrollTopForRow } from '../lib/virtual';
   import { formatDay, formatTime, highlight } from '../lib/format';
   import type { TrackWindow } from '../lib/track-window';
   import { SELECTION_CAP } from '../lib/selection';
@@ -85,6 +86,17 @@
   const OVERSCAN = 6;
 
   /**
+   * 滚动水管抽到 `lib/create-virtual-window`（与 QueuePanel 共用）：
+   * scroller 绑定、视口测量、可见区间都在那里，这里只接业务 effect。
+   */
+  const vw = createVirtualWindow({
+    rowHeight: () => ROW_HEIGHT,
+    total: () => total,
+    overscan: OVERSCAN,
+    fallbackViewport: 640,
+  });
+
+  /**
    * 表头三态：全选的上限与 `lib/selection.ts` 的 SELECTION_CAP 一致，
    * 否则 5 万首的视图点全选后表头还显示"半选"（只选了前 5000）。
    */
@@ -92,20 +104,9 @@
   const allSelected = $derived(selectableTotal > 0 && selection.size >= selectableTotal);
   const someSelected = $derived(selection.size > 0 && !allSelected);
 
-  let scroller = $state<HTMLDivElement | null>(null);
-  let viewportHeight = $state(640);
-  let scrollTop = $state(0);
   let dragState = $state<{ from: number; to: number; active: boolean } | null>(null);
 
-  const range = $derived(
-    computeRange({
-      scrollTop,
-      viewportHeight,
-      rowHeight,
-      total,
-      overscan: OVERSCAN,
-    }),
-  );
+  const range = $derived(vw.range);
 
   const rows = $derived.by(() => {
     // 读一下版本号，让 store 更新时这段重新计算
@@ -127,40 +128,20 @@
     if (total > 0) store.ensureRange(range.start, range.end);
   });
 
+  // 恢复滚动位置：等 total 就位后只执行一次（游标恢复时 total 刚就绪）
   $effect(() => {
-    if (!scroller) return;
-    const observer = new ResizeObserver(() => {
-      viewportHeight = scroller?.clientHeight ?? 640;
-    });
-    observer.observe(scroller);
-    viewportHeight = scroller.clientHeight;
-    return () => observer.disconnect();
-  });
-
-  // 恢复滚动位置：等 total 就位后只执行一次
-  $effect(() => {
-    if (restoreScrollTop === null || !scroller || total === 0) return;
-    scroller.scrollTop = restoreScrollTop;
-    scrollTop = scroller.scrollTop;
+    if (restoreScrollTop === null || !vw.scroller || total === 0) return;
+    vw.scroller.scrollTop = restoreScrollTop;
+    vw.scrollTop = vw.scroller.scrollTop;
     onrestored();
   });
 
   // 键盘选中项变化时把它滚进视野
   $effect(() => {
-    if (!scroller || selectedIndex < 0) return;
-    const top = selectedIndex * ROW_HEIGHT;
-    const bottom = top + ROW_HEIGHT;
-    if (top < scroller.scrollTop) scroller.scrollTop = top;
-    else if (bottom > scroller.scrollTop + scroller.clientHeight) {
-      scroller.scrollTop = bottom - scroller.clientHeight;
-    }
+    if (!vw.scroller || selectedIndex < 0) return;
+    const target = scrollTopForRow(selectedIndex, ROW_HEIGHT, vw.viewportHeight, vw.scroller.scrollTop);
+    if (target !== vw.scroller.scrollTop) vw.scroller.scrollTop = target;
   });
-
-  function handleScroll(): void {
-    if (!scroller) return;
-    scrollTop = scroller.scrollTop;
-    onscroll(scrollTop, Math.floor(scrollTop / ROW_HEIGHT));
-  }
 
   function handlePointerDown(event: PointerEvent, index: number): void {
     if (!onmove) return;
@@ -169,7 +150,7 @@
       index,
       count: total,
       rowHeight,
-      scroller,
+      scroller: vw.scroller,
       onState: (next) => (dragState = next),
       onDrop: (from, to) => onmove?.(from, to),
     });
@@ -180,8 +161,12 @@
   class="list"
   class:with-plays={showPlays}
   class:dragging={dragState?.active}
-  bind:this={scroller}
-  onscroll={handleScroll}
+  bind:this={vw.scroller}
+  onscroll={() => {
+    // 先让水管同步 scrollTop，再上报（沿用 B4-1 前的回调形状）
+    vw.handleScroll();
+    onscroll(vw.scrollTop, Math.floor(vw.scrollTop / ROW_HEIGHT));
+  }}
   role="grid"
   aria-rowcount={total}
 >
