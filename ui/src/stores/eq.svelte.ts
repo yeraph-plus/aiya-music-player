@@ -44,9 +44,10 @@ class EqStore {
   bands = $state<number[]>([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
   pregain = $state(0);
 
-  /** 当前是否恰好命中某个预设（是则菜单里显示它，否则"自定义"） */
+  /** 当前是否恰好命中某个预设的曲线（是则菜单里显示它，否则"自定义"）。
+   * 只看 bands：预设定义的是 10 段增益，pregain 是独立旋钮，调它不改曲线身份 */
   get presetKey(): string | null {
-    return isPreset(this.bands) && this.pregain === 0 ? isPreset(this.bands) : null;
+    return isPreset(this.bands);
   }
 
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -54,12 +55,12 @@ class EqStore {
   /** 面板打开时回读一次。失败不阻塞面板（保持默认值，滑杆照样能动） */
   async load(): Promise<void> {
     if (this.loaded) return;
-    this.loaded = true; // 先置位：失败的加载不反复重试，用户下次打开再试
     try {
       const s = await ipc.player.getEq();
       this.enabled = s.enabled;
       this.bands = [...s.bands];
       this.pregain = s.pregain;
+      this.loaded = true; // 成功才置位：读失败下次打开面板会重试
     } catch {
       // 静默：EQ 是锦上添花，读不到不该弹错误条
     }
@@ -71,16 +72,24 @@ class EqStore {
   }
 
   private async apply(): Promise<void> {
+    // 快照发送时刻的值。响应**不整包回写**：往返期间（~300ms 防抖 + IPC）
+    // 用户可能已经改了别的段，整包覆盖会把最新输入冲掉，滑杆闪回旧值。
+    // 只回写 clamp 产生差异、且用户此后没再动过的字段。
+    const sent = { bands: [...this.bands], pregain: this.pregain };
     try {
       const applied = await ipc.player.setEq({
         enabled: this.enabled,
-        bands: [...this.bands],
-        pregain: this.pregain,
+        bands: sent.bands,
+        pregain: sent.pregain,
       });
-      // 以生效值回写：clamp 差异在这里反弹到画面
-      this.enabled = applied.enabled;
-      this.bands = [...applied.bands];
-      this.pregain = applied.pregain;
+      if (applied.pregain !== sent.pregain && this.pregain === sent.pregain) {
+        this.pregain = applied.pregain;
+      }
+      for (let i = 0; i < applied.bands.length && i < sent.bands.length; i++) {
+        if (applied.bands[i] !== sent.bands[i] && this.bands[i] === sent.bands[i]) {
+          this.bands[i] = applied.bands[i];
+        }
+      }
     } catch {
       // 下发失败保持画面不动（错误条由全局 transport 分类层负责的场景不管这）
     }

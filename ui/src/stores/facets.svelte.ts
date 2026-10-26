@@ -19,21 +19,26 @@ import { notify } from './notify.svelte';
 class FacetsStore {
   albums = $state<AlbumFacet[] | null>(null);
   artists = $state<ArtistFacet[] | null>(null);
+  /** 过滤后总数（后端截断到 500 不静默：total > items.length 即有更多） */
+  albumsTotal = $state(0);
+  artistsTotal = $state(0);
   loading = $state(false);
 
   /**
-   * 拉专辑宫格。空白 search = 全量（前 500）。
+   * 拉专辑宫格。空白 search = 全量（前 500，total 可大于 items）。
    * 失败走全局错误条（宫格页没有 InlineError 位），返回 [] 让页面渲染空态。
    */
   async loadAlbums(search?: string): Promise<AlbumFacet[]> {
     this.loading = true;
     try {
-      const rows = await ipc.library.albums(search);
-      this.albums = rows;
-      return rows;
+      const page = await ipc.library.albums(search);
+      this.albums = page.items;
+      this.albumsTotal = page.total;
+      return page.items;
     } catch (err) {
       notify.showError(errorMessage(err));
       this.albums = [];
+      this.albumsTotal = 0;
       return [];
     } finally {
       this.loading = false;
@@ -43,12 +48,14 @@ class FacetsStore {
   async loadArtists(search?: string): Promise<ArtistFacet[]> {
     this.loading = true;
     try {
-      const rows = await ipc.library.artists(search);
-      this.artists = rows;
-      return rows;
+      const page = await ipc.library.artists(search);
+      this.artists = page.items;
+      this.artistsTotal = page.total;
+      return page.items;
     } catch (err) {
       notify.showError(errorMessage(err));
       this.artists = [];
+      this.artistsTotal = 0;
       return [];
     } finally {
       this.loading = false;

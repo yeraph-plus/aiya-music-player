@@ -867,7 +867,7 @@ fn library_stats(state: State<'_, AppState>) -> Result<dto::LibraryStats, dto::A
 fn library_albums(
     state: State<'_, AppState>,
     search: Option<String>,
-) -> Result<Vec<aiya_data::facets::AlbumFacet>, dto::ApiError> {
+) -> Result<aiya_data::facets::AlbumPage, dto::ApiError> {
     state
         .db()
         .send(move |conn| aiya_data::facets::list_albums(conn, search.as_deref()))
@@ -879,7 +879,7 @@ fn library_albums(
 fn library_artists(
     state: State<'_, AppState>,
     search: Option<String>,
-) -> Result<Vec<aiya_data::facets::ArtistFacet>, dto::ApiError> {
+) -> Result<aiya_data::facets::ArtistPage, dto::ApiError> {
     state
         .db()
         .send(move |conn| aiya_data::facets::list_artists(conn, search.as_deref()))

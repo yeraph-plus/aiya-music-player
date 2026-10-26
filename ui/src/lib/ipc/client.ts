@@ -17,9 +17,9 @@
 import type {
   ApiError,
   ApiErrorCode,
-  AlbumFacet,
+  AlbumPage,
   AppInfo,
-  ArtistFacet,
+  ArtistPage,
   BeetsStatus,
   CancelRequested,
   ChosenRoot,
@@ -170,8 +170,8 @@ export const ipc = {
      * 一次性返回前 500（后端 `FACET_LIMIT`），无游标；按名称排序。
      * 空白/缺省 `search` = 不过滤。
      */
-    albums: (search?: string) => call<AlbumFacet[]>('library_albums', { search }),
-    artists: (search?: string) => call<ArtistFacet[]>('library_artists', { search }),
+    albums: (search?: string) => call<AlbumPage>('library_albums', { search }),
+    artists: (search?: string) => call<ArtistPage>('library_artists', { search }),
   },
 
   playlist: {

@@ -20,7 +20,9 @@ import type { SelectionIdsQuery, QueueInsertMode } from '../client';
 import type { UiState } from '../schema';
 import type {
   AlbumFacet,
+  AlbumPage,
   ArtistFacet,
+  ArtistPage,
   Diagnostics,
   EqSettings,
   HistoryStats,
@@ -393,9 +395,9 @@ export class MockBackend {
 
   /**
    * 专辑/艺人聚合（真后端是 SQL GROUP BY，预览从内存曲目里聚合同一形状）。
-   * 与真后端同口径：只含有曲目的条目、按名称排序、上限 500。
+   * 与真后端同口径：只含有曲目的条目、按名称排序、上限 500、响应带 total。
    */
-  libraryAlbums(search?: string): AlbumFacet[] {
+  libraryAlbums(search?: string): AlbumPage {
     const needle = search?.trim().toLowerCase() || null;
     const map = new Map<string, AlbumFacet>();
     for (const t of this.tracks) {
@@ -417,13 +419,13 @@ export class MockBackend {
       f.trackCount += 1;
       f.totalDurationMs += t.durationMs ?? 0;
     }
-    return [...map.values()]
+    const all = [...map.values()]
       .filter((f) => !needle || f.title.toLowerCase().includes(needle))
-      .sort((a, b) => a.title.localeCompare(b.title, 'zh') || a.id.localeCompare(b.id))
-      .slice(0, 500);
+      .sort((a, b) => a.title.localeCompare(b.title, 'zh') || a.id.localeCompare(b.id));
+    return { items: all.slice(0, 500), total: all.length };
   }
 
-  libraryArtists(search?: string): ArtistFacet[] {
+  libraryArtists(search?: string): ArtistPage {
     const needle = search?.trim().toLowerCase() || null;
     const tracks = new Map<string, ArtistFacet>();
     const albums = new Map<string, Set<string>>();
@@ -449,11 +451,11 @@ export class MockBackend {
         set.add(t.albumId);
       }
     }
-    return [...tracks.values()]
+    const all = [...tracks.values()]
       .filter((f) => !needle || f.name.toLowerCase().includes(needle))
       .map((f) => ({ ...f, albumCount: albums.get(f.id)?.size ?? 0 }))
-      .sort((a, b) => a.name.localeCompare(b.name, 'zh') || a.id.localeCompare(b.id))
-      .slice(0, 500);
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh') || a.id.localeCompare(b.id));
+    return { items: all.slice(0, 500), total: all.length };
   }
 
   revealTrack(_trackId: string): RevealResult {

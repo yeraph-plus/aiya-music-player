@@ -828,7 +828,7 @@ ListPage 与 DataTable 的取舍见 §5 B4-2 末尾的决策修订。
 
 | 刀 | commit | 内容 |
 |---|---|---|
-| **B4-3a** | 后端 | `aiya-data` 新增 `facets.rs`：`list_albums`/`list_artists`（GROUP BY 聚合：id/名称/封面/曲目数/总时长/年份/专辑数），只含**实际有曲目**的条目（JOIN tracks，空专辑/无主艺人不出现——点进去是空列表没有意义，与 `library_stats` 的表行数口径允许不一致）。按 `*_norm` 排序、LIKE 按字面转义、上限 500（`FACET_LIMIT`，聚合毫秒级，不需要游标）。**宿主拆两条命令** `library_albums` / `library_artists`，不是草案的一条 `library_facets(kind)`：仓库派发表是命令一一对应的（mock/契约测试按名字对账），一条命令收 kind 再返回带 tag 的 enum，等于把"参数校验+判别联合"两层复杂度压到两端调用点上。ts-rs +2 类型（48），mock 从内存曲目聚合同一形状 |
+| **B4-3a** | 后端 | `aiya-data` 新增 `facets.rs`：`list_albums`/`list_artists`（GROUP BY 聚合：id/名称/封面/曲目数/总时长/年份/专辑数），只含**实际有曲目**的条目（JOIN tracks，空专辑/无主艺人不出现——点进去是空列表没有意义，与 `library_stats` 的表行数口径允许不一致）。按 `*_norm` 排序、LIKE 按字面转义、上限 500（`FACET_LIMIT`，聚合毫秒级，不需要游标）。**宿主拆两条命令** `library_albums` / `library_artists`，不是草案的一条 `library_facets(kind)`：仓库派发表是命令一一对应的（mock/契约测试按名字对账），一条命令收 kind 再返回带 tag 的 enum，等于把"参数校验+判别联合"两层复杂度压到两端调用点上。ts-rs +2 类型（48），mock 从内存曲目聚合同一形状。**审查补丁（2026-10-26）**：响应从裸数组改为 `AlbumPage`/`ArtistPage`（`items` + `total`）——截断不静默，`total > items.length` 时宫格页显示"共 N 个，仅显示前 500"提示；total 用"全量取回后 Rust 侧截断"实现，一条查询出两个数字，不用复制 WHERE 跑第二条 COUNT |
 | **B4-3b** | 浏览+详情 | `AppPage` 8 → 12 值：`albums`/`artists`（宫格浏览页，非列表页）+ `album`/`artist`（详情页，列表页）。**详情页参数复用 `albumId`/`artistId` 筛选字段**，不加 `facetId`：详情页的曲目列表本来就是"曲库查询 + albumId 过滤"（`list.query()` 已从这两个字段取筛选），复用 = 查询/返回栈快照/UiState 持久化三处**零改动**；新字段则三处都要跟着加。`ui.enterFacet()` 与 `enterList` 同清理语义但不能先调它（enterList 会清掉要设的参数）。`stores/facets.svelte.ts`（聚合数据 + 详情页头部查单条）；`views/BrowseView.svelte`（两模式一组件，页内过滤 200ms 防抖 + untrack 防击键触发 effect 直拉）；LibraryView 详情页头部（封面/年份/曲目数/总时长），tab 与筛选 chip 只在内置视图显示（详情页的"筛选"就是页面本身，chip × 会清掉路由参数）。右键菜单「按此艺人/专辑筛选」→「查看艺人/专辑」直达详情页（docs/24 §2 B4 的"半成品→[新]升级"落地）。侧栏一级导航 6 → 8 项（+专辑/艺人） |
 | **B4-3c** | 搜索页 | `AppPage` 12 → 13 值（+`search`）：顶栏搜索落**独立结果页**，不再寄居曲库列表（docs/24 §2 B3"独立结果页"落地）。曲目列表与曲库页**同一条查询路径**（isListPage 含 search、view getter → LIBRARY_VIEW），20 个 props 的 TrackList 接线零复制——搜索页就是 LibraryView 的又一个头部分支 + 曲目列表上方两个聚合卡片段（专辑/艺人各前 8 张，独立 200ms 防抖，`facetQuery` 锁查询词防旧段闪现）。空词显示"输入关键词"提示而不是全库列表 |
 
@@ -1212,7 +1212,7 @@ B6 补设置左栏 scroll-spy 改写与 EQ 预设交互两条）。`check` 0/0�
 | # | 决策 | 结论 | 影响面 |
 |---|---|---|---|
 | 1 | 列表点击语义 | **单击选中、双击播放、Enter 播放**（桌面惯例） | B4。要同步改：行 `onclick` → 选中、`ondblclick` → 播放、`lib/list-keys.ts` 的 Enter 语义、`TrackTable` 与 `QueuePanel` 保守起见只改主列表与首页表格；右键菜单里"播放"仍是显式入口。**风险**：用户已习惯单击播；缓解 = 首行 hover 出播放按钮 + 双击有 150ms 判定延迟，感知上不明显 |
-| 2 | 专辑页 / 艺人页 | **做**，新增后端聚合命令 `library_facets`（专辑/艺人：id、名称、封面、曲目数、总时长、年份）；复用 `library_list` 的 `albumId`/`artistId` 取曲目 | B4 末尾 + 一个后端子步（SQLite `GROUP BY`，与现有一致用游标或一次性返回前 N + 搜索）。路由 `album/:id`、`artist/:id`；侧栏加两个入口。**B4-3 实现记录**：命令拆成 `library_albums`/`library_artists` 两条（理由见 B4-3 章节）；详情页参数复用筛选字段（不加 facetId）；一次性返回前 500，不做游标 |
+| 2 | 专辑页 / 艺人页 | **做**，新增后端聚合命令 `library_facets`（专辑/艺人：id、名称、封面、曲目数、总时长、年份）；复用 `library_list` 的 `albumId`/`artistId` 取曲目 | B4 末尾 + 一个后端子步（SQLite `GROUP BY`，与现有一致用游标或一次性返回前 N + 搜索）。路由 `album/:id`、`artist/:id`；侧栏加两个入口。**B4-3 实现记录**：命令拆成 `library_albums`/`library_artists` 两条（理由见 B4-3 章节）；详情页参数复用筛选字段（不加 facetId）；一次性返回前 500，不做游标；审查补丁后响应带 `total`，截断在宫格页有提示（见 B4-3a） |
 | 3 | EQ 范围 | **含后端一起做**：10 段 biquad + 预设 + 协议 5→6 + 旁路一致性测试 | B5a（UI）+ B5b（Rust DSP）。B5b 必须先跑 `cargo build -p aiya-audio-host`（协议升版铁律） |
 | 4 | FM 电台入口 | **移出一级导航**，等后端 | B3。`RadioView` 暂时保留文件但不注册路由 |
 | 5 | Tailwind | **依赖保留、入口裁剪**（只引 `theme` + `utilities`，不引 preflight，不写 utility） | B0。产物 CSS 下降 ≥3 KB，消除双份 reset；vite 插件与两个 devDependency 留着 |

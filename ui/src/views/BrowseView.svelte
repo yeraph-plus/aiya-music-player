@@ -30,6 +30,9 @@
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
   const rows = $derived(mode === 'artists' ? facets.artists : facets.albums);
+  /** 过滤后总数（后端截断到 500 条；total > rows.length = 还有没画出来的） */
+  const total = $derived(mode === 'artists' ? facets.artistsTotal : facets.albumsTotal);
+  const truncated = $derived(rows !== null && total > rows.length);
 
   $effect(() => {
     // 只追踪 mode：search 变化走 onSearchInput 的显式重拉（防抖控制在那里）。
@@ -57,7 +60,7 @@
   const meta = $derived(
     rows === null
       ? ''
-      : `${rows.length} ${mode === 'artists' ? '位艺人' : '张专辑'}`,
+      : `${rows.length}${truncated ? ` / 共 ${total}` : ''} ${mode === 'artists' ? '位艺人' : '张专辑'}`,
   );
 
   function cardProps(item: AlbumFacet | ArtistFacet): { title: string; subtitle: string; cover: string | null } {
@@ -108,6 +111,11 @@
               : nav.go({ kind: 'album', id: item.id })}
         />
       {/each}
+      {#if truncated}
+        <p class="trunc-hint" role="note">
+          共 {total} 个，仅显示名称最靠前的 {rows.length} 个——用上方搜索框按名称收窄
+        </p>
+      {/if}
     </div>
   {:else if search.trim()}
     <EmptyState title="没有匹配的结果" hint="换个关键词，或清除过滤条件">
@@ -178,5 +186,14 @@
     overflow-y: auto;
     padding-bottom: var(--space-4);
     min-height: 0;
+  }
+
+  /* 截断提示：grid 末尾占满整行 */
+  .trunc-hint {
+    grid-column: 1 / -1;
+    margin: 0;
+    padding: var(--space-2) 0;
+    font-size: var(--fs-sm);
+    color: var(--text-3);
   }
 </style>

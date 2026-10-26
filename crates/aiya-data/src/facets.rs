@@ -33,7 +33,29 @@ use crate::norm::norm;
 
 /// 一次返回的条目上限。浏览页是宫格（一次全画），不是无限列表；
 /// 500 张专辑已远超本地曲库的正常规模，真到这个量级用户该用搜索。
+/// 截断不静默：响应带 `total`（过滤后总数），UI 靠 `total > items.len()` 提示。
 pub const FACET_LIMIT: usize = 500;
+
+/// 专辑浏览响应：截断后的条目 + 过滤后总数。
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumPage {
+    pub items: Vec<AlbumFacet>,
+    /// LIKE 过滤后的总条数（不受 [`FACET_LIMIT`] 截断影响）
+    #[ts(type = "number")]
+    pub total: i64,
+}
+
+/// 艺人浏览响应：形状与 [`AlbumPage`] 同理。
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistPage {
+    pub items: Vec<ArtistFacet>,
+    #[ts(type = "number")]
+    pub total: i64,
+}
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
@@ -92,7 +114,11 @@ fn like_pattern(search: Option<&str>) -> Option<String> {
 }
 
 /// 专辑浏览（按名称排序）。`search` 为空/全空白 = 不过滤。
-pub fn list_albums(conn: &Connection, search: Option<&str>) -> DbResult<Vec<AlbumFacet>> {
+///
+/// total 语义：过滤后**全部**条数；items 是按名称序的前 [`FACET_LIMIT`] 条。
+/// 实现上先取全量再 Rust 侧截断（而不是 SQL LIMIT + 第二条 COUNT）——聚合行
+/// 很小，一万张专辑也就 MB 级，一条查询换两个数字，省掉 WHERE 复制。
+pub fn list_albums(conn: &Connection, search: Option<&str>) -> DbResult<AlbumPage> {
     let like = like_pattern(search);
     let sql = format!(
         "SELECT al.id, al.title, al.artist_id, ar.name, al.year, al.artwork_id, \
@@ -102,8 +128,7 @@ pub fn list_albums(conn: &Connection, search: Option<&str>) -> DbResult<Vec<Albu
          LEFT JOIN artists ar ON ar.id = al.artist_id \
          {} \
          GROUP BY al.id \
-         ORDER BY al.title_norm ASC, al.id ASC \
-         LIMIT {FACET_LIMIT}",
+         ORDER BY al.title_norm ASC, al.id ASC",
         if like.is_some() {
             "WHERE al.title_norm LIKE ?1 ESCAPE '\\'"
         } else {
@@ -128,12 +153,14 @@ pub fn list_albums(conn: &Connection, search: Option<&str>) -> DbResult<Vec<Albu
             total_duration_ms: r.get(7)?,
         });
     }
-    Ok(out)
+    let total = out.len() as i64;
+    out.truncate(FACET_LIMIT);
+    Ok(AlbumPage { items: out, total })
 }
 
 /// 艺人浏览（按名称排序）。`artist_id IS NULL` 的曲目（扫描时没有艺人标签）
 /// 不归属任何条目，不出现在这里——浏览页是"有名有姓"的实体。
-pub fn list_artists(conn: &Connection, search: Option<&str>) -> DbResult<Vec<ArtistFacet>> {
+pub fn list_artists(conn: &Connection, search: Option<&str>) -> DbResult<ArtistPage> {
     let like = like_pattern(search);
     let sql = format!(
         "SELECT ar.id, ar.name, ar.artwork_id, \
@@ -142,8 +169,7 @@ pub fn list_artists(conn: &Connection, search: Option<&str>) -> DbResult<Vec<Art
          JOIN tracks t ON t.artist_id = ar.id \
          {} \
          GROUP BY ar.id \
-         ORDER BY ar.name_norm ASC, ar.id ASC \
-         LIMIT {FACET_LIMIT}",
+         ORDER BY ar.name_norm ASC, ar.id ASC",
         if like.is_some() {
             "WHERE ar.name_norm LIKE ?1 ESCAPE '\\'"
         } else {
@@ -166,7 +192,9 @@ pub fn list_artists(conn: &Connection, search: Option<&str>) -> DbResult<Vec<Art
             total_duration_ms: r.get(5)?,
         });
     }
-    Ok(out)
+    let total = out.len() as i64;
+    out.truncate(FACET_LIMIT);
+    Ok(ArtistPage { items: out, total })
 }
 
 #[cfg(test)]
@@ -199,8 +227,9 @@ mod tests {
         fixtures(&conn);
         let got = list_albums(&conn, None).unwrap();
         // 空专辑（无曲目）不出现
-        assert_eq!(got.len(), 2);
-        let al1 = got.iter().find(|a| a.id == "al1").unwrap();
+        assert_eq!(got.items.len(), 2);
+        assert_eq!(got.total, 2);
+        let al1 = got.items.iter().find(|a| a.id == "al1").unwrap();
         assert_eq!(al1.track_count, 2);
         assert_eq!(al1.total_duration_ms, 611_000);
         assert_eq!(al1.artist.as_deref(), Some("周杰伦"));
@@ -212,14 +241,43 @@ mod tests {
         let conn = open_in_memory().unwrap();
         fixtures(&conn);
         let got = list_artists(&conn, None).unwrap();
-        assert_eq!(got.len(), 2);
-        let a1 = got.iter().find(|a| a.id == "a1").unwrap();
+        assert_eq!(got.items.len(), 2);
+        assert_eq!(got.total, 2);
+        let a1 = got.items.iter().find(|a| a.id == "a1").unwrap();
         assert_eq!(a1.track_count, 2);
         // al3 是空专辑，不计入"有曲目的专辑数"
         assert_eq!(a1.album_count, 1);
-        let a2 = got.iter().find(|a| a.id == "a2").unwrap();
+        let a2 = got.items.iter().find(|a| a.id == "a2").unwrap();
         assert_eq!(a2.track_count, 1);
         assert_eq!(a2.album_count, 1);
+    }
+
+    #[test]
+    fn total_counts_all_matches_even_when_truncated() {
+        // 截断语义：total 是过滤后总数，items 只留前 FACET_LIMIT 条
+        let conn = open_in_memory().unwrap();
+        conn.execute_batch("BEGIN").unwrap();
+        for i in 0..520 {
+            conn.execute(
+                "INSERT INTO albums (id, title, title_norm) VALUES (?1, ?2, ?2)",
+                rusqlite::params![format!("al{i}"), format!("专辑{i:03}")],
+            )
+            .unwrap();
+            // 每张专辑挂一首曲目（JOIN tracks 才可见）；path/path_lower 有唯一约束，逐曲目编号
+            conn.execute(
+                "INSERT INTO tracks (id,title,title_norm,album_id,duration_ms,added_at,path,path_lower,size_bytes,mtime) \
+                 VALUES (?1,'x','x',?2,1,1,?3,?3,1,1)",
+                rusqlite::params![format!("t{i}"), format!("al{i}"), format!("/m/{i}.flac")],
+            )
+            .unwrap();
+        }
+        conn.execute_batch("COMMIT").unwrap();
+        let got = list_albums(&conn, Some("专辑")).unwrap();
+        assert_eq!(got.items.len(), FACET_LIMIT);
+        assert_eq!(got.total, 520);
+        // 截断按名称序：留下的是前 500 条
+        assert_eq!(got.items.first().unwrap().id, "al0");
+        assert_eq!(got.items.last().unwrap().id, "al499");
     }
 
     #[test]
@@ -227,28 +285,28 @@ mod tests {
         let conn = open_in_memory().unwrap();
         fixtures(&conn);
         let got = list_albums(&conn, Some("叶惠")).unwrap();
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].id, "al1");
+        assert_eq!(got.items.len(), 1);
+        assert_eq!(got.items[0].id, "al1");
 
         let got = list_artists(&conn, Some("BEETHOVEN")).unwrap();
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].id, "a2");
+        assert_eq!(got.items.len(), 1);
+        assert_eq!(got.items[0].id, "a2");
     }
 
     #[test]
     fn search_wildcards_are_literal() {
         let conn = open_in_memory().unwrap();
         fixtures(&conn);
-        assert!(list_artists(&conn, Some("周_伦")).unwrap().is_empty());
-        assert!(list_albums(&conn, Some("%叶%")).unwrap().is_empty());
+        assert!(list_artists(&conn, Some("周_伦")).unwrap().items.is_empty());
+        assert!(list_albums(&conn, Some("%叶%")).unwrap().items.is_empty());
     }
 
     #[test]
     fn blank_search_means_no_filter() {
         let conn = open_in_memory().unwrap();
         fixtures(&conn);
-        assert_eq!(list_albums(&conn, Some("   ")).unwrap().len(), 2);
-        assert_eq!(list_artists(&conn, Some("")).unwrap().len(), 2);
-        assert_eq!(list_albums(&conn, None).unwrap().len(), 2);
+        assert_eq!(list_albums(&conn, Some("   ")).unwrap().items.len(), 2);
+        assert_eq!(list_artists(&conn, Some("")).unwrap().items.len(), 2);
+        assert_eq!(list_albums(&conn, None).unwrap().items.len(), 2);
     }
 }
