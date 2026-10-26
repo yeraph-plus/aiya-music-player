@@ -101,7 +101,7 @@
   }
 
   /** 勾选框：点=切换、Shift=连选（与 ctrl+点行的语义不同） */
-  function handleCheck(index: number, event: MouseEvent): void {
+  function handleCheck(index: number, event: MouseEvent | KeyboardEvent): void {
     if (selection.handleCheck(index, event) === 'capped') {
       notify.showToast(`单次最多选择 ${SELECTION_CAP} 首，已截取刚点中的一段`);
     }

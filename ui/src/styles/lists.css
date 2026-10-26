@@ -86,6 +86,43 @@
   font-variant-numeric: tabular-nums;
   text-align: right;
   font-size: 11.5px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+/* ---------------- hover 播放键 ----------------
+ *
+ * 单击=选中（B4-1）之后，行内保留一个直接起播的入口：行 hover 时序号
+ * 换成播放三角。正在播放的行不放（那里是跳动条，位置也不该被抢）。
+ */
+.row .play-btn {
+  display: none;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-1);
+  cursor: pointer;
+  flex: none;
+}
+
+.row .play-btn:hover {
+  background: var(--surface-hover);
+  color: var(--accent-text);
+}
+
+.row:hover .play-btn {
+  display: inline-flex;
+}
+
+.row:hover .idx-num {
+  display: none;
 }
 
 /* ---------------- 多选勾选框 ----------------

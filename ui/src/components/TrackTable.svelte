@@ -28,6 +28,10 @@
     selected: ReadonlySet<string>;
     currentId: string | null;
     onchange: (ids: Set<string>) => void;
+    /**
+     * 播放。**只由双击 / 键盘 Enter 触发**（B4-1 交互语义，与主列表一致）；
+     * 紧凑表是预览性质，不设 hover 播放键。
+     */
     onplay: (index: number) => void;
     onmenu?: (event: MouseEvent, index: number, track: TrackRow) => void;
   }
@@ -72,7 +76,7 @@
    * 统一派发，同一批 handler 之间 `stopPropagation` 不保证顺序。
    * 这里仍然 stop 一次，是为了不把事件继续交给外层的其它委托 handler。
    */
-  function toggle(index: number, event: MouseEvent): void {
+  function toggle(index: number, event: MouseEvent | KeyboardEvent): void {
     event.stopPropagation();
     if (event.shiftKey && anchor >= 0) {
       emit(rangeSelection(anchor, index));
@@ -82,10 +86,32 @@
     }
   }
 
-  function toggleAll(event: MouseEvent): void {
+  function toggleAll(event: MouseEvent | KeyboardEvent): void {
     event.stopPropagation();
     emit(allSelected ? new Set<number>() : selectAll(rows.length));
     anchor = allSelected ? -1 : 0;
+  }
+
+  /**
+   * 点行 = 选中（B4-1 交互语义，与 `TrackList` 一致）。
+   *
+   * 裸点=只选这行（emit 一个全新的 Set，天然"清别的"）、Ctrl=切换、
+   * Shift=连选；**播放只由双击 / Enter 触发**。选择集是 ID（见组件头注释），
+   * 下标只在本表内做锚点。
+   */
+  function rowClick(index: number, event: MouseEvent): void {
+    // 勾选取的是"点勾选框"，不是"点这一行"。Svelte 5 的 click 是委托到根
+    // 节点派发的，`stopPropagation` 拦不住同一批 handler —— 行自己判一次来源才可靠。
+    if ((event.target as HTMLElement | null)?.closest('.tt-check')) return;
+    if (event.shiftKey && anchor >= 0) {
+      emit(rangeSelection(anchor, index));
+    } else if (event.ctrlKey || event.metaKey) {
+      emit(toggleSelection(new Set(selectedIndices), index));
+      anchor = index;
+    } else {
+      emit(new Set([index]));
+      anchor = index;
+    }
   }
 
   function value(row: TrackRow): string {
@@ -112,6 +138,14 @@
         indeterminate={someSelected}
         aria-label={allSelected ? '取消全选' : '全选'}
         disabled={rows.length === 0}
+        onkeydown={(event) => {
+          // 同 TrackList 表头：Space/Enter 拦下来走 toggleAll
+          if (event.key === ' ' || event.key === 'Enter') {
+            event.preventDefault();
+            event.stopPropagation();
+            toggleAll(event);
+          }
+        }}
       >
         {#snippet children({ checked, indeterminate })}
           {#if indeterminate}<Minus size={11} />{:else if checked}<Check size={11} />{/if}
@@ -134,14 +168,14 @@
       class:selected={selected.has(track.id)}
       role="row"
       tabindex="-1"
-      onclick={(event) => {
-        // 勾选取的是"点勾选框"，不是"点这一行"（播放）。Svelte 5 的 click 是
-        // 委托到根节点派发的，`stopPropagation` 拦不住同一批 handler —— 行自己
-        // 判一次来源才可靠。
+      onclick={(event) => rowClick(index, event)}
+      ondblclick={(event) => {
         if ((event.target as HTMLElement | null)?.closest('.tt-check')) return;
         onplay(index);
       }}
       onkeydown={(event) => {
+        // 焦点在行内按钮（勾选框）上时按键归按钮自己（见 TrackList 同款注释）
+        if ((event.target as HTMLElement | null)?.closest('button')) return;
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           onplay(index);
@@ -159,6 +193,15 @@
           class="tt-box"
           checked={selected.has(track.id)}
           aria-label={`选择 ${track.title}`}
+          onkeydown={(event) => {
+            // 同 TrackList：bits-ui 的 Space/Enter 只翻内部 state 不派发 click，
+            // 拦下来走 toggle 统一语义（KeyboardEvent 有 shiftKey，连选不丢）
+            if (event.key === ' ' || event.key === 'Enter') {
+              event.preventDefault();
+              event.stopPropagation();
+              toggle(index, event);
+            }
+          }}
         >
           {#snippet children({ checked })}
             {#if checked}<Check size={11} />{/if}

@@ -785,8 +785,10 @@ export class MockBackend {
   }
 
   setUiState(state: UiState): void {
-    this.uiState = { ...this.uiState, ...state };
-    saveJson('aiya.uiState', this.uiState);
+    // 整体覆盖，不合并 —— 与真后端（setting_set 整键覆盖）同语义。合并的话
+    // 拆页前留下的旧字段（libraryDetail/view）会永远洗不掉（B4-1 e2e 实测）。
+    this.uiState = state;
+    saveJson('aiya.uiState', state);
   }
 
   getSettings(): AppSettings {

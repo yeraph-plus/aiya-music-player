@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, Minus } from '@lucide/svelte';
+  import { Check, Minus, Play } from '@lucide/svelte';
   import { Checkbox } from 'bits-ui';
   import type { TrackRow } from '../lib/ipc';
   import type { TrackSort } from '../lib/query';
@@ -28,11 +28,20 @@
     /** 一次性恢复位置；应用后由父组件置空 */
     restoreScrollTop: number | null;
     playing: boolean;
+    /**
+     * 播放。**只由双击 / hover 播放键 / 键盘 Enter 触发**（B4-1 交互语义，
+     * docs/24 §6）：单击的职责是选中，与"点一下就切歌"的旧行为区分 ——
+     * 单击播放时用户没法先"看一眼再操作"，也和多选模型打架。
+     */
     onplay: (index: number) => void;
-    /** Ctrl / Shift / ⌘ 点击时走选择而不是播放 */
+    /**
+     * 选中。裸点、Ctrl、Shift **都走这里**（语义差别在
+     * `selection.handleSelect` 内部分流）：裸点=只选这行、Ctrl=切换、
+     * Shift=连选。
+     */
     onselect: (index: number, event: MouseEvent | KeyboardEvent) => void;
-    /** 勾选框：点=切换、Shift=连选（与 ctrl+点击的语义不同） */
-    oncheck: (index: number, event: MouseEvent) => void;
+    /** 勾选框：点=切换、Shift=连选（与 ctrl+点击的语义不同）；键盘 Space/Enter 也走这里 */
+    oncheck: (index: number, event: MouseEvent | KeyboardEvent) => void;
     /** 表头三态全选 */
     oncheckall: () => void;
     onmenu: (event: MouseEvent, index: number, track: TrackRow | null) => void;
@@ -189,6 +198,14 @@
         indeterminate={someSelected}
         aria-label={allSelected ? '取消全选' : '全选'}
         disabled={total === 0}
+        onkeydown={(event) => {
+          // 同行内勾选框：Space/Enter 拦下来走 oncheckall（键盘全选与模型同步）
+          if (event.key === ' ' || event.key === 'Enter') {
+            event.preventDefault();
+            event.stopPropagation();
+            oncheckall();
+          }
+        }}
       >
         {#snippet children({ checked, indeterminate })}
           {#if indeterminate}<Minus size={11} />{:else if checked}<Check size={11} />{/if}
@@ -228,20 +245,29 @@
           tabindex="0"
           onpointerdown={(event) => handlePointerDown(event, row.index)}
           onclick={(event) => {
-            // 拖拽激活后松手会派发一次残留 click，吞掉避免误播放
+            // 拖拽激活后松手会派发一次残留 click，吞掉避免误选中
             if (consumeClickSuppressed()) {
               event.stopPropagation();
               return;
             }
-            // 勾选列里的点击不是"播放"。**这个判断不能省**：Svelte 5 把 click
-            // 委托到根节点统一派发，`stopPropagation` 拦不住同一批委托 handler，
-            // 所以由行自己认出"点的是勾选框"才是可靠的那道闸。
-            if ((event.target as HTMLElement | null)?.closest('.check')) return;
-            if (event.ctrlKey || event.metaKey || event.shiftKey) onselect(row.index, event);
-            else onplay(row.index);
+            // 勾选列与 hover 播放键里的点击不是"选中这一行"。**这个判断不能省**：
+            // Svelte 5 把 click 委托到根节点统一派发，`stopPropagation` 拦不住
+            // 同一批委托 handler，所以由行自己认出点击来源才是可靠的那道闸。
+            if ((event.target as HTMLElement | null)?.closest('.check, .play-btn')) return;
+            // 裸点/Ctrl/Shift 全部交给 onselect，语义在 store 里分流
+            onselect(row.index, event);
+          }}
+          ondblclick={(event) => {
+            // 双击 = 播放。前面的两次单击各自选中过一次（幂等），无害。
+            if ((event.target as HTMLElement | null)?.closest('.check, .play-btn')) return;
+            onplay(row.index);
           }}
           onkeydown={(event) => {
-            // 键盘与鼠标单击同语义：Enter/Space 播放（选择走 Ctrl/Shift+点击或全局快捷键）
+            // 焦点在行内的按钮（勾选框 / 播放键）上时，Enter/Space 归按钮自己：
+            // 行级 preventDefault 会把按钮的原生激活吃掉，变成"按空格勾选
+            // 框却切了歌"。
+            if ((event.target as HTMLElement | null)?.closest('button')) return;
+            // 键盘与双击同语义：Enter/Space 播放
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault();
               onplay(row.index);
@@ -260,6 +286,18 @@
               class="tt-box"
               checked={selection.has(row.index)}
               aria-label={`选择第 ${row.index + 1} 行`}
+              onkeydown={(event) => {
+                // bits-ui 的 Checkbox 收到 Space/Enter 只翻**内部** state、不派发
+                // click（实测：data-state 翻成 checked 而选择集没动）→ 键盘勾选
+                // 与模型分叉，下一次渲染又被受控 prop 拉回，看起来"勾上了自己掉"。
+                // 拦下来走 oncheck 统一语义；KeyboardEvent 同样有 shiftKey/ctrlKey，
+                // Shift 连选不丢。preventDefault 同时拦掉原生 click 与 bits-ui 内部翻转。
+                if (event.key === ' ' || event.key === 'Enter') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  oncheck(row.index, event);
+                }
+              }}
             >
               {#snippet children({ checked })}
                 {#if checked}<Check size={11} />{/if}
@@ -272,7 +310,17 @@
                 <i></i><i></i><i></i>
               </span>
             {:else}
-              {row.index + 1}
+              <!-- hover 播放键：单击语义改成"选中"之后，行内保留一个直接起播的
+                   入口（不想练双击的用户用它）。display 由 CSS 在行 hover 时切换。 -->
+              <button
+                class="play-btn"
+                tabindex="-1"
+                aria-label={`播放 ${row.track.title}`}
+                onclick={() => onplay(row.index)}
+              >
+                <Play size={11} />
+              </button>
+              <span class="idx-num">{row.index + 1}</span>
             {/if}
           </span>
           {#if row.track.artworkId}

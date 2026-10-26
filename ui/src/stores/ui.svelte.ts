@@ -5,11 +5,44 @@ import { DEFAULT_SETTINGS } from '../lib/settings';
 import { ipc, type DynamicJson } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
 import { devValidate, settingsSchema, uiStateSchema, type UiState } from '../lib/ipc/schema';
-import { LIBRARY_VIEW, parseViewKey, viewKey, type View } from '../lib/view';
+import {
+  LIBRARY_VIEW,
+  MOST_PLAYED_VIEW,
+  RECENT_VIEW,
+  parseViewKey,
+  type View,
+} from '../lib/view';
 import { readLook } from '../lib/look';
 import { notify } from './notify.svelte';
 
-export type AppPage = 'home' | 'nowPlaying' | 'radio' | 'settings';
+/**
+ * 一级路由。**8 值**，每个值对应 `App.svelte` 里的一个分支（docs/24 §3.2）。
+ *
+ * 2026-10-26 B4-1 拆页：此前是 `home | nowPlaying | radio | settings` 四个值，
+ * 六个列表视图全都寄居在 `home` 上，靠 `libraryDetail: boolean` + `view` 两个
+ * 字段拼出"我现在到底在哪"——`App.svelte` 里那句
+ * `{#if ui.page === 'home'}{#if ui.libraryDetail}<LibraryView/>{:else}<HomeView/>`
+ * 就是这个双字段组合的化石。列表视图升级成一级值之后，`libraryDetail` 删掉，
+ * 那句嵌套判断变成一行一个分支。
+ *
+ * `playlist` 是唯一带参数的路由，参数在 `ui.playlistId`。
+ */
+export type AppPage =
+  | 'home'
+  | 'library'
+  | 'recent'
+  | 'mostPlayed'
+  | 'playlist'
+  | 'nowPlaying'
+  | 'settings'
+  | 'radio';
+
+/** 哪些路由是"列表页"（共用 `ListStore` 的查询与虚拟列表） */
+export function isListPage(page: AppPage): boolean {
+  return (
+    page === 'library' || page === 'recent' || page === 'mostPlayed' || page === 'playlist'
+  );
+}
 
 /**
  * 界面状态 store：视图、搜索排序、筛选、队列抽屉、设置、诊断。
@@ -27,11 +60,44 @@ export type AppPage = 'home' | 'nowPlaying' | 'radio' | 'settings';
  * 其余命令的返回值都由 Rust 生成类型，不再二次校验。
  */
 class UiStore {
-  view = $state<View>(LIBRARY_VIEW);
   page = $state<AppPage>('home');
-  /** 首页内部是仪表盘还是完整曲目列表；与四个一级页面分开持久化 */
-  libraryDetail = $state(false);
+  /** `page === 'playlist'` 时的参数。其余路由下无意义（保留旧值，返回时才清） */
+  playlistId = $state<string | null>(null);
   queueOpen = $state(false);
+
+  /**
+   * 当前列表视图（`list.query()` 用它算 `source`）。
+   *
+   * **是 getter，不是独立状态**：拆页之前 `page` / `libraryDetail` / `view`
+   * 三个字段各自可写，能拼出"page=home、libraryDetail=true、view=playlist"
+   * 这种自相矛盾的组合，而每个读它们的地方都只检查其中两个。现在
+   * `page`（+ `playlistId`）是唯一真相，`view` 由它派生 —— 想改路由只能
+   * 走 `enterList` / `setView` / `openPage`。
+   *
+   * 返回值**引用稳定**：同一个路由永远拿到同一个对象。否则 `$derived(ui.view)`
+   * 这类写法每次求值都得到新对象，下游按引用做记忆的地方会白算一遍。
+   */
+  get view(): View {
+    switch (this.page) {
+      case 'library':
+        return LIBRARY_VIEW;
+      case 'recent':
+        return RECENT_VIEW;
+      case 'mostPlayed':
+        return MOST_PLAYED_VIEW;
+      case 'playlist': {
+        const id = this.playlistId ?? '';
+        if (this.playlistView?.id !== id) this.playlistView = { kind: 'playlist', id };
+        return this.playlistView;
+      }
+      default:
+        // 非列表页：查询没有意义，给一个稳定的兜底（不必是当前路由）
+        return LIBRARY_VIEW;
+    }
+  }
+
+  /** `playlist` 视图的缓存对象，保证 getter 引用稳定 */
+  private playlistView: { kind: 'playlist'; id: string } | null = null;
   /**
    * 列表行高（px）。**不是设置项**，是 `--row-h` 的运行时镜像 ——
    * 虚拟列表要一个数字，而唯一出处是 CSS（见 `lib/look.ts: readRowHeight`）。
@@ -96,9 +162,8 @@ class UiStore {
         scrollTop: Math.round(this.scrollTop),
         artistId: this.artistId,
         albumId: this.albumId,
-        view: viewKey(this.view),
         page: this.page,
-        libraryDetail: this.libraryDetail,
+        playlistId: this.playlistId,
       };
       // 视图状态丢失不影响可用性，失败只记日志（别打断滚动）
       void ipc.app.setUiState(state as DynamicJson).catch((e) => {
@@ -112,14 +177,34 @@ class UiStore {
     this.saveTimer.clear();
   }
 
+  /**
+   * 还原 UiState。**要兼容拆页之前的旧文件**（docs/24 §3.2）。
+   *
+   * 旧形状是 `page: 'home'|'nowPlaying'|'radio'|'settings'` + `libraryDetail`
+   * + `view: 'library'|'recent'|'mostPlayed'|'playlist:xxx'`。旧文件里
+   * `page` 恒为 `home` 也可能表示六个列表视图之一，所以**不能**只看 `page`：
+   * 先认新字段，缺了再按旧字段换算。换算错的表现是"重启后回到首页、
+   * 用户以为丢了位置"，不报错，只会被当成玄学。
+   */
   restore(data: UiState): void {
     if (data.sort) this.sort = data.sort;
     if (data.direction) this.direction = data.direction;
     this.artistId = data.artistId ?? null;
     this.albumId = data.albumId ?? null;
-    this.page = data.page ?? 'home';
-    this.libraryDetail = data.libraryDetail ?? false;
-    this.view = parseViewKey(data.view);
+
+    if (data.page && data.page !== ('home' as string)) {
+      // 新形状（或旧形状的一级页）
+      this.page = data.page;
+      this.playlistId = data.playlistId ?? null;
+    } else if (data.libraryDetail) {
+      // 旧形状：home + libraryDetail=true 其实是某个列表视图
+      const legacy = parseViewKey(data.view);
+      this.applyView(legacy);
+    } else {
+      this.page = 'home';
+      this.playlistId = null;
+    }
+
     // 启动就落在设置页时**不会**经过 openPage，诊断块会一直空着
     // （显示"正在读取…"直到用户手动点刷新）。这里补一次。
     if (this.page === 'settings') void this.refreshDiagnostics();
@@ -129,6 +214,7 @@ class UiStore {
 
   openPage(page: AppPage): void {
     this.page = page;
+    if (page !== 'playlist') this.playlistId = null;
     this.queueOpen = false;
     this.scheduleUiSave();
     if (page === 'settings') {
@@ -147,14 +233,49 @@ class UiStore {
    *
    * 它**不负责落盘与重载**：调用方决定（搜索每敲一个字都落盘太吵）。
    */
-  enterList(view: View, opts: { detail?: boolean } = {}): void {
-    this.page = 'home';
-    this.libraryDetail = opts.detail ?? true;
+  enterList(view: View): void {
+    this.applyView(view);
     this.search = '';
     this.artistId = null;
     this.albumId = null;
-    this.view = view;
     this.queueOpen = false;
+  }
+
+  /**
+   * 回首页仪表盘。清理语义与 `enterList` 一致（首页不是列表页，但它同样是
+   * "用户主动导航到别处"，旧搜索词不该跟着 —— 否则回去看到的是"首页 +
+   * 一个还在生效的搜索框"）。
+   */
+  enterHome(): void {
+    this.page = 'home';
+    this.playlistId = null;
+    this.search = '';
+    this.artistId = null;
+    this.albumId = null;
+    this.queueOpen = false;
+  }
+
+  /**
+   * 只换视图，**不动**搜索/筛选/队列抽屉。
+   *
+   * `enterList` 清三样是因为它代表"用户主动导航到某处"（从别的地方点进来，
+   * 旧筛选不该跟着）。但有两类调用方不是这个语义：
+   * - `playlists.refresh()` 发现当前歌单已被删掉 → 退回曲库，此时不该
+   *   顺手把用户的搜索词也清掉；
+   * - `playlists.play()` 先切视图再 playlist 整列表起播 → 同一个动作内部，
+   *   清筛选会把"按当前筛选播放"变成"播放全部"。
+   *
+   * 拆页之前这两处直接写 `ui.view = ...`，绕过了 enterList 的清理 —— 行为
+   * 看着对，但那是因为**清理逻辑当时不在同一个字段上**。现在 `view` 没有
+   * setter，语义差异必须是两个方法，不能靠"有的地方绕过"。
+   */
+  setView(view: View): void {
+    this.applyView(view);
+  }
+
+  private applyView(view: View): void {
+    this.page = view.kind;
+    this.playlistId = view.kind === 'playlist' ? view.id : null;
   }
 
   toggleQueue(): void {

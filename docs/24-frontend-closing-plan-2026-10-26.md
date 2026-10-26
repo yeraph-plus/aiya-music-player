@@ -763,16 +763,66 @@ B3a 的 6 条真窗口实测重跑一遍全过；Dock 在窄窗下的收纳规�
 
 ### B4 主体页面收敛
 
-- **点击语义切换**：单击选中、双击播放、Enter 播放（§6 决策 1）
-- 路由拆页（`library`/`recent`/`mostPlayed`/`playlist` 独立，删 `libraryDetail`）
-- `ListPage` 骨架（Header/Toolbar/StatusBar）+ `DataTable`
-- 虚拟化抽 `lib/create-virtual-window.svelte.ts`（TrackList/QueuePanel 共用）
-- 勾选语义抽 `lib/row-selection.ts`（下标版 / ID 版两个实现，接口一致）
-- BatchBar 单点渲染（AppShell），删 HomeView 那份
-- 搜索结果页；**专辑页 / 艺人页**（配 `library_facets` 后端小步，§6 决策 2）
+#### B4-1 路由拆页 + 点击语义 ✅ 已完成（2026-10-26）
 
-验收：`components/TrackList.svelte` + `TrackTable.svelte` 行数下降 ≥40%；批量动作只有一处实现；
-6 个列表页视觉同构（同一骨架截图对比）；双击播放与单击选中互不串（各点 5 次无一次误触）。
+先拆两件互相纠缠的事：路由（决定"我在哪"）与点击（决定"点行是什么"）。
+
+##### 路由拆页：`page` 4 值 → 8 值，`view` 变 getter
+
+| 项 | 改动 |
+|---|---|
+| `AppPage` | `home\|nowPlaying\|radio\|settings` → **8 值**（+`library`/`recent`/`mostPlayed`/`playlist`），`isListPage()` 辅助 |
+| `ui.svelte.ts` | 删 `libraryDetail` 与 `view` 可写字段；**`view` 改为 getter**（由 `page`+`playlistId` 派生，单真相）。新增 `enterList` / `setView` / `enterHome` 三入口，语义差异写在注释里 |
+| `view.ts` | `LIBRARY_VIEW` / `RECENT_VIEW` / `MOST_PLAYED_VIEW` 单例常量 + `builtinView(kind)` —— getter 返回值**引用必须稳定**，否则下游按引用记忆的地方白算 |
+| `nav.svelte.ts` | 快照从三字段（page/libraryDetail/view）减到两字段；`isCurrent` 从三字段组合退化为相等比较 |
+| `schema.ts` | `UiState.page` 扩成 8 值 + `playlistId`；旧 `view`/`libraryDetail` 保留**只读**（迁移用，不再写回） |
+| `App.svelte` | `{#if libraryDetail}` 化石删除；四个列表页共用 `LibraryView`（本来就是同一套列表，只是数据源不同） |
+| 迁移 | `restore()` 兼容旧文件：`page !== 'home'` 走新形状；否则按 `libraryDetail`+`view` 换算。**换算错的表现是"重启回首页"，不报错**，所以 e2e 拿真实 localStorage 种子回放 |
+
+**e2e 探针升级常驻 `route.spec.ts`（5 条）**：旧形状三种回放（歌单/最近播放/首页）+ 新形状往返落盘 + 八值路由逐个可达且**侧栏高亮恰好一个**。途中顺带修一个 mock 契约偏差：
+
+> `mock/backend.ts` 的 `setUiState` 原来是 `{...旧, ...新}` **合并写**，真后端是 `setting_set` 整键**覆盖**
+> —— 合并的话拆页前的 `libraryDetail`/`view` 在 mock 里永远洗不掉（e2e 实测抓到）。已改整体覆盖。
+
+##### 点击语义：单击选中 / 双击播放 / hover 播放键（§6 决策 1 落地）
+
+| 组件 | 新行为 |
+|---|---|
+| `TrackList` | 裸点=选中（清别的）、Ctrl=切换、Shift=连选（全部走 `selection.handleSelect`，修饰键分流在 store 内部）；**双击=播放**；Enter/Space=播放；行 hover 时序号换播放键（正在播放的行保留跳动条不放） |
+| `TrackTable` | 同语义；紧凑表是预览性质，**不设 hover 播放键** |
+| `QueuePanel` | 不动（队列单击即播是惯例） |
+| 勾选框 | 语义不变（点=累加切换、Shift=连选），**但键盘修了一个真 bug**（见下） |
+
+**⚠️ 真 bug：勾选框键盘操作与选择集分叉（既有问题，本批修）**
+
+实测：焦点在 `Checkbox.Root` 上按 Space，`data-state` 翻成 `checked`，但 **bits-ui 只翻内部 state、不派发 click**
+→ 包装层的 `oncheck` 没跑 → 选择集没动 → 下一次渲染被受控 prop 拉回，用户看到"勾上了又自己掉"。
+更早的版本里行级 `keydown` 还会 `preventDefault + onplay`，等于"按空格勾选框却切了歌"。
+
+修法：`Checkbox.Root` 上拦 `Space/Enter` → `preventDefault + stopPropagation + oncheck(index, event)`。
+`KeyboardEvent` 同样有 `shiftKey`/`ctrlKey`，Shift 连选不丢。四处（TrackList 行内+表头、TrackTable 行内+表头）同修；
+`handleCheck`/`toggle`/`toggleAll` 签名放宽为 `MouseEvent | KeyboardEvent`。
+
+**实测（vite preview 产物 + Playwright，含临时探针验后删除）**
+
+| 门槛 | 结果 |
+|---|---|
+| `npm run check` | 0 / 0 |
+| `check:deps` | 0 环（94 模块 / **301** 条内部依赖） |
+| e2e | **11/11**（smoke 6 + route 5；smoke 两处 `firstRow.click()` → `dblclick()`） |
+| 单击/多选 | 裸点=单选且**不播放**（footer 仍"未在播放"、批量条出现）；Ctrl 追加两行同 selected；再裸点第三行清掉前两行 |
+| 双击/hover | hover 出播放键且序号隐藏；点播放键起播（footer 出歌名时长）；双击换歌（薄荷变奏→薄荷的信） |
+| 勾选框 | 鼠标点=累加（勾第二行第一行不掉）；键盘 Space 勾选后 `class` 与 `data-state` **同步**为 checked，且不触发播放、当前曲不变 |
+| 首页紧凑表 | 单击 selected → footer 未播放；双击起播 |
+| 运行时 | console error 0 / pageerror 0 |
+
+| 产物 | B3b-3 后 | B4-1 后 |
+|---|---|---|
+| CSS | 46 844 B | 47 254 B（hover 播放键 + 单例视图注释无 CSS 变化，+410 B 为 `.play-btn` 与迁移样式） |
+| JS 合计 | 520 856 B | **526 982 B**（index 407 718 + settings 95 265 + mock 19 031；+6.1 kB 为路由 getter/迁移/交互逻辑） |
+
+**剩余（归 B4-2/B4-3）**：`ListPage` 骨架 + `DataTable`、虚拟化抽公共、勾选语义抽公共、
+BatchBar 单点渲染、搜索结果页、专辑/艺人页（配 `library_facets`）。
 
 ### B5 播放区与 EQ（含后端子批）
 

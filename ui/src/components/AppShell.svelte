@@ -13,7 +13,7 @@
   import { player } from '../stores/player.svelte';
   import { playlists } from '../stores/playlists.svelte';
   import { selection } from '../stores/selection.svelte';
-  import { ui } from '../stores/ui.svelte';
+  import { isListPage, ui } from '../stores/ui.svelte';
 
   type Props = { children: Snippet };
   let { children }: Props = $props();
@@ -57,7 +57,7 @@
     </div>
   </main>
 
-  {#if ui.page === 'home' && ui.libraryDetail && selection.size > 0}
+  {#if isListPage(ui.page) && selection.size > 0}
     <BatchBar
       count={selection.size}
       playlists={playlists.items}

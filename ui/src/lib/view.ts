@@ -14,7 +14,13 @@ export type View =
   | { kind: 'mostPlayed' }
   | { kind: 'playlist'; id: string };
 
+/**
+ * 单例视图对象。**必须是常量**：`ui.view` 是 getter，每次求值都重建对象的话，
+ * 依赖它做记忆的下游（`$derived`、`TrackWindow` 的补页判断）会白算。
+ */
 export const LIBRARY_VIEW: View = { kind: 'library' };
+export const RECENT_VIEW: View = { kind: 'recent' };
+export const MOST_PLAYED_VIEW: View = { kind: 'mostPlayed' };
 
 export function viewKey(view: View): string {
   return view.kind === 'playlist' ? `playlist:${view.id}` : view.kind;
@@ -27,6 +33,13 @@ export function parseViewKey(key: string | undefined | null): View {
     const id = key.slice('playlist:'.length);
     return id ? { kind: 'playlist', id } : LIBRARY_VIEW;
   }
+  return LIBRARY_VIEW;
+}
+
+/** 三个内置列表视图的单例（按 kind 取，避免调用点各写一份对象字面量） */
+export function builtinView(kind: 'library' | 'recent' | 'mostPlayed'): View {
+  if (kind === 'recent') return RECENT_VIEW;
+  if (kind === 'mostPlayed') return MOST_PLAYED_VIEW;
   return LIBRARY_VIEW;
 }
 

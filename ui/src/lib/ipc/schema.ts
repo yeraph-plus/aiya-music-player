@@ -50,8 +50,14 @@ export const uiStateSchema = z
     scrollTop: z.number().optional(),
     artistId: z.string().nullable().optional(),
     albumId: z.string().nullable().optional(),
+    /** 一级路由（B4-1 拆页后 8 值）。旧文件的 `home` 仍合法 */
+    page: z
+      .enum(['home', 'library', 'recent', 'mostPlayed', 'playlist', 'nowPlaying', 'settings', 'radio'])
+      .optional(),
+    /** `page === 'playlist'` 的参数 */
+    playlistId: z.string().nullable().optional(),
+    /** 拆页（2026-10-26）之前的两个字段：只在新字段缺失时用于换算，不再写回 */
     view: z.string().optional(),
-    page: z.enum(['home', 'nowPlaying', 'radio', 'settings']).optional(),
     libraryDetail: z.boolean().optional(),
   })
   .passthrough();

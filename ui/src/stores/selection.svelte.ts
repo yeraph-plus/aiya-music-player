@@ -19,6 +19,12 @@ class SelectionStore {
   }
 
   /**
+   * 点行 / Ctrl / Shift 点行统一入口（B4-1 交互语义）。
+   *
+   * 裸点=只选这一行（清掉别的）、Ctrl=切换、Shift=连选；**裸点不再播放** ——
+   * 播放归双击 / hover 播放键 / Enter。与 `handleCheck` 分开是因为语义不同：
+   * 点行是"把注意力给这一行"（裸点清掉别的），勾选框是"往集合里加减"。
+   *
    * @returns 'capped' 表示触发单次上限、已截取（调用方据此提示）
    */
   handleSelect(index: number, event: MouseEvent | KeyboardEvent): 'capped' | 'ok' {
@@ -54,12 +60,10 @@ class SelectionStore {
   /**
    * 点勾选框：**不加修饰键也是"切换"**，不是"只选这一行"。
    *
-   * 与 `handleSelect` 分开是因为语义不同：点行本身是"播放"，按住 Ctrl
-   * 点行是"把这一行加进选择集"（裸点要清掉别的）；而**勾选框**的常规
-   * 预期是逐条累加，清空请用表头或批量条的 ✕。两套混在一起的症状是
-   * "勾第二首时第一首自己掉了"。
+   * 勾选框的常规预期是逐条累加，清空请用表头或批量条的 ✕。两套混在一起
+   * 的症状是"勾第二首时第一首自己掉了"。
    */
-  handleCheck(index: number, event: MouseEvent): 'capped' | 'ok' {
+  handleCheck(index: number, event: MouseEvent | KeyboardEvent): 'capped' | 'ok' {
     if (event.shiftKey) {
       const start = this.anchor < 0 ? this.selectedIndex : this.anchor;
       const span = Math.abs(index - start) + 1;

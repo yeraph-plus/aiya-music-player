@@ -64,17 +64,20 @@
     },
   ] as const;
 
-  /** 判定"当前在哪"：曲库三项与首页共用 `page === 'home'`，只能靠 view 区分 */
+  /**
+   * 判定"当前在哪"。
+   *
+   * B4-1 拆页后一项一个路由值，直接比 `page` 就行 —— 拆页前这里要写
+   * `page === 'home' && libraryDetail && view.kind === key`，因为四个列表视图
+   * 全挤在 `home` 上。判断从"三个字段的组合"退化成一个相等比较，是拆页
+   * 顺带赚到的可读性。
+   */
   function isActive(key: (typeof PAGES)[number]['key']): boolean {
-    if (key === 'home') return ui.page === 'home' && !ui.libraryDetail;
-    if (key === 'library' || key === 'recent' || key === 'mostPlayed') {
-      return ui.page === 'home' && ui.libraryDetail && ui.view.kind === key;
-    }
     return ui.page === key;
   }
 
   function playlistActive(id: string): boolean {
-    return ui.page === 'home' && ui.libraryDetail && ui.view.kind === 'playlist' && ui.view.id === id;
+    return ui.page === 'playlist' && ui.playlistId === id;
   }
 
   const stats = $derived(library.stats);

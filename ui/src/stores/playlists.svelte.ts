@@ -46,7 +46,9 @@ class PlaylistsStore {
   async refresh(): Promise<void> {
     await library.loadPlaylists();
     const view = ui.view;
-    if (view.kind === 'playlist' && !this.byId(view.id)) ui.view = LIBRARY_VIEW;
+    // setView 而不是 enterList：这里只是"当前歌单没了"的兜底，
+    // 不该顺手清掉用户的搜索词与筛选（拆页前直接写 ui.view 恰好绕过了清理）
+    if (view.kind === 'playlist' && !this.byId(view.id)) ui.setView(LIBRARY_VIEW);
   }
 
   /** 新建。成功返回新 id（调用方可能要跳过去），失败返回 null */
@@ -92,7 +94,7 @@ class PlaylistsStore {
     }
     await this.refresh();
     if (wasViewing) {
-      ui.view = LIBRARY_VIEW;
+      ui.setView(LIBRARY_VIEW);
       await list.reload();
     }
     notify.showToast(`已删除「${playlist.name}」`);
@@ -150,7 +152,7 @@ class PlaylistsStore {
   async play(playlist: PlaylistSummary): Promise<void> {
     // 不用 this.open()：那里面 reload 是 fire-and-forget，而这里必须先
     // 等列表换成该歌单的内容，否则 playAll 播的是上一个视图的歌
-    ui.view = { kind: 'playlist', id: playlist.id };
+    ui.setView({ kind: 'playlist', id: playlist.id });
     await list.reload();
     await list.playAll();
   }

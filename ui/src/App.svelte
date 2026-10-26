@@ -35,7 +35,7 @@
   import { notify } from './stores/notify.svelte';
   import { player } from './stores/player.svelte';
   import { lyrics } from './stores/lyrics.svelte';
-  import { ui } from './stores/ui.svelte';
+  import { isListPage, ui } from './stores/ui.svelte';
 
   /**
    * Kit 演示页只在 dev 构建里可达：`?page=kit`。
@@ -149,10 +149,18 @@
 -->
 <Tooltip.Provider delayDuration={400} skipDelayDuration={300}>
   <AppShell>
+    <!--
+      一名一路由。拆页（B4-1）之前这里是 `page === 'home'` 外面再套一层
+      `libraryDetail`，六个列表视图全靠一个 boolean 区分；现在四个列表页
+      共用 `LibraryView`（它们本来就是同一套列表，只是数据源不同），
+      路由值直接决定渲染谁。
+    -->
     {#if showKit}
       <KitView />
     {:else if ui.page === 'home'}
-      {#if ui.libraryDetail}<LibraryView />{:else}<HomeView />{/if}
+      <HomeView />
+    {:else if isListPage(ui.page)}
+      <LibraryView />
     {:else if ui.page === 'nowPlaying'}
       <NowPlayingView />
     {:else if ui.page === 'radio'}

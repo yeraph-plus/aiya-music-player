@@ -97,9 +97,10 @@ test('导航链：曲库 → 工具条切最近播放 → 顶栏返回', async (
   await expect(page.getByRole('button', { name: '返回上一页' })).toBeDisabled();
 });
 
-test('播放链路：点行播放 → 播放条与队列激活行', async ({ page }) => {
+test('播放链路：双击行播放 → 播放条与队列激活行', async ({ page }) => {
   await openLibrary(page);
-  await firstRow(page).click();
+  // B4-1 交互语义：单击=选中，双击=播放
+  await firstRow(page).dblclick();
   // 播放条出歌名与时长（mock 的 playTracks → 状态广播 → store → 渲染）
   await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
   await expect(page.locator('footer')).toContainText(/\d+:\d{2}/);
@@ -132,7 +133,7 @@ test('设置页：标题与工具条分两行 + 区块 tab + 主题切换生效'
 
 test('正在播放页：开启频谱后出现 pro 五形态 chip', async ({ page }) => {
   await openLibrary(page);
-  await firstRow(page).click();
+  await firstRow(page).dblclick();
   await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
 
   // 频谱默认关（settings.ts：不订阅 tap，保持最简出口路径），先到设置页开
