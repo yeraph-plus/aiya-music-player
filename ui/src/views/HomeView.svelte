@@ -2,6 +2,7 @@
   import { ArrowRight, Clock3, Flame, LibraryBig, ListMusic, Sparkles } from '@lucide/svelte';
   import Header from '../components/content/Header.svelte';
   import Button from '../components/ui/Button.svelte';
+  import InlineError from '../components/ui/InlineError.svelte';
   import TrackTable from '../components/TrackTable.svelte';
   import type { TrackRow } from '../lib/ipc';
   import type { TrackSource } from '../lib/query';
@@ -94,7 +95,7 @@
     {/snippet}
   </Header>
 
-  {#if loadError}<div class="error">{loadError}</div>{/if}
+  {#if loadError}<InlineError message={loadError} ondismiss={() => (loadError = '')} />{/if}
 
   <section class="home-section">
     <div class="section-heading">

@@ -3,6 +3,7 @@
   import PlayerBar from './shell/PlayerBar.svelte';
   import Sidebar from './shell/Sidebar.svelte';
   import TitleBar from './shell/TitleBar.svelte';
+  import InlineError from './ui/InlineError.svelte';
   import QueuePanel from './QueuePanel.svelte';
   import BatchBar from './BatchBar.svelte';
   import { errorMessage } from '../lib/errors';
@@ -35,16 +36,15 @@
 
   <main class="main">
     {#if notify.error}
-      <div class="error" aria-live="assertive">
-        {notify.error}
-        <button class="link" onclick={() => notify.clearError()}>关闭</button>
-      </div>
+      <!-- 阻断类错误：没有可自救动作，只有「关闭」（InlineError 的两类之一） -->
+      <InlineError message={notify.error} ondismiss={() => notify.clearError()} />
     {/if}
     {#if playerState?.status === 'error' && playerState.error}
-      <div class="error">
-        《{playerState.current?.title ?? '未知曲目'}》{playerState.error.message}
-        <button class="link" onclick={() => player.next()}>跳到下一首</button>
-      </div>
+      <!-- 可重试类错误：动作是「跳到下一首」，用户不用离开当前页 -->
+      <InlineError
+        message={`《${playerState.current?.title ?? '未知曲目'}》${playerState.error.message}`}
+        action={{ label: '跳到下一首', onclick: () => player.next() }}
+      />
     {/if}
 
     <div class="page-content">

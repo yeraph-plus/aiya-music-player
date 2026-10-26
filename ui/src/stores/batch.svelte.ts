@@ -91,7 +91,7 @@ class BatchStore {
     }
   }
 
-  /** 选中项加入歌单（不关批量条之前的确认由 `PlaylistPicker` 承担） */
+  /** 选中项加入歌单（「添加到播放列表」对话框在 OverlayHost，见 docs/24 B6） */
   async addTo(playlistId: string): Promise<void> {
     const ids = await this.ids();
     if (ids.length === 0) return;

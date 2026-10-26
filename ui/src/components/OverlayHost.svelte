@@ -1,8 +1,13 @@
 <script lang="ts">
-  import ConfirmDialog from './ConfirmDialog.svelte';
+  import { Plus } from '@lucide/svelte';
+  import type { PlaylistSummary } from '../lib/ipc';
+  import { artworkUrl } from '../lib/artwork';
+  import Button from './ui/Button.svelte';
+  import Cover from './ui/Cover.svelte';
+  import Dialog from './ui/Dialog.svelte';
+  import Field from './ui/Field.svelte';
   import Menu from './ui/Menu.svelte';
-  import PlaylistPicker from './PlaylistPicker.svelte';
-  import PromptDialog from './PromptDialog.svelte';
+  import Toast from './ui/Toast.svelte';
   import { playlistMenuItems, trackMenuItems } from '../lib/menu';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
@@ -83,10 +88,69 @@
       },
     );
   }
+
+  /* ---------------- 五个对话框的状态与提交（B6 删壳后收拢到这里） ---------------- */
+
+  /** 两个输入对话框共用一个文本状态；打开/切换时按语义初始化 */
+  let promptText = $state('');
+  $effect(() => {
+    const d = overlay.dialog;
+    if (d?.kind === 'createPlaylist') promptText = '';
+    else if (d?.kind === 'renamePlaylist') promptText = d.playlist.name;
+  });
+
+  let createInput = $state<HTMLInputElement | null>(null);
+  let renameInput = $state<HTMLInputElement | null>(null);
+  /** 危险对话框的焦点默认落「取消」——回车误确认的代价不可逆（见模板头注释） */
+  let deleteCancelEl = $state<HTMLButtonElement | null>(null);
+  let removeCancelEl = $state<HTMLButtonElement | null>(null);
+
+  function submitPrompt(): void {
+    const value = promptText.trim();
+    if (!value) return;
+    const d = overlay.dialog;
+    if (d?.kind === 'createPlaylist') {
+      const seed = d.seedIds;
+      overlay.closeDialog();
+      void playlists.create(value, seed);
+    } else if (d?.kind === 'renamePlaylist') {
+      const playlist = d.playlist;
+      overlay.closeDialog();
+      void playlists.rename(playlist, value);
+    }
+  }
+
+  function submitDelete(): void {
+    if (overlay.dialog?.kind !== 'deletePlaylist') return;
+    const playlist = overlay.dialog.playlist;
+    overlay.closeDialog();
+    void playlists.remove(playlist);
+  }
+
+  function submitRemoveTracks(): void {
+    if (overlay.dialog?.kind !== 'removeTracks') return;
+    const ids = overlay.dialog.ids;
+    overlay.closeDialog();
+    void list.removeTracks(ids);
+  }
+
+  function submitAddTo(playlistId: string): void {
+    if (overlay.dialog?.kind !== 'addToPlaylist') return;
+    const ids = overlay.dialog.ids;
+    overlay.closeDialog();
+    void playlists.addTracks(playlistId, ids);
+  }
+
+  /** 选择器里的「新建」：带着当前选中的曲目跳到新建对话框（种子曲目不丢） */
+  function pickThenCreate(): void {
+    if (overlay.dialog?.kind !== 'addToPlaylist') return;
+    const ids = overlay.dialog.ids;
+    overlay.dialog = { kind: 'createPlaylist', seedIds: ids };
+  }
 </script>
 
 {#if notify.toast}
-  <div class="toast" aria-live="polite">{notify.toast}</div>
+  <Toast message={notify.toast} />
 {/if}
 
 {#if overlay.trackMenu}
@@ -110,75 +174,159 @@
 {/if}
 
 {#if overlay.dialog?.kind === 'createPlaylist'}
-  <PromptDialog
-    title="新建播放列表"
-    label="名称"
-    confirmText="创建"
-    onconfirm={(name) => {
-      const seed = overlay.dialog?.kind === 'createPlaylist' ? overlay.dialog.seedIds : undefined;
-      overlay.closeDialog();
-      void playlists.create(name, seed);
-    }}
-    oncancel={() => overlay.closeDialog()}
-  />
+  <!--
+    三个对话框（B6 删壳后直接内联，五个分支同住一处的「浮层宿主」才完整）：
+
+    - **焦点默认落「取消」**（deletePlaylist/removeTracks）：危险操作的默认动作
+      必须是"什么都不做"，回车误确认的代价不可逆。靠 autofocus 指定元素实现，
+      不拦 Enter——拦截按键会和浏览器原生激活打架。
+    - **输入框 text 在对话框打开时初始化**（见 script 里的 effect）：value 只在
+      打开那一刻有意义，否则歌单列表刷新会把用户正在输的字覆盖掉。
+    - 「添加到播放列表」**不用 Menu**：选歌单是"看得到每个歌单有几首"的浏览
+      行为，菜单是"我已经知道要点哪一项"的快捷路径，混用两头不像。
+  -->
+  <Dialog title="新建播放列表" description="给歌单起个名字" onclose={() => overlay.closeDialog()}>
+    <div class="prompt-body">
+      <Field
+        label="名称"
+        bind:ref={createInput}
+        value={promptText}
+        maxlength={80}
+        oninput={(next) => (promptText = next)}
+        onenter={submitPrompt}
+      />
+    </div>
+    {#snippet actions()}
+      <Button onclick={() => overlay.closeDialog()}>取消</Button>
+      <Button variant="primary" disabled={!promptText.trim()} onclick={submitPrompt}>创建</Button>
+    {/snippet}
+  </Dialog>
 {:else if overlay.dialog?.kind === 'renamePlaylist'}
-  <PromptDialog
+  <Dialog
     title="重命名播放列表"
-    label="名称"
-    value={overlay.dialog.playlist.name}
-    confirmText="保存"
-    onconfirm={(name) => {
-      if (overlay.dialog?.kind !== 'renamePlaylist') return;
-      const playlist = overlay.dialog.playlist;
-      overlay.closeDialog();
-      void playlists.rename(playlist, name);
-    }}
-    oncancel={() => overlay.closeDialog()}
-  />
-{:else if overlay.dialog?.kind === 'deletePlaylist'}
-  <ConfirmDialog
-    title="删除播放列表"
-    message={`「${overlay.dialog.playlist.name}」会被删除，曲库里的歌曲不受影响。`}
-    confirmText="删除"
-    danger
-    onconfirm={() => {
-      if (overlay.dialog?.kind !== 'deletePlaylist') return;
-      const playlist = overlay.dialog.playlist;
-      overlay.closeDialog();
-      void playlists.remove(playlist);
-    }}
-    oncancel={() => overlay.closeDialog()}
-  />
-{:else if overlay.dialog?.kind === 'removeTracks'}
-  <ConfirmDialog
-    title="从曲库移除"
-    message={`将从曲库移除 ${overlay.dialog.ids.length} 首曲目。磁盘上的文件不会被删除，下次扫描会重新导入。`}
-    confirmText="移除"
-    danger
-    onconfirm={() => {
-      if (overlay.dialog?.kind !== 'removeTracks') return;
-      const ids = overlay.dialog.ids;
-      overlay.closeDialog();
-      void list.removeTracks(ids);
-    }}
-    oncancel={() => overlay.closeDialog()}
-  />
-{:else if overlay.dialog?.kind === 'addToPlaylist'}
-  <PlaylistPicker
-    title="添加到播放列表"
-    count={overlay.dialog.ids.length}
-    playlists={playlists.items}
-    onpick={(playlistId) => {
-      if (overlay.dialog?.kind !== 'addToPlaylist') return;
-      const ids = overlay.dialog.ids;
-      overlay.closeDialog();
-      void playlists.addTracks(playlistId, ids);
-    }}
-    oncreate={() => {
-      if (overlay.dialog?.kind !== 'addToPlaylist') return;
-      const ids = overlay.dialog.ids;
-      overlay.dialog = { kind: 'createPlaylist', seedIds: ids };
-    }}
     onclose={() => overlay.closeDialog()}
-  />
+    autofocus={() => {
+      renameInput?.focus();
+      // 重命名场景是「改已有名字」，全选后直接输入比让用户先删更快
+      renameInput?.select();
+    }}
+  >
+    <div class="prompt-body">
+      <Field
+        label="名称"
+        bind:ref={renameInput}
+        value={promptText}
+        maxlength={80}
+        oninput={(next) => (promptText = next)}
+        onenter={submitPrompt}
+      />
+    </div>
+    {#snippet actions()}
+      <Button onclick={() => overlay.closeDialog()}>取消</Button>
+      <Button variant="primary" disabled={!promptText.trim()} onclick={submitPrompt}>保存</Button>
+    {/snippet}
+  </Dialog>
+{:else if overlay.dialog?.kind === 'deletePlaylist'}
+  <Dialog
+    title="删除播放列表"
+    description={`「${overlay.dialog.playlist.name}」会被删除，曲库里的歌曲不受影响。`}
+    onclose={() => overlay.closeDialog()}
+    autofocus={() => deleteCancelEl?.focus()}
+  >
+    {#snippet actions()}
+      <Button bind:ref={deleteCancelEl} onclick={() => overlay.closeDialog()}>取消</Button>
+      <Button variant="danger" onclick={submitDelete}>删除</Button>
+    {/snippet}
+  </Dialog>
+{:else if overlay.dialog?.kind === 'removeTracks'}
+  <Dialog
+    title="从曲库移除"
+    description={`将从曲库移除 ${overlay.dialog.ids.length} 首曲目。磁盘上的文件不会被删除，下次扫描会重新导入。`}
+    onclose={() => overlay.closeDialog()}
+    autofocus={() => removeCancelEl?.focus()}
+  >
+    {#snippet actions()}
+      <Button bind:ref={removeCancelEl} onclick={() => overlay.closeDialog()}>取消</Button>
+      <Button variant="danger" onclick={submitRemoveTracks}>移除</Button>
+    {/snippet}
+  </Dialog>
+{:else if overlay.dialog?.kind === 'addToPlaylist'}
+  <Dialog
+    title="添加到播放列表"
+    description={`为 ${overlay.dialog.ids.length} 首曲目选择一个播放列表`}
+    width="md"
+    onclose={() => overlay.closeDialog()}
+  >
+    <div class="pick-list">
+      {#each playlists.items as playlist (playlist.id)}
+        <button class="pick-row" onclick={() => submitAddTo(playlist.id)}>
+          <Cover src={playlist.artworkId ? artworkUrl(playlist.artworkId, 96) : null} size="sm" />
+          <span class="pick-name">{playlist.name}</span>
+          <span class="pick-count">{playlist.trackCount} 首</span>
+        </button>
+      {:else}
+        <p class="pick-empty">还没有播放列表，点右下角新建一个。</p>
+      {/each}
+    </div>
+    {#snippet actions()}
+      <Button onclick={() => overlay.closeDialog()}>取消</Button>
+      <Button variant="primary" onclick={pickThenCreate}>
+        {#snippet icon()}<Plus size={13} />{/snippet}
+        新建播放列表
+      </Button>
+    {/snippet}
+  </Dialog>
 {/if}
+
+<style>
+  /* 输入对话框与歌单选择器的主体（原 PromptDialog / PlaylistPicker 的 scoped 样式，
+     B6 删壳后随内联迁来） */
+  .prompt-body {
+    padding: 14px 16px 2px;
+  }
+
+  .pick-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px;
+  }
+
+  .pick-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: var(--radius-md);
+    text-align: left;
+    color: var(--text-1);
+    font-size: 12.5px;
+  }
+
+  .pick-row:hover {
+    background: var(--surface-hover);
+  }
+
+  .pick-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pick-count {
+    flex: none;
+    font-size: 11px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pick-empty {
+    margin: 0;
+    padding: 18px 10px;
+    font-size: 12.5px;
+    color: var(--text-2);
+    text-align: center;
+  }
+</style>

@@ -60,18 +60,7 @@
   transition: width 120ms linear;
 }
 
-.error {
-  margin: 0 22px 8px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
-  color: var(--danger);
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
+/* 错误条样式已随 kit InlineError 组件化（B6），此处不再有全局 .error */
 
 .notice {
   padding: 8px 12px;

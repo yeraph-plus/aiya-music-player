@@ -8,7 +8,7 @@
    * 对话框外壳：标题 + 可选的说明 + 主体 + 动作区。
    *
    * 取代三个组件里各写一遍的「backdrop + role=dialog + 手写焦点陷阱」：
-   * `ConfirmDialog.svelte` 里那 20 行 `FOCUSABLE_SELECTOR` + `trapFocus` 是
+   * 原 ConfirmDialog 一类壳里各写一遍的 20 行 `FOCUSABLE_SELECTOR` + `trapFocus` 是
    * 手写的焦点环，它做对了 Tab 循环但没做**关闭后还原焦点**、没做滚动锁、
    * 也没做 aria-modal 下的背景 inert。bits-ui 的 `Dialog.Content` 四样都有
    * （FocusScope / DismissibleLayer / EscapeLayer / ScrollLock）。
