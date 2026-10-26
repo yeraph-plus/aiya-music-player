@@ -3,8 +3,7 @@
  * 三行两列：TitleBar / (Sidebar | Content) / PlayerDock。行号列号只在这里写一次 ——
  * 之前 `.app` 在 base.css、`.page-content`/`.player-dock` 在 pages.css，改一处翻三个文件。
  *
- * 仍待迁移（B3b）：`.sidebar` 的 border/padding/background 是 Sidebar 自己的皮，
- * `.player-dock` 的 z-index 属于播放条层级。本批只保证"席位集中"，外观随壳体换皮进组件。
+ * 仍待迁移（B3b-3）：`.player-dock` 的 z-index 属于播放条层级，随 PlayerBar 一起搬。
  */
 
 /* 三行两列：标题栏 / 侧栏 + 内容 / 播放条。**只有这一处定义**。 */
@@ -15,17 +14,12 @@
   height: 100%;
 }
 
+/* 席位只有两行：侧栏自己的 padding / border / background 在
+ * `components/shell/Sidebar.svelte` 里（它是壳，皮跟着它走）。 */
 .sidebar {
   grid-row: 2 / 3;
   grid-column: 1;
-  border-right: 1px solid var(--line);
-  padding: 8px 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
   min-height: 0;
-  background: var(--surface-2);
-  backdrop-filter: blur(18px);
 }
 
 /* ---------------- 骨架 ---------------- */

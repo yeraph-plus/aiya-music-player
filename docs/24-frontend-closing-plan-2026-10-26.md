@@ -15,7 +15,7 @@
 
 ### 修订 v4（2026-10-26 夜，B3b 拆三刀 + 两处记账更正）
 
-1. **B3b 拆成三刀**：B3b-1 浮层四件（✅ 完成）/ B3b-2 壳体换皮 / B3b-3 Content 与设置页。
+1. **B3b 拆成三刀**：B3b-1 浮层四件（✅ 完成）/ B3b-2 壳体换皮（✅ 完成）/ B3b-3 Content 与设置页（待做）。
    理由是 B3b-1 会改**事件与焦点**，和"只换视觉"的壳体换皮混在一起时，出问题无法归因。
 2. **§4.5 坑 4 重写**：原判断"`ContextMenu` 的锚点会随行回收丢失"**是错的** ——
    它用的是指针虚拟元素。真正原因是**坐标只能由它自己的 Trigger 捕获**，
@@ -834,12 +834,46 @@ E2E 补到 8–10 条（覆盖：拆页路由、批量、设置分组、kit 演�
 > **为什么单独提交**：这一刀会改**事件与焦点**（菜单从手算坐标改到浮层、对话框从自有 backdrop 改到 Portal）。
 > 和壳体换皮放一起，出问题时无法判断是"换皮错了"还是"浮层错了"。
 
-#### B3b-2 壳体换皮（待做）
+#### B3b-2 壳体换皮 ✅ 已完成（2026-10-26）
 
-`components/shell/` 归位（`TitleBar` / `Sidebar` / `PlayerBar`），三者的皮从 `styles/{layout,player,shell}.css`
-收进组件 scoped；`TitleBar` 搜索换 `Field`、窗控与返回换 `IconButton`；`PlayerBar` 三段滑块换 `Slider`
-（进度用 `oncommit`）、八个图标键换 `IconButton` + `Tooltip`；`Sidebar` 补「曲库」三段入口、
-电台移出、统计换 `StatBlock`、歌单封面换 `Cover`。
+`components/shell/` 归位：`TitleBar` / `Sidebar` / `PlayerBar`（`git mv`，import 深度改一层）。
+
+| 件 | 改了什么 |
+|---|---|
+| `TitleBar` | 返回键 → `IconButton`（**不套 Tooltip**：IconButton 的 label 已产出原生 title，两者并存会弹两次）；窗控三个仍是裸 button + `Tooltip`（要 44px 通栏悬停，不能是圆角方） |
+| `Sidebar` | **零 prop**（自己读 store、自己调 `nav.go`）；一级导航 6 项：首页 / **曲库** / **最近播放** / **常听** / 正在播放 / 设置；**电台移出**；歌单封面 → `Cover xs`；+ 号 → `IconButton`；底部统计 → 三个 `StatBlock` 并排 |
+| `PlayerBar` | 两个 `<input type=range>` → `Slider`（进度 `oncommit`、音量 `oninput`）；八个图标键 → `IconButton`（圆形，`solid` 只给播放键）；封面 → `Cover md` |
+
+**没换的两处，理由写进代码注释**：
+- **搜索框不换 `Field`**：`data-tauri-drag-region="false"` 必须挂在胶囊那层 div 上，而 `Field` 的内层盒子
+  由它自己渲染、kit 不透传任意 DOM 属性。为此给 kit 开"透传属性"的口子，等于放弃封装。
+- **倍速 chip 不换 `Chip`**：它必须是 `Popover.Trigger` 的宿主（要展开 bits-ui 给的 props），
+  `Chip` 不接 rest props。形状/字号本来也只有这一处用。
+
+**实测**
+
+| 门槛 | 结果 |
+|---|---|
+| `npm run check` | 0 error / 0 warning |
+| `check:deps` | 0 环（94 模块 / 289 条依赖） |
+| e2e | **6/6**。两处选择器随之更新：返回键改 `getByRole('button', {name:'返回上一页'})`（换 IconButton 后不再自带 `.tb-back` 类），队列键改 `name: /播放队列/`（label 带首数） |
+| 侧栏（1280×800，产物预览） | 6 项导航、`首页` 高亮、4 个歌单（封面实测 **22px**）、统计 `233/23/12`、`grid-template-columns` 三列各 ≈59.7px、歌单区 `scrollHeight ≤ clientHeight` |
+| 侧栏（960×700） | 无横向溢出、歌单名省略号、统计仍三列 |
+| 播放条 | 高 **92px**、9 个 button；`aria-label` 齐全（随机播放/上一首/播放/下一首/顺序播放/正在播放/播放队列（N 首）/静音）；两个滑块 `aria-valuenow`：进度 `0/236347`、音量 `0.85/1`；封面 48px；音量槽 92px；时间 0:00 / 3:56 |
+| 窄窗 960 | 播放条 `scrollWidth === clientWidth`（无溢出），进度槽 457px |
+| 顶栏几何（1280） | 品牌 12..111 / 返回 **119..143**（原 119..147，IconButton sm 是 24）/ 搜索 **151..511**（原 155..515）/ 窗控 1148..1280 |
+| 亮色 | 目检：导航文字、统计数字、播放键（深底浅图标）、两条滑块轨道、搜索框边框均可见 |
+| 运行时 | console error 0 / pageerror 0 |
+
+| 产物 | B3b-1 后 | B3b-2 后 | 差 |
+|---|---|---|---|
+| CSS | 47 134 B（gz 9.46 k） | 47 665 B（gz 9.53 k） | +0.5 kB（播放条 200 行全局样式搬成 scoped，注水后又瘦回去） |
+| 全局 CSS 行数 | `player.css` 482 | **282**（−200：播放条段全部搬进组件；`base.css` 又少了 130 行侧栏段） |
+
+> **还留在全局的**：`.icon-btn`（QueuePanel / SettingsPanel / ImportPanel 仍在用，B3b-3 与 B5 分批换）、
+> `.cover`（TrackList / QueuePanel 在用）、`player.css` 里的队列/歌词/频谱面板段（B5 重写）。
+> `layout.css` 保留 `.player-dock` 的 `z-index` —— 那是"播放条压在内容之上、队列抽屉从它沿口升起"的层级约定，
+> 属四区关系，不是播放条自己的皮。
 
 **专辑 / 艺人入口不在本刀**：两者需要"按专辑/艺人聚合"的查询（现在只有 `artistId`/`albumId` 单值筛选
 `TrackQuery`，没有 group-by 命令）。做入口等于做 B4 拆页的数据层，不在换皮批里夹带。

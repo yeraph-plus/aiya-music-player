@@ -17,6 +17,14 @@
     /** 必填：同时用于 aria-label 与 title */
     label: string;
     size?: 'sm' | 'md' | 'lg';
+    /**
+     * 外观变体，只管颜色。`solid` 是播放条那颗唯一的实心键（`--play-bg/--play-fg`）——
+     * 不给它做 `Button` 的 primary，是因为形状（圆）、尺寸（36）和一屏只有一颗
+     * 这两点都不属于通用按钮矩阵。
+     */
+    variant?: 'ghost' | 'solid';
+    /** 圆形：播放条的传输键是圆的，侧栏/对话框的是圆角方 */
+    round?: boolean;
     /** 切换按钮的按下态（会写 aria-pressed） */
     pressed?: boolean;
     /** 纯视觉高亮（不写 aria-pressed） */
@@ -30,6 +38,8 @@
   let {
     label,
     size = 'md',
+    variant = 'ghost',
+    round = false,
     pressed,
     active = false,
     disabled = false,
@@ -45,6 +55,8 @@
   class="k-icon-btn"
   class:sm={size === 'sm'}
   class:lg={size === 'lg'}
+  class:solid={variant === 'solid'}
+  class:round
   class:on={active}
   class:pressed={pressed === true}
   aria-label={label}
@@ -101,5 +113,21 @@
   .k-icon-btn.pressed {
     background: var(--accent-weak);
     color: var(--accent-text);
+  }
+
+  .k-icon-btn.round {
+    border-radius: var(--radius-pill);
+  }
+
+  /* 实心键（播放/暂停）：hover 只提亮，不换底色 —— 换了会闪一下像变灰 */
+  .k-icon-btn.solid {
+    background: var(--play-bg);
+    color: var(--play-fg);
+  }
+
+  .k-icon-btn.solid:hover:not(:disabled) {
+    background: var(--play-bg);
+    color: var(--play-fg);
+    filter: brightness(1.06);
   }
 </style>

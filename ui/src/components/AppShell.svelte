@@ -1,12 +1,11 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
-  import Sidebar from './Sidebar.svelte';
-  import TitleBar from './TitleBar.svelte';
-  import PlayerBar from './PlayerBar.svelte';
+  import PlayerBar from './shell/PlayerBar.svelte';
+  import Sidebar from './shell/Sidebar.svelte';
+  import TitleBar from './shell/TitleBar.svelte';
   import QueuePanel from './QueuePanel.svelte';
   import BatchBar from './BatchBar.svelte';
   import { errorMessage } from '../lib/errors';
-  import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
   import { nav } from '../stores/nav.svelte';
   import { notify } from '../stores/notify.svelte';
@@ -14,16 +13,12 @@
   import { player } from '../stores/player.svelte';
   import { playlists } from '../stores/playlists.svelte';
   import { selection } from '../stores/selection.svelte';
-  import { ui, type AppPage } from '../stores/ui.svelte';
+  import { ui } from '../stores/ui.svelte';
 
   type Props = { children: Snippet };
   let { children }: Props = $props();
 
   const playerState = $derived(player.state);
-
-  function navigate(page: AppPage): void {
-    nav.go(page === 'home' ? { kind: 'dashboard' } : { kind: 'page', page });
-  }
 
   async function playQueueAt(index: number): Promise<void> {
     try {
@@ -41,18 +36,7 @@
 
 <div class="app">
   <TitleBar />
-  <Sidebar
-    page={ui.page}
-    view={ui.view}
-    playlists={playlists.items}
-    stats={library.stats}
-    dataDir={library.dataDir}
-    onpage={navigate}
-    onplaylist={(id) => nav.go({ kind: 'playlist', id })}
-    oncreate={() => (overlay.dialog = { kind: 'createPlaylist' })}
-    onplaylistmenu={(event, playlist) =>
-      overlay.openPlaylistMenu(event.clientX, event.clientY, playlist)}
-  />
+  <Sidebar />
 
   <main class="main">
     {#if notify.error}

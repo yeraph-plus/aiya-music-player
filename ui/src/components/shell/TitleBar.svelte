@@ -2,10 +2,11 @@
   import { onMount } from 'svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { ChevronLeft, Copy, Minus, Search, Square, X } from '@lucide/svelte';
-  import Tooltip from './ui/Tooltip.svelte';
-  import { registerSearchFocus } from '../lib/focus-search';
-  import { nav } from '../stores/nav.svelte';
-  import { ui } from '../stores/ui.svelte';
+  import IconButton from '../ui/IconButton.svelte';
+  import Tooltip from '../ui/Tooltip.svelte';
+  import { registerSearchFocus } from '../../lib/focus-search';
+  import { nav } from '../../stores/nav.svelte';
+  import { ui } from '../../stores/ui.svelte';
 
   /**
    * 宽 TitleBar：**唯一一条横贯全宽的全局栏**。
@@ -59,26 +60,22 @@
   </div>
 
   <!--
-    提示走 Tooltip（bits-ui）而不是 `title`：原生 title 的延迟由系统决定（约 1s），
-    而且它和我们的深色皮完全不搭。**接了就删 `title`** —— 两者并存时
-    会先弹原生气泡再弹我们的，看起来像卡顿。
-    见 `components/ui/Tooltip.svelte` 的两条分工约定。
+    返回键用 `IconButton`（kit），**不套 Tooltip**：`IconButton` 的 `label` 同时产出
+    `aria-label` 与原生 `title`，再叠一层 Tooltip 会先弹原生再弹自己的（见 `ui/Tooltip.svelte`
+    的分工约定：两者不并存）。要 styled 提示的地方用裸 `<button>` + Tooltip（窗控三个就是这样）。
   -->
-  <Tooltip label={nav.canGoBack ? '返回上一页' : '没有上一页'}>
-    {#snippet trigger(props)}
-      <button
-        {...props}
-        class="tb-back"
-        aria-label="返回上一页"
-        disabled={!nav.canGoBack}
-        onclick={() => nav.back()}
-      >
-        <ChevronLeft size={16} />
-      </button>
-    {/snippet}
-  </Tooltip>
+  <div class="tb-back">
+    <IconButton label="返回上一页" size="sm" disabled={!nav.canGoBack} onclick={() => nav.back()}>
+      <ChevronLeft size={16} />
+    </IconButton>
+  </div>
 
   <!--
+    **搜索框不换 `Field`**（B3b-2 决定）：`data-tauri-drag-region="false"` 必须挂在
+    胶囊这层 div 上，而 `Field` 的内层盒子由组件自己渲染、kit 不透传任意 DOM 属性
+    （开口子等于放弃封装）；另外它是 chrome 不是表单字段 —— 无标签、30px 高、999 圆角。
+    换来的统一性不值得让 kit 长出"透传属性"这条后门。
+
     `data-tauri-drag-region="false"` 是**必须的**：胶囊容器是个 div（不是可点元素），
     顶栏又是 deep 拖拽区 —— 不加这一行，点输入框左右的内边距会开始拖窗口。
     反向陷阱：给这里的任何元素加 `tabindex="0"` 也会让整条拖拽区静默失效。
@@ -195,23 +192,9 @@
 
   /* ---------------- 返回 ---------------- */
 
+  /* 尺寸/圆角/悬停都在 IconButton 里，这里只管"别被搜索框挤走" */
   .tb-back {
     flex: none;
-    display: grid;
-    place-items: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 7px;
-    color: var(--text-2);
-  }
-
-  .tb-back:hover:not(:disabled) {
-    background: var(--surface-hover);
-    color: var(--text-1);
-  }
-
-  .tb-back:disabled {
-    opacity: 0.3;
   }
 
   /* ---------------- 搜索 ---------------- */

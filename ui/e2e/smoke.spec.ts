@@ -50,7 +50,7 @@ test('启动装配：顶栏四件 + 首页标题 + 播放条空态', async ({ pa
   await page.goto('/');
   // 宽 TitleBar：搜索框在位、返回键此时无历史所以 disabled
   await expect(page.locator('.titlebar .tb-search input')).toBeVisible();
-  await expect(page.locator('.titlebar .tb-back')).toBeDisabled();
+  await expect(page.getByRole('button', { name: '返回上一页' })).toBeDisabled();
   // 页内标题归 PageHeader（不是顶栏）
   await expect(page.locator('.main h1')).toHaveText('首页');
   await expect(page.locator('.main .ch-kicker')).toHaveText('YOUR LIBRARY');
@@ -87,14 +87,14 @@ test('导航链：曲库 → 工具条切最近播放 → 顶栏返回', async (
   await expect(page.locator('.main .content-toolbar .pt-tab.active')).toHaveText('最近播放');
 
   // 返回栈：这一步把「最近播放」退掉，回到「全部曲目」
-  await page.locator('.titlebar .tb-back').click();
+  await page.getByRole('button', { name: '返回上一页' }).click();
   await expect(page.locator('.main h1')).toHaveText('全部曲目');
-  await expect(page.locator('.titlebar .tb-back')).toBeEnabled();
+  await expect(page.getByRole('button', { name: '返回上一页' })).toBeEnabled();
 
   // 再退一步回到首页仪表盘，此时栈空 → 返回键 disabled
-  await page.locator('.titlebar .tb-back').click();
+  await page.getByRole('button', { name: '返回上一页' }).click();
   await expect(page.locator('.main h1')).toHaveText('首页');
-  await expect(page.locator('.titlebar .tb-back')).toBeDisabled();
+  await expect(page.getByRole('button', { name: '返回上一页' })).toBeDisabled();
 });
 
 test('播放链路：点行播放 → 播放条与队列激活行', async ({ page }) => {
@@ -104,7 +104,8 @@ test('播放链路：点行播放 → 播放条与队列激活行', async ({ pag
   await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
   await expect(page.locator('footer')).toContainText(/\d+:\d{2}/);
 
-  await page.locator('footer button[aria-label="播放队列"]').click();
+  // label 带首数（`播放队列（12 首）`），用 role + 正则匹配前缀，别绑死计数
+  await page.locator('footer').getByRole('button', { name: /播放队列/ }).click();
   const active = page.locator('.queue-panel .queue-row.active');
   await expect(active).toHaveCount(1);
   await expect(active.locator('.q-index')).toHaveText('▶');
