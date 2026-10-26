@@ -465,13 +465,25 @@ export class MockBackend {
 
   async scan(): Promise<ScanResult> {
     const started = Date.now();
-    const phases = ['walking', 'parsing', 'artwork', 'done'] as const;
-    for (let i = 0; i < phases.length; i++) {
+    // 阶段顺序与真后端逐字对齐（docs/29 批 B 之后）：walking → parsing（解析与
+    // 入库重叠）→ importing（解析全完、排队入库）→ done。
+    // 旧版这里有一段 `artwork`：封面落盘并进解析 worker 之后它不再单独出现，
+    // mock 留着会让"只在 mock 里才有"的状态白白多一个。
+    //
+    // `parsed > scanned` 是常态而不是 bug：解析比入库快，两者差值就是排队量，
+    // 也正是 UI 要显示「解析 X · 已入库 Y」的理由。
+    const total = this.tracks.length;
+    const half = Math.floor(total / 2);
+    const steps: { phase: string; scanned: number; parsed: number; imported: number }[] = [
+      { phase: 'walking', scanned: 0, parsed: 0, imported: 0 },
+      { phase: 'parsing', scanned: half, parsed: Math.floor(total * 0.75), imported: half },
+      { phase: 'importing', scanned: total - 1, parsed: total, imported: total - 1 },
+      { phase: 'done', scanned: total, parsed: total, imported: total },
+    ];
+    for (const s of steps) {
       this.emitter.emit('scan:progress', {
-        phase: phases[i],
-        scanned: Math.floor(((i + 1) / phases.length) * this.tracks.length),
-        total: this.tracks.length,
-        imported: i >= 1 ? this.tracks.length : 0,
+        ...s,
+        total,
         skipped: 0,
         failed: 0,
         currentPath: null,
@@ -480,8 +492,8 @@ export class MockBackend {
       await new Promise((r) => setTimeout(r, 250));
     }
     return {
-      scanned: this.tracks.length,
-      imported: this.tracks.length,
+      scanned: total,
+      imported: total,
       updated: 0,
       unchanged: 0,
       failed: 0,

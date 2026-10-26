@@ -128,6 +128,7 @@ class LibraryStore {
     this.scan = {
       phase: 'walking',
       scanned: 0,
+      parsed: 0,
       total: null,
       imported: 0,
       skipped: 0,
@@ -178,7 +179,10 @@ class LibraryStore {
 /** 扫描进度的视图形状（事件载荷是动态 JSON，这里定义读出来的结构） */
 export interface ScanProgressView {
   phase: string;
+  /** 已入库（含 unchanged / failed 记账）的文件数 —— 进度条按它走 */
   scanned: number;
+  /** 解析已完成数（docs/29 批 B）。`parsed - scanned` = 排队等入库的积压 */
+  parsed: number;
   total: number | null;
   imported: number;
   skipped: number;
@@ -194,6 +198,8 @@ function readScanProgress(raw: unknown): ScanProgressView {
   return {
     phase: typeof o.phase === 'string' ? o.phase : 'unknown',
     scanned: num('scanned'),
+    // 后端新增 parsed 之前的事件没有这个字段 → 0，UI 会退回"只显示已入库"
+    parsed: num('parsed'),
     total: typeof o.total === 'number' ? o.total : null,
     imported: num('imported'),
     skipped: num('skipped'),

@@ -302,3 +302,135 @@ duplicates 等，见 §7 功能映射）。
   拦住）。
 - **遗留**：`gen:types:check` 因应用运行中锁构建目录未能跑（ChosenRoot/
   LibraryRoots 两份手写契约与 ts-rs 输出格式一致），应用关闭后补跑。
+
+## 14. 批 B 落地记录（2026-10-27）
+
+基线：`main 46220f8`（清账后 `npm run verify` 全绿）。实测曲库：
+`D:\CkMsr\Music`，**1846 首 / 17 GB**（flac + mp3，1393 张嵌入封面）。
+
+### 14.1 先量基线，再动手
+
+§4 写着"预期收益 4 核 ≈ 3-4 倍"，但**没有可比对象**。补了
+`crates/aiya-data/examples/scan_bench.rs`（`cargo run --release -p aiya-data
+--example scan_bench -- --root <dir> --db <file> --runs N [--artwork <dir>]`），
+同一 DB 连跑 3 轮：第 1 轮是全量入库，第 2/3 轮是增量重扫，正好两种场景一次量完。
+
+串行基线（改造前，同一台机器同一目录）：
+
+| 场景 | run1 全量 | run2/3 重扫 |
+|---|---|---|
+| 无封面 | 8815 ms | 4992 / 4851 ms |
+| 带封面 | 18118 ms | 4473 / 4918 ms |
+
+**量基线时发现的真问题**：重扫明明 100% `unchanged`，却几乎没比全量快 ——
+因为 `unchanged` 判定写在 `upsert` 里，等轮到它时 `parse_file` 早就把整份标签
+和嵌入封面读完了。模块头注释写着"unchanged 判定：mtime+size 都没变就跳过解析"，
+**实际跳过的是"重新写库"**。这条比"并行"本身收益还大，所以批 B 把它一起做了。
+
+### 14.2 三个前置缺口（审查时挖出来的）
+
+1. **`save_artwork` 必须拆**：它是 `hash + 原子落盘 + upsert 行` 一体的，
+   而解析线程没有 `conn`。拆成 `artwork::stage(dir, data, mime)`（无 conn，
+   hash + 落盘，返回 `StagedArtwork`）+ `artwork::link(conn, staged, now)`
+   （登记一行）。`save_artwork` 保留为两者的组合（测试与 beets 导入仍走它）。
+2. **原子写 tmp 名并行会撞**：旧名 `.{hash8}.{pid}.tmp` 在串行时无害，
+   并行下"同专辑多首共用一张封面"是常态 → 两个 worker 同写一个 tmp，
+   rename 拿到半张图。加进程内序号（`STAGE_SEQ`）后唯一，跨进程仍靠 pid 区分。
+   新单测 `concurrent_stage_same_bytes_does_not_corrupt_target`（8 线程同字节）
+   断言目标文件完整 + 无 tmp 残留。
+3. **channel 必须有界**：`sync_channel(CHANNEL_CAP = 256)`。无界会把
+   "解析比入库快"直接翻译成"整库结果堆内存"。有界才有背压 —— 入库慢了
+   解析自然跟着慢。
+
+### 14.3 流水线形态
+
+```
+walk（主线程）→ 全量路径 + seen
+      ↓
+load_index：一次 SELECT path_lower/mtime/size/availability 全表 → HashMap
+      ↓
+rayon 局部池（N = 逻辑核-1）每文件：stat → 预筛 →（未命中才）读标签 + 封面 stage
+      ↓ sync_channel(256)   ← 有界 = 背压
+入库线程（= 调用线程，独占 conn）：攒 BATCH_SIZE → 一个 IMMEDIATE 事务提交
+```
+
+- **为什么用局部池**（`ThreadPoolBuilder` 而不是 rayon 全局池）：扫描是偶发批任务，
+  不该长期占着全局池；而且要精确控制 N。留一个核给入库线程 —— 它是 SQLite
+  单写者，多一个解析 worker 只会在 channel 上堵着。
+- **为什么预筛放进 worker**：`stat` 也是 IO（Windows 上还要过 Defender 一道），
+  摊到池里比串行 stat 1846 次快得多。`metadata` 只 stat 一次，同一个 `Metadata`
+  传给 `parse_file_with_meta`，不再重复 stat。
+- **连接不跨线程**：`process_file` 全程不碰 DB，`index` 是只读快照。
+  "解析线程拿不到连接"这件事由函数签名保证，不是靠自觉。
+
+### 14.4 两段式进度
+
+`ScanProgress` 新增 `parsed` 字段（解析完成数，由各 worker 用 `AtomicUsize`
+递增，入库线程发事件时读）：
+
+- 进度条按 `scanned`（已入库/已记账）走 —— 与旧的观感一致；
+- 详情行显示「`scanned`/`total` 已入库 · 解析 `parsed`」，`parsed > scanned`
+  时额外显示「（排队 N）」；
+- phase 追加 `importing`：`parsed >= total && scanned < total` 时如实说"正在入库"，
+  否则用户在"解析快、入库慢"那段看到进度条不动会以为卡死；
+- **删掉了 `artwork` phase**：封面落盘已并进解析 worker，不会再单独出现
+  （mock 同步删，不让"只在 mock 里存在"的状态多一个）。
+
+实测事件序列（带封面全量，1846 首）：
+
+```
+parsing scanned=600  parsed=600
+parsing scanned=800  parsed=803     ← 解析略超前，流水线在动
+parsing scanned=1400 parsed=1415
+parsing scanned=1800 parsed=1800
+importing scanned=1800 parsed=1846  ← 解析全完、最后一批没写库
+done    scanned=1846 parsed=1846
+```
+
+### 14.5 实测收益（同一台机器、同一目录、同一 DB 冷启动）
+
+| 场景 | 改造前 | 改造后 | 倍数 |
+|---|---|---|---|
+| 全量·无封面 | 8815 ms | **953 / 1012 / 1048 ms** | **≈9×** |
+| 全量·带封面 | 18118 ms | **5123 ms** | **≈3.5×** |
+| 重扫·无封面 | 4992 ms | **64 / 60 ms** | **≈80×** |
+| 重扫·带封面 | 4918 ms | **75 / 68 ms** | **≈68×** |
+
+带封面的全量 3.5 倍落在 §4 预估的 3-4 倍区间；无封面 9 倍是纯解析并行+
+少了重复 stat。重扫两个数量级来自预筛（本来只需 stat，不该读标签）。
+
+**正确性对照**（不能只看快）：并行版封面缓存 `1393 张 / 1.4 GB`，与串行版
+**完全一致**；`imported=1846 / failed=0`，两版一致；`artwork/originals` 下
+tmp 残留 `0` 个。
+
+### 14.6 过程记录：一个真死锁
+
+首跑测试卡在 `case_variant_paths_do_not_duplicate_rows`（一个只扫描 1 个文件的
+用例）。原因是我们自己写的：生产者闭包写成**非 `move`**，`tx` 只是被借用、
+活到函数末尾，于是消费者 `rx.recv()` 在生产者早已跑完之后还在等一个永远不会
+到来的 `Disconnected`。改成 `move` 闭包（提取 `&pool`/`&files`/`&index`/`&cancel`
+四个引用进闭包）让 `tx` 跟着闭包 drop 就好。
+
+值得记的是"1 个文件的用例卡死"这个形态：如果是卡在 1846 个文件的基准上，
+很容易被误判成"慢"。**测试套件里的最小用例才是死锁最好的探测器。**
+
+同一轮还修了两处自己的毛病：批提交后又按步长判断重复报了一次完全相同的事件
+（`next_report` 没跟着批边界前推）；以及 `importing` 在正常时序里几乎不露面
+（尾部批提交前补一次如实上报）。
+
+### 14.7 验证
+
+- `cargo test --workspace`：**291 passed / 0 failed**（1 ignored = perf_50k），
+  含新单测 `concurrent_stage_same_bytes_does_not_corrupt_target`。
+- `svelte-check`：**0 errors / 0 warnings**。
+- Playwright e2e：23 passed。
+- 真实曲库基准：见 14.5（工具入库为 `examples/scan_bench.rs`，可随时复现）。
+
+### 14.8 遗留
+
+- **取消延迟**：取消后要等当前在解析的几个文件跑完（每 worker 一个文件），
+  实测 1846 首的曲库在毫秒级；万首 + 大无损文件时最长约一次解析耗时。
+- **`updated` 字段仍是 0**：语义上"更新了多少首"与 `imported` 混在一起，
+  批 B 没动（改它要连 `ScanResult` 契约与 UI 一起改，不在本批范围）。
+- **rayon 可能不是瓶颈**：Windows Defender 实时扫描在并行后参与 IO 争抢，
+  实测仍有 3.5-9 倍说明不是主要瓶颈，但换机器（尤其无排除项的机器）需要复量。

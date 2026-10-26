@@ -68,6 +68,20 @@
       notify.showError(errorMessage(err));
     }
   }
+
+  /**
+   * 阶段文案（docs/29 批 B 两段式进度）。
+   *
+   * 为什么需要它：解析与入库是**重叠的两段**，只报一个百分比时用户在
+   * "解析快、入库慢"的那一段看到进度条不动，会以为卡死。这里把两段的
+   * 主活动如实说出来，具体数字在下面一行。
+   */
+  function phaseText(phase: string, scanning: boolean): string {
+    if (phase === 'done') return '已完成';
+    if (phase === 'cancelled') return '已取消';
+    if (!scanning) return phase;
+    return phase === 'walking' ? '遍历中' : phase === 'importing' ? '入库中' : '解析中';
+  }
 </script>
 
 <div class="library-tools">
@@ -112,7 +126,7 @@
     <div class="task-status">
       <div class="task-status-head">
         <span class="task-name"><RefreshCw size={13} class={library.scanning ? 'spinning' : undefined} /> 曲库扫描</span>
-        <span>{progress.phase === 'done' ? '已完成' : library.scanning ? '进行中' : progress.phase}</span>
+        <span>{phaseText(progress.phase, library.scanning)}</span>
       </div>
       {#if library.scanning}
         <div class="progress">
@@ -120,9 +134,12 @@
         </div>
       {/if}
       <div class="task-detail">
-        {progress.phase === 'walking'
-          ? '正在遍历目录…'
-          : `${progress.scanned}/${progress.total ?? '?'} · 新增 ${progress.imported} · 跳过 ${progress.skipped} · 失败 ${progress.failed}`}
+        {#if progress.phase === 'walking'}
+          正在遍历目录…
+        {:else}
+          {progress.scanned}/{progress.total ?? '?'} 已入库 · 解析 {progress.parsed}{#if progress.parsed > progress.scanned}<span class="dim">
+            （排队 {progress.parsed - progress.scanned}）</span>{/if} · 新增 {progress.imported} · 跳过 {progress.skipped} · 失败 {progress.failed}
+        {/if}
       </div>
       {#if library.scanning}<button class="link" onclick={() => scan.cancel()}>取消任务</button>{/if}
     </div>

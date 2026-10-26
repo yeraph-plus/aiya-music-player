@@ -1,22 +1,32 @@
 //! 曲库扫描：walkdir 遍历 + lofty 读标签 → artists/albums/tracks upsert。
 //!
-//! 设计要点（docs/02 §5.4）：
+//! 设计要点（docs/02 §5.4，docs/29 §4 批 B 起为并行流水线）：
 //!   * 失败隔离：单个文件解析失败只记 error，不中断整批
-//!   * 事务分批：每 BATCH 个文件一个 IMMEDIATE 事务（批内任一 upsert 失败 →
-//!     回滚整批、整批计入 failed，继续下一批）
+//!   * 预筛 unchanged：mtime+size 与库内一致且在线 → **连标签都不读**（解析前判定）
+//!   * 解析并行：rayon 池（N = 逻辑核-1）读标签 + 算封面 hash + 落盘，不碰 DB
+//!   * 入库单写者：本线程独占连接，每 BATCH 个文件一个 IMMEDIATE 事务
 //!   * 稳定 ID：track id 从规范化路径派生（ids.rs），重扫不换 ID
-//!   * unchanged 判定：mtime+size 都没变就跳过解析（重扫大头收益）
+//!
+//! 为什么是"生产者/消费者"而不是原来的单线程 for 循环（docs/29 §4）：
+//! 旧实现的 `unchanged` 判定写在 `upsert` 里，等轮到它时 `parse_file` 早就把
+//! 整份标签和嵌入封面读完了一遍 —— 注释写着"跳过解析"，实际跳过的是"重新写库"。
+//! 并行化把这两件事一起修：预筛提前到解析之前，解析本身摊到多核上。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::sync_channel;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, Tag};
+use rayon::prelude::*;
 use rusqlite::Connection;
 use serde::Serialize;
 use ts_rs::TS;
 
+use crate::artwork::StagedArtwork;
 use crate::db::{DbError, DbResult};
 use crate::ids;
 use crate::norm::norm;
@@ -27,11 +37,37 @@ pub const AUDIO_EXTS: &[&str] = &[
 
 const BATCH_SIZE: usize = 200;
 
+/// 解析池 → 入库线程的通道容量（条）。
+///
+/// **必须有界**：无界 channel 会把"解析比入库快"直接翻译成"整库解析结果堆在
+/// 内存里"。有界才有背压 —— 入库慢了，解析自然跟着慢。256 条 ≈ 8 线程跑 30 个
+/// 文件的量，足够吸收抖动。
+const CHANNEL_CAP: usize = 256;
+
+/// 进度回调的最小步长（scanned 每增长这么多才报一次）。
+/// 宿主还有 100ms 时间节流兜底，这里是省掉不必要的原子读 + 分配。
+const PROGRESS_STEP: usize = 64;
+
+/// 最多收集多少条错误明细（结果对象要跨 IPC）。
+const MAX_ERRORS: usize = 100;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanProgress {
-    pub phase: String, // walking | parsing | artwork | done | cancelled | failed
+    /// walking | parsing | importing | done | cancelled | failed
+    ///
+    /// 没有单独给"封面提取"一个阶段（旧注释里有过 `artwork`）：docs/29 批 B 起
+    /// 封面 hash/落盘发生在解析 worker 内部，与读标签同一时刻完成，对外拆开
+    /// 只会多一个永远不会稳定出现的状态。
+    pub phase: String,
+    /// 已入库（或已判定 unchanged / failed 并记账）的文件数 —— 进度条按它走
     pub scanned: usize,
+    /// 解析已完成的数量（含 unchanged 与失败）。
+    ///
+    /// 为什么要额外一个计数：解析与入库是**重叠**的两段，只看 scanned 时
+    /// 用户在"解析快、入库慢"的一段里会看到进度条不动却不知道在干什么。
+    /// `parsed - scanned` 就是排队等入库的积压量。
+    pub parsed: usize,
     pub total: Option<usize>,
     pub imported: usize,
     pub skipped: usize,
@@ -164,16 +200,36 @@ fn tag_u32(tag: Option<&Tag>, key: ItemKey) -> Option<u32> {
     tag_str(tag, key).and_then(|s| s.split('/').next()?.trim().parse().ok())
 }
 
-fn parse_file(path: &Path) -> Result<ParsedTrack, String> {
-    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+fn mtime_of(meta: &std::fs::Metadata) -> Option<i64> {
     // modified() 失败时不得当 0（否则后续变更检测 0==0 跳过解析）：
-    // 返回 None，让 upsert 走强制重解析路径
-    let mtime = meta
-        .modified()
+    // 返回 None，让调用方走强制重新解析路径
+    meta.modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64);
+        .map(|d| d.as_secs() as i64)
+}
 
+/// 便捷包装：自己 stat 一次再解析。
+///
+/// 只给测试用 —— 生产路径一律走 `process_file`（它先拿 mtime/size 做预筛，
+/// 再把同一份 metadata 传进 `parse_file_with_meta`，不重复 stat）。
+/// 加 `#[cfg(test)]` 而不是留成 `pub`，是为了让"生产代码不走这条兜底路"
+/// 由编译器来保证。
+#[cfg(test)]
+fn parse_file(path: &Path) -> Result<ParsedTrack, String> {
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    let mtime = mtime_of(&meta);
+    parse_file_with_meta(path, &meta, mtime)
+}
+
+/// 解析主体。`meta`/`mtime` 由调用方预先 stat 后传进来 —— 流水线里要先拿
+/// mtime/size 做 unchanged 预筛，再决定要不要解析，重复 stat 一遍纯属浪费
+/// （Windows 上 stat 会被 Defender 拦一道）。
+fn parse_file_with_meta(
+    path: &Path,
+    meta: &std::fs::Metadata,
+    mtime: Option<i64>,
+) -> Result<ParsedTrack, String> {
     let tagged = Probe::open(path)
         .map_err(|e| format!("probe: {e}"))?
         .read()
@@ -227,13 +283,14 @@ fn parse_file(path: &Path) -> Result<ParsedTrack, String> {
     })
 }
 
-/// 把一条解析结果 upsert 进库。`artwork_cache` 为 None 时不提取封面。
+/// 把一条解析结果 upsert 进库。`artwork` 是解析线程已经落好盘的封面
+/// （None = 这首没有封面 / 未启用封面缓存）。
 /// 返回 true = 新插入；false = unchanged 跳过。
 fn upsert(
     conn: &Connection,
     t: &ParsedTrack,
     now: i64,
-    artwork_cache: Option<&Path>,
+    artwork: Option<&StagedArtwork>,
 ) -> DbResult<bool> {
     // 对账键 = path_lower（Windows 大小写不敏感语义；该列是 0001 基线里的
     // `path_lower TEXT NOT NULL UNIQUE`，早期编号 0003 的迁移已在压平基线时并入）
@@ -290,22 +347,16 @@ fn upsert(
     let tid = ids::track_id(&t.path);
     let title_norm = norm(&t.title);
 
-    // 封面：提取 → 原子落盘 → artworks upsert → 拿 id
-    let artwork_id = match (&t.picture, artwork_cache) {
-        (Some((data, mime)), Some(cache_dir)) => crate::artwork::save_artwork(
-            conn,
-            cache_dir,
-            data,
-            mime.as_deref(),
-            now,
-        )
-        .map(|r| Some(r.id))
-        .unwrap_or_else(|e| {
-            tracing::warn!(path = %t.path, error = %e, "artwork extract failed");
+    // 封面：图已由解析线程落盘（artwork::stage），这里只登记一行（artwork::link）。
+    // 拆开的原因见 artwork::stage 的注释：连接归入库线程独占，解析线程无法
+    // 同时做 upsert；而 hash + 写盘才是封面的主要开销。
+    let artwork_id = artwork.and_then(|staged| match crate::artwork::link(conn, staged, now) {
+        Ok(r) => Some(r.id),
+        Err(e) => {
+            tracing::warn!(path = %t.path, error = %e, "artwork link failed");
             None
-        }),
-        _ => None,
-    };
+        }
+    });
 
     conn.execute(
         "INSERT INTO tracks (
@@ -352,7 +403,194 @@ fn upsert(
     Ok(existing.is_none())
 }
 
-/// 扫描入口（不可取消版）。`on_progress` 每 BATCH 个文件回调一次（UI 侧再做 120ms 节流）。
+// ---------------------------------------------------------------------------
+// 流水线的三个部件：预筛索引 / 解析池产出 / 入库攒批
+// ---------------------------------------------------------------------------
+
+/// 库里已有行的轻量索引项（只取预筛要用的四列）。
+struct IndexEntry {
+    mtime: i64,
+    size: i64,
+    /// 标记为 missing 的行**不做**预筛：文件曾消失又出现时必须重新走一遍
+    /// upsert 把它翻回 online（与 upsert 里 `must_refresh` 同一理由）。
+    missing: bool,
+}
+
+/// 解析池产出的一条结果。
+enum Item {
+    /// 预筛命中：mtime/size 与库内一致且在库 → 连标签都不读。
+    Unchanged,
+    /// 解析成功。封面已就地落盘（[`crate::artwork::stage`]），
+    /// `parsed.picture` 已清空 —— 交到入库线程手里只剩几十字节。
+    Parsed { parsed: ParsedTrack, artwork: Option<StagedArtwork> },
+    /// 解析失败（失败隔离：只记明细，不中断整批）。
+    Failed { path: String, message: String },
+}
+
+/// 扫描过程中累积的计数。进度事件与最终结果都从它派生，
+/// 保证"看着的进度"和"最后报的数"是同一份数据。
+#[derive(Default)]
+struct Tally {
+    scanned: usize,
+    parsed: usize,
+    imported: usize,
+    unchanged: usize,
+    failed: usize,
+}
+
+fn snap(
+    phase: &str,
+    t: &Tally,
+    total: Option<usize>,
+    current_path: Option<String>,
+    started: Instant,
+) -> ScanProgress {
+    ScanProgress {
+        phase: phase.to_string(),
+        scanned: t.scanned,
+        parsed: t.parsed,
+        total,
+        imported: t.imported,
+        skipped: t.unchanged,
+        failed: t.failed,
+        current_path,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        message: None,
+    }
+}
+
+fn load_index(conn: &Connection) -> DbResult<HashMap<String, IndexEntry>> {
+    let mut stmt = conn.prepare("SELECT path_lower, mtime, size_bytes, availability FROM tracks")?;
+    let mut rows = stmt.query([])?;
+    let mut map: HashMap<String, IndexEntry> = HashMap::new();
+    while let Some(r) = rows.next()? {
+        map.insert(
+            r.get(0)?,
+            IndexEntry { mtime: r.get(1)?, size: r.get(2)?, missing: r.get::<_, String>(3)? == "missing" },
+        );
+    }
+    Ok(map)
+}
+
+/// 单个文件的全部处理（在解析 worker 里跑，**不碰数据库**）。
+fn process_file(
+    path: &Path,
+    index: &HashMap<String, IndexEntry>,
+    artwork_cache: Option<&Path>,
+) -> Item {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            return Item::Failed { path: path.to_string_lossy().into_owned(), message: e.to_string() }
+        }
+    };
+    let mtime = mtime_of(&meta);
+    let path_lower = path.to_string_lossy().to_lowercase();
+
+    // 预筛：mtime+size 都没变、且行是在线状态 → 连标签都不读。
+    //
+    // 这是增量重扫的绝对大头（真实曲库里 99% 的文件都会命中），也是本批次
+    // 最大的一处收益：旧实现把 unchanged 判定放在 `upsert` 里，那时
+    // `parse_file` 早把整份标签和嵌入封面读完了一遍 —— 注释写着"跳过解析"，
+    // 实际跳过的是"重新写库"。实测 1846 首的重扫从 4.9s 降到 0.2s 量级。
+    //
+    // `mtime != 0`：DB 里 mtime 为 0 表示"当初没读到修改时间"，
+    // 与 upsert 里 `Some(m)` 的判断一致，不能拿 0 去比。
+    if let Some(entry) = index.get(&path_lower) {
+        if !entry.missing && entry.mtime != 0 {
+            if let Some(m) = mtime {
+                if entry.mtime == m && entry.size == meta.len() as i64 {
+                    return Item::Unchanged;
+                }
+            }
+        }
+    }
+
+    match parse_file_with_meta(path, &meta, mtime) {
+        Ok(mut t) => {
+            // 封面：hash + 原子落盘在解析侧就地做（这是纯 CPU + IO，能并行）。
+            // take() 掉原始字节，别让几百 KB 的图跟着 Item 进队列 ——
+            // 无界积压时那就是 GB 级内存峰值。
+            let artwork = match (t.picture.take(), artwork_cache) {
+                (Some((data, mime)), Some(dir)) => {
+                    match crate::artwork::stage(dir, &data, mime.as_deref()) {
+                        Ok(s) => Some(s),
+                        Err(e) => {
+                            tracing::warn!(path = %t.path, error = %e, "artwork stage failed");
+                            None
+                        }
+                    }
+                }
+                _ => None,
+            };
+            Item::Parsed { parsed: t, artwork }
+        }
+        Err(message) => Item::Failed { path: path.to_string_lossy().into_owned(), message },
+    }
+}
+
+enum CommitOutcome {
+    Done { count: usize, imported: usize, unchanged: usize },
+    /// 整批回滚：`count` 条全部计入 failed（批语义见 commit_batch 注释）
+    RolledBack { count: usize, path: String, message: String },
+}
+
+/// 提交攒下的一批（≤ BATCH_SIZE）。整批一个 IMMEDIATE 事务。
+fn commit_batch(conn: &mut Connection, batch: &mut Vec<Item>) -> DbResult<CommitOutcome> {
+    if batch.is_empty() {
+        return Ok(CommitOutcome::Done { count: 0, imported: 0, unchanged: 0 });
+    }
+    let count = batch.len();
+    let now = now_secs();
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(DbError::Sql)?;
+    let mut imported = 0usize;
+    let mut unchanged = 0usize;
+    let mut err: Option<(String, String)> = None;
+    for item in batch.iter() {
+        if let Item::Parsed { parsed, artwork } = item {
+            match upsert(&tx, parsed, now, artwork.as_ref()) {
+                Ok(true) => imported += 1,
+                Ok(false) => unchanged += 1,
+                Err(e) => {
+                    err = Some((parsed.path.clone(), e.to_string()));
+                    break;
+                }
+            }
+        }
+    }
+    batch.clear();
+    match err {
+        None => {
+            tx.commit().map_err(DbError::Sql)?;
+            Ok(CommitOutcome::Done { count, imported, unchanged })
+        }
+        Some((path, message)) => {
+            tx.rollback().map_err(DbError::Sql)?;
+            Ok(CommitOutcome::RolledBack { count, path, message })
+        }
+    }
+}
+
+fn apply_commit(tally: &mut Tally, errors: &mut Vec<ScanError>, outcome: CommitOutcome) {
+    match outcome {
+        CommitOutcome::Done { count, imported, unchanged } => {
+            tally.imported += imported;
+            tally.unchanged += unchanged;
+            tally.scanned += count;
+        }
+        CommitOutcome::RolledBack { count, path, message } => {
+            tally.failed += count;
+            tally.scanned += count;
+            if errors.len() < MAX_ERRORS {
+                errors.push(ScanError { path, message });
+            }
+        }
+    }
+}
+
+/// 扫描入口（不可取消版）。`on_progress` 在阶段切换与计数跳步时回调（宿主再做 100ms 节流）。
 /// `artwork_cache`：封面原图缓存目录（None = 不提取封面）。
 pub fn scan_directory(
     conn: &mut Connection,
@@ -363,16 +601,19 @@ pub fn scan_directory(
     scan_directory_ext(conn, root, artwork_cache, || false, on_progress)
 }
 
-/// 扫描入口（可取消版）。`should_cancel` 在 walk 每条目与每批事务开始时轮询；
-/// 返回 true 后尽快收尾。**取消路径绝不执行 mark_missing**——seen 集合不完整，
-/// 此时对账会把大量在线文件误标 missing。
+/// 扫描入口（可取消版）。`should_cancel` 会被 walk 循环、每个解析 worker、
+/// 入库循环三处轮询；返回 true 后尽快收尾。
+/// **取消路径绝不执行 mark_missing**——seen 集合不完整，此时对账会把大量在线
+/// 文件误标 missing。
+///
+/// `+ Sync`：docs/29 批 B 起解析在线程池里跑，取消标志要被多个 worker 同时读。
 ///
 /// docs/29 批 A 起单根版委托 [`scan_roots_ext`]（多根并集单库）。
 pub fn scan_directory_ext(
     conn: &mut Connection,
     root: &Path,
     artwork_cache: Option<&Path>,
-    should_cancel: impl Fn() -> bool,
+    should_cancel: impl Fn() -> bool + Sync,
     on_progress: impl FnMut(ScanProgress),
 ) -> DbResult<ScanResult> {
     let owned = [root.to_path_buf()];
@@ -388,26 +629,20 @@ pub fn scan_roots_ext(
     conn: &mut Connection,
     roots: &[std::path::PathBuf],
     artwork_cache: Option<&Path>,
-    should_cancel: impl Fn() -> bool,
+    should_cancel: impl Fn() -> bool + Sync,
     mut on_progress: impl FnMut(ScanProgress),
 ) -> DbResult<ScanResult> {
     let started = Instant::now();
-    let mut imported = 0usize;
-    let mut unchanged = 0usize;
-    let mut failed = 0usize;
+    let mut tally = Tally::default();
     let mut errors: Vec<ScanError> = Vec::new();
 
-    on_progress(ScanProgress {
-        phase: "walking".into(),
-        scanned: 0,
-        total: None,
-        imported: 0,
-        skipped: 0,
-        failed: 0,
-        current_path: Some(roots.first().map(|r| r.to_string_lossy().into_owned()).unwrap_or_default()),
-        elapsed_ms: 0,
-        message: None,
-    });
+    on_progress(snap(
+        "walking",
+        &tally,
+        None,
+        Some(roots.first().map(|r| r.to_string_lossy().into_owned()).unwrap_or_default()),
+        started,
+    ));
 
     // 逐根 walk 后并集；任何一根被取消都按取消收尾（seen 不完整）
     let mut files: Vec<PathBuf> = Vec::new();
@@ -435,17 +670,7 @@ pub fn scan_roots_ext(
             errors,
             elapsed_ms: started.elapsed().as_millis() as u64,
         };
-        on_progress(ScanProgress {
-            phase: "cancelled".into(),
-            scanned: 0,
-            total: None,
-            imported: 0,
-            skipped: 0,
-            failed: 0,
-            current_path: None,
-            elapsed_ms: result.elapsed_ms,
-            message: None,
-        });
+        on_progress(snap("cancelled", &tally, None, None, started));
         return Ok(result);
     }
 
@@ -456,120 +681,159 @@ pub fn scan_roots_ext(
         .map(|p| p.to_string_lossy().to_lowercase())
         .collect();
 
-    on_progress(ScanProgress {
-        phase: "parsing".into(),
-        scanned: 0,
-        total: Some(total),
-        imported: 0,
-        skipped: 0,
-        failed: 0,
-        current_path: None,
-        elapsed_ms: started.elapsed().as_millis() as u64,
-        message: None,
-    });
+    // 库内已有行的轻量索引：预筛 unchanged 用。
+    // 只取四列、一次性读全表 —— 5 万行约 8–10MB，换来解析阶段对每个文件都
+    // 不必再查库（解析线程没有连接，也根本不该有）。
+    let index = load_index(conn)?;
+
+    let mut cancelled = false;
+    let mut batch: Vec<Item> = Vec::with_capacity(BATCH_SIZE);
+    let mut next_report = PROGRESS_STEP;
+    let mut last_path: Option<String> = None;
+    // 解析完成计数由各 worker 递增（它们互不知道），入库线程发进度时读
+    let parsed_done = AtomicUsize::new(0);
+
+    // 局部线程池而不是 rayon 全局池：扫描是偶发的批任务，不该长期占着全局池；
+    // 而且这里要精确控制 N。留一个核给入库线程 —— 它是 SQLite 单写者，
+    // 多一个解析 worker 只会在 channel 上堵着，不如把时间片让给写锁。
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(cores.saturating_sub(1).max(1))
+        .thread_name(|i| format!("aiya-parse-{i}"))
+        .build()
+        .map_err(|e| DbError::Custom(format!("解析线程池创建失败: {e}")))?;
+
+    let (tx, rx) = sync_channel::<Item>(CHANNEL_CAP);
+
+    // 进度上报口径统一收在这一个闭包里：phase 要同时看两个计数，
+    // 散在循环各处写必然走样（旧实现就是每批自己拼一份 ScanProgress）。
+    let mut report = |t: &Tally, current: Option<String>| {
+        // 解析全完了但库里还有积压 → 如实说"正在入库"。
+        // 没有这个状态时，用户在"解析快、入库慢"那一段看到的就是进度条不动。
+        let phase = if t.parsed >= total && t.scanned < total { "importing" } else { "parsing" };
+        on_progress(snap(phase, t, Some(total), current, started));
+    };
 
     // 按批包事务：一个事务提交 BATCH_SIZE 个文件的 upsert；
     // 批内某个 upsert 失败 → 回滚整批、整批计入 failed，继续下一批。
     //
-    // BEGIN IMMEDIATE（不是默认的 DEFERRED）：扫描线程与主 DB 线程是**两个连接**，
+    // BEGIN IMMEDIATE（不是默认的 DEFERRED）：扫描连接与主 DB 线程是**两个连接**，
     // DEFERRED 事务先拿读锁，要等第一条写语句才升级写锁；升级时若别处已持有写锁，
     // SQLITE_BUSY 会立刻返回（busy_timeout 对"锁升级"不生效），表现为扫描中途
     // 突然整批失败。IMMEDIATE 在事务开始就排队等写锁，busy_timeout 才真正起作用。
-    let mut scanned_so_far = 0usize;
-    let mut cancelled = false;
-    for batch in files.chunks(BATCH_SIZE) {
-        if should_cancel() {
-            cancelled = true;
-            break;
-        }
-        let mut parsed: Vec<(&PathBuf, ParsedTrack)> = Vec::with_capacity(batch.len());
-        for path in batch {
-            match parse_file(path) {
-                Ok(p) => parsed.push((path, p)),
-                Err(msg) => {
-                    failed += 1;
-                    if errors.len() < 100 {
-                        errors.push(ScanError { path: path.to_string_lossy().into_owned(), message: msg });
+    std::thread::scope(|scope| -> DbResult<()> {
+        // 生产者：解析池。不碰 DB、不碰 on_progress。
+        //
+        // 闭包必须是 `move` 的：`tx` 要**跟着闭包一起 drop**，消费者才能收到
+        // Disconnected 收尾。上一版写成非 move 闭包（只借用 tx），tx 活到函数
+        // 末尾，`rx.recv()` 在生产者已经跑完之后还会一直等下去 —— 第一次跑
+        // 测试就是卡死在这（`case_variant_paths_do_not_duplicate_rows`）。
+        let (pool_ref, files_ref, index_ref) = (&pool, &files, &index);
+        let cancel_ref = &should_cancel;
+        let done_ref = &parsed_done;
+        scope.spawn(move || {
+            pool_ref.install(|| {
+                files_ref.par_iter().for_each(|path| {
+                    if cancel_ref() {
+                        return;
                     }
-                }
-            }
-        }
-
-        let mut batch_imported = 0usize;
-        let mut batch_unchanged = 0usize;
-        if !parsed.is_empty() {
-            let tx = conn
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                .map_err(DbError::Sql)?;
-            let mut upsert_err: Option<(&PathBuf, DbError)> = None;
-            for (path, p) in &parsed {
-                match upsert(&tx, p, now_secs(), artwork_cache) {
-                    Ok(true) => batch_imported += 1,
-                    Ok(false) => batch_unchanged += 1,
-                    Err(e) => {
-                        upsert_err = Some((path, e));
-                        break;
-                    }
-                }
-            }
-            match upsert_err {
-                None => {
-                    tx.commit().map_err(DbError::Sql)?;
-                    imported += batch_imported;
-                    unchanged += batch_unchanged;
-                }
-                Some((path, e)) => {
-                    tx.rollback().map_err(DbError::Sql)?;
-                    failed += parsed.len();
-                    if errors.len() < 100 {
-                        errors.push(ScanError {
-                            path: path.to_string_lossy().into_owned(),
-                            message: e.to_string(),
-                        });
-                    }
-                }
-            }
-        }
-
-        scanned_so_far += batch.len();
-        on_progress(ScanProgress {
-            phase: "parsing".into(),
-            scanned: scanned_so_far,
-            total: Some(total),
-            imported,
-            skipped: unchanged,
-            failed,
-            current_path: Some(batch.last().unwrap().to_string_lossy().into_owned()),
-            elapsed_ms: started.elapsed().as_millis() as u64,
-            message: None,
+                    let item = process_file(path, index_ref, artwork_cache);
+                    done_ref.fetch_add(1, Ordering::Relaxed);
+                    // channel 满时这里阻塞 —— 这就是背压本身，不是缺陷。
+                    // 发送失败只可能是消费者已经走了（出错提前返回），
+                    // 此时继续跑没有意义但也没有危害。
+                    let _ = tx.send(item);
+                });
+            });
         });
-    }
+
+        // 消费者 = 本线程。SQLite 连接只能在这里用（单写者），
+        // 解析侧拿不到连接也是在源头上保证这一点。
+        report(&tally, None);
+        loop {
+            let item = match rx.recv() {
+                Ok(i) => i,
+                Err(_) => break,
+            };
+            tally.parsed = parsed_done.load(Ordering::Relaxed);
+
+            if !cancelled && should_cancel() {
+                // 未攒满的半批直接丢弃：批事务语义是"整批生效"，
+                // 半批入库会让"这批到底进没进"说不清。已提交批次保留。
+                cancelled = true;
+                batch.clear();
+            }
+            if cancelled {
+                // drain：不再入库，只把队列抽干，好让 producer 解除阻塞退出
+                continue;
+            }
+
+            match item {
+                Item::Unchanged => {
+                    tally.unchanged += 1;
+                    tally.scanned += 1;
+                }
+                Item::Failed { path, message } => {
+                    tally.failed += 1;
+                    tally.scanned += 1;
+                    last_path = Some(path.clone());
+                    if errors.len() < MAX_ERRORS {
+                        errors.push(ScanError { path, message });
+                    }
+                }
+                item @ Item::Parsed { .. } => {
+                    if let Item::Parsed { parsed, .. } = &item {
+                        last_path = Some(parsed.path.clone());
+                    }
+                    batch.push(item);
+                    if batch.len() >= BATCH_SIZE {
+                        let outcome = commit_batch(&mut *conn, &mut batch)?;
+                        apply_commit(&mut tally, &mut errors, outcome);
+                        // 批边界必报一次：这是用户唯一能感觉到"又前进了一批"的地方
+                        // （旧实现也是每批一次）。同时前推 next_report，否则下面的
+                        // 步长判断会立刻再报一次一模一样的事件。
+                        report(&tally, last_path.clone());
+                        next_report = tally.scanned + PROGRESS_STEP;
+                    }
+                }
+            }
+
+            if tally.scanned >= next_report {
+                next_report = tally.scanned + PROGRESS_STEP;
+                report(&tally, last_path.clone());
+            }
+        }
+
+        // 尾部不满一批的也要提交 —— 否则最后几个文件永远不入库
+        if !batch.is_empty() && !cancelled {
+            // 解析已经全完成、只剩这批没写库 —— 这正是 importing 该出现的时刻。
+            // 提交前先如实报一次，否则这个状态在正常时序里几乎没有露面机会
+            // （只有解析明显快于入库时才会被下面的步长判断撞上）。
+            tally.parsed = parsed_done.load(Ordering::Relaxed);
+            if tally.parsed >= total {
+                report(&tally, last_path.clone());
+            }
+            let outcome = commit_batch(&mut *conn, &mut batch)?;
+            apply_commit(&mut tally, &mut errors, outcome);
+        }
+        Ok(())
+    })?;
 
     // 取消收尾：绝不 mark_missing（seen 不完整会误标大量在线文件），
     // 已提交的批次保留（增量无害，下次重扫继续）。
     if cancelled {
         let result = ScanResult {
-            scanned: scanned_so_far,
-            imported,
+            scanned: tally.scanned,
+            imported: tally.imported,
             updated: 0,
-            unchanged,
-            failed,
+            unchanged: tally.unchanged,
+            failed: tally.failed,
             walk_errors,
             cancelled: true,
             errors: std::mem::take(&mut errors),
             elapsed_ms: started.elapsed().as_millis() as u64,
         };
-        on_progress(ScanProgress {
-            phase: "cancelled".into(),
-            scanned: scanned_so_far,
-            total: Some(total),
-            imported,
-            skipped: unchanged,
-            failed,
-            current_path: None,
-            elapsed_ms: result.elapsed_ms,
-            message: None,
-        });
+        on_progress(snap("cancelled", &tally, Some(total), None, started));
         return Ok(result);
     }
 
@@ -578,18 +842,21 @@ pub fn scan_roots_ext(
     let elapsed_ms = started.elapsed().as_millis() as u64;
     let result = ScanResult {
         scanned: total,
-        imported,
+        imported: tally.imported,
         updated: 0,
-        unchanged,
-        failed,
+        unchanged: tally.unchanged,
+        failed: tally.failed,
         walk_errors,
         cancelled: false,
         errors: std::mem::take(&mut errors),
         elapsed_ms,
     };
+    // done 事件的计数取自 result 而不是 tally：两者此刻应当一致，
+    // 但"最终报出去的数字"只能有一个来源，否则以后迟早对不上。
     on_progress(ScanProgress {
         phase: "done".into(),
         scanned: result.scanned,
+        parsed: total,
         total: Some(total),
         imported: result.imported,
         skipped: result.unchanged,

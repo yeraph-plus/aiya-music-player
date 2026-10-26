@@ -18,7 +18,7 @@ pub mod queue;
 pub mod repo;
 pub mod scanner;
 
-pub use artwork::{ARTWORK_SCHEME, find_artwork, save_artwork};
+pub use artwork::{link, stage, save_artwork, StagedArtwork, ARTWORK_SCHEME, find_artwork};
 pub use db::{DbError, DbHandle, DbResult, open, open_conn};
 pub use queue::{QueuePersist, load_queue, save_queue_full, save_queue_state};
 pub use repo::{TrackRow, TrackSource, TrackWindowQuery};
