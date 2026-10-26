@@ -29,6 +29,11 @@
     oncommit?: (value: number) => void;
     /** 轨道宽度：进度条 100%，音量固定 84px */
     width?: string;
+    /**
+     * 竖向（B5 EQ 频段滑杆）：值从下往上增（与横向左→右一致）。
+     * 竖向时 `width` 是轨道的**厚度**，高度由调用方的样式决定。
+     */
+    orientation?: 'horizontal' | 'vertical';
   }
 
   let {
@@ -41,6 +46,7 @@
     oninput,
     oncommit,
     width,
+    orientation = 'horizontal',
   }: Props = $props();
 </script>
 
@@ -51,10 +57,11 @@
   {max}
   {step}
   {disabled}
+  {orientation}
   aria-label={label}
   onValueChange={(next) => oninput?.(next)}
   onValueCommit={(next) => oncommit?.(next)}
-  class="k-slider"
+  class={`k-slider${orientation === 'vertical' ? ' vert' : ''}`}
   style={width ? `width:${width}` : undefined}
 >
   <Slider.Range class="k-slider-range" />
@@ -115,5 +122,33 @@
   :global(.k-slider[data-disabled]) {
     opacity: 0.45;
     cursor: default;
+  }
+
+  /* 竖向（EQ 频段）：轨道竖画，宽度即厚度，高度由调用方给 */
+  :global(.k-slider.vert) {
+    width: 22px;
+    height: 100%;
+    flex: none;
+    justify-content: center;
+  }
+
+  :global(.k-slider.vert)::before {
+    left: 50%;
+    right: auto;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    height: auto;
+    transform: translateX(-50%);
+  }
+
+  :global(.k-slider.vert .k-slider-range) {
+    left: 50%;
+    right: auto;
+    top: auto;
+    bottom: 0;
+    width: 4px;
+    height: auto;
+    transform: translateX(-50%);
   }
 </style>

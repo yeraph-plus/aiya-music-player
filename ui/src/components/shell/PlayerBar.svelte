@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Snippet } from 'svelte';
   import type { PlayerState } from '../../lib/ipc/generated/PlayerState';
   import { artworkUrl } from '../../lib/artwork';
   import {
@@ -49,7 +50,10 @@
     onrate: (rate: number) => void;
     onrepeat: () => void;
     onshuffle: () => void;
-    onqueue: () => void;
+    /** 队列抽屉开合（Popover 受控） */
+    onqueueopen: (open: boolean) => void;
+    /** 队列抽屉内容（关闭时不渲染——bits-ui 卸载 Content） */
+    queuepanel: Snippet;
     onshownowplaying: () => void;
   }
 
@@ -66,7 +70,8 @@
     onrate,
     onrepeat,
     onshuffle,
-    onqueue,
+    onqueueopen,
+    queuepanel,
     onshownowplaying,
   }: Props = $props();
 
@@ -239,17 +244,36 @@
   </div>
 
   <div class="right">
-    <IconButton
-      label="正在播放"
-      round
-      active={nowPlayingActive}
-      onclick={onshownowplaying}
-    >
+    <IconButton label="正在播放" round active={nowPlayingActive} onclick={onshownowplaying}>
       <AudioLines size={17} />
     </IconButton>
-    <IconButton label={`播放队列（${player?.queueLength ?? 0} 首）`} round pressed={queueOpen} onclick={onqueue}>
-      <Icon name="queue" />
-    </IconButton>
+    <!--
+      队列抽屉（B5a）：kit Popover 整壳接管。触发键的 aria-expanded、Esc、
+      外点关闭、关闭后焦点还原全部由 bits-ui 负责——取代 QueuePanel 里手写的
+      svelte:window 两件套（外点 + Esc）。触发器不能复用 IconButton：
+      bits-ui 的 props（含它的 onclick）必须原样展开到触发元素上，而 IconButton
+      是固定签名组件；这里按 rate-chip 的先例用带 scoped 样式的裸 button。
+    -->
+    <Popover
+      open={queueOpen}
+      onopenchange={onqueueopen}
+      side="top"
+      align="end"
+      sideOffset={8}
+      contentClass="queue-pop"
+    >
+      {#snippet trigger(props)}
+        <button
+          {...props}
+          class="queue-btn"
+          aria-label={`播放队列（${player?.queueLength ?? 0} 首）`}
+          title={`播放队列（${player?.queueLength ?? 0} 首）`}
+        >
+          <Icon name="queue" />
+        </button>
+      {/snippet}
+      {@render queuepanel()}
+    </Popover>
     <IconButton label={player?.muted ? '取消静音' : '静音'} round onclick={onmute}>
       <Icon name={player?.muted || (player?.volume ?? 0) === 0 ? 'mute' : 'volume'} />
     </IconButton>
@@ -421,6 +445,32 @@
   }
 
   /* ---------------- 倍速面板（Popover 内容） ---------------- */
+
+  /* 队列触发键：IconButton 是固定签名组件（bits-ui 的 props 无法展开到它身上），
+     这里按 rate-chip 的先例用裸 button + 同款外观（30px 圆形 ghost 键） */
+  .queue-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: var(--radius-pill);
+    color: var(--text-2);
+    flex: none;
+    transition:
+      background var(--dur-fast) var(--ease),
+      color var(--dur-fast) var(--ease);
+  }
+
+  .queue-btn:hover {
+    background: var(--surface-hover);
+    color: var(--text-1);
+  }
+
+  /* data-state 由 bits-ui 写：open = 抽屉开着（与旧 pressed 高亮同语义） */
+  .queue-btn[data-state='open'] {
+    background: var(--accent-weak);
+    color: var(--accent-text);
+  }
 
   .rate-chip {
     flex: none;

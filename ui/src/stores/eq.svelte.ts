@@ -1,0 +1,122 @@
+import type { EqSettings } from '../lib/ipc/generated';
+import { ipc } from '../lib/ipc/client';
+
+/**
+ * EQ 状态（协议 v6，docs/24 B5b/B5a）。
+ *
+ * 与后端的分工：
+ * - **真相在引擎**：滑杆拖动 300ms 防抖后 `player.setEq`，**以返回值**（clamp 后
+ *   的生效值）回写本地——用户拖到 +20 会被 clamp 到 +12，画面必须跟着回弹，
+ *   不能停在自己的输入值上（那会与实际声音分叉）。
+ * - 持久化在 Rust 侧独立键 `eq`（不进 `app_settings`）：EQ 高频连调与设置页
+ *   低频整体写分键，互不覆盖（见 player_set_eq 的文档注释）。
+ * - `load()` 在面板第一次打开时调用一次；之后全部走本地状态。
+ *
+ * 频段与预设只是 UI 概念：wire 上只有 10 个数字 + pregain + 开关。
+ */
+
+/** 频段短标签（与 aiya_audio::EQ_BAND_HZ 一一对应） */
+export const EQ_FREQ_LABELS = ['31', '63', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'] as const;
+
+/** 预设：10 段增益（dB）。命名取主流播放器的常见集合，数值是常识起点不是玄学 */
+export const EQ_PRESETS: Record<string, { label: string; bands: number[] }> = {
+  flat: { label: '平直', bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+  bass: { label: '重低音', bands: [7, 6, 4, 2, 0, 0, 0, 0, 0, 0] },
+  vocal: { label: '人声', bands: [-2, -1, 0, 2, 4, 4, 3, 1, 0, -1] },
+  treble: { label: '高亮', bands: [0, 0, 0, 0, 0, 1, 2, 4, 6, 7] },
+  pop: { label: '流行', bands: [2, 3, 4, 2, -1, -1, 1, 3, 4, 2] },
+  rock: { label: '摇滚', bands: [5, 4, 2, -1, -2, 0, 2, 4, 5, 4] },
+  jazz: { label: '爵士', bands: [3, 2, 1, 2, -1, -1, 0, 1, 2, 3] },
+  classical: { label: '古典', bands: [0, 0, 0, 0, 0, 0, -1, -1, 0, 2] },
+};
+
+function isPreset(bands: readonly number[]): string | null {
+  for (const [key, preset] of Object.entries(EQ_PRESETS)) {
+    if (preset.bands.every((g, i) => g === bands[i])) return key;
+  }
+  return null;
+}
+
+class EqStore {
+  /** 面板数据是否已从后端回读过（只读一次，之后走本地） */
+  loaded = $state(false);
+  enabled = $state(false);
+  bands = $state<number[]>([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  pregain = $state(0);
+
+  /** 当前是否恰好命中某个预设（是则菜单里显示它，否则"自定义"） */
+  get presetKey(): string | null {
+    return isPreset(this.bands) && this.pregain === 0 ? isPreset(this.bands) : null;
+  }
+
+  private timer: ReturnType<typeof setTimeout> | undefined;
+
+  /** 面板打开时回读一次。失败不阻塞面板（保持默认值，滑杆照样能动） */
+  async load(): Promise<void> {
+    if (this.loaded) return;
+    this.loaded = true; // 先置位：失败的加载不反复重试，用户下次打开再试
+    try {
+      const s = await ipc.player.getEq();
+      this.enabled = s.enabled;
+      this.bands = [...s.bands];
+      this.pregain = s.pregain;
+    } catch {
+      // 静默：EQ 是锦上添花，读不到不该弹错误条
+    }
+  }
+
+  private scheduleApply(): void {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => void this.apply(), 300);
+  }
+
+  private async apply(): Promise<void> {
+    try {
+      const applied = await ipc.player.setEq({
+        enabled: this.enabled,
+        bands: [...this.bands],
+        pregain: this.pregain,
+      });
+      // 以生效值回写：clamp 差异在这里反弹到画面
+      this.enabled = applied.enabled;
+      this.bands = [...applied.bands];
+      this.pregain = applied.pregain;
+    } catch {
+      // 下发失败保持画面不动（错误条由全局 transport 分类层负责的场景不管这）
+    }
+  }
+
+  setBand(index: number, value: number): void {
+    if (index < 0 || index >= this.bands.length) return;
+    this.bands[index] = value;
+    this.scheduleApply();
+  }
+
+  setPregain(value: number): void {
+    this.pregain = value;
+    this.scheduleApply();
+  }
+
+  toggle(enabled: boolean): void {
+    this.enabled = enabled;
+    this.scheduleApply();
+  }
+
+  applyPreset(key: string): void {
+    const preset = EQ_PRESETS[key];
+    if (!preset) return;
+    this.bands = [...preset.bands];
+    this.pregain = 0;
+    this.enabled = true;
+    this.scheduleApply();
+  }
+
+  /** 全部归零（不关开关：用户重置的是曲线，不是意图） */
+  reset(): void {
+    this.bands = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    this.pregain = 0;
+    this.scheduleApply();
+  }
+}
+
+export const eq = new EqStore();

@@ -141,6 +141,8 @@ test('正在播放页：开启频谱后出现 pro 五形态 chip', async ({ page
   await page.getByRole('switch', { name: '频谱可视化' }).click();
 
   await page.locator('.sidebar .nav-item', { hasText: '正在播放' }).click();
+  // B5a 起三块可切，默认在歌词——先切到频谱
+  await page.getByRole('radio', { name: '频谱' }).click();
   const panel = page.locator('.spectrum-panel');
   await expect(panel).toBeVisible();
 

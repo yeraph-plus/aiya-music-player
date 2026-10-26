@@ -67,17 +67,6 @@
   {/if}
 
   <div class="player-dock">
-    {#if ui.queueOpen}
-      <QueuePanel
-        ids={player.queueIds}
-        index={playerState?.index ?? null}
-        onplay={(index) => void playQueueAt(index)}
-        onremove={(index) => player.removeAt(index)}
-        onmove={(from, to) => player.move(from, to)}
-        onclear={() => player.clear()}
-        onclose={() => ui.closeQueue()}
-      />
-    {/if}
     <PlayerBar
       player={playerState}
       queueOpen={ui.queueOpen}
@@ -91,8 +80,21 @@
       onrate={(rate) => player.setRate(rate)}
       onrepeat={() => player.cycleRepeat()}
       onshuffle={() => player.setShuffle(!(playerState?.shuffle ?? false))}
-      onqueue={() => ui.toggleQueue()}
+      onqueueopen={(open) => ui.setQueue(open)}
       onshownowplaying={() => nav.go({ kind: 'page', page: 'nowPlaying' })}
-    />
+    >
+      {#snippet queuepanel()}
+        <!-- 关闭时 bits-ui 卸载 Popover.Content：这里不再需要 {#if ui.queueOpen} -->
+        <QueuePanel
+          ids={player.queueIds}
+          index={playerState?.index ?? null}
+          onplay={(index) => void playQueueAt(index)}
+          onremove={(index) => player.removeAt(index)}
+          onmove={(from, to) => player.move(from, to)}
+          onclear={() => player.clear()}
+          onclose={() => ui.closeQueue()}
+        />
+      {/snippet}
+    </PlayerBar>
   </div>
 </div>

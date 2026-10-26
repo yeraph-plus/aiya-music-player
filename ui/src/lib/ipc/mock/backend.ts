@@ -912,6 +912,14 @@ export class MockBackend {
     return applied;
   }
 
+  getEq(): EqSettings {
+    return loadJson('aiya.eq', {
+      enabled: false,
+      bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      pregain: 0,
+    });
+  }
+
   diagnostics(): Diagnostics {
     const stats = this.libraryStats();
     return {

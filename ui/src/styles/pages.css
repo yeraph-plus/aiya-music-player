@@ -292,11 +292,19 @@
   gap: 14px;
 }
 
-/* 歌词 / 频谱在正在播放页是常驻卡片，不再是右侧栏 */
+/* 三块可切（B5a）：切换条 */
+.now-playing-tabs {
+  flex: none;
+  padding: 0 0 10px;
+}
+
+/* 歌词 / 频谱 / EQ 在正在播放页是常驻卡片（B5a 起三选一切换，
+   一次只渲染一块，独占整行） */
 .now-playing-grid .lyrics-panel,
-.now-playing-grid .spectrum-panel {
+.now-playing-grid .spectrum-panel,
+.now-playing-grid .eq-host {
   grid-row: auto;
-  grid-column: auto;
+  grid-column: 1 / -1;
   border: 1px solid var(--line);
   border-radius: 14px;
   backdrop-filter: none;
@@ -442,22 +450,9 @@
   background: var(--surface-2);
 }
 
-/* ---------------- 播放队列抽屉（悬浮，不影响主布局） ---------------- */
-
-.player-dock .queue-panel {
-  position: absolute;
-  right: 12px;
-  bottom: calc(100% + 8px);
-  width: 360px;
-  max-width: calc(100vw - 24px);
-  height: min(460px, calc(100vh - 160px));
-  grid-row: auto;
-  grid-column: auto;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  box-shadow: 0 18px 48px var(--shadow);
-  z-index: 30;
-}
+/* ---------------- 播放队列抽屉 ----------------
+   B5a 起 Drawer 的几何在 player.css 的 .queue-float（壳由 Popover portal 渲染，
+   不再是 .player-dock 的子元素，绝对定位锚点失效）。 */
 
 @media (prefers-reduced-motion: reduce) {
   .spinning {

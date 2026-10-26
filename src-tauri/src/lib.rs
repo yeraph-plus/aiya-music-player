@@ -446,6 +446,23 @@ fn player_set_eq(app_state: State<'_, AppState>, eq: Json) -> Result<dto::EqSett
     Ok(v)
 }
 
+/// 当前 EQ 设置（面板打开时回读一次；低频，直接走 DB 不进缓存）。
+/// 没保存过 = 默认（关 + 全 0 dB）。
+#[tauri::command]
+fn player_get_eq(app_state: State<'_, AppState>) -> Result<dto::EqSettings, dto::ApiError> {
+    let saved = app_state
+        .db()
+        .send(|conn| Ok(setting_get(conn, "eq")))
+        .map_err(dto::ApiError::from)?;
+    Ok(saved
+        .and_then(|v| serde_json::from_value::<dto::EqSettings>(v).ok())
+        .unwrap_or_else(|| dto::EqSettings {
+            enabled: false,
+            bands: vec![0.0; aiya_audio::EQ_BAND_HZ.len()],
+            pregain: 0.0,
+        }))
+}
+
 #[tauri::command]
 fn app_get_ui_state(state: State<'_, AppState>) -> Result<Json, dto::ApiError> {
     state
@@ -2730,6 +2747,7 @@ pub fn run() {
             app_info,
             spectrum_set,
             player_set_eq,
+            player_get_eq,
             app_get_ui_state,
             app_set_ui_state,
             app_get_settings,

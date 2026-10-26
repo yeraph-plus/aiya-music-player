@@ -160,6 +160,8 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return mock.setSpectrum(a.enabled as boolean);
     case 'player_set_eq':
       return mock.setEq(a.eq as EqSettings);
+    case 'player_get_eq':
+      return mock.getEq();
 
     /* ---------------- beets ---------------- */
     case 'beets_status':

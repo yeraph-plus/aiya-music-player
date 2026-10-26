@@ -241,6 +241,8 @@ export const ipc = {
      * UI 以返回值为准，不要用自己发出去的值更新状态。
      */
     setEq: (eq: EqSettings) => call<EqSettings>('player_set_eq', { eq }),
+    /** 当前 EQ 设置（面板打开时回读一次；没保存过 = 默认） */
+    getEq: () => call<EqSettings>('player_get_eq'),
   },
 
   lyrics: {

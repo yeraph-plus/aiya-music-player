@@ -5,6 +5,8 @@
   import { createVirtualWindow } from '../lib/create-virtual-window.svelte';
   import { formatDurationLong, formatTime } from '../lib/format';
   import { library as libraryStore } from '../stores/library.svelte';
+  import Cover from './ui/Cover.svelte';
+  import IconButton from './ui/IconButton.svelte';
   import Icon from './Icon.svelte';
 
   interface Props {
@@ -15,6 +17,7 @@
     onremove: (index: number) => void;
     onmove: (from: number, to: number) => void;
     onclear: () => void;
+    /** 关闭（头部的 × 键；Esc/外点由外层 Popover 处理，不走这里） */
     onclose: () => void;
   }
 
@@ -27,7 +30,6 @@
   /** 负缓存条数上限，超过整体清空（曲目可能重新上架，允许再试） */
   const META_FAILURE_CAP = 1000;
 
-  let root = $state<HTMLElement | null>(null);
   let metaVersion = $state(0);
   let dragState = $state<{ from: number; to: number; active: boolean } | null>(null);
 
@@ -139,27 +141,22 @@
       onDrop: (from, to) => onmove(from, to),
     });
   }
-
-  function onWindowPointerDown(event: PointerEvent): void {
-    if (!(event.target instanceof Node)) return;
-    if (root?.contains(event.target)) return;
-    if (event.target instanceof Element && event.target.closest('[data-queue-trigger]')) return;
-    onclose();
-  }
-
-  function onWindowKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') onclose();
-  }
 </script>
 
-<svelte:window onpointerdown={onWindowPointerDown} onkeydown={onWindowKeydown} />
-
-<aside class="queue-panel" aria-label="播放队列" bind:this={root}>
+<!--
+  壳体（B5a）：本组件只渲染**内容**。外层浮层（定位/Esc/外点关闭/焦点还原/
+  aria-expanded）由 PlayerBar 里队列键的 kit `Popover` 负责 —— 此前是
+  `<svelte:window>` 手写外点 + Esc 两件套，且触发键双触发问题要靠
+  `closest('[data-queue-trigger]')` 自防。
+-->
+<div class="queue-panel queue-float" aria-label="播放队列">
   <header>
     <strong>播放队列</strong>
     <span class="dim">{ids.length} 首{totalMs > 0 ? ` · ${formatDurationLong(totalMs)}` : ''}</span>
     <button class="link" onclick={onclear} disabled={ids.length === 0}>清空</button>
-    <button class="icon-btn" onclick={onclose} aria-label="关闭队列"><Icon name="close" size={14} /></button>
+    <IconButton label="关闭队列" size="sm" onclick={onclose}>
+      <Icon name="close" size={13} />
+    </IconButton>
   </header>
 
   <div
@@ -199,26 +196,22 @@
         >
           <span class="q-grip" aria-hidden="true"><Icon name="grip" size={13} /></span>
           <span class="q-index">{row.index === index ? '▶' : row.index + 1}</span>
-          {#if row.track?.artworkId}
-            <img class="cover sm" src={artworkUrl(row.track.artworkId, 96) ?? ''} alt="" loading="lazy" />
-          {:else}
-            <span class="cover sm placeholder">♪</span>
-          {/if}
+          <Cover src={row.track?.artworkId ? artworkUrl(row.track.artworkId, 96) : null} size="sm" alt="" />
           <span class="q-meta">
             <span class="q-title">{row.track?.title ?? '载入中…'}</span>
             <span class="q-artist">{row.track?.artist ?? ''}</span>
           </span>
           <span class="q-duration">{formatTime(row.track?.durationMs ?? 0)}</span>
-          <button
-            class="icon-btn tiny"
-            aria-label="从队列移除"
+          <IconButton
+            label="从队列移除"
+            size="sm"
             onclick={(event) => {
               event.stopPropagation();
               onremove(row.index);
             }}
           >
             <Icon name="close" size={12} />
-          </button>
+          </IconButton>
         </div>
       {/each}
       <div style={`height:${range.padBottom}px`}></div>
@@ -227,4 +220,4 @@
       {/if}
     {/if}
   </div>
-</aside>
+</div>

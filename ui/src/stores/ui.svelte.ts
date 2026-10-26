@@ -345,6 +345,11 @@ class UiStore {
     this.queueOpen = !this.queueOpen;
   }
 
+  /** 队列抽屉开合的**唯一入口**（B5a 起 PlayerBar 的 Popover 直接受控于它） */
+  setQueue(open: boolean): void {
+    this.queueOpen = open;
+  }
+
   closeQueue(): void {
     this.queueOpen = false;
   }

@@ -43,7 +43,7 @@
 
 .queue-row {
   display: grid;
-  grid-template-columns: 14px 22px 30px 1fr auto 24px;
+  grid-template-columns: 14px 22px 34px 1fr auto 24px;
   align-items: center;
   gap: 7px;
   height: 46px;
@@ -64,14 +64,15 @@
   opacity: 0.45;
 }
 
-/* 移除按钮只在悬停时出现：8 行队列里挂 8 个 × 会把标题挤得很窄 */
-.queue-row .icon-btn.tiny {
+/* 移除按钮只在悬停时出现：8 行队列里挂 8 个 × 会把标题挤得很窄
+   （B5a 起按钮是 kit IconButton，类名 .k-icon-btn） */
+.queue-row .k-icon-btn {
   opacity: 0;
   transition: opacity 0.12s ease;
 }
 
-.queue-row:hover .icon-btn.tiny,
-.queue-row:focus-within .icon-btn.tiny {
+.queue-row:hover .k-icon-btn,
+.queue-row:focus-within .k-icon-btn {
   opacity: 1;
 }
 
@@ -122,6 +123,23 @@
   color: var(--text-2);
   font-size: 12px;
   line-height: 1.9;
+}
+
+/* B5a：抽屉壳随 Popover portal 渲染，几何自带（不再锚定 .player-dock）。
+   `.queue-pop` 在 kit Popover 的 k-pop 之上覆盖小面板默认外观。 */
+.k-pop.queue-pop {
+  padding: 0;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.queue-float {
+  width: 360px;
+  max-width: calc(100vw - 24px);
+  height: min(460px, calc(100vh - 160px));
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: none; /* 外观由 k-pop 的投影负责，双投影会发灰 */
 }
 
 .dim {
