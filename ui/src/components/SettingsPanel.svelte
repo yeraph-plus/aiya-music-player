@@ -624,6 +624,17 @@
 </div>
 
 <style>
+  /* docs/19 §5：诊断值/路径/beets 提示/快捷键冲突说明是用户可能要复制的内容，
+     从全局 user-select:none 里豁免 */
+  .setting-hint,
+  .diag-grid,
+  .diag-block .dim,
+  .error-list,
+  .setting-foot .dim {
+    user-select: text;
+    cursor: text;
+  }
+
   /* 左分组导航 + 右内容（B6）。外层 .page-scroll 仍是唯一滚动容器，
      左栏 sticky 跟随；右列 max-width 收窄到原 860px 内 */
   .settings-body {

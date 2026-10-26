@@ -20,7 +20,8 @@
 </script>
 
 <div class="k-inline-error" role="alert" aria-live="assertive">
-  <span class="msg">{message}</span>
+  <!-- 错误详情是用户可能要贴给别人的内容，放开选择（docs/19 §5） -->
+  <span class="msg selectable">{message}</span>
   {#if action}
     <button class="link" onclick={action.onclick}>{action.label}</button>
   {/if}

@@ -52,6 +52,30 @@ test('正在播放页三块可切：一次只渲染一块，切走即卸载', as
   await expect(page.locator('.eq-panel')).toHaveCount(0);
 });
 
+test('均衡器：预设菜单命中打 ✓，应用后滑杆值跟随（B6 补 EQ 交互覆盖）', async ({ page }) => {
+  await openNowPlaying(page);
+  await page.getByRole('radio', { name: '均衡器' }).click();
+  await expect(page.locator('.eq-panel')).toBeVisible();
+
+  // 初始平直：首段值为 0，预设按钮显示「自定义」
+  await expect(page.locator('.eq-band').first().locator('.eq-val')).toHaveText('0');
+
+  // 开预设菜单 → 选「重低音」→ 菜单关、按钮显示命中名、滑杆值写入
+  await page.locator('.eq-panel header .link').click();
+  const menu = page.locator('.k-menu');
+  await expect(menu).toBeVisible();
+  await menu.getByRole('menuitem', { name: '重低音' }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(page.locator('.eq-panel header .link')).toHaveText(/预设：重低音/);
+  await expect(page.locator('.eq-band').first().locator('.eq-val')).toHaveText('+7');
+  // 最后一段（16k）仍是 0 —— 重低音只抬低频
+  await expect(page.locator('.eq-band').last().locator('.eq-val')).toHaveText('0');
+
+  // 重置回平直
+  await page.getByRole('button', { name: '重置曲线' }).click();
+  await expect(page.locator('.eq-band').first().locator('.eq-val')).toHaveText('0');
+});
+
 test('队列抽屉：Popover 开合，Esc 关闭后焦点回触发键', async ({ page }) => {
   await page.goto('/');
   // 队列内容与列表无关；进曲库只为拿到稳定的首屏

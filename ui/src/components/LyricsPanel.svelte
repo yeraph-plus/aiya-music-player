@@ -107,7 +107,12 @@
         <span class="dim">在同目录放一个同名的 .lrc 文件即可显示</span>
       </div>
     {:else if !lyrics.synced}
-      <div class="lyrics-lines plain" aria-label={`歌词（纯文本）：《${trackTitle ?? '当前曲目'}》`}>
+      <!-- 纯文本歌词没有逐行 seek 语义，整块放开选择（docs/19 §5）；
+           同步歌词的行是 button（点=seek），文本选择让位给点击手势 -->
+      <div
+        class="lyrics-lines plain selectable"
+        aria-label={`歌词（纯文本）：《${trackTitle ?? '当前曲目'}》`}
+      >
         {#each lines as line, index (index)}
           <div class="lyric-line">{line.text}</div>
         {/each}

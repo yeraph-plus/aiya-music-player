@@ -940,9 +940,36 @@ E2E 补到 8–10 条（覆盖：拆页路由、批量、设置分组、kit 演�
 
 验收：`npm run verify`（test + check + build + gen:types:check）全绿；`test:e2e` 10/10（B0 后基线 6/6）；真窗口 12 步走查表。
 
----
+#### B6 实测（2026-10-26 深夜，三刀：B6a 零件+删壳 / B6b 设置左栏 / B6c 巡检+EQ 用例）
 
-### B3b 壳体换皮（分三刀）
+**B6a**：kit 第 16/17 件 `InlineError`/`Toast` 自研（零件表 20，错误分「可重试/阻断」——区分不是颜色
+而是**有没有动作按钮**）；AppShell 两处 `.error`、OverlayHost `.toast`、HomeView loadError 全换零件，
+全局 `.error`/`.toast` 样式删除。`ConfirmDialog`/`PromptDialog`/`PlaylistPicker` 三个壳物理删除
+（B3b-1 已收敛语义，本批删文件），五个对话框分支以 `ui/Dialog` 组合内联进 OverlayHost——
+输入框文本收拢为一个 `promptText` 状态、打开/切换时按语义初始化（原壳里的 `untrack` 初始化花招
+换成 effect，Svelte 5 没有「`$state` 解构出 setter」这回事，第一版内联试过这个不存在的语法，被 check 拦下）。
+
+**B6b**：设置页 Toolbar tab → 左分组导航（148px sticky 列 + scroll-spy，≤720px 退回顶部横条）。
+**所有区块仍常驻挂载**——扫描/beets 任务进度不能因切组卸载，这是单页布局的硬约束；
+`aria-current` 与视觉高亮同源，选中指示用左侧 2px accent 边线（不只靠明暗，docs/19 §5）。
+
+**B6c 可访问性巡检表（docs/19 §5 逐条，代码证据为准）**：
+
+| 条目 | 状态 | 证据 |
+|---|---|---|
+| 状态不只靠红/绿 | ✅ | InlineError 靠"有无动作按钮"分类；rail 选中用边线+字重 |
+| 全键盘可达、浮层关闭还原焦点 | ✅ | bits-ui 五原语；e2e 断言 Esc 后 `trigger` focused（队列/倍速/对话框三处） |
+| 焦点环统一不永久移除 | ✅ | base.css `:focus-visible` 全局规则，无 `outline:none` 裸写 |
+| 装饰图标 aria-hidden、图标按钮有名称 | ✅ | Icon.svelte 默认 `aria-hidden`；IconButton `label` 必填 |
+| toast polite / 阻断错误才 assertive | ✅ | B6a 落地：Toast `polite`，InlineError `assertive`（唯一挂点） |
+| `user-select:none` 不扩散 | ✅ **巡检修出真缺口** | 此前零例外——歌词/路径/诊断全选不中；修法：`.selectable` 工具类 + 歌词纯文本/错误详情/诊断值/beets 提示放开（同步歌词行是 button，让位给 seek 手势） |
+| 快捷键录制屏蔽全局键 | ✅ | docs/23 §6 实测（录制中空格记键不起播）；capture store + keyboard.ts 让路 |
+| `prefers-reduced-motion` | ✅ | base.css 全局 + Toast/骨架等组件级 |
+
+**E2E**：B0 基线 6 条 → **19 条**（smoke 7 + route 8 + batch 2 + nowplaying 2，超计划 8–10 条；
+B6 补设置左栏 scroll-spy 改写与 EQ 预设交互两条）。`check` 0/0。
+
+#### B3b 壳体换皮（分三刀）
 
 原计划一刀做完，实测后拆成三条 —— 理由见每条末尾的"为什么单独提交"。
 

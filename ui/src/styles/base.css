@@ -23,6 +23,16 @@
   box-sizing: border-box;
 }
 
+/* docs/19 §5：body 的 user-select:none 不许扩散到"用户可能要复制"的内容。
+ * B6 巡检发现的缺口——此前一个例外都没有，歌词/路径/错误详情全都选不中。
+ * `.selectable` 挂在容器上整块放开；歌词逐行放开足够（点行是 seek，拖选是复制，
+ * 两种手势在行内不冲突）。 */
+.selectable,
+.selectable * {
+  user-select: text;
+  cursor: text;
+}
+
 html,
 body,
 #app {
