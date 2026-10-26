@@ -2,8 +2,6 @@
   import type { SpectrumSource } from '../lib/spectrum-source';
 
   interface Props {
-    /** 当前曲目封面 URL（96px 足够——反正要糊掉）；null = 退主题底色 */
-    artworkUrl: string | null;
     /** 频谱数据源（48 带 tap）；null 或 spectrumOn=false 时环境层不渲染 */
     source: SpectrumSource | null;
     spectrumOn: boolean;
@@ -14,25 +12,22 @@
     immersive: boolean;
   }
 
-  let { artworkUrl, source, spectrumOn, immersive }: Props = $props();
+  let { source, spectrumOn, immersive }: Props = $props();
 
   /**
-   * 全应用沉浸背景（docs/25 §5 T4b → T4c app 化，方案 B：预模糊 + 频谱自发光 + 遮罩）。
+   * 全应用背景（docs/25 §5 T4c app 化 + T4d 固定渐变）。
    *
-   * 挂在 AppShell 根部、四区（顶栏/侧栏/主区/播放条）之下，整个应用共享一套
-   * 四层结构：第 1 层预模糊封面、第 2 层频谱环境光、第 3 层可读性遮罩；
-   * 第 4 层是界面布局本身。持久性壳层（顶栏/侧栏/播放条）一律**半透明底色、
-   * 不用 backdrop-filter**——玻璃垫着动画 canvas 时合成器每帧重建离屏 buffer
-   * 全屏重模糊（最贵用法），这是方案 B 的红线；真玻璃只留给瞬时浮层
-   * （对话框/菜单/抽屉，打开时才付钱）和 .np-meta 一个展示性小块。
-   *
-   * 三层实现：
-   * - 第 1 层 背景：封面 `<img>` 自身 `filter: blur(64px)`——静态内容光栅化
-   *   一次即被缓存，切歌才重算一次，零每帧成本（业界沉浸页的通用做法）。
-   * - 第 2 层 频谱环境光：低分辨率 buffer 画柱 → `drawImage` 放大 + ctx.filter
-   *   大半径模糊——柔化在**画布内部**完成，频谱自己就是"叠在背景上的光"。
-   * - 第 3 层 可读性遮罩：主题化渐变（--surface-1 从下往上压过来），深浅主题都
-   *   成立；immersive 档压得轻（正在播放页），standard 档压得重（列表页）。
+   * 三层（第 4 层是界面布局本身，在四区席位里）：
+   * - 第 1 层 背景：固定 CSS 渐变（`--ambient-bg`，tokens.css 按
+   *   `html[data-ambient]` 定义，设置页成套切换）。**不再跟随封面**——
+   *   预模糊封面与封面主色提取已按用户拍板移除（T4d）。
+   * - 第 2 层 频谱环境光：低分辨率 buffer 画柱 → `drawImage` 放大 +
+   *   ctx.filter 大半径模糊——柔化在画布内部完成，频谱自己就是"叠在
+   *   背景上的光"。刻意不用 backdrop-filter 垫在动画 canvas 上（合成器
+   *   每帧全屏重模糊，方案 B 红线）。
+   * - 第 3 层 可读性遮罩：只在 standard 档渲染。**沉浸档整个撤销**
+   *   （T4d 用户反馈：正在播放页看不到频谱，就是被这层 72% 的底色
+   *   压没了）——固定渐变自身已带可读性设计。
    *
    * `prefers-reduced-motion: reduce` 时环境层整体不渲染（静态背景保留）。
    */
@@ -93,9 +88,9 @@
       octx.fillRect(i * slot, BH - h, Math.max(1, slot - 0.5), h);
     }
 
-    // 大半径模糊 + 低透明度 + 略微出血：频谱变成环境光而不是一排柱子
+    // 大半径模糊 + 透明度 + 略微出血：频谱变成环境光而不是一排柱子
     ctx.filter = 'blur(26px)';
-    ctx.globalAlpha = 0.5;
+    ctx.globalAlpha = 0.55;
     ctx.drawImage(off, -width * 0.05, height * 0.25, width * 1.1, height * 0.85);
     ctx.filter = 'none';
     ctx.globalAlpha = 1;
@@ -116,13 +111,13 @@
 </script>
 
 <div class="ambient-bg" class:immersive>
-  {#if artworkUrl}
-    <img class="ambient-art" src={artworkUrl} alt="" />
-  {/if}
+  <div class="ambient-art"></div>
   {#if active}
     <canvas bind:this={canvas} class="ambient-spectrum"></canvas>
   {/if}
-  <div class="ambient-veil"></div>
+  {#if !immersive}
+    <div class="ambient-veil"></div>
+  {/if}
 </div>
 
 <style>
@@ -134,20 +129,17 @@
     pointer-events: none;
   }
 
-  /* 出血 12%：blur 边缘会透出透明，拉大一点让边缘也糊满。
-   * 沉浸档放光（0.85），standard 档收着点（0.5）——列表页背景是氛围不是主角。 */
+  /* 第 1 层：固定渐变（--ambient-bg 随 html[data-ambient] 切换）。
+   * standard 档收着点（0.6）——列表页背景是氛围不是主角；沉浸档放满。 */
   .ambient-art {
     position: absolute;
-    inset: -12%;
-    width: 124%;
-    height: 124%;
-    object-fit: cover;
-    filter: blur(64px) saturate(1.4);
-    opacity: 0.5;
+    inset: 0;
+    background: var(--ambient-bg);
+    opacity: 0.6;
   }
 
   .immersive .ambient-art {
-    opacity: 0.85;
+    opacity: 1;
   }
 
   .ambient-spectrum {
@@ -157,11 +149,8 @@
     height: 100%;
   }
 
-  /* 可读性遮罩（第 3 层）两档：
-   * - standard（列表页）：近乎均匀地压一层 surface-1，正文对比度优先，
-   *   背景在缝隙里透出即可；
-   * - immersive（正在播放页）：底部压得重（信息/歌词在下半区呼吸），
-   *   顶部放光进来。 */
+  /* 第 3 层可读性遮罩：仅 standard 档存在（沉浸档不渲染——频谱直接可见）。
+   * 近乎均匀地压一层 surface-1，正文对比度优先，背景在缝隙里透出即可。 */
   .ambient-veil {
     position: absolute;
     inset: 0;
@@ -171,15 +160,6 @@
       color-mix(in srgb, var(--surface-1) 74%, transparent) 40%,
       color-mix(in srgb, var(--surface-1) 58%, transparent) 78%,
       color-mix(in srgb, var(--surface-1) 46%, transparent)
-    );
-  }
-
-  .immersive .ambient-veil {
-    background: linear-gradient(
-      to top,
-      color-mix(in srgb, var(--surface-1) 72%, transparent),
-      color-mix(in srgb, var(--surface-1) 34%, transparent) 45%,
-      transparent 82%
     );
   }
 </style>

@@ -8,7 +8,6 @@
   import InlineError from './ui/InlineError.svelte';
   import QueuePanel from './QueuePanel.svelte';
   import BatchBar from './BatchBar.svelte';
-  import { artworkUrl } from '../lib/artwork';
   import { errorMessage } from '../lib/errors';
   import type { SpectrumSource } from '../lib/spectrum-source';
   import { batch } from '../stores/batch.svelte';
@@ -46,11 +45,6 @@
     }
   });
 
-  /** 背景用小图（96px）：反正要糊掉，省解码内存 */
-  const bgArt = $derived(
-    playerState?.current?.artworkId ? artworkUrl(playerState.current.artworkId, 96) : null,
-  );
-
   async function playQueueAt(index: number): Promise<void> {
     try {
       await player.playTracks(player.queueIds, index);
@@ -61,10 +55,9 @@
 </script>
 
 <div class="app">
-  <!-- 背景四层（1-3 层，T4c 起 app 化）：绝对定位在 .app 根部、四区席位之下；
-       沉浸档只在正在播放页，其余页面用重遮罩保列表可读性 -->
+  <!-- 背景四层（1-3 层，T4c 起 app 化；T4d 起第 1 层是固定渐变，不跟随封面）：
+       绝对定位在 .app 根部、四区席位之下；沉浸档只在正在播放页 -->
   <AmbientBackdrop
-    artworkUrl={bgArt}
     source={spectrumSource}
     spectrumOn={ui.settings.spectrum}
     immersive={ui.page === 'nowPlaying'}

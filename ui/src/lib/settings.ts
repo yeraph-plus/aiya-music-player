@@ -20,11 +20,30 @@ import type { ShortcutAction } from './shortcuts';
 export type ThemeMode = 'dark' | 'light';
 export type ListDensity = 'comfortable' | 'compact';
 
+/**
+ * 背景方案（docs/25 §5 T4d）：固定 CSS 渐变 + 配套强调色，成套切换。
+ *
+ * 取代「封面预模糊背景 + 封面主色提取」（用户拍板移除）：
+ * 背景不再跟随曲目，而是用户选定的固定视觉身份。`aurora` 就是原默认
+ * （主题自带蓝色强调 + 蓝青渐变），其余方案在 tokens.css 按
+ * `html[data-ambient]` 定义各自的 `--ambient-bg` 与强调色三件套。
+ */
+export type AmbientScheme = 'aurora' | 'ember' | 'meadow' | 'dusk' | 'mono';
+
+/** 设置页与 look 校验共用的方案清单（id 顺序即展示顺序） */
+export const AMBIENT_SCHEMES: Array<{ value: AmbientScheme; label: string }> = [
+  { value: 'aurora', label: '极光' },
+  { value: 'ember', label: '流霞' },
+  { value: 'meadow', label: '苔原' },
+  { value: 'dusk', label: '暮紫' },
+  { value: 'mono', label: '素白' },
+];
+
 export interface AppSettings {
   theme: ThemeMode;
   density: ListDensity;
-  /** 从封面提取主色作为强调色；关闭则用固定主题色 */
-  accentFromArtwork: boolean;
+  /** 背景与强调色方案（固定渐变，不跟随封面） */
+  ambient: AmbientScheme;
   /** 按 ReplayGain 调整音量（近似实现：换算到音量系数） */
   normalizeVolume: boolean;
   /**
@@ -69,7 +88,7 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   density: 'comfortable',
-  accentFromArtwork: true,
+  ambient: 'aurora',
   normalizeVolume: false,
   // 频谱默认关：不订阅 tap，保持最简出口路径
   spectrum: false,

@@ -145,6 +145,15 @@ FM 电台   →  page 'radio'（占位页回归入口）
 ### 建议的推进方式
 **先做 A/B 的 30 分钟 spike**（一个临时页面两种实现，DevTools Performance + 探针测帧率），用数据定第三层。A/B 的第 1/2/4 层完全相同，spike 期间互不阻塞。
 
+### T4d 增补（同日晚，用户四点反馈）
+
+1. **顶栏/播放条同档半透明**：统一 90%，底色分别用 surface-2 / surface-3——同档不同阶，叠起来有一点色差变化。
+2. **背景脱离封面**：预模糊封面与封面主色提取整条移除（`lib/accent.ts` 删除、`accentFromArtwork` 设置删除、App.svelte 主色 effect 删除）；改为 **5 套固定 CSS 渐变 + 配套强调色**（aurora 极光 / ember 流霞 / meadow 苔原 / dusk 暮紫 / mono 素白），`html[data-ambient]` 切换，深浅主题各一份渐变与强调色三件套，设置页「背景方案」SegmentedControl 切换。`--ambient-bg` 是新 token；强调色覆盖 `--accent/--accent-weak/--accent-text`（aurora/mono 用主题默认蓝）。spec 加了 CSS 特异性坑备注：暗色方案块必须排在浅色主题块之后（同为 (0,1,1) 靠顺序），浅色变体用双属性选择器 (0,2,1) 压回。
+3. **沉浸档撤销遮罩**：正在播放页「看不到频谱」的根因就是第 3 层遮罩底部 72% 的 surface-1 把 0.55 透明度的频谱光压没了——`immersive` 时 veil 整个不渲染；standard 档保留。
+4. **正在播放信息区**：去 `.np-meta` 玻璃（无底色无边框）；艺人/专辑各占一行；标题 `-webkit-line-clamp: 2`；封面 300→240px；歌词面板摘头部（「歌词」标题与格式小字），`.np-lyrics .lyrics-panel` 网格改单行（player.css 的 `auto 1fr` 是给带头版的）。
+
+影响范围核对（第 2 项，改动前已核）：settings.ts（类型+默认值+方案清单）、schema.ts zod、look.ts（Look+ambient、镜像校验）、env.d.ts（`__AIYA_LOOK__` 形状）、App.svelte（look effect 三字段、删主色 effect）、SettingsPanel（行替换）、AmbientBackdrop/AppShell（img→渐变 div、删 bgArt）、tokens.css（5×2 方案块）、e2e（启动断言改渐变层常在、沉浸页断言 veil count 0）。`artwork-blob.ts` 保留（Media Session 封面仍用）。
+
 ### T4c 增补（同日，用户反馈「四层应是全应用而非本页局部」）
 
 背景从 NowPlayingView 局部组件升为 **AppShell 根部的全应用层**，四区席位共享一套四层结构：

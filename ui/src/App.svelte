@@ -26,8 +26,6 @@
   import NowPlayingView from './views/NowPlayingView.svelte';
   import RadioView from './views/RadioView.svelte';
   import SettingsView from './views/SettingsView.svelte';
-  import { accentForArtwork } from './lib/accent';
-  import { artworkUrl } from './lib/artwork';
   import { boot } from './lib/boot';
   import { onKeydown } from './lib/keyboard';
   import { createMediaSession, type MediaSessionBridge } from './lib/media-session';
@@ -69,36 +67,18 @@
     );
   }
 
-  // 主题与密度：写在 <html> 的 data 属性上，CSS 变量随之切换，无需重建组件。
+  // 主题/密度/背景方案：写在 <html> 的 data 属性上，CSS 变量随之切换，无需重建组件。
   // 同时写一份 localStorage 镜像，供下次启动首帧使用（否则浅色主题会先闪一帧深色）。
   $effect(() => {
-    const look = { theme: ui.settings.theme, density: ui.settings.density };
+    const look = {
+      theme: ui.settings.theme,
+      density: ui.settings.density,
+      ambient: ui.settings.ambient,
+    };
     applyLook(look);
     writeLook(look);
     // 行高只有 CSS 一处定义，这里把它的当前值同步给虚拟列表
     ui.rowHeight = readRowHeight();
-  });
-
-  // 封面主色：切歌或开关变化时重新提取；异步结果带取消标记，防止旧封面覆盖新颜色
-  $effect(() => {
-    const artworkId = player.state?.current?.artworkId ?? null;
-    if (!ui.settings.accentFromArtwork || !artworkId) {
-      document.documentElement.style.removeProperty('--accent');
-      document.documentElement.style.removeProperty('--accent-weak');
-      return;
-    }
-
-    let cancelled = false;
-    const url = artworkUrl(artworkId, 96);
-    if (!url) return;
-    void accentForArtwork(url).then((hex) => {
-      if (cancelled || !hex) return;
-      document.documentElement.style.setProperty('--accent', hex);
-      document.documentElement.style.setProperty('--accent-weak', `${hex}33`);
-    });
-    return () => {
-      cancelled = true;
-    };
   });
 
   /**

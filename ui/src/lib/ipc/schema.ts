@@ -15,7 +15,8 @@ export const settingsSchema = z
   .object({
     theme: z.enum(['dark', 'light']).optional(),
     density: z.enum(['compact', 'comfortable', 'spacious']).optional(),
-    accentFromArtwork: z.boolean().optional(),
+    /** 背景方案（2026-10-26 起取代 accentFromArtwork；旧字段不再写） */
+    ambient: z.enum(['aurora', 'ember', 'meadow', 'dusk', 'mono']).optional(),
     normalizeVolume: z.boolean().optional(),
     spectrum: z.boolean().optional(),
     spectrumEngine: z.enum(['compact', 'pro']).optional(),

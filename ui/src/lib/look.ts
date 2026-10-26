@@ -15,17 +15,21 @@
  * 所以 Tauri 下这条分支目前不生效；保留是为了将来若真的在 `index.html`
  * 里预置时这里零改动。预览模式下 mock 会写它。
  */
-import type { ListDensity, ThemeMode } from './settings';
+import type { AmbientScheme, ListDensity, ThemeMode } from './settings';
 
 export interface Look {
   theme: ThemeMode;
   density: ListDensity;
+  /** 背景方案（T4d）：切 `html[data-ambient]`，CSS 渐变与强调色成套换 */
+  ambient: AmbientScheme;
 }
 
 const KEY = 'aiya.look';
 
 /** 兜底值必须与 `DEFAULT_SETTINGS` 一致：镜像缺失时首帧就是默认外观 */
-const FALLBACK: Look = { theme: 'dark', density: 'comfortable' };
+const FALLBACK: Look = { theme: 'dark', density: 'comfortable', ambient: 'aurora' };
+
+const AMBIENTS: ReadonlySet<string> = new Set(['aurora', 'ember', 'meadow', 'dusk', 'mono']);
 
 function isTheme(value: unknown): value is ThemeMode {
   return value === 'dark' || value === 'light';
@@ -33,6 +37,10 @@ function isTheme(value: unknown): value is ThemeMode {
 
 function isDensity(value: unknown): value is ListDensity {
   return value === 'comfortable' || value === 'compact';
+}
+
+function isAmbient(value: unknown): value is AmbientScheme {
+  return typeof value === 'string' && AMBIENTS.has(value);
 }
 
 /**
@@ -47,7 +55,12 @@ export function readLook(): Look {
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<Look>;
       if (isTheme(parsed.theme) && isDensity(parsed.density)) {
-        return { theme: parsed.theme, density: parsed.density };
+        // ambient 是后加字段：镜像里没有就落默认（不为此判镜像无效）
+        return {
+          theme: parsed.theme,
+          density: parsed.density,
+          ambient: isAmbient(parsed.ambient) ? parsed.ambient : FALLBACK.ambient,
+        };
       }
     }
   } catch {
@@ -56,7 +69,11 @@ export function readLook(): Look {
 
   const injected = window.__AIYA_LOOK__;
   if (injected && isTheme(injected.theme) && isDensity(injected.density)) {
-    return { theme: injected.theme, density: injected.density };
+    return {
+      theme: injected.theme,
+      density: injected.density,
+      ambient: isAmbient(injected.ambient) ? injected.ambient : FALLBACK.ambient,
+    };
   }
   return FALLBACK;
 }
@@ -67,7 +84,10 @@ export function readLook(): Look {
  */
 export function writeLook(look: Look): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify({ theme: look.theme, density: look.density }));
+    localStorage.setItem(
+      KEY,
+      JSON.stringify({ theme: look.theme, density: look.density, ambient: look.ambient }),
+    );
   } catch {
     /* 配额满/存储禁用：只影响下次首帧 */
   }
@@ -90,8 +110,9 @@ export function readRowHeight(): number {
   return Number.isFinite(px) ? px : 52;
 }
 
-/** 把外观写到 `<html>`（CSS 变量按 `[data-theme]` / `[data-density]` 切换） */
+/** 把外观写到 `<html>`（CSS 变量按 `[data-theme]` / `[data-density]` / `[data-ambient]` 切换） */
 export function applyLook(look: Look): void {
   document.documentElement.dataset.theme = look.theme;
   document.documentElement.dataset.density = look.density;
+  document.documentElement.dataset.ambient = look.ambient;
 }

@@ -62,10 +62,10 @@ test('启动装配：顶栏四件 + 推荐页标题 + 播放条空态', async ({
   // 2026-10-26 这条数据从 ui store 挪到 library（避免 list/scan 与 playlists 成环），
   // 断言在这里是为了「挪完还接得上」——mock 种子固定 4 张。
   await expect(page.locator('.sidebar .playlist-item')).toHaveCount(4);
-  // docs/25 §5 T4c：背景四层是全应用的——推荐页也有遮罩层；未播放所以
-  // 没有封面背景层、没有频谱环境层
+  // docs/25 §5 T4c/T4d：背景四层是全应用的——推荐页也有背景渐变层与遮罩层；
+  // 频谱 mock 下默认关，所以环境层不在
+  await expect(page.locator('.ambient-art')).toHaveCount(1);
   await expect(page.locator('.ambient-veil')).toBeVisible();
-  await expect(page.locator('.ambient-art')).toHaveCount(0);
   await expect(page.locator('.ambient-spectrum')).toHaveCount(0);
 });
 
@@ -156,8 +156,10 @@ test('正在播放页：起播后两栏沉浸布局 + 背景四层接住真实�
   await expect(page.locator('.np-info .audio-spec')).toBeVisible();
   await expect(page.locator('.lyrics-panel')).toBeVisible();
 
-  // docs/25 §5 背景四层：背景层常在（遮罩可见）；频谱环境层随设置出现
-  await expect(page.locator('.ambient-veil')).toBeVisible();
+  // docs/25 §5 背景四层：背景层常在；沉浸档（正在播放页）遮罩撤销（T4d）——
+  // 频谱环境光不被压暗
+  await expect(page.locator('.ambient-art')).toBeVisible();
+  await expect(page.locator('.ambient-veil')).toHaveCount(0);
   await expect(page.locator('.ambient-spectrum')).toHaveCount(0); // mock 下频谱默认关
 
   await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();

@@ -33,11 +33,12 @@
     <div class="np-meta">
       <span class="page-kicker">NOW PLAYING</span>
       <h1>{current?.title ?? '未在播放'}</h1>
-      <p>
-        {current
-          ? `${current.artist ?? '未知艺人'}${current.album ? ` · ${current.album}` : ''}`
-          : '从推荐页或歌单选择一首歌开始'}
-      </p>
+      {#if current}
+        <p class="np-line">{current.artist ?? '未知艺人'}</p>
+        {#if current.album}<p class="np-line np-album">{current.album}</p>{/if}
+      {:else}
+        <p class="np-line">从推荐页或歌单选择一首歌开始</p>
+      {/if}
       {#if current?.audio}<span class="audio-spec">{formatAudioSpec(current.audio)}</span>{/if}
     </div>
   </div>

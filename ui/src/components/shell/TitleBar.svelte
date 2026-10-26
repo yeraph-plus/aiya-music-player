@@ -153,10 +153,11 @@
     padding: 0;
     min-width: 0;
     border-bottom: 1px solid var(--line);
-    /* 半透明（T4c）：全应用背景（预模糊封面/频谱）从底下透出来。
-     * 不用 backdrop-filter——它是持久壳层，垫着动画频谱 canvas 就是
-     * 每帧全条重模糊（docs/25 §5 方案 B 红线）。 */
-    background: color-mix(in srgb, var(--surface-2) 80%, transparent);
+    /* 半透明（T4d，与播放条同档 90%）：全应用背景从底下透出来。
+     * 底色用 surface-2（播放条是 surface-3）——同档不同阶，叠起来有
+     * 一点色差变化。不用 backdrop-filter——它是持久壳层，垫着动画频谱
+     * canvas 就是每帧全条重模糊（docs/25 §5 方案 B 红线）。 */
+    background: color-mix(in srgb, var(--surface-2) 90%, transparent);
     user-select: none;
   }
 

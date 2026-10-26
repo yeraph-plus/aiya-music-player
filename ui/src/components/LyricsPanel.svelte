@@ -2,8 +2,6 @@
   import type { Lyrics } from '../lib/ipc';
   import { findActiveLine } from '../lib/lyrics';
   import { anchorAt, projectPosition } from '../lib/lyrics-clock';
-  import Icon from './Icon.svelte';
-  import IconButton from './ui/IconButton.svelte';
 
   interface Props {
     lyrics: Lyrics | null;
@@ -13,11 +11,9 @@
     durationMs: number;
     playing: boolean;
     onseek: (ms: number) => void;
-    onclose?: () => void;
   }
 
-  let { lyrics, loading, trackTitle, positionMs, durationMs, playing, onseek, onclose }: Props =
-    $props();
+  let { lyrics, loading, trackTitle, positionMs, durationMs, playing, onseek }: Props = $props();
 
   let scroller = $state<HTMLDivElement | null>(null);
   let userScrolledAt = 0;
@@ -88,12 +84,8 @@
 <svelte:window ontouchstart={markUserScroll} onpointerdown={markUserScroll} />
 
 <aside class="lyrics-panel" aria-label="歌词">
-  <header>
-    <strong>歌词</strong>
-    <span class="dim">{lyrics?.found ? (lyrics.synced ? '同步歌词' : '纯文本') : '暂无'}</span>
-    {#if onclose}<IconButton label="关闭歌词" size="sm" onclick={onclose}><Icon name="close" size={13} /></IconButton>{/if}
-  </header>
-
+  <!-- 无头部（T4d 用户拍板）：「歌词」标题与格式小字移除，正在播放页的
+       页面语境已经说明这里是什么；唯一消费方是正在播放页右列 -->
   <div
     class="lyrics-body"
     bind:this={scroller}

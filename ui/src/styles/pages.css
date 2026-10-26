@@ -242,7 +242,7 @@
 }
 
 .np-cover {
-  width: min(300px, 100%);
+  width: min(240px, 100%);
   aspect-ratio: 1;
   height: auto;
   border-radius: 16px;
@@ -258,37 +258,40 @@
   color: var(--text-3);
 }
 
+/*
+ * 信息块**无底色无玻璃**（T4d 用户拍板）：背景固定渐变自身已保证可读性，
+ * 不再垫毛玻璃卡片。左列约 40% 分栏，封面缩到 240px 靠左。
+ */
 .np-meta {
   min-width: 0;
   max-width: 100%;
-  /* 局部真玻璃（方案 B 第 3 层的"小块"）：backdrop-filter 只在这里——
-     背后是静态预模糊图，不是动画 canvas，合成器无每帧重建成本。
-     负 margin 抵消内距，让文字与封面左缘对齐。 */
-  padding: 12px 16px;
-  margin: -12px 0 0 -16px;
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--surface-2) 45%, transparent);
-  backdrop-filter: blur(10px);
-  border: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
 }
 
 .np-meta h1 {
-  margin: 6px 0 8px;
+  margin: 6px 0 10px;
   font-size: 30px;
   font-weight: 650;
   letter-spacing: -0.01em;
+  /* 标题最多两行，超出行省略（T4d） */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.np-meta p {
-  margin: 0 0 10px;
+/* 艺人、专辑各占一行（T4d） */
+.np-meta .np-line {
+  margin: 0 0 6px;
   font-size: 13.5px;
   color: var(--text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.np-meta .np-album {
+  font-size: 12.5px;
+  color: var(--text-3);
 }
 
 .audio-spec {
@@ -312,6 +315,8 @@
   min-height: 0;
   background: transparent;
   border-left-color: transparent;
+  /* 头部已摘（T4d）：单行网格，歌词体占满整列（player.css 的 auto 1fr 是给带头版的） */
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .spectrum-disabled > div {

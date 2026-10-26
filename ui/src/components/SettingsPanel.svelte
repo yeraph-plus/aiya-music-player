@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import type { BeetsStatus, Diagnostics } from '../lib/ipc';
-  import type { AppSettings, ListDensity, ThemeMode } from '../lib/settings';
+  import type { AppSettings, AmbientScheme, ListDensity, ThemeMode } from '../lib/settings';
+  import { AMBIENT_SCHEMES } from '../lib/settings';
   import {
     SHORTCUT_ACTIONS,
     SHORTCUT_LABELS,
@@ -237,13 +238,14 @@
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">封面主色</div>
-            <div class="setting-hint">从封面提取强调色；关掉则使用固定蓝色</div>
+            <div class="setting-title">背景方案</div>
+            <div class="setting-hint">固定渐变背景与强调色成套切换，不跟随封面</div>
           </div>
-          <Switch
-            label="封面主色"
-            checked={settings.accentFromArtwork}
-            onchange={(checked) => apply({ accentFromArtwork: checked })}
+          <SegmentedControl
+            label="背景方案"
+            value={settings.ambient}
+            options={AMBIENT_SCHEMES}
+            onchange={(value) => apply({ ambient: value as AmbientScheme })}
           />
         </div>
       </section>
