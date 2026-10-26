@@ -52,13 +52,16 @@ export const uiStateSchema = z
     scrollTop: z.number().optional(),
     artistId: z.string().nullable().optional(),
     albumId: z.string().nullable().optional(),
-    /** 一级路由（B4-1 拆页 8 值；B4-3 加专辑/艺人/搜索共 13 值）。旧文件的 `home` 仍合法 */
+    /**
+     * 一级路由（B4-1 拆页 8 值；B4-3 加专辑/艺人/搜索；docs/28 撤
+     * recent/mostPlayed 共 11 值）。旧文件的 `home` 仍合法；落到已退役的
+     * `recent`/`mostPlayed` 时由 ui.restore() 换算成曲库（这里不收编，
+     * 让 devValidate 在开发期把"还在写退役值"的代码暴露出来）。
+     */
     page: z
       .enum([
         'home',
         'library',
-        'recent',
-        'mostPlayed',
         'playlist',
         'albums',
         'artists',

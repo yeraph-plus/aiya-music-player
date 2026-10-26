@@ -8,6 +8,7 @@
   import type { TrackSource } from '../lib/query';
   import { artworkUrl } from '../lib/artwork';
   import { errorMessage } from '../lib/errors';
+  import { history } from '../stores/history.svelte';
   import { library } from '../stores/library.svelte';
   import { nav } from '../stores/nav.svelte';
   import { notify } from '../stores/notify.svelte';
@@ -19,8 +20,14 @@
    *
    * 三段都走 `TrackTable`——docs/27 起是**纯预览表**（勾选/批量撤掉，
    * 批量归主列表工具条），双击播放、右键菜单保留。
+   *
+   * docs/28：最近播放/常听单页退役后这里成了唯一出口。常听段取 **top-15**
+   * ——排序是"播放次数 desc，同次数按最近播放优先"，第 16 名永远进不来，
+   * 满额后新歌挤掉末位，天然就是"新增一个退出一个"。
    */
-  const SECTION_SIZE = 8;
+  const RECENT_SIZE = 8;
+  const FREQUENT_SIZE = 15;
+  const ADDED_SIZE = 8;
 
   let recent = $state<TrackRow[]>([]);
   let frequent = $state<TrackRow[]>([]);
@@ -28,11 +35,11 @@
   let loading = $state(true);
   let loadError = $state('');
 
-  async function loadSection(source: TrackSource, recentlyAdded = false): Promise<TrackRow[]> {
+  async function loadSection(source: TrackSource, limit: number, recentlyAdded = false): Promise<TrackRow[]> {
     const page = await library.list({
       mode: 'offset',
       offset: 0,
-      limit: SECTION_SIZE,
+      limit,
       source,
       ...(recentlyAdded ? { sort: 'added' as const, direction: 'desc' as const } : {}),
     });
@@ -44,9 +51,9 @@
     loadError = '';
     try {
       [recent, frequent, added] = await Promise.all([
-        loadSection({ kind: 'recent' }),
-        loadSection({ kind: 'mostPlayed' }),
-        loadSection({ kind: 'library' }, true),
+        loadSection({ kind: 'recent' }, RECENT_SIZE),
+        loadSection({ kind: 'mostPlayed' }, FREQUENT_SIZE),
+        loadSection({ kind: 'library' }, ADDED_SIZE, true),
       ]);
     } catch (error) {
       loadError = errorMessage(error);
@@ -67,6 +74,15 @@
     lastTotal = total;
     void load();
   });
+
+  /**
+   * 清空历史后最近播放段要跟着重拉——stats.tracks 不变，上面的 effect
+   * 不会触发，只能显式刷（播放计数归零也让常听段同步变空）。
+   */
+  async function clearHistory(): Promise<void> {
+    await history.clear();
+    void load();
+  }
 
   async function play(rows: TrackRow[], index: number): Promise<void> {
     try {
@@ -123,7 +139,8 @@
   <section class="home-section">
     <div class="section-heading">
       <div><Clock3 size={17} /><h2>最近播放</h2></div>
-      <button class="section-link" onclick={() => nav.go({ kind: 'builtin', view: 'recent' })}>查看全部 <ArrowRight size={13} /></button>
+      <!-- docs/28：单页退役，"查看全部"换成"清空历史"——这个动作的唯一入口 -->
+      <button class="section-link" onclick={() => void clearHistory()}>清空播放历史</button>
     </div>
     <TrackTable
       rows={recent}
@@ -138,7 +155,7 @@
   <section class="home-section">
     <div class="section-heading">
       <div><Flame size={17} /><h2>常听</h2></div>
-      <button class="section-link" onclick={() => nav.go({ kind: 'builtin', view: 'mostPlayed' })}>查看全部 <ArrowRight size={13} /></button>
+      <span>播放最多的 15 首</span>
     </div>
     <TrackTable
       rows={frequent}

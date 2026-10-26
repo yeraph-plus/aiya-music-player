@@ -1009,9 +1009,16 @@ export class MockBackend {
         .sort((a, b) => (b.lastPlayedAtMs ?? 0) - (a.lastPlayedAtMs ?? 0) || a.id.localeCompare(b.id));
     }
     if (source.kind === 'mostPlayed') {
+      // 与 Rust repo.rs join_and_order 逐字对齐：次数 desc → 最近播放 desc → id。
+      // docs/28：推荐页 top-15 的第 15 名争夺战里，并列次数下"最近还在听"的留下
       return [...rows]
         .filter((t) => t.playCount > 0)
-        .sort((a, b) => b.playCount - a.playCount || a.id.localeCompare(b.id));
+        .sort(
+          (a, b) =>
+            b.playCount - a.playCount ||
+            (b.lastPlayedAtMs ?? 0) - (a.lastPlayedAtMs ?? 0) ||
+            a.id.localeCompare(b.id),
+        );
     }
     // library / playlist：mock 不建 playlist_items 表，歌单视图就用同一批曲目
     return [...rows].sort(cmp);

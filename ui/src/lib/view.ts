@@ -3,15 +3,18 @@ import type { TrackSource } from './query';
 /**
  * 视图模型。
  *
- * "全部曲目 / 最近播放 / 常听 / 某个播放列表"共用同一套分页协议，
- * 区别只在数据来源（TrackSource）与标题。把这一层抽出来的好处是
- * 列表、分页窗口、批量选择都不需要知道自己在看什么。
+ * "全部曲目 / 某个播放列表"共用同一套分页协议，区别只在数据来源
+ * （TrackSource）与标题。把这一层抽出来的好处是列表、分页窗口、批量选择
+ * 都不需要知道自己在看什么。
+ *
+ * 2026-10-26 docs/28：`recent` / `mostPlayed` 两个视图**退役**——单页从侧栏
+ * 撤掉（常听收进推荐页 top-15，最近播放被筛选器取代），但两个 TrackSource
+ * 查询本身保留（推荐页的两段预览还走它们，见 `lib/ipc/client.ts`）。
+ * View（路由层概念）与 TrackSource（查询层概念）从此不再一一对应。
  */
 
 export type View =
   | { kind: 'library' }
-  | { kind: 'recent' }
-  | { kind: 'mostPlayed' }
   | { kind: 'playlist'; id: string };
 
 /**
@@ -19,8 +22,6 @@ export type View =
  * 依赖它做记忆的下游（`$derived`、`TrackWindow` 的补页判断）会白算。
  */
 export const LIBRARY_VIEW: View = { kind: 'library' };
-export const RECENT_VIEW: View = { kind: 'recent' };
-export const MOST_PLAYED_VIEW: View = { kind: 'mostPlayed' };
 
 export function viewKey(view: View): string {
   return view.kind === 'playlist' ? `playlist:${view.id}` : view.kind;
@@ -28,56 +29,21 @@ export function viewKey(view: View): string {
 
 export function parseViewKey(key: string | undefined | null): View {
   if (!key) return LIBRARY_VIEW;
-  if (key === 'recent' || key === 'mostPlayed') return { kind: key };
   if (key.startsWith('playlist:')) {
     const id = key.slice('playlist:'.length);
     return id ? { kind: 'playlist', id } : LIBRARY_VIEW;
   }
-  return LIBRARY_VIEW;
-}
-
-/** 三个内置列表视图的单例（按 kind 取，避免调用点各写一份对象字面量） */
-export function builtinView(kind: 'library' | 'recent' | 'mostPlayed'): View {
-  if (kind === 'recent') return RECENT_VIEW;
-  if (kind === 'mostPlayed') return MOST_PLAYED_VIEW;
+  // 旧文件里的 'recent' / 'mostPlayed' 也落到这里：两个单页已退役，
+  // 恢复语义是"回到曲库"，而不是报错或白屏
   return LIBRARY_VIEW;
 }
 
 export function sourceOf(view: View): TrackSource {
   if (view.kind === 'playlist') return { kind: 'playlist', playlistId: view.id };
-  if (view.kind === 'recent') return { kind: 'recent' };
-  if (view.kind === 'mostPlayed') return { kind: 'mostPlayed' };
   return { kind: 'library' };
 }
 
-export function viewTitle(view: View, playlistName?: string | null): string {
-  switch (view.kind) {
-    case 'recent':
-      return '最近播放';
-    case 'mostPlayed':
-      return '常听';
-    case 'playlist':
-      return playlistName ?? '播放列表';
-    default:
-      return '全部曲目';
-  }
-}
-
-/** 只有"全部曲目"有排序控件；其余视图的顺序是语义的一部分 */
+/** 只有"全部曲目"有排序控件；歌单的顺序是语义的一部分 */
 export function viewCanSort(view: View): boolean {
   return view.kind === 'library';
 }
-
-/**
- * 曲库页的内置 tab（docs/25 §3 重排后）：全部曲目 / 专辑 / 艺人。
- *
- * 最近播放 / 常听从 tab 里摘出（它们在侧栏有一级席位，不再是曲库的子视图）；
- * 专辑 / 艺人是**导航式** tab——点击走 `nav.go({ kind: 'browse' })` 到宫格页，
- * 不嵌进曲库页内部，所以 `AppPage`/路由快照零改动。这份常量被 LibraryView
- * （曲库页）与 BrowseView（专辑/艺人宫格页）共用，三页的 tab 条长得一样。
- */
-export const LIB_TABS = [
-  { id: 'library', label: '全部曲目' },
-  { id: 'albums', label: '专辑' },
-  { id: 'artists', label: '艺人' },
-] as const;

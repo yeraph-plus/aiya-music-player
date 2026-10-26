@@ -100,6 +100,8 @@
         },
       },
       menu.multi,
+      // 详情页上"查看自己"没有意义（docs/28，与列链接同一条规则）
+      ui.page === 'album' ? 'album' : ui.page === 'artist' ? 'artist' : null,
     );
   }
 

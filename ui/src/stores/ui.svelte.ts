@@ -7,8 +7,6 @@ import { errorMessage } from '../lib/errors';
 import { devValidate, settingsSchema, uiStateSchema, type UiState } from '../lib/ipc/schema';
 import {
   LIBRARY_VIEW,
-  MOST_PLAYED_VIEW,
-  RECENT_VIEW,
   parseViewKey,
   type View,
 } from '../lib/view';
@@ -38,12 +36,14 @@ import { notify } from './notify.svelte';
  * 聚合段。`search` 是列表页（isListPage），因为它就是"library + search 过滤"。
  *
  * `playlist` / `album` / `artist` 是带参数的路由，参数见上。
+ *
+ * 2026-10-26 docs/28 减 2 值：`recent` / `mostPlayed` 单页退役（常听收进
+ * 推荐页 top-15，最近播放被筛选器取代，侧栏席位让给专辑/艺人宫格页）。
+ * 旧 UiState 里落着这两个值的，由 `restore()` 兜底换算成曲库。
  */
 export type AppPage =
   | 'home'
   | 'library'
-  | 'recent'
-  | 'mostPlayed'
   | 'playlist'
   | 'albums'
   | 'artists'
@@ -58,8 +58,6 @@ export type AppPage =
 export function isListPage(page: AppPage): boolean {
   return (
     page === 'library' ||
-    page === 'recent' ||
-    page === 'mostPlayed' ||
     page === 'playlist' ||
     page === 'album' ||
     page === 'artist' ||
@@ -118,10 +116,6 @@ class UiStore {
         // 搜索页 = 曲库查询 + search 过滤 —— 数据形状与曲库页完全相同
         // （见类头注释"参数复用筛选字段"）
         return LIBRARY_VIEW;
-      case 'recent':
-        return RECENT_VIEW;
-      case 'mostPlayed':
-        return MOST_PLAYED_VIEW;
       case 'playlist': {
         const id = this.playlistId ?? '';
         if (this.playlistView?.id !== id) this.playlistView = { kind: 'playlist', id };
@@ -229,12 +223,18 @@ class UiStore {
     this.artistId = data.artistId ?? null;
     this.albumId = data.albumId ?? null;
 
-    if (data.page && data.page !== ('home' as string)) {
+    // docs/28：recent/mostPlayed 单页退役，旧文件落在这两个值上时换算成曲库
+    //（恢复成"最近播放"没有意义——那个页面已经不存在了）
+    const RETIRED_PAGES: ReadonlySet<string> = new Set(['recent', 'mostPlayed']);
+    const rawPage = data.page && RETIRED_PAGES.has(data.page) ? 'library' : data.page;
+
+    if (rawPage && rawPage !== ('home' as string)) {
       // 新形状（或旧形状的一级页）
-      this.page = data.page;
+      this.page = rawPage as AppPage;
       this.playlistId = data.playlistId ?? null;
     } else if (data.libraryDetail) {
       // 旧形状：home + libraryDetail=true 其实是某个列表视图
+      //（parseViewKey 对 retired 的 'recent'/'mostPlayed' 键同样回落曲库）
       const legacy = parseViewKey(data.view);
       this.applyView(legacy);
     } else {

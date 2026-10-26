@@ -7,7 +7,7 @@ import {
   type TrackTimeFilter,
 } from '../lib/time-filter';
 import { TrackWindow } from '../lib/track-window';
-import { builtinView, sourceOf } from '../lib/view';
+import { LIBRARY_VIEW, sourceOf } from '../lib/view';
 import { library } from './library.svelte';
 import { notify } from './notify.svelte';
 import { player } from './player.svelte';
@@ -83,7 +83,8 @@ class ListStore {
    * 当前查询。**三条命令共用这一个**（list / playQuery / idsForSelection）。
    *
    * `mode: 'offset'` + `offset: 0`：首屏只要第一页，后续由 TrackWindow
-   * 按需拉；`source` 决定曲库/最近/常听/歌单，排序与筛选直接搬 ui store。
+   * 按需拉；`source` 决定曲库/歌单（推荐页的最近/常听来源不走这里），
+   * 排序与筛选直接搬 ui store。
    */
   query(): TrackQuery {
     return {
@@ -259,18 +260,19 @@ class ListStore {
   }
 
   /**
-   * 切到内置视图。
+   * 切到曲库列表页。
    *
    * `sort` 用于"最近添加 → 查看全部"这类**带排序语义的入口**：以前它只能
    * 打开「全部曲目」，排序用的是上一次留下的字段，用户看到的并不是最近
-   * 添加的顺序。同一个视图再点一次仍然重新拉（手滑点错了想刷新）。
+   * 添加的顺序。同一个页面再点一次仍然重新拉（手滑点错了想刷新）。
+   * （docs/28：原 openBuiltinView 的 recent/mostPlayed 分支随单页退役删除，
+   * 两个来源改以查询形式活在推荐页，不再是一级路由。）
    */
-  openBuiltinView(
-    kind: 'library' | 'recent' | 'mostPlayed',
+  openLibrary(
     sort?: { field: TrackSort; direction: 'asc' | 'desc' },
   ): void {
     clearTimeout(this.searchTimer);
-    ui.enterList(builtinView(kind));
+    ui.enterList(LIBRARY_VIEW);
     if (sort) {
       ui.sort = sort.field;
       ui.direction = sort.direction;

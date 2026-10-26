@@ -211,12 +211,17 @@ const JOIN_AGG: &str = "FROM (SELECT track_id, COUNT(*) AS played_count, MAX(pla
      LEFT JOIN artists al_ar ON al_ar.id = al.artist_id";
 
 /// JOIN 与固定排序（playlist/recent/mostPlayed 不吃用户 sort）。
+/// mostPlayed 的次键是最近播放时间（docs/28）：次数并列时"最近还在听"
+/// 排前面——推荐页 top-15 的第 15 名争夺战里，半年没听的那首先出去。
 fn join_and_order(q: &TrackWindowQuery) -> (&'static str, &'static str) {
     match &q.source {
         TrackSource::Library => (JOIN, ""),
         TrackSource::Playlist { .. } => (JOIN_PLAYLIST, " ORDER BY pi.position ASC"),
         TrackSource::Recent => (JOIN_AGG, " ORDER BY hs.recent_t0 DESC, t.id DESC"),
-        TrackSource::MostPlayed => (JOIN_AGG, " ORDER BY hs.played_count DESC, t.id ASC"),
+        TrackSource::MostPlayed => (
+            JOIN_AGG,
+            " ORDER BY hs.played_count DESC, hs.recent_t0 DESC, t.id ASC",
+        ),
     }
 }
 
@@ -763,6 +768,22 @@ mod tests {
         assert_eq!(page.items[0].play_count, 2);
         // 600 是 DB 里的秒，DTO 一律毫秒（docs/17 §3.1）——这条断言同时锁住换算
         assert_eq!(page.items[0].last_played_at_ms, Some(600_000));
+
+        // 次数并列时按最近播放优先（docs/28 次键）：t4 与 t2 都是 1 次，
+        // t4 的最后播放（800s）晚于 t2（700s），所以 t4 排前面
+        conn.execute_batch(
+            "INSERT INTO tracks (id,title,title_norm,duration_ms,added_at,path,path_lower,size_bytes,mtime,play_count) VALUES
+              ('t4','夜曲','夜曲',1000,130,'/m/4.flac','/m/4.flac',1,1,1);
+             INSERT INTO history (track_id, played_at) VALUES ('t4', 800);",
+        )
+        .unwrap();
+        q.limit = 10; // q_library 缺省 2，这里要装下全部 3 首
+        let page = list_tracks(&conn, &q).unwrap();
+        assert_eq!(
+            page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec!["t1", "t4", "t2"],
+            "tie on play_count resolves by last-played recency"
+        );
     }
 
     #[test]

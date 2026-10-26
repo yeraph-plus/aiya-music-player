@@ -64,6 +64,12 @@
     /** 歌手/专辑名点击跳转（docs/27：列表内直达详情页，不再绕右键菜单） */
     onopenartist: (id: string) => void;
     onopenalbum: (id: string) => void;
+    /**
+     * 详情页把自己的列链接废掉（docs/28）：在专辑页里点"专辑"跳的是当前页
+     * （nav 视为刷新、滚动位置丢失），语义不成立——渲染成纯文本。
+     */
+    disableArtistLink?: boolean;
+    disableAlbumLink?: boolean;
     /** 行高由密度设置决定；虚拟化与 CSS 必须用同一个值 */
     rowHeight?: number;
   }
@@ -102,6 +108,8 @@
     onfilteropen,
     onopenartist,
     onopenalbum,
+    disableArtistLink = false,
+    disableAlbumLink = false,
     rowHeight = 52,
   }: Props = $props();
 
@@ -332,7 +340,7 @@
               {/each}
             </span>
             <span class="cell dim">
-              {#if row.track.artistId && row.track.artist}
+              {#if row.track.artistId && row.track.artist && !disableArtistLink}
                 <button
                   class="link-cell"
                   title={`查看歌手 ${row.track.artist}`}
@@ -348,7 +356,7 @@
               {/if}
             </span>
             <span class="cell dim">
-              {#if row.track.albumId && row.track.album}
+              {#if row.track.albumId && row.track.album && !disableAlbumLink}
                 <button
                   class="link-cell"
                   title={`查看专辑 ${row.track.album}`}

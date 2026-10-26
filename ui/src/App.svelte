@@ -19,6 +19,8 @@
   import { Tooltip } from 'bits-ui';
   import AppShell from './components/AppShell.svelte';
   import OverlayHost from './components/OverlayHost.svelte';
+  import AlbumView from './views/AlbumView.svelte';
+  import ArtistView from './views/ArtistView.svelte';
   import BrowseView from './views/BrowseView.svelte';
   import KitView from './views/KitView.svelte';
   import LibraryView from './views/LibraryView.svelte';
@@ -132,9 +134,10 @@
   <AppShell>
     <!--
       一名一路由。拆页（B4-1）之前这里是 `page === 'home'` 外面再套一层
-      `libraryDetail`，六个列表视图全靠一个 boolean 区分；现在四个列表页
-      共用 `LibraryView`（它们本来就是同一套列表，只是数据源不同），
-      路由值直接决定渲染谁。
+      `libraryDetail`，六个列表视图全靠一个 boolean 区分；现在列表页
+      共用同一套列表查询，路由值直接决定渲染谁。
+      docs/28：专辑/艺人详情页有独立视图（含头部聚合数据），先于
+      LibraryView 判断。
     -->
     {#if showKit}
       <KitView />
@@ -142,6 +145,10 @@
       <HomeView />
     {:else if ui.page === 'albums' || ui.page === 'artists'}
       <BrowseView />
+    {:else if ui.page === 'album'}
+      <AlbumView />
+    {:else if ui.page === 'artist'}
+      <ArtistView />
     {:else if isListPage(ui.page)}
       <LibraryView />
     {:else if ui.page === 'nowPlaying'}

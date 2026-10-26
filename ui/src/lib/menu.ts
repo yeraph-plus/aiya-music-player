@@ -33,12 +33,16 @@ export interface TrackMenuActions {
  * `multi` = 对整个选择集生效（docs/27）：右键的行在选择集里且不止一行。
  * 单行专属项（播放 / 下一首播放 / 查看艺人 / 查看专辑 / 在文件夹中显示）
  * 整体隐藏；批量项（加入队列 / 加入歌单 / 移除）与工具条同语义，保留。
+ *
+ * `self`（docs/28）：右键发生在哪个详情页上。专辑页的「查看专辑」指向的
+ * 就是当前页（nav 视为刷新、白丢滚动位置），禁掉——列表列链接同一条规则。
  */
 export function trackMenuItems(
   track: TrackRow | null,
   view: View,
   actions: TrackMenuActions,
   multi = false,
+  self: 'album' | 'artist' | null = null,
 ): MenuItem[] {
   const inPlaylist = view.kind === 'playlist';
   const items: MenuItem[] = [];
@@ -55,8 +59,8 @@ export function trackMenuItems(
   if (!multi) {
     // B4-3b 起直达艺人/专辑详情页（不再是"筛选 chip"），文案随之改为浏览语义
     items.push(
-      { label: '查看艺人', action: actions.filterByArtist, disabled: !track?.artistId },
-      { label: '查看专辑', action: actions.filterByAlbum, disabled: !track?.albumId },
+      { label: '查看艺人', action: actions.filterByArtist, disabled: !track?.artistId || self === 'artist' },
+      { label: '查看专辑', action: actions.filterByAlbum, disabled: !track?.albumId || self === 'album' },
       { label: '在文件夹中显示', action: actions.reveal, disabled: !track },
     );
   }

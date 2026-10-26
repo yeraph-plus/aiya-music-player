@@ -80,22 +80,23 @@ test('歌单：侧栏点开 → 标题与列表来自该歌单', async ({ page }
   await expect(page.locator('.main .content-toolbar')).toHaveCount(0);
 });
 
-test('导航链：曲库 → 工具条切专辑（导航式 tab）→ 顶栏返回', async ({ page }) => {
+test('导航链：曲库 → 侧栏切专辑宫格（docs/28 一级项）→ 详情 → 逐级返回', async ({ page }) => {
   await openLibrary(page);
-  // docs/25 §3 重排后的曲库 tab：全部曲目 / 专辑 / 艺人（最近播放/常听已升侧栏一级页）
-  const tabs = page.locator('.main .content-toolbar .pt-tab');
-  await expect(tabs).toHaveCount(3);
-  await expect(page.locator('.main .content-toolbar .pt-tab.active')).toHaveText('全部曲目');
+  // docs/28：曲库页第一层 tab 已撤（连同分隔线），专辑/艺人从侧栏进
+  await expect(page.locator('.main .content-toolbar .pt-tab')).toHaveCount(0);
 
-  // 专辑是导航式 tab：进 browse 宫格页，tab 条仍在原位且 active 跟过去
-  await tabs.filter({ hasText: '专辑' }).click();
+  await page.locator('.sidebar .nav-item', { hasText: '专辑' }).click();
   await expect(page.locator('.main h1')).toHaveText('专辑');
-  await expect(page.locator('.main .content-toolbar .pt-tab.active')).toHaveText('专辑');
 
-  // 返回栈：这一步把「专辑」退掉，回到「全部曲目」
+  // 进详情页再逐级返回：详情 → 宫格 → 全部曲目 → 推荐页（栈空，返回键 disabled）
+  await page.locator('.main .k-card').first().click();
+  await expect(page.locator('.main .list .row').first()).toBeVisible();
+  await page.getByRole('button', { name: '返回上一页' }).click();
+  await expect(page.locator('.main h1')).toHaveText('专辑');
+  await expect(page.getByRole('button', { name: '返回上一页' })).toBeEnabled();
+
   await page.getByRole('button', { name: '返回上一页' }).click();
   await expect(page.locator('.main h1')).toHaveText('全部曲目');
-  await expect(page.locator('.main .content-toolbar .pt-tab.active')).toHaveText('全部曲目');
   await expect(page.getByRole('button', { name: '返回上一页' })).toBeEnabled();
 
   // 再退一步回到推荐页（原首页），此时栈空 → 返回键 disabled

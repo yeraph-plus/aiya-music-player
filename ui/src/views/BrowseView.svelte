@@ -9,27 +9,17 @@
   import type { AlbumFacet, ArtistFacet } from '../lib/ipc/generated';
   import { artworkUrl } from '../lib/artwork';
   import { formatDurationLong } from '../lib/format';
-  import { LIB_TABS } from '../lib/view';
   import { facets } from '../stores/facets.svelte';
   import { nav } from '../stores/nav.svelte';
   import { ui } from '../stores/ui.svelte';
-  import Toolbar from '../components/content/Toolbar.svelte';
-
-  /**
-   * 曲库 tab 条（docs/25 §3）：专辑/艺人宫格页与曲库页共用 LIB_TABS，
-   * 三页的 tab 条长得一样——从「全部曲目」点「专辑」进来，tab 还在原位，
-   * active 跟着 ui.page 走（albums/artists），再点「全部曲目」就回去。
-   */
-  function switchView(id: string): void {
-    if (id === 'library') {
-      nav.go({ kind: 'builtin', view: 'library' });
-    } else if (id === 'albums' || id === 'artists') {
-      nav.go({ kind: 'browse', view: id });
-    }
-  }
 
   /**
    * 专辑 / 艺人宫格浏览页（B4-3b，docs/24 §3.2 路由表 albums/artists）。
+   *
+   * docs/28：升为侧栏一级项（曲库页 tab 撤掉后宫格需要一级入口），
+   * 宫格页上的 tab 条随之撤掉——侧栏就是这层导航，页内再放一组
+   * "专辑/艺人互切"是同一个功能的第二次出现。卡片进详情页
+   * （`album`/`artist` 带参数路由，docs/28 拆出的独立视图）。
    *
    * 两个模式共用一个组件：形状完全一样（宫格卡片），差别只有数据源、
    * 文案与卡片副标题——分开写两个视图得到的是两份一模一样的拉取/空态/
@@ -112,8 +102,6 @@
       </div>
     {/snippet}
   </Header>
-
-  <Toolbar tabs={[...LIB_TABS]} active={ui.page} ontab={switchView} />
 
   {#if facets.loading && rows === null}
     <Skeleton kind="row" count={10} />

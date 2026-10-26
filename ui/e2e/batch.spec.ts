@@ -63,11 +63,14 @@ test('列表页：批量开关控制勾选列显隐；筛选器打开模态框',
   await openLibrary(page);
   const toolbar = page.locator('.list-toolbar');
 
-  // 开关打开 → 勾选列出现；全选可用
-  await toolbar.getByRole('switch', { name: '批量操作模式' }).click();
+  // docs/28：批量开关收成纯图标按钮（aria-pressed 表达开关态）
+  const batchToggle = toolbar.getByRole('button', { name: '批量操作' });
+  await expect(batchToggle).toHaveAttribute('aria-pressed', 'false');
+  await batchToggle.click();
+  await expect(batchToggle).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('.main .list .k-check').first()).toBeVisible();
 
-  // 筛选器模态框：应用「从未播放」→ chip 出现
+  // 筛选器模态框（funnel 图标按钮）：应用「从未播放」→ 列表仍在
   await toolbar.getByRole('button', { name: /筛选器/ }).click();
   const dialog = page.locator('.k-dlg');
   await expect(dialog).toContainText('筛选曲目');

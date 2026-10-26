@@ -4,64 +4,34 @@
   import Button from '../components/ui/Button.svelte';
   import Card from '../components/ui/Card.svelte';
   import Toolbar from '../components/content/Toolbar.svelte';
-  import TrackList from '../components/TrackList.svelte';
+  import TrackListPanel from '../components/TrackListPanel.svelte';
   import { artworkUrl } from '../lib/artwork';
-  import { errorMessage } from '../lib/errors';
   import { formatDurationLong } from '../lib/format';
-  import { SELECTION_CAP } from '../lib/selection';
-  import { LIB_TABS, viewCanSort, viewTitle } from '../lib/view';
   import { DEFAULT_TIME_FILTER } from '../lib/time-filter';
-  import { history } from '../stores/history.svelte';
+  import { viewCanSort } from '../lib/view';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
   import { facets } from '../stores/facets.svelte';
   import { nav } from '../stores/nav.svelte';
   import { overlay } from '../stores/overlay.svelte';
   import { playlists } from '../stores/playlists.svelte';
-  import { player } from '../stores/player.svelte';
   import { scan } from '../stores/scan.svelte';
-  import { selection } from '../stores/selection.svelte';
-  import { notify } from '../stores/notify.svelte';
   import { ui } from '../stores/ui.svelte';
 
   /**
-   * 曲库主区：视图头 + 筛选/扫描/错误条 + 曲目表（或空态）。
-   * 顶栏（搜索）已上移到 AppShell，全局唯一；扫描与导入入口在设置页。
+   * 曲库主区（docs/28 收窄）：只负责**曲库 / 歌单 / 搜索**三个列表页。
+   * 专辑/艺人详情页拆去了 AlbumView/ArtistView（参数路由直达），
+   * 最近播放/常听单页退役（常听收进推荐页 top-15）。
+   * 列表接线在 TrackListPanel——这里只剩头部、筛选 chip 与搜索聚合段。
    */
 
   const view = $derived(ui.view);
   const currentPlaylist = $derived(
     view.kind === 'playlist' ? playlists.byId(view.id) : null,
   );
-  const playerState = $derived(player.state);
 
   /**
-   * 专辑/艺人详情页（B4-3b）的头部数据。曲目列表与曲库页共用一条查询路径
-   * （source=library + albumId/artistId 筛选，见 `ui.enterFacet`），差别只在头部。
-   *
-   * 详情页可能被启动恢复直接命中（facets 缓存还是空），所以这里负责补拉
-   * 一次聚合列表再查单条；查不到（条目刚被移除）时 title 用 id 兜底。
-   */
-  const facet = $derived.by(() => {
-    if (ui.page === 'album') {
-      return { kind: 'album' as const, data: facets.albumById(ui.albumId ?? '') };
-    }
-    if (ui.page === 'artist') {
-      return { kind: 'artist' as const, data: facets.artistById(ui.artistId ?? '') };
-    }
-    return null;
-  });
-
-  $effect(() => {
-    if (ui.page === 'album' && facets.albums === null) void facets.loadAlbums();
-    if (ui.page === 'artist' && facets.artists === null) void facets.loadArtists();
-  });
-
-  /**
-   * 标题区数据。
-   *
-   * 三个视图的头部形状原本分成两套（歌单有一张 92px 封面，统计只有文字），
-   * 分别写在 ViewHeader 的两个 `{#if}` 分支里。现在归一到 Header 的
+   * 标题区数据。歌单有一张 92px 封面，搜索/曲库只有文字——Header 的
    * 「有封面 / 无封面」两态，差别只剩数据。
    */
   const header = $derived.by(() => {
@@ -78,50 +48,6 @@
         playDisabled: !playlist || playlist.trackCount === 0,
       };
     }
-    if (view.kind === 'recent' || view.kind === 'mostPlayed') {
-      return {
-        kicker: '播放统计',
-        title: viewTitle(view),
-        subtitle:
-          view.kind === 'recent'
-            ? '按最后一次播放排序，只统计真正听过的曲目'
-            : '按播放次数排序，用于快速回到最近常听的歌',
-        meta: `${list.total} 首`,
-        cover: undefined as string | null | undefined,
-        playDisabled: list.total === 0,
-      };
-    }
-    if (facet) {
-      if (facet.kind === 'album') {
-        const al = facet.data;
-        return {
-          kicker: '专辑',
-          title: al?.title ?? ui.albumId ?? '专辑',
-          subtitle: al?.artist ?? undefined,
-          meta:
-            al === null
-              ? `${list.total} 首`
-              : `${al.trackCount} 首` +
-                (al.year ? ` · ${al.year}` : '') +
-                (al.totalDurationMs > 0 ? ` · ${formatDurationLong(al.totalDurationMs)}` : ''),
-          cover: al?.artworkId ? (artworkUrl(al.artworkId, 320) ?? null) : null,
-          playDisabled: list.total === 0,
-        };
-      }
-      const ar = facet.data;
-      return {
-        kicker: '艺人',
-        title: ar?.name ?? ui.artistId ?? '艺人',
-        subtitle: undefined,
-        meta:
-          ar === null
-            ? `${list.total} 首`
-            : `${ar.trackCount} 首 · ${ar.albumCount} 张专辑` +
-              (ar.totalDurationMs > 0 ? ` · ${formatDurationLong(ar.totalDurationMs)}` : ''),
-        cover: ar?.artworkId ? (artworkUrl(ar.artworkId, 320) ?? null) : null,
-        playDisabled: list.total === 0,
-      };
-    }
     if (isSearchPage) {
       return {
         kicker: '搜索',
@@ -135,6 +61,7 @@
     return {
       kicker: '曲库',
       title: '全部曲目',
+      subtitle: undefined as string | undefined,
       meta: `${list.total} 首`,
       cover: undefined as string | null | undefined,
       playDisabled: list.total === 0,
@@ -177,101 +104,16 @@
     isSearchPage && facetQuery ? facets.artists?.slice(0, 8) ?? null : null,
   );
 
-  function handleSelect(index: number, event: MouseEvent | KeyboardEvent): void {
-    if (selection.handleSelect(index, event) === 'capped') {
-      notify.showToast(`单次最多选择 ${SELECTION_CAP} 首，已截取刚点中的一段`);
-    }
-  }
-
   /**
-   * 批量操作开关（docs/27 第 2 点）：关 = 隐藏勾选列，同时清掉选择集——
-   * 勾选列都看不见了还留着选择会让人以为操作会落到那几行上。
-   */
-  function setBatchMode(on: boolean): void {
-    ui.batchMode = on;
-    if (!on) selection.clear();
-  }
-
-  /** 工具条「加入歌单」：选择集 → ID 后开选择器对话框 */
-  function addSelectionToPlaylist(): void {
-    void (async () => {
-      const ids = await list.selectionIds();
-      if (ids.length === 0) return;
-      overlay.dialog = { kind: 'addToPlaylist', ids };
-    })();
-  }
-
-  /** 工具条「加入播放队列」：选择集追加到队尾 */
-  function enqueueSelection(): void {
-    void (async () => {
-      const ids = await list.selectionIds();
-      if (ids.length === 0) return;
-      try {
-        await player.enqueue(ids);
-        notify.showToast(`已加入队列 ${ids.length} 首`);
-        selection.clear();
-      } catch (error) {
-        notify.showError(errorMessage(error));
-      }
-    })();
-  }
-
-  /**
-   * 工具条「从曲库中删除 / 从播放列表移除」：语义随视图。
-   * 曲库走确认对话框（只删索引不动磁盘）；歌单按下标倒序删。
-   */
-  function removeSelection(): void {
-    if (ui.view.kind === 'playlist') {
-      void playlists.removeItemsAt(selection.sortedIndices());
-      return;
-    }
-    void (async () => {
-      const ids = await list.selectionIds();
-      if (ids.length === 0) return;
-      overlay.dialog = { kind: 'removeTracks', ids };
-    })();
-  }
-
-  /**
-   * 曲库页的 tab（docs/25 §3 重排后）。最近播放 / 常听已升级为侧栏一级页，
-   * 不再寄居曲库 tab 行；专辑 / 艺人是导航式 tab（进 browse 宫格页）。
-   * tab 条只在曲库页显示——专辑/艺人**宫格页**的 tab 条在 BrowseView 里
-   * （共用 LIB_TABS）；歌单/详情页不显示（标题已经说明在哪）。
-   */
-  const showBuiltinTabs = $derived(ui.page === 'library');
-
-  /**
-   * 筛选 chip 只在曲库页显示。专辑/艺人详情页的"筛选"就是页面本身
-   * （ui.albumId/ui.artistId 是路由参数），显示"专辑筛选 ×"chip 等于
-   * 让用户能把当前页面拆掉——点 × 会清掉路由参数却不换页。
    * 时间筛选 chip（docs/27）：筛选器模态框应用后在这里给一个可清除的入口。
+   * 只在曲库页显示——艺人/专辑"筛选"已升级为详情页路由（B4-3b），
+   * 详情页拆出后曲库页只剩时间筛选这一种可清除状态。
    */
   const filterChips = $derived(
-    ui.page === 'library'
-      ? [
-          ...(ui.artistId ? [{ label: '艺人筛选', onclear: () => list.clearFilter() }] : []),
-          ...(ui.albumId ? [{ label: '专辑筛选', onclear: () => list.clearFilter() }] : []),
-          ...(list.timeFilterOn
-            ? [{ label: '时间筛选', onclear: () => list.setTimeFilter({ ...DEFAULT_TIME_FILTER }) }]
-            : []),
-        ]
+    ui.page === 'library' && list.timeFilterOn
+      ? [{ label: '时间筛选', onclear: () => list.setTimeFilter({ ...DEFAULT_TIME_FILTER }) }]
       : [],
   );
-
-  function switchView(id: string): void {
-    if (id === 'library') {
-      nav.go({ kind: 'builtin', view: 'library' });
-    } else if (id === 'albums' || id === 'artists') {
-      nav.go({ kind: 'browse', view: id });
-    }
-  }
-
-  /** 勾选框：点=切换、Shift=连选（与 ctrl+点行的语义不同） */
-  function handleCheck(index: number, event: MouseEvent | KeyboardEvent): void {
-    if (selection.handleCheck(index, event) === 'capped') {
-      notify.showToast(`单次最多选择 ${SELECTION_CAP} 首，已截取刚点中的一段`);
-    }
-  }
 </script>
 
 <div class="page-pad">
@@ -313,18 +155,16 @@
           {#snippet icon()}<Icon name="trash" size={12} />{/snippet}
           删除
         </Button>
-      {:else if view.kind === 'recent'}
-        <Button onclick={() => void history.clear()}>清空历史</Button>
       {/if}
     {/snippet}
   </Header>
 
-  <Toolbar
-    tabs={showBuiltinTabs ? [...LIB_TABS] : undefined}
-    active={ui.page}
-    ontab={switchView}
-    filters={filterChips}
-  />
+  <!--
+    docs/28：曲库页的第一层 tab（全部曲目/专辑/艺人）与分隔线撤掉——
+    专辑/艺人升侧栏一级项后 tab 只剩"自己指自己"，chips 行在无筛选时
+    整条不渲染（Toolbar 的行为），不留孤立的分隔线。
+  -->
+  <Toolbar filters={filterChips} />
 </div>
 
 {#if library.scan && library.scanning}
@@ -382,88 +222,37 @@
     <strong>在上方搜索框输入关键词</strong>
     <span>曲目、专辑与艺人会同时匹配</span>
   </div>
-{:else if list.total > 0}
-  <TrackList
-    store={list.trackWindow}
-    version={list.version}
-    total={list.total}
-    query={ui.search}
-    sort={ui.sort}
-    direction={ui.direction}
-    canSort={viewCanSort(view)}
-    onsort={(field) => list.setSort(field)}
-    currentId={playerState?.current?.id ?? null}
-    selectedIndex={selection.selectedIndex}
-    selection={selection.selection}
-    restoreScrollTop={list.restoreScrollTop}
-    rowHeight={ui.rowHeight}
-    playing={playerState?.status === 'playing'}
-    onplay={(index) => void list.playIndex(index)}
-    onselect={handleSelect}
-    oncheck={handleCheck}
-    oncheckall={() => selection.toggleAll(list.total)}
-    onmenu={(event, index, track) => {
-      // 右键的行不在选择集里 → 先单选它（handleSelect 裸点语义），
-      // 在选择集里则整组保留；菜单按 multi 对整组生效（docs/27 第 6 点）
-      if (!selection.selection.has(index)) handleSelect(index, event);
-      overlay.openTrackMenu(event.clientX, event.clientY, index, track, selection.size > 1);
-    }}
-    onscroll={(top) => list.setScroll(top)}
-    onrestored={() => (list.restoreScrollTop = null)}
-    onretry={() => void list.reload()}
-    onmove={view.kind === 'playlist' ? (from, to) => void playlists.moveItem(from, to) : undefined}
-    batchMode={ui.batchMode}
-    onbatchmode={setBatchMode}
-    onplayall={() => void list.playAll()}
-    onenqueue={enqueueSelection}
-    onaddto={addSelectionToPlaylist}
-    onremove={removeSelection}
-    removeLabel={view.kind === 'playlist' ? '从播放列表移除' : '从曲库中删除'}
-    filterCount={ui.page === 'library' ? (list.timeFilterOn ? 1 : 0) : undefined}
-    onfilteropen={() => (overlay.dialog = { kind: 'trackFilter' })}
-    onopenartist={(id) => nav.go({ kind: 'artist', id })}
-    onopenalbum={(id) => nav.go({ kind: 'album', id })}
-  />
-{:else if list.booted}
-  <div class="empty">
-    {#if notify.error}
-      <!-- 查询失败时 total 也是 0，但这时候说"曲库还是空的"是错的：
-           用户会去设置页重新扫描，而真正该做的是重试查询 -->
-      <strong>列表加载失败</strong>
-      <span>上方错误条里有原因</span>
-      <Button onclick={() => void list.reload()}>重试</Button>
-    {:else if ui.search.trim()}
-      <strong>没有匹配的曲目</strong>
-      <span>换个关键词，或清除搜索条件</span>
-      <Button onclick={() => list.clearSearch()}>清除搜索</Button>
-    {:else if view.kind === 'recent'}
-      <strong>还没有播放记录</strong>
-      <span>听几首歌，这里会按时间倒序记录</span>
-    {:else if view.kind === 'mostPlayed'}
-      <strong>还没有常听曲目</strong>
-      <span>播放次数会从零开始积累</span>
-    {:else if ui.page === 'album'}
-      <strong>这张专辑里没有曲目</strong>
-      <span>曲目可能已被移出曲库</span>
-      <Button onclick={() => nav.go({ kind: 'browse', view: 'albums' })}>返回专辑</Button>
-    {:else if ui.page === 'artist'}
-      <strong>这位艺人没有曲目</strong>
-      <span>曲目可能已被移出曲库</span>
-      <Button onclick={() => nav.go({ kind: 'browse', view: 'artists' })}>返回艺人</Button>
-    {:else if view.kind === 'playlist'}
-      <strong>这个播放列表还是空的</strong>
-      <span>在曲库里选中歌曲，右键或批量操作加入这里</span>
-      <Button onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>去曲库看看</Button>
-    {:else}
-      <strong>曲库还是空的</strong>
-      <span>选择一个音乐目录，AIYA 会扫描并建立索引</span>
-      <Button variant="primary" onclick={() => void scan.pickRootAndScan()} disabled={library.scanning}>
-        选择音乐目录
-      </Button>
-    {/if}
-  </div>
 {:else}
-  <div class="empty"><strong>正在启动…</strong></div>
+  <TrackListPanel
+    canSort={viewCanSort(view)}
+    removeLabel={view.kind === 'playlist' ? '从播放列表移除' : '从曲库中删除'}
+    showFilter={ui.page === 'library'}
+    onmove={view.kind === 'playlist' ? (from, to) => void playlists.moveItem(from, to) : undefined}
+  >
+    {#snippet empty()}
+      {#if ui.search.trim()}
+        <div class="empty">
+          <strong>没有匹配的曲目</strong>
+          <span>换个关键词，或清除搜索条件</span>
+          <Button onclick={() => list.clearSearch()}>清除搜索</Button>
+        </div>
+      {:else if view.kind === 'playlist'}
+        <div class="empty">
+          <strong>这个播放列表还是空的</strong>
+          <span>在曲库里选中歌曲，右键或批量操作加入这里</span>
+          <Button onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>去曲库看看</Button>
+        </div>
+      {:else}
+        <div class="empty">
+          <strong>曲库还是空的</strong>
+          <span>选择一个音乐目录，AIYA 会扫描并建立索引</span>
+          <Button variant="primary" onclick={() => void scan.pickRootAndScan()} disabled={library.scanning}>
+            选择音乐目录
+          </Button>
+        </div>
+      {/if}
+    {/snippet}
+  </TrackListPanel>
 {/if}
 
 <style>

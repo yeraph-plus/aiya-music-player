@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Clock, Flame, House, Library, Plus, Radio, Settings } from '@lucide/svelte';
+  import { Disc, House, Library, Mic2, Plus, Radio, Settings } from '@lucide/svelte';
   import { artworkUrl } from '../../lib/artwork';
   import { shortenPath } from '../../lib/format';
   import { library } from '../../stores/library.svelte';
@@ -19,15 +19,15 @@
    * 用 prop 传回调时，AppShell 得给每一条入口写一个转发函数 —— 那次改名的教训是
    * "入口散在模板里，漏一个就变成点了没反应"。现在"我要去哪"直接说给 nav。
    *
-  * ### 一级导航的六项（docs/25 §3 重排 + 本轮修订）
+  * ### 一级导航的六项（docs/25 §3 重排 + docs/28 修订）
 
-  * 推荐 / 曲库 / 最近播放 / 常听 / FM 电台 / 设置。
+  * 推荐 / 曲库 / 专辑 / 艺人 / FM 电台 / 设置。
   * - **正在播放撤出侧栏**（用户拍板）：唯一入口改在播放条左侧的歌曲区域
   *   ——"正在听什么"的信息本身就在那里，点它是比找侧栏更短的路。
   * - **「首页」改名「推荐」**：歌单宫格 + 三段预览本来就是推荐位，名字跟上。
-  * - **专辑 / 艺人撤出一级导航**（docs/25 §3）：浏览宫格归入曲库页的 tab
-  *   （全部曲目 / 专辑 / 艺人，导航式复用 browse 页），一级导航不再给它们
-  *   两个常驻席位。可达性不变：曲库 tab + 搜索结果聚合卡 + 右键菜单。
+  * - **最近播放 / 常听单页退役**（docs/28）：常听收进推荐页 top-15 段，
+  *   最近播放被筛选器取代；腾出的两个席位给**专辑 / 艺人宫格页**——
+  *   曲库页 tab 撤掉后宫格需要一级入口，导航总数不变（仍是六项）。
   * - **FM 电台回归**：占位页也给出入口比死链接消失好——用户知道这功能在规划里。
   */
 
@@ -40,16 +40,16 @@
       go: () => nav.go({ kind: 'builtin', view: 'library' }),
     },
     {
-      key: 'recent',
-      label: '最近播放',
-      icon: Clock,
-      go: () => nav.go({ kind: 'builtin', view: 'recent' }),
+      key: 'albums',
+      label: '专辑',
+      icon: Disc,
+      go: () => nav.go({ kind: 'browse', view: 'albums' }),
     },
     {
-      key: 'mostPlayed',
-      label: '常听',
-      icon: Flame,
-      go: () => nav.go({ kind: 'builtin', view: 'mostPlayed' }),
+      key: 'artists',
+      label: '艺人',
+      icon: Mic2,
+      go: () => nav.go({ kind: 'browse', view: 'artists' }),
     },
     {
       key: 'radio',
@@ -68,19 +68,14 @@
   /**
    * 判定"当前在哪"。
    *
-   * B4-1 拆页后一项一个路由值，直接比 `page` 就行 —— 拆页前这里要写
-   * `page === 'home' && libraryDetail && view.kind === key`，因为四个列表视图
-   * 全挤在 `home` 上。判断从"三个字段的组合"退化成一个相等比较，是拆页
-   * 顺带赚到的可读性。
-   *
-   * docs/25 §3 的一个例外：专辑/艺人宫格页并入了曲库 tab（导航式），
-   * 它们没有自己的侧栏席位——曲库项要吸收这两个页面，否则宫格页上
-   * 侧栏零高亮（e2e「高亮恰好一个」会抓住）。
+   * B4-1 拆页后一项一个路由值，直接比 `page` 就行。宫格页与其详情页
+   * **共用一个侧栏席位**（docs/28）：专辑页/专辑详情页都高亮「专辑」——
+   * 详情页是从宫格或列表链接点进来的，高亮跟着"内容类别"走而不是
+   * "路由值"，否则详情页上侧栏零高亮（e2e「高亮恰好一个」会抓住）。
    */
   function isActive(key: (typeof PAGES)[number]['key']): boolean {
-    if (key === 'library') {
-      return ui.page === 'library' || ui.page === 'albums' || ui.page === 'artists';
-    }
+    if (key === 'albums') return ui.page === 'albums' || ui.page === 'album';
+    if (key === 'artists') return ui.page === 'artists' || ui.page === 'artist';
     return ui.page === key;
   }
 

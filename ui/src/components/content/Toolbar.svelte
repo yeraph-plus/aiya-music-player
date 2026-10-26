@@ -79,8 +79,14 @@
     align-items: center;
     gap: 10px;
     padding: 0 0 10px;
-    border-bottom: 1px solid var(--line);
     min-width: 0;
+  }
+
+  /* 分隔线只跟 tab 走（docs/28）：tab 行是页面级分区，值得一条线；
+     chips/次级动作的残行不值得——曲库页撤掉 tab 后只剩时间筛选 chip，
+     不该再拖一条孤立的分隔线 */
+  .content-toolbar:has(.pt-tabs) {
+    border-bottom: 1px solid var(--line);
   }
 
   .pt-tabs {

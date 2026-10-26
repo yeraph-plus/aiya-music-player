@@ -48,10 +48,13 @@ type RouteSnapshot = {
 export type NavTarget =
   /** 首页仪表盘（歌单宫格 + 三段预览） */
   | { kind: 'dashboard' }
-  /** 曲库三个内置视图，共用一套列表 */
+  /**
+   * 曲库列表页（docs/28：recent/mostPlayed 单页退役，内置视图只剩曲库；
+   * 最近播放/常听以查询来源的形式活在推荐页，不再是一级路由）。
+   */
   | {
       kind: 'builtin';
-      view: 'library' | 'recent' | 'mostPlayed';
+      view: 'library';
       /** 「最近添加 → 查看全部」这类带排序语义的入口 */
       sort?: { field: TrackSort; direction: 'asc' | 'desc' };
     }
@@ -162,7 +165,7 @@ class NavStore {
         list.openHome();
         break;
       case 'builtin':
-        list.openBuiltinView(target.view, target.sort);
+        list.openLibrary(target.sort);
         break;
       case 'playlist':
         list.openPlaylist(target.id);
