@@ -114,7 +114,9 @@
     if (!display || display.length !== n) display = new Float32Array(n);
     const eased: number[] = new Array(n);
     for (let i = 0; i < n; i += 1) {
-      const v = Math.min(1, (bands[i] as number) / 255);
+      // RemoteSpectrumSource.frame() 已经归一化到 0–1（引擎 0–255 → /255），
+      // 这里**不能**再除 255——T4h 曾二次归一化把带值压到 ~0.4%，山成贴底平线
+      const v = Math.min(1, Math.max(0, bands[i] as number));
       display[i] = display[i] + (v - display[i]) * 0.3;
       // 轻微伽马压低持续偏热的低频带，山形重心回到中频
       eased[i] = Math.pow(display[i], 1.2);
