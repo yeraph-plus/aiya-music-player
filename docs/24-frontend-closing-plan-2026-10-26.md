@@ -428,7 +428,7 @@ active 状态只能靠 `IntersectionObserver` 反查后写回一个 `.chip.on` �
 | 16 | `Dialog` | `.modal` `.confirm-message` `.modal-actions` | Alert/Prompt/Picker 三态共用壳；焦点陷阱 + 还原 |
 | 17 | `Tooltip` | 现在全靠 `title=` | 统一延迟与位置；不承载唯一信息 |
 | 18 | `Popover` | `.rate-box` `.rate-pop` | 挂触发点、外点关闭、Esc 关闭、还原焦点 |
-| 19 | `DataTable` | `.list` `.row` `.grid-head` `.cell` `.tt*` | 表头可排序 + 勾选列 + 虚拟化 hook（见 §5 B4） |
+| 19 | ~~`DataTable`~~ → **`CheckCell`** | ~~`.list` `.row` `.grid-head` `.cell` `.tt*`~~ 勾选格：`.k-check` `.k-box` | 受控 Checkbox + 包装层点击 + Space/Enter 键盘防护的唯一实现（§5 B4-2 决策修订：整表合并不做） |
 | 20 | `StatBlock` | 侧栏统计、诊断 grid | 数字 + 标签，tabular 数字 |
 
 **版式件（2 件，v2 新增）** —— 与上面 20 个原子件的规则**不同**：
@@ -491,7 +491,7 @@ active 状态只能靠 `IntersectionObserver` 反查后写回一个 `.chip.on` �
 | 16 | `Dialog` | **bits-ui** `Dialog`（确认类用 `AlertDialog`） | 焦点陷阱、Esc、还原焦点、`aria-modal` | `title`/`description`/`actions` snippet；`danger` 变体 | B3b |
 | 17 | `Popover` | **bits-ui** `Popover` | 定位、外点关闭、还原焦点 | 触发点 + `content` snippet；`width` | B3b |
 | 18 | `Tooltip` | **bits-ui** `Tooltip` + 顶层 `Provider` | hover 延迟、定位 | 统一 `delayDuration=400`；**不承载唯一信息** | B3b |
-| 19 | `DataTable` | **自研** | — | 表头排序 + 勾选列 + 虚拟化 hook；`Checkbox` 是它唯一的原语依赖 | B4 |
+| 19 | ~~`DataTable`~~ → **`CheckCell`** | **自研** | — | 受控 + 包装层点击 + 键盘防护一处实现（B4-2 决策修订，整表合并取消）；依赖 `bits-ui/Checkbox` | ✅ B4-2c |
 | 20 | `Toast` / `InlineError` | **自研** | — | 沿用 `notify` store；错误分「可重试 / 阻断」 | B6 |
 | 21 | **`Header`**（Content 层） | **自研** | — | `kicker`/`title`/`subtitle`/`meta`/`cover` 三态/`actions` snippet | ✅ 已改名 |
 | 22 | **`Toolbar`**（Content 层） | **自研** | — | `tabs` / `active` / `ontab` / `filters` / `end` snippet；全空不渲染 | ✅ 已改名 |
@@ -821,8 +821,46 @@ B3a 的 6 条真窗口实测重跑一遍全过；Dock 在窄窗下的收纳规�
 | CSS | 46 844 B | 47 254 B（hover 播放键 + 单例视图注释无 CSS 变化，+410 B 为 `.play-btn` 与迁移样式） |
 | JS 合计 | 520 856 B | **526 982 B**（index 407 718 + settings 95 265 + mock 19 031；+6.1 kB 为路由 getter/迁移/交互逻辑） |
 
-**剩余（归 B4-2/B4-3）**：`ListPage` 骨架 + `DataTable`、虚拟化抽公共、勾选语义抽公共、
-BatchBar 单点渲染、搜索结果页、专辑/艺人页（配 `library_facets`）。
+**剩余（归 B4-3）**：搜索结果页、专辑/艺人页（配 `library_facets`）。
+ListPage 与 DataTable 的取舍见 §5 B4-2 末尾的决策修订。
+
+#### B4-2 抽公共三刀 ✅ 已完成（2026-10-26）
+
+原计划"ListPage + DataTable + 抽公共"一刀，实测拆三刀（`22c1f09` / `0fc377b` / `a9dc666`）：
+
+| 刀 | 内容 |
+|---|---|
+| **B4-2a** | `lib/create-virtual-window.svelte.ts`（scroller/视口测量/区间，TrackList+QueuePanel 各抄过一遍的 30 行水管收敛）；`lib/row-selection.ts`（Mods + 意图分流 + ID 版 `applyIdSelection`，与下标版共享同一套分流规则） |
+| **B4-2b** | `stores/batch.svelte.ts`：批量条全应用**只剩 AppShell 一个渲染点**；批量动作（play/enqueue/addTo/remove/clear）**一份实现**，替代 `list.batchPlay`/`batchEnqueue`/`playlists.addSelection` + HomeView 本地四函数的两份拷贝。首页三段的选择状态从 HomeView 挪进 store（`selectedIn`/`setSection`） |
+| **B4-2c** | kit 第 15 件 `CheckCell`：包装层点击 + 受控 Checkbox + **Space/Enter 键盘防护的唯一实现** —— B4-1 修的分叉防护此前复制在四个调用点，最容易漂移。类名统一 `.check`/`.tt-check`/`.tt-box` → `.k-check`/`.k-box` |
+
+**实测要点**：
+- `createVirtualWindow` 不提供 `onScroll` 回调选项 —— prop 内联箭头每次渲染都是新实例，
+  创建时捕获拿到的是首次实例（行为对但来源隐蔽）；组件在自己的 `onscroll` 里先调
+  `vw.handleScroll()` 再取 `vw.scrollTop`，依赖显式
+- `scroller`/`scrollTop` 用显式 getter/setter 暴露，DOM 节点不进 `$state` 代理
+- TrackTable 的 Shift 无锚点回退与主列表不同（回退成 toggle，不是焦点行）——
+  因为紧凑表没有键盘焦点概念，差别写在 `applyIdSelection` 注释里
+- 批量条 `active`/`count` 只认**当前页**的来源：跨页导航另一来源自然失活，与旧行为一致
+
+**验收（修订）**：
+
+| 原条目 | 结果 |
+|---|---|
+| 批量动作只有一处实现 | ✅ `stores/batch.svelte.ts` |
+| TrackList+TrackTable 行数下降 ≥40% | **修订为"共享实现去重"**：TrackList 348→322、TrackTable 223→187（−14%），降幅来自水管/选择语义/勾选格四处抽取；**整表合并不做**（理由见下） |
+| 6 个列表页视觉同构 | ✅ 结构性达成：四个列表路由共用 `LibraryView`（B4-1 拆页），首页三段共用 `TrackTable` |
+| 双击播放与单击选中互不串 | ✅ e2e/batch.spec.ts + smoke 双击用例 |
+
+**DataTable 整表合并：不做（决策）**。`TrackTable` 头注释记录的设计理由仍然成立：
+两边共用的是**交互模型**而不是组件——TrackList 绑死 `TrackWindow`（游标分页+虚拟滚动+
+拖拽排序+行高密度），TrackTable 是"一次查 8 条"的快照表。硬合并得到的是
+`virtual?`/`rows?` 双数据源 + 双选择键型 + 条件模板的"两个组件假装一个"。
+真正要防漂移的是**语义**（点行/勾选/键盘/批量），已由四处共享实现覆盖：
+虚拟化水管（B4-2a）、选择分流（B4-2a）、批量动作（B4-2b）、勾选格（B4-2c）。
+
+**ListPage 细壳：不做（决策）**。B4-1 拆页后四个列表路由共用 `LibraryView`，
+它就是那个"细壳"；再加一层只有转发。§3.2 的布局契约（页面自己拼三段）维持原样。
 
 ### B5 播放区与 EQ（含后端子批）
 
