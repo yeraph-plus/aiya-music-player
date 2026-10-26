@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { Plus } from '@lucide/svelte';
   import type { PlaylistSummary } from '../lib/ipc';
   import { artworkUrl } from '../lib/artwork';
   import Button from './ui/Button.svelte';
@@ -140,13 +139,6 @@
     overlay.closeDialog();
     void playlists.addTracks(playlistId, ids);
   }
-
-  /** 选择器里的「新建」：带着当前选中的曲目跳到新建对话框（种子曲目不丢） */
-  function pickThenCreate(): void {
-    if (overlay.dialog?.kind !== 'addToPlaylist') return;
-    const ids = overlay.dialog.ids;
-    overlay.dialog = { kind: 'createPlaylist', seedIds: ids };
-  }
 </script>
 
 {#if notify.toast}
@@ -251,12 +243,13 @@
     {/snippet}
   </Dialog>
 {:else if overlay.dialog?.kind === 'addToPlaylist'}
-  <Dialog
-    title="添加到播放列表"
-    description={`为 ${overlay.dialog.ids.length} 首曲目选择一个播放列表`}
-    width="md"
-    onclose={() => overlay.closeDialog()}
-  >
+  <!--
+    极简歌单选择器（docs/25 用户反馈）：无标题、无关闭键、无底部按钮——
+    就一份歌单列表，**点行即添加并关闭**；没有歌单就一行空态文案。
+    关闭走 Esc / 点遮罩。不用 Menu：选歌单是"看得到每个歌单有几首"的
+    浏览行为，菜单是"我已经知道要点哪一项"的快捷路径，混用两头不像。
+  -->
+  <Dialog label="添加到播放列表" width="md" onclose={() => overlay.closeDialog()}>
     <div class="pick-list">
       {#each playlists.items as playlist (playlist.id)}
         <button class="pick-row" onclick={() => submitAddTo(playlist.id)}>
@@ -265,16 +258,9 @@
           <span class="pick-count">{playlist.trackCount} 首</span>
         </button>
       {:else}
-        <p class="pick-empty">还没有播放列表，点右下角新建一个。</p>
+        <p class="pick-empty">还没有播放列表</p>
       {/each}
     </div>
-    {#snippet actions()}
-      <Button onclick={() => overlay.closeDialog()}>取消</Button>
-      <Button variant="primary" onclick={pickThenCreate}>
-        {#snippet icon()}<Plus size={13} />{/snippet}
-        新建播放列表
-      </Button>
-    {/snippet}
   </Dialog>
 {/if}
 

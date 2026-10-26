@@ -14,12 +14,16 @@
   let { open, onclose, label, children }: Props = $props();
 
   /**
-   * 从窗口左缘滑出的悬浮抽屉（docs/25 §6）。
+   * 从窗口右缘滑出的悬浮抽屉（docs/25 §6）。
    *
    * 为什么不用 bits-ui Popover（B5a 的队列/EQ 抽屉原壳）：气泡的定位由
    * floating-ui 每次打开时测量计算，触发键在窗口边缘时还要做碰撞翻转，
-   * 实测开合瞬间位置有可见抖动。抽屉的几何是**确定的**——贴窗口左缘、
-   * 全高、固定宽度，没有任何测量参与，天然不抖。
+   * 实测开合瞬间位置有可见抖动。抽屉的几何是**确定的**——贴窗口右缘、
+   * 固定宽度、固定上下外边距，没有任何测量参与，天然不抖。
+   *
+   * 几何：浮在主区之上、**不与顶栏/播放条贴边**——上下各让出一条栏高
+   * 再加 10px 外边距，四角圆角、整卡悬浮（与窗控三键所在顶栏、播放条
+   * 都保持呼吸距离）。背景与顶栏/播放条同透明度档（75% color-mix）。
    *
    * 焦点语义：打开时焦点移入面板（Esc 直接可用），关闭时还原到打开前的
    * 元素（触发键）——与 bits-ui Dialog 的行为对齐，只是手写。
@@ -71,7 +75,7 @@
       aria-modal="true"
       aria-label={label}
       tabindex="-1"
-      transition:fly={{ x: -440, duration: reducedMotion ? 0 : 240 }}
+      transition:fly={{ x: 440, duration: reducedMotion ? 0 : 240 }}
     >
       {@render children()}
     </div>
@@ -83,37 +87,37 @@
     position: fixed;
     inset: 0;
     z-index: 56; /* 浮层级：> .k-pop 55，< Menu 60（抽屉里的预设菜单要盖住面板） */
-    /* 容器本身不拦截指针：拦截只归遮罩（且遮罩让出了播放条高度）——
+    /* 容器本身不拦截指针：拦截只归遮罩（且遮罩让出了顶栏与播放条）——
        抽屉开着时播放条触发键仍可点，否则互斥切换/再点关闭会被吃掉 */
     pointer-events: none;
   }
 
   .sd-backdrop {
     pointer-events: auto;
-  }
-
-  .sd-backdrop {
     position: absolute;
-    /* 底部让出播放条高度：抽屉开着时播放条触发键仍可点（互斥切换/再点
-       关闭不被遮罩吃掉），Esc 与点主区遮罩是关抽屉的另外两条路 */
-    inset: 0 0 var(--player-h) 0;
+    /* 上下都让出栏高：顶栏有窗控与搜索、底栏有全部播放键，都不能被
+       遮罩吃掉点击。Esc 与点主区遮罩是关抽屉的另外两条路。 */
+    inset: var(--titlebar-h) 0 var(--player-h) 0;
     background: color-mix(in srgb, var(--shadow) 45%, transparent);
   }
 
   .sd-panel {
     pointer-events: auto;
     position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 0;
+    /* 悬浮卡：上下让出栏高再留 10px 呼吸边，右侧同宽——四边都不贴
+       窗口/其他壳层边缘（用户反馈：不和顶栏、播放条贴在一起） */
+    top: calc(var(--titlebar-h) + 10px);
+    bottom: calc(var(--player-h) + 10px);
+    right: 10px;
     width: min(380px, 92vw);
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    background: var(--surface-2);
-    border-right: 1px solid var(--line);
-    border-radius: 0 14px 14px 0;
-    box-shadow: 18px 0 44px var(--shadow);
+    /* 与顶栏（surface-2 75%）同透明度档：背景从卡下透出来 */
+    background: color-mix(in srgb, var(--surface-2) 75%, transparent);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: -18px 0 44px var(--shadow);
     outline: none;
   }
 </style>

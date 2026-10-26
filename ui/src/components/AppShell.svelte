@@ -120,9 +120,10 @@
   </div>
 
   <!--
-    队列 / EQ 抽屉（docs/25 §6）：窗口左缘滑出的 SideDrawer 宿主。
-    原先是播放条上的 bits-ui Popover 气泡——floating-ui 测量+碰撞翻转让
-    开合位置有可见抖动；抽屉几何确定（贴左缘、全高、定宽），没有测量参与。
+    队列 / EQ 抽屉（docs/25 §6）：窗口右缘滑出的悬浮 SideDrawer 宿主
+    （上下让出顶栏/播放条栏高再留呼吸边）。原先播放条上的 bits-ui
+    Popover 气泡——floating-ui 测量+碰撞翻转让开合位置有可见抖动；
+    抽屉几何确定（贴右缘、定宽、定边距），没有测量参与。
     互斥仍由 ui store 的 setQueue/setEqDrawer 负责，这里只做壳。
   -->
   <SideDrawer open={ui.queueOpen} label="播放队列" onclose={() => ui.closeQueue()}>

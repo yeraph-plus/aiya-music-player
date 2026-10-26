@@ -175,6 +175,16 @@ FM 电台   →  page 'radio'（占位页回归入口）
 
 验证：svelte-check 0/0；check:deps 0 环（102 模块）；e2e 19/19（正在播放入口断言改播放条歌曲区、路由用例补 `via:'player'` 分支 + 正在播放页侧栏高亮数 0、互斥双向断言不变仍绿）；JS 424 kB / CSS 58.9 kB。
 
+### T4f 增补（同日稍晚，用户三点反馈：抽屉右缘悬浮 + 频谱让位 + 图标/选择器简化）
+
+1. **SideDrawer 改右缘悬浮卡**：滑出方向左→右（fly `x: +440`）；上下各让出 `--titlebar-h` / `--player-h` 栏高**再加 10px 呼吸外边距**、右缘同宽——四边不与顶栏/播放条贴边；四角 14px 圆角、阴影翻向左侧（`-18px 0 44px`）。遮罩同步改 `inset: var(--titlebar-h) 0 var(--player-h) 0`（顶栏窗控与播放条按键都不被吃）。抽屉背景与顶栏同透明度档：`color-mix(surface-2 75%)`。
+2. **壳层透明度 90%→75%**：顶栏（surface-2）与播放条（surface-3）同步降浓度——用户反馈 90% 还是太闷；抽屉用同档 75% 保持一致。仍未用 backdrop-filter（方案 B 红线不变）。
+3. **频谱层让位**：`.ambient-spectrum` 从 `inset:0` 改 `top: var(--titlebar-h); bottom: var(--player-h)`——柱子不再从两条栏底下钻出来，沉浸档"贴底满幅"的底也随画布底缘上移到播放条上缘（用户要的就是这个对齐）。
+4. **图标替换**：顺序播放 `ArrowRight`（单箭头）→ `ChevronsRight`（双平行箭头 »，lucide 无 `iterator`，已核实包内不存在）；加入歌单 `Plus` → `Heart`（Icon 表删 `plus` 加 `heart`，`plus` 全库仅播放条一处在用）。
+5. **歌单选择器极简化**（`OverlayHost` + `Dialog` 支持无头模式）：`Dialog.title` 变可选——不给就不渲染头部（标题+关闭键都没有，关闭走 Esc/点遮罩；a11y 用视觉隐藏的 `Dialog.Title`（新 `.k-dlg-sr`）+ 新 `label` prop 挂名称）。addToPlaylist 分支删 description、删底部「取消/新建播放列表」动作区（`pickThenCreate` 连带删除，`seedIds` 链路保留但当前无人传种）；空态文案改「还没有播放列表」。点行即添加行为不变。
+
+验证：svelte-check 0/0；e2e 19/19（互斥/Esc/焦点还原断言不变仍绿）；JS 424 kB / CSS 59.1 kB。
+
 ---
 
 ## §7 待拍板项（开工前确认）

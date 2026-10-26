@@ -36,7 +36,7 @@
    * docs/25 §6 按键重排（用户五点反馈）：
    * - 左侧歌曲区域**本身就是正在播放页的入口**（侧栏席位已撤）；
    * - 主五键 = 加入歌单 / 上一首 / 播放 / 下一首 / 模式单键循环；
-   * - 队列与 EQ 改走窗口左缘的 `SideDrawer`（AppShell 宿主），这里只留
+   * - 队列与 EQ 改走窗口右缘的 `SideDrawer`（AppShell 宿主），这里只留
    *   触发键——气泡定位抖动的根源（floating-ui 测量+翻转）整个消失；
    * - 倍速保持 Popover 气泡（小面板贴键，无抖动问题），迁到右侧键区。
    */
@@ -176,7 +176,7 @@
         disabled={!hasTrack}
         onclick={addCurrentToPlaylist}
       >
-        <Icon name="plus" />
+        <Icon name="heart" />
       </IconButton>
 
       <IconButton label="上一首" round disabled={!hasTrack} onclick={onprev}>
@@ -236,7 +236,7 @@
   <div class="right">
     <!--
       队列 / EQ 抽屉触发键（docs/25 §6）：内容宿主是 AppShell 的 SideDrawer
-      （窗口左缘滑出，几何确定不抖）。这里只是普通开关键：aria-expanded
+      （窗口右缘滑出，几何确定不抖）。这里只是普通开关键：aria-expanded
       手动同步，外点/Esc/焦点还原全部由抽屉负责。不用 IconButton：
       EQ 的"生效中"打点需要 relative 定位锚点，裸 button 自持样式。
     -->
@@ -333,11 +333,11 @@
     height: var(--player-h);
     padding: 0 18px;
     border-top: 1px solid var(--line);
-    /* 半透明（T4d，与顶栏同档 90%）：全应用背景从底下透出来。
-     * 底色用 surface-3（顶栏是 surface-2）——同档不同阶，有一点色差。
-     * 原 backdrop-filter 摘除——持久壳层垫着动画频谱 canvas 就是每帧
-     * 全条重模糊（docs/25 §5 方案 B 红线）。 */
-    background: color-mix(in srgb, var(--surface-3) 90%, transparent);
+    /* 半透明（docs/25 T4d 起，浓度 75%——与顶栏同档，用户反馈 90% 太闷）：
+     * 全应用背景从底下透出来。底色用 surface-3（顶栏是 surface-2）——
+     * 同档不同阶，有一点色差。原 backdrop-filter 摘除——持久壳层垫着
+     * 动画频谱 canvas 就是每帧全条重模糊（docs/25 §5 方案 B 红线）。 */
+    background: color-mix(in srgb, var(--surface-3) 75%, transparent);
   }
 
   /* ---------------- 左：当前曲目（= 正在播放页入口） ---------------- */

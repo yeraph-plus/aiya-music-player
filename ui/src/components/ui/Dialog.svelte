@@ -25,7 +25,15 @@
    */
 
   interface Props {
-    title: string;
+    /**
+     * 标题。**不给则整个头部（标题 + 关闭键）都不渲染**——极简壳，比如
+     * 歌单选择器（docs/25 用户反馈：点行即添加，标题和关闭键都是噪音；
+     * 关闭走 Esc / 点遮罩）。a11y 仍需要 Dialog.Title，用 `label` 以视觉
+     * 隐藏形式挂上。
+     */
+    title?: string;
+    /** 无头部时的无障碍名称（视觉隐藏的 Dialog.Title 文本） */
+    label?: string;
     /** 说明文字。给了才渲染 `Dialog.Description`，并自动接上 aria-describedby */
     description?: string;
     width?: 'sm' | 'md';
@@ -38,7 +46,7 @@
     actions?: Snippet;
   }
 
-  let { title, description, width = 'sm', autofocus, onclose, children, actions }: Props = $props();
+  let { title, label, description, width = 'sm', autofocus, onclose, children, actions }: Props = $props();
 </script>
 
 <Dialog.Root open={true} onOpenChange={(value) => (value ? undefined : onclose())}>
@@ -54,12 +62,17 @@
         autofocus();
       }}
     >
-      <header class="k-dlg-head">
-        <Dialog.Title class="k-dlg-title">{title}</Dialog.Title>
-        <IconButton label="关闭" size="sm" onclick={onclose}>
-          <X size={14} />
-        </IconButton>
-      </header>
+      {#if title}
+        <header class="k-dlg-head">
+          <Dialog.Title class="k-dlg-title">{title}</Dialog.Title>
+          <IconButton label="关闭" size="sm" onclick={onclose}>
+            <X size={14} />
+          </IconButton>
+        </header>
+      {:else}
+        <!-- bits-ui 的 aria-labelledby 指向 Title 元素，无头部也要有一颗（视觉隐藏） -->
+        <Dialog.Title class="k-dlg-sr">{label ?? ''}</Dialog.Title>
+      {/if}
 
       {#if description}
         <Dialog.Description class="k-dlg-desc">{description}</Dialog.Description>
@@ -154,5 +167,18 @@
     justify-content: flex-end;
     gap: 8px;
     padding: 14px 16px;
+  }
+
+  /* 无头部对话框的视觉隐藏标题（a11y 用） */
+  :global(.k-dlg-sr) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
   }
 </style>

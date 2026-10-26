@@ -155,7 +155,12 @@
 
   .ambient-spectrum {
     position: absolute;
-    inset: 0;
+    /* 频谱只画在主区里：上下让出顶栏与播放条（用户反馈——柱子不从
+       栏底下钻出来，环境光与内容区对齐） */
+    top: var(--titlebar-h);
+    bottom: var(--player-h);
+    left: 0;
+    right: 0;
     width: 100%;
     height: 100%;
   }
