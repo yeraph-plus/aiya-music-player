@@ -176,32 +176,12 @@ class ListStore {
     void this.reload();
   }
 
-  /* ---------------- 批量操作（选择集 → 命令） ---------------- */
-
-  /** 选中项加入队列末尾 */
-  async batchEnqueue(): Promise<void> {
-    const ids = await this.selectionIds();
-    if (ids.length === 0) return;
-    try {
-      await player.enqueue(ids);
-      notify.showToast(`已加入队列 ${ids.length} 首`);
-      selection.clear();
-    } catch (err) {
-      notify.showError(errorMessage(err));
-    }
-  }
-
-  /** 选中项替换当前队列并从第一首起播 */
-  async batchPlay(): Promise<void> {
-    const ids = await this.selectionIds();
-    if (ids.length === 0) return;
-    try {
-      await player.playTracks(ids, 0);
-      selection.clear();
-    } catch (err) {
-      notify.showError(errorMessage(err));
-    }
-  }
+  /* ---------------- 批量操作（选择集 → 命令） ----------------
+   *
+   * 动作实现在 `stores/batch.svelte.ts`（B4-2b 单点化：列表页与首页共用
+   * 一个批量条、一份 play/enqueue/addTo/remove）。这里只保留本查询相关的
+   * `selectionIds`（下标 → ID 要走当前视图的查询，是 list 的职责）。
+   */
 
   /**
    * 从曲库移除（**只删索引，不动磁盘文件**，扫描会把它重新导回来）。

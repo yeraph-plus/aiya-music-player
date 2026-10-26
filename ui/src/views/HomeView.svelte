@@ -1,6 +1,5 @@
 <script lang="ts">
   import { ArrowRight, Clock3, Flame, LibraryBig, ListMusic, Sparkles } from '@lucide/svelte';
-  import BatchBar from '../components/BatchBar.svelte';
   import Header from '../components/content/Header.svelte';
   import Button from '../components/ui/Button.svelte';
   import TrackTable from '../components/TrackTable.svelte';
@@ -8,21 +7,21 @@
   import type { TrackSource } from '../lib/query';
   import { artworkUrl } from '../lib/artwork';
   import { errorMessage } from '../lib/errors';
+  import { batch, type HomeSection } from '../stores/batch.svelte';
   import { library } from '../stores/library.svelte';
-  import { list } from '../stores/list.svelte';
   import { nav } from '../stores/nav.svelte';
   import { notify } from '../stores/notify.svelte';
-  import { overlay } from '../stores/overlay.svelte';
   import { player } from '../stores/player.svelte';
   import { playlists } from '../stores/playlists.svelte';
-  import { ui } from '../stores/ui.svelte';
 
   /**
    * 首页：歌单宫格 + 三段曲目预览（最近播放 / 常听 / 最近添加）。
    *
    * 三段都走 `TrackTable`（真表头 + 勾选列 + 三态全选），所以首页也能
    * **批量管理**：选中 → 底部批量条（播放 / 加入队列 / 加入歌单 / 移出曲库）。
-   * 选择集按 ID，三段之间互斥（在 A 段选会清掉 B 段的选中）。
+   * 选择集按 ID，三段之间互斥（在 A 段选会清掉 B 段的选中）——
+   * 这套状态与批量动作在 `stores/batch.svelte.ts`（B4-2b 单点化，
+   * 与列表页共用同一个批量条与同一份动作实现）。
    */
   const SECTION_SIZE = 8;
 
@@ -31,32 +30,6 @@
   let added = $state<TrackRow[]>([]);
   let loading = $state(true);
   let loadError = $state('');
-
-  /** 当前有选中的区块 + 选中 ID（一次只有一段生效） */
-  let selSection = $state<'recent' | 'frequent' | 'added' | null>(null);
-  let selIds = $state<Set<string>>(new Set());
-  const selList = $derived([...selIds]);
-  const EMPTY: ReadonlySet<string> = new Set();
-
-  function selectedIn(section: 'recent' | 'frequent' | 'added'): ReadonlySet<string> {
-    return selSection === section ? selIds : EMPTY;
-  }
-
-  function onChange(section: 'recent' | 'frequent' | 'added', ids: Set<string>): void {
-    // 换区块就把上一段的选择清空：批量条只有一个，不能同时代表两段
-    if (ids.size === 0) {
-      selSection = null;
-      selIds = new Set();
-      return;
-    }
-    selSection = section;
-    selIds = ids;
-  }
-
-  function clearSelection(): void {
-    selSection = null;
-    selIds = new Set();
-  }
 
   async function loadSection(source: TrackSource, recentlyAdded = false): Promise<TrackRow[]> {
     const page = await library.list({
@@ -104,41 +77,6 @@
     } catch (error) {
       notify.showError(errorMessage(error));
     }
-  }
-
-  /* ---------------- 批量操作（选择集已是 ID，不需要后端换算） ---------------- */
-
-  async function batchPlay(): Promise<void> {
-    if (selList.length === 0) return;
-    try {
-      await player.playTracks(selList, 0);
-      clearSelection();
-    } catch (error) {
-      notify.showError(errorMessage(error));
-    }
-  }
-
-  async function batchEnqueue(): Promise<void> {
-    if (selList.length === 0) return;
-    try {
-      await player.enqueue(selList);
-      notify.showToast(`已加入队列 ${selList.length} 首`);
-      clearSelection();
-    } catch (error) {
-      notify.showError(errorMessage(error));
-    }
-  }
-
-  async function batchAddTo(playlistId: string): Promise<void> {
-    if (selList.length === 0) return;
-    await playlists.addTracks(playlistId, selList);
-    clearSelection();
-  }
-
-  function batchRemove(): void {
-    if (selList.length === 0) return;
-    overlay.dialog = { kind: 'removeTracks', ids: selList };
-    clearSelection();
   }
 </script>
 
@@ -195,9 +133,9 @@
       {loading}
       empty="还没有播放记录，听几首歌后会出现在这里。"
       valueKind="duration"
-      selected={selectedIn('recent')}
+      selected={batch.selectedIn('recent')}
       currentId={player.state?.current?.id ?? null}
-      onchange={(ids) => onChange('recent', ids)}
+      onchange={(ids) => batch.setSection('recent', ids)}
       onplay={(index) => void play(recent, index)}
     />
   </section>
@@ -212,9 +150,9 @@
       {loading}
       empty="播放次数积累后，这里会形成你的常听榜单。"
       valueKind="plays"
-      selected={selectedIn('frequent')}
+      selected={batch.selectedIn('frequent')}
       currentId={player.state?.current?.id ?? null}
-      onchange={(ids) => onChange('frequent', ids)}
+      onchange={(ids) => batch.setSection('frequent', ids)}
       onplay={(index) => void play(frequent, index)}
     />
   </section>
@@ -231,22 +169,10 @@
       {loading}
       empty="曲库还是空的，到设置页选择目录并扫描。"
       valueKind="added"
-      selected={selectedIn('added')}
+      selected={batch.selectedIn('added')}
       currentId={player.state?.current?.id ?? null}
-      onchange={(ids) => onChange('added', ids)}
+      onchange={(ids) => batch.setSection('added', ids)}
       onplay={(index) => void play(added, index)}
     />
   </section>
 </div>
-
-{#if selList.length > 0}
-  <BatchBar
-    count={selList.length}
-    playlists={playlists.items}
-    onplay={() => void batchPlay()}
-    onenqueue={() => void batchEnqueue()}
-    onaddto={(playlistId) => void batchAddTo(playlistId)}
-    onremove={batchRemove}
-    onclear={clearSelection}
-  />
-{/if}

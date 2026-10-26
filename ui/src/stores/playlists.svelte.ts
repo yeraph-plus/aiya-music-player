@@ -138,16 +138,6 @@ class PlaylistsStore {
     if (view.kind === 'playlist' && view.id === playlistId) await list.reload({ restore: true });
   }
 
-  /**
-   * 批量条「加入播放列表」：先把选中集换成 ID 再加。
-   * 选择集为空时静默返回（批量条本身在没有选中时不显示，这里是兜底）。
-   */
-  async addSelection(playlistId: string): Promise<void> {
-    const ids = await list.selectionIds();
-    if (ids.length === 0) return;
-    await this.addTracks(playlistId, ids);
-  }
-
   /** 侧栏右键「播放」：先切到该歌单再整列表起播 */
   async play(playlist: PlaylistSummary): Promise<void> {
     // 不用 this.open()：那里面 reload 是 fire-and-forget，而这里必须先

@@ -6,14 +6,14 @@
   import QueuePanel from './QueuePanel.svelte';
   import BatchBar from './BatchBar.svelte';
   import { errorMessage } from '../lib/errors';
+  import { batch } from '../stores/batch.svelte';
   import { list } from '../stores/list.svelte';
   import { nav } from '../stores/nav.svelte';
   import { notify } from '../stores/notify.svelte';
   import { overlay } from '../stores/overlay.svelte';
   import { player } from '../stores/player.svelte';
   import { playlists } from '../stores/playlists.svelte';
-  import { selection } from '../stores/selection.svelte';
-  import { isListPage, ui } from '../stores/ui.svelte';
+  import { ui } from '../stores/ui.svelte';
 
   type Props = { children: Snippet };
   let { children }: Props = $props();
@@ -26,11 +26,6 @@
     } catch (err) {
       notify.showError(errorMessage(err));
     }
-  }
-
-  async function askRemoveSelection(): Promise<void> {
-    const ids = await list.selectionIds();
-    if (ids.length > 0) overlay.dialog = { kind: 'removeTracks', ids };
   }
 </script>
 
@@ -57,15 +52,17 @@
     </div>
   </main>
 
-  {#if isListPage(ui.page) && selection.size > 0}
+  {#if batch.active}
+    <!-- 批量条全应用只有这一个渲染点（B4-2b）：列表页与首页三段的选择
+         都汇到 batch store，动作也只有一份实现 -->
     <BatchBar
-      count={selection.size}
+      count={batch.count}
       playlists={playlists.items}
-      onplay={() => void list.batchPlay()}
-      onenqueue={() => void list.batchEnqueue()}
-      onaddto={(playlistId) => void playlists.addSelection(playlistId)}
-      onremove={() => void askRemoveSelection()}
-      onclear={() => selection.clear()}
+      onplay={() => void batch.play()}
+      onenqueue={() => void batch.enqueue()}
+      onaddto={(playlistId) => void batch.addTo(playlistId)}
+      onremove={() => void batch.remove()}
+      onclear={() => batch.clear()}
     />
   {/if}
 
