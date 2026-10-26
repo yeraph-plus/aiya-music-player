@@ -112,16 +112,22 @@ test('播放链路：双击行播放 → 播放条与队列激活行', async ({ 
   await expect(active.locator('.q-index')).toHaveText('▶');
 });
 
-test('设置页：标题与工具条分两行 + 区块 tab + 主题切换生效', async ({ page }) => {
+test('设置页：左分组导航 + scroll-spy + 主题切换生效', async ({ page }) => {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
   await expect(page.locator('.main h1')).toHaveText('设置');
   await expect(page.locator('.main .ch-kicker')).toHaveText('PREFERENCES');
 
-  // 标题与工具条是两个零件、两行：标题不再装导航，tab 也不在标题里
-  const tabs = page.locator('.main .content-toolbar .pt-tab');
-  await expect(tabs).toHaveCount(6);
-  await expect(tabs.first()).toHaveAttribute('aria-current', 'true');
+  // 左栏六组；初始高亮第一组（scroll-spy 的初值）
+  const rail = page.locator('.settings-rail .rail-item');
+  await expect(rail).toHaveCount(6);
+  await expect(rail.first()).toHaveAttribute('aria-current', 'true');
+
+  // 点「诊断」→ 平滑滚动后 scroll-spy 把高亮写回诊断组
+  await rail.last().click();
+  await expect(page.locator('#settings-diagnostics')).toBeInViewport();
+  await expect(rail.last()).toHaveAttribute('aria-current', 'true');
+  await expect(rail.first()).not.toHaveAttribute('aria-current', 'true');
 
   // 主题切换即时生效（写到 <html data-theme>）
   await page
