@@ -365,10 +365,10 @@ const ID_COLLECT_CAP: usize = 50_000;
 const DEFAULT_SETTINGS: &str = r#"{
   "theme": "dark",
   "density": "comfortable",
-  "accentFromArtwork": true,
+  "ambient": "aurora",
   "normalizeVolume": false,
   "spectrum": false,
-  "spectrumEngine": "pro",
+  "spectrumStyle": "mirror",
   "mediaKeys": true,
   "output": { "mode": "shared", "bufferMs": 0, "clock": "auto", "releaseOnPause": true },
   "autoplayOnStart": false,

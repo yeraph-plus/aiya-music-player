@@ -16,11 +16,13 @@
    * 内容层（第 4 层）= 左列封面信息 + 右列歌词，**去卡片化**浮在背景上；
    * 第 1-3 层（固定渐变 / 山形环境光 / 可读性遮罩）由 AppShell 根部的
    * AmbientBackdrop 全应用提供（T4c app 化），本页无遮罩档。
-   * 页内**居中式镜像曲线可视化**（docs/26 §3 方案 A）垫在两栏内容之后——
+   * 页内**居中式可视化**（docs/26 §3，形态由设置「频谱风格」控制：
+   * 镜像曲线 / 径向环形 / 示波线）垫在两栏内容之后——
    * 与背景层共享同一 SpectrumSource 实例（start/stop 引用计数叠放），
    * 数据源按全局频谱设置派生：关了设置这里和背景一起静默。
    */
   const current = $derived(player.state?.current ?? null);
+  const spectrumStyle = $derived(ui.settings.spectrumStyle);
 
   let spectrumSource = $state<SpectrumSource | null>(null);
 
@@ -39,7 +41,7 @@
 </script>
 
 <div class="now-playing-page">
-  <NowPlayingSpectrum source={spectrumSource} />
+  <NowPlayingSpectrum source={spectrumSource} style={spectrumStyle} />
 
   <div class="np-info">
     {#if current?.artworkId}

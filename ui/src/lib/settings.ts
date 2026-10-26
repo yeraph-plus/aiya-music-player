@@ -39,6 +39,22 @@ export const AMBIENT_SCHEMES: Array<{ value: AmbientScheme; label: string }> = [
   { value: 'mono', label: '素白' },
 ];
 
+/**
+ * 频谱风格（2026-10-26 起）：**正在播放页**居中可视化的形态（docs/26 §3）。
+ *
+ * 取代旧 `spectrumEngine`（compact/pro）——它的唯一消费方（SpectrumPanel
+ * 五形态）已随 T4a 页面改版移除，且 pro 需要渲染层 AudioNode、原生引擎
+ * 架构（ADR-0006）下本就无法成立。背景环境光固定为山形，不受此项影响。
+ */
+export type SpectrumStyle = 'mirror' | 'radial' | 'wave';
+
+/** 设置页与 NowPlayingSpectrum 共用的形态清单（id 顺序即展示顺序） */
+export const SPECTRUM_STYLES: Array<{ value: SpectrumStyle; label: string }> = [
+  { value: 'mirror', label: '镜像曲线' },
+  { value: 'radial', label: '径向环形' },
+  { value: 'wave', label: '示波线' },
+];
+
 export interface AppSettings {
   theme: ThemeMode;
   density: ListDensity;
@@ -53,13 +69,8 @@ export interface AppSettings {
    * 面板按钮整个不出现，引擎侧零开销。
    */
   spectrum: boolean;
-  /**
-   * 频谱面板渲染引擎。
-   *
-   * compact：自研轻量条形（零依赖）；
-   * pro：audioMotion-analyzer 专业渲染（径向/LED/镜像等，AGPL-3.0，见 docs/09）。
-   */
-  spectrumEngine: 'compact' | 'pro';
+  /** 频谱风格：正在播放页居中可视化的形态（背景环境光固定山形，不受影响） */
+  spectrumStyle: SpectrumStyle;
   /**
    * 系统媒体控制（Windows SMTC / 锁屏 / 蓝牙耳机）。
    *
@@ -92,8 +103,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   normalizeVolume: false,
   // 频谱默认关：不订阅 tap，保持最简出口路径
   spectrum: false,
-  // 默认专业引擎：装饰观感优先；想要零依赖轻量路径可切回 compact
-  spectrumEngine: 'pro',
+  // 默认镜像曲线：T4h 用户拍板的首发形态
+  spectrumStyle: 'mirror',
   mediaKeys: true,
   // 启动就出声容易吓到人，默认关闭；想开的人在设置里开
   autoplayOnStart: false,

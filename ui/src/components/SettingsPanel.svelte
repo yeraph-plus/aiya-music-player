@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import type { BeetsStatus, Diagnostics } from '../lib/ipc';
-  import type { AppSettings, AmbientScheme, ListDensity, ThemeMode } from '../lib/settings';
-  import { AMBIENT_SCHEMES } from '../lib/settings';
+  import type { AppSettings, AmbientScheme, ListDensity, SpectrumStyle, ThemeMode } from '../lib/settings';
+  import { AMBIENT_SCHEMES, SPECTRUM_STYLES } from '../lib/settings';
   import {
     SHORTCUT_ACTIONS,
     SHORTCUT_LABELS,
@@ -167,11 +167,6 @@
     { value: 'comfortable', label: '标准' },
     { value: 'compact', label: '紧凑' },
   ];
-
-  const SPECTRUM_ENGINE_OPTIONS: Array<{ value: string; label: string }> = [
-    { value: 'pro', label: '专业' },
-    { value: 'compact', label: '简洁' },
-  ];
 </script>
 
 <svelte:window onkeydown={onWindowKey} />
@@ -267,15 +262,14 @@
           <div>
             <div class="setting-title">频谱风格</div>
             <div class="setting-hint">
-              专业（五形态渲染）当前无生效入口——唯一消费方（正在播放页频谱面板）已随页面改版移除，
-              选项保留待正在播放页新可视化接入后启用；背景环境光不受此项影响
+              「正在播放」页居中可视化的形态，切换即时生效；背景环境光固定为山形，不受此项影响
             </div>
           </div>
           <SegmentedControl
             label="频谱风格"
-            value={settings.spectrumEngine}
-            options={SPECTRUM_ENGINE_OPTIONS}
-            onchange={(value) => apply({ spectrumEngine: value as 'compact' | 'pro' })}
+            value={settings.spectrumStyle}
+            options={SPECTRUM_STYLES}
+            onchange={(value) => apply({ spectrumStyle: value as SpectrumStyle })}
           />
         </div>
       </section>
