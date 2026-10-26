@@ -84,8 +84,8 @@
 <svelte:window ontouchstart={markUserScroll} onpointerdown={markUserScroll} />
 
 <aside class="lyrics-panel" aria-label="歌词">
-  <!-- 无头部（T4d 用户拍板）：「歌词」标题与格式小字移除，正在播放页的
-       页面语境已经说明这里是什么；唯一消费方是正在播放页右列 -->
+  <!-- 无头部（T4d）、无底部提示条（用户反馈：编码/跳转提示去掉）——
+       正在播放页的页面语境已经说明这里是什么；唯一消费方是正在播放页右列 -->
   <div
     class="lyrics-body"
     bind:this={scroller}
@@ -98,46 +98,46 @@
         《{trackTitle ?? '当前曲目'}》没有歌词<br />
         <span class="dim">在同目录放一个同名的 .lrc 文件即可显示</span>
       </div>
-    {:else if !lyrics.synced}
-      <!-- 纯文本歌词没有逐行 seek 语义，整块放开选择（docs/19 §5）；
-           同步歌词的行是 button（点=seek），文本选择让位给点击手势 -->
-      <div
-        class="lyrics-lines plain selectable"
-        aria-label={`歌词（纯文本）：《${trackTitle ?? '当前曲目'}》`}
-      >
-        {#each lines as line, index (index)}
-          <div class="lyric-line">{line.text}</div>
-        {/each}
-      </div>
     {:else}
-      <div class="lyrics-lines" aria-label={`同步歌词：《${trackTitle ?? '当前曲目'}》，点击或回车某一行跳转到该句`}>
-        {#each lines as line, index (index)}
-          <button
-            class="lyric-line"
-            class:active={index === activeIndex}
-            class:past={index < activeIndex}
-            onclick={() => seekTo(line.timeMs)}
-            onkeydown={(event) => {
-              // 原生 button 自带 Enter 触发，Space 在部分浏览器只滚动不点击，这里补齐
-              if (event.key === ' ') {
-                event.preventDefault();
-                seekTo(line.timeMs);
-              }
-            }}
-            title="跳到这一句"
-          >
-            {line.text || '·'}
-          </button>
-        {/each}
-      </div>
+      <!-- 上下各半高空白占位（用户拍板）：歌词区上下居中——激活行跟随滚动
+           本来就把激活行滚到容器中线，占位让**第一句之前 / 最后一句之后**
+           也有半屏余量，首尾句同样能滚到中线；占位用 flex-basis 50% 直接
+           由容器高度算出，不需要 JS 测量。 -->
+      <div class="lyrics-pad" aria-hidden="true"></div>
+      {#if !lyrics.synced}
+        <!-- 纯文本歌词没有逐行 seek 语义，整块放开选择（docs/19 §5）；
+             同步歌词的行是 button（点=seek），文本选择让位给点击手势 -->
+        <div
+          class="lyrics-lines plain selectable"
+          aria-label={`歌词（纯文本）：《${trackTitle ?? '当前曲目'}》`}
+        >
+          {#each lines as line, index (index)}
+            <div class="lyric-line">{line.text}</div>
+          {/each}
+        </div>
+      {:else}
+        <div class="lyrics-lines" aria-label={`同步歌词：《${trackTitle ?? '当前曲目'}》，点击或回车某一行跳转到该句`}>
+          {#each lines as line, index (index)}
+            <button
+              class="lyric-line"
+              class:active={index === activeIndex}
+              class:past={index < activeIndex}
+              onclick={() => seekTo(line.timeMs)}
+              onkeydown={(event) => {
+                // 原生 button 自带 Enter 触发，Space 在部分浏览器只滚动不点击，这里补齐
+                if (event.key === ' ') {
+                  event.preventDefault();
+                  seekTo(line.timeMs);
+                }
+              }}
+              title="跳到这一句"
+            >
+              {line.text || '·'}
+            </button>
+          {/each}
+        </div>
+      {/if}
+      <div class="lyrics-pad" aria-hidden="true"></div>
     {/if}
   </div>
-
-  {#if lyrics?.found}
-    <footer class="lyrics-foot">
-      {lyrics.encoding ? `编码 ${lyrics.encoding}` : ''}
-      {lyrics.offsetMs !== 0 ? ` · 偏移 ${lyrics.offsetMs > 0 ? '+' : ''}${lyrics.offsetMs}ms` : ''}
-      <span class="dim">点击歌词可跳转</span>
-    </footer>
-  {/if}
 </aside>

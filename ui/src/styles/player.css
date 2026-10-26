@@ -173,18 +173,38 @@
   color: var(--text-2);
 }
 
-/* 歌词 */
+/* 歌词。头部与底部提示条均已移除（T4d / 用户反馈）——体占满整栏 */
 .lyrics-panel {
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .lyrics-body {
   overflow-y: auto;
   min-height: 0;
-  padding: 24px 16px 40px;
+  display: flex;
+  flex-direction: column;
+  padding: 0 16px;
+}
+
+/* 上下各半容器高的空白占位：歌词（含首尾句）整体居中显示。
+   flex-basis 百分比由容器的确定高度算出，不用 JS 测量；
+   flex-shrink 0——歌词再长也不许压缩占位，多出的长度交给滚动。 */
+.lyrics-pad {
+  flex: 0 0 50%;
+}
+
+.lyrics-empty {
+  /* 空态/加载态没有占位参与，用 auto 外边距在容器里居中 */
+  margin: auto;
+  padding: 48px 8px;
+  text-align: center;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 2;
 }
 
 .lyrics-lines {
+  flex: none;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -217,28 +237,8 @@
   color: var(--accent-text);
   font-weight: 600;
   background: var(--accent-weak);
-}
-
-.lyrics-empty {
-  padding: 48px 8px;
-  text-align: center;
-  color: var(--text-2);
-  font-size: 12.5px;
-  line-height: 2;
-}
-
-.lyrics-foot {
-  padding: 8px 14px 12px;
-  border-top: 1px solid var(--line);
-  font-size: 10.5px;
-  color: var(--text-3);
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.lyrics-foot .dim {
-  margin-left: auto;
+  /* 激活行略微放大字号（用户反馈）：视觉重心落在当前句上 */
+  font-size: 14.5px;
 }
 
 .icon-btn svg {

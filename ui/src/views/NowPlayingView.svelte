@@ -3,8 +3,8 @@
   import LyricsPanel from '../components/LyricsPanel.svelte';
   import NowPlayingSpectrum from '../components/NowPlayingSpectrum.svelte';
   import { artworkUrl } from '../lib/artwork';
+  import { audioBadge, audioTooltip, formatAudioSpec } from '../lib/audio-format';
   import { errorMessage } from '../lib/errors';
-  import { formatAudioSpec } from '../lib/audio-format';
   import type { SpectrumSource } from '../lib/spectrum-source';
   import { player } from '../stores/player.svelte';
   import { lyrics } from '../stores/lyrics.svelte';
@@ -56,15 +56,22 @@
       <span class="np-cover np-cover-empty"><ListMusic size={64} strokeWidth={1.3} /></span>
     {/if}
     <div class="np-meta">
-      <span class="page-kicker">NOW PLAYING</span>
+      {#if current?.audio}
+        {@const badge = audioBadge(current.audio.codec, current.audio.container)}
+        {@const spec = formatAudioSpec(current.audio)}
+        {#if badge || spec}
+          <span class="audio-spec" title={audioTooltip(current.audio) ?? undefined}>
+            {[badge, spec].filter(Boolean).join(' · ')}
+          </span>
+        {/if}
+      {/if}
       <h1>{current?.title ?? '未在播放'}</h1>
       {#if current}
-        <p class="np-line">{current.artist ?? '未知艺人'}</p>
         {#if current.album}<p class="np-line np-album">{current.album}</p>{/if}
+        <p class="np-line">{current.artist ?? '未知艺人'}</p>
       {:else}
         <p class="np-line">从推荐页或歌单选择一首歌开始</p>
       {/if}
-      {#if current?.audio}<span class="audio-spec">{formatAudioSpec(current.audio)}</span>{/if}
     </div>
   </div>
 

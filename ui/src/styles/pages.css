@@ -209,7 +209,7 @@
 /* ---------------- 正在播放（docs/25 §4 T4a 两栏沉浸） ---------------- */
 
 /*
- * 两栏：左信息（封面+标题+艺人·专辑+规格）右歌词。整页**无卡片**——
+ * 两栏：左信息（封面 + 徽章/标题/专辑/艺人）右歌词。整页**无卡片**——
  * 没有边框、没有底色，内容直接浮在背景上；背景四层由 AppShell 根部的
  * AmbientBackdrop 全应用提供（T4c app 化，本页进沉浸档遮罩；
  * docs/25 §5 方案 B：预模糊封面 + 频谱环境光 + 主题遮罩），
@@ -232,13 +232,19 @@
   z-index: 1;
 }
 
+/*
+ * 左列布局（用户拍板终版）：**封面独占流内、精确上下居中**（240px 不变）；
+ * 信息块绝对定位——顶边 = 页面中线 + 半个封面高度 + 18px 呼吸，即正好
+ * 从封面下缘开始往下排。不用"整组居中"是因为组里带着信息块，封面中心
+ * 会被信息块高度顶得偏离页面中线。
+ */
 .np-info {
+  position: relative;
   min-width: 0;
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: flex-start;
-  gap: 18px;
 }
 
 .np-cover {
@@ -260,11 +266,25 @@
 
 /*
  * 信息块**无底色无玻璃**（T4d 用户拍板）：背景固定渐变自身已保证可读性，
- * 不再垫毛玻璃卡片。左列约 40% 分栏，封面缩到 240px 靠左。
+ * 不再垫毛玻璃卡片。绝对定位锚在封面下方（见 .np-info 注释）。
  */
 .np-meta {
+  position: absolute;
+  top: calc(50% + 120px + 18px); /* 中线 + 半封面(240/2) + 18px 呼吸 */
+  left: 0;
   min-width: 0;
   max-width: 100%;
+}
+
+/* 格式徽章是信息块第一项：FLAC/MP3 等格式名 + 采样率位深或比特率 */
+.audio-spec {
+  display: inline-block;
+  margin-bottom: 2px;
+  font-size: 11px;
+  color: var(--accent-text);
+  background: var(--accent-weak);
+  border-radius: 999px;
+  padding: 3px 10px;
 }
 
 .np-meta h1 {
@@ -279,7 +299,7 @@
   overflow: hidden;
 }
 
-/* 艺人、专辑各占一行（T4d） */
+/* 专辑、艺人各占一行（顺序：徽章 → 标题 → 专辑 → 艺人） */
 .np-meta .np-line {
   margin: 0 0 6px;
   font-size: 13.5px;
@@ -292,14 +312,6 @@
 .np-meta .np-album {
   font-size: 12.5px;
   color: var(--text-3);
-}
-
-.audio-spec {
-  font-size: 11px;
-  color: var(--accent-text);
-  background: var(--accent-weak);
-  border-radius: 999px;
-  padding: 3px 10px;
 }
 
 /* 右列：歌词容器真透明（T4a 意图在此落地——player.css 给 .lyrics-panel 的
@@ -315,8 +327,6 @@
   min-height: 0;
   background: transparent;
   border-left-color: transparent;
-  /* 头部已摘（T4d）：单行网格，歌词体占满整列（player.css 的 auto 1fr 是给带头版的） */
-  grid-template-rows: minmax(0, 1fr);
 }
 
 .spectrum-disabled > div {
