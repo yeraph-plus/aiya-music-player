@@ -2,7 +2,6 @@ import { errorMessage } from '../lib/errors';
 import { library } from './library.svelte';
 import { list } from './list.svelte';
 import { notify } from './notify.svelte';
-import { ui } from './ui.svelte';
 
 /**
  * 扫描编排：选目录 → 扫描 → 刷新统计/歌单/列表。
@@ -49,7 +48,7 @@ class ScanStore {
    */
   async afterScan(): Promise<void> {
     await library.loadStats();
-    await ui.refreshPlaylists();
+    await library.loadPlaylists();
     await list.reload({ restore: true });
   }
 

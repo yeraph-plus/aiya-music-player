@@ -26,7 +26,7 @@
 
   const view = $derived(ui.view);
   const currentPlaylist = $derived(
-    view.kind === 'playlist' ? (ui.playlistById(view.id) ?? null) : null,
+    view.kind === 'playlist' ? playlists.byId(view.id) : null,
   );
   const showPlays = $derived(view.kind === 'recent' || view.kind === 'mostPlayed');
   const playerState = $derived(player.state);

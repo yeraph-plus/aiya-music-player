@@ -1,13 +1,10 @@
-@import 'tailwindcss';
-
-/*
- * 样式入口：只做 @import，规则全部在 styles/ 下分层。
+/* 样式入口：只做 @import，规则全部在 styles/ 下分层。
  *
  * 分层顺序有意义（CSS 后写的赢）：
- *   tokens（变量）→ base（元素默认）→ shell / lists / player / overlays（组件）
+ *   tokens（**只有变量**）→ base（元素默认 + 骨架）→ shell / lists / player / overlays / pages
  *
- * 为什么拆：1825 行单文件里"哪条规则属于哪个组件"只能靠段落注释认；
- * 拆开之后一次改动只看一个文件，也便于以后换皮——换皮只动 tokens.css。
+ * 为什么拆：单文件 1800 行时"哪条规则属于哪个组件"只能靠段落注释认；
+ * 拆开之后一次改动只看一个文件，也便于以后换皮 —— 换皮只动 tokens.css。
  */
 @import './styles/tokens.css';
 @import './styles/base.css';
@@ -16,3 +13,24 @@
 @import './styles/player.css';
 @import './styles/overlays.css';
 @import './styles/pages.css';
+
+/* Tailwind v4：**只引 theme + utilities，不引 preflight**
+ * （docs/24 决策 5：依赖与 vite 插件保留、入口裁剪）。
+ *
+ * 两件实测出来的事：
+ *
+ * ① preflight 是它唯一真正生效的部分。它把 margin/button/border reset 一遍，
+ *    而 base.css 又 reset 一遍，两份规则叠在同一个元素上，谁赢取决于层顺序。
+ *    但不引之后**必须自己补**缺的那几条 —— 见 base.css 的「元素默认」段，
+ *    那里逐条写了出处（`ImportPanel` 的 `.panel-head h2` 就全靠 preflight 归零）。
+ *
+ * ② 只去 preflight 只降 3.9 KB。剩下的 ~1.9 KB 是 Tailwind 从**我们自己 CSS
+ *    的值**里误判出来的 25 条 utility（`position: absolute` / `display: flex` /
+ *    `visibility: visible` 被当成了类名），连带 `@layer properties` 的兜底块。
+ *    `source(none)` 关掉源码扫描后归零；将来真要写 utility，得同时补 @source。
+ *
+ * 合计 41 102 → 35 278 B（−5.8 KB / −14.2%）。
+ */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities) source(none);

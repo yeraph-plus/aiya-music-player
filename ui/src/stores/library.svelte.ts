@@ -4,6 +4,7 @@ import type { LibraryStats } from '../lib/ipc/generated/LibraryStats';
 import type { TrackPage } from '../lib/ipc/generated/TrackPage';
 import type { TrackDetail } from '../lib/ipc/generated/TrackDetail';
 import type { ScanResult } from '../lib/ipc/generated/ScanResult';
+import type { PlaylistSummary } from '../lib/ipc/generated/PlaylistSummary';
 import { errorMessage } from '../lib/errors';
 
 /**
@@ -21,6 +22,17 @@ class LibraryStore {
   scan = $state<ScanProgressView | null>(null);
   dataDir = $state<string | null>(null);
 
+  /**
+   * 歌单摘要（侧栏、首页、选择器共用这一份）。
+   *
+   * 为什么放在 library 而不是 playlists store：曲目变动后这份数据会过期，
+   * 而 `list.removeTracks` 与 `scan.afterScan` 都要刷它 —— 它们**不能**
+   * import playlists（playlists 反过来 import 它们做 reload/playAll，会成环，
+   * 全仓此前是 0 环）。library 只依赖 ipc，是这张图里唯一夹在中间的位置。
+   * playlists store 在此之上做"改完刷新 + 提示 + 重载"的编排。
+   */
+  playlists = $state<PlaylistSummary[]>([]);
+
   readonly scanning = $derived(this.scan?.phase === 'walking' || this.scan?.phase === 'parsing');
 
   async loadStats(): Promise<void> {
@@ -29,6 +41,20 @@ class LibraryStore {
     } catch (e) {
       console.warn('library.stats failed:', errorMessage(e));
     }
+  }
+
+  /** 重拉歌单摘要。失败降级为不动（侧栏旧数据比空列表好） */
+  async loadPlaylists(): Promise<void> {
+    try {
+      this.playlists = await ipc.playlist.list();
+    } catch (e) {
+      console.warn('playlist.list failed:', errorMessage(e));
+    }
+  }
+
+  /** 侧栏歌单整体排序：后端回排好的完整列表，省一次 roundtrip。失败抛出 */
+  async reorderPlaylists(from: number, to: number): Promise<void> {
+    this.playlists = await ipc.playlist.reorder(from, to);
   }
 
   /** 分页列表（TrackWindow 与 App.reload 共用这一个入口）。失败抛出，由调用方决定怎么显示 */

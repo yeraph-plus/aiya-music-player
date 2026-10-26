@@ -44,7 +44,7 @@
   <Sidebar
     page={ui.page}
     view={ui.view}
-    playlists={ui.playlists}
+    playlists={playlists.items}
     stats={library.stats}
     dataDir={library.dataDir}
     onpage={navigate}
@@ -76,7 +76,7 @@
   {#if ui.page === 'home' && ui.libraryDetail && selection.size > 0}
     <BatchBar
       count={selection.size}
-      playlists={ui.playlists}
+      playlists={playlists.items}
       onplay={() => void list.batchPlay()}
       onenqueue={() => void list.batchEnqueue()}
       onaddto={(playlistId) => void playlists.addSelection(playlistId)}

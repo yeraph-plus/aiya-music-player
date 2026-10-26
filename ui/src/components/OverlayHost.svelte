@@ -65,10 +65,10 @@
   }
 
   function playlistItems(menu: NonNullable<typeof overlay.playlistMenu>) {
-    const index = ui.playlists.findIndex((item) => item.id === menu.playlist.id);
+    const index = playlists.items.findIndex((item) => item.id === menu.playlist.id);
     return playlistMenuItems(
       menu.playlist,
-      { index, total: ui.playlists.length },
+      { index, total: playlists.items.length },
       {
         play: () => void playlists.play(menu.playlist),
         rename: () => {
@@ -167,7 +167,7 @@
   <PlaylistPicker
     title="添加到播放列表"
     count={overlay.dialog.ids.length}
-    playlists={ui.playlists}
+    playlists={playlists.items}
     onpick={(playlistId) => {
       if (overlay.dialog?.kind !== 'addToPlaylist') return;
       const ids = overlay.dialog.ids;

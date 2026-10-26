@@ -6,6 +6,7 @@ import { nav } from '../stores/nav.svelte';
 import { overlay } from '../stores/overlay.svelte';
 import { player } from '../stores/player.svelte';
 import { selection } from '../stores/selection.svelte';
+import { lyrics } from '../stores/lyrics.svelte';
 import { ui } from '../stores/ui.svelte';
 import { focusSearch } from './focus-search';
 import { listKeyIntent } from './list-keys';
@@ -83,7 +84,7 @@ export function runShortcut(action: ShortcutAction): void {
       return;
     case 'toggleLyrics':
       nav.go({ kind: 'page', page: 'nowPlaying' });
-      if (currentTrackId()) ui.loadLyrics(currentTrackId()!);
+      if (currentTrackId()) lyrics.load(currentTrackId()!);
       return;
     case 'toggleShuffle':
       player.setShuffle(!(state?.shuffle ?? false));

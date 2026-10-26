@@ -6,6 +6,7 @@
   import { formatAudioSpec } from '../lib/audio-format';
   import { errorMessage } from '../lib/errors';
   import type { SpectrumSource } from '../lib/spectrum-source';
+  import { lyrics } from '../stores/lyrics.svelte';
   import { player } from '../stores/player.svelte';
   import { ui } from '../stores/ui.svelte';
 
@@ -44,8 +45,8 @@
 
   <div class="now-playing-grid">
     <LyricsPanel
-      lyrics={ui.lyrics}
-      loading={ui.lyricsLoading}
+      lyrics={lyrics.doc}
+      loading={lyrics.loading}
       trackTitle={current?.title ?? null}
       positionMs={player.state?.positionMs ?? 0}
       durationMs={player.state?.durationMs ?? 0}

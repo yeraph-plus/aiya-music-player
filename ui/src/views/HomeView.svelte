@@ -159,7 +159,7 @@
   <section class="home-section">
     <div class="section-heading">
       <div><ListMusic size={17} /><h2>歌单</h2></div>
-      <span>{ui.playlists.length} 个</span>
+      <span>{playlists.items.length} 个</span>
     </div>
     <div class="playlist-grid">
       <button class="playlist-card library-card" onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>
@@ -167,7 +167,7 @@
         <strong>全部曲目</strong>
         <span>{library.stats?.tracks ?? 0} 首</span>
       </button>
-      {#each ui.playlists as playlist (playlist.id)}
+      {#each playlists.items as playlist (playlist.id)}
         <button class="playlist-card" onclick={() => nav.go({ kind: 'playlist', id: playlist.id })}>
           {#if playlist.artworkId}
             <img src={artworkUrl(playlist.artworkId, 160) ?? ''} alt="" loading="lazy" />
@@ -240,7 +240,7 @@
 {#if selList.length > 0}
   <BatchBar
     count={selList.length}
-    playlists={ui.playlists}
+    playlists={playlists.items}
     onplay={() => void batchPlay()}
     onenqueue={() => void batchEnqueue()}
     onaddto={(playlistId) => void batchAddTo(playlistId)}

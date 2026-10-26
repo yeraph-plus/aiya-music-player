@@ -147,11 +147,7 @@ class ListStore {
     // 搜索始终针对全库。第一次输入时离开仪表盘/歌单详情，避免把关键词
     // 错套到当前歌单；后续每个字符只更新查询，不再重置视图。
     if (value.trim() && (!ui.libraryDetail || ui.page !== 'home' || !ui.search.trim())) {
-      ui.page = 'home';
-      ui.libraryDetail = true;
-      ui.view = { kind: 'library' };
-      ui.artistId = null;
-      ui.albumId = null;
+      ui.enterList({ kind: 'library' });
     }
     ui.search = value;
     clearTimeout(this.searchTimer);
@@ -226,7 +222,7 @@ class ListStore {
     notify.showToast(`已移出曲库 ${removed} 首`);
     selection.clear();
     await library.loadStats();
-    await ui.refreshPlaylists();
+    await library.loadPlaylists();
     await this.reload({ restore: true });
   }
 
@@ -256,13 +252,9 @@ class ListStore {
    */
   openHome(): void {
     clearTimeout(this.searchTimer);
-    ui.search = '';
-    ui.artistId = null;
-    ui.albumId = null;
-    ui.view = { kind: 'library' };
-    ui.libraryDetail = false;
+    ui.enterList({ kind: 'library' }, { detail: false });
     selection.clear();
-    ui.openPage('home');
+    ui.scheduleUiSave();
   }
 
   /**
@@ -277,28 +269,18 @@ class ListStore {
     sort?: { field: TrackSort; direction: 'asc' | 'desc' },
   ): void {
     clearTimeout(this.searchTimer);
-    ui.page = 'home';
-    ui.libraryDetail = true;
-    ui.search = '';
-    ui.artistId = null;
-    ui.albumId = null;
+    ui.enterList({ kind });
     if (sort) {
       ui.sort = sort.field;
       ui.direction = sort.direction;
     }
-    if (ui.view.kind !== kind) ui.view = { kind };
     void this.reload();
     ui.scheduleUiSave();
   }
 
   openPlaylist(id: string): void {
     clearTimeout(this.searchTimer);
-    ui.page = 'home';
-    ui.libraryDetail = true;
-    ui.search = '';
-    ui.artistId = null;
-    ui.albumId = null;
-    ui.view = { kind: 'playlist', id };
+    ui.enterList({ kind: 'playlist', id });
     void this.reload();
     ui.scheduleUiSave();
   }

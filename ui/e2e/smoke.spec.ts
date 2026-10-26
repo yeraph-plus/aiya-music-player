@@ -58,6 +58,21 @@ test('启动装配：顶栏四件 + 首页标题 + 播放条空态', async ({ pa
   await expect(page.locator('.main .tt-row').first()).toBeVisible();
   await expect(page.locator('.main .list')).toHaveCount(0);
   await expect(page.locator('footer')).toContainText('未在播放');
+  // 歌单摘要的加载链路：boot → playlists.refresh() → library.playlists → 侧栏。
+  // 2026-10-26 这条数据从 ui store 挪到 library（避免 list/scan 与 playlists 成环），
+  // 断言在这里是为了「挪完还接得上」——mock 种子固定 4 张。
+  await expect(page.locator('.sidebar .playlist-item')).toHaveCount(4);
+});
+
+test('歌单：侧栏点开 → 标题与列表来自该歌单', async ({ page }) => {
+  await page.goto('/');
+  const first = page.locator('.sidebar .playlist-item').first();
+  const name = (await first.getAttribute('title'))?.split(' · ')[0] ?? '';
+  await first.click();
+  await expect(page.locator('.main .page-header h1')).toHaveText(name);
+  await expect(firstRow(page)).toBeVisible();
+  // 曲库三 tab 在歌单视图里不出现（工具条全空时整条不渲染）
+  await expect(page.locator('.main .page-toolbar')).toHaveCount(0);
 });
 
 test('导航链：曲库 → 工具条切最近播放 → 顶栏返回', async ({ page }) => {

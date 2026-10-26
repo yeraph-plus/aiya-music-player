@@ -2,6 +2,7 @@ import { errorMessage } from './errors';
 import type { PlayerState } from './ipc/generated/PlayerState';
 import { library } from '../stores/library.svelte';
 import { list } from '../stores/list.svelte';
+import { playlists } from '../stores/playlists.svelte';
 import { scan } from '../stores/scan.svelte';
 import { player } from '../stores/player.svelte';
 import { ui } from '../stores/ui.svelte';
@@ -44,6 +45,10 @@ export function boot(options: { onState: (state: PlayerState) => void }): () => 
     if (dataDir) library.dataDir = dataDir;
     ui.scrollTop = restoredScrollTop;
     // 频谱面板若被恢复，`AppShell` 的 effect 会自己拿源（sidePanel 已就位）
+
+    // 歌单摘要必须在 `ui.bootstrap()` 之后拉：恢复出来的 view 可能指着一个
+    // 已经不存在的歌单，`playlists.refresh()` 会顺手把视图退回曲库。
+    await playlists.refresh();
 
     await library.loadStats();
     await list.reload({ restore: true });

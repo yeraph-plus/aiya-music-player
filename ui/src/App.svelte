@@ -32,6 +32,7 @@
   import { list } from './stores/list.svelte';
   import { notify } from './stores/notify.svelte';
   import { player } from './stores/player.svelte';
+  import { lyrics } from './stores/lyrics.svelte';
   import { ui } from './stores/ui.svelte';
 
   let mediaSession: MediaSessionBridge | null = null;
@@ -106,7 +107,7 @@
   $effect(() => {
     const trackId = player.state?.current?.id ?? null;
     if (ui.page !== 'nowPlaying' || !trackId) return;
-    ui.loadLyrics(trackId);
+    lyrics.load(trackId);
   });
 
   onMount(() => {

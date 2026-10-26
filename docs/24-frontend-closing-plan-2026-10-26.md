@@ -57,6 +57,12 @@
 > 的 scoped `<style>`，全局部分净减 267 行）、CSS 类名 207 → **181**
 > （`.titlebar*` `.topbar` `.search*` `.view-*` `.page-heading*` `.settings-jump`
 > `.chip*` `.filters` 全部消失）。上表保留动工前的基线，方便对比。
+>
+> **B0 之后的同一组数字**（2026-10-26 实测）：`components/` 仍 **21**、`stores/` 13 → **14**
+> （新增 `stores/lyrics.svelte.ts`）、`views/` 5、`styles/` 2 205 → **2 265 行**（tokens 只剩
+> 74 行变量、base 补了元素默认，见 B0 表）、CSS 类名 181 → **185**、产物 CSS
+> 41.10 → **35.28 kB**（−5.82 kB / −14.2%）、JS 237.28 → **239.41 kB**（+2.13 kB，19 个 lucide
+> 图标定义换掉 169 行手写 path 的代价）、`test:e2e` **6/6**。
 
 ---
 
@@ -64,6 +70,7 @@
 
 | # | 问题 | 证据 | 影响 |
 |---|---|---|---|
+| 状态 | **B3a 关掉 P1 的一半**（`.titlebar*/topbar/view-*/page-heading*` 随组件删、缩进改由组件自带 scoped）；**B0 关掉 P1 的另一半、P2、P3、P4 的歌单/歌词部分、P7、P8、P9**（见 §5 B0 表）。P5/P6/P10/P11/P12 留给 B4/B5。下表是动工前的原始审计，保留原文以便对照。 |
 | **P1** | 样式分层名不副实 | `tokens.css` 里装着 `box-sizing`/`body`/`button`/滚动条 reset；`base.css` 里装着 `.app` 网格、`.sidebar`、`.nav-item`；`pages.css` 里装着 `.titlebar`、`.queue-panel`。三份文件的头注释都写着别的职责 | 换皮/换布局时不知道该改哪个文件；新同事按注释找会找错 |
 | **P2** | Tailwind 的 preflight 是白付的成本 | 全仓零 utility 使用（`grep 'class=".*\b(flex\|px-4\|text-sm)'` 只命中我们自己的 `diag-grid`/`grid-head`/`playlist-grid`）。产物 CSS 39 752 B，其中 **5 498 B（13.8%）是 tailwind v4 的 preflight + `@theme` + `@layer properties`**，一行都不生效 | 每屏白付 5.5 KB；更麻烦的是它和 `tokens.css` 各自 reset 一遍按钮/输入（双份 reset 是"改了一条不生效"的经典来源）。**决议：依赖保留，入口裁成只引 `theme` + `utilities`，不再引 preflight**（见 §4.1） |
 | **P3** | 两套图标系统 | `Icon.svelte` 手写 29 条 SVG path（169 行），同时 9 个组件直接 `import { X } from '@lucide/svelte'`；strokeWidth 1.7 与 1.8 混用；ImportPanel 用文字 `✕` | 同一屏里三种视觉粗细；加一个图标要判断"写 path 还是装 lucide" |
@@ -487,17 +494,30 @@ active 状态只能靠 `IntersectionObserver` 反查后写回一个 `.chip.on` �
 - 点输入框左右内边距不拖窗 —— 同上（`drag="false"` 已就位，但没手拖验证）
 - 搜索后按返回是否还原搜索前状态 —— 曲库为空时搜索无结果，等有数据再验
 
-### B0 清场（无视觉变更）
+### B0 清场（无视觉变更）✅ 已完成（2026-10-26）
 
-| 项 | 动作 |
-|---|---|
-| Tailwind | `app.css` 入口换成 `theme` + `utilities` 两层，不引 preflight（依赖与 vite 插件保留）；产物 CSS 应下降 ≥3 KB |
-| 死代码 | 删 `.modal.settings`/`.tabs`/`.modal-body`/`.settings`/`.stats`/`.home-skeleton`（`.topbar`/`.view-*`/`.page-heading`/`.titlebar*` 已在 B3a 随组件删）；补 `--warning`→`--warn`、`--font-mono`→新增 token |
-| store 归位 | `ui` 的 8 个歌单 CRUD + `playlists` 字段 → 迁进 `stores/playlists.svelte.ts`；`ui.lyrics*` → 新 `stores/lyrics.svelte.ts` |
-| 图标 | `Icon.svelte` 改成"语义名 → lucide 组件"的薄映射（保留 API，内部不再存 path）；统一 strokeWidth |
-| 去重 | 视图重置逻辑：**B3a 之后剩下的 3 处**（`openHome`/`openBuiltinView`/`openPlaylist` 各自清搜索+筛选）抽一处，或直接由 nav 统一 |
+| 项 | 动作 | 结果 |
+|---|---|---|
+| Tailwind | 入口换成 `theme` + `utilities` 两层，不引 preflight；依赖与 vite 插件保留 | CSS 41 102 → **35 278 B**。**关键发现**：光去 preflight 只降 3.9 KB —— 剩下的 `@layer properties` + 25 条 utility 是 Tailwind 从**我们自己 CSS 的值**里误判出来的（`position: absolute` / `display: flex` / `visibility: visible` 被当成类名）。加 `source(none)` 关掉源码扫描后归零 |
+| 死代码 | 删 `.modal.settings`/`.tabs`/`.modal-body`/`.stats`/`.home-skeleton`/`body.is-dragging`；`--warning`→`--warn`；补 `--font-mono` | 已在 S5 落地 |
+| store 归位 | 8 个歌单命令 + `playlists` 字段 + `refreshPlaylists` + `playlistById` 全部离开 `ui`；`ui.lyrics*` → `stores/lyrics.svelte.ts` | 那 8 个命令的**唯一调用方就是 playlists store**，所以直接内联成 `ipc.playlist.*` 调用，公开 API 从 10 个降到 0 个。歌单摘要落到 `library.playlists`（理由见下） |
+| 图标 | `Icon.svelte` 改成"语义名 → lucide 组件"的薄映射，169 行 → 41 行 | 29 条手写 path → 19 行映射（实际用到 19 个，含 2 个动态传入的 `repeat`/`volume`）；strokeWidth 统一 **1.8**，大号展示图标自己传更细的值 |
+| 去重 | 视图重置 4 处 → `ui.enterList(view, {detail})` | 4×6 行同样的赋值收敛成一个方法 |
+| 元素默认 | **reset 从 `tokens.css` 挪回 `base.css`**，并补上 preflight 原本代劳的几条 | tokens 从 133 行降到 **74 行纯变量**；补的 5 条各有出处（`ul/ol` 去掉 disc、`svg` 变 block、`h1..h6` 归零、`a` 继承色、`table` 折叠边框） |
 
-验收：`npm run check` 0/0、`build:ui` 通过且 CSS ≤ 32 KB（B3a 后基线重测）、`npm run test:e2e` 4/4 绿、`probe:ui` 无异常。
+**一条不能省的推论**：preflight 不是"白付的钱"，它同时**替我们做了 5 件小事**。真窗口实测
+`ImportPanel` 的 `.panel-head h2` 没有任何自有样式，全靠 preflight 归零 —— 直接删不补，那个
+面板头会变成浏览器默认 `1.5em` 加粗 + 上下 margin。所以删 preflight 和补元素默认是**同一个动作**。
+
+**歌单摘要为什么落在 `library` 而不是 `playlists`**：曲目变动后这份数据会过期，而
+`list.removeTracks` 与 `scan.afterScan` 都要刷它。它们不能 import `playlists`（`playlists` 反过来
+import 它们做 reload/playAll）→ 会成环，而全仓在此之前实测是 **0 环**。`library` 只依赖 ipc，
+是这张图里唯一夹在中间的位置。保护：把环检测写成了脚本，改完复核仍是 0。
+
+验收（实测）：`npm run check` 0/0、`build:ui` 通过且 CSS **35.28 kB**（目标 ≤ 36 kB）、
+`test:e2e` **6/6** 绿（新增 1 条歌单链路）、`probe:ui -- --nav` 10 步无异常。
+真窗口另测：元素默认 `h2` 13px/400/0 margin、`ul` 无圆点、`svg` block、骨架 46/216/1064 未变、
+播放条 4 个 `.icon-solid` 的 `fill` 取到 `currentColor`、27 个 svg 无一零尺寸。
 
 ### B1 Token 与样式分层
 
@@ -554,7 +574,7 @@ B3a 的 6 条真窗口实测重跑一遍全过；Dock 在窄窗下的收纳规�
 E2E 补到 8–10 条（覆盖：拆页路由、批量、设置分组、kit 演示页、队列抽屉、EQ）；
 可访问性与键盘巡检表（docs/19 §5 逐条打勾）；更新 docs/19 的作废标记与 docs/23 的补充。
 
-验收：`npm run verify`（test + check + build + gen:types:check）全绿；`test:e2e` 10/10；真窗口 12 步走查表。
+验收：`npm run verify`（test + check + build + gen:types:check）全绿；`test:e2e` 10/10（B0 后基线 6/6）；真窗口 12 步走查表。
 
 ---
 
@@ -662,7 +682,7 @@ E2E 补到 8–10 条（覆盖：拆页路由、批量、设置分组、kit 演�
 | 构建 | `npm run build:ui` | 通过；JS ≤ 240 KB、CSS 逐批下降 |
 | 契约 | `npm run gen:types:check` | 无漂移 |
 | 运行时 | `npm run probe:ui -- --play` | 无 console error / 无 4xx / 无未捕获异常 |
-| E2E | `npm run test:e2e` | **B3a 起 5/5**（原本 0/4），B6 起 10/10 |
+| E2E | `npm run test:e2e` | **B3a 起 5/5**（原本 0/4）、**B0 起 6/6**，B6 起 10/10 |
 | 视觉 | 真窗口 3 档 × 明暗 2 套 | 12 张目检图，记进本文档附录 |
 | 壳体（v2） | 真窗口手测 6 条 | ①顶栏四件位置正确 ②拖空白移动窗口、双击最大化 ③点搜索框内边距不拖窗 ④首页→歌单→返回回首页 ⑤搜索后返回还原搜索前状态 ⑥设置页标题与 tab 分两行 |
 | 版式件边界（v2） | `grep -rn "PageHeader\|PageToolbar" components views` | 引用方**只能是 `views/`**；出现在 `components/` 里就是被组合化了，打回 |

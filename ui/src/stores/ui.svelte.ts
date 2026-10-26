@@ -1,4 +1,4 @@
-import type { BeetsStatus, Diagnostics, Lyrics, PlaylistSummary } from '../lib/ipc';
+import type { BeetsStatus, Diagnostics } from '../lib/ipc';
 import type { TrackSort } from '../lib/query';
 import type { AppSettings } from '../lib/settings';
 import { DEFAULT_SETTINGS } from '../lib/settings';
@@ -6,14 +6,17 @@ import { ipc, type DynamicJson } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
 import { devValidate, settingsSchema, uiStateSchema, type UiState } from '../lib/ipc/schema';
 import { LIBRARY_VIEW, parseViewKey, viewKey, type View } from '../lib/view';
-import { LyricsLoader } from '../lib/lyrics-loader';
 import { readLook } from '../lib/look';
 import { notify } from './notify.svelte';
 
 export type AppPage = 'home' | 'nowPlaying' | 'radio' | 'settings';
 
 /**
- * 界面状态 store：视图、搜索排序、筛选、面板、设置、歌单列表、歌词、诊断。
+ * 界面状态 store：视图、搜索排序、筛选、队列抽屉、设置、诊断。
+ *
+ * 边界（2026-10-26 收窄过一次）：只描述"界面在哪、长什么样"。
+ * 歌单在 `library.playlists` + `playlists`（编排），歌词在 `stores/lyrics`，
+ * 列表怎么刷在 `list`——这三样都不在这里。
  *
  * 这里只持有"是什么"，不持有"列表怎么刷"——reload/TrackWindow 仍在 App：
  * store 改完状态后由 App 触发一次 reload。
@@ -44,7 +47,6 @@ class UiStore {
    * 其余字段仍走默认值：它们不影响首帧观感，bootstrap 一回来就覆盖。
    */
   settings = $state<AppSettings>({ ...DEFAULT_SETTINGS, ...readLook() });
-  playlists = $state<PlaylistSummary[]>([]);
   diagnostics = $state<Diagnostics | null>(null);
   beets = $state<BeetsStatus | null>(null);
 
@@ -64,24 +66,6 @@ class UiStore {
       this.handle = setTimeout(fn, 600);
     },
   };
-
-  lyrics = $state<Lyrics | null>(null);
-  lyricsLoading = $state(false);
-  /**
-   * 歌词加载的并发与幂等由 loader 负责：面板打开、换歌、点按钮三个入口
-   * 都会调它，晚到的旧请求会被丢弃（详见 lib/lyrics-loader.ts）。
-   */
-  private readonly lyricsLoader = new LyricsLoader(
-    (trackId) => ipc.lyrics.get(trackId),
-    (state) => {
-      this.lyrics = state.lyrics;
-      this.lyricsLoading = state.loading;
-    },
-  );
-
-  loadLyrics(trackId: string): void {
-    this.lyricsLoader.load(trackId);
-  }
 
   /* ---------------- 视图状态持久化 ---------------- */
 
@@ -147,6 +131,26 @@ class UiStore {
     }
   }
 
+  /**
+   * 进入「列表视图」上下文：一级页回落首页、关掉队列抽屉、清搜索与筛选、
+   * 换成目标视图。
+   *
+   * 抽出来之前这段在 list store 里抄了 4 份（openHome / openBuiltinView /
+   * openPlaylist / setSearch），4×6 行同样的赋值。漏一行不会报错，只会留下
+   * "切了视图筛选还在"这种状态残留 —— 症状是列表少一半数据，最难查的一类。
+   *
+   * 它**不负责落盘与重载**：调用方决定（搜索每敲一个字都落盘太吵）。
+   */
+  enterList(view: View, opts: { detail?: boolean } = {}): void {
+    this.page = 'home';
+    this.libraryDetail = opts.detail ?? true;
+    this.search = '';
+    this.artistId = null;
+    this.albumId = null;
+    this.view = view;
+    this.queueOpen = false;
+  }
+
   toggleQueue(): void {
     this.queueOpen = !this.queueOpen;
   }
@@ -202,95 +206,29 @@ class UiStore {
     }
   }
 
-  /* ---------------- 歌单 ---------------- */
-
-  async refreshPlaylists(): Promise<void> {
-    try {
-      this.playlists = await ipc.playlist.list();
-    } catch (e) {
-      console.warn('playlist.list failed:', errorMessage(e));
-      return;
-    }
-    const view = this.view;
-    if (view.kind === 'playlist' && !this.playlists.some((item) => item.id === view.id)) {
-      this.view = LIBRARY_VIEW;
-    }
-  }
-
-  playlistById(id: string): PlaylistSummary | null {
-    return this.playlists.find((item) => item.id === id) ?? null;
-  }
-
-  /* ---------------- 歌单 CRUD（调用方负责随后的 refresh/reload） ----------------
-   * 全部抛出：歌单操作是用户显式动作，失败必须让他看到。
-   */
-
-  async createPlaylist(name: string, trackIds?: string[]): Promise<string> {
-    const created = await ipc.playlist.create(name, trackIds);
-    return created.id;
-  }
-
-  async renamePlaylist(id: string, name: string): Promise<void> {
-    await ipc.playlist.rename(id, name);
-  }
-
-  async removePlaylist(id: string): Promise<void> {
-    await ipc.playlist.remove(id);
-  }
-
-  async clearPlaylist(id: string): Promise<void> {
-    await ipc.playlist.clear(id);
-  }
-
-  /** 返回新增/跳过计数（`addTracks` 的去重结果，UI 要原样告诉用户） */
-  async addTracks(id: string, trackIds: string[]): Promise<{ added: number; skipped: number }> {
-    const result = await ipc.playlist.addTracks(id, trackIds);
-    return { added: result.added, skipped: result.skipped };
-  }
-
-  async moveItem(id: string, from: number, to: number): Promise<void> {
-    await ipc.playlist.move(id, from, to);
-  }
-
-  /** 侧栏歌单整体排序：后端回排好的完整列表，省一次 roundtrip */
-  async reorderPlaylists(from: number, to: number): Promise<PlaylistSummary[]> {
-    this.playlists = await ipc.playlist.reorder(from, to);
-    return this.playlists;
-  }
-
-  async removeItemAt(id: string, position: number): Promise<void> {
-    await ipc.playlist.removeAt(id, position);
-  }
-
   /* ---------------- 启动引导 ---------------- */
 
-  /** 首屏并发拉取：设置 / 歌单 / UiState。返回恢复出的 lastScrollTop */
+  /** 首屏并发拉取：设置 / UiState。返回恢复出的 lastScrollTop。
+   *
+   * 歌单摘要不在这里：它在 `library.playlists`，由 `playlists.refresh()` 加载
+   * 并在加载后兜底"当前歌单已不存在"（boot.ts 里紧跟着调）。
+   */
   async bootstrap(): Promise<number> {
     let rawUi: DynamicJson;
     let rawSettings: DynamicJson;
-    let playlists: PlaylistSummary[];
     try {
-      [rawUi, rawSettings, playlists] = await Promise.all([
-        ipc.app.getUiState(),
-        ipc.app.getSettings(),
-        ipc.playlist.list(),
-      ]);
+      [rawUi, rawSettings] = await Promise.all([ipc.app.getUiState(), ipc.app.getSettings()]);
     } catch (e) {
-      // 启动引导失败不致命：设置/歌单/视图恢复走默认值，界面仍可用
+      // 启动引导失败不致命：设置/视图恢复走默认值，界面仍可用
       console.warn('bootstrap failed:', errorMessage(e));
       return 0;
     }
 
     this.settings = mergeSettings(rawSettings);
-    this.playlists = playlists;
 
     devValidate(uiStateSchema, rawUi, 'app.uiState');
     const restored = rawUi as UiState;
     this.restore(restored);
-    const view = this.view;
-    if (view.kind === 'playlist' && !this.playlists.some((item) => item.id === view.id)) {
-      this.view = LIBRARY_VIEW;
-    }
     return typeof restored.scrollTop === 'number' ? restored.scrollTop : 0;
   }
 }
