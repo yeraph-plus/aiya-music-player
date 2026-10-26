@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import type { BeetsStatus, Diagnostics } from '../lib/ipc';
-  import type { AppSettings } from '../lib/settings';
+  import type { AppSettings, ListDensity, ThemeMode } from '../lib/settings';
   import {
     SHORTCUT_ACTIONS,
     SHORTCUT_LABELS,
@@ -14,6 +14,9 @@
   import { formatBytes, formatDateTime, formatDurationLong, shortenPath } from '../lib/format';
   import Icon from './Icon.svelte';
   import LibraryTools from './LibraryTools.svelte';
+  import Button from './ui/Button.svelte';
+  import SegmentedControl from './ui/SegmentedControl.svelte';
+  import Switch from './ui/Switch.svelte';
   import Header from './content/Header.svelte';
   import Toolbar from './content/Toolbar.svelte';
   import { capture } from '../stores/capture.svelte';
@@ -121,18 +124,44 @@
     { value: 'null', label: '静音', hint: '不开音频设备：进度照常走但不出声（排查用）' },
   ];
 
-  /** 0 = 交给引擎按模式取默认（共享 200ms、独占按设备周期） */
-  const BUFFER_OPTIONS: Array<{ value: number; label: string }> = [
-    { value: 0, label: '自动' },
-    { value: 50, label: '50ms' },
-    { value: 100, label: '100ms' },
-    { value: 200, label: '200ms' },
+  /** 分段控件要 `title`，这里把 `hint` 映射过去；模块级只算一次，
+   *  否则每次渲染都造新数组，RadioGroup 会重挂、键盘焦点丢失。 */
+  const OUTPUT_OPTIONS = OUTPUT_MODES.map(({ value, label, hint }) => ({ value, label, title: hint }));
+
+  /**
+   * 0 = 交给引擎按模式取默认（共享 200ms、独占按设备周期）
+   *
+   * value 写成字符串：分段控件的值是 `string`，这里若留 number 就要在
+   * 每次渲染时 `String()` 一遍，反而更容易写错比较（`'0' === 0` 恒 false）。
+   */
+  const BUFFER_OPTIONS: Array<{ value: string; label: string }> = [
+    { value: '0', label: '自动' },
+    { value: '50', label: '50ms' },
+    { value: '100', label: '100ms' },
+    { value: '200', label: '200ms' },
   ];
 
   const CLOCK_OPTIONS: Array<{ value: string; label: string }> = [
     { value: 'auto', label: '自动' },
     { value: 'events', label: '事件' },
     { value: 'polling', label: '轮询' },
+  ];
+
+  /** 分段控件的选项一律写成模块级常量：内联数组字面量每次渲染都是新引用，
+   *  RadioGroup 会连同 `title` 一起重挂，键盘焦点在重挂瞬间丢掉。 */
+  const THEME_OPTIONS: Array<{ value: string; label: string }> = [
+    { value: 'dark', label: '深色' },
+    { value: 'light', label: '浅色' },
+  ];
+
+  const DENSITY_OPTIONS: Array<{ value: string; label: string }> = [
+    { value: 'comfortable', label: '标准' },
+    { value: 'compact', label: '紧凑' },
+  ];
+
+  const SPECTRUM_ENGINE_OPTIONS: Array<{ value: string; label: string }> = [
+    { value: 'pro', label: '专业' },
+    { value: 'compact', label: '简洁' },
   ];
 </script>
 
@@ -160,14 +189,16 @@
         <div class="setting-title">主题</div>
         <div class="setting-hint">浅色主题适合白天与投影，切换即时生效</div>
       </div>
-      <div class="segmented">
-        <button class:on={settings.theme === 'dark'} onclick={() => apply({ theme: 'dark' })}>
-          <Icon name="moon" size={13} /> 深色
-        </button>
-        <button class:on={settings.theme === 'light'} onclick={() => apply({ theme: 'light' })}>
-          <Icon name="sun" size={13} /> 浅色
-        </button>
-      </div>
+      <SegmentedControl
+        label="主题"
+        value={settings.theme}
+        options={THEME_OPTIONS}
+        onchange={(value) => apply({ theme: value as ThemeMode })}
+      >
+        {#snippet icon(value)}
+          <Icon name={value === 'dark' ? 'moon' : 'sun'} size={13} />
+        {/snippet}
+      </SegmentedControl>
     </div>
 
     <div class="setting-row">
@@ -175,14 +206,12 @@
         <div class="setting-title">列表密度</div>
         <div class="setting-hint">紧凑模式一屏多显示约 20%，适合大曲库浏览</div>
       </div>
-      <div class="segmented">
-        <button class:on={settings.density === 'comfortable'} onclick={() => apply({ density: 'comfortable' })}>
-          标准
-        </button>
-        <button class:on={settings.density === 'compact'} onclick={() => apply({ density: 'compact' })}>
-          紧凑
-        </button>
-      </div>
+      <SegmentedControl
+        label="列表密度"
+        value={settings.density}
+        options={DENSITY_OPTIONS}
+        onchange={(value) => apply({ density: value as ListDensity })}
+      />
     </div>
 
     <div class="setting-row">
@@ -190,9 +219,11 @@
         <div class="setting-title">封面主色</div>
         <div class="setting-hint">从封面提取强调色；关掉则使用固定蓝色</div>
       </div>
-      <button class="switch" class:on={settings.accentFromArtwork} onclick={() => apply({ accentFromArtwork: !settings.accentFromArtwork })} aria-label="封面主色">
-        <i></i>
-      </button>
+      <Switch
+        label="封面主色"
+        checked={settings.accentFromArtwork}
+        onchange={(checked) => apply({ accentFromArtwork: checked })}
+      />
     </div>
   </section>
 
@@ -206,17 +237,12 @@
             '共享：与系统混音，其他程序照常出声'}
         </div>
       </div>
-      <div class="segmented">
-        {#each OUTPUT_MODES as mode (mode.value)}
-          <button
-            class:on={settings.output.mode === mode.value}
-            onclick={() => apply({ output: { ...settings.output, mode: mode.value } })}
-            title={mode.hint}
-          >
-            {mode.label}
-          </button>
-        {/each}
-      </div>
+      <SegmentedControl
+        label="输出模式"
+        value={settings.output.mode}
+        options={OUTPUT_MODES}
+        onchange={(value) => apply({ output: { ...settings.output, mode: value } })}
+      />
     </div>
 
     <div class="setting-row">
@@ -226,16 +252,12 @@
           越深越抗抖、延迟越大；「自动」按模式取默认（共享 200ms，独占按设备周期）
         </div>
       </div>
-      <div class="segmented">
-        {#each BUFFER_OPTIONS as opt (opt.value)}
-          <button
-            class:on={settings.output.bufferMs === opt.value}
-            onclick={() => apply({ output: { ...settings.output, bufferMs: opt.value } })}
-          >
-            {opt.label}
-          </button>
-        {/each}
-      </div>
+      <SegmentedControl
+        label="缓冲"
+        value={String(settings.output.bufferMs)}
+        options={BUFFER_OPTIONS}
+        onchange={(value) => apply({ output: { ...settings.output, bufferMs: Number(value) } })}
+      />
     </div>
 
     <div class="setting-row">
@@ -245,16 +267,12 @@
           自动 = 独占先试事件、失败再试轮询；共享固定用事件（更省电、延迟更稳）
         </div>
       </div>
-      <div class="segmented">
-        {#each CLOCK_OPTIONS as opt (opt.value)}
-          <button
-            class:on={settings.output.clock === opt.value}
-            onclick={() => apply({ output: { ...settings.output, clock: opt.value } })}
-          >
-            {opt.label}
-          </button>
-        {/each}
-      </div>
+      <SegmentedControl
+        label="时钟"
+        value={settings.output.clock}
+        options={CLOCK_OPTIONS}
+        onchange={(value) => apply({ output: { ...settings.output, clock: value } })}
+      />
     </div>
 
     <div class="setting-row">
@@ -264,15 +282,12 @@
           暂停就关流，让独占设备回到系统；再播放会重新打开（有几十毫秒空白）
         </div>
       </div>
-      <button
-        class="switch"
-        class:on={settings.output.releaseOnPause}
-        onclick={() =>
-          apply({ output: { ...settings.output, releaseOnPause: !settings.output.releaseOnPause } })}
-        aria-label="暂停时释放设备"
-      >
-        <i></i>
-      </button>
+      <Switch
+        label="暂停时释放设备"
+        checked={settings.output.releaseOnPause}
+        onchange={(checked) =>
+          apply({ output: { ...settings.output, releaseOnPause: checked } })}
+      />
     </div>
 
     <div class="setting-row">
@@ -280,9 +295,11 @@
         <div class="setting-title">启动时自动播放</div>
         <div class="setting-hint">打开应用就接着放上次那一首；关闭则停在暂停状态</div>
       </div>
-      <button class="switch" class:on={settings.autoplayOnStart} onclick={() => apply({ autoplayOnStart: !settings.autoplayOnStart })} aria-label="启动时自动播放">
-        <i></i>
-      </button>
+      <Switch
+        label="启动时自动播放"
+        checked={settings.autoplayOnStart}
+        onchange={(checked) => apply({ autoplayOnStart: checked })}
+      />
     </div>
 
     <div class="setting-row">
@@ -290,9 +307,11 @@
         <div class="setting-title">记住播放进度</div>
         <div class="setting-hint">下次启动从上次停下的位置继续；关闭则每次从头开始</div>
       </div>
-      <button class="switch" class:on={settings.rememberPosition} onclick={() => apply({ rememberPosition: !settings.rememberPosition })} aria-label="记住播放进度">
-        <i></i>
-      </button>
+      <Switch
+        label="记住播放进度"
+        checked={settings.rememberPosition}
+        onchange={(checked) => apply({ rememberPosition: checked })}
+      />
     </div>
 
     <div class="setting-row">
@@ -300,9 +319,11 @@
         <div class="setting-title">播放时阻止系统休眠</div>
         <div class="setting-hint">只阻止系统睡眠，屏幕仍会按系统设置熄掉</div>
       </div>
-      <button class="switch" class:on={settings.preventSleep} onclick={() => apply({ preventSleep: !settings.preventSleep })} aria-label="播放时阻止系统休眠">
-        <i></i>
-      </button>
+      <Switch
+        label="播放时阻止系统休眠"
+        checked={settings.preventSleep}
+        onchange={(checked) => apply({ preventSleep: checked })}
+      />
     </div>
 
     <div class="setting-row">
@@ -312,9 +333,11 @@
           按 ReplayGain 标签换算音量系数。近似实现：不改变你设置的音量，只做播放时的补偿
         </div>
       </div>
-      <button class="switch" class:on={settings.normalizeVolume} onclick={() => apply({ normalizeVolume: !settings.normalizeVolume })} aria-label="音量归一化">
-        <i></i>
-      </button>
+      <Switch
+        label="音量归一化"
+        checked={settings.normalizeVolume}
+        onchange={(checked) => apply({ normalizeVolume: checked })}
+      />
     </div>
 
     <div class="setting-row">
@@ -322,9 +345,11 @@
         <div class="setting-title">频谱可视化</div>
         <div class="setting-hint">在「正在播放」页显示实时频谱（ADR-037：开启后启用渲染层音频图）</div>
       </div>
-      <button class="switch" class:on={settings.spectrum} onclick={() => apply({ spectrum: !settings.spectrum })} aria-label="频谱可视化">
-        <i></i>
-      </button>
+      <Switch
+        label="频谱可视化"
+        checked={settings.spectrum}
+        onchange={(checked) => apply({ spectrum: checked })}
+      />
     </div>
 
     <div class="setting-row">
@@ -335,14 +360,12 @@
           两种风格数据同源（48 分带实时频谱），差别只在渲染层。
         </div>
       </div>
-      <div class="segmented">
-        <button class:on={settings.spectrumEngine === 'pro'} onclick={() => apply({ spectrumEngine: 'pro' })}>
-          专业
-        </button>
-        <button class:on={settings.spectrumEngine === 'compact'} onclick={() => apply({ spectrumEngine: 'compact' })}>
-          简洁
-        </button>
-      </div>
+      <SegmentedControl
+        label="频谱风格"
+        value={settings.spectrumEngine}
+        options={SPECTRUM_ENGINE_OPTIONS}
+        onchange={(value) => apply({ spectrumEngine: value as 'compact' | 'pro' })}
+      />
     </div>
   </section>
 
@@ -355,9 +378,11 @@
           打开后点关闭只是隐藏窗口，播放继续；要退出请用托盘菜单或 Ctrl+Q
         </div>
       </div>
-      <button class="switch" class:on={settings.closeToTray} onclick={() => apply({ closeToTray: !settings.closeToTray })} aria-label="关闭窗口时最小化到托盘">
-        <i></i>
-      </button>
+      <Switch
+        label="关闭窗口时最小化到托盘"
+        checked={settings.closeToTray}
+        onchange={(checked) => apply({ closeToTray: checked })}
+      />
     </div>
 
     <div class="setting-row">
@@ -367,9 +392,11 @@
           播放器的标题、封面与播放状态同步到系统媒体面板，媒体键由系统路由，失焦也生效
         </div>
       </div>
-      <button class="switch" class:on={settings.mediaKeys} onclick={() => apply({ mediaKeys: !settings.mediaKeys })} aria-label="系统媒体键">
-        <i></i>
-      </button>
+      <Switch
+        label="系统媒体键"
+        checked={settings.mediaKeys}
+        onchange={(checked) => apply({ mediaKeys: checked })}
+      />
     </div>
   </section>
 
@@ -403,16 +430,19 @@
     </div>
     <div class="setting-foot">
       <span class="dim">Esc 取消录制，Backspace 清空绑定。↑/↓ 与 Enter 是列表导航，不占用快捷键。</span>
-      <button class="btn" onclick={() => apply({ shortcuts: {} })}>恢复默认</button>
+      <Button size="sm" onclick={() => apply({ shortcuts: {} })}>恢复默认</Button>
     </div>
   </section>
 
   <section class="settings-section" id="settings-diagnostics">
     <div class="section-heading"><div><h2>诊断</h2></div></div>
     <div class="diag-actions">
-      <button class="btn" onclick={onrefresh}><Icon name="refresh" size={13} /> 刷新</button>
-      <button class="btn" onclick={onopendatadir}>打开数据目录</button>
-      <button class="btn" onclick={onclearhistory}>清空播放历史</button>
+      <Button size="sm" onclick={onrefresh}>
+        {#snippet icon()}<Icon name="refresh" size={13} />{/snippet}
+        刷新
+      </Button>
+      <Button size="sm" onclick={onopendatadir}>打开数据目录</Button>
+      <Button variant="danger" size="sm" onclick={onclearhistory}>清空播放历史</Button>
     </div>
 
     {#if diagnostics}

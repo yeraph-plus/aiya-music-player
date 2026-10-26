@@ -4,15 +4,17 @@
   /**
    * 按钮：**唯一**的按钮外观定义。
    *
-   * 取代全局 `.btn` / `.btn.primary` / `.btn.danger` / `.apply-btn` 四份手写规则
-   * （在 `styles/shell.css` 里，各写了一遍 height/padding/border-radius）。
+   * 已取代并删除全局 `.btn` / `.btn.primary` / `.btn.danger` / `.apply-btn`
+   * 四份手写规则（原在 `styles/shell.css` 与 `ImportPanel` 里，各写了一遍
+   * height/padding/border-radius）。B3b-3 收尾后 `grep 'class="btn'` 在
+   * `ui/src` 已归零，旧规则随之删除（2026-10-26）。
    *
    * 为什么不用 `bits-ui/button`：`Button.Root` 是 builder 模式，产出的是裸 `<button>`
    * + `data-state`，样式仍然全要自己写；而按钮的难点恰恰在样式变体矩阵，不在行为
    * （按下/禁用是浏览器原生）。判断线见 docs/24 §4.5。
    *
-   * 类名用 `k-` 前缀而不是 `.btn`：本批与旧全局 CSS **共存**，`.btn` 两边同名会让
-   * "这条规则到底谁赢"取决于 scoped 哈希，调试时看不出来。B3b 换完皮再删旧类。
+   * 类名用 `k-` 前缀而不是 `.btn`：替换期与旧全局 CSS **共存**，`.btn` 两边同名
+   * 会让"这条规则到底谁赢"取决于 scoped 哈希，调试时看不出来。
    */
 
   interface Props {

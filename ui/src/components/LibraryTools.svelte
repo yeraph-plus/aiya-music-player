@@ -1,6 +1,7 @@
 <script lang="ts">
   import { FolderOpen, RefreshCw, ScanSearch } from '@lucide/svelte';
   import ImportPanel from './ImportPanel.svelte';
+  import Button from './ui/Button.svelte';
   import { beetsSession } from '../stores/beets-session.svelte';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
@@ -14,12 +15,14 @@
       <p>选择音乐目录建立索引；再次扫描会更新变更并保留播放记录。</p>
     </div>
     <div class="library-scan-buttons">
-      <button class="btn" onclick={() => void scan.pickRootAndScan()} disabled={library.scanning}>
-        <FolderOpen size={14} /> 选择目录
-      </button>
-      <button class="btn primary" onclick={() => void scan.start()} disabled={library.scanning}>
-        <ScanSearch size={14} /> {library.scanning ? '扫描中…' : '重新扫描'}
-      </button>
+      <Button size="sm" onclick={() => void scan.pickRootAndScan()} disabled={library.scanning}>
+        {#snippet icon()}<FolderOpen size={14} />{/snippet}
+        选择目录
+      </Button>
+      <Button variant="primary" size="sm" onclick={() => void scan.start()} disabled={library.scanning}>
+        {#snippet icon()}<ScanSearch size={14} />{/snippet}
+        {library.scanning ? '扫描中…' : '重新扫描'}
+      </Button>
     </div>
   </div>
 

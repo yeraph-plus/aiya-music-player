@@ -2,6 +2,7 @@
   import { ArrowRight, Clock3, Flame, LibraryBig, ListMusic, Sparkles } from '@lucide/svelte';
   import BatchBar from '../components/BatchBar.svelte';
   import Header from '../components/content/Header.svelte';
+  import Button from '../components/ui/Button.svelte';
   import TrackTable from '../components/TrackTable.svelte';
   import type { TrackRow } from '../lib/ipc';
   import type { TrackSource } from '../lib/query';
@@ -148,9 +149,10 @@
     subtitle="回到常听的音乐，或继续整理你的本地曲库。"
   >
     {#snippet actions()}
-      <button class="btn" onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>
-        浏览全部曲目 <ArrowRight size={14} />
-      </button>
+      <Button onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>
+        浏览全部曲目
+        {#snippet icon()}<ArrowRight size={14} />{/snippet}
+      </Button>
     {/snippet}
   </Header>
 

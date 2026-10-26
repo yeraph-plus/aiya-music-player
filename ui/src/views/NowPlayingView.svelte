@@ -2,6 +2,7 @@
   import { AudioLines, ListMusic } from '@lucide/svelte';
   import LyricsPanel from '../components/LyricsPanel.svelte';
   import SpectrumPanel from '../components/SpectrumPanel.svelte';
+  import Button from '../components/ui/Button.svelte';
   import { artworkUrl } from '../lib/artwork';
   import { formatAudioSpec } from '../lib/audio-format';
   import { errorMessage } from '../lib/errors';
@@ -61,7 +62,9 @@
         <div>
           <AudioLines size={32} />
           <p>频谱可视化当前已关闭</p>
-          <button class="btn" onclick={() => ui.applySettings({ ...ui.settings, spectrum: true })}>开启频谱</button>
+          <Button size="sm" onclick={() => ui.applySettings({ ...ui.settings, spectrum: true })}>
+            开启频谱
+          </Button>
         </div>
       </section>
     {/if}

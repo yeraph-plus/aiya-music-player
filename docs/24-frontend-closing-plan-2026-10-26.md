@@ -478,7 +478,7 @@ active 状态只能靠 `IntersectionObserver` 反查后写回一个 `.chip.on` �
 | 3 | `Chip` | **自研** | — | `on`（accent-weak）、可关（右侧 ×，`onclear`） | B2 |
 | 4 | `Checkbox` | **bits-ui** `Checkbox.Root` | 三态 `checked`/`indeterminate` | 受控唯一的勾选入口；点击处理**挂包装层** | B2（已有用法，抽件） |
 | 5 | `Switch` | **bits-ui** `Switch.Root` + `Thumb` | `bind:checked` | 可见标签由 `Field` 提供；`label` 必填 | B2 |
-| 6 | `SegmentedControl` | **bits-ui** `ToggleGroup`(`type=single`) + 自研外观 | `value` 受控、方向键 | 2–5 个短选项；`onchange(value)` | B2 |
+| 6 | `SegmentedControl` | **bits-ui** `RadioGroup` + 自研外观（原定 `ToggleGroup`，B3b-3 实测换掉，见 §4.5 坑 8） | `value` 受控、方向键、单选不可置空 | 2–5 个短选项；`onchange(value)` | B2 建 / B3b-3 换核 |
 | 7 | `Slider` | **bits-ui** `Slider.Root` + `Range` + `Thumb` | `onValueChange`（预览）/ `onValueCommit`（提交） | 进度 / 音量 / 倍速三处共用；`format` 提示；`step` | B2 |
 | 8 | `Progress` | **bits-ui** `Progress.Root` | `value` / `max` | 确定态（扫描）；不确定态用自研条纹 | B2 |
 | 9 | `Field` | **自研**（可选 `bits-ui/label`） | — | label + hint + error + 单行 input；`bind:value` | B2 |
@@ -546,8 +546,13 @@ active 状态只能靠 `IntersectionObserver` 反查后写回一个 `.chip.on` �
      `class={`k-progress${size === 'md' ? ' md' : ''}`}`；`style:` 同样，用 `style={...}`；
    - 想要真正 scoped，只能用 bits-ui 的 `child` snippet 自己渲染元素 —— 本批不用（会让 14 件里 5 件写法各不相同）。
 7. **`Tooltip.Provider` 只放一次**（`App.svelte` 顶层），否则每个 Tooltip 自带 700ms 延迟且互不协调。
-8. **`ToggleGroup` 的 `type="single"` 返回值是 `string | undefined`**（取消选中时），
-   而我们的分段控件永远有值 → 包壳里要把 `undefined` 吃掉，回落到上一个值。
+8. **分段控件用 `RadioGroup`，别用 `ToggleGroup type="single"`**（B3b-3 实测，原判断**是错的**）。
+   原文写「包壳里把 `undefined` 吃掉就行」—— 实测不行：`ToggleGroup` 在已选中项上按 `Space`
+   会**真的取消选中**（两项都 `data-state="off"`），而回调被吃掉后设置里还是旧值 →
+   **画面说没选、状态说选了**。吃掉 undefined 只挡住了写状态，挡不住它的内部视觉态。
+   `RadioGroup` 语义同构（单选永不为空），方向键同时移焦点 + 换选中。
+   另外 `orientation="horizontal"` 必须显式给（默认 vertical，左右键不生效），
+   `data-state` 是 `checked`/`unchecked` 不是 `on`/`off`，CSS 选择器要跟着改。
 9. **`Slider.Thumb` 必须给 `index`**：单拇指也要 `index={0}`，它是必填项不是可选项（TS 会直接报缺属性）。
 10. **不要给包装组件加泛型**：`<script generics="T extends string">` 配 `options` 数组字面量时，
     推导结果是 `string` 而不是联合类型（数组先被推成 `string[]`），最后还是要在调用点断言。
@@ -713,7 +718,7 @@ import 它们做 reload/playAll）→ 会成环，而全仓在此之前实测是
 | `Chip.svelte` | 自研 | 外层 span（可关 chip 内套 × 按钮，button 套 button 非法） |
 | `Checkbox.svelte` | bits-ui `Checkbox.Root` | 不暴露 `onCheckedChange`（双翻反相，docs/23 实测） |
 | `Switch.svelte` | bits-ui `Switch.Root`+`Thumb` | 受控 `checked` + `onCheckedChange` |
-| `SegmentedControl.svelte` | bits-ui `ToggleGroup` | 吃掉 `undefined`（再点当前项会取消选中） |
+| `SegmentedControl.svelte` | bits-ui `RadioGroup` | `orientation="horizontal"`；`data-state` 是 checked/unchecked（原用 ToggleGroup，B3b-3 换核） |
 | `Slider.svelte` | bits-ui `Slider` | `oninput`（预览）/ `oncommit`（进度 seek）分离 |
 | `Progress.svelte` | bits-ui `Progress.Root` | `value=null` → 不确定态条纹 |
 | `Field.svelte` | 自研 | `$props.id()` 生成 id，error/hint 共用一个描述位 |
@@ -870,7 +875,7 @@ E2E 补到 8–10 条（覆盖：拆页路由、批量、设置分组、kit 演�
 | CSS | 47 134 B（gz 9.46 k） | 47 665 B（gz 9.53 k） | +0.5 kB（播放条 200 行全局样式搬成 scoped，注水后又瘦回去） |
 | 全局 CSS 行数 | `player.css` 482 | **282**（−200：播放条段全部搬进组件；`base.css` 又少了 130 行侧栏段） |
 
-> **还留在全局的**：`.icon-btn`（QueuePanel / SettingsPanel / ImportPanel 仍在用，B3b-3 与 B5 分批换）、
+> **还留在全局的**：`.icon-btn`（QueuePanel 在用；SettingsPanel / ImportPanel 已在 B3b-3 换掉）、
 > `.cover`（TrackList / QueuePanel 在用）、`player.css` 里的队列/歌词/频谱面板段（B5 重写）。
 > `layout.css` 保留 `.player-dock` 的 `z-index` —— 那是"播放条压在内容之上、队列抽屉从它沿口升起"的层级约定，
 > 属四区关系，不是播放条自己的皮。
@@ -878,11 +883,78 @@ E2E 补到 8–10 条（覆盖：拆页路由、批量、设置分组、kit 演�
 **专辑 / 艺人入口不在本刀**：两者需要"按专辑/艺人聚合"的查询（现在只有 `artistId`/`albumId` 单值筛选
 `TrackQuery`，没有 group-by 命令）。做入口等于做 B4 拆页的数据层，不在换皮批里夹带。
 
-#### B3b-3 Content 内部与设置页（待做）
+#### B3b-3 Content 内部与设置页 ✅ 已完成（2026-10-26）
 
-`Header` / `Toolbar` 内部换 `Button` / `Chip` / `Cover`（**对外 props 不变**），
-`SettingsPanel` 571 行里的 `.btn` / `.switch` / `.segmented` 换 kit。
-门槛：`grep -c 'class="btn'` 在 `components/` 降到 0。
+三处：`Header`/`Toolbar` 内部件、五个视图/工具条里的 `.btn`、设置页三个成套控件。
+对外 props 一个没动，调用方零改动。
+
+| 文件 | 改了什么 |
+|---|---|
+| `content/Header.svelte` | 92px 封面 div → `Cover lg`；删 `.ch-cover` 两条规则 |
+| `content/Toolbar.svelte` | 筛选 chip 的 span + × → `Chip`（`onclear` 走它自己的 ×）；删 `.pt-chip` / `.pt-chip-x` / `:hover`（567 B） |
+| `LibraryView` | 10 处 `.btn` → `Button`（含 `primary` / `danger` / `snippet icon`） |
+| `HomeView` / `NowPlayingView` / `LibraryTools` | 各 1–2 处 → `Button` |
+| `BatchBar` | 四个 `.btn` → `Button size="sm"`；`.icon-btn` → `IconButton` |
+| `ImportPanel` | 5 处 `.btn` + 1 处 `.icon-btn`；`.apply-btn`（`align-self`+小字号）→ `.apply-row` 包裹 + `Button sm` |
+| `SettingsPanel` | **9 个 `.switch` → `Switch`**、**6 个 `.segmented` → `SegmentedControl`**、4 处 `.btn` → `Button`（清空历史用 `danger`） |
+| `styles/overlays.css` | 删 `.segmented` / `.switch` 全套（**−928 B**） |
+| `styles/shell.css` | 删 `.btn` 全套（**−560 B**） |
+
+**给 `SegmentedControl` 加了 `icon` 插槽**：主题项的月/日图标不能丢。图标不进 `options`
+（那是纯数据，塞 Snippet 进去每次渲染都新建片段），而是 `Snippet<[string]>` 按 `value` 回查。
+
+##### ⚠️ 关键发现：分段控件的内核必须是 `RadioGroup`，不是 `ToggleGroup`
+
+原实现用 `ToggleGroup type="single"`，注释还写着"方向键做对了"。实测推翻：
+
+| 操作 | 期望 | 实测（ToggleGroup） |
+|---|---|---|
+| `ArrowRight` | 换选中 | 只移焦点，`data-state` 不变（`on`/`off` 都不动） |
+| `Space`（在已选中项上） | 保持选中 | **两项全变 `off`** —— 而设置里还是旧值 |
+
+`Space` 那条是真 bug：ToggleGroup 的 `onValueChange` 在取消选中时回 `undefined`，
+原代码"吃掉 undefined 不写回"，于是**画面说没选、状态说选了**，两者分叉。
+自研 CSS 只认 `[data-state='on']`，两项都不亮，用户看不到当前位置。
+
+换 `bits-ui/RadioGroup` 后（语义同构：单选永不为空）实测：
+
+| 操作 | RadioGroup 结果 |
+|---|---|
+| `ArrowRight` / `ArrowLeft` | 焦点**和**选中一起移动（`checked` 从 标准 → 紧凑 → 标准） |
+| `Space`（在已选中项上） | 保持 `checked`，不再取消 |
+| 点另一项 | `data-state` 翻转 + `onchange` 写回设置 |
+
+三条硬约束记在组件注释里：
+1. `orientation="horizontal"` **必须显式给**，默认 `vertical` 时左右键不生效；
+2. `data-state` 是 `checked`/`unchecked`（**不是** ToggleGroup 的 `on`/`off`），CSS 选择器跟着改；
+3. `RadioGroup.Item` 的 `disabled` 是 `boolean | null | undefined`，根上的 `disabled` 不会下传。
+
+**实测（1280×800，`vite preview` 产物 + Playwright）**
+
+| 门槛 | 结果 |
+|---|---|
+| `npm run check` | 0 / 0 |
+| `check:deps` | 0 环（94 模块 / **302** 条内部依赖，+13） |
+| e2e | **6/6**。一处选择器更新：`button.switch[aria-label="频谱可视化"]` → `getByRole('switch', {name})` |
+| 开关 | **9 个**，全部 `role="switch"`、38×22px（与旧 CSS 逐像素一致）、`aria-checked` 与 `data-state` 一致；点「频谱可视化」`unchecked → checked` 且写回设置 |
+| 分段控件 | **6 组** `role="radiogroup"`：主题 / 列表密度 / 输出模式 / 缓冲 / 时钟 / 频谱风格；每组恰好一个 `checked` |
+| 主题段 | `svg` 数量 **2**（月/日图标保住了）；点「浅色」后 `html[data-theme]` = `light` 且 `data-state` 同步翻转 |
+| 几何 | `.k-seg` 86×32、项 39×26（`md`）；主题段 122 宽；行高 62；控件右边缘与行右边缘差 **0**、垂直居中偏移 **0.5px**（取整） |
+| 诊断页按钮 | 三个 `Button sm` 高 **28px** |
+| 运行时 | console error 0 / pageerror 0 |
+
+| 产物 | B3b-2 后 | B3b-3 后 | 差 |
+|---|---|---|---|
+| CSS | 47 665 B | **46 844 B**（gz 9 479） | **−821 B**（删掉 1 488 B 旧规则，换来的 `:global` 注水 667 B） |
+| JS 合计 | 510 129 B | **520 856 B**（index 406 560 + settings 95 265 + mock 19 031） | +10.7 kB |
+
+> **+10.7 kB 的来源要说清**：`RadioGroup` + `Switch` 是**第一次进生产包**。B2 之后这两个零件
+> 只被 `KitView` 引用，而 `KitView` 由 `import.meta.env.DEV` 门控、整棵被摇掉 —— 所以 B2 那批
+> "kit 让包变大"的记账是错的（已在 v4 更正）。真正的体积代价在**开始用**的时刻付，不在**写组件**的时刻付。
+
+**还留在全局的**：`.icon-btn`（`LyricsPanel` / `QueuePanel` / `SpectrumPanel` 在用，归 B5）、
+`.cover`（`TrackList` / `QueuePanel` 在用，归 B4/B5）、`.chip` 的其他变体、`player.css` 面板段。
+`settings-*.js` 独立 chunk 说明设置页已被路由懒加载分开（B4 拆页前就存在）。
 
 
 ## 5.5 改动方式评估：就地改，还是隔离重做？（v2 新增）

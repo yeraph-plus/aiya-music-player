@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import Cover from '../ui/Cover.svelte';
 
   /**
    * 页内标题零件。
@@ -42,13 +43,8 @@
 
 <header class="content-header" class:with-cover={cover !== undefined}>
   {#if cover !== undefined}
-    <div class="ch-cover">
-      {#if cover}
-        <img src={cover} alt="" />
-      {:else}
-        ♪
-      {/if}
-    </div>
+    <!-- 92px 大封面：尺寸/圆角/占位符/投影全在 Cover 的 lg 档里（kit 是唯一出处） -->
+    <Cover src={cover || null} size="lg" />
   {/if}
 
   <div class="ch-text">
@@ -70,26 +66,6 @@
     gap: 16px;
     padding: 12px 0 18px;
     min-width: 0;
-  }
-
-  .ch-cover {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 92px;
-    height: 92px;
-    border-radius: 12px;
-    overflow: hidden;
-    background: var(--surface-cover);
-    color: var(--text-3);
-    font-size: 30px;
-    box-shadow: 0 12px 30px var(--shadow);
-  }
-
-  .ch-cover img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
   }
 
   .ch-text {

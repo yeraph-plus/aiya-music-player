@@ -26,39 +26,6 @@
   cursor: default;
 }
 
-.btn {
-  height: 32px;
-  padding: 0 12px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: var(--surface-input);
-  color: var(--text-1);
-  font-size: 12.5px;
-  white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.btn:hover:not(:disabled) {
-  background: var(--surface-hover);
-  border-color: var(--line-strong);
-}
-
-.btn.primary {
-  background: var(--accent-weak);
-  border-color: var(--accent-weak);
-  color: var(--accent-text);
-}
-
-.btn.danger {
-  color: var(--danger);
-}
-
-.btn:disabled {
-  opacity: 0.45;
-}
-
 .link {
   color: var(--accent);
   font-size: inherit;

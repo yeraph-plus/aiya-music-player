@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from '../components/Icon.svelte';
   import Header from '../components/content/Header.svelte';
+  import Button from '../components/ui/Button.svelte';
   import Toolbar from '../components/content/Toolbar.svelte';
   import TrackList from '../components/TrackList.svelte';
   import { artworkUrl } from '../lib/artwork';
@@ -116,37 +117,38 @@
     cover={header.cover}
   >
     {#snippet actions()}
-      <button class="btn primary" onclick={() => void list.playAll()} disabled={header.playDisabled}>
-        <Icon name="play" size={12} /> 播放全部
-      </button>
+      <Button variant="primary" onclick={() => void list.playAll()} disabled={header.playDisabled}>
+        {#snippet icon()}<Icon name="play" size={12} />{/snippet}
+        播放全部
+      </Button>
       {#if view.kind === 'playlist' && currentPlaylist}
-        <button
-          class="btn"
+        <Button
           onclick={() => {
             if (currentPlaylist) overlay.dialog = { kind: 'renamePlaylist', playlist: currentPlaylist };
           }}
         >
-          <Icon name="edit" size={12} /> 重命名
-        </button>
-        <button
-          class="btn"
+          {#snippet icon()}<Icon name="edit" size={12} />{/snippet}
+          重命名
+        </Button>
+        <Button
           disabled={currentPlaylist.trackCount === 0}
           onclick={() => {
             if (currentPlaylist) void playlists.clear(currentPlaylist);
           }}
         >
           清空
-        </button>
-        <button
-          class="btn danger"
+        </Button>
+        <Button
+          variant="danger"
           onclick={() => {
             if (currentPlaylist) overlay.dialog = { kind: 'deletePlaylist', playlist: currentPlaylist };
           }}
         >
-          <Icon name="trash" size={12} /> 删除
-        </button>
+          {#snippet icon()}<Icon name="trash" size={12} />{/snippet}
+          删除
+        </Button>
       {:else if view.kind === 'recent'}
-        <button class="btn" onclick={() => void history.clear()}>清空历史</button>
+        <Button onclick={() => void history.clear()}>清空历史</Button>
       {/if}
     {/snippet}
   </Header>
@@ -170,7 +172,7 @@
         ? '正在遍历目录…'
         : `${progress.scanned}/${progress.total ?? '?'} · 新增 ${progress.imported} · 跳过 ${progress.skipped} · 失败 ${progress.failed}`}
     </span>
-    <button class="btn" onclick={() => scan.cancel()}>取消</button>
+    <Button size="sm" onclick={() => scan.cancel()}>取消</Button>
   </div>
 {/if}
 
@@ -208,11 +210,11 @@
            用户会去设置页重新扫描，而真正该做的是重试查询 -->
       <strong>列表加载失败</strong>
       <span>上方错误条里有原因</span>
-      <button class="btn" onclick={() => void list.reload()}>重试</button>
+      <Button onclick={() => void list.reload()}>重试</Button>
     {:else if ui.search.trim()}
       <strong>没有匹配的曲目</strong>
       <span>换个关键词，或清除搜索条件</span>
-      <button class="btn" onclick={() => list.clearSearch()}>清除搜索</button>
+      <Button onclick={() => list.clearSearch()}>清除搜索</Button>
     {:else if view.kind === 'recent'}
       <strong>还没有播放记录</strong>
       <span>听几首歌，这里会按时间倒序记录</span>
@@ -222,13 +224,13 @@
     {:else if view.kind === 'playlist'}
       <strong>这个播放列表还是空的</strong>
       <span>在曲库里选中歌曲，右键或批量操作加入这里</span>
-      <button class="btn" onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>去曲库看看</button>
+      <Button onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>去曲库看看</Button>
     {:else}
       <strong>曲库还是空的</strong>
       <span>选择一个音乐目录，AIYA 会扫描并建立索引</span>
-      <button class="btn primary" onclick={() => void scan.pickRootAndScan()} disabled={library.scanning}>
+      <Button variant="primary" onclick={() => void scan.pickRootAndScan()} disabled={library.scanning}>
         选择音乐目录
-      </button>
+      </Button>
     {/if}
   </div>
 {:else}

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import Chip from '../ui/Chip.svelte';
 
   /**
    * 页内工具条零件：tab 组 + 筛选 chip + 右侧次级动作。
@@ -63,17 +64,7 @@
     {/if}
 
     {#each filters ?? [] as filter (filter.label)}
-      <span class="pt-chip">
-        {filter.label}
-        <button
-          class="pt-chip-x"
-          aria-label={`清除${filter.label}`}
-          title={`清除${filter.label}`}
-          onclick={filter.onclear}
-        >
-          ×
-        </button>
-      </span>
+      <Chip label={filter.label} onclear={filter.onclear} />
     {/each}
 
     <div class="pt-spacer"></div>
@@ -125,35 +116,6 @@
     color: var(--text-3);
     font-size: 10.5px;
     font-variant-numeric: tabular-nums;
-  }
-
-  .pt-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 4px 3px 10px;
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    background: var(--surface-input);
-    color: var(--text-2);
-    font-size: 11.5px;
-    white-space: nowrap;
-  }
-
-  .pt-chip-x {
-    display: grid;
-    place-items: center;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    color: var(--text-3);
-    font-size: 13px;
-    line-height: 1;
-  }
-
-  .pt-chip-x:hover {
-    background: var(--surface-hover);
-    color: var(--text-1);
   }
 
   .pt-spacer {

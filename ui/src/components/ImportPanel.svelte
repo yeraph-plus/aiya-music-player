@@ -3,6 +3,8 @@
   import type { ApplyDecision } from '../lib/ipc';
   import { beetsSession as beets } from '../stores/beets-session.svelte';
   import Icon from './Icon.svelte';
+  import Button from './ui/Button.svelte';
+  import IconButton from './ui/IconButton.svelte';
 
   /**
    * beets 导入面板（B1 预览 + B2 应用 + B3 移动/复制/取消）：
@@ -108,14 +110,19 @@
 <div class="side-panel">
   <header class="panel-head">
     <h2>导入整理（beets）</h2>
-    {#if onclose}<button class="icon-btn" onclick={onclose} aria-label="关闭">✕</button>{/if}
+    {#if onclose}
+      <IconButton label="关闭" size="sm" onclick={onclose}>
+        <Icon name="close" size={13} />
+      </IconButton>
+    {/if}
   </header>
 
   <div class="import-body">
     <div class="import-actions">
-      <button class="btn primary" onclick={() => void chooseAndPreview()} disabled={running || applying}>
-        <Icon name="folder" size={13} /> 选择文件夹预览
-      </button>
+      <Button variant="primary" size="sm" onclick={() => void chooseAndPreview()} disabled={running || applying}>
+        {#snippet icon()}<Icon name="folder" size={13} />{/snippet}
+        选择文件夹预览
+      </Button>
       {#if running}
         <span class="dim">
           匹配中 {beets.progress ? `${beets.progress.current}/${beets.progress.total}` : '…'}（MusicBrainz，只读不改文件）
@@ -130,7 +137,7 @@
         </span>
       {/if}
       {#if running || applying}
-        <button class="btn" onclick={() => void cancelSession()} aria-label="取消当前 beets 导入">取消</button>
+        <Button size="sm" onclick={() => void cancelSession()} ariaLabel="取消当前 beets 导入">取消</Button>
       {/if}
       {#if beets.doneCount !== null && !running && !applying}
         <select
@@ -143,13 +150,11 @@
             <option value={mode}>{label}</option>
           {/each}
         </select>
-        <button class="btn primary" onclick={() => void applyAll()} disabled={applyableCount === 0}>
+        <Button variant="primary" size="sm" onclick={() => void applyAll()} disabled={applyableCount === 0}>
           应用所选（{applyableCount} 张）
-        </button>
+        </Button>
       {/if}
-      <button class="btn" onclick={() => void syncNow()} disabled={syncing} title="beets 库 → 本地曲库全量对齐">
-        从 beets 同步
-      </button>
+      <Button size="sm" onclick={() => void syncNow()} disabled={syncing} title="beets 库 → 本地曲库全量对齐">从 beets 同步</Button>
     </div>
 
     {#if beets.applySummary}
@@ -267,13 +272,11 @@
                 </div>
               {/each}
             </details>
-            <button
-              class="btn apply-btn"
-              onclick={() => void applyOne(album)}
-              disabled={applying || running}
-            >
-              应用此候选（{MOVE_LABELS[moveMode]}）
-            </button>
+            <div class="apply-row">
+              <Button size="sm" onclick={() => void applyOne(album)} disabled={applying || running}>
+                应用此候选（{MOVE_LABELS[moveMode]}）
+              </Button>
+            </div>
           {/if}
         {/if}
       </div>
@@ -356,9 +359,8 @@
     gap: 8px;
     padding: 1px 0;
   }
-  .apply-btn {
+  .apply-row {
     align-self: flex-start;
-    font-size: 11.5px;
   }
   .apply-summary {
     border: 1px solid var(--accent);

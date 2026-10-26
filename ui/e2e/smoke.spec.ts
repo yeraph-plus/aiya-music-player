@@ -137,7 +137,7 @@ test('正在播放页：开启频谱后出现 pro 五形态 chip', async ({ page
 
   // 频谱默认关（settings.ts：不订阅 tap，保持最简出口路径），先到设置页开
   await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
-  await page.locator('button.switch[aria-label="频谱可视化"]').click();
+  await page.getByRole('switch', { name: '频谱可视化' }).click();
 
   await page.locator('.sidebar .nav-item', { hasText: '正在播放' }).click();
   const panel = page.locator('.spectrum-panel');

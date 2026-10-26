@@ -1,16 +1,23 @@
 <script lang="ts">
-  import { ToggleGroup } from 'bits-ui';
+  import { RadioGroup } from 'bits-ui';
+  import type { Snippet } from 'svelte';
 
   /**
    * 分段控件：2–5 个互斥短选项（密度、输出模式、缓冲）。
    *
-   * 内核 `bits-ui/ToggleGroup`（`type="single"`）：它是 @sveltejs 生态里少数
-   * 把"单选 + 方向键 + `aria-pressed`"三件事都做对的实现。外观完全自研。
+   * 内核 `bits-ui/RadioGroup`，**不是 ToggleGroup**。2026-10-26 实测换的：
+   * ToggleGroup（`type="single"`）点/空格按当前项会**取消选中**，回调给
+   * `undefined`；这里只吃掉 undefined 不写回，结果 UI 变成"两个都不选"、
+   * 设置里却还是旧值 —— 状态与画面分叉。RadioGroup 天然不允许空值，
+   * 与"分段控件永远有值"这个语义同构（实测：Space 后仍是 checked 的那个）。
    *
-   * 两个必须处理的细节：
-   * 1. `onValueChange` 会收到 `undefined`（再点一次当前项时取消选中），
-   *    而分段控件**永远有值** → 这里吃掉 undefined，回落到当前值。
-   * 2. 值类型是 `string`，调用方在自己的联合类型里窄化（`SegmentedControl<T>`）。
+   * RadioGroup 渲染 `role="radiogroup"` + `role="radio"`，`data-state` 是
+   * `checked` / `unchecked`（不是 ToggleGroup 的 `on` / `off`）。
+   * 方向键走焦点（roving）+ 选中，这是 WAI-ARIA radio group 的标准行为。
+   *
+   * `orientation="horizontal"` 必须显式给：默认 vertical，左右方向键不生效。
+   *
+   * 值类型是 `string`，调用方在自己的联合类型里窄化（`onchange` 里断言）。
    */
 
   interface Props {
@@ -25,28 +32,33 @@
     disabled?: boolean;
     /** 紧凑档：设置页行内用默认，工具栏里可以用 sm */
     size?: 'sm' | 'md';
+    /**
+     * 每项的前置图标，入参是该项的 value。
+     * 主题切换要月/日图标，但图标**不能**写进 `options`：
+     * options 是纯数据（`ReadonlyArray<{value,label,title}>`），塞 Snippet 进去
+     * 会让调用方每次渲染都新建片段；按 value 回查也更直白。
+     */
+    icon?: Snippet<[string]>;
   }
 
-  let { value, options, onchange, label, disabled = false, size = 'md' }: Props = $props();
+  let { value, options, onchange, label, disabled = false, size = 'md', icon }: Props = $props();
 </script>
 
-<ToggleGroup.Root
-  type="single"
-  value={value}
+<RadioGroup.Root
+  {value}
   aria-label={label}
   {disabled}
-  onValueChange={(next) => {
-    // 取消选中（undefined）时保持原值：分段控件没有"都不选"这个状态
-    if (next !== undefined) onchange(next);
-  }}
+  orientation="horizontal"
+  onValueChange={(next) => onchange(next)}
   class={`k-seg${size === 'sm' ? ' sm' : ''}`}
 >
   {#each options as opt (opt.value)}
-    <ToggleGroup.Item value={opt.value} class="k-seg-item" title={opt.title}>
+    <RadioGroup.Item value={opt.value} class="k-seg-item" title={opt.title} disabled={disabled}>
+      {#if icon}<span class="k-seg-ic">{@render icon(opt.value)}</span>{/if}
       {opt.label}
-    </ToggleGroup.Item>
+    </RadioGroup.Item>
   {/each}
-</ToggleGroup.Root>
+</RadioGroup.Root>
 
 <style>
   :global(.k-seg) {
@@ -59,6 +71,9 @@
   }
 
   :global(.k-seg-item) {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     height: calc(var(--control-h) - 6px);
     padding: 0 var(--space-3);
     border-radius: var(--radius-sm);
@@ -80,7 +95,7 @@
     color: var(--text-1);
   }
 
-  :global(.k-seg-item[data-state='on']) {
+  :global(.k-seg-item[data-state='checked']) {
     background: var(--surface-3);
     color: var(--text-1);
     box-shadow: 0 1px 2px var(--shadow);
@@ -89,5 +104,10 @@
   :global(.k-seg-item[disabled]) {
     opacity: 0.4;
     cursor: default;
+  }
+
+  :global(.k-seg-ic) {
+    display: inline-flex;
+    align-items: center;
   }
 </style>
