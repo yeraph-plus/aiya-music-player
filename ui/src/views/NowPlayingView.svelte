@@ -1,6 +1,5 @@
 <script lang="ts">
   import { AudioLines, ListMusic } from '@lucide/svelte';
-  import EqPanel from '../components/EqPanel.svelte';
   import LyricsPanel from '../components/LyricsPanel.svelte';
   import SpectrumPanel from '../components/SpectrumPanel.svelte';
   import Button from '../components/ui/Button.svelte';
@@ -30,15 +29,15 @@
   });
 
   /**
-   * 三块可切（B5a，docs/24）：歌词 / 频谱 / EQ 共占一个内容区。
-   * 选中值存页面本地（不是设置项）：上次看歌词这次想调 EQ，属页面内切换，
+   * 两块可切（docs/24 B5a 三块 → docs/25 §1 T3 摘走 EQ）：歌词 / 频谱
+   * 共占一个内容区。EQ 已迁往播放条抽屉（ui.eqOpen）。
+   * 选中值存页面本地（不是设置项）：上次看歌词这次想看频谱，属页面内切换，
    * 记忆它反而要在设置 schema 里加一个纯 UI 字段。
    */
-  type NowTab = 'lyrics' | 'spectrum' | 'eq';
+  type NowTab = 'lyrics' | 'spectrum';
   const TABS = [
     { value: 'lyrics', label: '歌词' },
     { value: 'spectrum', label: '频谱' },
-    { value: 'eq', label: '均衡器' },
   ] as const;
   let tab = $state<NowTab>('lyrics');
 </script>
@@ -94,10 +93,6 @@
           </div>
         </section>
       {/if}
-    {:else}
-      <div class="eq-host">
-        <EqPanel />
-      </div>
     {/if}
   </div>
 </div>

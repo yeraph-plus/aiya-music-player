@@ -3,11 +3,13 @@
   import PlayerBar from './shell/PlayerBar.svelte';
   import Sidebar from './shell/Sidebar.svelte';
   import TitleBar from './shell/TitleBar.svelte';
+  import EqPanel from './EqPanel.svelte';
   import InlineError from './ui/InlineError.svelte';
   import QueuePanel from './QueuePanel.svelte';
   import BatchBar from './BatchBar.svelte';
   import { errorMessage } from '../lib/errors';
   import { batch } from '../stores/batch.svelte';
+  import { eq } from '../stores/eq.svelte';
   import { list } from '../stores/list.svelte';
   import { nav } from '../stores/nav.svelte';
   import { notify } from '../stores/notify.svelte';
@@ -81,8 +83,17 @@
       onrepeat={() => player.cycleRepeat()}
       onshuffle={() => player.setShuffle(!(playerState?.shuffle ?? false))}
       onqueueopen={(open) => ui.setQueue(open)}
+      eqOpen={ui.eqOpen}
+      eqEnabled={eq.enabled}
+      oneqopen={(open) => ui.setEqDrawer(open)}
       onshownowplaying={() => nav.go({ kind: 'page', page: 'nowPlaying' })}
     >
+      {#snippet eqpanel()}
+        <!-- EQ 抽屉（docs/25 §1）：面板本体不动，换了个宿主 -->
+        <div class="eq-drawer-body">
+          <EqPanel />
+        </div>
+      {/snippet}
       {#snippet queuepanel()}
         <!-- 关闭时 bits-ui 卸载 Popover.Content：这里不再需要 {#if ui.queueOpen} -->
         <QueuePanel

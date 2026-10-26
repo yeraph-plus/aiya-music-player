@@ -19,7 +19,7 @@
   import IconButton from '../ui/IconButton.svelte';
   import Popover from '../ui/Popover.svelte';
   import Slider from '../ui/Slider.svelte';
-  import { AudioLines } from '@lucide/svelte';
+  import { AudioLines, SlidersHorizontal } from '@lucide/svelte';
 
   /**
    * 底部播放条：**唯一常驻的播放控制面**。
@@ -54,6 +54,13 @@
     onqueueopen: (open: boolean) => void;
     /** 队列抽屉内容（关闭时不渲染——bits-ui 卸载 Content） */
     queuepanel: Snippet;
+    /** EQ 抽屉开合（与队列互斥，ui store 负责清理，docs/25 §1） */
+    eqOpen: boolean;
+    /** EQ 是否启用（启用时触发键打点，不打开抽屉也能看出状态） */
+    eqEnabled: boolean;
+    oneqopen: (open: boolean) => void;
+    /** EQ 抽屉内容 */
+    eqpanel: Snippet;
     onshownowplaying: () => void;
   }
 
@@ -72,6 +79,10 @@
     onshuffle,
     onqueueopen,
     queuepanel,
+    eqOpen,
+    eqEnabled,
+    oneqopen,
+    eqpanel,
     onshownowplaying,
   }: Props = $props();
 
@@ -248,6 +259,33 @@
       <AudioLines size={17} />
     </IconButton>
     <!--
+      EQ 抽屉（docs/25 §1 T3）：与队列抽屉同一套壳（裸 button + Popover），
+      互斥由 ui store 的 setEqDrawer/setQueue 负责。启用时键面右下打点——
+      EQ 是"开着生效"的能力，不点开抽屉也该看得见状态。
+    -->
+    <Popover
+      open={eqOpen}
+      onopenchange={oneqopen}
+      side="top"
+      align="end"
+      sideOffset={8}
+      contentClass="queue-pop"
+    >
+      {#snippet trigger(props)}
+        <button
+          {...props}
+          class="drawer-btn"
+          class:on={eqEnabled}
+          aria-label={`均衡器（${eqEnabled ? '已启用' : '已关闭'}）`}
+          title={`均衡器（${eqEnabled ? '已启用' : '已关闭'}）`}
+        >
+          <SlidersHorizontal size={16} />
+          {#if eqEnabled}<span class="drawer-dot" aria-hidden="true"></span>{/if}
+        </button>
+      {/snippet}
+      {@render eqpanel()}
+    </Popover>
+    <!--
       队列抽屉（B5a）：kit Popover 整壳接管。触发键的 aria-expanded、Esc、
       外点关闭、关闭后焦点还原全部由 bits-ui 负责——取代 QueuePanel 里手写的
       svelte:window 两件套（外点 + Esc）。触发器不能复用 IconButton：
@@ -265,7 +303,7 @@
       {#snippet trigger(props)}
         <button
           {...props}
-          class="queue-btn"
+          class="drawer-btn"
           aria-label={`播放队列（${player?.queueLength ?? 0} 首）`}
           title={`播放队列（${player?.queueLength ?? 0} 首）`}
         >
@@ -446,9 +484,11 @@
 
   /* ---------------- 倍速面板（Popover 内容） ---------------- */
 
-  /* 队列触发键：IconButton 是固定签名组件（bits-ui 的 props 无法展开到它身上），
-     这里按 rate-chip 的先例用裸 button + 同款外观（30px 圆形 ghost 键） */
-  .queue-btn {
+  /* 抽屉触发键（队列/EQ 共用）：IconButton 是固定签名组件（bits-ui 的 props
+     无法展开到它身上），按 rate-chip 的先例用裸 button + 同款外观（30px 圆形
+     ghost 键） */
+  .drawer-btn {
+    position: relative;
     display: inline-grid;
     place-items: center;
     width: 30px;
@@ -461,15 +501,30 @@
       color var(--dur-fast) var(--ease);
   }
 
-  .queue-btn:hover {
+  .drawer-btn:hover {
     background: var(--surface-hover);
     color: var(--text-1);
   }
 
   /* data-state 由 bits-ui 写：open = 抽屉开着（与旧 pressed 高亮同语义） */
-  .queue-btn[data-state='open'] {
+  .drawer-btn[data-state='open'] {
     background: var(--accent-weak);
     color: var(--accent-text);
+  }
+
+  /* EQ 启用打点：不用 accent 底（那是"抽屉开着"），只点一颗小点表示"生效中" */
+  .drawer-btn.on {
+    color: var(--text-1);
+  }
+
+  .drawer-dot {
+    position: absolute;
+    right: 5px;
+    bottom: 5px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
   }
 
   .rate-chip {

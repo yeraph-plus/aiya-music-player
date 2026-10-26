@@ -87,6 +87,8 @@ class UiStore {
   /** `page === 'playlist'` 时的参数。其余路由下无意义（保留旧值，返回时才清） */
   playlistId = $state<string | null>(null);
   queueOpen = $state(false);
+  /** EQ 抽屉（播放条 Popover）会话态开合，与队列抽屉互斥（docs/25 §1） */
+  eqOpen = $state(false);
 
   /**
    * 当前列表视图（`list.query()` 用它算 `source`）。
@@ -342,16 +344,24 @@ class UiStore {
   }
 
   toggleQueue(): void {
-    this.queueOpen = !this.queueOpen;
+    this.setQueue(!this.queueOpen);
   }
 
   /** 队列抽屉开合的**唯一入口**（B5a 起 PlayerBar 的 Popover 直接受控于它） */
   setQueue(open: boolean): void {
     this.queueOpen = open;
+    // EQ 抽屉与队列同侧同层，互斥（docs/25 §1）：一个开另一个关
+    if (open) this.eqOpen = false;
   }
 
   closeQueue(): void {
     this.queueOpen = false;
+  }
+
+  /** EQ 抽屉开合的唯一入口（docs/25 §1 T3）；开时关队列，规则对等 */
+  setEqDrawer(open: boolean): void {
+    this.eqOpen = open;
+    if (open) this.queueOpen = false;
   }
 
   /* ---------------- 设置 ---------------- */

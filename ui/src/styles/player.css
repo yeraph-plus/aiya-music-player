@@ -142,6 +142,28 @@
   box-shadow: none; /* 外观由 k-pop 的投影负责，双投影会发灰 */
 }
 
+/* T3（docs/25 §1）：EQ 抽屉体。与队列抽屉同宽；10 段滑杆按 360px 收紧——
+   EqPanel 默认段宽 34px + 间距 14px 是给整页准备的（≈500px），抽屉里
+   用 :global 覆盖段宽与间距（EqPanel 的样式是 scoped 的）。 */
+.eq-drawer-body {
+  width: 360px;
+  max-width: calc(100vw - 24px);
+  height: min(420px, calc(100vh - 160px));
+}
+
+.eq-drawer-body .eq-bands {
+  gap: 8px;
+  padding: 14px 10px 6px;
+}
+
+.eq-drawer-body .eq-band {
+  width: 26px;
+}
+
+.eq-drawer-body .eq-track {
+  min-height: 150px;
+}
+
 .dim {
   color: var(--text-2);
 }

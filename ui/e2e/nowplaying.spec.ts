@@ -1,12 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * 正在播放页三块可切 + 队列抽屉（B5a 起常驻）。
+ * 正在播放页两块可切 + EQ/队列抽屉（docs/25 §1 T3 起常驻）。
  *
  * 断言的是**行为契约**，不是版式：
- * - 三块切换：SegmentedControl 一次只渲染一块，切走后上一块卸载；
+ * - 两块切换：SegmentedControl 一次只渲染一块，切走后上一块卸载；
+ * - EQ 抽屉：从播放条进入（Popover 受控），预设/滑杆交互同 B6；
  * - 队列抽屉：Popover 受控（开 → 内容出现且触发键 aria-expanded=true；
- *   Esc 关闭且焦点回触发键）。跑在浏览器预览的 mock 后端上。
+ *   Esc 关闭且焦点回触发键）；EQ 与队列互斥。跑在浏览器预览的 mock 后端上。
  */
 
 let runtimeErrors: string[] = [];
@@ -33,32 +34,29 @@ async function openNowPlaying(page: Page): Promise<void> {
   await expect(page.locator('.main h1')).toHaveText('未在播放');
 }
 
-test('正在播放页三块可切：一次只渲染一块，切走即卸载', async ({ page }) => {
+test('正在播放页两块可切：一次只渲染一块，切走即卸载', async ({ page }) => {
   await openNowPlaying(page);
 
-  // 默认歌词块
+  // 默认歌词块；EQ 已迁往播放条抽屉（docs/25 §1），页内不再有
   await expect(page.locator('.lyrics-panel')).toBeVisible();
   await expect(page.locator('.eq-panel')).toHaveCount(0);
-
-  // 切到均衡器：10 段滑杆 + 开关都在，歌词块卸载
-  await page.getByRole('radio', { name: '均衡器' }).click();
-  await expect(page.locator('.eq-panel')).toBeVisible();
-  await expect(page.locator('.eq-panel .k-slider')).toHaveCount(11); // 10 段 + 前置增益
-  await expect(page.locator('.lyrics-panel')).toHaveCount(0);
 
   // 切到频谱（mock 下频谱默认关 → 显示已关闭占位，同样是"块已切换"的证明）
   await page.getByRole('radio', { name: '频谱' }).click();
   await expect(page.locator('.spectrum-panel')).toBeVisible();
-  await expect(page.locator('.eq-panel')).toHaveCount(0);
+  await expect(page.locator('.lyrics-panel')).toHaveCount(0);
 });
 
-test('均衡器：预设菜单命中打 ✓，应用后滑杆值跟随（B6 补 EQ 交互覆盖）', async ({ page }) => {
-  await openNowPlaying(page);
-  await page.getByRole('radio', { name: '均衡器' }).click();
-  await expect(page.locator('.eq-panel')).toBeVisible();
+test('EQ 抽屉：从播放条进入，预设命中打 ✓；与队列抽屉互斥', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('.sidebar .nav-item', { hasText: '曲库' }).click();
+  await expect(page.locator('.main .list .row').first()).toBeVisible();
 
-  // 初始平直：首段值为 0，预设按钮显示「自定义」
-  await expect(page.locator('.eq-band').first().locator('.eq-val')).toHaveText('0');
+  const eqTrigger = page.getByRole('button', { name: /^均衡器/ });
+  await eqTrigger.click();
+  const panel = page.locator('.eq-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel.locator('.k-slider')).toHaveCount(11); // 10 段 + 前置增益
 
   // 开预设菜单 → 选「重低音」→ 菜单关、按钮显示命中名、滑杆值写入
   await page.locator('.eq-panel header .link').click();
@@ -70,8 +68,21 @@ test('均衡器：预设菜单命中打 ✓，应用后滑杆值跟随（B6 补 
   await expect(page.locator('.eq-band').first().locator('.eq-val')).toHaveText('+7');
   // 最后一段（16k）仍是 0 —— 重低音只抬低频
   await expect(page.locator('.eq-band').last().locator('.eq-val')).toHaveText('0');
+  // 启用后触发键打点语义：aria-label 更新
+  await expect(eqTrigger).toHaveAttribute('aria-label', '均衡器（已启用）');
 
-  // 重置回平直
+  // 互斥：开队列 → EQ 抽屉被关掉（ui store 单向清理，docs/25 §1）
+  const queueTrigger = page.getByRole('button', { name: /播放队列/ });
+  await queueTrigger.click();
+  await expect(page.locator('.queue-float')).toBeVisible();
+  await expect(page.locator('.eq-panel')).toHaveCount(0);
+
+  // 反向互斥：再开 EQ → 队列被关掉
+  await eqTrigger.click();
+  await expect(page.locator('.eq-panel')).toBeVisible();
+  await expect(page.locator('.queue-float')).toHaveCount(0);
+
+  // 重置回平直（顺便验证抽屉内交互仍全通）
   await page.getByRole('button', { name: '重置曲线' }).click();
   await expect(page.locator('.eq-band').first().locator('.eq-val')).toHaveText('0');
 });

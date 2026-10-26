@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { DropdownMenu } from 'bits-ui';
+  import { DropdownMenu, Portal } from 'bits-ui';
   import type { MenuItem } from '../../lib/menu';
 
   /**
@@ -22,9 +22,16 @@
    * 我们只负责把坐标变成锚点位置。副作用是锚点是个一次性隐藏元素，
    * 菜单关闭时随组件一起卸载，行怎么回收都影响不到它。
    *
-   * 坑（docs/24 §4.5）：`class` 不带 scoped 哈希 → 样式一律 `:global(.k-*)`；
-   * `class:` 指令不能用在组件上 → 拼字符串。
-   */
+  * 坑（docs/24 §4.5）：`class` 不带 scoped 哈希 → 样式一律 `:global(.k-*)`；
+  * `class:` 指令不能用在组件上 → 拼字符串。
+  *
+  * 坑 2（docs/25 §1 T3 实测）：**锚点必须 portal 到 body**。锚点是
+  * `position: fixed`，一旦 Menu 被放进带 `transform` 的容器（bits-ui 的
+  * Popover.Content 就用 transform 定位——EQ 抽屉是第一个这样的宿主），
+  * fixed 退化为"相对该容器定位"，点击坐标变成容器内偏移，菜单整体
+  * 飞出视口。portal 到 body 后 fixed 恒等于视口坐标；对原右键菜单
+  * （宿主在 body 层）零行为差异。
+  */
 
   interface Props {
     x: number;
@@ -54,14 +61,17 @@
         0×0 锚点。`tabindex="-1"` 是必须的：默认的 button 会进 Tab 序列，
         用户按 Tab 会落到一个看不见的东西上。`pointer-events:none` 让它在点击
         坐标处不遮挡任何东西（菜单已经开着，下一次点击应该落到下层元素上）。
+        portal 到 body：见坑 2（transform 祖先会让 fixed 失效）。
       -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -- 这是定位锚点，不是控件 -->
-      <span
-        {...props}
-        tabindex={-1}
-        class="k-menu-anchor"
-        style={`left:${x}px;top:${y}px`}
-      ></span>
+      <Portal>
+        <span
+          {...props}
+          tabindex={-1}
+          class="k-menu-anchor"
+          style={`left:${x}px;top:${y}px`}
+        ></span>
+      </Portal>
     {/snippet}
   </DropdownMenu.Trigger>
 
