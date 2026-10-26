@@ -207,6 +207,35 @@ duplicates 等，见 §7 功能映射）。
 5. 批 D 的 beets 查询入口形态：曲库筛选器加"beets 查询"高级输入，还是单独的查询页？
 6. web 外链（§9a）要不要顺手做？
 
+## 12. 拍板记录（2026-10-26，§11 六问全落定）
+
+1. 新页面入口：**侧栏第七项「扫描入库」**。
+2. 多目录：**并集单库**（无多库切换诉求）。
+3. 批 B 解析池：**引入 rayon**。
+4. 批 C 路线 B（CI 预构建 venv）：**接受安装包 +50-80 MB**。
+5. 批 D beets 高级查询：**不纳入计划**（沿用当前数据库模型）；应用内只执行规划好的
+   扫描指令（import/update/duplicates 等按需加）。
+6. web 外链：**做**——工具页放一个"在浏览器中打开 beets Web"按钮即止，应用内不设计
+   GUI / 命令行转换。
+
+### 路径漂移问题（用户追问：beets 整理目录后应用内文件路径怎么办）
+
+结论：**读模型已内建跟随机制，无需新设计**，批 D 只需把触发时机接对：
+
+- `tracks.beets_item_id` 存 beets item id；`sync_items` 对账是**双键**的：
+  path 命中优先；未命中再看 beets_item_id——命中后者即为"文件被移走"，
+  `relocate_track` 把该行 `path/path_lower` 更新为新路径，**行 id 保持不变**
+  （`beets_sync.rs::sync_items` 的注释即为此场景而写）。
+- 行 id 不变 ⇒ 播放计数/历史/歌单项/队列状态全部稳定；引擎下次开播读到的已是新路径。
+- 扫描器 upsert 冲突键是 `path_lower`（`scanner.rs`），beets 整理后再扫描
+  不会把同一文件裂成两行。
+- 边缘已在机制内：目标路径恰好被扫描器先建行占用 → 放弃跟随、继续更新字段
+  并 warn，不让单行失败影响整次对账。
+- **唯一要做的接线**：refile/move 属应用内触发的规划指令（拍板 5），
+  指令完成 → sidecar `dump_items` → `sync_items` 即时对账，不等用户下次扫描。
+  使用方约定：beets 整理与库扫描不同时跑（对账幂等，乱序最坏结果是
+  "跟随失败 warn + 下次对账收敛"）。
+
 ## 附：调研来源
 
 - beets 官方文档：plugins/index、web、replaygain（v2.14.0）、acousticbrainz（deprecated 声明）、
