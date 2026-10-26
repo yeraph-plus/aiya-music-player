@@ -2,6 +2,7 @@
   import Icon from '../components/Icon.svelte';
   import Header from '../components/content/Header.svelte';
   import Button from '../components/ui/Button.svelte';
+  import Card from '../components/ui/Card.svelte';
   import Toolbar from '../components/content/Toolbar.svelte';
   import TrackList from '../components/TrackList.svelte';
   import { artworkUrl } from '../lib/artwork';
@@ -120,15 +121,60 @@
         playDisabled: list.total === 0,
       };
     }
+    if (isSearchPage) {
+      return {
+        kicker: '搜索',
+        title: ui.search.trim() ? `搜索「${ui.search.trim()}」` : '搜索',
+        subtitle: '曲目、专辑与艺人同时匹配',
+        meta: `${list.total} 首`,
+        cover: undefined as string | null | undefined,
+        playDisabled: list.total === 0,
+      };
+    }
     return {
       kicker: '曲库',
       title: '全部曲目',
-      subtitle: ui.search.trim() ? `搜索「${ui.search.trim()}」` : undefined,
       meta: `${list.total} 首`,
       cover: undefined as string | null | undefined,
       playDisabled: list.total === 0,
     };
   });
+
+  /* ---------------- 搜索结果页（B4-3c） ---------------- */
+
+  const isSearchPage = $derived(ui.page === 'search');
+
+  /**
+   * 搜索页的聚合段：曲目列表之外再给专辑/艺人两段（docs/24 §3.2 路由表
+   * "分段：曲目 / 专辑 / 艺人"）。独立 200ms 防抖——曲目查询的 120ms 防抖
+   * 在 list store 里，两边互不依赖；聚合是毫秒级，防的只是连打刷 IPC。
+   * 空词不拉（空搜索页显示提示，不是全库）。
+   */
+  let facetSearchTimer: ReturnType<typeof setTimeout> | undefined;
+  let facetQuery = $state('');
+  $effect(() => {
+    if (!isSearchPage) return;
+    const q = ui.search.trim();
+    clearTimeout(facetSearchTimer);
+    facetSearchTimer = setTimeout(
+      () => {
+        facetQuery = q;
+        if (!q) return;
+        void facets.loadAlbums(q);
+        void facets.loadArtists(q);
+      },
+      200,
+    );
+    return () => clearTimeout(facetSearchTimer);
+  });
+
+  /** 卡片段只在查询词与当前展示一致时渲染（防抖期间的旧结果显示旧段） */
+  const searchAlbums = $derived(
+    isSearchPage && facetQuery ? facets.albums?.slice(0, 8) ?? null : null,
+  );
+  const searchArtists = $derived(
+    isSearchPage && facetQuery ? facets.artists?.slice(0, 8) ?? null : null,
+  );
 
   function handleSelect(index: number, event: MouseEvent | KeyboardEvent): void {
     if (selection.handleSelect(index, event) === 'capped') {
@@ -247,7 +293,47 @@
   </div>
 {/if}
 
-{#if list.total > 0}
+{#if isSearchPage && (searchAlbums?.length || searchArtists?.length)}
+  <div class="facet-rows">
+    {#if searchAlbums?.length}
+      <section class="facet-row">
+        <h2>专辑</h2>
+        <div class="facet-scroll">
+          {#each searchAlbums as al (al.id)}
+            <Card
+              title={al.title}
+              subtitle={al.artist ? `${al.artist} · ${al.trackCount} 首` : `${al.trackCount} 首`}
+              cover={al.artworkId ? artworkUrl(al.artworkId, 256) : null}
+              onclick={() => nav.go({ kind: 'album', id: al.id })}
+            />
+          {/each}
+        </div>
+      </section>
+    {/if}
+    {#if searchArtists?.length}
+      <section class="facet-row">
+        <h2>艺人</h2>
+        <div class="facet-scroll">
+          {#each searchArtists as ar (ar.id)}
+            <Card
+              title={ar.name}
+              subtitle={`${ar.trackCount} 首 · ${ar.albumCount} 张专辑`}
+              cover={ar.artworkId ? artworkUrl(ar.artworkId, 256) : null}
+              onclick={() => nav.go({ kind: 'artist', id: ar.id })}
+            />
+          {/each}
+        </div>
+      </section>
+    {/if}
+  </div>
+{/if}
+
+{#if isSearchPage && !ui.search.trim()}
+  <div class="empty">
+    <strong>在上方搜索框输入关键词</strong>
+    <span>曲目、专辑与艺人会同时匹配</span>
+  </div>
+{:else if list.total > 0}
   <TrackList
     store={list.trackWindow}
     version={list.version}
@@ -315,3 +401,30 @@
 {:else}
   <div class="empty"><strong>正在启动…</strong></div>
 {/if}
+
+<style>
+  /* 搜索结果页的专辑/艺人段（B4-3c）。横向卡片行：各最多 8 张，横向滚动，
+     主区留给曲目列表（虚拟滚动的重心） */
+  .facet-rows {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    padding: 0 22px var(--space-3);
+  }
+
+  .facet-row h2 {
+    margin: 0 0 var(--space-2);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--text-2);
+  }
+
+  .facet-scroll {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(200px, 1fr);
+    gap: var(--space-2);
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+</style>

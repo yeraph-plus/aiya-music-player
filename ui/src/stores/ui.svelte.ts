@@ -33,6 +33,10 @@ import { notify } from './notify.svelte';
  * 代价是"page=album 的参数"与"library 页的筛选 chip"共享一个存储位，但
  * 两者永远不会同时可见（不同路由值），语义不冲突。
  *
+ * 2026-10-26 B4-3c 加 `search`：独立搜索结果页（此前搜索直接寄居曲库列表）。
+ * 交给 LibraryView 渲染（曲目列表与曲库页同一查询路径），头部多专辑/艺人两个
+ * 聚合段。`search` 是列表页（isListPage），因为它就是"library + search 过滤"。
+ *
  * `playlist` / `album` / `artist` 是带参数的路由，参数见上。
  */
 export type AppPage =
@@ -45,6 +49,7 @@ export type AppPage =
   | 'artists'
   | 'album'
   | 'artist'
+  | 'search'
   | 'nowPlaying'
   | 'settings'
   | 'radio';
@@ -57,7 +62,8 @@ export function isListPage(page: AppPage): boolean {
     page === 'mostPlayed' ||
     page === 'playlist' ||
     page === 'album' ||
-    page === 'artist'
+    page === 'artist' ||
+    page === 'search'
   );
 }
 
@@ -99,8 +105,10 @@ class UiStore {
       case 'library':
       case 'album':
       case 'artist':
+      case 'search':
         // 专辑/艺人详情页的曲目列表 = 曲库查询 + albumId/artistId 筛选，
-        // 数据形状与曲库页完全相同（见类头注释"参数复用筛选字段"）
+        // 搜索页 = 曲库查询 + search 过滤 —— 数据形状与曲库页完全相同
+        // （见类头注释"参数复用筛选字段"）
         return LIBRARY_VIEW;
       case 'recent':
         return RECENT_VIEW;
@@ -271,6 +279,21 @@ class UiStore {
     this.page = 'home';
     this.playlistId = null;
     this.search = '';
+    this.artistId = null;
+    this.albumId = null;
+    this.queueOpen = false;
+  }
+
+  /**
+   * 进入搜索结果页（B4-3c）。
+   *
+   * 与 enterList 的唯一差别：**不清 search**（search 是本页的主题），
+   * 且目标是 search 页。旧筛选与歌单参数不该跟着搜索词走——在歌单里
+   * 搜索会得到"全库搜索结果"，原来歌单的上下文到此为止。
+   */
+  enterSearch(): void {
+    this.page = 'search';
+    this.playlistId = null;
     this.artistId = null;
     this.albumId = null;
     this.queueOpen = false;

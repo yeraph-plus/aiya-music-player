@@ -153,3 +153,32 @@ test('B4-3b：艺人详情页列出该艺人的曲目', async ({ page }) => {
   // 列顺序属于 TrackList 的实现细节
   await expect(page.locator('.main .list .row').first()).toContainText(artistName);
 });
+
+test('B4-3c：搜索落独立结果页，三段（曲目/专辑/艺人）+ 卡片进详情 + 返回词不丢', async ({
+  page,
+}) => {
+  await page.goto('/');
+  // mock 数据：「深」同时命中曲目（艺人名）、专辑（深的深）、艺人（周深）
+  const box = page.getByRole('searchbox');
+  await box.fill('深');
+  await page.waitForTimeout(500); // 曲目 120ms + 卡片段 200ms 两层防抖
+
+  await expect(page.locator('.main h1')).toHaveText('搜索「深」');
+  // 按 h2 文本锁定段（卡片副标题也含"专辑/艺人"字样，hasText 会串段）
+  const albumRow = page.locator('.facet-row').filter({
+    has: page.locator('h2', { hasText: /^专辑$/ }),
+  });
+  const artistRow = page.locator('.facet-row').filter({
+    has: page.locator('h2', { hasText: /^艺人$/ }),
+  });
+  await expect(albumRow).toBeVisible();
+  await expect(artistRow).toBeVisible();
+  await expect(page.locator('.main .list .row').first()).toBeVisible();
+
+  // 点专辑卡 → 专辑详情 → 返回：搜索页与搜索词都还在
+  await albumRow.locator('.k-card').first().click();
+  await expect(page.locator('.main h1')).not.toHaveText('搜索「深」');
+  await page.getByRole('button', { name: '返回上一页' }).click();
+  await expect(page.locator('.main h1')).toHaveText('搜索「深」');
+  await expect(box).toHaveValue('深');
+});

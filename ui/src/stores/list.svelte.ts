@@ -1,7 +1,7 @@
 import { parseTrackQuery, type TrackQuery, type TrackSort } from '../lib/query';
 import { errorMessage } from '../lib/errors';
 import { TrackWindow } from '../lib/track-window';
-import { LIBRARY_VIEW, builtinView, sourceOf } from '../lib/view';
+import { builtinView, sourceOf } from '../lib/view';
 import { library } from './library.svelte';
 import { notify } from './notify.svelte';
 import { player } from './player.svelte';
@@ -144,9 +144,9 @@ class ListStore {
    * （经 `nav.search()`），但只有停顿 120 ms 才发查询 —— 否则 5 首/字的连打会排队等 IPC。
    */
   setSearch(value: string): void {
-    // 搜索始终针对全库。不在曲库页时先跳过去，避免把关键词错套到当前歌单；
-    // 已经在曲库页就只更新查询，不再重置视图。
-    if (value.trim() && ui.page !== 'library') ui.enterList(LIBRARY_VIEW);
+    // 搜索始终针对全库。不在搜索页时先跳过去（B4-3c：独立搜索结果页，
+    // 不再寄居曲库列表）；已经在搜索页就只更新查询，不再重置视图。
+    if (value.trim() && ui.page !== 'search') ui.enterSearch();
     ui.search = value;
     clearTimeout(this.searchTimer);
     this.searchTimer = setTimeout(() => void this.reload(), SEARCH_DEBOUNCE_MS);
