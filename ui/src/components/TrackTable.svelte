@@ -11,13 +11,12 @@
    * 选择集按**曲目 ID**（不是下标）：首页三个区块各自是独立查询，
    * 下标在区块之间没有意义。
    */
-  import { Check, Minus } from '@lucide/svelte';
-  import { Checkbox } from 'bits-ui';
   import type { TrackRow } from '../lib/ipc';
   import { artworkUrl } from '../lib/artwork';
   import { formatDay, formatPlays, formatTime } from '../lib/format';
   import { SELECTION_CAP } from '../lib/selection';
   import { applyIdSelection, classifyRowClick, classifyRowCheck } from '../lib/row-selection';
+  import CheckCell from './ui/CheckCell.svelte';
 
   interface Props {
     rows: TrackRow[];
@@ -70,7 +69,7 @@
    * 模型改了它就跟着改，不会出现"视觉上一个勾、模型里没选中"的错位。
    *
    * 拦"顺手起播"靠的不是 `stopPropagation`，而是**行自己认出点击来源**
-   * （行里的 `closest('.tt-check')` 判断）：Svelte 5 把 click 委托到根节点
+   * （行里的 `closest('.k-check')` 判断）：Svelte 5 把 click 委托到根节点
    * 统一派发，同一批 handler 之间 `stopPropagation` 不保证顺序。
    * 这里仍然 stop 一次，是为了不把事件继续交给外层的其它委托 handler。
    */
@@ -100,7 +99,7 @@
   function rowClick(index: number, event: MouseEvent): void {
     // 勾选取的是"点勾选框"，不是"点这一行"。Svelte 5 的 click 是委托到根
     // 节点派发的，`stopPropagation` 拦不住同一批 handler —— 行自己判一次来源才可靠。
-    if ((event.target as HTMLElement | null)?.closest('.tt-check')) return;
+    if ((event.target as HTMLElement | null)?.closest('.k-check')) return;
     const intent = event.shiftKey && anchor >= 0 ? 'range' : classifyRowClick(event);
     const next = applyIdSelection(selected, rows, anchor, intent, index);
     onchange(next.ids);
@@ -119,32 +118,14 @@
 
 <div class="tt" role="table" aria-label="曲目列表">
   <div class="tt-head" role="row">
-    <!-- 点击处理放在包装层而不是 Checkbox 上：bits-ui 自己的 click 处理器会同时跑，
-         内部 checked 与我们的受控 prop 各翻一次，结果正好反相（实测：勾了的行
-         显示未勾）。键盘可达性由内层 button 提供，这两条 a11y 提示是误报。 -->
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- tabindex=-1：可编程聚焦但不进 Tab 序列，真正的键盘入口是内层 button -->
-    <span class="tt-check" role="columnheader" tabindex="-1" onclick={toggleAll}>
-      <Checkbox.Root
-        class="tt-box"
-        checked={allSelected}
-        indeterminate={someSelected}
-        aria-label={allSelected ? '取消全选' : '全选'}
-        disabled={rows.length === 0}
-        onkeydown={(event) => {
-          // 同 TrackList 表头：Space/Enter 拦下来走 toggleAll
-          if (event.key === ' ' || event.key === 'Enter') {
-            event.preventDefault();
-            event.stopPropagation();
-            toggleAll(event);
-          }
-        }}
-      >
-        {#snippet children({ checked, indeterminate })}
-          {#if indeterminate}<Minus size={11} />{:else if checked}<Check size={11} />{/if}
-        {/snippet}
-      </Checkbox.Root>
-    </span>
+    <CheckCell
+      role="columnheader"
+      checked={allSelected}
+      indeterminate={someSelected}
+      label={allSelected ? '取消全选' : '全选'}
+      disabled={rows.length === 0}
+      ontoggle={toggleAll}
+    />
     <span role="columnheader"></span>
     <span role="columnheader">标题</span>
     <span role="columnheader">艺人</span>
@@ -163,7 +144,7 @@
       tabindex="-1"
       onclick={(event) => rowClick(index, event)}
       ondblclick={(event) => {
-        if ((event.target as HTMLElement | null)?.closest('.tt-check')) return;
+        if ((event.target as HTMLElement | null)?.closest('.k-check')) return;
         onplay(index);
       }}
       onkeydown={(event) => {
@@ -179,28 +160,11 @@
         onmenu?.(event, index, track);
       }}
     >
-      <!-- 同上：点选框由包装层接管，键盘可达性在 button 上 -->
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <span class="tt-check" role="cell" tabindex="-1" onclick={(event) => checkRow(index, event)}>
-        <Checkbox.Root
-          class="tt-box"
-          checked={selected.has(track.id)}
-          aria-label={`选择 ${track.title}`}
-          onkeydown={(event) => {
-            // 同 TrackList：bits-ui 的 Space/Enter 只翻内部 state 不派发 click，
-            // 拦下来走 toggle 统一语义（KeyboardEvent 有 shiftKey，连选不丢）
-            if (event.key === ' ' || event.key === 'Enter') {
-              event.preventDefault();
-              event.stopPropagation();
-              checkRow(index, event);
-            }
-          }}
-        >
-          {#snippet children({ checked })}
-            {#if checked}<Check size={11} />{/if}
-          {/snippet}
-        </Checkbox.Root>
-      </span>
+      <CheckCell
+        checked={selected.has(track.id)}
+        label={`选择 ${track.title}`}
+        ontoggle={(event) => checkRow(index, event)}
+      />
       {#if track.artworkId}
         <img class="cover sm" src={artworkUrl(track.artworkId, 96) ?? ''} alt="" loading="lazy" />
       {:else}

@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { Check, Minus, Play } from '@lucide/svelte';
-  import { Checkbox } from 'bits-ui';
+  import { Play } from '@lucide/svelte';
   import type { TrackRow } from '../lib/ipc';
   import type { TrackSort } from '../lib/query';
   import { artworkUrl } from '../lib/artwork';
   import { startRowDrag, consumeClickSuppressed } from '../lib/drag';
   import { createVirtualWindow } from '../lib/create-virtual-window.svelte';
   import { scrollTopForRow } from '../lib/virtual';
+  import CheckCell from './ui/CheckCell.svelte';
   import { formatDay, formatTime, highlight } from '../lib/format';
   import type { TrackWindow } from '../lib/track-window';
   import { SELECTION_CAP } from '../lib/selection';
@@ -171,32 +171,14 @@
   aria-rowcount={total}
 >
   <div class="grid-head" role="row">
-    <!-- 点击处理放在包装层而不是 Checkbox 上：bits-ui 自己的 click 处理器会同时跑，
-         内部 checked 与我们的受控 prop 各翻一次，结果正好反相（实测：勾了的行
-         显示未勾）。键盘可达性由内层 button 提供，这两条 a11y 提示是误报。 -->
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- tabindex=-1：可编程聚焦但不进 Tab 序列，真正的键盘入口是内层 button -->
-    <span class="check" role="columnheader" tabindex="-1" onclick={oncheckall}>
-      <Checkbox.Root
-        class="tt-box"
-        checked={allSelected}
-        indeterminate={someSelected}
-        aria-label={allSelected ? '取消全选' : '全选'}
-        disabled={total === 0}
-        onkeydown={(event) => {
-          // 同行内勾选框：Space/Enter 拦下来走 oncheckall（键盘全选与模型同步）
-          if (event.key === ' ' || event.key === 'Enter') {
-            event.preventDefault();
-            event.stopPropagation();
-            oncheckall();
-          }
-        }}
-      >
-        {#snippet children({ checked, indeterminate })}
-          {#if indeterminate}<Minus size={11} />{:else if checked}<Check size={11} />{/if}
-        {/snippet}
-      </Checkbox.Root>
-    </span>
+    <CheckCell
+      role="columnheader"
+      checked={allSelected}
+      indeterminate={someSelected}
+      label={allSelected ? '取消全选' : '全选'}
+      disabled={total === 0}
+      ontoggle={() => oncheckall()}
+    />
     <span class="idx">#</span>
     <span></span>
     <button class="sort-head" class:on={sort === 'title'} onclick={() => canSort && onsort('title')} disabled={!canSort}>
@@ -238,13 +220,13 @@
             // 勾选列与 hover 播放键里的点击不是"选中这一行"。**这个判断不能省**：
             // Svelte 5 把 click 委托到根节点统一派发，`stopPropagation` 拦不住
             // 同一批委托 handler，所以由行自己认出点击来源才是可靠的那道闸。
-            if ((event.target as HTMLElement | null)?.closest('.check, .play-btn')) return;
+            if ((event.target as HTMLElement | null)?.closest('.k-check, .play-btn')) return;
             // 裸点/Ctrl/Shift 全部交给 onselect，语义在 store 里分流
             onselect(row.index, event);
           }}
           ondblclick={(event) => {
             // 双击 = 播放。前面的两次单击各自选中过一次（幂等），无害。
-            if ((event.target as HTMLElement | null)?.closest('.check, .play-btn')) return;
+            if ((event.target as HTMLElement | null)?.closest('.k-check, .play-btn')) return;
             onplay(row.index);
           }}
           onkeydown={(event) => {
@@ -264,31 +246,11 @@
             onmenu(event, row.index, row.track ?? null);
           }}
         >
-          <!-- 同上：点选框由包装层接管，键盘可达性在 button 上 -->
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <span class="check" role="cell" tabindex="-1" onclick={(event) => oncheck(row.index, event)}>
-            <Checkbox.Root
-              class="tt-box"
-              checked={selection.has(row.index)}
-              aria-label={`选择第 ${row.index + 1} 行`}
-              onkeydown={(event) => {
-                // bits-ui 的 Checkbox 收到 Space/Enter 只翻**内部** state、不派发
-                // click（实测：data-state 翻成 checked 而选择集没动）→ 键盘勾选
-                // 与模型分叉，下一次渲染又被受控 prop 拉回，看起来"勾上了自己掉"。
-                // 拦下来走 oncheck 统一语义；KeyboardEvent 同样有 shiftKey/ctrlKey，
-                // Shift 连选不丢。preventDefault 同时拦掉原生 click 与 bits-ui 内部翻转。
-                if (event.key === ' ' || event.key === 'Enter') {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  oncheck(row.index, event);
-                }
-              }}
-            >
-              {#snippet children({ checked })}
-                {#if checked}<Check size={11} />{/if}
-              {/snippet}
-            </Checkbox.Root>
-          </span>
+          <CheckCell
+            checked={selection.has(row.index)}
+            label={`选择第 ${row.index + 1} 行`}
+            ontoggle={(event) => oncheck(row.index, event)}
+          />
           <span class="idx">
             {#if row.track.id === currentId}
               <span class="bars" class:animated={playing} aria-label="正在播放">
@@ -328,7 +290,7 @@
         </div>
       {:else if row.error}
         <div class="row failed" role="row">
-          <span class="check"></span>
+          <span class="k-check"></span>
           <span class="idx">{row.index + 1}</span>
           <span class="cover placeholder">!</span>
           <span class="cell">{row.error}</span>
@@ -340,7 +302,7 @@
         </div>
       {:else}
         <div class="row skeleton" role="row" aria-busy="true">
-          <span class="check"></span>
+          <span class="k-check"></span>
           <span class="idx">{row.index + 1}</span>
           <span class="cover placeholder"></span>
           <span class="cell shimmer"></span>

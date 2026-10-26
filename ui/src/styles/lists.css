@@ -125,18 +125,20 @@
   display: none;
 }
 
-/* ---------------- 多选勾选框 ----------------
+/* ---------------- 多选勾选格 ----------------
  *
- * bits-ui 的 `Checkbox.Root` 渲染成 `<button role="checkbox" data-state=...>`，
- * 尺寸与配色由这里定。主列表与首页表格共用同一套（`.tt-box`）。
+ * 结构在 `components/ui/CheckCell.svelte`（包装层点击 + 键盘 Space/Enter
+ * 防护的唯一实现）；这里只有外观。bits-ui 的 `Checkbox.Root` 渲染成
+ * `<button role="checkbox" data-state=...>`，尺寸与配色由 `.k-box` 定，
+ * 主列表与首页表格共用。
  */
-.check {
+.k-check {
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.tt-box {
+.k-box {
   width: 14px;
   height: 14px;
   display: grid;
@@ -149,17 +151,17 @@
   flex: none;
 }
 
-.tt-box:hover:not(:disabled) {
+.k-box:hover:not(:disabled) {
   border-color: var(--accent);
 }
 
-.tt-box[data-state='checked'],
-.tt-box[data-state='indeterminate'] {
+.k-box[data-state='checked'],
+.k-box[data-state='indeterminate'] {
   background: var(--accent);
   border-color: var(--accent);
 }
 
-.tt-box:disabled {
+.k-box:disabled {
   opacity: 0.4;
 }
 

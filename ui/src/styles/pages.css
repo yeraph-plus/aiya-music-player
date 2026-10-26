@@ -186,13 +186,6 @@
   font-size: 11px;
 }
 
-.tt-check {
-  display: flex;
-  align-items: center;
-}
-
-/* 勾选框本体（.tt-box）在 lists.css —— 主列表与首页表格共用 */
-
 .tt-skeleton {
   height: 40px;
   margin: 0 12px;
