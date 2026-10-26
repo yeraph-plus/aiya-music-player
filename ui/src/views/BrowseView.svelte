@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { Disc, Mic2, Search } from '@lucide/svelte';
+  import { Disc, Mic2, Search, User } from '@lucide/svelte';
   import Header from '../components/content/Header.svelte';
   import Button from '../components/ui/Button.svelte';
   import Card from '../components/ui/Card.svelte';
@@ -68,14 +68,8 @@
       : `${rows.length}${truncated ? ` / 共 ${total}` : ''} ${mode === 'artists' ? '位艺人' : '张专辑'}`,
   );
 
-  function cardProps(item: AlbumFacet | ArtistFacet): { title: string; subtitle: string; cover: string | null } {
-    if ('name' in item) {
-      return {
-        title: item.name,
-        subtitle: `${item.trackCount} 首 · ${item.albumCount} 张专辑`,
-        cover: item.artworkId ? artworkUrl(item.artworkId, 256) : null,
-      };
-    }
+  /** 专辑卡片属性。艺人卡片不用封面（docs/28 修订：user 图标，见模板内分支） */
+  function albumCardProps(item: AlbumFacet): { title: string; subtitle: string; cover: string | null } {
     return {
       title: item.title,
       subtitle:
@@ -108,13 +102,21 @@
   {:else if rows && rows.length > 0}
     <div class="grid">
       {#each rows as item (item.id)}
-        <Card
-          {...cardProps(item)}
-          onclick={() =>
-            mode === 'artists'
-              ? nav.go({ kind: 'artist', id: item.id })
-              : nav.go({ kind: 'album', id: item.id })}
-        />
+        {#if 'name' in item}
+          <!-- 艺人卡片：user 图标（artists 表没有封面数据，不做图片获取逻辑） -->
+          <Card
+            title={item.name}
+            subtitle={`${item.trackCount} 首 · ${item.albumCount} 张专辑`}
+            onclick={() => nav.go({ kind: 'artist', id: item.id })}
+          >
+            {#snippet icon()}<User size={22} />{/snippet}
+          </Card>
+        {:else}
+          <Card
+            {...albumCardProps(item)}
+            onclick={() => nav.go({ kind: 'album', id: item.id })}
+          />
+        {/if}
       {/each}
       {#if truncated}
         <p class="trunc-hint" role="note">

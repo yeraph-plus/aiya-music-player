@@ -34,17 +34,25 @@
      *  snippet 的内容渲染在父组件作用域，这里的 scoped class 命中不了它 */
     meta?: string;
     cover?: string | null;
+    /**
+     * 无封面时的图标位（艺人详情页的 user 徽标）。与 `cover` 的关系：
+     * cover 已给出 → Cover 组件；否则 icon 存在 → 92px 圆形图标块。
+     * 有图标位时标题同样升到 26px（with-cover 类，视觉权重与封面位一致）。
+     */
+    icon?: Snippet;
     /** 右侧操作按钮组 */
     actions?: Snippet;
   }
 
-  let { kicker, title, subtitle, meta, cover, actions }: Props = $props();
+  let { kicker, title, subtitle, meta, cover, icon, actions }: Props = $props();
 </script>
 
-<header class="content-header" class:with-cover={cover !== undefined}>
+<header class="content-header" class:with-cover={cover !== undefined || icon !== undefined}>
   {#if cover !== undefined}
     <!-- 92px 大封面：尺寸/圆角/占位符/投影全在 Cover 的 lg 档里（kit 是唯一出处） -->
     <Cover src={cover || null} size="lg" />
+  {:else if icon}
+    <div class="ch-icon" aria-hidden="true">{@render icon()}</div>
   {/if}
 
   <div class="ch-text">
@@ -99,6 +107,19 @@
     font-size: 11.5px;
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* 92px 圆形图标块：与 Cover.lg 同尺寸同投影，形状圆形（艺人徽标语义） */
+  .ch-icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 92px;
+    height: 92px;
+    border-radius: 50%;
+    background: var(--surface-cover);
+    color: var(--accent-text);
+    box-shadow: 0 12px 30px var(--shadow);
   }
 
   .ch-actions {

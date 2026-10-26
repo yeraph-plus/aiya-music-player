@@ -175,9 +175,34 @@ test('docs/28：艺人详情页列出该艺人的曲目，歌手列链接失效'
   await card.click();
 
   await expect(page.locator('.main h1')).toHaveText(artistName);
+  // docs/28 修订：艺人不做图片获取逻辑——头部是 user 图标位，不是封面
+  await expect(page.locator('.content-header .ch-icon')).toBeVisible();
+
   // 曲目列表（查询走 artistId 筛选）首行内容含这位艺人——不猜列下标，
   // 列顺序属于 TrackList 的实现细节
   await expect(page.locator('.main .list .row').first()).toContainText(artistName);
+});
+
+test('docs/28 修订：曲库列表行内直达详情页，标题显示名称而非路由 id', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('.sidebar .nav-item', { hasText: '曲库' }).click();
+  const firstRow = page.locator('.main .list .row:not(.skeleton):not(.failed)').first();
+  await firstRow.waitFor({ state: 'visible' });
+
+  // 歌手链接 → 艺人详情页：标题 = 歌手名（回归：真机上曾显示 uuid——
+  // 聚合缓存未命中时标题回落到了路由参数；现在回落到列表首行的真名）
+  const artistName = await firstRow.locator('.link-cell[title^="查看歌手"]').textContent();
+  await firstRow.locator('.link-cell[title^="查看歌手"]').click();
+  await expect(page.locator('.main h1')).toHaveText(artistName!.trim());
+
+  // 返回 → 专辑链接 → 专辑详情页：标题 = 专辑名（聚合缓存与首行回落都给同一个名字）
+  await page.getByRole('button', { name: '返回上一页' }).click();
+  const row = page.locator('.main .list .row:not(.skeleton):not(.failed)').first();
+  const albumName = await row.locator('.link-cell[title^="查看专辑"]').textContent();
+  await row.locator('.link-cell[title^="查看专辑"]').click();
+  await expect(page.locator('.main h1')).toHaveText(albumName!.trim());
+  // 专辑详情页保持封面位（封面回落到首曲的 artworkId）
+  await expect(page.locator('.content-header .k-cover')).toBeVisible();
 });
 
 test('B4-3c：搜索落独立结果页，三段（曲目/专辑/艺人）+ 卡片进详情 + 返回词不丢', async ({

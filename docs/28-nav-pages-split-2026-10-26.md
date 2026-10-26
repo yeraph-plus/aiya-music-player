@@ -99,3 +99,30 @@ tab 行是页面级分区值得一条线，chips 残行不值得——曲库页�
 - 猜你喜欢：待 beets 标签能力落地后，基于 top-15 做关联推荐（用户明说本批不做）。
 - workspace `cargo check`：上批因运行中的应用锁 sidecar exe 未跑完，本批未涉
   音频 crates，风险不变。
+
+## 6. 修订（同日，真机走查反馈）
+
+**问题 1：列表行内跳详情页，标题显示 uuid。**
+根因：`AlbumView`/`ArtistView` 的标题回落链末位是 `ui.albumId`/`ui.artistId`
+（路由参数本身），聚合缓存（`facets`）未命中时它直接渲染出来——真机 id 是
+uuid v5 字符串（`ids::artist_id(name)`），mock 是 `ar-01` 这种短 id，所以只有
+真机能看到。聚合缓存未命中的时机：页面刚挂载还在拉、或 `library_albums` 失败。
+
+修法：回落链改为 **聚合缓存 → 列表首行的真名 → 通用文案**。列表首行
+（`list.trackWindow.get(0)`，靠 `list.version` 计数驱动重算）与详情页下方
+的曲目列表同一次查询同源，聚合缓存加载慢或失败都给得出真名；**任何路径都不
+再把路由 id 渲染给用户**。副标题同链回落（`al?.artist ?? row?.artist`）。
+
+**问题 2：专辑封面改为取首曲封面。**
+回落链 **聚合缓存 artworkId → 首曲 artworkId**（扫描器给每条曲目都写了
+`artwork_id`，专辑首曲封面即专辑封面）。
+
+**问题 3：艺人不做图片获取逻辑。**
+`artists.artwork_id` 扫描器从不填写，永远走占位没有意义（用户拍板）：
+- 详情页头部：`Header` 新增 `icon` snippet 位（92px 圆形徽标，与 `Cover.lg`
+  同尺寸同投影），艺人页放 `User` 图标；
+- 艺人宫格卡片：不再传 `cover`，走 `Card` 既有 `icon` 位（48px 方块 `User`）。
+
+验证：svelte-check **0/0**；build **✓ 4.90s**（JS 433.41 kB）；e2e
+**22 passed**——新增 route 用例「曲库列表行内直达详情页，标题显示名称而非
+路由 id」（歌手/专辑两条链接 + 艺人页 `.ch-icon`、专辑页 `.k-cover` 断言）。
