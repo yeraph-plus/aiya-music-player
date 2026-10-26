@@ -73,6 +73,23 @@ export function writeLook(look: Look): void {
   }
 }
 
+/**
+ * 读当前列表行高（px）。
+ *
+ * **CSS 是唯一出处**：`--row-h` 在 tokens.css 按 `html[data-density]` 分档，
+ * 虚拟列表要一个数字（算可见区间、拖拽落点），于是这里读一次。
+ * 之前的写法是组件里 `density === 'compact' ? 42 : 52` —— 加第三档密度时
+ * CSS 改了、JS 忘了，列表就会滚错位（症状是越滚越偏，不是报错）。
+ *
+ * 必须在 `applyLook()` 之后调用：`data-density` 写进 DOM 后 `getComputedStyle`
+ * 才会返回新档位的值（写属性会强制同步样式计算）。
+ */
+export function readRowHeight(): number {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue('--row-h').trim();
+  const px = Number.parseFloat(raw);
+  return Number.isFinite(px) ? px : 52;
+}
+
 /** 把外观写到 `<html>`（CSS 变量按 `[data-theme]` / `[data-density]` 切换） */
 export function applyLook(look: Look): void {
   document.documentElement.dataset.theme = look.theme;

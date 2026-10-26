@@ -9,7 +9,8 @@
 >
 > ⚠️ **补充作废（2026-10-26，见 docs/24）**：§6.4 的「Tailwind 全量落地」不执行——实测零 utility
 > 使用，产物里 13.8% 的 CSS 全是 preflight，收尾批会把 Tailwind 整个移除；§4.1 的「Bits 全量原语」
-> 收窄为「bits-ui 只用于 Checkbox（已用），浮层与控件走自有 kit」；§2.4 的「单击选择/双击播放」
+> 收窄为「**按行为用原语、按视觉自研**」——22 件里 9 件用 bits-ui（Checkbox/Switch/SegmentedControl/
+> Slider/Progress + Menu/Dialog/Popover/Tooltip），13 件自研；逐件映射与 10 条坑见 docs/24 §4.5。§2.4 的「单击选择/双击播放」
 > 由 docs/24 §6 决策 1 拍板。§3.1 的色彩角色与 §5 的可访问性条目**仍然有效**，docs/24 §4 直接继承
 > （token 名按 §4.2 统一，satisfies 本文语义但不用本文的变量拼写）。
 >

@@ -32,6 +32,12 @@ class UiStore {
   /** 首页内部是仪表盘还是完整曲目列表；与四个一级页面分开持久化 */
   libraryDetail = $state(false);
   queueOpen = $state(false);
+  /**
+   * 列表行高（px）。**不是设置项**，是 `--row-h` 的运行时镜像 ——
+   * 虚拟列表要一个数字，而唯一出处是 CSS（见 `lib/look.ts: readRowHeight`）。
+   * `App` 的外观 effect 每次切密度后重读。
+   */
+  rowHeight = $state(52);
   search = $state('');
   sort = $state<TrackSort>('title');
   direction = $state<'asc' | 'desc'>('asc');

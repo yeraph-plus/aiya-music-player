@@ -68,7 +68,7 @@
 
     const styles = getComputedStyle(target);
     const barColor = styles.getPropertyValue('--accent').trim() || '#7c9cff';
-    const peakColor = styles.getPropertyValue('--text-dim').trim() || 'rgba(128,128,128,.8)';
+    const peakColor = styles.getPropertyValue('--text-2').trim() || 'rgba(128,128,128,.8)';
 
     const count = bands.length;
     const slot = width / count;
@@ -173,10 +173,10 @@
   }
   .mode-chip {
     margin-right: auto;
-    border: 1px solid var(--border);
+    border: 1px solid var(--line);
     border-radius: 999px;
     background: transparent;
-    color: var(--text-dim);
+    color: var(--text-2);
     font-size: 11px;
     padding: 2px 10px;
     cursor: pointer;

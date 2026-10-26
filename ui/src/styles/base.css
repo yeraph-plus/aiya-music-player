@@ -1,4 +1,5 @@
-/* base.css — 元素默认 + 骨架：reset、body、滚动条、字体、全局动效。 */
+/* base.css — 元素默认（**唯一的 reset**）：box-sizing、body、按钮/输入、滚动条、焦点与动效偏好。
+ * 四区席位在 layout.css，变量在 tokens.css —— 这个文件不该出现 grid-template 或 --var 定义。 */
 
 /* ---------------- 元素默认 ----------------
  * 两段合在这里：
@@ -33,10 +34,10 @@ body {
   background:
     radial-gradient(1100px 620px at 12% -8%, var(--glow-1), transparent 60%),
     radial-gradient(900px 520px at 100% 0%, var(--glow-2), transparent 55%),
-    var(--bg);
-  color: var(--text);
+    var(--surface-1);
+  color: var(--text-1);
   font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    var(--font-ui);
   font-size: 13px;
   overflow: hidden;
   user-select: none;
@@ -118,27 +119,9 @@ table {
   background-clip: padding-box;
 }
 
-/* 三行骨架：标题栏 / 内容 / 播放条。**只有这一处定义**，
- * pages.css 不再重复覆盖（两处写行号时改一行忘一行，是布局错位的经典来源）。 */
-.app {
-  display: grid;
-  grid-template-columns: var(--sidebar-width) 1fr;
-  grid-template-rows: var(--titlebar-height) 1fr var(--player-height);
-  height: 100%;
-}
-
-.sidebar {
-  grid-row: 2 / 3;
-  grid-column: 1;
-  border-right: 1px solid var(--border);
-  padding: 8px 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-height: 0;
-  background: var(--bg-panel);
-  backdrop-filter: blur(18px);
-}
+/* ---------------- 侧栏零件（待迁移） ----------------
+ * B3b 会把这一段搬进 `Sidebar.svelte` 的 scoped 样式：`.nav-item` 这些是零件外观，
+ * 不是元素默认。留在 base.css 只是因为本批不碰壳体。 */
 
 .nav {
   display: flex;
@@ -153,7 +136,7 @@ table {
   width: 100%;
   padding: 7px 9px;
   border-radius: 8px;
-  color: var(--text-dim);
+  color: var(--text-2);
   text-align: left;
   min-height: 30px;
 }
@@ -165,13 +148,13 @@ table {
 }
 
 .nav-item:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text);
+  background: var(--surface-hover);
+  color: var(--text-1);
 }
 
 .nav-item.active {
-  background: var(--bg-hover);
-  color: var(--text);
+  background: var(--surface-hover);
+  color: var(--text-1);
 }
 
 .nav-item.active svg {
@@ -198,7 +181,7 @@ table {
   padding: 6px 9px;
   font-size: 11px;
   letter-spacing: 0.06em;
-  color: var(--text-faint);
+  color: var(--text-3);
   text-transform: uppercase;
 }
 
@@ -231,14 +214,14 @@ table {
 
 .pl-count {
   font-size: 10.5px;
-  color: var(--text-faint);
+  color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
 
 .side-empty {
   padding: 8px 10px;
   font-size: 11.5px;
-  color: var(--text-faint);
+  color: var(--text-3);
 }
 
 /* 侧栏底部统计：块内是"数字 / 专辑艺人 / 缺失 / 数据目录"四行，
@@ -247,8 +230,8 @@ table {
 .sidebar-footer {
   margin-top: auto;
   padding: 10px 8px 0;
-  border-top: 1px solid var(--border);
-  color: var(--text-dim);
+  border-top: 1px solid var(--line);
+  color: var(--text-2);
   font-size: 11px;
   line-height: 1.7;
   word-break: break-all;
@@ -258,13 +241,13 @@ table {
 }
 
 .sidebar-footer strong {
-  color: var(--text);
+  color: var(--text-1);
   font-size: 13px;
   font-weight: 600;
 }
 
 .sidebar-footer .library-stats {
-  color: var(--text-dim);
+  color: var(--text-2);
 }
 
 .sidebar-footer .warn {
@@ -282,13 +265,3 @@ table {
 /* 注意：`.library-stats` / `.warn` 在此之前**没有任何定义** ——
  * 上一版删了 `<br />` 却没补样式，视觉上四行挤成一段。 */
 
-.main {
-  grid-row: 2 / 3;
-  grid-column: 2;
-  /* 用 flex 而不是 grid-template-rows：横幅、筛选条、扫描条都是可选的，
-     固定行数会在它们出现时把列表挤到隐式行里，高度塌掉 */
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}

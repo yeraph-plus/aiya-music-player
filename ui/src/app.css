@@ -1,13 +1,14 @@
 /* 样式入口：只做 @import，规则全部在 styles/ 下分层。
  *
  * 分层顺序有意义（CSS 后写的赢）：
- *   tokens（**只有变量**）→ base（元素默认 + 骨架）→ shell / lists / player / overlays / pages
+ *   tokens（**只有变量**）→ base（元素默认）→ layout（四区席位）→ shell / lists / player / overlays / pages
  *
  * 为什么拆：单文件 1800 行时"哪条规则属于哪个组件"只能靠段落注释认；
  * 拆开之后一次改动只看一个文件，也便于以后换皮 —— 换皮只动 tokens.css。
  */
 @import './styles/tokens.css';
 @import './styles/base.css';
+@import './styles/layout.css';
 @import './styles/shell.css';
 @import './styles/lists.css';
 @import './styles/player.css';

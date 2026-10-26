@@ -82,8 +82,8 @@ export function createProSpectrum(
   // 渐变：暗底 → 主题色 → 亮顶，观感对齐原 audioMotion 的 aiya-accent 渐变
   const gradBottom = mix(accent, '#000000', 0.45);
   const gradTop = mix(accent, '#ffffff', 0.55);
-  const peakColor = styles.getPropertyValue('--text-dim').trim() || 'rgba(128,128,128,.8)';
-  const unlitColor = styles.getPropertyValue('--text-faint').trim() || 'rgba(128,128,128,.25)';
+  const peakColor = styles.getPropertyValue('--text-2').trim() || 'rgba(128,128,128,.8)';
+  const unlitColor = styles.getPropertyValue('--text-3').trim() || 'rgba(128,128,128,.25)';
 
   let mode: ProSpectrumMode = PRO_MODES.includes(initialMode) ? initialMode : 'bars';
   let frameId = 0;

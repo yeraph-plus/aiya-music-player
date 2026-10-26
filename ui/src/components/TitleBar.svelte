@@ -136,8 +136,8 @@
     gap: 8px;
     padding: 0 0 0 12px;
     min-width: 0;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-panel);
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-2);
     user-select: none;
   }
 
@@ -158,7 +158,7 @@
     height: 18px;
     border-radius: 5px;
     background: var(--accent);
-    color: var(--bg);
+    color: var(--surface-1);
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0;
@@ -171,7 +171,7 @@
 
   .tb-sub {
     font-size: 9px;
-    color: var(--text-dim);
+    color: var(--text-2);
     letter-spacing: 0.22em;
   }
 
@@ -184,12 +184,12 @@
     width: 28px;
     height: 28px;
     border-radius: 7px;
-    color: var(--text-dim);
+    color: var(--text-2);
   }
 
   .tb-back:hover:not(:disabled) {
-    background: var(--bg-hover);
-    color: var(--text);
+    background: var(--surface-hover);
+    color: var(--text-1);
   }
 
   .tb-back:disabled {
@@ -206,19 +206,19 @@
     gap: 7px;
     height: 30px;
     padding: 0 10px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--line);
     border-radius: 999px;
-    background: var(--bg-input);
+    background: var(--surface-input);
   }
 
   .tb-search:focus-within {
-    border-color: var(--border-strong);
+    border-color: var(--line-strong);
   }
 
   .tb-search-icon {
     flex: none;
     display: inline-flex;
-    color: var(--text-dim);
+    color: var(--text-2);
   }
 
   .tb-search input {
@@ -227,12 +227,12 @@
     border: none;
     outline: none;
     background: transparent;
-    color: var(--text);
+    color: var(--text-1);
     font-size: 12.5px;
   }
 
   .tb-search input::placeholder {
-    color: var(--text-dim);
+    color: var(--text-2);
   }
 
   /* 去掉 type=search 的原生 ✕：右边已经有我们自己的清除键，两个会并排 */
@@ -247,12 +247,12 @@
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    color: var(--text-dim);
+    color: var(--text-2);
   }
 
   .tb-search-clear:hover {
-    background: var(--bg-hover);
-    color: var(--text);
+    background: var(--surface-hover);
+    color: var(--text-1);
   }
 
   /* 唯一的拖拽余量：顶栏空白处都在这里 */
@@ -275,17 +275,17 @@
     width: 44px;
     display: grid;
     place-items: center;
-    color: var(--text-dim);
+    color: var(--text-2);
   }
 
   .window-controls button:hover:not(:disabled) {
-    background: var(--bg-hover);
-    color: var(--text);
+    background: var(--surface-hover);
+    color: var(--text-1);
   }
 
   .window-controls .window-close:hover:not(:disabled) {
-    background: #e81123;
-    color: #fff;
+    background: var(--close-hover);
+    color: var(--close-fg);
   }
 
   .window-controls button:disabled {

@@ -14,8 +14,8 @@
   import { formatBytes, formatDateTime, formatDurationLong, shortenPath } from '../lib/format';
   import Icon from './Icon.svelte';
   import LibraryTools from './LibraryTools.svelte';
-  import PageHeader from './PageHeader.svelte';
-  import PageToolbar from './PageToolbar.svelte';
+  import Header from './content/Header.svelte';
+  import Toolbar from './content/Toolbar.svelte';
   import { capture } from '../stores/capture.svelte';
 
   interface Props {
@@ -68,7 +68,7 @@
     root?.querySelector(`#settings-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  /** PageToolbar 的 tab id 是 string，这里窄化回 Section（非法 id 静默忽略） */
+  /** Toolbar 的 tab id 是 string，这里窄化回 Section（非法 id 静默忽略） */
   function jumpToId(id: string): void {
     const section = SECTIONS.find((item) => item.id === id);
     if (section) jumpTo(section.id);
@@ -139,12 +139,12 @@
 <svelte:window onkeydown={onWindowKey} />
 
 <div class="page-scroll settings-page" bind:this={root}>
-  <PageHeader kicker="PREFERENCES" title="设置" />
+  <Header kicker="PREFERENCES" title="设置" />
 
-  <!-- 锚点条从标题 header 里搬出来（2026-10-26 壳体收口）：标题归 PageHeader，
-       跳转是 PageToolbar 上的 tab。挤在一行时 `.chip.on` 的 active 只能靠滚动
+  <!-- 锚点条从标题 header 里搬出来（2026-10-26 壳体收口）：标题归 Header，
+       跳转是 Toolbar 上的 tab。挤在一行时 `.chip.on` 的 active 只能靠滚动
        反查写回，标题区在兼职承载导航状态；现在反查结果只是这个 prop 的值。 -->
-  <PageToolbar tabs={toolbarTabs} active={active} ontab={jumpToId} />
+  <Toolbar tabs={toolbarTabs} active={active} ontab={jumpToId} />
 
   <section class="settings-section" id="settings-library">
     <div class="section-heading">

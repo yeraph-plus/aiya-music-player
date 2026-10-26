@@ -13,6 +13,18 @@
 >
 > 一句话结论：**先把"清场 + token + kit"做完，再动页面；播放区（含 EQ）独立成批，因为它要后端。**
 
+### 修订 v3（2026-10-26 深夜，Content 层归位 + 组件引用规划）
+
+1. **`PageHeader` / `PageToolbar` 改名**：→ `Header` / `Toolbar`，移到 `components/content/`。
+   二者是 **Content 层的版式件**，不属于"页面布局层"（页面布局层只有 AppShell 的四区席位），
+   所以**不带 `Page` 前缀** —— 前缀说的是"它属于页"，而实际归属是"它属于内容区"。
+   文件 `components/content/{Header,Toolbar}.svelte`，类名同步 `.content-header` / `.content-toolbar`。
+2. **新增 §4.5 框架组件引用规划**：22 件逐个定来源（bits-ui 原语 / 自研 / 包装），
+   并列出用原语时必须绕开的 8 个坑。B2 的施工图。
+3. **`components/` 目录开始分层**：`shell/`（壳体，B3b 迁）、`content/`（版式件）、`ui/`（原子件 kit）、
+   其余浮层/面板暂留原地到 B3b/B6 —— **本批只动 Content 两个文件，不搞一次性大搬迁**
+   （移动 + 改 import 的噪音会淹没真正的改动）。
+
 ### 修订 v2（2026-10-26 晚，壳体三条）
 
 用户在评审本文 §3.1 后给了三条更明确的壳体要求，本文据此修订：
@@ -191,8 +203,8 @@
 ┌──────────────────────────────────────────────────────────────────────┐
 │ TitleBar [A AIYA] [←] [ 搜索本地曲库 ] ·········空白可拖········ [—][□][✕] │ 46px
 ├───────────┬──────────────────────────────────────────────────────────┤
-│ Sidebar   │ PageHeader     ← 页内标题零件（页面自己调用，随内容滚动）   │
-│ 216px     │ PageToolbar    ← 页内工具条零件（tab / 筛选 chip / 动作）   │
+│ Sidebar   │ Header         ← 页内标题零件（页面自己调用，随内容滚动）   │
+│ 216px     │ Toolbar        ← 页内工具条零件（tab / 筛选 chip / 动作）   │
 │           ├──────────────────────────────────────────────────────────┤
 │ 一级导航  │ Content  唯一 dominant region（列表/宫格/表单）             │
 │ 歌单分组  │                                                          │
@@ -207,8 +219,8 @@
 |---|---|---|
 | **TitleBar**（唯一全局条） | 应用名（品牌块）、**返回上一页**、**搜索框**（全局唯一）、窗口三键；**整条空白可拖拽，双击最大化** | 页面标题、页面级动作、播放控制 |
 | **Sidebar** | 一级导航（首页/曲库/最近/常听/专辑/艺人）、歌单分组（新建、右键、排序）、底部统计 | 设置入口降级为导航最后一项；扫描进度 → 设置页 |
-| **PageHeader**（页内零件） | kicker + 标题 + 副标题 + meta（`12 首 · 43 分钟`）+ 右侧动作组；可选大封面（歌单/专辑） | tab、筛选 chip、搜索 |
-| **PageToolbar**（页内零件） | tab 组（曲库三视图 / 设置六区块）、筛选 chip、右侧次级动作 | 标题、播放全部（那是 PageHeader 的主按钮） |
+| **Header**（Content 层） | kicker + 标题 + 副标题 + meta（`12 首 · 43 分钟`）+ 右侧动作组；可选大封面（歌单/专辑） | tab、筛选 chip、搜索 |
+| **Toolbar**（Content 层） | tab 组（曲库三视图 / 设置六区块）、筛选 chip、右侧次级动作 | 标题、播放全部（那是 Header 的主按钮） |
 | **PlayerDock** | 当前曲信息、传输、进度、音效(EQ)、正在播放入口、队列按钮、音量 | 歌词正文与频谱画布（在「正在播放」页） |
 
 **三条形态约束（本次修订的核心）：**
@@ -216,7 +228,7 @@
 1. **顶栏四件一行**。搜索框宽度固定（约 360px），右侧留给窗口控制，中间是唯一的拖拽余量。
    `--titlebar-height` 由 36px 提到 **46px** —— 36px 塞不下 30px 高的输入框 + 上下呼吸；
    46 也是 Windows 自定义标题栏的常见值（系统标题栏 32 + 应用条 14）。
-2. **PageHeader 与 PageToolbar 不在一行、不组合**。它们是两个零件，页面写两行标签，中间想插
+2. **Header 与 Toolbar 不在一行、不组合**。它们是两个零件，页面写两行标签，中间想插
    "扫描进度条"就插，不需要给"组合零件"开插槽。理由：这两个东西的**生命周期不同** —— 标题是静态的，
    工具条会因视图/权限/空态出现或消失（歌单页没有 tab，曲库页有；扫描时工具条下面还要多一条进度）。
    组合 = 提前把它们的出现条件绑死。
@@ -260,15 +272,15 @@
 **布局契约**：所有列表页共用同一套"三段式"，但**三段是页面自己拼的**，不是某个 `ListPage` 组件的插槽：
 
 ```
-<PageHeader …>          ← 零件 1（静态）
-<PageToolbar …>         ← 零件 2（可缺席：歌单页无 tab、空库无 chip 时整条不渲染）
+<Header …>              ← 零件 1（静态）
+<Toolbar …>             ← 零件 2（可缺席：歌单页无 tab、空库无 chip 时整条不渲染）
 <列表 / 空态 / 表单>      ← 各自实现
 ```
 
-`ListPage` 若要做，只做"给这三段排间距"的细壳（B4 再定），**不允许**把 PageHeader/PageToolbar
+`ListPage` 若要做，只做"给这三段排间距"的细壳（B4 再定），**不允许**把 Header/Toolbar
 降级成它的内部 prop —— 那样又回到"组合组件"的老路。
 
-`ui.page` 从 4 值扩展到 8 值。**每个页面自己调 PageHeader / PageToolbar**，不经过任何中间组件。
+`ui.page` 从 4 值扩展到 8 值。**每个页面自己调 Header / Toolbar**，不经过任何中间组件。
 
 | 路由 | 页面 | 装什么 | 数据来源 | 备注 |
 |---|---|---|---|---|
@@ -292,27 +304,27 @@
 
 ```
 首页 HomeView（整页滚动，零件在 .page-scroll 内，滚动时跟着走）
-  <PageHeader kicker="YOUR LIBRARY" title="首页" subtitle="回到常听的音乐…">
+  <Header kicker="YOUR LIBRARY" title="首页" subtitle="回到常听的音乐…">
     actions: [浏览全部曲目 →]
-  <PageToolbar>                     ← 首页没有：三段预览各自带 section-heading
+  <Toolbar>                         ← 首页没有：三段预览各自带 section-heading
   <section> 歌单宫格 / 最近播放 / 常听 / 最近添加
 
 曲库 LibraryView（固定头 + 独立滚动列表，零件不跟列表滚）
   <div class="page-pad">            ← 横向 22px 归布局层，零件自己不带
-    <PageHeader kicker="曲库" title="全部曲目" meta="5 000 首"> actions: [播放全部]
-    <PageToolbar tabs=[全部曲目|最近播放|常听] active="library" filters=[已按艺人筛选 ×]>
+    <Header kicker="曲库" title="全部曲目" meta="5 000 首"> actions: [播放全部]
+    <Toolbar tabs=[全部曲目|最近播放|常听] active="library" filters=[已按艺人筛选 ×]>
   <TrackList>                       ← 自己滚动、自己恢复位置
 
 设置 SettingsView（**现役反例**）
   今天：<header class="page-heading"> <h1>设置</h1> + <nav class="settings-jump">18 个 chip 锚点</nav> </header>
         —— 标题与工具条挤在同一个 header 里，各自 padding 靠猜
-  改造：<PageHeader kicker="PREFERENCES" title="设置" />
-        <PageToolbar tabs=[音乐库|外观|播放|系统|快捷键|诊断] active={滚动位置反查} />
+  改造：<Header kicker="PREFERENCES" title="设置" />
+        <Toolbar tabs=[音乐库|外观|播放|系统|快捷键|诊断] active={滚动位置反查} />
         —— 锚点 chip 从"标题右边的导航"变成"独立工具条上的 tab"，滚动联动逻辑不变
 ```
 
 设置页是本轮最有说服力的证据：它**已经**把两种东西塞进一行，且因为塞在一起，`jumpTo()` 的
-active 状态只能靠 `IntersectionObserver` 反查后写回一个 `.chip.on` —— 拆开之后，`PageToolbar`
+active 状态只能靠 `IntersectionObserver` 反查后写回一个 `.chip.on` —— 拆开之后，`Toolbar`
 的 `active` 是它的正常职责，不再需要"标题区域兼职承载导航状态"。
 
 ### 3.3 播放条与播放相关浮层
@@ -411,16 +423,16 @@ active 状态只能靠 `IntersectionObserver` 反查后写回一个 `.chip.on` �
 
 | # | 零件 | 取代现有 | 约束 |
 |---|---|---|---|
-| 21 | `PageHeader` | `.page-heading` `.page-heading h1/p` `.view-head` `.view-meta` `.view-kicker` `.view-cover` `.view-actions` | 形态由 `cover` 三态决定（缺省=纯文字 / `null`=占位 / 字符串=大封面）。**不带横向 padding**（归调用方的 `.page-pad`），所以能在 `.page-scroll` 内也能在固定头位置。`meta` 是字符串不是 snippet —— snippet 里写的 scoped class 不生效（渲染在父作用域） |
-| 22 | `PageToolbar` | `.settings-jump` `.chip.on` `.filters` `.filter` | `tabs` + `filters` + `start`/`end` snippet；**全部为空时整条不渲染**（不占高度）。`active` 由页面给（设置页仍是滚动反查，但反查结果只是这个 prop 的值） |
+| 21 | `Header`（Content 层） | `.page-heading` `.page-heading h1/p` `.view-head` `.view-meta` `.view-kicker` `.view-cover` `.view-actions` | 形态由 `cover` 三态决定（缺省=纯文字 / `null`=占位 / 字符串=大封面）。**不带横向 padding**（归调用方的 `.page-pad`），所以能在 `.page-scroll` 内也能在固定头位置。`meta` 是字符串不是 snippet —— snippet 里写的 scoped class 不生效（渲染在父作用域） |
+| 22 | `Toolbar`（Content 层） | `.settings-jump` `.chip.on` `.filters` `.filter` | `tabs` + `filters` + `start`/`end` snippet；**全部为空时整条不渲染**（不占高度）。`active` 由页面给（设置页仍是滚动反查，但反查结果只是这个 prop 的值） |
 
 > **版式件的铁律：只允许页面直接调用，不允许被别的零件内部调用。**
-> 一旦 `PageHeader` 被 `ListPage` 之类包起来，就会出现"这个页面想改标题右边的东西，
+> 一旦 `Header` 被 `ListPage` 之类包起来，就会出现"这个页面想改标题右边的东西，
 > 得先给中间组件加 prop"——那正是 `TopBar` 死掉的原因。原子件可以互相嵌套（Button 里放 Icon），
 > 版式件不行。
 
 演示页：`?page=kit`（仅 dev/mock 下注册）—— 一屏看全 20 件的全状态（normal/hover/active/disabled/loading/dark/light/compact），
-外加 PageHeader / PageToolbar 的三种形态各一例。
+外加 Header / Toolbar 的三种形态各一例。
 它是 kit 的自测页，也是后续改 token 时的目检页。
 
 ### 4.4 主题适配
@@ -429,6 +441,111 @@ active 状态只能靠 `IntersectionObserver` 反查后写回一个 `.chip.on` �
 - **密度**：`html[data-density]` 只改 `--row-h`/`--control-h`/`--space-*` 的档位；列表虚拟化读同一个 `--row-h`（现在 `rowHeight={density==='compact'?42:52}` 是 JS 硬编码，要和 CSS 同源 —— 改成从 token 读或单一常量导出）。
 - **主色**：`--accent` 默认来自主题；开启"封面主色"后由 `accentForArtwork` 派生，但**必须过对比度约束**：派生色与 `--surface-1` 的对比度 < 3:1 就回落到主题色（现在无约束，浅色主题下深色封面会得到看不见的 accent）。
 - **禁用规则**：组件内禁止 `rgba(255,122,122,...)` 这类硬编码（`.error` 现在就是这么写的，浅色主题下底色仍是深红调），一律 `color-mix(in srgb, var(--danger) 10%, transparent)`。
+
+### 4.5 框架组件引用规划（bits-ui 2.20.2）
+
+> 2026-10-26 晚追加。起因：`bits-ui` 从 docs/23 起就在依赖里，但**只用了 `Checkbox` 一个原语**，
+> 「引了却不用」和「全量重写」一样浪费。本节把 22 个零件逐个过一遍：哪些该用原语、哪些必须自研、
+> 哪些明确不用，以及用的时候必须绕开的坑。**这是 B2 的施工图，不是选型讨论。**
+
+#### 一、判断线（一条，不是四条）
+
+> **行为难写对 → 用原语；视觉难统一 → 自研；两者都难 → 原语包壳。**
+
+"行为难写对"的判据很具体：**焦点陷阱、Esc/外点关闭、Portal 定位与碰撞翻转、ARIA 状态机、
+键盘导航、指针捕获**。这几样每一条都能写出来，但写对需要覆盖的组合数远超它的体积。
+反过来，`Button` 的"primary/ghost/danger + loading + 图标"没有任何一条属于上面 —— 它只是样式，
+用 `bits-ui/button` 反而要写 adapter（`Button.Root` 是 builder 模式，不产出样式按钮）。
+
+#### 二、逐件映射
+
+| # | 零件 | 来源 | 内核 / 子件 | 我们要包的东西 | 批次 |
+|---|---|---|---|---|---|
+| 1 | `Button` | **自研** | — | `variant: primary/secondary/ghost/danger` × `size: sm/md` × `loading` / `disabled` / `icon` snippet | B2 |
+| 2 | `IconButton` | **自研** | — | `label` 必填（同时产出 `aria-label` + `title`）、`pressed`、`size: sm/md/lg` | B2 |
+| 3 | `Chip` | **自研** | — | `on`（accent-weak）、可关（右侧 ×，`onclear`） | B2 |
+| 4 | `Checkbox` | **bits-ui** `Checkbox.Root` | 三态 `checked`/`indeterminate` | 受控唯一的勾选入口；点击处理**挂包装层** | B2（已有用法，抽件） |
+| 5 | `Switch` | **bits-ui** `Switch.Root` + `Thumb` | `bind:checked` | 可见标签由 `Field` 提供；`label` 必填 | B2 |
+| 6 | `SegmentedControl` | **bits-ui** `ToggleGroup`(`type=single`) + 自研外观 | `value` 受控、方向键 | 2–5 个短选项；`onchange(value)` | B2 |
+| 7 | `Slider` | **bits-ui** `Slider.Root` + `Range` + `Thumb` | `onValueChange`（预览）/ `onValueCommit`（提交） | 进度 / 音量 / 倍速三处共用；`format` 提示；`step` | B2 |
+| 8 | `Progress` | **bits-ui** `Progress.Root` | `value` / `max` | 确定态（扫描）；不确定态用自研条纹 | B2 |
+| 9 | `Field` | **自研**（可选 `bits-ui/label`） | — | label + hint + error + 单行 input；`bind:value` | B2 |
+| 10 | `Card` | **自研** | — | 封面/图标 + 标题 + 副标题；`href` 语义用 button | B2 |
+| 11 | `Cover` | **自研** | — | `xs/sm/md/lg` + `src` 空占位（♪）；`radius` 档位 | B2 |
+| 12 | `Skeleton` | **自研** | — | `line` / `block` / `row` | B2 |
+| 13 | `EmptyState` | **自研** | — | icon / title / hint / action 四段 | B2 |
+| 14 | `StatBlock` | **自研** | — | 数字（tabular）+ 标签；`size` | B2 |
+| 15 | `Menu` | **bits-ui** `ContextMenu`（`Root`/`Trigger`/`Content`/`Item`/`Separator`） | 定位、碰撞翻转、键盘、Esc | 数据驱动：`MenuItem[]` → 子件；危险项 `variant="danger"` | B3b |
+| 16 | `Dialog` | **bits-ui** `Dialog`（确认类用 `AlertDialog`） | 焦点陷阱、Esc、还原焦点、`aria-modal` | `title`/`description`/`actions` snippet；`danger` 变体 | B3b |
+| 17 | `Popover` | **bits-ui** `Popover` | 定位、外点关闭、还原焦点 | 触发点 + `content` snippet；`width` | B3b |
+| 18 | `Tooltip` | **bits-ui** `Tooltip` + 顶层 `Provider` | hover 延迟、定位 | 统一 `delayDuration=400`；**不承载唯一信息** | B3b |
+| 19 | `DataTable` | **自研** | — | 表头排序 + 勾选列 + 虚拟化 hook；`Checkbox` 是它唯一的原语依赖 | B4 |
+| 20 | `Toast` / `InlineError` | **自研** | — | 沿用 `notify` store；错误分「可重试 / 阻断」 | B6 |
+| 21 | **`Header`**（Content 层） | **自研** | — | `kicker`/`title`/`subtitle`/`meta`/`cover` 三态/`actions` snippet | ✅ 已改名 |
+| 22 | **`Toolbar`**（Content 层） | **自研** | — | `tabs` / `active` / `ontab` / `filters` / `end` snippet；全空不渲染 | ✅ 已改名 |
+
+合计：**bits-ui 9 件**（B2 已落地 5：Checkbox / Switch / SegmentedControl / Slider / Progress；B3b 落地 4：Menu / Dialog / Popover / Tooltip），**自研 13 件**。
+
+#### 三、明确不用，以及为什么
+
+| bits-ui 组件 | 为什么不用 |
+|---|---|
+| `Button` / `Toggle` | `Button.Root` 是「带 builder 的裸元素」，产出的是 `<button>` + `data-state`，样式全要自己写；我们的按钮 90% 是变体矩阵，用它等于多写一层 adapter |
+| `Tabs` | 曲库三视图是**改查询后重载列表**，不是面板切换；设置页六个锚点是**滚动跳转**。两处都不是 `tablist/tabpanel` 语义（docs/24 §3.1 已定 `nav` + `aria-current`），硬套会给读屏软件一个不存在的 tabpanel |
+| `ScrollArea` | 列表的 `scrollTop` 由我们自己算（虚拟窗口 + 稀疏分页 + 拖拽自动滚动）；它插一层 viewport 后所有 `scrollTop` 读写点都要改，回归面覆盖整个列表 |
+| `Select` / `Combobox` | 现在的选择器是 `PlaylistPicker`（列表 + 新建入口），不是"输入框 + 候选"；没有可搜索下拉的真实场景 |
+| `Toolbar`（role=toolbar） | 我们的 `Toolbar` 是版式件（tab + 筛选 chip），不是应用工具栏；两者同名不同物，**不要因为名字像就套** |
+| `Separator` | 分隔线一条 `border-top` 就够，不需要一个组件管 `orientation` |
+| `Avatar` / `Meter` / `RatingGroup` / `PinInput` / `Calendar` / `DatePicker` / `Command` / `Menubar` / `NavigationMenu` / `Accordion` / `Collapsible` / `LinkPreview` / `AspectRatio` | 无对应场景。列表里没有日期筛选、没有命令面板、没有多级菜单栏、设置区块直接展开 |
+
+#### 四、用原语时必须绕开的坑（每条都来自实测或源码）
+
+1. **`Checkbox` 不能同时受控 + 挂 `onCheckedChange`**（docs/23 实测）。它的 click 处理器会先翻内部 state，
+   我们再翻一次受控值 → 视觉与模型反相。约定：**勾选态只由 `checked` prop 决定，点击处理挂包装层**。
+   包装层要 `tabindex="-1"`（可编程聚焦但不进 Tab 序列；真正的键盘入口是内层 `button`）。
+   —— 与顶栏拖拽无关（顶栏里没有选框），但**同理**：任何给元素补 `tabindex` 的地方都要想一下。
+2. **`Switch` 同样不要双绑**：`checked` 受控 + `onCheckedChange` 只用于触发写设置，不要在回调里再改本地副本。
+3. **`Slider` 的两个回调分工不同**：`onValueChange` 每次指针移动都来（音量实时生效可以），
+   `onValueCommit` 只在松手/键盘结束时来。**进度条必须用 commit** —— 拖动中每帧 seek 会让
+   Rust 侧反复 flush，实测有咔哒声；音量可以用 change（用户期待拖的时候就听到）。
+4. **`ContextMenu` 不要包在虚拟列表的行上**。行节点会被回收/复用，菜单开着时滚动一下锚点就没了。
+   保留现有「事件坐标 → 单例菜单」的模型：在 `OverlayHost` 里放一个 1×1 的定位锚点，
+   用 `ContextMenu.Root open` + 锚点 Trigger 让 bits-ui 负责算位置与碰撞翻转，删掉手写的
+   `Math.min` 翻转、backdrop、`svelte:window` 的 Esc（这三样它都有）。
+5. **`Dialog` 必须有 `Title`**，否则运行时 a11y 警告；`Description` 可省但要显式 `aria-describedby={undefined}`。
+6. **bits-ui 渲染出来的 DOM 不在你的 scoped 作用域里**（B2 实测，此前"哈希会带上"的判断是错的）。
+   `<Switch.Root class="k-switch">` 里的 `class` 是普通属性，**不会带 scoped 哈希**；写在父组件
+   `<style>` 里的 `.k-switch { }` 会被 svelte-check 报 `Unused CSS selector`，运行时完全不生效 ——
+   症状是"控件出现了，但一点样式都没有"，比报错更难查。三条规矩：
+   - 包装件的样式选择器一律写 `:global(.k-xxx)`，类名带 `k-` 前缀且全局唯一（本批有 10 个：
+     `.k-check` / `.k-switch(-thumb)` / `.k-seg(-item)` / `.k-slider(-range/-thumb)` / `.k-progress(-fill)`）；
+   - **`class:` 指令不能用在组件上**（编译期 `component_invalid_directive`），要拼字符串：
+     `class={`k-progress${size === 'md' ? ' md' : ''}`}`；`style:` 同样，用 `style={...}`；
+   - 想要真正 scoped，只能用 bits-ui 的 `child` snippet 自己渲染元素 —— 本批不用（会让 14 件里 5 件写法各不相同）。
+7. **`Tooltip.Provider` 只放一次**（`App.svelte` 顶层），否则每个 Tooltip 自带 700ms 延迟且互不协调。
+8. **`ToggleGroup` 的 `type="single"` 返回值是 `string | undefined`**（取消选中时），
+   而我们的分段控件永远有值 → 包壳里要把 `undefined` 吃掉，回落到上一个值。
+9. **`Slider.Thumb` 必须给 `index`**：单拇指也要 `index={0}`，它是必填项不是可选项（TS 会直接报缺属性）。
+10. **不要给包装组件加泛型**：`<script generics="T extends string">` 配 `options` 数组字面量时，
+    推导结果是 `string` 而不是联合类型（数组先被推成 `string[]`），最后还是要在调用点断言。
+    直接把 `value` 声明成 `string`、断言写在调用处更诚实（`SegmentedControl` 最终就是这么定的）。
+
+#### 五、图标与样式的引用规则
+
+- **kit 内部直接 `import { X } from '@lucide/svelte'`**，图形通过 snippet/prop 由调用方给。
+  `components/Icon.svelte` 是「语义名 → 组件」的旧适配层，留给**业务视图**用；kit 不再叠一层映射
+  （否则一个图标两处注册，加图标要改两个地方）。
+- **kit 不写全局类**，外观全在自身 `<style>`，只吃 token 变量。唯一的全局样式例外是
+  `.icon-solid`（scoped 够不到子组件渲染的 `<svg>`）。
+- **kit 不引 `styles/*.css`**：B1 之后全局 CSS 只剩 `tokens/base/layout`，其余逐批删。
+
+#### 六、批次分配与理由
+
+- **B2（本批）**：14 件（1–14）。共同点：**替换时只影响视觉，不动交互路径**，可以边替边看。
+  `Header` / `Toolbar` 已在 B3a 落地，本轮改名为 Content 层归位。
+- **B3b**：15–18（Menu / Dialog / Popover / Tooltip）。共同点：**会改事件与焦点**（右键菜单从手算坐标
+  改到 bits-ui、对话框从自有 backdrop 改到 Portal），必须和壳体换皮一起验，否则两套浮层同时存在。
+- **B4**：19 `DataTable`。**B6**：20 `Toast/InlineError`。
 
 ---
 
@@ -519,26 +636,84 @@ import 它们做 reload/playAll）→ 会成环，而全仓在此之前实测是
 真窗口另测：元素默认 `h2` 13px/400/0 margin、`ul` 无圆点、`svg` block、骨架 46/216/1064 未变、
 播放条 4 个 `.icon-solid` 的 `fill` 取到 `currentColor`、27 个 svg 无一零尺寸。
 
-### B1 Token 与样式分层
+### B1 Token 与样式分层 ✅ 已完成（2026-10-26）
 
-token 三轴重命名（293 处引用机械替换）、reset 从 `tokens.css` 挪到 `base.css`、`.app`/`.sidebar`/`.main` 挪到 `layout.css`、
-`.error`/`.notice` 等硬编码色改 token、密度变量化（JS 与 CSS 同源）。
+**做了什么**
 
-验收：`grep 'rgba(255, *122'` 无命中；明暗 × 舒适紧凑 4 张目检图；`--row-h` 改动只动一处。
+1. `tokens.css` 重写成**只有变量**（145 行，含注释）：三条轴齐备
+   （色彩 `--surface-1..4/--surface-head/--surface-input/--surface-hover/--surface-active/--surface-cover`、
+   `--line/--line-strong`、`--text-1..3`、`--accent/--accent-weak/--accent-text/--accent-fg`、`--danger/--warn/--ok`、
+   `--play-bg/--play-fg`、`--close-hover/--close-fg`；尺寸 `--space-1..6`、`--radius-sm/md/lg/pill`、
+   `--control-h/--row-h/--titlebar-h/--sidebar-w/--player-h`；字体与动效 `--font-ui/--font-mono/--fs-xs..xl/--dur-*/--ease`）。
+2. **299 处 `var(--x)` 机械重命名**（脚本跑 + 逐文件核对，0 残留）：`--bg*` → `--surface-*`、`--border*` → `--line*`、
+   `--text*` → `--text-1/2/3`、`--accent-soft` → `--accent-weak`、`--*-height/width` → `--*-h/w`。
+3. 新建 `styles/layout.css`（75 行）：`.app` 网格 + `.sidebar/.main/.page-content/.page-scroll/.page-pad/.player-dock` 的席位
+   从 `base.css` / `pages.css` 集中过来。`base.css` 只剩元素默认 + 待迁移的侧栏零件样式。
+4. 硬编码色清零：`.error`/`.notice.danger` 的 `rgba(255,122,122,x)` → `color-mix(in srgb, var(--danger) x%, transparent)`；
+   `ImportPanel` 的 `var(--danger, #c33)` 去掉 fallback；开关拇指 `#fff` → `--accent-fg`；关闭键 `#e81123` → `--close-hover`。
+5. 密度**同源**：`html[data-density]` 只改 `--row-h/--control-h/--space-5/6`；`lib/look.ts` 新增 `readRowHeight()`
+   读 CSS 值，`ui.rowHeight` 是它的运行时镜像，`LibraryView` 不再写 `density === 'compact' ? 42 : 52`。
 
-### B2 UI Kit 第一批（12 件）+ 演示页
+**实测**
 
-Button、IconButton、Chip、Checkbox、Switch、SegmentedControl、Slider、Progress、Field、Card、Cover、Skeleton、
-EmptyState、StatBlock（可拆两小步）。配 `?page=kit` 演示页。
-已在用的视图（设置页、首页、列表页）**先只替换 icon-btn / btn 两类**，验证 kit 与既有全局 CSS 能共存。
+| 门槛 | 结果 |
+|---|---|
+| `npm run check` | 0 error / 0 warning |
+| `grep -E "\-\-(bg|border|text|accent-soft|fg-play|player-h...)([^-a-z]|$)"` | 0 命中 |
+| `grep "rgba(255, *122"` | 0 命中 |
+| 密度分档 | `data-density=compact` 时 `--row-h` 读到 `42px`（CSS 单点定义） |
+| CSS 体积 | 35 278 → **39 690 B**（+3.2 kB kit 组件 + ~1.2 kB 新增变量轴）。B1 本身**不是**下降批 —— 它把散落的字面量换成了变量，压缩率反而略降；真正的下降在 B3b/B4 删旧全局 CSS 时发生 |
+| JS | 239.41 → **239.72 kB** |
 
-验收：演示页 0 a11y warn；`grep -c 'class="btn'` 在 views 里降到 0；剩余件数进 B3/finish。
+> 已知遗留：`base.css` 尾部的侧栏零件样式（`.nav-item/.side-*/.sidebar-footer`）与
+> `.sidebar` 自身的 border/background 还没进组件 —— 按 §5.5 的"结构就地改、视觉隔离试"，
+> 它们随 B3b 换皮一起搬，避免同一批既改结构又改皮。
+
+### B2 UI Kit 第一批（14 件）+ 演示页 ✅ 已完成（2026-10-26）
+
+`components/ui/` 14 件，全部**自带 scoped 样式、只吃 token、不写全局类**（bits-ui 包装件用 `:global(.k-*)`，原因见 §4.5 坑 6）：
+
+| 文件 | 来源 | 备注 |
+|---|---|---|
+| `Button.svelte` | 自研 | 4 variant × 2 size + `icon` snippet + `loading`（conic-gradient 转圈） |
+| `IconButton.svelte` | 自研 | `label` 必填；`pressed`（aria-pressed）与 `active`（纯视觉）分开 |
+| `Chip.svelte` | 自研 | 外层 span（可关 chip 内套 × 按钮，button 套 button 非法） |
+| `Checkbox.svelte` | bits-ui `Checkbox.Root` | 不暴露 `onCheckedChange`（双翻反相，docs/23 实测） |
+| `Switch.svelte` | bits-ui `Switch.Root`+`Thumb` | 受控 `checked` + `onCheckedChange` |
+| `SegmentedControl.svelte` | bits-ui `ToggleGroup` | 吃掉 `undefined`（再点当前项会取消选中） |
+| `Slider.svelte` | bits-ui `Slider` | `oninput`（预览）/ `oncommit`（进度 seek）分离 |
+| `Progress.svelte` | bits-ui `Progress.Root` | `value=null` → 不确定态条纹 |
+| `Field.svelte` | 自研 | `$props.id()` 生成 id，error/hint 共用一个描述位 |
+| `Card.svelte` | 自研 | 恒 `<button>`（卡片只作可点入口） |
+| `Cover.svelte` | 自研 | 四档 22/34/48/92 |
+| `Skeleton.svelte` | 自研 | line / block / row，`prefers-reduced-motion` 停动画 |
+| `EmptyState.svelte` | 自研 | icon/title/hint/action 四段 |
+| `StatBlock.svelte` | 自研 | tabular 数字，tone 三态 |
+
+**演示页** `views/KitView.svelte`（`?page=kit`，仅 `import.meta.env.DEV`）：
+三态 Header + Toolbar + 14 件全状态。**不注册进 `AppPage`**（否则要处理持久化与侧栏入口）。
+
+**实测**
+
+| 门槛 | 结果 |
+|---|---|
+| `npm run check` | 0 error / 0 warning（含演示页） |
+| 演示页 DOM 计数 | btn 9 / icon-btn 6 / chip 4 / check 4 / switch 2 / seg-item 4 / slider 2 / progressbar 3 / field 4 / card 3 / cover 6 / skeleton 10 / empty 1 / stat 3 / toolbar 1 / header 3 |
+| 状态断言（CDP） | check `unchecked/checked/indeterminate`；switch `checked/unchecked`；seg `on/off`；slider range 151/238（64%）、41/238（17%）；progress fill 260/420（62%）+ 不确定态 126/420（30%）无 `aria-valuenow` |
+| 运行时 | Console error 0 / 未捕获异常 0 / 4xx 0 |
+| 亮色 | 截图目检无白字白底；kit 全部吃 token，切 `data-theme=light` 零分支 |
+| CSS | kit 14 件 + 演示页合计 +3.2 kB（39.69 kB 总量，gzip 8.44 kB） |
+| E2E | 6/6（`Header` 改名后选择器同步改为 `.main h1`） |
+
+> **未做**（有意）：把 kit 替换进现有视图。按计划 B2 只建零件与演示页，
+> 设置页/首页/列表页的 `.btn`/`.icon-btn` 替换放在 B3b（换皮批）一起做 ——
+> 替换时视觉会变，和壳体换皮放同一批才能一次目检完。
 
 ### B3b 壳体换皮与播放条（原 B3）
 
 B3a 定好的结构**不再动**，这一批只换零件实现：
 TitleBar（返回键与窗控换 `IconButton`、搜索框换 `Field`）/ Sidebar / PlayerDock 用 kit 重写（含 Popover、Tooltip）；
-PageHeader / PageToolbar 内部改用 `Button`/`Chip`/`Cover`，对外的 props 一行不改。
+Header / Toolbar 内部改用 `Button`/`Chip`/`Cover`，对外的 props 一行不改。
 侧栏加"专辑/艺人"入口与分组；电台入口移出；统计区改用 `StatBlock`。
 播放条：EQ/倍速/输出状态三个 Popover 的**壳**（EQ 内容在 B5）。
 
@@ -549,7 +724,7 @@ B3a 的 6 条真窗口实测重跑一遍全过；Dock 在窄窗下的收纳规�
 
 - **点击语义切换**：单击选中、双击播放、Enter 播放（§6 决策 1）
 - 路由拆页（`library`/`recent`/`mostPlayed`/`playlist` 独立，删 `libraryDetail`）
-- `ListPage` 骨架（PageHeader/Toolbar/StatusBar）+ `DataTable`
+- `ListPage` 骨架（Header/Toolbar/StatusBar）+ `DataTable`
 - 虚拟化抽 `lib/create-virtual-window.svelte.ts`（TrackList/QueuePanel 共用）
 - 勾选语义抽 `lib/row-selection.ts`（下标版 / ID 版两个实现，接口一致）
 - BatchBar 单点渲染（AppShell），删 HomeView 那份
@@ -668,7 +843,7 @@ E2E 补到 8–10 条（覆盖：拆页路由、批量、设置分组、kit 演�
 | # | 决策 | 结论 | 影响面 |
 |---|---|---|---|
 | 6 | 顶栏形态 | **宽 TitleBar**：应用名 + 返回 + 搜索 + 窗口控制在**一行**；空白区整条可拖；高度 36 → **46px** | B3a。搜索从"页面级容器"升到"全局容器"，必须处理 `data-tauri-drag-region` 的两个反向陷阱（可点元素阻断、非可点容器默认可拖） |
-| 7 | 页内标题 / 工具条 | **两个独立零件，不在一行、不组合**，页面自己调用；**删掉 TopBar 这一级** | B3a。`PageHeader`/`PageToolbar` 属"版式件"，禁止被其它零件内部调用（§4.3 铁律） |
+| 7 | 页内标题 / 工具条 | **两个独立零件，不在一行、不组合**，页面自己调用；**删掉 TopBar 这一级** | B3a。`Header`/`Toolbar` 属"版式件"，禁止被其它零件内部调用（§4.3 铁律） |
 | 8 | 导航归属 | **Sidebar 与顶栏共用 `stores/nav.svelte.ts`**：`go`/`back`/`search` 三个动作 + 50 深快照栈；Sidebar 改零 prop | B3a。本轮只收"动作"（`go()` 转调既有入口），**不收"状态"**；B4 拆页时 `nav.go()` 签名不变、调用点不用改 |
 | 9 | 改动方式 | **结构就地改、视觉隔离试**（详见 §5.5） | B3a 分 S1–S5 五个可运行小步；PageHeader/PageToolbar 的长相先在 `?page=kit`（B2）定稿 |
 
@@ -686,7 +861,7 @@ E2E 补到 8–10 条（覆盖：拆页路由、批量、设置分组、kit 演�
 | E2E | `npm run test:e2e` | **B3a 起 5/5**（原本 0/4）、**B0 起 6/6**，B6 起 10/10 |
 | 视觉 | 真窗口 3 档 × 明暗 2 套 | 12 张目检图，记进本文档附录 |
 | 壳体（v2） | 真窗口手测 6 条 | ①顶栏四件位置正确 ②拖空白移动窗口、双击最大化 ③点搜索框内边距不拖窗 ④首页→歌单→返回回首页 ⑤搜索后返回还原搜索前状态 ⑥设置页标题与 tab 分两行 |
-| 版式件边界（v2） | `grep -rn "PageHeader\|PageToolbar" components views` | 引用方**只能是 `views/`**；出现在 `components/` 里就是被组合化了，打回 |
+| 版式件边界（v2/v3） | `grep -rn "content/Header\|content/Toolbar" components views` | 引用方**只能是 `views/` 与 `SettingsPanel`**；被 `ListPage`/`Card` 这类零件内部调用就是被组合化了，打回 |
 
 后端子批（B5b）另加：`cargo test --workspace` 全绿 + `cargo build -p aiya-audio-host`（协议升版必跑）。
 

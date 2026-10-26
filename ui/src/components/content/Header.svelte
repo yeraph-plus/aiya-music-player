@@ -9,7 +9,7 @@
    * - **和工具条不在一行、不组合**。旧实现把标题、统计、四个操作按钮塞进一个
    *   `.view-head`，首页又另有一份 `.page-heading`，两套形状各写一遍 padding；
    *   设置页更极端 —— 标题和 18 个锚点 chip 挤在同一个 `header` 里，active 状态
-   *   只能靠滚动反查写回 `.chip.on`。现在标题归这里、工具条归 `PageToolbar`，
+   *   只能靠滚动反查写回 `.chip.on`。现在标题归这里、工具条归 `Toolbar`，
    *   页面自己按顺序写两行标签，中间想插扫描进度条就插。
    * - **不设 TopBar 这一级**。顶栏只放全局的（应用名/返回/搜索/窗口控制），
    *   页内标题属于页面自己 —— 它随内容滚动，不是外壳。
@@ -40,9 +40,9 @@
   let { kicker, title, subtitle, meta, cover, actions }: Props = $props();
 </script>
 
-<header class="page-header" class:with-cover={cover !== undefined}>
+<header class="content-header" class:with-cover={cover !== undefined}>
   {#if cover !== undefined}
-    <div class="ph-cover">
+    <div class="ch-cover">
       {#if cover}
         <img src={cover} alt="" />
       {:else}
@@ -51,20 +51,20 @@
     </div>
   {/if}
 
-  <div class="ph-text">
-    {#if kicker}<span class="page-kicker">{kicker}</span>{/if}
+  <div class="ch-text">
+    {#if kicker}<span class="ch-kicker">{kicker}</span>{/if}
     <h1>{title}</h1>
     {#if subtitle}<p>{subtitle}</p>{/if}
-    {#if meta}<div class="ph-meta">{meta}</div>{/if}
+    {#if meta}<div class="ch-meta">{meta}</div>{/if}
   </div>
 
   {#if actions}
-    <div class="ph-actions">{@render actions()}</div>
+    <div class="ch-actions">{@render actions()}</div>
   {/if}
 </header>
 
 <style>
-  .page-header {
+  .content-header {
     display: flex;
     align-items: center;
     gap: 16px;
@@ -72,7 +72,7 @@
     min-width: 0;
   }
 
-  .ph-cover {
+  .ch-cover {
     flex: none;
     display: grid;
     place-items: center;
@@ -80,19 +80,19 @@
     height: 92px;
     border-radius: 12px;
     overflow: hidden;
-    background: var(--bg-cover);
-    color: var(--text-faint);
+    background: var(--surface-cover);
+    color: var(--text-3);
     font-size: 30px;
     box-shadow: 0 12px 30px var(--shadow);
   }
 
-  .ph-cover img {
+  .ch-cover img {
     width: 100%;
     height: 100%;
     object-fit: cover;
   }
 
-  .ph-text {
+  .ch-text {
     flex: 1;
     min-width: 0;
   }
@@ -115,17 +115,17 @@
   p {
     margin: 0;
     font-size: 12px;
-    color: var(--text-dim);
+    color: var(--text-2);
   }
 
-  .ph-meta {
+  .ch-meta {
     margin-top: 4px;
     font-size: 11.5px;
-    color: var(--text-dim);
+    color: var(--text-2);
     font-variant-numeric: tabular-nums;
   }
 
-  .ph-actions {
+  .ch-actions {
     display: flex;
     align-items: center;
     gap: 6px;

@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from '../components/Icon.svelte';
-  import PageHeader from '../components/PageHeader.svelte';
-  import PageToolbar from '../components/PageToolbar.svelte';
+  import Header from '../components/content/Header.svelte';
+  import Toolbar from '../components/content/Toolbar.svelte';
   import TrackList from '../components/TrackList.svelte';
   import { artworkUrl } from '../lib/artwork';
   import { formatDurationLong } from '../lib/format';
@@ -35,7 +35,7 @@
    * 标题区数据。
    *
    * 三个视图的头部形状原本分成两套（歌单有一张 92px 封面，统计只有文字），
-   * 分别写在 ViewHeader 的两个 `{#if}` 分支里。现在归一到 PageHeader 的
+   * 分别写在 ViewHeader 的两个 `{#if}` 分支里。现在归一到 Header 的
    * 「有封面 / 无封面」两态，差别只剩数据。
    */
   const header = $derived.by(() => {
@@ -108,7 +108,7 @@
 </script>
 
 <div class="page-pad">
-  <PageHeader
+  <Header
     kicker={header.kicker}
     title={header.title}
     subtitle={header.subtitle}
@@ -149,9 +149,9 @@
         <button class="btn" onclick={() => void history.clear()}>清空历史</button>
       {/if}
     {/snippet}
-  </PageHeader>
+  </Header>
 
-  <PageToolbar
+  <Toolbar
     tabs={view.kind === 'playlist' ? undefined : BUILTIN_TABS}
     active={view.kind}
     ontab={switchView}
@@ -189,7 +189,7 @@
     selectedIndex={selection.selectedIndex}
     selection={selection.selection}
     restoreScrollTop={list.restoreScrollTop}
-    rowHeight={ui.settings.density === 'compact' ? 42 : 52}
+    rowHeight={ui.rowHeight}
     playing={playerState?.status === 'playing'}
     onplay={(index) => void list.playIndex(index)}
     onselect={handleSelect}

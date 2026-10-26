@@ -1,0 +1,75 @@
+/* layout.css — 四区席位：**只有网格与容器，没有零件外观**。
+ *
+ * 三行两列：TitleBar / (Sidebar | Content) / PlayerDock。行号列号只在这里写一次 ——
+ * 之前 `.app` 在 base.css、`.page-content`/`.player-dock` 在 pages.css，改一处翻三个文件。
+ *
+ * 仍待迁移（B3b）：`.sidebar` 的 border/padding/background 是 Sidebar 自己的皮，
+ * `.player-dock` 的 z-index 属于播放条层级。本批只保证"席位集中"，外观随壳体换皮进组件。
+ */
+
+/* 三行两列：标题栏 / 侧栏 + 内容 / 播放条。**只有这一处定义**。 */
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-rows: var(--titlebar-h) 1fr var(--player-h);
+  height: 100%;
+}
+
+.sidebar {
+  grid-row: 2 / 3;
+  grid-column: 1;
+  border-right: 1px solid var(--line);
+  padding: 8px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  background: var(--surface-2);
+  backdrop-filter: blur(18px);
+}
+
+/* ---------------- 骨架 ---------------- */
+
+/* `.app` 的三行网格与 `.sidebar` / `.main` 的行号定义在 base.css（唯一来源），
+ * 这里只补新加的两个容器。 */
+
+.page-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* 顶栏从 36 提到 46 并吸收了 TopBar，页面顶部不再有那一层 14px 内边距，
+   * 这里补回来（原来 6 是叠在 TopBar 的 padding 上的） */
+  padding: 18px 22px 28px;
+}
+
+/* 固定头（不随列表滚动）的页面用它给零件补横向 padding：
+ * PageHeader / PageToolbar 自己不带宽边距 —— 这样同一个零件既能放进
+ * `.page-scroll`（已带 22px），也能放在这里。 */
+.page-pad {
+  padding: 4px 22px 0;
+}
+
+.player-dock {
+  grid-row: 3;
+  grid-column: 1 / -1;
+  position: relative;
+  z-index: 20;
+}
+
+.main {
+  grid-row: 2 / 3;
+  grid-column: 2;
+  /* 用 flex 而不是 grid-template-rows：横幅、筛选条、扫描条都是可选的，
+     固定行数会在它们出现时把列表挤到隐式行里，高度塌掉 */
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}

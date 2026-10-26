@@ -18,6 +18,7 @@
   import { onMount } from 'svelte';
   import AppShell from './components/AppShell.svelte';
   import OverlayHost from './components/OverlayHost.svelte';
+  import KitView from './views/KitView.svelte';
   import LibraryView from './views/LibraryView.svelte';
   import HomeView from './views/HomeView.svelte';
   import NowPlayingView from './views/NowPlayingView.svelte';
@@ -28,12 +29,22 @@
   import { boot } from './lib/boot';
   import { onKeydown } from './lib/keyboard';
   import { createMediaSession, type MediaSessionBridge } from './lib/media-session';
-  import { applyLook, writeLook } from './lib/look';
+  import { applyLook, readRowHeight, writeLook } from './lib/look';
   import { list } from './stores/list.svelte';
   import { notify } from './stores/notify.svelte';
   import { player } from './stores/player.svelte';
   import { lyrics } from './stores/lyrics.svelte';
   import { ui } from './stores/ui.svelte';
+
+  /**
+   * Kit 演示页只在 dev 构建里可达：`?page=kit`。
+   *
+   * **不注册进 AppPage**：它是零件自测页，不是产品页面。进了 AppPage 就要处理
+   * 持久化（用户上次停在 kit，下次启动还落在 demo 上），还要在侧栏给入口 ——
+   * 两条都不该为一个自测页付。
+   */
+  const showKit =
+    import.meta.env.DEV && new URLSearchParams(window.location.search).get('page') === 'kit';
 
   let mediaSession: MediaSessionBridge | null = null;
 
@@ -62,6 +73,8 @@
     const look = { theme: ui.settings.theme, density: ui.settings.density };
     applyLook(look);
     writeLook(look);
+    // 行高只有 CSS 一处定义，这里把它的当前值同步给虚拟列表
+    ui.rowHeight = readRowHeight();
   });
 
   // 封面主色：切歌或开关变化时重新提取；异步结果带取消标记，防止旧封面覆盖新颜色
@@ -69,7 +82,7 @@
     const artworkId = player.state?.current?.artworkId ?? null;
     if (!ui.settings.accentFromArtwork || !artworkId) {
       document.documentElement.style.removeProperty('--accent');
-      document.documentElement.style.removeProperty('--accent-soft');
+      document.documentElement.style.removeProperty('--accent-weak');
       return;
     }
 
@@ -79,7 +92,7 @@
     void accentForArtwork(url).then((hex) => {
       if (cancelled || !hex) return;
       document.documentElement.style.setProperty('--accent', hex);
-      document.documentElement.style.setProperty('--accent-soft', `${hex}33`);
+      document.documentElement.style.setProperty('--accent-weak', `${hex}33`);
     });
     return () => {
       cancelled = true;
@@ -129,7 +142,9 @@
 <svelte:window onkeydown={onKeydown} />
 
 <AppShell>
-  {#if ui.page === 'home'}
+  {#if showKit}
+    <KitView />
+  {:else if ui.page === 'home'}
     {#if ui.libraryDetail}<LibraryView />{:else}<HomeView />{/if}
   {:else if ui.page === 'nowPlaying'}
     <NowPlayingView />

@@ -11,7 +11,7 @@ import { expect, test, type Page } from '@playwright/test';
  *
  * 这一版使用：
  * - 壳体：`.titlebar`（唯一全局条）、`.sidebar .nav-item`（一级导航）
- * - 页内：`.page-header h1`（PageHeader 标题）、`.page-toolbar .pt-tab`（工具条）
+ * - 页内：`.main h1`（Header 标题，故意不带类名 —— 标题类名会随批次变）、`.content-toolbar .pt-tab`（Toolbar）
  * - 列表：`.list .row`（虚拟列表）、`.tt-row`（首页紧凑表）
  * 版式细节（`.page-pad`、`.tt-*`、间距）**不参与断言** —— 那些会继续变。
  *
@@ -42,7 +42,7 @@ function firstRow(page: Page) {
 async function openLibrary(page: Page): Promise<void> {
   await page.goto('/');
   await page.locator('.main button', { hasText: '浏览全部曲目' }).click();
-  await expect(page.locator('.main .page-header h1')).toHaveText('全部曲目');
+  await expect(page.locator('.main h1')).toHaveText('全部曲目');
   await firstRow(page).waitFor({ state: 'visible' });
 }
 
@@ -52,8 +52,8 @@ test('启动装配：顶栏四件 + 首页标题 + 播放条空态', async ({ pa
   await expect(page.locator('.titlebar .tb-search input')).toBeVisible();
   await expect(page.locator('.titlebar .tb-back')).toBeDisabled();
   // 页内标题归 PageHeader（不是顶栏）
-  await expect(page.locator('.main .page-header h1')).toHaveText('首页');
-  await expect(page.locator('.main .page-header .page-kicker')).toHaveText('YOUR LIBRARY');
+  await expect(page.locator('.main h1')).toHaveText('首页');
+  await expect(page.locator('.main .ch-kicker')).toHaveText('YOUR LIBRARY');
   // 首页三段都是紧凑表（TrackTable），不是虚拟列表
   await expect(page.locator('.main .tt-row').first()).toBeVisible();
   await expect(page.locator('.main .list')).toHaveCount(0);
@@ -69,31 +69,31 @@ test('歌单：侧栏点开 → 标题与列表来自该歌单', async ({ page }
   const first = page.locator('.sidebar .playlist-item').first();
   const name = (await first.getAttribute('title'))?.split(' · ')[0] ?? '';
   await first.click();
-  await expect(page.locator('.main .page-header h1')).toHaveText(name);
+  await expect(page.locator('.main h1')).toHaveText(name);
   await expect(firstRow(page)).toBeVisible();
   // 曲库三 tab 在歌单视图里不出现（工具条全空时整条不渲染）
-  await expect(page.locator('.main .page-toolbar')).toHaveCount(0);
+  await expect(page.locator('.main .content-toolbar')).toHaveCount(0);
 });
 
 test('导航链：曲库 → 工具条切最近播放 → 顶栏返回', async ({ page }) => {
   await openLibrary(page);
   // 曲库三个内置视图互切（这是本轮补上的缺口）
-  const tabs = page.locator('.main .page-toolbar .pt-tab');
+  const tabs = page.locator('.main .content-toolbar .pt-tab');
   await expect(tabs).toHaveCount(3);
-  await expect(page.locator('.main .page-toolbar .pt-tab.active')).toHaveText('全部曲目');
+  await expect(page.locator('.main .content-toolbar .pt-tab.active')).toHaveText('全部曲目');
 
   await tabs.filter({ hasText: '最近播放' }).click();
-  await expect(page.locator('.main .page-header h1')).toHaveText('最近播放');
-  await expect(page.locator('.main .page-toolbar .pt-tab.active')).toHaveText('最近播放');
+  await expect(page.locator('.main h1')).toHaveText('最近播放');
+  await expect(page.locator('.main .content-toolbar .pt-tab.active')).toHaveText('最近播放');
 
   // 返回栈：这一步把「最近播放」退掉，回到「全部曲目」
   await page.locator('.titlebar .tb-back').click();
-  await expect(page.locator('.main .page-header h1')).toHaveText('全部曲目');
+  await expect(page.locator('.main h1')).toHaveText('全部曲目');
   await expect(page.locator('.titlebar .tb-back')).toBeEnabled();
 
   // 再退一步回到首页仪表盘，此时栈空 → 返回键 disabled
   await page.locator('.titlebar .tb-back').click();
-  await expect(page.locator('.main .page-header h1')).toHaveText('首页');
+  await expect(page.locator('.main h1')).toHaveText('首页');
   await expect(page.locator('.titlebar .tb-back')).toBeDisabled();
 });
 
@@ -113,11 +113,11 @@ test('播放链路：点行播放 → 播放条与队列激活行', async ({ pag
 test('设置页：标题与工具条分两行 + 区块 tab + 主题切换生效', async ({ page }) => {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
-  await expect(page.locator('.main .page-header h1')).toHaveText('设置');
-  await expect(page.locator('.main .page-header .page-kicker')).toHaveText('PREFERENCES');
+  await expect(page.locator('.main h1')).toHaveText('设置');
+  await expect(page.locator('.main .ch-kicker')).toHaveText('PREFERENCES');
 
   // 标题与工具条是两个零件、两行：标题不再装导航，tab 也不在标题里
-  const tabs = page.locator('.main .page-toolbar .pt-tab');
+  const tabs = page.locator('.main .content-toolbar .pt-tab');
   await expect(tabs).toHaveCount(6);
   await expect(tabs.first()).toHaveAttribute('aria-current', 'true');
 

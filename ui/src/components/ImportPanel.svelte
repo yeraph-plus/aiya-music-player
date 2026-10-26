@@ -296,7 +296,7 @@
     flex-wrap: wrap;
   }
   .import-error {
-    border: 1px solid var(--danger, #c33);
+    border: 1px solid var(--danger);
     border-radius: 6px;
     padding: 8px 10px;
     font-size: 12px;
@@ -306,7 +306,7 @@
     line-height: 1.6;
   }
   .album-card {
-    border: 1px solid var(--border);
+    border: 1px solid var(--line);
     border-radius: 8px;
     padding: 10px;
     display: flex;
@@ -323,7 +323,7 @@
   .rec {
     margin-left: auto;
     font-size: 10.5px;
-    color: var(--text-dim);
+    color: var(--text-2);
   }
   .rec.strong {
     color: var(--accent);
@@ -341,7 +341,7 @@
   .diff-table th {
     padding: 2px 6px;
     text-align: left;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--line);
   }
   .diff-table .changed {
     color: var(--accent);
@@ -368,7 +368,7 @@
     line-height: 1.6;
   }
   .apply-summary.has-failed {
-    border-color: var(--danger, #c33);
+    border-color: var(--danger);
   }
   .apply-result {
     color: var(--accent);
@@ -376,10 +376,10 @@
     line-height: 1.5;
   }
   .apply-result.has-failed {
-    color: var(--text);
+    color: var(--text-1);
   }
   .fail-line.conflict {
-    color: var(--warn, #d90);
+    color: var(--warn);
   }
   .mode-select {
     width: auto;
