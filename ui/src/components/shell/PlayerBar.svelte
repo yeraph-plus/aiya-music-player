@@ -1,5 +1,4 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte';
   import type { PlayerState } from '../../lib/ipc/generated/PlayerState';
   import { artworkUrl } from '../../lib/artwork';
   import {
@@ -14,12 +13,13 @@
     isHiRes,
   } from '../../lib/audio-format';
   import { formatTime, repeatLabel } from '../../lib/format';
+  import { overlay } from '../../stores/overlay.svelte';
+  import { SlidersHorizontal } from '@lucide/svelte';
   import Icon from '../Icon.svelte';
   import Cover from '../ui/Cover.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import Popover from '../ui/Popover.svelte';
   import Slider from '../ui/Slider.svelte';
-  import { AudioLines, SlidersHorizontal } from '@lucide/svelte';
 
   /**
    * 底部播放条：**唯一常驻的播放控制面**。
@@ -30,17 +30,23 @@
    *    它在亮色主题下拇指是深色圆点、深色主题下又是浅色，两套值各写一遍。
    *    **进度用 `oncommit`、音量用 `oninput`**：拖动中每帧 seek 会让 Rust 侧
    *    反复 flush 输出缓冲（实测有咔哒声），音量则相反 —— 用户期待拖的时候就听到。
-   * 2. 八个图标键 → `IconButton`（圆形 + `solid` 只给中间那颗播放键）。
-   * 3. 封面 → `Cover size="md"`（48px，旧 `.cover.lg` 在曲库里也是 48 ——
-   *    kit 的四档 22/34/48/92 里 92 是详情页头，播放条用不到）。
+   * 2. 图标键 → `IconButton`（圆形 + `solid` 只给中间那颗播放键）。
+   * 3. 封面 → `Cover size="md"`（48px）。
    *
-   * 倍速面板仍是 `Popover` + `Slider`（B3b-1 已迁），这里不动。
+   * docs/25 §6 按键重排（用户五点反馈）：
+   * - 左侧歌曲区域**本身就是正在播放页的入口**（侧栏席位已撤）；
+   * - 主五键 = 加入歌单 / 上一首 / 播放 / 下一首 / 模式单键循环；
+   * - 队列与 EQ 改走窗口左缘的 `SideDrawer`（AppShell 宿主），这里只留
+   *   触发键——气泡定位抖动的根源（floating-ui 测量+翻转）整个消失；
+   * - 倍速保持 Popover 气泡（小面板贴键，无抖动问题），迁到右侧键区。
    */
 
   interface Props {
     player: PlayerState | null;
     queueOpen: boolean;
-    nowPlayingActive: boolean;
+    eqOpen: boolean;
+    /** EQ 是否启用（启用时触发键打点，不打开抽屉也能看出状态） */
+    eqEnabled: boolean;
     ontoggle: () => void;
     onnext: () => void;
     onprev: () => void;
@@ -48,26 +54,21 @@
     onvolume: (value: number) => void;
     onmute: () => void;
     onrate: (rate: number) => void;
-    onrepeat: () => void;
-    onshuffle: () => void;
-    /** 队列抽屉开合（Popover 受控） */
+    /** 播放模式单键循环（列表循环→单曲循环→随机→顺序） */
+    onmode: () => void;
+    /** 队列抽屉开合（ui store 唯一入口；SideDrawer 宿主在 AppShell） */
     onqueueopen: (open: boolean) => void;
-    /** 队列抽屉内容（关闭时不渲染——bits-ui 卸载 Content） */
-    queuepanel: Snippet;
-    /** EQ 抽屉开合（与队列互斥，ui store 负责清理，docs/25 §1） */
-    eqOpen: boolean;
-    /** EQ 是否启用（启用时触发键打点，不打开抽屉也能看出状态） */
-    eqEnabled: boolean;
+    /** EQ 抽屉开合（与队列互斥，ui store 负责清理） */
     oneqopen: (open: boolean) => void;
-    /** EQ 抽屉内容 */
-    eqpanel: Snippet;
+    /** 跳正在播放页（左侧歌曲区域的点击目标） */
     onshownowplaying: () => void;
   }
 
   let {
     player,
     queueOpen,
-    nowPlayingActive,
+    eqOpen,
+    eqEnabled,
     ontoggle,
     onnext,
     onprev,
@@ -75,14 +76,9 @@
     onvolume,
     onmute,
     onrate,
-    onrepeat,
-    onshuffle,
+    onmode,
     onqueueopen,
-    queuepanel,
-    eqOpen,
-    eqEnabled,
     oneqopen,
-    eqpanel,
     onshownowplaying,
   }: Props = $props();
 
@@ -110,10 +106,38 @@
   const tooltip = $derived(audioTooltip(audio));
 
   const volume = $derived(player?.muted ? 0 : (player?.volume ?? 0.85));
+
+  /**
+   * 播放模式（单键循环的四态）。后端字段是 repeat + shuffle 两个正交开关，
+   * 这里合成用户心智里的一个"模式"：随机优先显示（shuffle 开着就是随机，
+   * 不管 repeat 是什么）。
+   */
+  type PlayMode = 'all' | 'one' | 'shuffle' | 'sequential';
+  const mode = $derived<PlayMode>(
+    player?.shuffle ? 'shuffle' : (player?.repeat ?? 'off') === 'one' ? 'one' : (player?.repeat ?? 'off') === 'all' ? 'all' : 'sequential',
+  );
+  const modeLabel = $derived(
+    mode === 'shuffle' ? '随机播放' : repeatLabel(mode === 'sequential' ? 'off' : mode),
+  );
+  /** PlayMode → Icon 语义名（all 用 repeat 图标，one 用 repeatOne） */
+  const modeIcon = $derived(
+    mode === 'all' ? 'repeat' : mode === 'one' ? 'repeatOne' : mode,
+  );
+
+  /** 当前曲目加入歌单：复用全局 addToPlaylist 对话框（OverlayHost 渲染） */
+  function addCurrentToPlaylist(): void {
+    const id = player?.current?.id;
+    if (id) overlay.dialog = { kind: 'addToPlaylist', ids: [id] };
+  }
 </script>
 
 <footer class="player">
-  <div class="now">
+  <!--
+    歌曲区域 = 正在播放页入口（docs/25 §6：侧栏席位撤了，入口搬到这里——
+    "正在听什么"的信息本身就在这，点它是最近的路）。无曲目也允许点进
+    空态页（页面自己会说明"未在播放"），不做 disabled。
+  -->
+  <button class="now" onclick={onshownowplaying} title="正在播放" aria-label="正在播放详情">
     <Cover
       src={player?.current?.artworkId ? artworkUrl(player.current.artworkId, 96) : null}
       size="md"
@@ -142,17 +166,17 @@
         {/if}
       </div>
     </div>
-  </div>
+  </button>
 
   <div class="transport">
     <div class="controls">
       <IconButton
-        label={player?.shuffle ? '随机播放：开' : '随机播放：关'}
+        label="把当前曲目加入播放列表"
         round
-        pressed={player?.shuffle ?? false}
-        onclick={onshuffle}
+        disabled={!hasTrack}
+        onclick={addCurrentToPlaylist}
       >
-        <Icon name="shuffle" />
+        <Icon name="plus" />
       </IconButton>
 
       <IconButton label="上一首" round disabled={!hasTrack} onclick={onprev}>
@@ -180,55 +204,10 @@
         <Icon name="next" size={18} />
       </IconButton>
 
-      <IconButton
-        label={repeatLabel(player?.repeat ?? 'off')}
-        round
-        pressed={player?.repeat !== 'off'}
-        onclick={onrepeat}
-      >
-        <Icon name={player?.repeat === 'one' ? 'repeatOne' : 'repeat'} />
+      <!-- 模式单键循环：列表循环 → 单曲循环 → 随机 → 顺序 -->
+      <IconButton label={`播放模式：${modeLabel}`} round pressed={mode !== 'sequential'} onclick={onmode}>
+        <Icon name={modeIcon} />
       </IconButton>
-
-      <Popover
-        open={rateOpen}
-        onopenchange={(value) => (rateOpen = value)}
-        side="top"
-        align="center"
-        sideOffset={12}
-      >
-        {#snippet trigger(props)}
-          <button
-            {...props}
-            class={`rate-chip${rate !== 1 ? ' on' : ''}`}
-            ondblclick={() => onrate(1)}
-            aria-label="播放速度"
-            title={`播放速度 ${formatRate(rate)}（双击复位 1.0×）`}
-          >
-            {formatRate(rate)}
-          </button>
-        {/snippet}
-
-        <div class="rate-panel">
-          <div class="rate-head">
-            <span>播放速度</span>
-            <button class="rate-reset" onclick={() => onrate(1)}>复位</button>
-          </div>
-          <Slider
-            label="播放速度"
-            value={rate}
-            min={AUDIO_RATE_MIN}
-            max={AUDIO_RATE_MAX}
-            step={AUDIO_RATE_STEP}
-            oninput={(value) => onrate(value)}
-            width="100%"
-          />
-          <div class="rate-scale">
-            <span>{formatRate(AUDIO_RATE_MIN)}</span>
-            <span>1.0×</span>
-            <span>{formatRate(AUDIO_RATE_MAX)}</span>
-          </div>
-        </div>
-      </Popover>
     </div>
 
     <div class="timeline">
@@ -255,63 +234,75 @@
   </div>
 
   <div class="right">
-    <IconButton label="正在播放" round active={nowPlayingActive} onclick={onshownowplaying}>
-      <AudioLines size={17} />
-    </IconButton>
     <!--
-      EQ 抽屉（docs/25 §1 T3）：与队列抽屉同一套壳（裸 button + Popover），
-      互斥由 ui store 的 setEqDrawer/setQueue 负责。启用时键面右下打点——
-      EQ 是"开着生效"的能力，不点开抽屉也该看得见状态。
+      队列 / EQ 抽屉触发键（docs/25 §6）：内容宿主是 AppShell 的 SideDrawer
+      （窗口左缘滑出，几何确定不抖）。这里只是普通开关键：aria-expanded
+      手动同步，外点/Esc/焦点还原全部由抽屉负责。不用 IconButton：
+      EQ 的"生效中"打点需要 relative 定位锚点，裸 button 自持样式。
     -->
+    <button
+      class="drawer-btn"
+      aria-expanded={queueOpen}
+      aria-label={`播放队列（${player?.queueLength ?? 0} 首）`}
+      title={`播放队列（${player?.queueLength ?? 0} 首）`}
+      onclick={() => onqueueopen(!queueOpen)}
+    >
+      <Icon name="queue" />
+    </button>
+    <button
+      class="drawer-btn"
+      class:on={eqEnabled}
+      aria-expanded={eqOpen}
+      aria-label={`均衡器（${eqEnabled ? '已启用' : '已关闭'}）`}
+      title={`均衡器（${eqEnabled ? '已启用' : '已关闭'}）`}
+      onclick={() => oneqopen(!eqOpen)}
+    >
+      <SlidersHorizontal size={16} />
+      {#if eqEnabled}<span class="drawer-dot" aria-hidden="true"></span>{/if}
+    </button>
+
+    <!-- 倍速：保持气泡（小面板贴键无抖动问题），不进抽屉 -->
     <Popover
-      open={eqOpen}
-      onopenchange={oneqopen}
+      open={rateOpen}
+      onopenchange={(value) => (rateOpen = value)}
       side="top"
       align="end"
-      sideOffset={8}
-      contentClass="queue-pop"
+      sideOffset={12}
     >
       {#snippet trigger(props)}
         <button
           {...props}
-          class="drawer-btn"
-          class:on={eqEnabled}
-          aria-label={`均衡器（${eqEnabled ? '已启用' : '已关闭'}）`}
-          title={`均衡器（${eqEnabled ? '已启用' : '已关闭'}）`}
+          class={`rate-chip${rate !== 1 ? ' on' : ''}`}
+          ondblclick={() => onrate(1)}
+          aria-label="播放速度"
+          title={`播放速度 ${formatRate(rate)}（双击复位 1.0×）`}
         >
-          <SlidersHorizontal size={16} />
-          {#if eqEnabled}<span class="drawer-dot" aria-hidden="true"></span>{/if}
+          {formatRate(rate)}
         </button>
       {/snippet}
-      {@render eqpanel()}
+
+      <div class="rate-panel">
+        <div class="rate-head">
+          <span>播放速度</span>
+          <button class="rate-reset" onclick={() => onrate(1)}>复位</button>
+        </div>
+        <Slider
+          label="播放速度"
+          value={rate}
+          min={AUDIO_RATE_MIN}
+          max={AUDIO_RATE_MAX}
+          step={AUDIO_RATE_STEP}
+          oninput={(value) => onrate(value)}
+          width="100%"
+        />
+        <div class="rate-scale">
+          <span>{formatRate(AUDIO_RATE_MIN)}</span>
+          <span>1.0×</span>
+          <span>{formatRate(AUDIO_RATE_MAX)}</span>
+        </div>
+      </div>
     </Popover>
-    <!--
-      队列抽屉（B5a）：kit Popover 整壳接管。触发键的 aria-expanded、Esc、
-      外点关闭、关闭后焦点还原全部由 bits-ui 负责——取代 QueuePanel 里手写的
-      svelte:window 两件套（外点 + Esc）。触发器不能复用 IconButton：
-      bits-ui 的 props（含它的 onclick）必须原样展开到触发元素上，而 IconButton
-      是固定签名组件；这里按 rate-chip 的先例用带 scoped 样式的裸 button。
-    -->
-    <Popover
-      open={queueOpen}
-      onopenchange={onqueueopen}
-      side="top"
-      align="end"
-      sideOffset={8}
-      contentClass="queue-pop"
-    >
-      {#snippet trigger(props)}
-        <button
-          {...props}
-          class="drawer-btn"
-          aria-label={`播放队列（${player?.queueLength ?? 0} 首）`}
-          title={`播放队列（${player?.queueLength ?? 0} 首）`}
-        >
-          <Icon name="queue" />
-        </button>
-      {/snippet}
-      {@render queuepanel()}
-    </Popover>
+
     <IconButton label={player?.muted ? '取消静音' : '静音'} round onclick={onmute}>
       <Icon name={player?.muted || (player?.volume ?? 0) === 0 ? 'mute' : 'volume'} />
     </IconButton>
@@ -349,13 +340,27 @@
     background: color-mix(in srgb, var(--surface-3) 90%, transparent);
   }
 
-  /* ---------------- 左：当前曲目 ---------------- */
+  /* ---------------- 左：当前曲目（= 正在播放页入口） ---------------- */
 
   .now {
     display: flex;
     align-items: center;
     gap: 10px;
     min-width: 0;
+    padding: 4px 6px;
+    margin: -4px -6px; /* 抵消内距：视觉占位与原 div 一致，只多出悬停热区 */
+    border-radius: 10px;
+    text-align: left;
+    transition: background var(--dur-fast) var(--ease);
+  }
+
+  .now:hover {
+    background: var(--surface-hover);
+  }
+
+  .now:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 
   .meta {
@@ -470,7 +475,7 @@
     text-align: right;
   }
 
-  /* ---------------- 右：正在播放 / 队列 / 音量 ---------------- */
+  /* ---------------- 右：队列 / EQ / 倍速 / 音量 ---------------- */
 
   .right {
     display: flex;
@@ -487,9 +492,9 @@
 
   /* ---------------- 倍速面板（Popover 内容） ---------------- */
 
-  /* 抽屉触发键（队列/EQ 共用）：IconButton 是固定签名组件（bits-ui 的 props
-     无法展开到它身上），按 rate-chip 的先例用裸 button + 同款外观（30px 圆形
-     ghost 键） */
+  /* 抽屉触发键（队列/EQ 共用）：内容宿主在 AppShell 的 SideDrawer，这里只是
+     开关键。30px 圆形 ghost 键外观（与 IconButton 同款，但要挂 aria-expanded
+     和 EQ 打点的 relative 锚点，裸 button 自持样式）。 */
   .drawer-btn {
     position: relative;
     display: inline-grid;
@@ -509,8 +514,7 @@
     color: var(--text-1);
   }
 
-  /* data-state 由 bits-ui 写：open = 抽屉开着（与旧 pressed 高亮同语义） */
-  .drawer-btn[data-state='open'] {
+  .drawer-btn[aria-expanded='true'] {
     background: var(--accent-weak);
     color: var(--accent-text);
   }
@@ -549,7 +553,7 @@
     background: var(--surface-hover);
   }
 
-  /* 非 1× 高亮：和 shuffle / repeat 的开启态同一套语义 */
+  /* 非 1× 高亮：和模式键的开启态同一套语义 */
   .rate-chip.on {
     color: var(--accent);
     background: var(--accent-weak);

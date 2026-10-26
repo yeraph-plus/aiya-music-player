@@ -88,12 +88,23 @@
       octx.fillRect(i * slot, BH - h, Math.max(1, slot - 0.5), h);
     }
 
-    // 大半径模糊 + 透明度 + 略微出血：频谱变成环境光而不是一排柱子
-    ctx.filter = 'blur(26px)';
-    ctx.globalAlpha = 0.55;
-    ctx.drawImage(off, -width * 0.05, height * 0.25, width * 1.1, height * 0.85);
-    ctx.filter = 'none';
-    ctx.globalAlpha = 1;
+    if (immersive) {
+      // 沉浸档（正在播放页）：**不虚化，直出**（用户反馈：关掉背景虚化，
+      // 直接显示频谱层）。柱子贴底满幅、不透明度拉高——它是本页的主视觉，
+      // 不是环境光。standard 档（列表页）才是"柔化成光"的画法。
+      ctx.filter = 'none';
+      ctx.globalAlpha = 0.9;
+      ctx.drawImage(off, 0, height * 0.3, width, height * 0.7);
+      ctx.filter = 'none';
+      ctx.globalAlpha = 1;
+    } else {
+      // 大半径模糊 + 透明度 + 略微出血：频谱变成环境光而不是一排柱子
+      ctx.filter = 'blur(26px)';
+      ctx.globalAlpha = 0.55;
+      ctx.drawImage(off, -width * 0.05, height * 0.25, width * 1.1, height * 0.85);
+      ctx.filter = 'none';
+      ctx.globalAlpha = 1;
+    }
 
     frameId = requestAnimationFrame(draw);
   }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Component } from 'svelte';
   import {
+    ArrowRight,
     Folder,
     GripVertical,
     ListVideo,
@@ -29,7 +30,7 @@
    * 直接 import lucide —— 同一套界面两种图标来源，strokeWidth 还有 1.3/1.7/1.8
    * 三种。现在只剩这张表：**要用新图标就加一行**，不要回来手画 path。
    *
-   * 只保留实际用到的 19 个。历史上有、现在没有的（search/clock/flame/list/
+   * 只保留实际用到的 20 个。历史上有、现在没有的（search/clock/flame/list/
    * settings/lyrics/check/more/spectrum）已删 —— 需要时一行就够，留着没人用的
    * 映射只会让人以为功能还在。
    */
@@ -41,6 +42,7 @@
     shuffle: Shuffle,
     repeat: Repeat,
     repeatOne: Repeat1,
+    sequential: ArrowRight,
     volume: Volume2,
     mute: VolumeX,
     queue: ListVideo,

@@ -126,30 +126,34 @@
   line-height: 1.9;
 }
 
-/* B5a：抽屉壳随 Popover portal 渲染，几何自带（不再锚定 .player-dock）。
-   `.queue-pop` 在 kit Popover 的 k-pop 之上覆盖小面板默认外观。 */
-.k-pop.queue-pop {
-  padding: 0;
-  background: var(--surface-2);
-  overflow: hidden;
-}
-
+/* docs/25 §6：抽屉壳是 SideDrawer（窗口左缘滑出，AppShell 宿主），
+   内容全出血铺满抽屉面板——几何由壳负责，这里只归零旧气泡形状。 */
 .queue-float {
-  width: 360px;
-  max-width: calc(100vw - 24px);
-  height: min(460px, calc(100vh - 160px));
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  box-shadow: none; /* 外观由 k-pop 的投影负责，双投影会发灰 */
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 
-/* T3（docs/25 §1）：EQ 抽屉体。与队列抽屉同宽；10 段滑杆按 360px 收紧——
-   EqPanel 默认段宽 34px + 间距 14px 是给整页准备的（≈500px），抽屉里
-   用 :global 覆盖段宽与间距（EqPanel 的样式是 scoped 的）。 */
+/* 面板组的边线与底色（气泡时代的左缘线/底）在抽屉里由壳提供 */
+.sd-panel .queue-panel {
+  border-left: none;
+  background: transparent;
+}
+
+/* EQ 抽屉体：铺满抽屉；10 段滑杆仍按 ~380px 收紧——EqPanel 默认段宽
+   34px + 间距 14px 是给整页准备的（≈500px） */
 .eq-drawer-body {
-  width: 360px;
-  max-width: calc(100vw - 24px);
-  height: min(420px, calc(100vh - 160px));
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.eq-drawer-body .eq-panel {
+  flex: 1;
+  min-height: 0;
 }
 
 .eq-drawer-body .eq-bands {

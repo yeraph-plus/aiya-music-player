@@ -247,6 +247,7 @@ class UiStore {
     this.page = page;
     if (page !== 'playlist') this.playlistId = null;
     this.queueOpen = false;
+    this.eqOpen = false;
     this.scheduleUiSave();
     if (page === 'settings') {
       this.diagnostics = null;
@@ -270,6 +271,7 @@ class UiStore {
     this.artistId = null;
     this.albumId = null;
     this.queueOpen = false;
+    this.eqOpen = false;
   }
 
   /**
@@ -284,6 +286,7 @@ class UiStore {
     this.artistId = null;
     this.albumId = null;
     this.queueOpen = false;
+    this.eqOpen = false;
   }
 
   /**
@@ -299,6 +302,7 @@ class UiStore {
     this.artistId = null;
     this.albumId = null;
     this.queueOpen = false;
+    this.eqOpen = false;
   }
 
   /**
@@ -318,6 +322,7 @@ class UiStore {
     this.page = kind;
     this.playlistId = null;
     this.queueOpen = false;
+    this.eqOpen = false;
   }
 
   /**

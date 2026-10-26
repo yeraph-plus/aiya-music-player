@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AudioLines, Clock, Flame, House, Library, ListMusic, Plus, Radio, Settings } from '@lucide/svelte';
+  import { Clock, Flame, House, Library, Plus, Radio, Settings } from '@lucide/svelte';
   import { artworkUrl } from '../../lib/artwork';
   import { shortenPath } from '../../lib/format';
   import { library } from '../../stores/library.svelte';
@@ -19,10 +19,11 @@
    * 用 prop 传回调时，AppShell 得给每一条入口写一个转发函数 —— 那次改名的教训是
    * "入口散在模板里，漏一个就变成点了没反应"。现在"我要去哪"直接说给 nav。
    *
-  * ### 一级导航的七项（docs/25 §3 重排）
+  * ### 一级导航的六项（docs/25 §3 重排 + 本轮修订）
 
-  * 正在播放 / 推荐 / 曲库 / 最近播放 / 常听 / FM 电台 / 设置。
-  * - **正在播放置顶**：它是播放态的第一入口，不只在底部播放条。
+  * 推荐 / 曲库 / 最近播放 / 常听 / FM 电台 / 设置。
+  * - **正在播放撤出侧栏**（用户拍板）：唯一入口改在播放条左侧的歌曲区域
+  *   ——"正在听什么"的信息本身就在那里，点它是比找侧栏更短的路。
   * - **「首页」改名「推荐」**：歌单宫格 + 三段预览本来就是推荐位，名字跟上。
   * - **专辑 / 艺人撤出一级导航**（docs/25 §3）：浏览宫格归入曲库页的 tab
   *   （全部曲目 / 专辑 / 艺人，导航式复用 browse 页），一级导航不再给它们
@@ -31,12 +32,6 @@
   */
 
   const PAGES = [
-    {
-      key: 'nowPlaying',
-      label: '正在播放',
-      icon: AudioLines,
-      go: () => nav.go({ kind: 'page', page: 'nowPlaying' }),
-    },
     { key: 'home', label: '推荐', icon: House, go: () => nav.go({ kind: 'dashboard' }) },
     {
       key: 'library',

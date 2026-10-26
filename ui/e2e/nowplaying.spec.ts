@@ -1,13 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * 正在播放页两块可切 + EQ/队列抽屉（docs/25 §1 T3 起常驻）。
+ * 正在播放页两栏沉浸 + EQ/队列抽屉（docs/25 §6 起 SideDrawer 宿主）。
  *
  * 断言的是**行为契约**，不是版式：
- * - 两块切换：SegmentedControl 一次只渲染一块，切走后上一块卸载；
- * - EQ 抽屉：从播放条进入（Popover 受控），预设/滑杆交互同 B6；
- * - 队列抽屉：Popover 受控（开 → 内容出现且触发键 aria-expanded=true；
- *   Esc 关闭且焦点回触发键）；EQ 与队列互斥。跑在浏览器预览的 mock 后端上。
+ * - 正在播放入口：播放条歌曲区域（侧栏无席位）；
+ * - EQ 抽屉：从播放条进入（SideDrawer 受控），预设/滑杆交互同 B6；
+ * - 队列抽屉：开 → 内容出现且触发键 aria-expanded=true；Esc 关闭且焦点回
+ *   触发键；EQ 与队列互斥。跑在浏览器预览的 mock 后端上。
  */
 
 let runtimeErrors: string[] = [];
@@ -30,7 +30,8 @@ function firstRow(page: Page) {
 
 async function openNowPlaying(page: Page): Promise<void> {
   await page.goto('/');
-  await page.locator('.sidebar .nav-item', { hasText: '正在播放' }).click();
+  // docs/25 §6：正在播放页唯一入口是播放条左侧歌曲区域（侧栏席位已撤）
+  await page.locator('footer .now').click();
   await expect(page.locator('.main h1')).toHaveText('未在播放');
 }
 

@@ -132,8 +132,36 @@ class PlayerStore {
     void ipc.player.setShuffle(shuffle).catch((e) => this.fail('setShuffle', e));
   }
 
-  cycleRepeat(): void {
-    void ipc.player.setRepeat('cycle').catch((e) => this.fail('setRepeat', e));
+  /**
+   * 播放模式（用户心智里的"一个键"）：列表循环 / 单曲循环 / 随机 / 顺序。
+   *
+   * 后端没有"模式"这个字段——它是 repeat + shuffle 两个正交开关的组合。
+   * UI 侧组合成单键循环（docs/25 §6）：随机 = shuffle:true + repeat:'all'
+   * （随机播完一轮还想循环）；顺序 = repeat:'off' + shuffle:false。
+   * 两条命令并发下发，状态以 player:state 事件为准。
+   */
+  setMode(mode: 'all' | 'one' | 'shuffle' | 'sequential'): void {
+    const shuffle = mode === 'shuffle';
+    const repeat = mode === 'one' ? 'one' : mode === 'sequential' ? 'off' : 'all';
+    if (shuffle !== (this.state?.shuffle ?? false)) this.setShuffle(shuffle);
+    if (repeat !== (this.state?.repeat ?? 'off')) {
+      void ipc.player.setRepeat(repeat).catch((e) => this.fail('setRepeat', e));
+    }
+  }
+
+  /** 模式单键循环：列表循环 → 单曲循环 → 随机 → 顺序 → 列表循环 */
+  cyclePlayMode(): void {
+    const s = this.state;
+    const current = s?.shuffle
+      ? 'shuffle'
+      : s?.repeat === 'one'
+        ? 'one'
+        : s?.repeat === 'all'
+          ? 'all'
+          : 'sequential';
+    const ORDER = ['all', 'one', 'shuffle', 'sequential'] as const;
+    const next = ORDER[(ORDER.indexOf(current) + 1) % ORDER.length]!;
+    this.setMode(next);
   }
 
   clear(): void {

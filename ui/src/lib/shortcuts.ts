@@ -89,7 +89,7 @@ export const SHORTCUT_LABELS: Record<ShortcutAction, string> = {
   toggleQueue: '播放队列面板',
   toggleLyrics: '歌词面板',
   toggleShuffle: '随机播放切换',
-  cycleRepeat: '循环模式轮转',
+  cycleRepeat: '播放模式轮转（列表循环/单曲循环/随机/顺序）',
   selectAll: '全选当前视图',
   openSettings: '打开设置',
 };

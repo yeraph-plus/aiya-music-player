@@ -90,7 +90,8 @@ export function runShortcut(action: ShortcutAction): void {
       player.setShuffle(!(state?.shuffle ?? false));
       return;
     case 'cycleRepeat':
-      player.cycleRepeat();
+      // 动作 id 是持久化键不改（老配置不失效）；实现已升级为模式单键循环
+      player.cyclePlayMode();
       return;
     case 'selectAll':
       selection.selectAll(list.total);

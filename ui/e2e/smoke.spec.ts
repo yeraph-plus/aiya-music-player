@@ -149,7 +149,8 @@ test('正在播放页：起播后两栏沉浸布局 + 背景四层接住真实�
   await firstRow(page).dblclick();
   await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
 
-  await page.locator('.sidebar .nav-item', { hasText: '正在播放' }).click();
+  // docs/25 §6：正在播放页唯一入口 = 播放条左侧歌曲区域（侧栏席位已撤）
+  await page.locator('footer .now').click();
 
   // docs/25 §4 两栏改版：信息列跟着播放态走（标题换成真歌名），歌词容器在右
   await expect(page.locator('.np-info h1')).not.toHaveText('未在播放');
@@ -164,6 +165,6 @@ test('正在播放页：起播后两栏沉浸布局 + 背景四层接住真实�
 
   await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
   await page.getByRole('switch', { name: '频谱可视化' }).click();
-  await page.locator('.sidebar .nav-item', { hasText: '正在播放' }).click();
+  await page.locator('footer .now').click();
   await expect(page.locator('.ambient-spectrum')).toHaveCount(1);
 });

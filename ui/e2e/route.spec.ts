@@ -84,7 +84,13 @@ test('新形状往返：切到常听 → 落盘 page=mostPlayed → 刷新仍在
 
 test('八值路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => {
   await page.goto('/');
-  const cases: Array<{ via: 'initial' | 'nav' | 'playlist'; text: string; title: string }> = [
+  const cases: Array<{
+    via: 'initial' | 'nav' | 'playlist' | 'player';
+    text: string;
+    title: string;
+    /** 侧栏高亮数；默认 1。正在播放页无侧栏席位（docs/25 §6），应为 0 */
+    sidebarActive?: number;
+  }> = [
     { via: 'initial', text: '', title: '推荐' },
     { via: 'nav', text: '曲库', title: '全部曲目' },
     { via: 'nav', text: '最近播放', title: '最近播放' },
@@ -92,7 +98,8 @@ test('八值路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => 
     // docs/25 §3：FM 电台回归一级导航（占位页）
     { via: 'nav', text: 'FM 电台', title: 'FM 电台' },
     { via: 'playlist', text: '', title: '' }, // 标题动态取歌单名
-    { via: 'nav', text: '正在播放', title: '未在播放' },
+    // docs/25 §6：正在播放页从播放条歌曲区域进（侧栏席位已撤）
+    { via: 'player', text: '', title: '未在播放', sidebarActive: 0 },
     { via: 'nav', text: '设置', title: '设置' },
   ];
 
@@ -101,14 +108,16 @@ test('八值路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => 
       await page.locator('.sidebar .nav-item', { hasText: c.text }).click();
     } else if (c.via === 'playlist') {
       await page.locator('.sidebar .playlist-item').first().click();
+    } else if (c.via === 'player') {
+      await page.locator('footer .now').click();
     }
     await expect(page.locator('.main h1').first()).toHaveText(
       c.via === 'playlist'
         ? (await page.locator('.sidebar .playlist-item').first().getAttribute('title'))!.split(' · ')[0]!
         : c.title,
     );
-    // 每一步侧栏都恰好一个高亮
-    await expect(page.locator('.sidebar .active')).toHaveCount(1);
+    // 每一步侧栏高亮数符合预期（多高亮=判断写重了，该零的时候非零=残留）
+    await expect(page.locator('.sidebar .active')).toHaveCount(c.sidebarActive ?? 1);
     // radio 路由之后落到非列表页，再回列表要能恢复（防 playlistId 残留）
     if (i === cases.length - 1) {
       await page.locator('.sidebar .nav-item', { hasText: '曲库' }).click();

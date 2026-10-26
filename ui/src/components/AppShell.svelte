@@ -7,6 +7,7 @@
   import EqPanel from './EqPanel.svelte';
   import InlineError from './ui/InlineError.svelte';
   import QueuePanel from './QueuePanel.svelte';
+  import SideDrawer from './ui/SideDrawer.svelte';
   import BatchBar from './BatchBar.svelte';
   import { errorMessage } from '../lib/errors';
   import type { SpectrumSource } from '../lib/spectrum-source';
@@ -102,7 +103,8 @@
     <PlayerBar
       player={playerState}
       queueOpen={ui.queueOpen}
-      nowPlayingActive={ui.page === 'nowPlaying'}
+      eqOpen={ui.eqOpen}
+      eqEnabled={eq.enabled}
       ontoggle={() => player.toggle()}
       onnext={() => player.next()}
       onprev={() => player.prev()}
@@ -110,32 +112,34 @@
       onvolume={(value) => player.setVolume(value)}
       onmute={() => player.toggleMute()}
       onrate={(rate) => player.setRate(rate)}
-      onrepeat={() => player.cycleRepeat()}
-      onshuffle={() => player.setShuffle(!(playerState?.shuffle ?? false))}
+      onmode={() => player.cyclePlayMode()}
       onqueueopen={(open) => ui.setQueue(open)}
-      eqOpen={ui.eqOpen}
-      eqEnabled={eq.enabled}
       oneqopen={(open) => ui.setEqDrawer(open)}
       onshownowplaying={() => nav.go({ kind: 'page', page: 'nowPlaying' })}
-    >
-      {#snippet eqpanel()}
-        <!-- EQ 抽屉（docs/25 §1）：面板本体不动，换了个宿主 -->
-        <div class="eq-drawer-body">
-          <EqPanel />
-        </div>
-      {/snippet}
-      {#snippet queuepanel()}
-        <!-- 关闭时 bits-ui 卸载 Popover.Content：这里不再需要 {#if ui.queueOpen} -->
-        <QueuePanel
-          ids={player.queueIds}
-          index={playerState?.index ?? null}
-          onplay={(index) => void playQueueAt(index)}
-          onremove={(index) => player.removeAt(index)}
-          onmove={(from, to) => player.move(from, to)}
-          onclear={() => player.clear()}
-          onclose={() => ui.closeQueue()}
-        />
-      {/snippet}
-    </PlayerBar>
+    />
   </div>
+
+  <!--
+    队列 / EQ 抽屉（docs/25 §6）：窗口左缘滑出的 SideDrawer 宿主。
+    原先是播放条上的 bits-ui Popover 气泡——floating-ui 测量+碰撞翻转让
+    开合位置有可见抖动；抽屉几何确定（贴左缘、全高、定宽），没有测量参与。
+    互斥仍由 ui store 的 setQueue/setEqDrawer 负责，这里只做壳。
+  -->
+  <SideDrawer open={ui.queueOpen} label="播放队列" onclose={() => ui.closeQueue()}>
+    <QueuePanel
+      ids={player.queueIds}
+      index={playerState?.index ?? null}
+      onplay={(index) => void playQueueAt(index)}
+      onremove={(index) => player.removeAt(index)}
+      onmove={(from, to) => player.move(from, to)}
+      onclear={() => player.clear()}
+      onclose={() => ui.closeQueue()}
+    />
+  </SideDrawer>
+
+  <SideDrawer open={ui.eqOpen} label="均衡器" onclose={() => ui.setEqDrawer(false)}>
+    <div class="eq-drawer-body">
+      <EqPanel />
+    </div>
+  </SideDrawer>
 </div>
