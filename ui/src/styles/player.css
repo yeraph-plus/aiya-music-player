@@ -9,7 +9,8 @@
   grid-column: 3;
   border-left: 1px solid var(--line);
   background: var(--surface-2);
-  backdrop-filter: blur(18px);
+  /* T4c：backdrop-filter 摘除。队列抽屉开着时背景频谱在动，玻璃就是
+   * 每帧重模糊（docs/25 §5 方案 B 红线）；抽屉本体靠不透明底色区分层次。 */
   display: grid;
   grid-template-rows: auto 1fr;
   min-height: 0;

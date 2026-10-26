@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import AmbientBackdrop from './AmbientBackdrop.svelte';
   import PlayerBar from './shell/PlayerBar.svelte';
   import Sidebar from './shell/Sidebar.svelte';
   import TitleBar from './shell/TitleBar.svelte';
@@ -7,7 +8,9 @@
   import InlineError from './ui/InlineError.svelte';
   import QueuePanel from './QueuePanel.svelte';
   import BatchBar from './BatchBar.svelte';
+  import { artworkUrl } from '../lib/artwork';
   import { errorMessage } from '../lib/errors';
+  import type { SpectrumSource } from '../lib/spectrum-source';
   import { batch } from '../stores/batch.svelte';
   import { eq } from '../stores/eq.svelte';
   import { list } from '../stores/list.svelte';
@@ -23,6 +26,31 @@
 
   const playerState = $derived(player.state);
 
+  /**
+   * 全应用背景的频谱源（docs/25 §5 T4c app 化）：设置开着才建
+   * （tap 按需订阅，关着引擎零开销）。原先在 NowPlayingView——背景
+   * 升为全应用层后跟着搬进来。
+   */
+  let spectrumSource = $state<SpectrumSource | null>(null);
+
+  $effect(() => {
+    if (!ui.settings.spectrum) {
+      spectrumSource = null;
+      return;
+    }
+    try {
+      spectrumSource = player.getSpectrumSource();
+    } catch (error) {
+      console.warn('spectrum source failed:', errorMessage(error));
+      spectrumSource = null;
+    }
+  });
+
+  /** 背景用小图（96px）：反正要糊掉，省解码内存 */
+  const bgArt = $derived(
+    playerState?.current?.artworkId ? artworkUrl(playerState.current.artworkId, 96) : null,
+  );
+
   async function playQueueAt(index: number): Promise<void> {
     try {
       await player.playTracks(player.queueIds, index);
@@ -33,6 +61,15 @@
 </script>
 
 <div class="app">
+  <!-- 背景四层（1-3 层，T4c 起 app 化）：绝对定位在 .app 根部、四区席位之下；
+       沉浸档只在正在播放页，其余页面用重遮罩保列表可读性 -->
+  <AmbientBackdrop
+    artworkUrl={bgArt}
+    source={spectrumSource}
+    spectrumOn={ui.settings.spectrum}
+    immersive={ui.page === 'nowPlaying'}
+  />
+
   <TitleBar />
   <Sidebar />
 

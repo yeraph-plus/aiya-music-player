@@ -8,10 +8,22 @@
 
 /* 三行两列：标题栏 / 侧栏 + 内容 / 播放条。**只有这一处定义**。 */
 .app {
+  position: relative; /* AmbientBackdrop（全应用背景）的定位基准 */
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   grid-template-rows: var(--titlebar-h) 1fr var(--player-h);
   height: 100%;
+}
+
+/* 背景四层（docs/25 §5 T4c app 化）：AmbientBackdrop 是 .app 的绝对定位
+ * 首子元素（z-index:0），四个席位必须自己带 position+z-index 才能压在
+ * 它上面——静态元素会被定位元素盖住（含文字）。
+ * player-dock 自带 z-20，BatchBar 固定 z-30，均在背景之上。 */
+.titlebar,
+.sidebar,
+.main {
+  position: relative;
+  z-index: 1;
 }
 
 /* 席位只有两行：侧栏自己的 padding / border / background 在

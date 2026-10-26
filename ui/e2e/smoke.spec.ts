@@ -62,6 +62,11 @@ test('启动装配：顶栏四件 + 推荐页标题 + 播放条空态', async ({
   // 2026-10-26 这条数据从 ui store 挪到 library（避免 list/scan 与 playlists 成环），
   // 断言在这里是为了「挪完还接得上」——mock 种子固定 4 张。
   await expect(page.locator('.sidebar .playlist-item')).toHaveCount(4);
+  // docs/25 §5 T4c：背景四层是全应用的——推荐页也有遮罩层；未播放所以
+  // 没有封面背景层、没有频谱环境层
+  await expect(page.locator('.ambient-veil')).toBeVisible();
+  await expect(page.locator('.ambient-art')).toHaveCount(0);
+  await expect(page.locator('.ambient-spectrum')).toHaveCount(0);
 });
 
 test('歌单：侧栏点开 → 标题与列表来自该歌单', async ({ page }) => {

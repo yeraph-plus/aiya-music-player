@@ -7,23 +7,32 @@
     /** 频谱数据源（48 带 tap）；null 或 spectrumOn=false 时环境层不渲染 */
     source: SpectrumSource | null;
     spectrumOn: boolean;
+    /**
+     * 沉浸档：正在播放页用浅遮罩让背景放光进来；其余页面用重遮罩
+     * 保列表可读性（背景只是"隐约透出"，不是主视觉）。
+     */
+    immersive: boolean;
   }
 
-  let { artworkUrl, source, spectrumOn }: Props = $props();
+  let { artworkUrl, source, spectrumOn, immersive }: Props = $props();
 
   /**
-   * 正在播放页的沉浸背景（docs/25 §5 T4b，方案 B：预模糊 + 频谱自发光 + 遮罩）。
+   * 全应用沉浸背景（docs/25 §5 T4b → T4c app 化，方案 B：预模糊 + 频谱自发光 + 遮罩）。
    *
-   * 三层各司其职，**没有一个全屏 backdrop-filter**：
+   * 挂在 AppShell 根部、四区（顶栏/侧栏/主区/播放条）之下，整个应用共享一套
+   * 四层结构：第 1 层预模糊封面、第 2 层频谱环境光、第 3 层可读性遮罩；
+   * 第 4 层是界面布局本身。持久性壳层（顶栏/侧栏/播放条）一律**半透明底色、
+   * 不用 backdrop-filter**——玻璃垫着动画 canvas 时合成器每帧重建离屏 buffer
+   * 全屏重模糊（最贵用法），这是方案 B 的红线；真玻璃只留给瞬时浮层
+   * （对话框/菜单/抽屉，打开时才付钱）和 .np-meta 一个展示性小块。
+   *
+   * 三层实现：
    * - 第 1 层 背景：封面 `<img>` 自身 `filter: blur(64px)`——静态内容光栅化
    *   一次即被缓存，切歌才重算一次，零每帧成本（业界沉浸页的通用做法）。
    * - 第 2 层 频谱环境光：低分辨率 buffer 画柱 → `drawImage` 放大 + ctx.filter
-   *   大半径模糊——柔化在**画布内部**完成，频谱自己就是"叠在背景上的光"，
-   *   不依赖外层玻璃。这正是方案 B 的核心：backdrop-filter 背后若垫动画
-   *   canvas，合成器每帧重建离屏 buffer 全屏重模糊（最贵用法），所以玻璃
-   *   只给局部小块（.np-meta），整页用这套替代。
-   * - 第 3 层 可读性遮罩：主题化渐变（--surface-1 从下往上压过来），
-   *   深浅主题都成立。
+   *   大半径模糊——柔化在**画布内部**完成，频谱自己就是"叠在背景上的光"。
+   * - 第 3 层 可读性遮罩：主题化渐变（--surface-1 从下往上压过来），深浅主题都
+   *   成立；immersive 档压得轻（正在播放页），standard 档压得重（列表页）。
    *
    * `prefers-reduced-motion: reduce` 时环境层整体不渲染（静态背景保留）。
    */
@@ -94,7 +103,7 @@
     frameId = requestAnimationFrame(draw);
   }
 
-  // 数据源订阅与绘制循环同生命周期：进页面 start（开引擎 tap），离开 stop
+  // 数据源订阅与绘制循环同生命周期：有源就 start（开引擎 tap），无源 stop
   $effect(() => {
     if (!active) return;
     source?.start();
@@ -106,7 +115,7 @@
   });
 </script>
 
-<div class="ambient-bg">
+<div class="ambient-bg" class:immersive>
   {#if artworkUrl}
     <img class="ambient-art" src={artworkUrl} alt="" />
   {/if}
@@ -120,12 +129,13 @@
   .ambient-bg {
     position: absolute;
     inset: 0;
+    z-index: 0;
     overflow: hidden;
-    border-radius: 18px;
     pointer-events: none;
   }
 
-  /* 出血 12%：blur 边缘会透出透明，拉大一点让边缘也糊满 */
+  /* 出血 12%：blur 边缘会透出透明，拉大一点让边缘也糊满。
+   * 沉浸档放光（0.85），standard 档收着点（0.5）——列表页背景是氛围不是主角。 */
   .ambient-art {
     position: absolute;
     inset: -12%;
@@ -133,6 +143,10 @@
     height: 124%;
     object-fit: cover;
     filter: blur(64px) saturate(1.4);
+    opacity: 0.5;
+  }
+
+  .immersive .ambient-art {
     opacity: 0.85;
   }
 
@@ -143,10 +157,24 @@
     height: 100%;
   }
 
-  /* 可读性遮罩：底部压得重（歌词/信息都在下半区呼吸），顶部放光进来 */
+  /* 可读性遮罩（第 3 层）两档：
+   * - standard（列表页）：近乎均匀地压一层 surface-1，正文对比度优先，
+   *   背景在缝隙里透出即可；
+   * - immersive（正在播放页）：底部压得重（信息/歌词在下半区呼吸），
+   *   顶部放光进来。 */
   .ambient-veil {
     position: absolute;
     inset: 0;
+    background: linear-gradient(
+      to top,
+      color-mix(in srgb, var(--surface-1) 88%, transparent),
+      color-mix(in srgb, var(--surface-1) 74%, transparent) 40%,
+      color-mix(in srgb, var(--surface-1) 58%, transparent) 78%,
+      color-mix(in srgb, var(--surface-1) 46%, transparent)
+    );
+  }
+
+  .immersive .ambient-veil {
     background: linear-gradient(
       to top,
       color-mix(in srgb, var(--surface-1) 72%, transparent),

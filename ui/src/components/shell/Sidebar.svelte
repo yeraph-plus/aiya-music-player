@@ -180,8 +180,9 @@
     gap: 6px;
     min-height: 0;
     border-right: 1px solid var(--line);
-    background: var(--surface-2);
-    backdrop-filter: blur(18px);
+    /* 半透明（T4c）：全应用背景从底下透出来。不用 backdrop-filter——
+     * 持久壳层垫着动画频谱 canvas 就是每帧重模糊（docs/25 §5 红线）。 */
+    background: color-mix(in srgb, var(--surface-2) 82%, transparent);
   }
 
   /* ---------------- 一级导航 ---------------- */

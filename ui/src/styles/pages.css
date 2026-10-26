@@ -210,9 +210,10 @@
 
 /*
  * 两栏：左信息（封面+标题+艺人·专辑+规格）右歌词。整页**无卡片**——
- * 没有边框、没有底色，内容直接浮在背景上；背景四层结构见
- * AmbientBackdrop（docs/25 §5 T4b 方案 B：预模糊封面 + 频谱环境光 +
- * 主题遮罩），真正的 backdrop-filter 玻璃只给 .np-meta 一个局部小块。
+ * 没有边框、没有底色，内容直接浮在背景上；背景四层由 AppShell 根部的
+ * AmbientBackdrop 全应用提供（T4c app 化，本页进沉浸档遮罩；
+ * docs/25 §5 方案 B：预模糊封面 + 频谱环境光 + 主题遮罩），
+ * 真正的 backdrop-filter 玻璃只给 .np-meta 一个展示性小块。
  */
 .now-playing-page {
   position: relative;
@@ -298,7 +299,8 @@
   padding: 3px 10px;
 }
 
-/* 右列：歌词容器透明（LyricsPanel 自身无底色，不再套卡片边框） */
+/* 右列：歌词容器真透明（T4a 意图在此落地——player.css 给 .lyrics-panel 的
+ * surface-2 底色在这里掀掉：沉浸页歌词直接浮在背景四层上，不再套卡片） */
 .np-lyrics {
   min-width: 0;
   min-height: 0;
@@ -308,6 +310,8 @@
 .np-lyrics .lyrics-panel {
   flex: 1;
   min-height: 0;
+  background: transparent;
+  border-left-color: transparent;
 }
 
 .spectrum-disabled > div {

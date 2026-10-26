@@ -342,8 +342,10 @@
     height: var(--player-h);
     padding: 0 18px;
     border-top: 1px solid var(--line);
-    background: var(--surface-3);
-    backdrop-filter: blur(24px);
+    /* 半透明（T4c）：全应用背景（预模糊封面/频谱环境光）从底下透出来。
+     * 原 backdrop-filter 摘除——播放条是持久壳层，垫着动画频谱 canvas
+     * 就是每帧全条重模糊（docs/25 §5 方案 B 红线）。 */
+    background: color-mix(in srgb, var(--surface-3) 88%, transparent);
   }
 
   /* ---------------- 左：当前曲目 ---------------- */
