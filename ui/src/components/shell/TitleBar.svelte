@@ -149,7 +149,8 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 0 0 0 12px;
+    /* 左内距交给 .tb-brand 自己管——它的定宽与侧栏对齐（见下） */
+    padding: 0;
     min-width: 0;
     border-bottom: 1px solid var(--line);
     background: var(--surface-2);
@@ -158,8 +159,14 @@
 
   /* ---------------- 品牌 ---------------- */
 
+  /*
+   * 品牌区定宽 = 侧栏宽（docs/25 §2）：右缘正好压在侧栏分隔线的延长线上，
+   * 左内距 = 侧栏容器 10px + 导航项内距 9px，品牌标记与导航文字同一条竖线起排。
+   */
   .tb-brand {
     flex: none;
+    width: var(--sidebar-w);
+    padding-left: 19px;
     display: flex;
     align-items: center;
     gap: 5px;
@@ -192,9 +199,13 @@
 
   /* ---------------- 返回 ---------------- */
 
-  /* 尺寸/圆角/悬停都在 IconButton 里，这里只管"别被搜索框挤走" */
+  /*
+   * 左缘 = 侧栏宽 + 主区内容边距（--space-6，随密度 16/22/26px）：
+   * 与 .page-pad 的内容左边距同一条竖线（docs/25 §2）。搜索框跟在后面同节奏。
+   */
   .tb-back {
     flex: none;
+    margin-left: var(--space-6);
   }
 
   /* ---------------- 搜索 ---------------- */

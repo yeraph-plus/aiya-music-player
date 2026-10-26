@@ -69,7 +69,7 @@
 
   --control-h: 32px; /* 按钮/输入框的默认高 */
   --row-h: 52px; /* 列表行高：JS 从 CSS 读同一个值（lib/look.ts） */
-  --titlebar-h: 46px;
+  --titlebar-h: 54px;
   --sidebar-w: 216px;
   --player-h: 92px;
 
