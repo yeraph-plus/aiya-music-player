@@ -681,6 +681,7 @@ E2E 补到 8–10 条（覆盖：拆页路由、批量、设置分组、kit 演�
 | 类型 | `npm run check` | 0 error / 0 warning |
 | 构建 | `npm run build:ui` | 通过；JS ≤ 240 KB、CSS 逐批下降 |
 | 契约 | `npm run gen:types:check` | 无漂移 |
+| 依赖图 | `npm run check:deps` | **0 环**（B0 起固化：`tools/dep-graph.mjs`。store 的分层是隐性契约，环在 ESM 里不一定立刻炸，只会让初始化顺序变得不可推理） |
 | 运行时 | `npm run probe:ui -- --play` | 无 console error / 无 4xx / 无未捕获异常 |
 | E2E | `npm run test:e2e` | **B3a 起 5/5**（原本 0/4）、**B0 起 6/6**，B6 起 10/10 |
 | 视觉 | 真窗口 3 档 × 明暗 2 套 | 12 张目检图，记进本文档附录 |
