@@ -139,7 +139,7 @@ test('设置页：左分组导航 + scroll-spy + 主题切换生效', async ({ p
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });
 
-test('正在播放页：起播后两栏沉浸布局接住真实曲目', async ({ page }) => {
+test('正在播放页：起播后两栏沉浸布局 + 背景四层接住真实曲目', async ({ page }) => {
   await openLibrary(page);
   await firstRow(page).dblclick();
   await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
@@ -150,4 +150,13 @@ test('正在播放页：起播后两栏沉浸布局接住真实曲目', async ({
   await expect(page.locator('.np-info h1')).not.toHaveText('未在播放');
   await expect(page.locator('.np-info .audio-spec')).toBeVisible();
   await expect(page.locator('.lyrics-panel')).toBeVisible();
+
+  // docs/25 §5 背景四层：背景层常在（遮罩可见）；频谱环境层随设置出现
+  await expect(page.locator('.ambient-veil')).toBeVisible();
+  await expect(page.locator('.ambient-spectrum')).toHaveCount(0); // mock 下频谱默认关
+
+  await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
+  await page.getByRole('switch', { name: '频谱可视化' }).click();
+  await page.locator('.sidebar .nav-item', { hasText: '正在播放' }).click();
+  await expect(page.locator('.ambient-spectrum')).toHaveCount(1);
 });
