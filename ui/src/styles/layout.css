@@ -18,7 +18,7 @@
 /* 背景四层（docs/25 §5 T4c app 化）：AmbientBackdrop 是 .app 的绝对定位
  * 首子元素（z-index:0），四个席位必须自己带 position+z-index 才能压在
  * 它上面——静态元素会被定位元素盖住（含文字）。
- * player-dock 自带 z-20，BatchBar 固定 z-30，均在背景之上。 */
+ * player-dock 自带 z-20，在背景之上（悬浮批量条已删，docs/27 归列表工具条）。 */
 .titlebar,
 .sidebar,
 .main {

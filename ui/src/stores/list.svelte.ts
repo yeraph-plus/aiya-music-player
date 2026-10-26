@@ -1,5 +1,11 @@
 import { parseTrackQuery, type TrackQuery, type TrackSort } from '../lib/query';
 import { errorMessage } from '../lib/errors';
+import {
+  DEFAULT_TIME_FILTER,
+  timeFilterActive,
+  timeFilterToQuery,
+  type TrackTimeFilter,
+} from '../lib/time-filter';
 import { TrackWindow } from '../lib/track-window';
 import { builtinView, sourceOf } from '../lib/view';
 import { library } from './library.svelte';
@@ -68,6 +74,12 @@ class ListStore {
   }
 
   /**
+   * 时间筛选（筛选器模态框，docs/27）：档位存这里，查询时换算毫秒——
+   * 「7 天内」这类相对档随时间自然滚动，不需要用户重设。
+   */
+  timeFilter = $state<TrackTimeFilter>({ ...DEFAULT_TIME_FILTER });
+
+  /**
    * 当前查询。**三条命令共用这一个**（list / playQuery / idsForSelection）。
    *
    * `mode: 'offset'` + `offset: 0`：首屏只要第一页，后续由 TrackWindow
@@ -84,6 +96,7 @@ class ListStore {
       ...(ui.search.trim() ? { search: ui.search.trim() } : {}),
       ...(ui.artistId ? { artistId: ui.artistId } : {}),
       ...(ui.albumId ? { albumId: ui.albumId } : {}),
+      ...timeFilterToQuery(this.timeFilter),
     };
   }
 
@@ -176,11 +189,21 @@ class ListStore {
     void this.reload();
   }
 
+  /** 应用筛选器模态框的时间档位（改档 = 重载） */
+  setTimeFilter(next: TrackTimeFilter): void {
+    this.timeFilter = { ...next };
+    void this.reload();
+  }
+
+  /** 时间筛选是否生效（工具条筛选键的角标 / 筛选 chip） */
+  get timeFilterOn(): boolean {
+    return timeFilterActive(this.timeFilter);
+  }
+
   /* ---------------- 批量操作（选择集 → 命令） ----------------
    *
-   * 动作实现在 `stores/batch.svelte.ts`（B4-2b 单点化：列表页与首页共用
-   * 一个批量条、一份 play/enqueue/addTo/remove）。这里只保留本查询相关的
-   * `selectionIds`（下标 → ID 要走当前视图的查询，是 list 的职责）。
+   * docs/27：批量动作 UI 归列表工具条（TrackList 顶部的 ListToolbar），
+   * 选择集 → ID 的换算仍是本 store 的职责（下标 → ID 要走当前视图查询）。
    */
 
   /**

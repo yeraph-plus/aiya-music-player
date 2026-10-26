@@ -73,7 +73,7 @@ test('EQ 抽屉：从播放条进入，预设命中打 ✓；与队列抽屉互�
   await expect(eqTrigger).toHaveAttribute('aria-label', '均衡器（已启用）');
 
   // 互斥：开队列 → EQ 抽屉被关掉（ui store 单向清理，docs/25 §1）
-  const queueTrigger = page.getByRole('button', { name: /播放队列/ });
+  const queueTrigger = page.locator('footer').getByRole('button', { name: /播放队列/ });
   await queueTrigger.click();
   await expect(page.locator('.queue-float')).toBeVisible();
   await expect(page.locator('.eq-panel')).toHaveCount(0);
@@ -94,7 +94,7 @@ test('队列抽屉：Popover 开合，Esc 关闭后焦点回触发键', async ({
   await page.locator('.sidebar .nav-item', { hasText: '曲库' }).click();
   await expect(page.locator('.main .list .row').first()).toBeVisible();
 
-  const trigger = page.getByRole('button', { name: /播放队列/ });
+  const trigger = page.locator('footer').getByRole('button', { name: /播放队列/ });
   await trigger.click();
   const panel = page.locator('.queue-float');
   await expect(panel).toBeVisible();

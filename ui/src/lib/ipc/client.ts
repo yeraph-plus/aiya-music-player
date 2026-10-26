@@ -63,6 +63,14 @@ export type TrackQueryInput = {
   search?: string | null;
   artistId?: string | null;
   albumId?: string | null;
+  /** 入库时间范围（毫秒，含 from 不含 to）——筛选器模态框 */
+  addedFromMs?: number | null;
+  addedToMs?: number | null;
+  /** 上次播放时间范围（毫秒，含 from 不含 to） */
+  lastPlayedFromMs?: number | null;
+  lastPlayedToMs?: number | null;
+  /** 只看从未播放的曲目；与 lastPlayed 范围互斥，同给时后端 never 优先 */
+  lastPlayedNever?: boolean | null;
   source?:
     | { kind: 'library' }
     | { kind: 'playlist'; playlistId: string }

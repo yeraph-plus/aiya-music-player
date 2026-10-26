@@ -8,6 +8,15 @@
   import Menu from './ui/Menu.svelte';
   import Toast from './ui/Toast.svelte';
   import { playlistMenuItems, trackMenuItems } from '../lib/menu';
+  import {
+    ADDED_PRESETS,
+    DEFAULT_TIME_FILTER,
+    LAST_PLAYED_PRESETS,
+    type LastPlayedPreset,
+    type AddedPreset,
+  } from '../lib/time-filter';
+  import type { TrackTimeFilter } from '../lib/time-filter';
+  import SegmentedControl from './ui/SegmentedControl.svelte';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
   import { nav } from '../stores/nav.svelte';
@@ -15,6 +24,7 @@
   import { overlay } from '../stores/overlay.svelte';
   import { playlists } from '../stores/playlists.svelte';
   import { player } from '../stores/player.svelte';
+  import { selection } from '../stores/selection.svelte';
   import { ui } from '../stores/ui.svelte';
 
   /**
@@ -37,35 +47,60 @@
   }
 
   function trackItems(menu: NonNullable<typeof overlay.trackMenu>) {
-    return trackMenuItems(menu.track, ui.view, {
-      play: () => void list.playIndex(menu.index),
-      insertNext: () => {
-        if (menu.track?.id) player.insertNext(menu.track.id);
+    return trackMenuItems(
+      menu.track,
+      ui.view,
+      {
+        play: () => void list.playIndex(menu.index),
+        insertNext: () => {
+          if (menu.track?.id) player.insertNext(menu.track.id);
+        },
+        // 批量语义（docs/27 第 6 点）：动作对**整个选择集**生效——右键前
+        // LibraryView 已保证目标行在选择集里（不在就单选它），所以这里
+        // 统一走 selectionIds()，单选/多选同一条路径，不需要分支。
+        enqueue: () => {
+          void (async () => {
+            const ids = await list.selectionIds();
+            if (ids.length === 0) return;
+            await player.enqueue(ids);
+            notify.showToast(`已加入队列 ${ids.length} 首`);
+          })();
+        },
+        addToPlaylist: () => {
+          void (async () => {
+            const ids = await list.selectionIds();
+            if (ids.length === 0) return;
+            overlay.dialog = { kind: 'addToPlaylist', ids };
+          })();
+        },
+        filterByArtist: () => {
+          // B4-3b 升级：从"列表 + 筛选 chip"改成直达艺人详情页（docs/24 §2 B4）
+          const id = menu.track?.artistId;
+          if (!id) return;
+          nav.go({ kind: 'artist', id });
+        },
+        filterByAlbum: () => {
+          const id = menu.track?.albumId;
+          if (!id) return;
+          nav.go({ kind: 'album', id });
+        },
+        reveal: () => void revealTrack(menu.track?.id),
+        remove: () => {
+          // 歌单视图里是"从歌单移除"（按下标，倒序防位移），
+          // 曲库里是"从曲库移除"（按 ID 走确认对话框）
+          if (ui.view.kind === 'playlist') {
+            void playlists.removeItemsAt(selection.sortedIndices());
+          } else {
+            void (async () => {
+              const ids = await list.selectionIds();
+              if (ids.length === 0) return;
+              overlay.dialog = { kind: 'removeTracks', ids };
+            })();
+          }
+        },
       },
-      enqueue: () => {
-        if (menu.track?.id) void player.enqueue([menu.track.id]);
-      },
-      addToPlaylist: () => {
-        if (menu.track?.id) overlay.dialog = { kind: 'addToPlaylist', ids: [menu.track.id] };
-      },
-      filterByArtist: () => {
-        // B4-3b 升级：从"列表 + 筛选 chip"改成直达艺人详情页（docs/24 §2 B4）
-        const id = menu.track?.artistId;
-        if (!id) return;
-        nav.go({ kind: 'artist', id });
-      },
-      filterByAlbum: () => {
-        const id = menu.track?.albumId;
-        if (!id) return;
-        nav.go({ kind: 'album', id });
-      },
-      reveal: () => void revealTrack(menu.track?.id),
-      remove: () => {
-        // 歌单视图里是"从歌单移除"，曲库里是"从曲库移除"——同一个菜单项两种语义
-        if (ui.view.kind === 'playlist') void playlists.removeItemAt(menu.index);
-        else if (menu.track?.id) overlay.dialog = { kind: 'removeTracks', ids: [menu.track.id] };
-      },
-    });
+      menu.multi,
+    );
   }
 
   function playlistItems(menu: NonNullable<typeof overlay.playlistMenu>) {
@@ -96,6 +131,14 @@
     const d = overlay.dialog;
     if (d?.kind === 'createPlaylist') promptText = '';
     else if (d?.kind === 'renamePlaylist') promptText = d.playlist.name;
+  });
+
+  /* ---------------- 筛选器模态框（docs/27 第 2/3 点） ---------------- */
+
+  /** 草稿：打开时从 list.timeFilter 复制，应用才写回（取消不落库） */
+  let filterDraft = $state<TrackTimeFilter>({ ...DEFAULT_TIME_FILTER });
+  $effect(() => {
+    if (overlay.dialog?.kind === 'trackFilter') filterDraft = { ...list.timeFilter };
   });
 
   let createInput = $state<HTMLInputElement | null>(null);
@@ -242,6 +285,50 @@
       <Button variant="danger" onclick={submitRemoveTracks}>移除</Button>
     {/snippet}
   </Dialog>
+{:else if overlay.dialog?.kind === 'trackFilter'}
+  <!--
+    筛选器（docs/27 第 2/3 点）：入库时间 / 上次播放两组预设档。
+    后续 beets 标签字段按同样的「档位分段控件 → 查询参数」模式加在这里。
+  -->
+  <Dialog
+    title="筛选曲目"
+    description="按入库时间或上次播放过滤当前列表"
+    onclose={() => overlay.closeDialog()}
+  >
+    <div class="filter-body">
+      <div class="filter-row">
+        <div class="filter-label">入库时间</div>
+        <SegmentedControl
+          label="入库时间"
+          value={filterDraft.added}
+          options={ADDED_PRESETS}
+          onchange={(value) => (filterDraft = { ...filterDraft, added: value as AddedPreset })}
+        />
+      </div>
+      <div class="filter-row">
+        <div class="filter-label">上次播放</div>
+        <SegmentedControl
+          label="上次播放"
+          value={filterDraft.lastPlayed}
+          options={LAST_PLAYED_PRESETS}
+          onchange={(value) =>
+            (filterDraft = { ...filterDraft, lastPlayed: value as LastPlayedPreset })}
+        />
+      </div>
+    </div>
+    {#snippet actions()}
+      <Button onclick={() => overlay.closeDialog()}>取消</Button>
+      <Button
+        variant="primary"
+        onclick={() => {
+          overlay.closeDialog();
+          list.setTimeFilter(filterDraft);
+        }}
+      >
+        应用
+      </Button>
+    {/snippet}
+  </Dialog>
 {:else if overlay.dialog?.kind === 'addToPlaylist'}
   <!--
     极简歌单选择器（docs/25 用户反馈）：无大标题、无关闭键、无底部按钮——
@@ -275,6 +362,27 @@
      B6 删壳后随内联迁来） */
   .prompt-body {
     padding: 14px 16px 2px;
+  }
+
+  /* 筛选器模态框：两组档位分段控件 */
+  .filter-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 14px 16px 4px;
+  }
+
+  .filter-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .filter-label {
+    flex: none;
+    font-size: 12.5px;
+    color: var(--text-2);
   }
 
   .pick-list {

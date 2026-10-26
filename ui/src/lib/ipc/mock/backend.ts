@@ -968,6 +968,18 @@ export class MockBackend {
       }
       if (q.artistId && t.artistId !== q.artistId) return false;
       if (q.albumId && t.albumId !== q.albumId) return false;
+      // 时间筛选（docs/27）：语义与 Rust repo.rs 逐字对齐——
+      // from 含、to 开区间，毫秒比较；never 优先于时间范围
+      if (q.addedFromMs !== undefined && t.addedAtMs < q.addedFromMs) return false;
+      if (q.addedToMs !== undefined && t.addedAtMs >= q.addedToMs) return false;
+      if (q.lastPlayedNever === true) {
+        if (t.lastPlayedAtMs !== null) return false;
+      } else if (q.lastPlayedFromMs !== undefined || q.lastPlayedToMs !== undefined) {
+        // SQL 语义：NULL 与任何比较都是假——从未播放的曲目被时间范围排除
+        if (t.lastPlayedAtMs === null) return false;
+        if (q.lastPlayedFromMs !== undefined && t.lastPlayedAtMs < q.lastPlayedFromMs) return false;
+        if (q.lastPlayedToMs !== undefined && t.lastPlayedAtMs >= q.lastPlayedToMs) return false;
+      }
       return true;
     });
   }

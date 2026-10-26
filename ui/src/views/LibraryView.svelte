@@ -6,9 +6,11 @@
   import Toolbar from '../components/content/Toolbar.svelte';
   import TrackList from '../components/TrackList.svelte';
   import { artworkUrl } from '../lib/artwork';
+  import { errorMessage } from '../lib/errors';
   import { formatDurationLong } from '../lib/format';
   import { SELECTION_CAP } from '../lib/selection';
   import { LIB_TABS, viewCanSort, viewTitle } from '../lib/view';
+  import { DEFAULT_TIME_FILTER } from '../lib/time-filter';
   import { history } from '../stores/history.svelte';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
@@ -31,7 +33,6 @@
   const currentPlaylist = $derived(
     view.kind === 'playlist' ? playlists.byId(view.id) : null,
   );
-  const showPlays = $derived(view.kind === 'recent' || view.kind === 'mostPlayed');
   const playerState = $derived(player.state);
 
   /**
@@ -183,6 +184,55 @@
   }
 
   /**
+   * 批量操作开关（docs/27 第 2 点）：关 = 隐藏勾选列，同时清掉选择集——
+   * 勾选列都看不见了还留着选择会让人以为操作会落到那几行上。
+   */
+  function setBatchMode(on: boolean): void {
+    ui.batchMode = on;
+    if (!on) selection.clear();
+  }
+
+  /** 工具条「加入歌单」：选择集 → ID 后开选择器对话框 */
+  function addSelectionToPlaylist(): void {
+    void (async () => {
+      const ids = await list.selectionIds();
+      if (ids.length === 0) return;
+      overlay.dialog = { kind: 'addToPlaylist', ids };
+    })();
+  }
+
+  /** 工具条「加入播放队列」：选择集追加到队尾 */
+  function enqueueSelection(): void {
+    void (async () => {
+      const ids = await list.selectionIds();
+      if (ids.length === 0) return;
+      try {
+        await player.enqueue(ids);
+        notify.showToast(`已加入队列 ${ids.length} 首`);
+        selection.clear();
+      } catch (error) {
+        notify.showError(errorMessage(error));
+      }
+    })();
+  }
+
+  /**
+   * 工具条「从曲库中删除 / 从播放列表移除」：语义随视图。
+   * 曲库走确认对话框（只删索引不动磁盘）；歌单按下标倒序删。
+   */
+  function removeSelection(): void {
+    if (ui.view.kind === 'playlist') {
+      void playlists.removeItemsAt(selection.sortedIndices());
+      return;
+    }
+    void (async () => {
+      const ids = await list.selectionIds();
+      if (ids.length === 0) return;
+      overlay.dialog = { kind: 'removeTracks', ids };
+    })();
+  }
+
+  /**
    * 曲库页的 tab（docs/25 §3 重排后）。最近播放 / 常听已升级为侧栏一级页，
    * 不再寄居曲库 tab 行；专辑 / 艺人是导航式 tab（进 browse 宫格页）。
    * tab 条只在曲库页显示——专辑/艺人**宫格页**的 tab 条在 BrowseView 里
@@ -194,12 +244,16 @@
    * 筛选 chip 只在曲库页显示。专辑/艺人详情页的"筛选"就是页面本身
    * （ui.albumId/ui.artistId 是路由参数），显示"专辑筛选 ×"chip 等于
    * 让用户能把当前页面拆掉——点 × 会清掉路由参数却不换页。
+   * 时间筛选 chip（docs/27）：筛选器模态框应用后在这里给一个可清除的入口。
    */
   const filterChips = $derived(
     ui.page === 'library'
       ? [
           ...(ui.artistId ? [{ label: '艺人筛选', onclear: () => list.clearFilter() }] : []),
           ...(ui.albumId ? [{ label: '专辑筛选', onclear: () => list.clearFilter() }] : []),
+          ...(list.timeFilterOn
+            ? [{ label: '时间筛选', onclear: () => list.setTimeFilter({ ...DEFAULT_TIME_FILTER }) }]
+            : []),
         ]
       : [],
   );
@@ -337,7 +391,6 @@
     sort={ui.sort}
     direction={ui.direction}
     canSort={viewCanSort(view)}
-    {showPlays}
     onsort={(field) => list.setSort(field)}
     currentId={playerState?.current?.id ?? null}
     selectedIndex={selection.selectedIndex}
@@ -349,11 +402,27 @@
     onselect={handleSelect}
     oncheck={handleCheck}
     oncheckall={() => selection.toggleAll(list.total)}
-    onmenu={(event, index, track) => overlay.openTrackMenu(event.clientX, event.clientY, index, track)}
+    onmenu={(event, index, track) => {
+      // 右键的行不在选择集里 → 先单选它（handleSelect 裸点语义），
+      // 在选择集里则整组保留；菜单按 multi 对整组生效（docs/27 第 6 点）
+      if (!selection.selection.has(index)) handleSelect(index, event);
+      overlay.openTrackMenu(event.clientX, event.clientY, index, track, selection.size > 1);
+    }}
     onscroll={(top) => list.setScroll(top)}
     onrestored={() => (list.restoreScrollTop = null)}
     onretry={() => void list.reload()}
     onmove={view.kind === 'playlist' ? (from, to) => void playlists.moveItem(from, to) : undefined}
+    batchMode={ui.batchMode}
+    onbatchmode={setBatchMode}
+    onplayall={() => void list.playAll()}
+    onenqueue={enqueueSelection}
+    onaddto={addSelectionToPlaylist}
+    onremove={removeSelection}
+    removeLabel={view.kind === 'playlist' ? '从播放列表移除' : '从曲库中删除'}
+    filterCount={ui.page === 'library' ? (list.timeFilterOn ? 1 : 0) : undefined}
+    onfilteropen={() => (overlay.dialog = { kind: 'trackFilter' })}
+    onopenartist={(id) => nav.go({ kind: 'artist', id })}
+    onopenalbum={(id) => nav.go({ kind: 'album', id })}
   />
 {:else if list.booted}
   <div class="empty">

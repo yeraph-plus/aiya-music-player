@@ -89,6 +89,12 @@ class UiStore {
   queueOpen = $state(false);
   /** EQ 抽屉（播放条 Popover）会话态开合，与队列抽屉互斥（docs/25 §1） */
   eqOpen = $state(false);
+  /**
+   * 列表批量操作模式（docs/27）：开 = 显示勾选列，关 = 隐藏。
+   * 会话态不持久化；Ctrl+点行会自动把它打开（用户不一定要找到开关），
+   * 关闭时由调用方清空选择集。
+   */
+  batchMode = $state(false);
 
   /**
    * 当前列表视图（`list.query()` 用它算 `source`）。

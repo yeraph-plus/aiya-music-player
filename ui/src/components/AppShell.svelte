@@ -8,17 +8,14 @@
   import InlineError from './ui/InlineError.svelte';
   import QueuePanel from './QueuePanel.svelte';
   import SideDrawer from './ui/SideDrawer.svelte';
-  import BatchBar from './BatchBar.svelte';
   import { errorMessage } from '../lib/errors';
   import type { SpectrumSource } from '../lib/spectrum-source';
-  import { batch } from '../stores/batch.svelte';
   import { eq } from '../stores/eq.svelte';
   import { list } from '../stores/list.svelte';
   import { nav } from '../stores/nav.svelte';
   import { notify } from '../stores/notify.svelte';
   import { overlay } from '../stores/overlay.svelte';
   import { player } from '../stores/player.svelte';
-  import { playlists } from '../stores/playlists.svelte';
   import { ui } from '../stores/ui.svelte';
 
   type Props = { children: Snippet };
@@ -84,20 +81,6 @@
       {@render children()}
     </div>
   </main>
-
-  {#if batch.active}
-    <!-- 批量条全应用只有这一个渲染点（B4-2b）：列表页与首页三段的选择
-         都汇到 batch store，动作也只有一份实现 -->
-    <BatchBar
-      count={batch.count}
-      playlists={playlists.items}
-      onplay={() => void batch.play()}
-      onenqueue={() => void batch.enqueue()}
-      onaddto={(playlistId) => void batch.addTo(playlistId)}
-      onremove={() => void batch.remove()}
-      onclear={() => batch.clear()}
-    />
-  {/if}
 
   <div class="player-dock">
     <PlayerBar

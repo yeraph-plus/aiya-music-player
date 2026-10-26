@@ -1,6 +1,19 @@
-/* lists.css — 曲目列表：表头、行、虚拟滚动占位、选中/播放中/拖拽态。 */
+/* lists.css — 曲目列表：外壳/工具条、表头、行、虚拟滚动占位、选中/播放中/拖拽态。 */
 
-/* ---------------- 列表 ---------------- */
+/* ---------------- 列表外壳（docs/27） ---------------- */
+
+/*
+ * TrackList 的根。工具条不随列表滚动，`.list` 仍是虚拟滚动的 scroller。
+ * 批量模式关（.no-batch）时勾选列不渲染，网格模板少一列——两套模板的
+ * 后 6 列定义必须保持一致，否则开关批量时行内容会跳位。
+ */
+.list-shell {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
 
 .list {
   flex: 1;
@@ -12,25 +25,25 @@
   position: relative;
 }
 
-/* 列序：选框 / 序号 / 封面 / 标题 / 艺人 / 专辑 / 添加日期 / [次数] / 时长。
- * 「添加」列是为了让 `sort: added` 有一个**看得见的入口** —— 之前排序支持
- * added，但表头只有标题/艺人/专辑三个按钮，用户根本点不到它。 */
+/* 列序：[勾选] / # / 封面 / 标题 / 歌手 / 专辑 / 时长。
+ * 入库时间与次数列已撤（docs/27 第 3 点）：入库时间等可筛选字段
+ * 移入工具条的筛选器模态框；次数只在首页预览表（TrackTable）显示。 */
 .grid-head,
 .row {
   display: grid;
   grid-template-columns:
-    22px 34px 42px minmax(150px, 2.2fr) minmax(100px, 1.4fr) minmax(100px, 1.4fr) 78px
+    22px 34px 42px minmax(150px, 2.2fr) minmax(100px, 1.3fr) minmax(100px, 1.3fr)
     56px;
   align-items: center;
   gap: 10px;
   padding: 0 12px;
 }
 
-.list.with-plays .grid-head,
-.list.with-plays .row {
+.list-shell.no-batch .grid-head,
+.list-shell.no-batch .row {
   grid-template-columns:
-    22px 34px 42px minmax(140px, 2.2fr) minmax(90px, 1.4fr) minmax(90px, 1.4fr) 78px
-    48px 56px;
+    34px 42px minmax(150px, 2.2fr) minmax(100px, 1.3fr) minmax(100px, 1.3fr)
+    56px;
 }
 
 .grid-head {
@@ -92,37 +105,66 @@
   gap: 4px;
 }
 
-/* ---------------- hover 播放键 ----------------
+/* ---------------- 封面悬浮播放键（docs/27 第 4 点） ----------------
  *
- * 单击=选中（B4-1）之后，行内保留一个直接起播的入口：行 hover 时序号
- * 换成播放三角。正在播放的行不放（那里是跳动条，位置也不该被抢）。
+ * 单击=选中（B4-1）之后，行内保留一个直接起播的入口：**叠在封面上**，
+ * 行 hover 时出现（半透明压暗底 + 白色三角），不再是 # 列里换序号。
+ * 正在播放的行不放（那里有跳动条，封面键照常可用）。
  */
+.cover-slot {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  flex: none;
+}
+
 .row .play-btn {
+  position: absolute;
+  inset: 0;
   display: none;
-  width: 22px;
-  height: 22px;
   align-items: center;
   justify-content: center;
   padding: 0;
   border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--text-1);
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.45);
+  color: #fff;
   cursor: pointer;
-  flex: none;
-}
-
-.row .play-btn:hover {
-  background: var(--surface-hover);
-  color: var(--accent-text);
 }
 
 .row:hover .play-btn {
   display: inline-flex;
 }
 
-.row:hover .idx-num {
-  display: none;
+.row .play-btn:hover {
+  background: rgb(0 0 0 / 0.62);
+  color: #fff;
+}
+
+/* ---------------- 歌手/专辑跳转链接（docs/27 第 7 点） ----------------
+ *
+ * 详情页直达入口直接长在单元格里，不再绕右键菜单。按钮样式压平成文字，
+ * hover 出下划线与 accent——可点的暗示要够轻，不抢标题的视觉主角位。
+ */
+.link-cell {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.link-cell:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 /* ---------------- 多选勾选格 ----------------

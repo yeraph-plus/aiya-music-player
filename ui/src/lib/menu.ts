@@ -29,28 +29,44 @@ export interface TrackMenuActions {
   remove(): void;
 }
 
+/**
+ * `multi` = 对整个选择集生效（docs/27）：右键的行在选择集里且不止一行。
+ * 单行专属项（播放 / 下一首播放 / 查看艺人 / 查看专辑 / 在文件夹中显示）
+ * 整体隐藏；批量项（加入队列 / 加入歌单 / 移除）与工具条同语义，保留。
+ */
 export function trackMenuItems(
   track: TrackRow | null,
   view: View,
   actions: TrackMenuActions,
+  multi = false,
 ): MenuItem[] {
   const inPlaylist = view.kind === 'playlist';
-  return [
-    { label: '播放', action: actions.play, disabled: !track },
-    { label: '下一首播放', action: actions.insertNext, disabled: !track },
+  const items: MenuItem[] = [];
+  if (!multi) {
+    items.push(
+      { label: '播放', action: actions.play, disabled: !track },
+      { label: '下一首播放', action: actions.insertNext, disabled: !track },
+    );
+  }
+  items.push(
     { label: '加入播放队列', action: actions.enqueue, disabled: !track },
     { label: '添加到播放列表…', action: actions.addToPlaylist, disabled: !track },
+  );
+  if (!multi) {
     // B4-3b 起直达艺人/专辑详情页（不再是"筛选 chip"），文案随之改为浏览语义
-    { label: '查看艺人', action: actions.filterByArtist, disabled: !track?.artistId },
-    { label: '查看专辑', action: actions.filterByAlbum, disabled: !track?.albumId },
-    { label: '在文件夹中显示', action: actions.reveal, disabled: !track },
-    {
-      label: inPlaylist ? '从播放列表移除' : '从曲库移除',
-      action: actions.remove,
-      disabled: !track,
-      danger: true,
-    },
-  ];
+    items.push(
+      { label: '查看艺人', action: actions.filterByArtist, disabled: !track?.artistId },
+      { label: '查看专辑', action: actions.filterByAlbum, disabled: !track?.albumId },
+      { label: '在文件夹中显示', action: actions.reveal, disabled: !track },
+    );
+  }
+  items.push({
+    label: inPlaylist ? '从播放列表移除' : '从曲库移除',
+    action: actions.remove,
+    disabled: !track,
+    danger: true,
+  });
+  return items;
 }
 
 export interface PlaylistMenuActions {

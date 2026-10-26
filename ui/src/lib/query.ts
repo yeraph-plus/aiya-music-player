@@ -44,6 +44,12 @@ const baseQuery = z.object({
   search: z.string().trim().max(200).optional(),
   artistId: z.string().max(64).optional(),
   albumId: z.string().max(64).optional(),
+  /** 时间筛选（筛选器模态框，lib/time-filter.ts 换算）：毫秒，to 为开区间 */
+  addedFromMs: z.number().int().nonnegative().optional(),
+  addedToMs: z.number().int().nonnegative().optional(),
+  lastPlayedFromMs: z.number().int().nonnegative().optional(),
+  lastPlayedToMs: z.number().int().nonnegative().optional(),
+  lastPlayedNever: z.boolean().optional(),
   source: trackSourceSchema.default({ kind: 'library' }),
   limit: z.number().int().min(1).max(MAX_PAGE_SIZE).default(100),
 });

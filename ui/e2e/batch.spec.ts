@@ -1,9 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * 批量条回归（B4-2b 起常驻）：全应用唯一渲染点在 AppShell，
- * 首页三段（ID 选择集）与列表页（下标选择集）都汇到 `stores/batch.svelte.ts`。
- * 覆盖：出现/消失、加入队列、跨段互斥、✕ 清空。
+ * 列表批量操作回归（docs/27 重写）：
+ * 悬浮批量条已删，批量动作内置在 TrackList 顶部工具条（ListToolbar）。
+ * 覆盖：Ctrl+点行自动进批量模式、工具条加入队列、批量开关与勾选列显隐、
+ * 首页预览表为纯列表（无勾选）。
  */
 
 let runtimeErrors: string[] = [];
@@ -20,45 +21,72 @@ test.afterEach(async () => {
   expect(runtimeErrors, '页面运行期错误').toEqual([]);
 });
 
-test('首页：选中一段 → 批量条出现 → 加入队列 → 批量条消失', async ({ page }) => {
-  await page.goto('/');
-  const row = page.locator('.main .tt-row').first();
-  await row.click();
-  await expect(row).toHaveClass(/selected/);
+function firstRow(page: Page) {
+  return page.locator('.main .list .row:not(.skeleton):not(.failed)').first();
+}
 
-  // 批量条（AppShell 渲染的全应用唯一实例）
-  const bar = page.locator('.batch-bar');
-  await expect(bar).toBeVisible();
-  await expect(bar).toContainText(/已选 1 首/);
-
-  // 加入队列：toast + 批量条消失（选择被清）
-  await bar.getByRole('button', { name: /加入队列/ }).click();
-  await expect(page.locator('body')).toContainText(/已加入队列 1 首/);
-  await expect(bar).toHaveCount(0);
-
-  // 换段互斥：在 A 段选中后点 B 段，A 段清空
-  const rowA = page.locator('.home-section', { hasText: '最近播放' }).locator('.tt-row').first();
-  const rowB = page.locator('.home-section', { hasText: '常听' }).locator('.tt-row').first();
-  await rowA.click();
-  await expect(rowA).toHaveClass(/selected/);
-  await expect(bar).toBeVisible();
-  await rowB.click();
-  await expect(rowB).toHaveClass(/selected/);
-  await expect(rowA).not.toHaveClass(/selected/);
-});
-
-test('列表页：选中 → 批量条 → ✕ 清空', async ({ page }) => {
+async function openLibrary(page: Page): Promise<void> {
   await page.goto('/');
   await page.locator('.main button', { hasText: '浏览全部曲目' }).click();
   await expect(page.locator('.main h1')).toHaveText('全部曲目');
-  const row = page.locator('.main .list .row:not(.skeleton):not(.failed)').first();
+  await firstRow(page).waitFor({ state: 'visible' });
+}
+
+test('列表页：Ctrl+点两行自动进批量模式 → 工具条加入队列', async ({ page }) => {
+  await openLibrary(page);
+
+  // 批量模式默认关：勾选框不可见，单选行仍然高亮
+  // （点标题单元格：行中心的歌手/专辑是可点跳转链接，行点击守卫会忽略）
+  const toolbar = page.locator('.list-toolbar');
+  await expect(toolbar).toBeVisible();
+  const rowA = firstRow(page);
+  const rowB = page.locator('.main .list .row:not(.skeleton):not(.failed)').nth(1);
+  await rowA.locator('.cell.title').click();
+  await expect(rowA).toHaveClass(/selected/);
+  await expect(page.locator('.main .list .k-check')).toHaveCount(0);
+
+  // Ctrl+点第二行 → 批量模式自动打开（勾选列出现），两行都在选择集里
+  await rowB.locator('.cell.title').click({ modifiers: ['Control'] });
+  await expect(page.locator('.main .list .k-check').first()).toBeVisible();
+  await expect(rowA).toHaveClass(/selected/);
+  await expect(rowB).toHaveClass(/selected/);
+  await expect(toolbar).toContainText(/已选 2 首/);
+
+  // 工具条加入队列：toast + 选择清空（计数消失）
+  await toolbar.getByRole('button', { name: '加入播放队列' }).click();
+  await expect(page.locator('body')).toContainText(/已加入队列 2 首/);
+  await expect(toolbar).not.toContainText(/已选/);
+  await expect(rowA).not.toHaveClass(/selected/);
+});
+
+test('列表页：批量开关控制勾选列显隐；筛选器打开模态框', async ({ page }) => {
+  await openLibrary(page);
+  const toolbar = page.locator('.list-toolbar');
+
+  // 开关打开 → 勾选列出现；全选可用
+  await toolbar.getByRole('switch', { name: '批量操作模式' }).click();
+  await expect(page.locator('.main .list .k-check').first()).toBeVisible();
+
+  // 筛选器模态框：应用「从未播放」→ chip 出现
+  await toolbar.getByRole('button', { name: /筛选器/ }).click();
+  const dialog = page.locator('.k-dlg');
+  await expect(dialog).toContainText('筛选曲目');
+  // mock 种子里有从未播放的曲目，应用后列表仍在
+  await dialog.getByRole('button', { name: '应用' }).click();
+  await expect(page.locator('.main h1')).toHaveText('全部曲目');
+  await firstRow(page).waitFor({ state: 'visible' });
+});
+
+test('首页：预览表为纯列表（无勾选列），双击播放保留', async ({ page }) => {
+  await page.goto('/');
+  const row = page.locator('.main .tt-row').first();
   await row.waitFor({ state: 'visible' });
 
-  await row.click();
-  const bar = page.locator('.batch-bar');
-  await expect(bar).toBeVisible();
+  // 纯预览：没有勾选框、没有悬浮批量条
+  await expect(page.locator('.main .tt-row .k-check')).toHaveCount(0);
+  await expect(page.locator('.batch-bar')).toHaveCount(0);
 
-  await bar.getByRole('button', { name: '取消选择' }).click();
-  await expect(bar).toHaveCount(0);
-  await expect(row).not.toHaveClass(/selected/);
+  // 双击播放链路保留
+  await row.dblclick();
+  await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
 });

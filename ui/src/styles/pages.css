@@ -138,7 +138,8 @@
 .tt-head,
 .tt-row {
   display: grid;
-  grid-template-columns: 22px 30px minmax(0, 2.2fr) minmax(0, 1.3fr) minmax(0, 1.3fr) 62px;
+  /* docs/27：纯预览表（勾选列撤掉）——封面 / 标题 / 艺人 / 专辑 / 数值 */
+  grid-template-columns: 30px minmax(0, 2.2fr) minmax(0, 1.3fr) minmax(0, 1.3fr) 62px;
   align-items: center;
   gap: 10px;
   padding: 0 12px;
@@ -165,10 +166,6 @@
 
 .tt-row:hover {
   background: var(--surface-hover);
-}
-
-.tt-row.selected {
-  background: var(--accent-weak);
 }
 
 .tt-row.active .cell {

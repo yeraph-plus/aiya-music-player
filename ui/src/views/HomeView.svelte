@@ -8,7 +8,6 @@
   import type { TrackSource } from '../lib/query';
   import { artworkUrl } from '../lib/artwork';
   import { errorMessage } from '../lib/errors';
-  import { batch, type HomeSection } from '../stores/batch.svelte';
   import { library } from '../stores/library.svelte';
   import { nav } from '../stores/nav.svelte';
   import { notify } from '../stores/notify.svelte';
@@ -18,11 +17,8 @@
   /**
    * 推荐页（原「首页」，docs/25 §3 改名）：歌单宫格 + 三段曲目预览（最近播放 / 常听 / 最近添加）。
    *
-   * 三段都走 `TrackTable`（真表头 + 勾选列 + 三态全选），所以首页也能
-   * **批量管理**：选中 → 底部批量条（播放 / 加入队列 / 加入歌单 / 移出曲库）。
-   * 选择集按 ID，三段之间互斥（在 A 段选会清掉 B 段的选中）——
-   * 这套状态与批量动作在 `stores/batch.svelte.ts`（B4-2b 单点化，
-   * 与列表页共用同一个批量条与同一份动作实现）。
+   * 三段都走 `TrackTable`——docs/27 起是**纯预览表**（勾选/批量撤掉，
+   * 批量归主列表工具条），双击播放、右键菜单保留。
    */
   const SECTION_SIZE = 8;
 
@@ -134,9 +130,7 @@
       {loading}
       empty="还没有播放记录，听几首歌后会出现在这里。"
       valueKind="duration"
-      selected={batch.selectedIn('recent')}
       currentId={player.state?.current?.id ?? null}
-      onchange={(ids) => batch.setSection('recent', ids)}
       onplay={(index) => void play(recent, index)}
     />
   </section>
@@ -151,9 +145,7 @@
       {loading}
       empty="播放次数积累后，这里会形成你的常听榜单。"
       valueKind="plays"
-      selected={batch.selectedIn('frequent')}
       currentId={player.state?.current?.id ?? null}
-      onchange={(ids) => batch.setSection('frequent', ids)}
       onplay={(index) => void play(frequent, index)}
     />
   </section>
@@ -170,9 +162,7 @@
       {loading}
       empty="曲库还是空的，到设置页选择目录并扫描。"
       valueKind="added"
-      selected={batch.selectedIn('added')}
       currentId={player.state?.current?.id ?? null}
-      onchange={(ids) => batch.setSection('added', ids)}
       onplay={(index) => void play(added, index)}
     />
   </section>

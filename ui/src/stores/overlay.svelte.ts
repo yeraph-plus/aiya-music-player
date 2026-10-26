@@ -16,6 +16,8 @@ export type Dialog =
   | { kind: 'deletePlaylist'; playlist: PlaylistSummary }
   | { kind: 'addToPlaylist'; ids: string[] }
   | { kind: 'removeTracks'; ids: string[] }
+  /** 列表工具条的筛选器模态框（docs/27）；草稿状态在 OverlayHost 本地 */
+  | { kind: 'trackFilter' }
   | null;
 
 export interface TrackMenu {
@@ -23,6 +25,12 @@ export interface TrackMenu {
   y: number;
   index: number;
   track: TrackRow | null;
+  /**
+   * 多选语义（docs/27）：右键的行在当前选择集里且选择集 >1 行时为真——
+   * 菜单隐藏「播放/下一首播放/在文件夹中显示/查看艺人/查看专辑」这类
+   * 单行专属项，批量项对整个选择集生效。
+   */
+  multi: boolean;
 }
 
 export interface PlaylistMenu {
@@ -50,9 +58,15 @@ class OverlayStore {
    * 两个菜单**互斥**：右键曲目行之后再去右键侧栏歌单，不该两个都挂在屏幕上
    * （2026-10-25 真窗口验证时看到过两个 `.context-menu` 同时存在）。
    */
-  openTrackMenu(x: number, y: number, index: number, track: TrackRow | null): void {
+  openTrackMenu(
+    x: number,
+    y: number,
+    index: number,
+    track: TrackRow | null,
+    multi = false,
+  ): void {
     this.playlistMenu = null;
-    this.trackMenu = { x, y, index, track };
+    this.trackMenu = { x, y, index, track, multi };
   }
 
   openPlaylistMenu(x: number, y: number, playlist: PlaylistSummary): void {

@@ -187,6 +187,26 @@ class PlaylistsStore {
     await list.reload({ restore: true });
   }
 
+  /**
+   * 歌单内批量删（docs/27：工具条/右键对选择集生效）。**按下标从大到小删**：
+   * removeAt 按位置删，先删后面的不会让前面未删的下标位移；
+   * 全部删完只 refresh/reload 一次（逐个调 removeItemAt 会 O(n) 次重载）。
+   */
+  async removeItemsAt(indices: number[]): Promise<void> {
+    const view = ui.view;
+    if (view.kind !== 'playlist' || indices.length === 0) return;
+    try {
+      for (const index of [...indices].sort((a, b) => b - a)) {
+        await ipc.playlist.removeAt(view.id, index);
+      }
+    } catch (err) {
+      notify.showError(errorMessage(err));
+      return;
+    }
+    await this.refresh();
+    await list.reload({ restore: true });
+  }
+
   /** 打开歌单（切视图 + 重载 + 存状态） */
   open(id: string): void {
     nav.go({ kind: 'playlist', id });

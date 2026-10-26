@@ -119,6 +119,20 @@ pub struct TrackWindowQuery {
     pub artist_id: Option<String>,
     #[serde(default)]
     pub album_id: Option<String>,
+    /// 入库时间范围（毫秒，含 from 不含 to）。列表工具条的筛选器模态框用。
+    #[serde(default)]
+    pub added_from_ms: Option<i64>,
+    #[serde(default)]
+    pub added_to_ms: Option<i64>,
+    /// 上次播放时间范围（毫秒，含 from 不含 to）。
+    #[serde(default)]
+    pub last_played_from_ms: Option<i64>,
+    #[serde(default)]
+    pub last_played_to_ms: Option<i64>,
+    /// 只看从未播放过的曲目（`last_played_at IS NULL`）；与 last_played 范围互斥，
+    /// 同时给时 never 优先。
+    #[serde(default)]
+    pub last_played_never: Option<bool>,
     /// 嵌套形状 `{ source: { kind: "library" } }`，与 contracts/query.ts 的
     /// trackSourceSchema（discriminatedUnion('kind')）同构。
     /// 注意不能用 #[serde(flatten)] 把 kind 摊到顶层 —— 那是 Electron demo
@@ -261,6 +275,37 @@ fn build_where(q: &TrackWindowQuery, cursor_filter: Option<&str>) -> (String, Ve
             v.push(Box::new(b.clone()));
         }));
         where_clauses.push("t.album_id = ?".to_string());
+    }
+    // 时间筛选（筛选器模态框）：DB 存 unix 秒，入参是毫秒——绑定前 /1000。
+    // to 是开区间（前端给"下一档起点"），所以用 <；from 用 >=。
+    if let Some(ms) = q.added_from_ms {
+        binders.push(Box::new(move |v: &mut Vec<Box<dyn ToSql>>| {
+            v.push(Box::new(ms / 1000));
+        }));
+        where_clauses.push("t.added_at >= ?".to_string());
+    }
+    if let Some(ms) = q.added_to_ms {
+        binders.push(Box::new(move |v: &mut Vec<Box<dyn ToSql>>| {
+            v.push(Box::new(ms / 1000));
+        }));
+        where_clauses.push("t.added_at < ?".to_string());
+    }
+    if q.last_played_never == Some(true) {
+        // 「从未播放」与时间范围互斥，never 优先（见字段注释）
+        where_clauses.push("t.last_played_at IS NULL".to_string());
+    } else {
+        if let Some(ms) = q.last_played_from_ms {
+            binders.push(Box::new(move |v: &mut Vec<Box<dyn ToSql>>| {
+                v.push(Box::new(ms / 1000));
+            }));
+            where_clauses.push("t.last_played_at >= ?".to_string());
+        }
+        if let Some(ms) = q.last_played_to_ms {
+            binders.push(Box::new(move |v: &mut Vec<Box<dyn ToSql>>| {
+                v.push(Box::new(ms / 1000));
+            }));
+            where_clauses.push("t.last_played_at < ?".to_string());
+        }
     }
     // 歌单来源：JOIN_PLAYLIST 从 playlist_items 出发，必须按 playlist_id 过滤，
     // 否则任何歌单都返回全部曲目（P0）。占位符顺序 = binder 推入顺序
@@ -614,12 +659,49 @@ mod tests {
             search: None,
             artist_id: None,
             album_id: None,
+            added_from_ms: None,
+            added_to_ms: None,
+            last_played_from_ms: None,
+            last_played_to_ms: None,
+            last_played_never: None,
             source: TrackSource::Library,
             limit: 2,
             mode,
             cursor,
             offset,
         }
+    }
+
+    /// 时间筛选（筛选器模态框）：毫秒入参 → 秒比较；never 优先于范围。
+    /// 夹具 added_at：t1=100s, t2=110s, t3=120s；last_played：t1=600s, t2=700s, t3=NULL。
+    #[test]
+    fn time_filters_added_and_last_played() {
+        let conn = open_in_memory().unwrap();
+        insert_fixtures(&conn);
+
+        // 入库 [105s, 115s) → 只有 t2
+        let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
+        q.added_from_ms = Some(105_000);
+        q.added_to_ms = Some(115_000);
+        let page = list_tracks(&conn, &q).unwrap();
+        assert_eq!(page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t2"]);
+
+        // 上次播放 >= 650s → 只有 t2（t1 是 600s，t3 从未播）
+        let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
+        q.last_played_from_ms = Some(650_000);
+        let page = list_tracks(&conn, &q).unwrap();
+        assert_eq!(page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t2"]);
+
+        // 从未播放 → 只有 t3；never 与范围同给时 never 优先
+        let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
+        q.last_played_never = Some(true);
+        let page = list_tracks(&conn, &q).unwrap();
+        assert_eq!(page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t3"]);
+        let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
+        q.last_played_never = Some(true);
+        q.last_played_from_ms = Some(0);
+        let page = list_tracks(&conn, &q).unwrap();
+        assert_eq!(page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t3"]);
     }
 
     #[test]
@@ -717,6 +799,11 @@ mod tests {
                 search: None,
                 artist_id: None,
                 album_id: None,
+                added_from_ms: None,
+                added_to_ms: None,
+                last_played_from_ms: None,
+                last_played_to_ms: None,
+                last_played_never: None,
                 source: TrackSource::Library,
                 limit: 2,
                 mode: Mode::Cursor,
