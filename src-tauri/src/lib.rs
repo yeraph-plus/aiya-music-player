@@ -802,6 +802,32 @@ fn library_stats(state: State<'_, AppState>) -> Result<dto::LibraryStats, dto::A
     .map_err(dto::ApiError::from)
 }
 
+/// 专辑浏览聚合（docs/24 §3.2 决策 2）。只含实际有曲目的专辑，
+/// 一次性返回前 N（`facets::FACET_LIMIT`），无游标——聚合本身是全表
+/// GROUP BY，5 万行量级个位数毫秒，分页反而多余。
+#[tauri::command]
+fn library_albums(
+    state: State<'_, AppState>,
+    search: Option<String>,
+) -> Result<Vec<aiya_data::facets::AlbumFacet>, dto::ApiError> {
+    state
+        .db()
+        .send(move |conn| aiya_data::facets::list_albums(conn, search.as_deref()))
+        .map_err(dto::ApiError::from)
+}
+
+/// 艺人浏览聚合。与 `library_albums` 同形状（拆两条命令的理由见 facets.rs 头注释）。
+#[tauri::command]
+fn library_artists(
+    state: State<'_, AppState>,
+    search: Option<String>,
+) -> Result<Vec<aiya_data::facets::ArtistFacet>, dto::ApiError> {
+    state
+        .db()
+        .send(move |conn| aiya_data::facets::list_artists(conn, search.as_deref()))
+        .map_err(dto::ApiError::from)
+}
+
 /// 扫描：阻塞直到完成（进度经 `scan:progress` 事件推送，UI 侧节流渲染）。
 /// 用独立连接（WAL 下与主 DB 线程并行），不占用 DbHandle。
 /// Tauri 要求 async 命令带引用参数（`State<'_, _>`）必须返回 Result。
@@ -2660,6 +2686,8 @@ pub fn run() {
             beets_cancel,
             beets_sync,
             library_list,
+            library_albums,
+            library_artists,
             library_tracks,
             library_stats,
             library_scan,

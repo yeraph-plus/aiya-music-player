@@ -54,6 +54,10 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return mock.idsForSelection(a.request as SelectionIdsQuery);
     case 'library_remove_tracks':
       return mock.removeTracks(a.trackIds as string[]);
+    case 'library_albums':
+      return mock.libraryAlbums(a.search as string | undefined);
+    case 'library_artists':
+      return mock.libraryArtists(a.search as string | undefined);
 
     /* ---------------- playlist ---------------- */
     case 'playlist_list':

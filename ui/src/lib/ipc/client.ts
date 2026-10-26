@@ -17,7 +17,9 @@
 import type {
   ApiError,
   ApiErrorCode,
+  AlbumFacet,
   AppInfo,
+  ArtistFacet,
   BeetsStatus,
   CancelRequested,
   ChosenRoot,
@@ -162,6 +164,13 @@ export const ipc = {
       call<string[]>('library_ids_for_selection', { request }),
     /** 从曲库移除（只删索引，不动磁盘文件） */
     removeTracks: (trackIds: string[]) => call<RemoveTracks>('library_remove_tracks', { trackIds }),
+    /**
+     * 专辑/艺人聚合浏览（docs/24 §3.2 决策 2）。只含**实际有曲目**的条目，
+     * 一次性返回前 500（后端 `FACET_LIMIT`），无游标；按名称排序。
+     * 空白/缺省 `search` = 不过滤。
+     */
+    albums: (search?: string) => call<AlbumFacet[]>('library_albums', { search }),
+    artists: (search?: string) => call<ArtistFacet[]>('library_artists', { search }),
   },
 
   playlist: {

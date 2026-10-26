@@ -7,6 +7,7 @@
 pub mod artwork;
 pub mod beets_sync;
 pub mod db;
+pub mod facets;
 pub mod history;
 pub mod ids;
 pub mod lyrics;

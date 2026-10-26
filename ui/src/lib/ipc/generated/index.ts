@@ -1,7 +1,9 @@
 // 由 npm run gen:types 生成，勿手改。
+export * from './AlbumFacet';
 export * from './ApiError';
 export * from './ApiErrorCode';
 export * from './AppInfo';
+export * from './ArtistFacet';
 export * from './AudioError';
 export * from './AudioErrorCode';
 export * from './AudioModeEvent';

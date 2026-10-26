@@ -19,6 +19,8 @@ import { parseTrackQuery } from '../../query';
 import type { SelectionIdsQuery, QueueInsertMode } from '../client';
 import type { UiState } from '../schema';
 import type {
+  AlbumFacet,
+  ArtistFacet,
   Diagnostics,
   HistoryStats,
   LibraryStats,
@@ -386,6 +388,71 @@ export class MockBackend {
     return request.indices
       .map((i) => rows[i]?.id)
       .filter((id): id is string => typeof id === 'string');
+  }
+
+  /**
+   * 专辑/艺人聚合（真后端是 SQL GROUP BY，预览从内存曲目里聚合同一形状）。
+   * 与真后端同口径：只含有曲目的条目、按名称排序、上限 500。
+   */
+  libraryAlbums(search?: string): AlbumFacet[] {
+    const needle = search?.trim().toLowerCase() || null;
+    const map = new Map<string, AlbumFacet>();
+    for (const t of this.tracks) {
+      if (!t.albumId) continue;
+      let f = map.get(t.albumId);
+      if (!f) {
+        f = {
+          id: t.albumId,
+          title: t.album ?? t.albumId,
+          artistId: t.artistId,
+          artist: t.albumArtist ?? t.artist,
+          year: t.year,
+          artworkId: t.artworkId,
+          trackCount: 0,
+          totalDurationMs: 0,
+        };
+        map.set(t.albumId, f);
+      }
+      f.trackCount += 1;
+      f.totalDurationMs += t.durationMs ?? 0;
+    }
+    return [...map.values()]
+      .filter((f) => !needle || f.title.toLowerCase().includes(needle))
+      .sort((a, b) => a.title.localeCompare(b.title, 'zh') || a.id.localeCompare(b.id))
+      .slice(0, 500);
+  }
+
+  libraryArtists(search?: string): ArtistFacet[] {
+    const needle = search?.trim().toLowerCase() || null;
+    const tracks = new Map<string, ArtistFacet>();
+    const albums = new Map<string, Set<string>>();
+    for (const t of this.tracks) {
+      if (!t.artistId) continue;
+      let f = tracks.get(t.artistId);
+      if (!f) {
+        f = {
+          id: t.artistId,
+          name: t.artist ?? t.artistId,
+          artworkId: t.artworkId,
+          trackCount: 0,
+          albumCount: 0,
+          totalDurationMs: 0,
+        };
+        tracks.set(t.artistId, f);
+      }
+      f.trackCount += 1;
+      f.totalDurationMs += t.durationMs ?? 0;
+      if (t.albumId) {
+        let set = albums.get(t.artistId);
+        if (!set) albums.set(t.artistId, (set = new Set()));
+        set.add(t.albumId);
+      }
+    }
+    return [...tracks.values()]
+      .filter((f) => !needle || f.name.toLowerCase().includes(needle))
+      .map((f) => ({ ...f, albumCount: albums.get(f.id)?.size ?? 0 }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh') || a.id.localeCompare(b.id))
+      .slice(0, 500);
   }
 
   revealTrack(_trackId: string): RevealResult {
