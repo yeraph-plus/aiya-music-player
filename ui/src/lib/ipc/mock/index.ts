@@ -11,7 +11,7 @@
  */
 import type { ApplyDecision, DynamicJson, QueueInsertMode, ScanOptions, SelectionIdsQuery, TrackQueryInput } from '../client';
 import type { AppSettings } from '../../settings';
-import type { ApiError, RepeatMode } from '../generated';
+import type { ApiError, EqSettings, RepeatMode } from '../generated';
 import type { UiState } from '../schema';
 import type { Transport } from '../transport';
 import { setTransport } from '../transport';
@@ -158,6 +158,8 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return undefined;
     case 'spectrum_set':
       return mock.setSpectrum(a.enabled as boolean);
+    case 'player_set_eq':
+      return mock.setEq(a.eq as EqSettings);
 
     /* ---------------- beets ---------------- */
     case 'beets_status':

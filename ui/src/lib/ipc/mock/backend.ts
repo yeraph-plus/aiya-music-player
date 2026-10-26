@@ -22,6 +22,7 @@ import type {
   AlbumFacet,
   ArtistFacet,
   Diagnostics,
+  EqSettings,
   HistoryStats,
   LibraryStats,
   ListTiming,
@@ -894,6 +895,21 @@ export class MockBackend {
       this.spectrumTimer = null;
     }
     return { enabled: on };
+  }
+
+  /**
+   * EQ（协议 v6）：与真后端同语义——clamp 后存 localStorage 并原样返回生效值。
+   * 预览不出声，滤波本身无从演示；这里保住的是"发出去的值和回读的值一致"。
+   */
+  setEq(eq: EqSettings): EqSettings {
+    const LIMIT = 12;
+    const applied: EqSettings = {
+      enabled: eq.enabled,
+      pregain: Math.max(-LIMIT, Math.min(LIMIT, eq.pregain)),
+      bands: eq.bands.map((b) => Math.max(-LIMIT, Math.min(LIMIT, b))),
+    };
+    saveJson('aiya.eq', applied);
+    return applied;
   }
 
   diagnostics(): Diagnostics {

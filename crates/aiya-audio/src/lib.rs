@@ -6,6 +6,8 @@
 
 pub mod decoder;
 pub mod engine;
+/// 10 段 biquad EQ（协议 v6，docs/24 B5b）。
+pub mod eq;
 /// HLS (m3u8) 流式源（docs/22 G3）。对 engine 透明——只以 `DecodedStream`
 /// 的 Hls 变体出现；模块内类型不进公共 API。
 pub mod hls;
@@ -94,6 +96,7 @@ impl AudioError {
 
 pub use decoder::{DecodeBackend, DecodedStream};
 pub use engine::{ClockPref, Engine, EngineCommand, EngineEvent, ModePref, OutputConfig};
+pub use eq::{EqParams, EQ_BAND_HZ, EQ_GAIN_LIMIT_DB, EQ_PREGAIN_LIMIT_DB};
 pub use proto::{encode_line, HostToSidecar, SidecarToHost, PROTOCOL_VERSION};
 
 /// 设备自检（sidecar --selftest 用）：列出渲染设备名。

@@ -40,6 +40,9 @@ struct TrackState {
     /// 引擎内部的 pending_cfg 归零；不回放这条，用户开着独占会静默退回共享
     /// （设置页却显示已开）。
     output: aiya_audio::OutputConfig,
+    /// EQ 参数（协议 v6）。与输出配置同性质：设置项而非曲目属性，崩溃重启
+    /// 后必须无条件回放（引擎未装载时只暂存，首曲 Load 即生效）。
+    eq: aiya_audio::EqParams,
 }
 
 /// 跨线程共享的 supervisor 状态。
@@ -128,6 +131,7 @@ impl SidecarHandle {
                 aiya_audio::EngineCommand::SetVolume(v) => t.volume = *v,
                 aiya_audio::EngineCommand::SetRate(r) => t.rate = *r,
                 aiya_audio::EngineCommand::SetOutputConfig(c) => t.output = *c,
+                aiya_audio::EngineCommand::SetEq(p) => t.eq = *p,
                 _ => {}
             }
         }
@@ -401,6 +405,12 @@ fn spawn_watchdog(
             // 首曲 Load 才真正开流。漏了这条，崩溃重启后会静默退回共享。
             if let Ok(b) = aiya_audio::encode_line(&aiya_audio::HostToSidecar::Cmd(
                 aiya_audio::EngineCommand::SetOutputConfig(t.output),
+            )) {
+                restore.extend_from_slice(&b);
+            }
+            // EQ 偏好无条件回放（v6），理由同上：设置项不随装载与否
+            if let Ok(b) = aiya_audio::encode_line(&aiya_audio::HostToSidecar::Cmd(
+                aiya_audio::EngineCommand::SetEq(t.eq),
             )) {
                 restore.extend_from_slice(&b);
             }

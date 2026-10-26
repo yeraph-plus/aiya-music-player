@@ -24,6 +24,7 @@ import type {
   CancelRequested,
   ChosenRoot,
   Diagnostics,
+  EqSettings,
   HistoryCleared,
   HistoryStats,
   JobStarted,
@@ -235,6 +236,11 @@ export const ipc = {
     removeAt: (index: number) => call<PlayerState>('player_remove_at', { index }),
     move: (from: number, to: number) => call<PlayerState>('player_move', { from, to }),
     clear: () => call<PlayerState>('player_clear'),
+    /**
+     * EQ 设置（协议 v6）：持久化 + 即时下发。返回**生效值**（clamp 后）——
+     * UI 以返回值为准，不要用自己发出去的值更新状态。
+     */
+    setEq: (eq: EqSettings) => call<EqSettings>('player_set_eq', { eq }),
   },
 
   lyrics: {

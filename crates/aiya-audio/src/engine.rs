@@ -60,6 +60,9 @@ pub enum EngineCommand {
     /// 取代早期的 `SetExclusive(bool)`：模式、时钟、缓冲是**一组**参数，分开
     /// 下发会出现"模式已切、缓冲还是旧的"中间态，且每次都要重建流两次。
     SetOutputConfig(OutputConfig),
+    /// 10 段 EQ 整体下发（协议 v6，docs/24 B5b）。播放中热切：系数重算、
+    /// 延迟线保留。生效值（clamp 后）经 `EngineEvent::EqApplied` 回报。
+    SetEq(crate::eq::EqParams),
     /// 退出线程
     Shutdown,
 }
@@ -104,6 +107,9 @@ pub enum EngineEvent {
     /// 产生处由 `AudioError::kind()` 定，不经宿主猜——UI 要靠它决定
     /// "跳下一首"还是"提示/亮灰标"。
     Error { token: u64, kind: String, message: String },
+    /// EQ 设置已被 sidecar 接受（协议 v6）。`params` 是**生效值**（clamp 后），
+    /// UI 以它为准而不是自己发出去的值。未装载时的 SetEq 回报 token=0。
+    EqApplied { token: u64, params: crate::eq::EqParams },
 }
 
 /// 引擎事件通道容量。Position ~10ms/帧 + Spectrum ~30fps，正常消费下远用不满；
@@ -234,6 +240,9 @@ fn render_loop(
     let mut pending_rate: f32 = 1.0;
     // 输出配置同理跨曲目保持（设置项，不随换曲回默认）
     let mut pending_cfg = OutputConfig::default();
+    // EQ 参数同样跨曲目保持（协议 v6）。play_file 内部收到 SetEq 时会更新
+    // 自己的实例并把最终值经 LoadExit 带回这里（与 rate/cfg 同一套账法）
+    let mut pending_eq = crate::eq::EqParams::default();
     'outer: loop {
         // 命令循环：等 Load 或 Shutdown（Load 前到的 SetRate/SetSpectrum 暂存生效）
         let (mut path, mut start_ms, mut token) = loop {
@@ -244,6 +253,12 @@ fn render_loop(
                 Ok(EngineCommand::SetRate(r)) => pending_rate = r.clamp(0.5, 2.0),
                 Ok(EngineCommand::SetSpectrum(on)) => tap.set_enabled(on),
                 Ok(EngineCommand::SetOutputConfig(c)) => pending_cfg = c,
+                Ok(EngineCommand::SetEq(p)) => {
+                    let applied = p.clamped();
+                    pending_eq = applied;
+                    // 未装载阶段 token=0（"装载代数来自最近的 Load"——还没有）
+                    send(EngineEvent::EqApplied { token: 0, params: applied });
+                }
                 Ok(EngineCommand::Shutdown) | Err(_) => break 'outer,
                 Ok(other) => {
                     // 未装载时只响应 Stop 类命令的回报
@@ -267,6 +282,7 @@ fn render_loop(
                     token,
                     pending_rate,
                     pending_cfg,
+                    pending_eq,
                     &tap,
                     &written,
                 )
@@ -279,21 +295,24 @@ fn render_loop(
                     token,
                     pending_rate,
                     pending_cfg,
+                    pending_eq,
                     &tap,
                     &written,
                 )
             };
             match outcome {
-                Ok(LoadExit::Finished { cfg }) => {
+                Ok(LoadExit::Finished { cfg, eq }) => {
                     pending_cfg = cfg;
+                    pending_eq = eq;
                     break; // EOF/Stop/错误恢复：回顶层等下一条 Load
                 }
-                Ok(LoadExit::NewLoad { path: p, rate, start_ms: s, token: t, cfg }) => {
+                Ok(LoadExit::NewLoad { path: p, rate, start_ms: s, token: t, cfg, eq }) => {
                     path = p;
                     pending_rate = rate;
                     start_ms = s;
                     token = t;
                     pending_cfg = cfg;
+                    pending_eq = eq;
                 }
                 Ok(LoadExit::Shutdown) => break 'outer,
                 Err(e) => {
@@ -342,6 +361,7 @@ fn play_null(
     token: u64,
     initial_rate: f32,
     initial_cfg: OutputConfig,
+    initial_eq: crate::eq::EqParams,
     tap: &crate::spectrum::SpectrumTap,
     written: &AtomicU64,
 ) -> Result<LoadExit, AudioError> {
@@ -365,6 +385,8 @@ fn play_null(
     let channels = decoder.channels().max(1);
     let mut rate: f32 = initial_rate;
     let mut cfg = initial_cfg;
+    // 静音模式不滤波（没有输出），但参数要记账：切回真实输出时经 LoadExit 带回
+    let mut eq_params = initial_eq;
     let mut paused = false;
     send(EngineEvent::StateChanged { token, playing: true });
 
@@ -398,6 +420,10 @@ fn play_null(
                 Ok(EngineCommand::SetVolume(_)) => {}
                 Ok(EngineCommand::SetRate(r)) => rate = r.clamp(0.5, 2.0),
                 Ok(EngineCommand::SetSpectrum(on)) => tap.set_enabled(on),
+                Ok(EngineCommand::SetEq(p)) => {
+                    eq_params = p.clamped();
+                    send(EngineEvent::EqApplied { token, params: eq_params });
+                }
                 Ok(EngineCommand::SetOutputConfig(c)) => {
                     if c.mode != ModePref::Null {
                         // 切回真实输出：把当前位置带出去，让外层用新配置重开
@@ -407,6 +433,7 @@ fn play_null(
                             start_ms: decoder.position_ms(),
                             token,
                             cfg: c,
+                            eq: eq_params,
                         });
                     }
                     cfg = c;
@@ -414,7 +441,7 @@ fn play_null(
                 Ok(EngineCommand::Stop) => {
                     send(EngineEvent::StateChanged { token, playing: false });
                     send(EngineEvent::Eof { token });
-                    return Ok(LoadExit::Finished { cfg });
+                    return Ok(LoadExit::Finished { cfg, eq: eq_params });
                 }
                 Ok(EngineCommand::Load { path: p, start_ms: s, token: t }) => {
                     return Ok(LoadExit::NewLoad {
@@ -423,6 +450,7 @@ fn play_null(
                         start_ms: s,
                         token: t,
                         cfg,
+                        eq: eq_params,
                     });
                 }
                 Ok(EngineCommand::Shutdown) => return Ok(LoadExit::Shutdown),
@@ -464,7 +492,7 @@ fn play_null(
             send(EngineEvent::Position { token, position_ms: decoder.duration_ms() });
             send(EngineEvent::StateChanged { token, playing: false });
             send(EngineEvent::Eof { token });
-            return Ok(LoadExit::Finished { cfg });
+            return Ok(LoadExit::Finished { cfg, eq: eq_params });
         }
     }
 }
@@ -472,8 +500,8 @@ fn play_null(
 /// play_file 的退出原因。NewLoad 必须把 path/起点/代数带回外层续播。
 enum LoadExit {
     /// EOF / Stop / 设备错误：回命令循环等下一条 Load。
-    /// 带回最新配置（播放中用户可能改过设置）
-    Finished { cfg: OutputConfig },
+    /// 带回最新配置与 EQ 参数（播放中用户可能改过设置）
+    Finished { cfg: OutputConfig, eq: crate::eq::EqParams },
     /// 播放中收到新 Load：直接换曲续播。
     NewLoad {
         path: String,
@@ -481,6 +509,7 @@ enum LoadExit {
         start_ms: u64,
         token: u64,
         cfg: OutputConfig,
+        eq: crate::eq::EqParams,
     },
     /// 收到 Shutdown：终止渲染线程
     Shutdown,
@@ -569,6 +598,7 @@ const DEVICE_RECOVERY_ATTEMPTS: u32 = 5;
 /// `token`：本曲装载代数，原样回显进所有事件。
 /// `initial_rate`：Load 前收到的变速指令（如启动恢复/恢复会话）。
 /// `initial_cfg`：输出配置（模式/时钟/缓冲/暂停释放）。
+/// `initial_eq`：EQ 参数（协议 v6）。随流构建滤波器，播放中可热切。
 /// `tap`：频谱采样点（跨曲目常驻；推**重采样后**的输出帧，未乘音量）。
 fn play_file(
     cmd_rx: &Receiver<EngineCommand>,
@@ -578,6 +608,7 @@ fn play_file(
     token: u64,
     initial_rate: f32,
     initial_cfg: OutputConfig,
+    initial_eq: crate::eq::EqParams,
     tap: &crate::spectrum::SpectrumTap,
     written: &AtomicU64,
 ) -> Result<LoadExit, AudioError> {
@@ -593,6 +624,9 @@ fn play_file(
     // 配置意图与设备事实分开记：cfg 是用户设置，out.mode 是设备实际给的。
     // 回落不算错误（Error 会让 UI 弹红条），用 AudioMode 的 reason 说明。
     let mut cfg = initial_cfg;
+    // EQ：滤波器实例绑定本流的格式（采样率/声道），参数跨曲目经 LoadExit 记账
+    let mut eq_params = initial_eq;
+    let mut eq = crate::eq::Eq::new(eq_params, decoder.sample_rate(), decoder.channels());
     let (mut out, mut mode_note) = open_output(&decoder, &cfg)?;
     send(mode_event(token, &cfg, &out, mode_note.take()));
 
@@ -710,6 +744,13 @@ fn play_file(
                 Ok(EngineCommand::SetVolume(v)) => volume = v.clamp(0.0, 1.0),
                 Ok(EngineCommand::SetRate(r)) => rate = r.clamp(0.5, 2.0),
                 Ok(EngineCommand::SetSpectrum(on)) => tap.set_enabled(on),
+                Ok(EngineCommand::SetEq(p)) => {
+                    // 热切：系数重算、延迟线保留。回报生效值（clamp 后），
+                    // UI 以它为准（防"发了 20 结果存了 12"的漂移）
+                    eq_params = p.clamped();
+                    eq.set_params(eq_params);
+                    send(EngineEvent::EqApplied { token, params: eq_params });
+                }
                 Ok(EngineCommand::SetOutputConfig(next)) if next.mode == ModePref::Null => {
                     // 切到静音输出要走另一条渲染路径（play_null）：停流后把当前
                     // 位置带回外层重新装载。位置取 play_position（扣掉池内未播
@@ -722,6 +763,7 @@ fn play_file(
                         start_ms: resume_ms,
                         token,
                         cfg: next,
+                        eq: eq_params,
                     });
                 }
                 Ok(EngineCommand::SetOutputConfig(next)) => {
@@ -754,6 +796,7 @@ fn play_file(
                         start_ms: s,
                         token: t,
                         cfg,
+                        eq: eq_params,
                     });
                 }
                 Ok(EngineCommand::Shutdown) => {
@@ -831,7 +874,7 @@ fn play_file(
             send(EngineEvent::StateChanged { token, playing: false });
             send(EngineEvent::Eof { token }); // Stop 视为曲目结束（PlayerActor 决定下一动作）
             out.stop();
-            return Ok(LoadExit::Finished { cfg });
+            return Ok(LoadExit::Finished { cfg, eq: eq_params });
         }
         if result.is_err() {
             out.stop();
@@ -1009,6 +1052,7 @@ fn play_file(
                 out_frames,
                 gain_now,
                 step,
+                &mut eq,
                 &mut out_f32,
                 &mut tap_mono,
             );
@@ -1082,6 +1126,7 @@ fn play_file(
                             start_ms: s,
                             token: t,
                             cfg,
+                            eq: eq_params,
                         });
                     }
                     Ok(EngineCommand::Stop) => {
@@ -1089,8 +1134,12 @@ fn play_file(
                         break;
                     }
                     Ok(EngineCommand::SetSpectrum(on)) => tap.set_enabled(on),
-                    // 曲尾只剩不到 500ms：只更新配置，重开流留给下一曲
+                    // 曲尾只剩不到 500ms：只更新配置/EQ，重开流留给下一曲
                     Ok(EngineCommand::SetOutputConfig(c)) => cfg = c,
+                    Ok(EngineCommand::SetEq(p)) => {
+                        eq_params = p.clamped();
+                        send(EngineEvent::EqApplied { token, params: eq_params });
+                    }
                     Ok(EngineCommand::Seek(_))
                     | Ok(EngineCommand::Pause)
                     | Ok(EngineCommand::Resume)
@@ -1118,13 +1167,13 @@ fn play_file(
             if user_stopped {
                 send(EngineEvent::StateChanged { token, playing: false });
                 send(EngineEvent::Eof { token });
-                return Ok(LoadExit::Finished { cfg });
+                return Ok(LoadExit::Finished { cfg, eq: eq_params });
             }
             send(EngineEvent::Position { token, position_ms: decoder.duration_ms() });
             send(EngineEvent::StateChanged { token, playing: false });
             send(EngineEvent::Eof { token });
             // EOF 后回命令循环等下一条 Load
-            return Ok(LoadExit::Finished { cfg });
+            return Ok(LoadExit::Finished { cfg, eq: eq_params });
         }
     }
 }
@@ -1886,9 +1935,12 @@ fn writable_frames(clock: Clock, mode: OutputMode, buffer_frames: u32, padding: 
     }
 }
 
-/// 从 pool 的 pool_pos 起按 rate 线性插值取 out_frames 帧，交错 f32（已乘音量）写入 out。
+/// 从 pool 的 pool_pos 起按 rate 线性插值取 out_frames 帧，交错 f32 写入 out。
 /// 输出帧 i 对应源位置 pool_pos + i*rate；越界索引 clamp 到池尾（仅 EOF 尾部触发）。
 /// `vol_start` / `vol_step`：音量斜坡的本块起点与每帧增量（见 [`VOLUME_RAMP_MS`]）。
+/// `eq`：10 段 EQ（协议 v6），插值后、乘音量**前**整块滤波——增益提升不能
+/// 顶爆已归一化的输出电平；旁路时零开销直通。频谱 tap 吃**滤波后**的单声道：
+/// 频谱反映的应该是耳朵听到的东西，不是文件里的东西。
 /// `mono_out`：同步写出每帧的单声道平均（未乘音量），供频谱 tap 使用。
 #[allow(clippy::too_many_arguments)]
 fn resample_take(
@@ -1899,6 +1951,7 @@ fn resample_take(
     out_frames: usize,
     vol_start: f32,
     vol_step: f32,
+    eq: &mut crate::eq::Eq,
     out: &mut Vec<f32>,
     mono_out: &mut Vec<f32>,
 ) {
@@ -1912,16 +1965,25 @@ fn resample_take(
         // i0 被 clamp 到池尾时 frac 可能 >1（EOF 残余防御路径），钳到 [0,1]
         // 复制末帧而非线性外插
         let frac = ((src_f - i0 as f64) as f32).clamp(0.0, 1.0);
-        let vol = vol_start + vol_step * i as f32;
-        let mut mono = 0.0f32;
         for ch in 0..channels {
             let a = pool[i0 * channels + ch];
             let b = pool[i1 * channels + ch];
-            let s = a + (b - a) * frac;
-            mono += s;
-            out.push(s * vol);
+            out.push(a + (b - a) * frac);
         }
-        mono_out.push(mono * inv_ch);
+    }
+    // EQ：整块就地滤波（bypass 时跳过，样本位级不动——docs/24 B5b 旁路证明）
+    if !eq.is_bypass() {
+        for frame in out.chunks_mut(channels) {
+            eq.process_frame(frame);
+        }
+    }
+    // 单声道：滤波后混（tap 反映实际出声内容）
+    for frame in out.chunks_exact(channels) {
+        mono_out.push(frame.iter().sum::<f32>() * inv_ch);
+    }
+    // 音量斜坡：逐样本乘（在 EQ 之后，见函数头注释）
+    for (i, s) in out.iter_mut().enumerate() {
+        *s *= vol_start + vol_step * (i / channels) as f32;
     }
 }
 
@@ -1972,7 +2034,8 @@ mod tests {
     /// 跑一遍 resample_take，返回交错 f32 输出。
     fn take(pool: &[f32], pos: f64, rate: f64, ch: usize, frames: usize, vol: f32) -> Vec<f32> {
         let mut out = Vec::new();
-        resample_take(pool, pos, rate, ch, frames, vol, 0.0, &mut out, &mut Vec::new());
+        let mut eq = crate::eq::Eq::new(crate::eq::EqParams::default(), 48_000, ch);
+        resample_take(pool, pos, rate, ch, frames, vol, 0.0, &mut eq, &mut out, &mut Vec::new());
         out
     }
 
@@ -2029,7 +2092,8 @@ mod tests {
         // 0 → 1 在一个 4 帧块里线性上升，中间没有阶跃（每步 0.25）
         let pool = [1.0f32; 4];
         let mut out = Vec::new();
-        resample_take(&pool, 0.0, 1.0, 1, 4, 0.0, 0.25, &mut out, &mut Vec::new());
+        let mut eq = crate::eq::Eq::new(crate::eq::EqParams::default(), 48_000, 1);
+        resample_take(&pool, 0.0, 1.0, 1, 4, 0.0, 0.25, &mut eq, &mut out, &mut Vec::new());
         let expect = [0.0, 0.25, 0.5, 0.75];
         for (i, (v, e)) in out.iter().zip(expect).enumerate() {
             assert!((v - e).abs() < 1e-6, "frame {i}: {v} != {e}");
@@ -2041,7 +2105,8 @@ mod tests {
         // 第二块从上一块的终点相位继续（0.0 + 4×0.25 = 1.0 → 直接满音量）
         let pool2 = [1.0f32; 2];
         let mut out = Vec::new();
-        resample_take(&pool2, 1.0, 1.0, 1, 2, 1.0, 0.25, &mut out, &mut Vec::new());
+        let mut eq = crate::eq::Eq::new(crate::eq::EqParams::default(), 48_000, 1);
+        resample_take(&pool2, 1.0, 1.0, 1, 2, 1.0, 0.25, &mut eq, &mut out, &mut Vec::new());
         assert!((out[0] - 1.0).abs() < 1e-6);
     }
 

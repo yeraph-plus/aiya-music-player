@@ -405,6 +405,47 @@ fn spectrum_set(
     Ok(dto::SpectrumToggle { enabled })
 }
 
+/// EQ 设置（协议 v6，docs/24 B5b）。持久化独立键 `eq`，落库成功后即时下发。
+///
+/// 为什么不是 `app_set_settings` 的一部分：EQ 滑杆是高频连续调整（拖动中每
+/// 300ms 一次），设置页是低频整体写。混在一起，两边都要做字段级 diff 才能不
+/// 互相覆盖；分键之后各写各的，天然无冲突。
+#[tauri::command]
+fn player_set_eq(app_state: State<'_, AppState>, eq: Json) -> Result<dto::EqSettings, dto::ApiError> {
+    let mut v: dto::EqSettings = serde_json::from_value(eq)
+        .map_err(|e| dto::ApiError::invalid_arg(format!("EQ 参数不合法：{e}")))?;
+    if v.bands.len() != aiya_audio::EQ_BAND_HZ.len() {
+        return Err(dto::ApiError::invalid_arg(format!(
+            "EQ 需要 {} 段增益，收到 {} 段",
+            aiya_audio::EQ_BAND_HZ.len(),
+            v.bands.len()
+        )));
+    }
+    // 入口 clamp：持久化的是生效值，UI 回读不会见到"发了 20 实际 12"的漂移
+    // （引擎入口还有一次同样的 clamp，两处一致，脏数据无处可藏）
+    for b in &mut v.bands {
+        *b = b.clamp(-aiya_audio::EQ_GAIN_LIMIT_DB, aiya_audio::EQ_GAIN_LIMIT_DB);
+    }
+    v.pregain = v
+        .pregain
+        .clamp(-aiya_audio::EQ_PREGAIN_LIMIT_DB, aiya_audio::EQ_PREGAIN_LIMIT_DB);
+
+    let value = serde_json::to_value(&v).map_err(|e| dto::ApiError::invalid_arg(e.to_string()))?;
+    app_state
+        .db()
+        .send(move |conn| setting_set(conn, "eq", &value).map_err(aiya_data::DbError::Sql))
+        .map_err(dto::ApiError::from)?;
+    engine_send(
+        &app_state,
+        aiya_audio::EngineCommand::SetEq(aiya_audio::EqParams {
+            bands: std::array::from_fn(|i| v.bands[i]),
+            pregain: v.pregain,
+            enabled: v.enabled,
+        }),
+    );
+    Ok(v)
+}
+
 #[tauri::command]
 fn app_get_ui_state(state: State<'_, AppState>) -> Result<Json, dto::ApiError> {
     state
@@ -2359,6 +2400,18 @@ pub fn run() {
                 db.send(move |conn| Ok(setting_get(conn, "app_settings").unwrap_or(def)))
                     .unwrap_or_else(|_| fallback())
             };
+            // EQ 偏好（协议 v6）同样在 manage 前取：db 马上要被 move 进 AppState
+            let eq0: aiya_audio::EqParams = db
+                .send(|conn| Ok(setting_get(conn, "eq")))
+                .ok()
+                .flatten()
+                .and_then(|v| serde_json::from_value::<dto::EqSettings>(v).ok())
+                .map(|s| aiya_audio::EqParams {
+                    bands: std::array::from_fn(|i| s.bands.get(i).copied().unwrap_or(0.0)),
+                    pregain: s.pregain,
+                    enabled: s.enabled,
+                })
+                .unwrap_or_default();
             app.manage(AppState {
                 db: Mutex::new(db),
                 db_path,
@@ -2384,6 +2437,8 @@ pub fn run() {
             {
                 let st = app.state::<AppState>();
                 engine_send(&st, aiya_audio::EngineCommand::SetOutputConfig(st.setting_output()));
+                // EQ 偏好同理（协议 v6）：设置项，与是否装载无关
+                engine_send(&st, aiya_audio::EngineCommand::SetEq(eq0));
             }
             // 音量归一化偏好同样先灌进 Actor：音量在 pump 里统一算，
             // 不放在 UI（旧 UI 侧的 setNormalization 已是 no-op）
@@ -2674,6 +2729,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_info,
             spectrum_set,
+            player_set_eq,
             app_get_ui_state,
             app_set_ui_state,
             app_get_settings,

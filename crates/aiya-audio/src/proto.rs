@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 
 /// 协议版本。不匹配的握手直接失败，由调用方决定重启或退出。
 ///
+/// v6：新增 `SetEq(EqParams)` 命令与 `EngineEvent::EqApplied`（docs/24 B5b，
+/// 10 段 biquad）。EQ 是设置而非曲目属性：恢复序列在 SetOutputConfig 之后
+/// 无条件回放。`EqApplied` 带生效值（clamp 后），UI 以它为准而非自己发的值。
+///
 /// v5：`EngineEvent::Error` 加 `kind` 分类（`fileMissing`/`io`/`decode`/
 /// `codecUnsupported`/`deviceLost`/`unsupportedFormat`/`unknown`）。此前只有
 /// 一句话，宿主无法区分"文件没了该跳过"和"设备断了该提示"，只能解析文案前缀。
@@ -23,7 +27,7 @@ use serde::{Deserialize, Serialize};
 /// v3：新增 `SetExclusive` 命令与 `AudioMode` 事件（独占可选 + 失败可解释）。
 /// v2：`Load` 携带 `start_ms` + `token`；所有事件回显 `token`
 /// （ADR-0003 generation，修"启动恢复从 0 播"与"曲尾切歌连跳两首"）。
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// host → sidecar 消息。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +93,7 @@ mod tests {
             HostToSidecar::Cmd(EngineCommand::Pause),
             HostToSidecar::Cmd(EngineCommand::Stop),
             HostToSidecar::Cmd(EngineCommand::SetOutputConfig(Default::default())),
+            HostToSidecar::Cmd(EngineCommand::SetEq(crate::eq::EqParams::default())),
         ] {
             assert_eq!(format!("{:?}", roundtrip_in(m.clone())), format!("{:?}", m));
         }
@@ -104,6 +109,10 @@ mod tests {
                 token: 1,
                 kind: "decode".into(),
                 message: "boom".into(),
+            }),
+            SidecarToHost::Evt(EngineEvent::EqApplied {
+                token: 1,
+                params: crate::eq::EqParams::default(),
             }),
             SidecarToHost::Evt(EngineEvent::AudioMode {
                 token: 1,
@@ -187,6 +196,27 @@ mod tests {
         assert_eq!(
             std::str::from_utf8(&err).unwrap(),
             "{\"k\":\"evt\",\"m\":{\"t\":\"error\",\"token\":5,\"kind\":\"fileMissing\",\"message\":\"io: 系统找不到指定的文件。\"}}\n"
+        );
+
+        // v6 形状：EQ 整体下发 + 生效值回报（camelCase 字段，bands 是数组）
+        let eq = encode_line(&HostToSidecar::Cmd(EngineCommand::SetEq(crate::eq::EqParams {
+            bands: [6.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 3.0],
+            pregain: -3.0,
+            enabled: true,
+        })))
+        .unwrap();
+        assert_eq!(
+            std::str::from_utf8(&eq).unwrap(),
+            "{\"k\":\"cmd\",\"m\":{\"t\":\"setEq\",\"v\":{\"bands\":[6.0,0.0,0.0,0.0,0.0,-2.0,0.0,0.0,0.0,3.0],\"pregain\":-3.0,\"enabled\":true}}}\n"
+        );
+        let applied = encode_line(&SidecarToHost::Evt(EngineEvent::EqApplied {
+            token: 7,
+            params: crate::eq::EqParams { bands: [6.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 3.0], pregain: -3.0, enabled: true },
+        }))
+        .unwrap();
+        assert_eq!(
+            std::str::from_utf8(&applied).unwrap(),
+            "{\"k\":\"evt\",\"m\":{\"t\":\"eqApplied\",\"token\":7,\"params\":{\"bands\":[6.0,0.0,0.0,0.0,0.0,-2.0,0.0,0.0,0.0,3.0],\"pregain\":-3.0,\"enabled\":true}}}\n"
         );
     }
 

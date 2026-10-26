@@ -43,7 +43,7 @@ pub mod playlist;
 
 pub use app::{AppInfo, Diagnostics, ListTiming, RecentError, SpectrumToggle};
 pub use library::{LibraryStats, TrackDetail};
-pub use output::{AudioModeEvent, AudioModeInfo, DesiredOutput, MediaKeysInfo, PowerInfo, StreamsInfo};
+pub use output::{AudioModeEvent, AudioModeInfo, DesiredOutput, EqSettings, MediaKeysInfo, PowerInfo, StreamsInfo};
 
 /// 命令失败的统一形状。替代 `{ok:false, error:{code,message}}` 信封。
 ///

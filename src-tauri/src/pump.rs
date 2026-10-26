@@ -202,6 +202,10 @@ impl PumpCore {
                     });
                     should_emit = true;
                 }
+                EngineEvent::EqApplied { .. } => {
+                    // EQ 生效确认（v6）。生效值随 player_set_eq 的返回值到 UI，
+                    // 恢复场景（sidecar 重启回放）下 UI 设置没变，无需转发
+                }
             }
         }
 

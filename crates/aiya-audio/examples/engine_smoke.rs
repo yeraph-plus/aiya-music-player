@@ -74,6 +74,9 @@ fn main() {
                 // 频谱帧（tap 未订阅时不会出现）
                 let _ = bands;
             }
+            Some(aiya_audio::EngineEvent::EqApplied { .. }) => {
+                // EQ 生效确认（smoke 不开 EQ，不会出现；列出以保穷尽）
+            }
             None => std::thread::sleep(Duration::from_millis(20)),
         }
     }

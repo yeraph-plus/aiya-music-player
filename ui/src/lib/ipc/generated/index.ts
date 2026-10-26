@@ -14,6 +14,7 @@ export * from './CancelRequested';
 export * from './ChosenRoot';
 export * from './DesiredOutput';
 export * from './Diagnostics';
+export * from './EqSettings';
 export * from './HistoryCleared';
 export * from './HistoryStats';
 export * from './HistoryTopTrack';
