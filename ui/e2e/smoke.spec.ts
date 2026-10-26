@@ -139,28 +139,15 @@ test('设置页：左分组导航 + scroll-spy + 主题切换生效', async ({ p
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });
 
-test('正在播放页：开启频谱后出现 pro 五形态 chip', async ({ page }) => {
+test('正在播放页：起播后两栏沉浸布局接住真实曲目', async ({ page }) => {
   await openLibrary(page);
   await firstRow(page).dblclick();
   await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
 
-  // 频谱默认关（settings.ts：不订阅 tap，保持最简出口路径），先到设置页开
-  await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
-  await page.getByRole('switch', { name: '频谱可视化' }).click();
-
   await page.locator('.sidebar .nav-item', { hasText: '正在播放' }).click();
-  // B5a 起三块可切，默认在歌词——先切到频谱
-  await page.getByRole('radio', { name: '频谱' }).click();
-  const panel = page.locator('.spectrum-panel');
-  await expect(panel).toBeVisible();
 
-  // pro 引擎分支的标志：头部有形态 chip（compact 分支没有）
-  const chip = panel.locator('.mode-chip');
-  await expect(chip).toBeVisible();
-  const labels = ['渐变条', 'LED', '镜像', '径向', '反射'];
-  for (const label of labels) {
-    await expect(chip).toHaveText(label);
-    await chip.click();
-  }
-  await expect(chip).toHaveText(labels[0]!);
+  // docs/25 §4 两栏改版：信息列跟着播放态走（标题换成真歌名），歌词容器在右
+  await expect(page.locator('.np-info h1')).not.toHaveText('未在播放');
+  await expect(page.locator('.np-info .audio-spec')).toBeVisible();
+  await expect(page.locator('.lyrics-panel')).toBeVisible();
 });

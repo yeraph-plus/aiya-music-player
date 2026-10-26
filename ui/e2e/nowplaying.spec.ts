@@ -34,17 +34,17 @@ async function openNowPlaying(page: Page): Promise<void> {
   await expect(page.locator('.main h1')).toHaveText('未在播放');
 }
 
-test('正在播放页两块可切：一次只渲染一块，切走即卸载', async ({ page }) => {
+test('正在播放页两栏沉浸：左信息右歌词，卡片与切换条已拆', async ({ page }) => {
   await openNowPlaying(page);
 
-  // 默认歌词块；EQ 已迁往播放条抽屉（docs/25 §1），页内不再有
+  // 左信息列 + 右歌词都在；EQ 在播放条抽屉（docs/25 §1），不在页面里
+  await expect(page.locator('.np-info')).toBeVisible();
   await expect(page.locator('.lyrics-panel')).toBeVisible();
   await expect(page.locator('.eq-panel')).toHaveCount(0);
 
-  // 切到频谱（mock 下频谱默认关 → 显示已关闭占位，同样是"块已切换"的证明）
-  await page.getByRole('radio', { name: '频谱' }).click();
-  await expect(page.locator('.spectrum-panel')).toBeVisible();
-  await expect(page.locator('.lyrics-panel')).toHaveCount(0);
+  // 去卡片化（docs/25 §4）：hero 卡片与 SegmentedControl 不复存在
+  await expect(page.locator('.now-playing-hero')).toHaveCount(0);
+  await expect(page.locator('.now-playing-tabs')).toHaveCount(0);
 });
 
 test('EQ 抽屉：从播放条进入，预设命中打 ✓；与队列抽屉互斥', async ({ page }) => {

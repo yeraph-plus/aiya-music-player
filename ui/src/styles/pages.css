@@ -206,54 +206,57 @@
   }
 }
 
-/* ---------------- 正在播放 ---------------- */
+/* ---------------- 正在播放（docs/25 §4 T4a 两栏沉浸） ---------------- */
 
+/*
+ * 两栏：左信息（封面+标题+艺人·专辑+规格）右歌词。整页**无卡片**——
+ * 没有边框、没有底色，内容直接浮在背景上；背景层（封面预模糊 + 频谱
+ * 环境光 + 遮罩，§5 T4b）负责可读性。切歌时整页变化由 AppShell 的
+ * 封面主色 effect 联动。
+ */
 .now-playing-page {
   flex: 1;
   min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 4fr) minmax(0, 6fr);
+  gap: 44px;
+  padding: 28px 32px 24px;
+}
+
+.np-info {
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 6px 22px 20px;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 18px;
 }
 
-.now-playing-hero {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 22px;
-  border: 1px solid var(--line);
+.np-cover {
+  width: min(300px, 100%);
+  aspect-ratio: 1;
+  height: auto;
   border-radius: 16px;
-  background: var(--surface-2);
-  overflow: hidden;
-  flex: none;
-}
-
-.now-playing-hero img,
-.now-playing-cover {
-  width: 132px;
-  height: 132px;
-  border-radius: 14px;
   object-fit: cover;
   background: var(--surface-cover);
-  box-shadow: 0 14px 34px var(--shadow);
+  box-shadow: 0 18px 44px var(--shadow);
   flex: none;
 }
 
-.now-playing-cover {
+.np-cover-empty {
   display: grid;
   place-items: center;
   color: var(--text-3);
 }
 
-.now-playing-meta {
+.np-meta {
   min-width: 0;
+  max-width: 100%;
 }
 
-.now-playing-meta h1 {
-  margin: 4px 0 6px;
-  font-size: 26px;
+.np-meta h1 {
+  margin: 6px 0 8px;
+  font-size: 30px;
   font-weight: 650;
   letter-spacing: -0.01em;
   overflow: hidden;
@@ -261,10 +264,13 @@
   white-space: nowrap;
 }
 
-.now-playing-meta p {
-  margin: 0 0 8px;
-  font-size: 13px;
+.np-meta p {
+  margin: 0 0 10px;
+  font-size: 13.5px;
   color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .audio-spec {
@@ -275,39 +281,16 @@
   padding: 3px 10px;
 }
 
-.now-playing-watermark {
-  position: absolute;
-  right: 18px;
-  bottom: -16px;
-  color: var(--text-3);
-  opacity: 0.35;
-  pointer-events: none;
+/* 右列：歌词容器透明（LyricsPanel 自身无底色，不再套卡片边框） */
+.np-lyrics {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
 }
 
-.now-playing-grid {
+.np-lyrics .lyrics-panel {
   flex: 1;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-  gap: 14px;
-}
-
-/* 三块可切（B5a）：切换条 */
-.now-playing-tabs {
-  flex: none;
-  padding: 0 0 10px;
-}
-
-/* 歌词 / 频谱 / EQ 在正在播放页是常驻卡片（B5a 起三选一切换，
-   一次只渲染一块，独占整行） */
-.now-playing-grid .lyrics-panel,
-.now-playing-grid .spectrum-panel,
-.now-playing-grid .eq-host {
-  grid-row: auto;
-  grid-column: 1 / -1;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  backdrop-filter: none;
 }
 
 .spectrum-disabled > div {
