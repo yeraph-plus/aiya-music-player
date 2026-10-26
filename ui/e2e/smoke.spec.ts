@@ -126,14 +126,14 @@ test('设置页：左分组导航 + scroll-spy + 主题切换生效', async ({ p
   await expect(page.locator('.main h1')).toHaveText('设置');
   await expect(page.locator('.main .ch-kicker')).toHaveText('PREFERENCES');
 
-  // 左栏六组；初始高亮第一组（scroll-spy 的初值）
+  // docs/29 批 A：左栏收窄为四组（音乐库与任务/诊断 → 扫描入库页）；初始高亮第一组
   const rail = page.locator('.settings-rail .rail-item');
-  await expect(rail).toHaveCount(6);
+  await expect(rail).toHaveCount(4);
   await expect(rail.first()).toHaveAttribute('aria-current', 'true');
 
-  // 点「诊断」→ 平滑滚动后 scroll-spy 把高亮写回诊断组
+  // 点「快捷键」→ 平滑滚动后 scroll-spy 把高亮写回快捷键组
   await rail.last().click();
-  await expect(page.locator('#settings-diagnostics')).toBeInViewport();
+  await expect(page.locator('#settings-shortcuts')).toBeInViewport();
   await expect(rail.last()).toHaveAttribute('aria-current', 'true');
   await expect(rail.first()).not.toHaveAttribute('aria-current', 'true');
 

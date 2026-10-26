@@ -28,6 +28,7 @@ import type {
   HistoryCleared,
   HistoryStats,
   JobStarted,
+  LibraryRoots,
   LibraryStats,
   Lyrics,
   PlayerState,
@@ -92,8 +93,11 @@ export type SelectionIdsQuery = {
 /** 队列插入位置：`next` 插到当前曲之后，`end` 追加到队尾。 */
 export type QueueInsertMode = { mode: 'next' | 'end' };
 
-/** 扫描选项：不传 path 时后端按 settings.library.root → 系统 Music 目录取。 */
-export type ScanOptions = { path?: string };
+/**
+ * 扫描选项（docs/29 批 A）：不传 `roots` 时后端按 settings `library.roots`
+ * （数组，多目录并集单库）→ 旧 `library.root` → 系统 Music 目录取。
+ */
+export type ScanOptions = { roots?: string[] };
 
 /**
  * beets 应用决策。`candidate` 是预览结果**原样回传**的深层对象——
@@ -164,8 +168,12 @@ export const ipc = {
     /** 阻塞直到扫描结束（进度走 `scan:progress`）；并发调用得 `busy` */
     scan: (options?: ScanOptions) => call<ScanResult>('library_scan', { options }),
     scanCancel: () => call<ScanCancel>('library_scan_cancel'),
-    /** 打开系统目录选择器；用户取消返回 null */
+    /** 打开系统目录选择器；用户取消返回 null。选中时回填完整根列表 */
     chooseRoot: () => call<ChosenRoot | null>('library_choose_root'),
+    /** 扫描根列表（settings `library.roots`；textarea 数据源） */
+    rootsGet: () => call<LibraryRoots>('library_roots_get'),
+    /** 覆盖写扫描根列表（后端再归一化：trim/去空/去引号/去重） */
+    rootsSet: (roots: string[]) => call<LibraryRoots>('library_roots_set', { roots }),
     /** 在文件管理器中定位；`revealed=false` 时看 `reason`，不是错误 */
     revealTrack: (trackId: string) => call<RevealResult>('library_reveal_track', { trackId }),
     /** 批量选择 → ID（全选 5 万首也只回一数组，UI 不必持有整库） */
@@ -272,6 +280,8 @@ export const ipc = {
     cancel: () => call<CancelRequested>('beets_cancel'),
     /** 手动触发 beets → 自有读模型全量对齐；汇总走 `librarySynced` 事件 */
     sync: () => call<JobStarted>('beets_sync'),
+    /** 起 beets web 并用系统浏览器打开（高级用户外链出口，docs/29 §12） */
+    webOpen: () => call<string>('beets_web_open'),
   },
 };
 

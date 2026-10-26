@@ -48,6 +48,10 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     // 浏览器里没有系统目录选择器：返回 null = 用户取消（契约里的正常分支）
     case 'library_choose_root':
       return null;
+    case 'library_roots_get':
+      return mock.rootsGet();
+    case 'library_roots_set':
+      return mock.rootsSet(a.roots as string[]);
     case 'library_reveal_track':
       return mock.revealTrack(a.trackId as string);
     case 'library_ids_for_selection':
@@ -186,6 +190,9 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return { started: true };
     case 'beets_cancel':
       return { requested: false };
+    // 预览里没有 beets 环境，也不该真的拉浏览器：回"未找到"语义
+    case 'beets_web_open':
+      throw mockError('beets_web_open');
 
     default:
       throw mockError(cmd);

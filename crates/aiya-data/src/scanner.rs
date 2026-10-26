@@ -364,9 +364,27 @@ pub fn scan_directory(
 /// 扫描入口（可取消版）。`should_cancel` 在 walk 每条目与每批事务开始时轮询；
 /// 返回 true 后尽快收尾。**取消路径绝不执行 mark_missing**——seen 集合不完整，
 /// 此时对账会把大量在线文件误标 missing。
+///
+/// docs/29 批 A 起单根版委托 [`scan_roots_ext`]（多根并集单库）。
 pub fn scan_directory_ext(
     conn: &mut Connection,
     root: &Path,
+    artwork_cache: Option<&Path>,
+    should_cancel: impl Fn() -> bool,
+    on_progress: impl FnMut(ScanProgress),
+) -> DbResult<ScanResult> {
+    let owned = [root.to_path_buf()];
+    scan_roots_ext(conn, &owned, artwork_cache, should_cancel, on_progress)
+}
+
+/// 多根扫描：所有根的 walk 结果**并集**进同一个库（拍板：并集单库，无多库切换）。
+///
+/// 为什么不是"逐根调单根版"：mark_missing 按"本轮 walk 到的路径"对账，
+/// 逐根调用时第 1 根的对账会把第 2 根下的曲目全标 missing。必须先走完全部根、
+/// 拿到完整 seen 集合，再做一次全根前缀的 missing 对账。
+pub fn scan_roots_ext(
+    conn: &mut Connection,
+    roots: &[std::path::PathBuf],
     artwork_cache: Option<&Path>,
     should_cancel: impl Fn() -> bool,
     mut on_progress: impl FnMut(ScanProgress),
@@ -384,12 +402,24 @@ pub fn scan_directory_ext(
         imported: 0,
         skipped: 0,
         failed: 0,
-        current_path: root.to_string_lossy().into_owned().into(),
+        current_path: Some(roots.first().map(|r| r.to_string_lossy().into_owned()).unwrap_or_default()),
         elapsed_ms: 0,
         message: None,
     });
 
-    let (files, walk_errors, walk_cancelled) = walk(root, &should_cancel);
+    // 逐根 walk 后并集；任何一根被取消都按取消收尾（seen 不完整）
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut walk_errors = 0usize;
+    let mut walk_cancelled = false;
+    for root in roots {
+        let (mut root_files, root_errs, root_cancelled) = walk(root, &should_cancel);
+        files.append(&mut root_files);
+        walk_errors += root_errs;
+        if root_cancelled {
+            walk_cancelled = true;
+            break;
+        }
+    }
 
     if walk_cancelled {
         let result = ScanResult {
@@ -541,7 +571,7 @@ pub fn scan_directory_ext(
         return Ok(result);
     }
 
-    mark_missing(conn, root, &seen)?;
+    mark_missing(conn, roots, &seen)?;
 
     let elapsed_ms = started.elapsed().as_millis() as u64;
     let result = ScanResult {
@@ -584,19 +614,40 @@ fn like_escape(s: &str) -> String {
     out
 }
 
-/// 把「库中 online + 位于 root 前缀下 + 本轮未 walk 到」的曲目标为 missing。
+/// 把「库中 online + 位于**任一**根前缀下 + 本轮未 walk 到」的曲目标为 missing。
 /// 重新出现的文件由 upsert 的 `availability = 'online'` 恢复。
+///
+/// 多根版本（docs/29 批 A）：OR 拼接各根前缀；没有任何根时**不标记**
+/// （配置为空是"用户还没填"，把整库标 missing 是灾难）。
 fn mark_missing(
     conn: &mut Connection,
-    root: &Path,
+    roots: &[std::path::PathBuf],
     seen: &std::collections::HashSet<String>,
 ) -> DbResult<()> {
     // 前缀统一小写并以路径分隔符收尾，防止 "C:\m" 误匹配 "C:\music\..."
-    let mut prefix = root.to_string_lossy().to_lowercase();
-    if !prefix.ends_with('\\') && !prefix.ends_with('/') {
-        prefix.push(std::path::MAIN_SEPARATOR);
+    let mut prefixes = Vec::with_capacity(roots.len());
+    for root in roots {
+        let mut prefix = root.to_string_lossy().to_lowercase();
+        if !prefix.ends_with('\\') && !prefix.ends_with('/') {
+            prefix.push(std::path::MAIN_SEPARATOR);
+        }
+        prefixes.push(like_escape(&prefix));
     }
-    let prefix_like = like_escape(&prefix);
+    if prefixes.is_empty() {
+        tracing::warn!("扫描根列表为空，跳过 missing 对账");
+        return Ok(());
+    }
+    // OR 子句按根数动态拼，参数占位符 ?1..?N
+    let where_clause = prefixes
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("path_lower LIKE ?{} ESCAPE '\\'", i + 1))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    let like_params: Vec<String> = prefixes
+        .iter()
+        .map(|p| format!("{p}%"))
+        .collect();
 
     // 同批事务的理由：与主 DB 线程并发时 DEFERRED 的锁升级会立刻 BUSY
     let tx = conn
@@ -611,11 +662,13 @@ fn mark_missing(
         }
     }
     let missing = tx.execute(
-        "UPDATE tracks SET availability = 'missing'
-         WHERE availability = 'online'
-           AND path_lower LIKE ?1 ESCAPE '\\'
-           AND path_lower NOT IN (SELECT path_lower FROM scan_seen)",
-        rusqlite::params![format!("{prefix_like}%")],
+        &format!(
+            "UPDATE tracks SET availability = 'missing'
+             WHERE availability = 'online'
+               AND ({where_clause})
+               AND path_lower NOT IN (SELECT path_lower FROM scan_seen)"
+        ),
+        rusqlite::params_from_iter(like_params.iter()),
     )?;
     tx.execute_batch("DROP TABLE IF EXISTS temp.scan_seen")?;
     tx.commit().map_err(DbError::Sql)?;
@@ -834,6 +887,45 @@ mod tests {
         let codec: Option<String> =
             conn.query_row("SELECT codec FROM tracks", [], |r| r.get(0)).unwrap();
         assert_eq!(codec.as_deref(), Some("MP3"), "重扫不得把 beets 写的 codec 冲回 NULL");
+    }
+
+    /// docs/29 批 A：多根并集单库。两根各一首都要入库；missing 对账只作用
+    /// 于**根前缀内**的曲目——这正是不能"逐根调单根版"的原因（第 1 根的
+    /// 对账会把第 2 根的曲目误标 missing）。
+    #[test]
+    fn multi_roots_union_scan_and_missing_scope() {
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        write_test_mp3(dir_a.path(), "a.mp3", "甲", "歌手");
+        write_test_mp3(dir_b.path(), "b.mp3", "乙", "歌手");
+
+        let mut conn = open_in_memory().unwrap();
+        let roots = vec![dir_a.path().to_path_buf(), dir_b.path().to_path_buf()];
+        let result = scan_roots_ext(&mut conn, &roots, None, || false, |_| {}).unwrap();
+        assert_eq!(result.imported, 2, "errors={:?}", result.errors);
+
+        // 先预置一首"根外"曲目（不在任何根下）——它绝不能被标 missing
+        let dir_out = tempfile::tempdir().unwrap();
+        write_test_mp3(dir_out.path(), "c.mp3", "丙", "歌手");
+        scan_directory(&mut conn, dir_out.path(), None, |_| {}).unwrap();
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        assert_eq!(total, 3);
+
+        // 只删 A 根的文件 → 重扫两根：A 根那首 missing，B 根与根外都还是 online
+        std::fs::remove_file(dir_a.path().join("a.mp3")).unwrap();
+        let result2 = scan_roots_ext(&mut conn, &roots, None, || false, |_| {}).unwrap();
+        assert_eq!(result2.imported, 0);
+        let avail = |title: &str| -> String {
+            conn.query_row(
+                "SELECT availability FROM tracks WHERE title = ?1",
+                [title],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(avail("甲"), "missing", "根内消失的文件要标 missing");
+        assert_eq!(avail("乙"), "online", "B 根的文件不得被 A 根的对账误伤");
+        assert_eq!(avail("丙"), "online", "根外的文件不得被对账误伤");
     }
 
     #[test]

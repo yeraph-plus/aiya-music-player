@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Disc, House, Library, Mic2, Plus, Radio, Settings } from '@lucide/svelte';
+  import { DatabaseZap, Disc, House, Library, Mic2, Plus, Radio, Settings } from '@lucide/svelte';
   import { artworkUrl } from '../../lib/artwork';
   import { shortenPath } from '../../lib/format';
   import { library } from '../../stores/library.svelte';
@@ -19,15 +19,16 @@
    * 用 prop 传回调时，AppShell 得给每一条入口写一个转发函数 —— 那次改名的教训是
    * "入口散在模板里，漏一个就变成点了没反应"。现在"我要去哪"直接说给 nav。
    *
-  * ### 一级导航的六项（docs/25 §3 重排 + docs/28 修订）
+  * ### 一级导航的七项（docs/25 §3 重排 + docs/28 修订 + docs/29 批 A）
 
-  * 推荐 / 曲库 / 专辑 / 艺人 / FM 电台 / 设置。
+  * 推荐 / 曲库 / 专辑 / 艺人 / 扫描入库 / FM 电台 / 设置。
   * - **正在播放撤出侧栏**（用户拍板）：唯一入口改在播放条左侧的歌曲区域
   *   ——"正在听什么"的信息本身就在那里，点它是比找侧栏更短的路。
   * - **「首页」改名「推荐」**：歌单宫格 + 三段预览本来就是推荐位，名字跟上。
   * - **最近播放 / 常听单页退役**（docs/28）：常听收进推荐页 top-15 段，
-  *   最近播放被筛选器取代；腾出的两个席位给**专辑 / 艺人宫格页**——
-  *   曲库页 tab 撤掉后宫格需要一级入口，导航总数不变（仍是六项）。
+  *   最近播放被筛选器取代；腾出的两个席位给**专辑 / 艺人宫格页**。
+  * - **「扫描入库」升一级导航**（docs/29 批 A，用户拍板）：扫描 / beets 任务
+  *   / 日志诊断从设置页拆出——任务是长时跑的，值得一个可停留可刷新的一级页。
   * - **FM 电台回归**：占位页也给出入口比死链接消失好——用户知道这功能在规划里。
   */
 
@@ -50,6 +51,12 @@
       label: '艺人',
       icon: Mic2,
       go: () => nav.go({ kind: 'browse', view: 'artists' }),
+    },
+    {
+      key: 'tools',
+      label: '扫描入库',
+      icon: DatabaseZap,
+      go: () => nav.go({ kind: 'page', page: 'tools' }),
     },
     {
       key: 'radio',

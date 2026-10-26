@@ -728,6 +728,13 @@ fn beets_sync(app: AppHandle, state: State<'_, AppState>) -> Result<dto::beets::
     Ok(dto::beets::JobStarted { started: true })
 }
 
+/// 起 beets web 并用系统浏览器打开（docs/29 §12 拍板 6：高级用户外链出口）。
+/// 返回打开的 URL；未找到 beets 报错（UI 显示安装指引）。
+#[tauri::command]
+fn beets_web_open(app: AppHandle) -> Result<String, dto::ApiError> {
+    beets::web_open(&app).map_err(dto::ApiError::invalid_arg)
+}
+
 #[tauri::command]
 fn library_list(
     state: State<'_, AppState>,
@@ -907,29 +914,71 @@ async fn library_scan_body(
         return Err(dto::ApiError::busy("已有扫描在进行"));
     }
 
-    // 路径优先级：显式 options.path > settings 里存的 library.root > 系统 Music 目录
-    let root: PathBuf = options
+    // 根列表优先级（docs/29 批 A，多目录并集单库）：
+    // 显式 options.roots > settings.library.roots（数组）> 旧 settings.library.root（单串）> 系统 Music
+    let mut roots: Vec<PathBuf> = if let Some(list) = options
         .as_ref()
-        .and_then(|o| o.get("path"))
-        .and_then(|p| p.as_str())
-        .map(PathBuf::from)
-        .or_else(|| {
-            let from_settings: Option<String> = state
-                .db()
-                .send(|conn| {
-                    Ok(setting_get(conn, "library.root").and_then(|v| v.as_str().map(str::to_string)))
-                })
-                .ok()
-                .flatten();
-            from_settings.map(PathBuf::from).or_else(|| {
-                std::env::var("USERPROFILE").ok().map(|h| PathBuf::from(h).join("Music"))
-            })
+        .and_then(|o| o.get("roots"))
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .map(PathBuf::from)
+                .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
+        .filter(|v: &Vec<PathBuf>| !v.is_empty())
+    {
+        list
+    } else {
+        let from_settings: Option<Vec<String>> = state
+            .db()
+            .send(|conn| {
+                Ok(setting_get(conn, "library.roots")
+                    .and_then(|v| v.as_array().cloned())
+                    .map(|a| {
+                        a.into_iter()
+                            .filter_map(|s| s.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    // 旧单键兼容：有数组键用数组键，否则看旧字符串键
+                    .or_else(|| {
+                        setting_get(conn, "library.root")
+                            .and_then(|v| v.as_str().map(str::to_string))
+                            .map(|s| vec![s])
+                    }))
+            })
+            .ok()
+            .flatten();
+        match from_settings {
+            Some(list) if !list.is_empty() => list.into_iter().map(PathBuf::from).collect(),
+            // 完全没有配置：回落系统 Music 目录（保持旧行为）
+            _ => vec![std::env::var("USERPROFILE")
+                .ok()
+                .map(|h| PathBuf::from(h).join("Music"))
+                .unwrap_or_default()],
+        }
+    };
 
-    if !root.is_dir() {
+    // 逐个验证：无效根跳过（不中断扫描），全部无效才报错——报错信息带上每个根，
+    // 让用户能对照 textarea 修
+    let invalid: Vec<String> = roots
+        .iter()
+        .filter(|r| !r.is_dir())
+        .map(|r| r.to_string_lossy().into_owned())
+        .collect();
+    roots.retain(|r| r.is_dir());
+    if roots.is_empty() {
         state.scanning.store(false, Ordering::SeqCst);
-        return Err(dto::ApiError::invalid_arg(format!("目录不存在：{}", root.display())));
+        let detail = if invalid.is_empty() {
+            "未配置任何扫描目录".to_string()
+        } else {
+            format!("目录不存在：{}", invalid.join("、"))
+        };
+        return Err(dto::ApiError::invalid_arg(detail));
+    }
+    if !invalid.is_empty() {
+        tracing::warn!(skipped = %invalid.join("、"), "扫描跳过不存在的根目录");
     }
 
     let db_path = state.db_path.clone();
@@ -946,9 +995,9 @@ async fn library_scan_body(
             // 宿主侧 100ms 节流（P2：此前每条目一次 IPC 序列化，10 万文件 =
             // 10 万次跨进程 emit；UI 侧节流只省渲染不省传输）
             let last_emit_ms = std::sync::atomic::AtomicU64::new(0);
-            let scan_result = scanner::scan_directory_ext(
+            let scan_result = scanner::scan_roots_ext(
                 &mut conn,
-                &root,
+                &roots,
                 Some(&artwork_dir),
                 || scan_cancel.load(Ordering::Relaxed),
                 move |p| {
@@ -989,7 +1038,8 @@ fn library_scan_cancel(state: State<'_, AppState>) -> Result<dto::library::ScanC
     }
 }
 
-/// 选目录并持久化为 `library.root`（UI 的 startScan 不带 path，扫描时从这里取）。
+/// 选目录并**追加**进 `library.roots`（docs/29 批 A：多目录并集单库）。
+/// UI 的 startScan 不带 roots，扫描时从这里取。
 /// P1：blocking_pick_folder 在主线程调用有死锁风险（tauri-plugin-dialog
 /// 明确警告），spawn_blocking 卸载到工作线程。
 ///
@@ -1013,15 +1063,85 @@ async fn library_choose_root(
         return Ok(None);
     };
     let path_str = p.to_string_lossy().into_owned();
-    let to_save = path_str.clone();
     let Some(state) = app.try_state::<AppState>() else {
         return Err(dto::ApiError::internal("app state 不可用"));
     };
-    let saved: aiya_data::DbResult<()> = state.db().send(move |conn| {
-        setting_set(conn, "library.root", &json!(to_save)).map_err(aiya_data::DbError::Sql)
+    let chosen = path_str.clone();
+    let saved: aiya_data::DbResult<Vec<String>> = state.db().send(move |conn| {
+        let mut roots = read_roots(conn);
+        // 大小写不敏感去重（Windows 路径）：重复选择同一目录不动列表
+        let chosen_lower = chosen.to_lowercase();
+        if !roots.iter().any(|r| r.to_lowercase() == chosen_lower) {
+            roots.push(chosen);
+        }
+        setting_set(conn, "library.roots", &json!(roots))?;
+        Ok(roots)
     });
-    saved.map_err(|e| dto::ApiError::internal(format!("无法保存曲库目录：{e}")))?;
-    Ok(Some(dto::library::ChosenRoot { path: path_str }))
+    let roots = saved.map_err(|e| dto::ApiError::internal(format!("无法保存曲库目录：{e}")))?;
+    Ok(Some(dto::library::ChosenRoot { path: path_str, roots }))
+}
+
+/// 读 settings 里的根列表：`library.roots` 数组优先，旧 `library.root` 单串兜底。
+/// 仅在持有连接的调用里用（内部 helper）。
+fn read_roots(conn: &rusqlite::Connection) -> Vec<String> {
+    setting_get(conn, "library.roots")
+        .and_then(|v| v.as_array().cloned())
+        .map(|a| {
+            a.into_iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .filter(|s| !s.trim().is_empty())
+                .collect()
+        })
+        .or_else(|| {
+            setting_get(conn, "library.root")
+                .and_then(|v| v.as_str().map(str::to_string))
+                .map(|s| vec![s])
+        })
+        .unwrap_or_default()
+}
+
+/// 读扫描根列表（UI 的 textarea 数据源）。
+#[tauri::command]
+fn library_roots_get(state: State<'_, AppState>) -> Result<dto::library::LibraryRoots, dto::ApiError> {
+    let roots = state
+        .db()
+        .send(|conn| Ok(read_roots(conn)))
+        .map_err(|e| dto::ApiError::internal(format!("读取扫描目录失败：{e}")))?;
+    Ok(dto::library::LibraryRoots { roots })
+}
+
+/// 覆盖写扫描根列表（textarea 的保存动作）。
+/// 归一化在服务端再做一遍：trim、去空行、大小写不敏感去重——客户端可能绕过校验。
+#[tauri::command]
+fn library_roots_set(
+    state: State<'_, AppState>,
+    roots: Json,
+) -> Result<dto::library::LibraryRoots, dto::ApiError> {
+    let raw = roots
+        .get("roots")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| dto::ApiError::invalid_arg("缺少 roots 数组"))?;
+    let mut cleaned: Vec<String> = Vec::new();
+    for item in raw {
+        let Some(s) = item.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        // 去掉从别处复制路径时可能带上的引号
+        let s = s.trim_matches('"').trim_matches('\'').trim().to_string();
+        let lower = s.to_lowercase();
+        if !cleaned.iter().any(|r| r.to_lowercase() == lower) {
+            cleaned.push(s);
+        }
+    }
+    let to_save = cleaned.clone();
+    state
+        .db()
+        .send(move |conn| {
+            setting_set(conn, "library.roots", &json!(to_save))?;
+            Ok(())
+        })
+        .map_err(|e| dto::ApiError::internal(format!("保存扫描目录失败：{e}")))?;
+    Ok(dto::library::LibraryRoots { roots: cleaned })
 }
 
 #[tauri::command]
@@ -2759,6 +2879,7 @@ pub fn run() {
             beets_apply,
             beets_cancel,
             beets_sync,
+            beets_web_open,
             library_list,
             library_albums,
             library_artists,
@@ -2767,6 +2888,8 @@ pub fn run() {
             library_scan,
             library_scan_cancel,
             library_choose_root,
+            library_roots_get,
+            library_roots_set,
             library_reveal_track,
             library_ids_for_selection,
             library_remove_tracks,

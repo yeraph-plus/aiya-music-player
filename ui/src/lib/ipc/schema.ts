@@ -54,9 +54,9 @@ export const uiStateSchema = z
     albumId: z.string().nullable().optional(),
     /**
      * 一级路由（B4-1 拆页 8 值；B4-3 加专辑/艺人/搜索；docs/28 撤
-     * recent/mostPlayed 共 11 值）。旧文件的 `home` 仍合法；落到已退役的
-     * `recent`/`mostPlayed` 时由 ui.restore() 换算成曲库（这里不收编，
-     * 让 devValidate 在开发期把"还在写退役值"的代码暴露出来）。
+     * recent/mostPlayed；docs/29 批 A 加 tools 共 12 值）。旧文件的 `home`
+     * 仍合法；落到已退役的 `recent`/`mostPlayed` 时由 ui.restore() 换算成
+     * 曲库（这里不收编，让 devValidate 在开发期把"还在写退役值"的代码暴露出来）。
      */
     page: z
       .enum([
@@ -70,6 +70,7 @@ export const uiStateSchema = z
         'search',
         'nowPlaying',
         'settings',
+        'tools',
         'radio',
       ])
       .optional(),

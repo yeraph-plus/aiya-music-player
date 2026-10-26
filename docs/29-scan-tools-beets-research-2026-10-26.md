@@ -246,3 +246,59 @@ duplicates 等，见 §7 功能映射）。
   adrian-fuertes/vibenet、ArchWiki Beets。
 - Python 打包：CPython 官方 Using on Windows（embeddable 限制）、PortablePythonMaker、
   venvdrop（离线 wheelhouse 模式参考）。
+
+## 13. 批 A 落地记录（2026-10-26）
+
+### Rust 侧
+
+- **scanner 多根化**：`scan_roots_ext(conn, roots: &[PathBuf], …)` 为新主入口，
+  `scan_directory_ext` 单根版委托（兼容既有调用与测试）。逐根 walk 后**并集**
+  进同一批解析/入库；`mark_missing` 改收根切片，OR 拼接各根前缀（前缀小写 +
+  分隔符收尾 + LIKE 转义规则不变）。**根列表为空时不做对账**（配置为空是
+  "用户还没填"，把整库标 missing 是灾难）。
+- **为什么不能逐根调单根版**：missing 对账以"本轮 walk 到的路径"为准，逐根
+  调用时第 1 根的对账会把第 2 根下的曲目全部误标 missing。新单测
+  `multi_roots_union_scan_and_missing_scope` 专门锁这个语义（根内 missing /
+  他根 online / 根外 online 三方断言）。
+- **lib.rs**：`library_scan` 根来源优先级 = `options.roots`（数组）>
+  settings `library.roots`（数组）> 旧 `library.root`（单串）> 系统 Music。
+  逐根验证 `is_dir`：无效根**跳过并 warn**，全部无效才报 `invalid_arg`
+  （信息带上每个无效根，方便对照 textarea 修）。
+- **`library_choose_root` 追加语义**：选完目录追加进 `library.roots`
+  （大小写不敏感去重），返回 `ChosenRoot { path, roots }`（UI 直接回填，
+  省一次 roots_get 往返）。
+- **新命令** `library_roots_get` / `library_roots_set`：读/覆盖写根列表。
+  set 侧服务端再归一化（trim / 去空行 / 去引号 / 大小写不敏感去重）——
+  客户端可能绕过校验。
+- **`beets_web_open`**（拍板 6）：复用 probe 找到的解释器起 `python -m beets web`
+  （分离进程，不进会话通道），1.5s 后 `explorer <url>` 拉系统浏览器开
+  `http://localhost:8337`。beets 环境报错属用户侧排障（页面有状态块对照）。
+
+### UI 侧
+
+- **路由**：`AppPage` + `'tools'`（12 值），schema 枚举收编；侧栏第七项
+  「扫描入库」（`DatabaseZap` 图标），nav/history 的诊断刷新触发点扩到 tools。
+- **`ScanToolsView`**（新）：「音乐库与任务」（LibraryTools）+「诊断与日志」
+  （整段自 SettingsPanel 迁入，diag 样式走全局 overlays.css 不复制）。
+  数据源同设置页（`ui.diagnostics` / `ui.beets`），快捷键冲突块改只读展示。
+- **`LibraryTools`**：新增**多目录 textarea**——草稿态绑定本地文本，失焦
+  有效变更才发 `roots_set`；保存成功后草稿回填为后端归一化结果（textarea
+  与实际生效值一致）；beets 状态块新增「在浏览器中打开 beets Web」按钮
+  （仅 `beets.found` 时显示）。
+- **SettingsPanel 收窄**：撤「音乐库与任务」「诊断」两分区（props 只剩
+  settings/onsave），左栏六组 → 四组；快捷键区保留录制时的即时冲突提示。
+- **mock**：`library_roots_get/set`（默认根 `D:/MUSIC_Player/test-music`），
+  `beets_web_open` 抛 unsupported（预览不真拉浏览器）。
+
+### 验证
+
+- `cargo test -p aiya-data`：**98 passed / 0 failed**（新增多根并集单测）；
+  `cargo check -p aiya` ✓。
+- `svelte-check`：**0 errors / 0 warnings**；`vite build` ✓ 5.58s。
+- Playwright e2e：**23 passed / 22.2s**——route.spec 新增「扫描入库页」用例
+  （textarea 归一化回填断言 + 设置页分区撤离断言），「一级路由逐个可达」
+  加第七项；smoke.spec 设置页 rail 6 组 → 4 组。
+- 首跑抓到一个真 bug：textarea 保存后草稿未回填归一化结果（e2e 先于手测
+  拦住）。
+- **遗留**：`gen:types:check` 因应用运行中锁构建目录未能跑（ChosenRoot/
+  LibraryRoots 两份手写契约与 ts-rs 输出格式一致），应用关闭后补跑。

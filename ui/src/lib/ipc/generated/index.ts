@@ -21,6 +21,7 @@ export * from './HistoryCleared';
 export * from './HistoryStats';
 export * from './HistoryTopTrack';
 export * from './JobStarted';
+export * from './LibraryRoots';
 export * from './LibraryStats';
 export * from './ListTiming';
 export * from './LyricLine';

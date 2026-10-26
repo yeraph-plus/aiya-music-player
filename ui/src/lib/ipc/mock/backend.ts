@@ -26,6 +26,7 @@ import type {
   Diagnostics,
   EqSettings,
   HistoryStats,
+  LibraryRoots,
   LibraryStats,
   ListTiming,
   Lyrics,
@@ -489,6 +490,29 @@ export class MockBackend {
       errors: [],
       elapsedMs: Date.now() - started,
     };
+  }
+
+  /* ---------------- 扫描根列表（docs/29 批 A：多目录并集单库） ---------------- */
+
+  private scanRoots: string[] = ['D:/MUSIC_Player/test-music'];
+
+  rootsGet(): LibraryRoots {
+    return { roots: [...this.scanRoots] };
+  }
+
+  /** 与真后端同语义：trim / 去空行 / 去引号 / 大小写不敏感去重 */
+  rootsSet(roots: string[]): LibraryRoots {
+    const cleaned: string[] = [];
+    for (const item of roots) {
+      const s = item
+        .trim()
+        .replace(/^["']+|["']+$/g, '')
+        .trim();
+      if (!s) continue;
+      if (!cleaned.some((r) => r.toLowerCase() === s.toLowerCase())) cleaned.push(s);
+    }
+    this.scanRoots = cleaned;
+    return { roots: [...cleaned] };
   }
 
   /* ---------------- playlists ---------------- */

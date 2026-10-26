@@ -106,6 +106,8 @@ test('一级路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => 
     // docs/28：专辑/艺人升侧栏一级项（曲库 tab 撤掉）
     { via: 'nav', text: '专辑', title: '专辑' },
     { via: 'nav', text: '艺人', title: '艺人' },
+    // docs/29 批 A：扫描入库升侧栏一级项（自设置页拆出）
+    { via: 'nav', text: '扫描入库', title: '扫描入库' },
     // docs/25 §3：FM 电台回归一级导航（占位页）
     { via: 'nav', text: 'FM 电台', title: 'FM 电台' },
     { via: 'playlist', text: '', title: '' }, // 标题动态取歌单名
@@ -135,6 +137,31 @@ test('一级路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => 
       await expect(page.locator('.main h1')).toHaveText('全部曲目');
     }
   }
+});
+
+test('docs/29 批 A：扫描入库页——多目录 textarea 草稿保存 + 设置页不再含扫描/诊断', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('.sidebar .nav-item', { hasText: '扫描入库' }).click();
+  await expect(page.locator('.main h1')).toHaveText('扫描入库');
+  // 侧栏高亮恰好「扫描入库」一个
+  expect(await activeSidebar(page)).toEqual(['扫描入库']);
+
+  // 多目录 textarea：写入两行 + 一行重复（大小写不同）+ 一空行 → 保存后归一化
+  const textarea = page.locator('.roots-input');
+  await expect(textarea).toBeVisible();
+  await textarea.fill('D:/music/a\nD:/MUSIC/a\n\nD:/music/b');
+  await textarea.blur();
+  await expect(page.locator('.roots-head .dim')).toContainText('2 个');
+  // 归一化结果回填草稿（后端返回为准）
+  await expect(textarea).toHaveValue('D:/music/a\nD:/music/b');
+
+  // 设置页不再有「音乐库与任务」「诊断」分区（拆去扫描入库页）
+  await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
+  await expect(page.locator('.main h1')).toHaveText('设置');
+  await expect(page.locator('#settings-library')).toHaveCount(0);
+  await expect(page.locator('#settings-diagnostics')).toHaveCount(0);
+  // 设置页左栏只剩四组
+  await expect(page.locator('.settings-rail .rail-item')).toHaveCount(4);
 });
 
 test('docs/28：专辑宫格（侧栏一级项）→ 卡片 → 专辑详情 → 返回回宫格', async ({ page }) => {

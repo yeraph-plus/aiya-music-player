@@ -40,6 +40,10 @@ import { notify } from './notify.svelte';
  * 2026-10-26 docs/28 减 2 值：`recent` / `mostPlayed` 单页退役（常听收进
  * 推荐页 top-15，最近播放被筛选器取代，侧栏席位让给专辑/艺人宫格页）。
  * 旧 UiState 里落着这两个值的，由 `restore()` 兜底换算成曲库。
+ *
+ * 2026-10-26 docs/29 批 A 加 `tools`：侧栏第七项「扫描入库」（扫描/beets
+ * 任务 + 日志诊断从设置页拆出，成为独立路由页——任务是长时跑的，
+ * 值得一个可以停留、可以刷新、可以分享位置的一级入口）。
  */
 export type AppPage =
   | 'home'
@@ -52,6 +56,7 @@ export type AppPage =
   | 'search'
   | 'nowPlaying'
   | 'settings'
+  | 'tools'
   | 'radio';
 
 /** 哪些路由是"列表页"（共用 `ListStore` 的查询与虚拟列表） */

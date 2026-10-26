@@ -555,6 +555,37 @@ pub fn sync_now(app: tauri::AppHandle, params: RefreshParams) {
         .ok();
 }
 
+/// beets Web 外链（docs/29 §12 拍板 6）：高级用户出口，应用内不做 GUI。
+///
+/// 复用 probe 找到的解释器起 `python -m beets web`（**分离进程**：不进会话
+/// 通道、stdout/stderr 丢弃，关掉应用也不影响 web 服务——它就是用户自己的
+/// beets 环境）；1.5s 后用系统默认浏览器打开 `http://localhost:8337`
+/// （beets web 默认端口）。返回打开的 URL。
+///
+/// 端口被占/插件配置报错属于用户 beets 环境问题：进程 spawn 成功就算成功，
+/// 浏览器里看不到服务是用户侧排障（页面有 beets 状态块可对照）。
+pub fn web_open(app: &tauri::AppHandle) -> Result<String, String> {
+    const WEB_URL: &str = "http://localhost:8337";
+    let interpreter = probe(app)
+        .interpreter
+        .ok_or_else(|| "未找到 beets（页面里看安装指引）".to_string())?;
+    std::process::Command::new(&interpreter)
+        .args(["-m", "beets", "web"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("启动 beets web 失败：{e}"))?;
+    // 给 web 服务一点启动时间再拉浏览器；失败静默——用户可以自己开 URL
+    std::thread::Builder::new()
+        .name("beets-web-open".into())
+        .spawn(move || {
+            std::thread::sleep(Duration::from_millis(1500));
+            let _ = std::process::Command::new("explorer").arg(WEB_URL).spawn();
+        })
+        .map_err(|e| format!("起浏览器线程失败：{e}"))?;
+    Ok(WEB_URL.to_string())
+}
+
 /// dump 全量收集的整体超时：本地库读取，几万条也在秒级；超过这个数就是卡死。
 const DUMP_TIMEOUT: Duration = Duration::from_secs(180);
 

@@ -2,5 +2,8 @@
 
 /**
  * 选目录成功后的路径。用户取消选择时命令返回 `null` 而不是空字符串。
+ *
+ * docs/29 批 A：`roots` 是选择后的**完整根列表**（多目录并集单库），
+ * UI 拿它直接回填 textarea，省一次 roots_get 往返。
  */
-export type ChosenRoot = { path: string, };
+export type ChosenRoot = { path: string, roots: Array<string>, };

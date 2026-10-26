@@ -89,10 +89,29 @@ class LibraryStore {
     return result.removed;
   }
 
-  /** 打开系统目录选择器；用户取消返回 null */
+  /** 打开系统目录选择器；用户取消返回 null。选中后回填根列表状态 */
   async chooseRoot(): Promise<string | null> {
     const chosen = await ipc.library.chooseRoot();
+    if (chosen) this.roots = chosen.roots;
     return chosen?.path ?? null;
+  }
+
+  /* ---------------- 扫描根列表（docs/29 批 A：多目录并集单库） ---------------- */
+
+  roots = $state<string[]>([]);
+
+  /** 拉取扫描根列表（textarea 数据源）。失败降级为不动（旧值比空列表好） */
+  async loadRoots(): Promise<void> {
+    try {
+      this.roots = (await ipc.library.rootsGet()).roots;
+    } catch (e) {
+      console.warn('library.rootsGet failed:', errorMessage(e));
+    }
+  }
+
+  /** 覆盖写扫描根列表。后端会再归一化，这里以后端返回为准回填 */
+  async saveRoots(roots: string[]): Promise<void> {
+    this.roots = (await ipc.library.rootsSet(roots)).roots;
   }
 
   /** 订阅扫描进度；返回清理函数 */

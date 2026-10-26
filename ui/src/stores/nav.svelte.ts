@@ -205,7 +205,8 @@ class NavStore {
     // 只有落在列表页才重拉列表：正在播放/设置页看不到列表，
     // 白跑一次查询还会把错误条带出来
     if (isListPage(s.page)) void list.reload({ restore: true });
-    if (s.page === 'settings') void ui.refreshDiagnostics();
+    // 设置页与扫描入库页都展示诊断/beets 状态（docs/29 批 A 拆页共用一份数据）
+    if (s.page === 'settings' || s.page === 'tools') void ui.refreshDiagnostics();
     ui.scheduleUiSave();
   }
 }

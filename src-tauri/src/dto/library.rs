@@ -109,11 +109,23 @@ pub struct ScanCancel {
 }
 
 /// 选目录成功后的路径。用户取消选择时命令返回 `null` 而不是空字符串。
+///
+/// docs/29 批 A：`roots` 是选择后的**完整根列表**（多目录并集单库），
+/// UI 拿它直接回填 textarea，省一次 roots_get 往返。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct ChosenRoot {
     pub path: String,
+    pub roots: Vec<String>,
+}
+
+/// 扫描根列表（settings 键 `library.roots`，多目录并集单库）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryRoots {
+    pub roots: Vec<String>,
 }
 
 /// 在文件管理器中定位曲目。
