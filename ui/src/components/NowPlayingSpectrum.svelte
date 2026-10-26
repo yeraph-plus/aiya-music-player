@@ -180,10 +180,15 @@
 
   /**
    * 心电图式折线（wave，用户反馈改版）：不再是单条平滑曲线，而是沿基线
-   * 排布的一串"心电波群"——每带一个：平基线 → 上冲尖峰（R 波，随频带
-   * 能量起落）→ 下折（S 波，幅度取上冲的 ~45%）→ 回基线。直 lineTo
-   * 折线（不走贝塞尔），尖峰保持锐利才是心电图的味道；频带安静的段落
-   * 自然塌回基线，像心跳间歇。
+   * 排布的一串"心电波群"——每带一个：上冲尖峰（R 波，随频带能量起落）→
+   * 下折（S 波，幅度取上冲的 ~45%）→ 回基线。直 lineTo 折线（不走贝塞尔），
+   * 尖峰保持锐利才是心电图的味道；频带安静的段落自然塌回基线，像心跳间歇。
+   *
+   * 连续性（用户反馈二改）：**波与波之间不画硬编码的静息平段**——平段
+   * 恒在零幅度基线上，与数据无关，两个响度都高的相邻频带之间也会横着
+   * 一小段"零幅度横线"（观感即"幅度算错了"）。现在每带占满整个 slot：
+   * 回基线的落点就是下一带的起点，波间只有频带边界上的一个尖点；
+   * 只有数据本身安静（v≈0）时线才贴着基线走。
    */
   function drawWave(
     ctx: CanvasRenderingContext2D,
@@ -207,18 +212,17 @@
     ctx.stroke();
     ctx.globalAlpha = 1;
 
-    // 波群折线：每带四段（基线段 / 上冲 / 下折 / 回基线），直角转折
+    // 波群折线：每带三段（上冲 R 波 / 下折 S 波 / 回基线），直角转折，
+    // 首尾在频带边界相接——整条线连续，没有与数据无关的平段
     ctx.beginPath();
     ctx.moveTo(0, cy);
     for (let i = 0; i < n; i += 1) {
       const x = i * slot;
       const v = Math.min(1, Math.max(0, vals[i] as number));
-      ctx.lineTo(x + slot * 0.22, cy); // 静息段
-      ctx.lineTo(x + slot * 0.5, cy - v * amp); // 上冲（R 波）
-      ctx.lineTo(x + slot * 0.74, cy + v * amp * 0.45); // 下折（S 波）
-      ctx.lineTo(x + slot * 0.96, cy); // 回基线
+      ctx.lineTo(x + slot * 0.38, cy - v * amp); // 上冲（R 波）
+      ctx.lineTo(x + slot * 0.58, cy + v * amp * 0.45); // 下折（S 波）
+      ctx.lineTo(x + slot, cy); // 回基线 = 下一带起点
     }
-    ctx.lineTo(width, cy);
 
     ctx.shadowColor = accent;
     ctx.shadowBlur = 12;
