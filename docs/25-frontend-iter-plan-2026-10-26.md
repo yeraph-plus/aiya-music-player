@@ -185,6 +185,16 @@ FM 电台   →  page 'radio'（占位页回归入口）
 
 验证：svelte-check 0/0；e2e 19/19（互斥/Esc/焦点还原断言不变仍绿）；JS 424 kB / CSS 59.1 kB。
 
+### T4g 增补（同日，用户四点反馈）
+
+1. **顺序播放图标 → `RepeatOff`**（用户点名；lucide 包内已核实存在）——语义对齐"不重复、播完即止"。ChevronsRight 随之撤下。
+2. **歌单选择器补次要文本**：极简壳顶部加一行 muted 说明（走 `Dialog.description`，无头模式下照样渲染 `.k-dlg-desc`）。
+3. **频谱让位修真因**：T4f 给 `.ambient-spectrum` 写了 `top/bottom` + `width/height:100%`——绝对定位元素 **top/bottom/height 三者同给时 height 赢、bottom 被忽略**，画布仍是全窗高。改为纯四向 `inset: var(--titlebar-h) 0 var(--player-h) 0`（自动定尺寸），并留注释防再踩。
+4. **沉浸档频谱零虚化直出**：用户仍见"blur 虚化"的真因不是 blur filter——沉浸档柱子先画进 **128×72 低分辨率 buffer 再放大全幅，双线性插值把硬边柱子糊成雾**。改为沉浸档**跳过 buffer，主画布按实际分辨率直接 fillRect**（硬边缘、条间 gap=min(3, slot·0.2)）；standard 档保留 buffer+blur(26px) 环境光画法。侧栏与浮层（Dialog/Menu/Popover 的真玻璃）不动——用户明确"只解除封面歌词区域"。
+5. **壳层透明度定档 95%**：顶栏/播放条/抽屉三处 75%→95%（用户反馈要接近不透明）。方案 B 红线（禁 backdrop-filter）不变。
+
+验证：svelte-check 0/0；e2e 19/19。
+
 ---
 
 ## §7 待拍板项（开工前确认）

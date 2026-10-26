@@ -333,11 +333,11 @@
     height: var(--player-h);
     padding: 0 18px;
     border-top: 1px solid var(--line);
-    /* 半透明（docs/25 T4d 起，浓度 75%——与顶栏同档，用户反馈 90% 太闷）：
+    /* 半透明（docs/25 T4g 定档 95%——与顶栏同档，接近不透明）：
      * 全应用背景从底下透出来。底色用 surface-3（顶栏是 surface-2）——
      * 同档不同阶，有一点色差。原 backdrop-filter 摘除——持久壳层垫着
      * 动画频谱 canvas 就是每帧全条重模糊（docs/25 §5 方案 B 红线）。 */
-    background: color-mix(in srgb, var(--surface-3) 75%, transparent);
+    background: color-mix(in srgb, var(--surface-3) 95%, transparent);
   }
 
   /* ---------------- 左：当前曲目（= 正在播放页入口） ---------------- */

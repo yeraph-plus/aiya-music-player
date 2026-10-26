@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { Component } from 'svelte';
   import {
-    ChevronsRight,
     Folder,
     GripVertical,
     Heart,
@@ -12,6 +11,7 @@
     Play,
     Repeat,
     Repeat1,
+    RepeatOff,
     RotateCw,
     Shuffle,
     SkipBack,
@@ -42,7 +42,7 @@
     shuffle: Shuffle,
     repeat: Repeat,
     repeatOne: Repeat1,
-    sequential: ChevronsRight,
+    sequential: RepeatOff,
     volume: Volume2,
     mute: VolumeX,
     queue: ListVideo,

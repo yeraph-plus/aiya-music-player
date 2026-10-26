@@ -244,12 +244,18 @@
   </Dialog>
 {:else if overlay.dialog?.kind === 'addToPlaylist'}
   <!--
-    极简歌单选择器（docs/25 用户反馈）：无标题、无关闭键、无底部按钮——
-    就一份歌单列表，**点行即添加并关闭**；没有歌单就一行空态文案。
-    关闭走 Esc / 点遮罩。不用 Menu：选歌单是"看得到每个歌单有几首"的
-    浏览行为，菜单是"我已经知道要点哪一项"的快捷路径，混用两头不像。
+    极简歌单选择器（docs/25 用户反馈）：无大标题、无关闭键、无底部按钮——
+    顶部只留一行**次要文本**说明用途，主体就一份歌单列表，**点行即添加
+    并关闭**；没有歌单就一行空态文案。关闭走 Esc / 点遮罩。
+    不用 Menu：选歌单是"看得到每个歌单有几首"的浏览行为，菜单是
+    "我已经知道要点哪一项"的快捷路径，混用两头不像。
   -->
-  <Dialog label="添加到播放列表" width="md" onclose={() => overlay.closeDialog()}>
+  <Dialog
+    label="添加到播放列表"
+    description="添加到播放列表"
+    width="md"
+    onclose={() => overlay.closeDialog()}
+  >
     <div class="pick-list">
       {#each playlists.items as playlist (playlist.id)}
         <button class="pick-row" onclick={() => submitAddTo(playlist.id)}>

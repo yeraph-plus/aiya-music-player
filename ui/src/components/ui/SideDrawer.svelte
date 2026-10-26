@@ -23,7 +23,7 @@
    *
    * 几何：浮在主区之上、**不与顶栏/播放条贴边**——上下各让出一条栏高
    * 再加 10px 外边距，四角圆角、整卡悬浮（与窗控三键所在顶栏、播放条
-   * 都保持呼吸距离）。背景与顶栏/播放条同透明度档（75% color-mix）。
+   * 都保持呼吸距离）。背景与顶栏/播放条同透明度档（95% color-mix）。
    *
    * 焦点语义：打开时焦点移入面板（Esc 直接可用），关闭时还原到打开前的
    * 元素（触发键）——与 bits-ui Dialog 的行为对齐，只是手写。
@@ -113,8 +113,8 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    /* 与顶栏（surface-2 75%）同透明度档：背景从卡下透出来 */
-    background: color-mix(in srgb, var(--surface-2) 75%, transparent);
+    /* 与顶栏（surface-2 95%）同透明度档：背景从卡下透出来 */
+    background: color-mix(in srgb, var(--surface-2) 95%, transparent);
     border: 1px solid var(--line);
     border-radius: 14px;
     box-shadow: -18px 0 44px var(--shadow);
