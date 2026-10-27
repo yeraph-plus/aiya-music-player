@@ -60,18 +60,13 @@ fn wav_decode_positions_and_seek() {
     // 读前 100ms：前 50ms 有信号、50ms 后（本测试的 1kHz 段只占前 2.5s，所以 100ms 内都有信号）
     let mut saw_signal = false;
     let mut total_samples = 0usize;
-    loop {
-        match dec.next_packet().unwrap() {
-            Some(samples) => {
-                total_samples += samples.len();
-                if samples.iter().any(|s| s.abs() > 0.01) {
-                    saw_signal = true;
-                }
-                if dec.position_ms() > 200 {
-                    break;
-                }
-            }
-            None => break,
+    while let Some(samples) = dec.next_packet().unwrap() {
+        total_samples += samples.len();
+        if samples.iter().any(|s| s.abs() > 0.01) {
+            saw_signal = true;
+        }
+        if dec.position_ms() > 200 {
+            break;
         }
     }
     assert!(saw_signal, "decoded signal present");

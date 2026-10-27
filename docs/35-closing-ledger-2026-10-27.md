@@ -14,8 +14,8 @@ grep -n "^#\+.*\(未完成\|遗留\|剩余\|仍欠\|后续\|待办\)" docs/*.md
 # 发布材料的真实状态（下面 P0 各项都是这样核出来的）
 grep -n "signingIdentity\|csp" src-tauri/tauri.conf.json
 head -20 licenses/SOURCE-OFFER.txt
-ls .github/workflows                                      # 2026-10-27 之前不存在
-cargo clippy --version                                   # → 组件未安装
+ls .github/workflows                                      # 2026-10-27 建了 ci.yml + release.yml
+cargo clippy --version                                   # 2026-10-27 装上并清零（见 P2-10）
 ```
 
 **读法**：`[ ]` 未做 / `[x]` 已做。每条末尾的「出处」指向写下这条理由的文档，
@@ -43,10 +43,27 @@ cargo clippy --version                                   # → 组件未安装
       不是"链接已可访问"）。首次 push 后点一次即可销项。
       *出处：docs/30 §9；docs/33 §8.2（分包后此文件已改过一次文案）。*
 
-- [ ] **P0-3 CSP 与 capabilities 收窄**：`src-tauri/tauri.conf.json` 里 `"csp": null`；
-      `capabilities/default.json` 只有 `core:default` + dialog + 5 条窗口控制。
-      **判据**：设上 `default-src 'self'` 一类的最小策略，`npm run build` + e2e 全绿
-      （重点是 `aiya-artwork://` 与 `ipc://` 不被拦）。
+- [x] **P0-3 CSP 收窄**（2026-10-27 做掉）。生产策略：
+      `default-src 'self'` / `script-src 'self'`（**无** unsafe-inline、无 unsafe-eval）/
+      `style-src 'self' 'unsafe-inline'` / `img-src 'self' blob: data:` +
+      `aiya-artwork:` + `http://aiya-artwork.localhost` / `connect-src 'self' ipc:`
+      + `http://ipc.localhost` + 同上两个封面源 / `media-src 'self' blob:` /
+      `font-src 'self' data:` / `object-src 'none'` / `base-uri 'self'` /
+      `form-action 'none'` / `frame-ancestors 'none'`。**devCsp 单独一份**：vite HMR 要
+      `ws://localhost:1420` 与 `unsafe-eval`，不写就会 fallback 到生产策略把开发打挂
+      （`tauri/src/manager/mod.rs` 的 `csp()` 是 `dev_csp.or(csp)`）。
+
+      **实测（不是推断）**：`tauri build --debug --no-bundle` 出包 → 页面 URL 是
+      `http://tauri.localhost/`（生产 custom-protocol，证明用的是 `csp` 而非 `devCsp`）
+      → CDP 连真 WebView2，`securitypolicyviolation` 监听 + `document.querySelectorAll('img')`：
+      封面 `http://aiya-artwork.localhost/artwork/...` `naturalWidth=96` 加载成功，
+      IPC 拿到真实曲目，**零违规零 console.error**。
+      唯一一条历史违规来自 zod v4 的 JIT 探测（`Function('')`），它自己会降级，
+      但每启动留一条红字会掩盖以后真被拦的东西 → 用 `z.config({jitless:true})`
+      （`ui/src/lib/zod-setup.ts`，必须被 schema 模块**先行** import，写在 main.ts
+      顶层已经太晚：settings chunk 是静态依赖，先于入口主体求值）。
+      **capabilities 未动**：只有 `core:default` + dialog + 5 条窗口控制，没有可收的。
+      **仍未验**：只在 debug 构建上验过（生产 profile 的资源内嵌方式相同，但没实跑）。
       *出处：docs/30 §7 第 4 条；docs/13 §7。*
 
 - [ ] **P0-4 干净机「安装 → 运行 → 卸载」闭环**：没在从未装过本程序的机器上走过一遍。
@@ -197,8 +214,23 @@ cargo clippy --version                                   # → 组件未安装
       同一个绝对路径（改成 `argv[1]`，默认 `./test-music`）；`.gitignore` 加 `/test-music/`。
       *出处：docs/30 §9「故意没做」。*
 
-- [ ] **P2-10 `cargo clippy -D warnings` 从未跑过**：clippy 组件没装
-      （`rustup component add clippy`）。首跑大概率有几十条，其中会不会有真 bug 未知。
+- [x] **P2-10 clippy 首跑并清零**（2026-10-27）。装组件后
+      `cargo clippy --workspace --all-targets`：1 条 **error** + 约 50 条 warning。
+      那条 error 是真问题不是风格：`crates/aiya-audio/src/hls.rs` 拼 ADTS 头时写
+      `(0x7FF >> 6) & 0x1F`——左边已经是 `0x1F`，掩码是空操作，`clippy::eq_op`
+      是默认 deny，所以 `--all-targets` 直接编译失败。**这条从来没暴露**，因为
+      `npm run test` 不跑 clippy。
+      处理分两类：
+      · 机械改（`unwrap_err` after `is_err`、`loop+match` → `while let`、
+        索引循环 → `iter_mut().enumerate()`、`push_str("；")` → `push('；')`、
+        `assert_eq!(x, true)` 等）用 `cargo clippy --fix` + 手工收尾；
+      · **定性判断的加 `#[allow]` 并写理由**，不照改：`eq.rs` 的 `!(f0 > 0.0)`
+        （换成 `<=` 会让 NaN 通过，污染整条 EQ 系数）、两个 `large_enum_variant`
+        （音频热路径加一层 Box 不划算 / 每条结果只 move 一次）、
+        三处 `too_many_arguments`（参数是 Load + pending_* 状态汇合点，拆结构体
+        只是换个位置）。
+      结果：**rc=0，0 warning 0 error**；`cargo test --workspace` 336 passed / 0 failed
+      （证明机械改动没改行为）。已进 `npm run verify` 与 CI（`check:clippy`）。
       *出处：docs/30 §9「故意没做」。*
 
 - [ ] **P2-11 mock 里 `beets.found` 恒为 `true`**：所以"未装 beets 时整理库段收成一行"
@@ -231,10 +263,10 @@ cargo clippy --version                                   # → 组件未安装
 ## 建议顺序（三条路线，按目标选一条）
 
 **A. 想尽快有一个能发给别人装的版本**（最短路径，约 1 天 + 1 台干净机）
-`P0-3`（CSP）→ `P0-1`（签名）→ `P0-4`（干净机）→ `P0-6`（杀软，紧随签名）
+`P0-1`（签名）→ `P0-4`（干净机）→ `P0-6`（杀软，紧随签名）
 
-> `P0-2`（源码要约地址）、`P1-2`（死分支）与 `P2-13`（README 表）已在仓库托管
-> 那一轮做掉；`P0-5` soak 可以并行跑，它不挡构建，只挡"敢不敢说不崩"。
+> `P0-2`（源码要约地址）、`P1-2`（死分支）、`P0-3`（CSP）与 `P2-13`（README 表）
+> 已在前面几轮做掉；`P0-5` soak 可以并行跑，它不挡构建，只挡"敢不敢说不崩"。
 
 **B. 想把 beets 能力真正交付出去**（约 2–3 天，需要一台无 Python 的机器）
 `P1-1`（真发布）→ `P1-3`（两条轨道）→ `P2-4`（插件依赖，同时决定"摘还是补"）→
@@ -244,7 +276,7 @@ cargo clippy --version                                   # → 组件未安装
 `P1-5`（任务登记表）→ `P2-11`（补 mock 场景，它正是这张表最容易漏的测试）
 
 **D. 想让后来接手的人少踩坑**
-`P2-9`（CI）→ `P2-10`（clippy 首跑）→ `P2-13` + `P2-14`
+`P2-9`（CI）与 `P2-10`（clippy）已做；剩下 `P2-11` + `P2-14`
 
 ---
 

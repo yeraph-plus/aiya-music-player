@@ -1,3 +1,5 @@
+// 第一行，必须在任何会构造 zod schema 的模块之前（原因见该文件注释）
+import './lib/zod-setup';
 import './app.css';
 import { mount } from 'svelte';
 import App from './App.svelte';

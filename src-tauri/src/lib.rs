@@ -1995,7 +1995,7 @@ fn apply_engine_intents(state: &AppState, actor: &mut aiya_player::PlayerActor) 
 /// 返回新快照（命令返回值用）。
 fn drive_and_emit(state: &State<'_, AppState>, app: &AppHandle) -> aiya_player::PlayerState {
     let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let acted = apply_engine_intents(&state, &mut actor);
+    let acted = apply_engine_intents(state, &mut actor);
     // 切歌/停止立即全量落库（队列结构可能变了；exit 时不必依赖节流尾巴）
     if acted {
         persist_queue_full(state, &actor);
@@ -2032,7 +2032,7 @@ pub fn quit_app(app: &AppHandle) {
 
 /// 引擎命令统一入口（Engine 在 Mutex 里）。&State 自动 deref 成 &AppState。
 fn engine_send(state: &AppState, cmd: aiya_audio::EngineCommand) {
-    let _ = state.engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner).send(cmd);
+    state.engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner).send(cmd);
 }
 
 /// 从 DB 拿 TrackRef 列表（trackIds 保序）。
@@ -2539,7 +2539,7 @@ fn history_clear(state: State<'_, AppState>) -> Result<dto::history::HistoryClea
     // 清历史必须与曲目统计列归零同事务（见 aiya_data::history::clear）
     state
         .db()
-        .send(|conn| aiya_data::history::clear(conn))
+        .send(aiya_data::history::clear)
         .map_err(dto::ApiError::from)?;
     Ok(dto::history::HistoryCleared { cleared: true })
 }
@@ -2574,7 +2574,7 @@ fn artwork_protocol(app: &AppHandle, request: tauri::http::Request<Vec<u8>>) -> 
 
     // 1) 查记录（DB 线程）
     let found = state.db().send(move |conn| {
-        Ok(aiya_data::find_artwork(conn, artwork_id.as_str())?)
+        aiya_data::find_artwork(conn, artwork_id.as_str())
     });
     let Some((cache_key, mime)) = found.ok().flatten() else {
         return not_found();
@@ -2673,12 +2673,12 @@ pub fn run() {
         .setup(|app| {
             // 第一件事：日志。此后的任何失败（建库、起 sidecar）才有据可查，
             // 否则 release 里所有 tracing 输出进虚空。
-            logging::init(&app.handle());
+            logging::init(app.handle());
 
-            let db_path = default_db_path(&app.handle());
+            let db_path = default_db_path(app.handle());
             let db = aiya_data::open(&db_path)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
-            let artwork_dir = default_artwork_dir(&app.handle());
+            let artwork_dir = default_artwork_dir(app.handle());
             let _ = std::fs::create_dir_all(artwork_dir.join("originals"));
             let _ = std::fs::create_dir_all(artwork_dir.join("thumbs"));
             let engine = sidecar::SidecarHandle::launch()
@@ -2946,7 +2946,7 @@ pub fn run() {
                         for cmd in sent {
                             engine_send(&engine, cmd);
                         }
-                        if effects.iter().any(|e| *e == PumpEffect::EmitState) {
+                        if effects.contains(&PumpEffect::EmitState) {
                             // 意图下发可能改了队列结构 → 全量落库（与命令路径一致）
                             persist_queue_full(&engine, &actor);
                         }

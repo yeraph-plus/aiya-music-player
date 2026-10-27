@@ -728,8 +728,7 @@ mod tests {
     /// beets 侧自己的改动也算（apply 改了标签但 mtime 没变的情形）。
     #[test]
     fn beets_side_change_counts() {
-        let mut stats = aiya_data::beets_sync::SyncStats::default();
-        stats.updated = 3;
+        let stats = aiya_data::beets_sync::SyncStats { updated: 3, ..Default::default() };
         let outcome = Outcome { scan: scan(0, 0, 0), sync: Some(stats), sync_error: None };
         assert!(outcome.changed());
     }

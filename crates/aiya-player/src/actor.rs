@@ -171,6 +171,9 @@ impl PlayerActor {
     /// - shuffle 开启时重新洗牌（排列不落库，对齐持久化决策），当前曲保持在 cursor 位
     /// - `current_track_id` 按曲目 ID 定位（不传下标：DB 队列里被删曲目会让下标错位）
     /// - 恢复前调用方负责用 DB 队列重建 tracks（缺失曲目已静默剔除）
+    // 这些参数是一次「会话恢复」的完整快照（DB 里的队列/模式/音量/位置），
+    // 打包成结构体只是同一批字段换个位置，且本仓只有一个调用点。
+    #[allow(clippy::too_many_arguments)]
     pub fn hydrate(
         &mut self,
         tracks: Vec<TrackRef>,

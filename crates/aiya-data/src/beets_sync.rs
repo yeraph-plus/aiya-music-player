@@ -468,7 +468,7 @@ mod tests {
         let it = item(7, r"C:\m\a.mp3", "标题一");
 
         // 1) 新导入
-        let s = sync_items(&mut conn, &[it.clone()], 100).unwrap();
+        let s = sync_items(&mut conn, std::slice::from_ref(&it), 100).unwrap();
         assert_eq!((s.matched, s.updated, s.imported, s.unchanged), (0, 0, 1, 0));
 
         let (title, gain, beets_id, codec): (String, f64, i64, String) = conn
@@ -495,7 +495,7 @@ mod tests {
         assert_eq!(artist, "测试艺人");
 
         // 2) 同数据再对齐 → unchanged
-        let s = sync_items(&mut conn, &[it.clone()], 101).unwrap();
+        let s = sync_items(&mut conn, std::slice::from_ref(&it), 101).unwrap();
         assert_eq!((s.matched, s.updated, s.unchanged), (1, 0, 1));
 
         // 3) 改标题/曲目号 → updated

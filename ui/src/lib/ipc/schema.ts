@@ -8,6 +8,9 @@
  * 为什么热路径禁止校验：`player:state`（10Hz）、`spectrum:frame`（30fps）
  * 每帧过一次 zod 会直接吃掉渲染预算；那两条靠生成的静态类型 + Rust 快照测试。
  */
+// 必须先于本文件的 `z.object(...)`：zod v4 在构造 schema 时判定 JIT，而判定会
+// 缓存，写晚了改不回来（原因与实测见 zod-setup.ts）
+import '../zod-setup';
 import { z } from 'zod';
 
 /** 设置项。老配置文件缺字段是常态（`output` 是 2026-10 才加的），所以全 optional + passthrough。 */

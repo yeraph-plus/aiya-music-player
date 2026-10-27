@@ -313,11 +313,10 @@ fn spawn_reader(
                         match ev_tx.try_send(evt) {
                             Ok(()) => {}
                             Err(mpsc::TrySendError::Full(restage)) => {
-                                if !matches!(restage, aiya_audio::EngineEvent::Position { .. }) {
-                                    if ev_tx.send(restage).is_err() {
+                                if !matches!(restage, aiya_audio::EngineEvent::Position { .. })
+                                    && ev_tx.send(restage).is_err() {
                                         break;
                                     }
-                                }
                             }
                             Err(mpsc::TrySendError::Disconnected(_)) => break,
                         }
@@ -342,15 +341,12 @@ fn spawn_writer(cmd_rx: Receiver<aiya_audio::EngineCommand>, shared: Arc<Shared>
                 Err(_) => continue,
             };
             let mut guard = shared.writer_slot.lock().unwrap();
-            match guard.as_mut() {
-                Some(w) => {
-                    if w.write_all(&bytes).and_then(|_| w.flush()).is_err() {
-                        // 管道断开：清槽，看门狗接管
-                        *guard = None;
-                    }
+            // None = 断线中：命令丢弃（恢复由看门狗负责）
+            if let Some(w) = guard.as_mut() {
+                if w.write_all(&bytes).and_then(|_| w.flush()).is_err() {
+                    // 管道断开：清槽，看门狗接管
+                    *guard = None;
                 }
-                // None = 断线中：命令丢弃（恢复由看门狗负责）
-                None => {}
             }
         })
         .expect("spawn sidecar cmd writer");

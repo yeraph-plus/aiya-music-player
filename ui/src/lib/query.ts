@@ -1,3 +1,5 @@
+// 同 ipc/schema.ts：先关 JIT，再构造 schema
+import './zod-setup';
 import { z } from 'zod';
 import type { TrackQueryInput } from './ipc/client';
 

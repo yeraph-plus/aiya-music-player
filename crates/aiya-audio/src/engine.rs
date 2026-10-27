@@ -343,7 +343,7 @@ fn render_loop(
         }
     }
 
-    { let _ = wasapi::deinitialize(); }
+    { wasapi::deinitialize(); }
 }
 
 /// Null 输出的实时节拍（毫秒）：一次解码/推进一小批，避免忙转。
@@ -367,6 +367,10 @@ fn open_source(path: &str) -> Result<DecodedStream, AudioError> {
 ///
 /// 时钟用 `sleep` 而不是忙等：这个模式的价值是"和真实播放同样的节奏出现
 /// 同样的位置事件"，忙等只会白烧一个核。
+// 参数多不是"从某个结构体抄一遍"，而是 Load 命令 + 线程里累积的 pending_* 状态
+// （变速/输出配置/EQ/tap）在进入播放循环前的汇合点。打包成结构体只是把同一批字段
+// 挪个位置（调用点只有一处），不减少信息量——留作 docs/36 的重构项，这里先记账。
+#[allow(clippy::too_many_arguments)]
 fn play_null(
     cmd_rx: &Receiver<EngineCommand>,
     send: &impl Fn(EngineEvent),
@@ -426,9 +430,7 @@ fn play_null(
                 Ok(EngineCommand::Seek(ms)) => {
                     // 直播流忽略 seek（UI 禁拖；误触发不能杀播放）
                     if decoder.seekable() {
-                        if let Err(e) = decoder.seek_ms(ms) {
-                            return Err(e);
-                        }
+                        decoder.seek_ms(ms)?;
                         send(EngineEvent::Position { token, position_ms: decoder.position_ms() });
                     }
                 }
@@ -491,7 +493,7 @@ fn play_null(
                     got += samples.len() / channels;
                     // tap 内部按订阅开关短路（关闭时只剩一次原子读），
                     // 静音模式下频谱仍应跟着音乐动（UI 不显示成"卡死"）
-                    tap.push_frame(&samples, channels);
+                    tap.push_frame(samples, channels);
                 }
                 Ok(None) => {
                     eof = true;
@@ -536,10 +538,7 @@ enum LoadExit {
 }
 
 fn handle_preload(cmd: &EngineCommand, send: &impl Fn(EngineEvent)) {
-    match cmd {
-        EngineCommand::Stop => send(EngineEvent::StateChanged { token: 0, playing: false }),
-        _ => {}
-    }
+    if cmd == &EngineCommand::Stop { send(EngineEvent::StateChanged { token: 0, playing: false }) }
 }
 
 /// 构造 `AudioMode` 事件（"设备到底给了什么"的完整快照）。
@@ -621,6 +620,8 @@ const DEVICE_RECOVERY_ATTEMPTS: u32 = 5;
 /// `initial_cfg`：输出配置（模式/时钟/缓冲/暂停释放）。
 /// `initial_eq`：EQ 参数（协议 v6）。随流构建滤波器，播放中可热切。
 /// `tap`：频谱采样点（跨曲目常驻；推**重采样后**的输出帧，未乘音量）。
+// 同 play_null：参数是 Load + pending_* 状态的汇合点，见上一条注释。
+#[allow(clippy::too_many_arguments)]
 fn play_file(
     cmd_rx: &Receiver<EngineCommand>,
     send: &impl Fn(EngineEvent),
@@ -906,9 +907,9 @@ fn play_file(
             out.stop();
             return Ok(LoadExit::Finished { cfg, eq: eq_params });
         }
-        if result.is_err() {
+        if let Err(e) = result {
             out.stop();
-            return Err(result.unwrap_err());
+            return Err(e);
         }
 
         // 设备错误恢复（唯一出口）：重建输出流后继续当前曲目。
@@ -970,7 +971,7 @@ fn play_file(
                         SwitchOutcome::Switched(note) => {
                             let mut r = why;
                             if let Some(n) = note {
-                                r.push_str("；");
+                                r.push('；');
                                 r.push_str(&n);
                             }
                             send(mode_event(token, &cfg, &out, Some(r)));
@@ -2026,13 +2027,13 @@ fn resample_take(
 fn encode_frames(fmt: OutFormat, src: &[f32], dst: &mut [u8]) {
     match fmt {
         OutFormat::F32 => {
-            for (c, s) in dst.chunks_exact_mut(4).zip(src) {
+            for (c, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src) {
                 c.copy_from_slice(&s.to_le_bytes());
             }
         }
         OutFormat::I24In32 => {
             // 24 bit 有效位**左对齐**在 32 bit 容器里（WAVEFORMATEXTENSIBLE 约定）
-            for (c, s) in dst.chunks_exact_mut(4).zip(src) {
+            for (c, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src) {
                 let x = (s.clamp(-1.0, 1.0) * 8_388_608.0)
                     .round()
                     .clamp(-8_388_608.0, 8_388_607.0);
@@ -2040,7 +2041,7 @@ fn encode_frames(fmt: OutFormat, src: &[f32], dst: &mut [u8]) {
             }
         }
         OutFormat::I16 => {
-            for (c, s) in dst.chunks_exact_mut(2).zip(src) {
+            for (c, s) in dst.as_chunks_mut::<2>().0.iter_mut().zip(src) {
                 let x = (s.clamp(-1.0, 1.0) * 32_768.0)
                     .round()
                     .clamp(-32_768.0, 32_767.0);
@@ -2160,7 +2161,7 @@ mod tests {
     /// 读出 i16 交错样本。
     fn read_i16(bytes: &[u8]) -> Vec<i16> {
         bytes
-            .chunks_exact(2)
+            .as_chunks::<2>().0.iter()
             .map(|c| i16::from_le_bytes([c[0], c[1]]))
             .collect()
     }
@@ -2168,7 +2169,7 @@ mod tests {
     /// 读出 i24-in-32（右移还原成 24 bit 数值）。
     fn read_i24(bytes: &[u8]) -> Vec<i32> {
         bytes
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) >> 8)
             .collect()
     }
@@ -2179,7 +2180,7 @@ mod tests {
         let mut dst = vec![0u8; src.len() * 4];
         encode_frames(OutFormat::F32, &src, &mut dst);
         let back: Vec<f32> = dst
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         assert_eq!(back, src);

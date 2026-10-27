@@ -17,6 +17,7 @@
     "check": "npm --prefix ui run check",
     "check:deps": "node tools/dep-graph.mjs",
     "check:boundary": "node tools/check-boundary.mjs",
+    "check:clippy": "node tools/run.mjs cargo clippy --workspace --all-targets -- -D warnings",
     "proto:sync": "node tools/proto-sync.mjs",
     "proto:check": "node tools/proto-sync.mjs --check",
     "probe:ui": "node tools/cdp-probe.mjs",
@@ -47,7 +48,7 @@
     "notices": "node tools/run.mjs tools/gen-notices.mjs",
     "icon:source": "node scripts/gen-icon.mjs",
     "clean": "node tools/run.mjs cargo clean",
-    "verify": "npm run test:all && npm run gen:types:check && npm run smoke:beets && npm run smoke:maint && npm run smoke:proto",
+    "verify": "npm run test:all && npm run check:clippy && npm run gen:types:check && npm run smoke:beets && npm run smoke:maint && npm run smoke:proto",
     "verify:release": "npm run test:all && npm run bundle"
   }
 }

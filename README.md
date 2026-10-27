@@ -74,7 +74,7 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 | `npm run test:data` / `test:audio` / `test:player` / `test:app` | 单 crate 测试 |
 | `npm run test:all` | 先编 sidecar（`src-tauri/build.rs` 要它，干净检出缺了会编译失败）→ Rust 全量 + UI 类型检查 + UI 构建 |
 | `npm run gen:types` / `gen:types:check` | 从 Rust 生成 TS 类型 / 只校验不写盘 |
-| `npm run verify` | `test:all` + `gen:types:check` + beets 导入/维护冒烟 |
+| `npm run verify` | `test:all` + `check:clippy`（-D warnings）+ `gen:types:check` + beets 导入/维护/契约冒烟 |
 | `npm run test:e2e` | Playwright（`ui/` 下跑；mock 后端 + 系统 Edge，26 条） |
 | `npm run smoke:engine` / `smoke:offset` / `smoke:switch` / `smoke:rate` | 真机 WASAPI 出声冒烟（需要声卡） |
 | `npm run smoke:supervisor` | sidecar 握手/心跳/看门狗冒烟（不需要声卡） |

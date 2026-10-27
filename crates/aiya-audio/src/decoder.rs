@@ -64,6 +64,9 @@ pub struct DecodedStream {
     inner: Inner,
 }
 
+// Symphonia 分支字段多（约 400 字节），但 DecodedStream 每首曲目只构造一次、move 一次；
+// 改成 Box 会让每次 next_packet 多一层指针跳转，而那是音频线程的热路径。
+#[allow(clippy::large_enum_variant)]
 enum Inner {
     Symphonia(SymphoniaStream),
     Hls(HlsStream),

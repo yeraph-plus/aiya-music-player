@@ -133,5 +133,5 @@ fn main() {
         let (w, c, pads) = run(false);
         println!("轮询：写入 {w} 帧 / {RUN_MS}ms，时钟 {c} 帧，padding 出现 {pads} 种取值");
     }
-    { let _ = wasapi::deinitialize(); }
+    { wasapi::deinitialize(); }
 }

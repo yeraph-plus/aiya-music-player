@@ -615,7 +615,7 @@ impl HlsStream {
         // 退避按失败次数爬坡，但**不超过剩余预算**：最后一段睡眠不能越过死线，
         // 否则预算又变成了"最多 +5s"的软约束。
         let backoff = BACKOFF_BASE
-            .saturating_mul(self.failures.min(10) as u32)
+            .saturating_mul(self.failures.min(10))
             .min(BACKOFF_CAP)
             .min(OUTAGE_BUDGET - elapsed);
         self.fetcher.sleep(backoff);
@@ -785,10 +785,13 @@ mod tests {
             h[0] = 0xFF;
             h[1] = 0xF1;
             h[2] = 0x40 | (freq_idx << 2) | ((channels >> 2) & 1);
-            h[3] = ((channels & 3) << 6) as u8 | ((frame_len >> 11) & 3) as u8;
+            h[3] = ((channels & 3) << 6) | ((frame_len >> 11) & 3) as u8;
             h[4] = ((frame_len >> 3) & 0xFF) as u8;
-            h[5] = (((frame_len & 7) << 5) | ((0x7FF >> 6) & 0x1F)) as u8;
-            h[6] = (((0x7FF & 0x3F) << 2) | 0) as u8;
+            // buffer_fullness 11 位全 1（=VBR）：高 5 位进 B5、低 6 位进 B6。
+            // 别写成 (0x7FF >> 6) & 0x1F —— 左边已经是 0x1F，那个 & 是空操作，
+            // clippy::eq_op 默认 deny，会让 --all-targets 编译失败。
+            h[5] = (((frame_len & 7) << 5) | 0x1F) as u8;
+            h[6] = 0x3F << 2; // buffer_fullness 低 6 位 <<2 | raw_data_blocks-1 = 0
             out.extend_from_slice(&h);
             // 全 0 负载 = AAC 元素 id 000（SCE）+ 全零 ICS → 解码出静音帧。
             // 别用 0xAB 之类：前 3 位凑成 101 = PCE，symphonia 直接报

@@ -332,7 +332,7 @@ fn upsert(
     }
 
     let artist_name = t.artist.clone().or_else(|| t.album_artist.clone());
-    let artist_id = artist_name.as_deref().map(|n| ids::artist_id(n));
+    let artist_id = artist_name.as_deref().map(ids::artist_id);
     let album_title = t.album.clone();
     let album_id = album_title.as_deref().map(|al| {
         let group = t.album_artist.as_deref().or(artist_name.as_deref()).unwrap_or("");
@@ -452,6 +452,10 @@ struct IndexEntry {
 }
 
 /// 解析池产出的一条结果。
+///
+/// `Parsed` 明显大于另两个变体（384 字节），但它每条曲目只经 channel 传一次，
+/// 一次 384 字节 move 远低于读一次标签的成本；boxing 反而给每条结果加一次堆分配。
+#[allow(clippy::large_enum_variant)]
 enum Item {
     /// 预筛命中：mtime/size 与库内一致且在库 → 连标签都不读。
     Unchanged,
@@ -792,11 +796,7 @@ pub fn scan_roots_ext(
         // 消费者 = 本线程。SQLite 连接只能在这里用（单写者），
         // 解析侧拿不到连接也是在源头上保证这一点。
         report(&tally, None);
-        loop {
-            let item = match rx.recv() {
-                Ok(i) => i,
-                Err(_) => break,
-            };
+        while let Ok(item) = rx.recv() {
             tally.parsed = parsed_done.load(Ordering::Relaxed);
 
             if !cancelled && should_cancel() {

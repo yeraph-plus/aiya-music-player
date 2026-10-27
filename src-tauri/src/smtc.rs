@@ -77,7 +77,7 @@ pub fn spawn(app: AppHandle, hwnd: isize) -> Option<Sender<SmtcUpdate>> {
                         title: Some(&title),
                         artist: artist.as_deref(),
                         album: album.as_deref(),
-                        duration: duration_ms.map(|ms| Duration::from_millis(ms)),
+                        duration: duration_ms.map(Duration::from_millis),
                         cover_url: cover_url.as_deref(),
                     };
                     if let Err(e) = controls.set_metadata(meta) {

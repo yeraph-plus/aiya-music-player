@@ -492,7 +492,7 @@ mod tests {
         let fx = core.ingest(vec![EngineEvent::Eof { token }], &mut actor, 1_000, &mut |c| {
             sent.push(c)
         });
-        assert!(fx.iter().any(|e| *e == PumpEffect::EmitState));
+        assert!(fx.contains(&PumpEffect::EmitState));
         // 自动换曲：SetRate → Load(第二首, 起点 0, 新 token) → SetVolume
         match &sent[..] {
             [EngineCommand::SetRate(_), EngineCommand::Load { path, start_ms, token: t, .. }, EngineCommand::SetVolume(_)] => {
@@ -531,7 +531,7 @@ mod tests {
                 PumpEffect::Spectrum(vec![4, 5, 6])
             ]
         );
-        assert!(!fx.iter().any(|e| *e == PumpEffect::EmitState), "频谱不触发状态广播");
+        assert!(!fx.contains(&PumpEffect::EmitState), "频谱不触发状态广播");
     }
 
     #[test]

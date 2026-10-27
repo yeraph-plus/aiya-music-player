@@ -523,7 +523,7 @@ mod tests {
         create(&mut conn, "a", "A", &[], 100).unwrap();
         reorder_playlists(&mut conn, 0, 5).unwrap();
         reorder_playlists(&mut conn, -1, 0).unwrap();
-        assert_eq!(exists(&conn, "a").unwrap(), true);
+        assert!(exists(&conn, "a").unwrap());
     }
 
     #[test]

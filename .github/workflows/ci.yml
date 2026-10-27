@@ -72,6 +72,13 @@ jobs:
       - name: 单测与静态检查
         run: npm run test:all
 
+      # clippy 带 -D warnings：2026-10-27 首次全量跑，清到 0 条后设成门禁。
+      # 那一轮抓到一条 deny 级真问题（hls.rs 里 ADTS 头的空操作掩码会让
+      # --all-targets 编译失败），说明它不是纯风格检查。
+      # runner 自带 clippy，但显式装一次只多几秒，省得版本切换时莫名红。
+      - name: clippy（-D warnings）
+        run: rustup component add clippy && npm run check:clippy
+
       # ts-rs 生成物必须与 Rust 源一致：差异只有一个 doc comment 也算漂移
       - name: 契约生成物一致
         run: npm run gen:types:check

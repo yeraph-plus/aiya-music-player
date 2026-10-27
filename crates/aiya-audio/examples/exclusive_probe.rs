@@ -40,7 +40,7 @@ fn main() {
     let rates = [44_100u32, 48_000, 88_200, 96_000, 192_000];
     let channels = [2usize, 1];
 
-    println!("{:<12}{:<10}{:<6}{}", "格式", "采样率", "声道", "独占");
+    println!("{:<12}{:<10}{:<6}独占", "格式", "采样率", "声道");
     println!("{}", "-".repeat(40));
     let mut any = false;
     for (name, bits, valid, st) in depths {

@@ -65,8 +65,8 @@ impl MonoRing {
         let tail = self.tail.load(Ordering::Relaxed);
         let avail = head.wrapping_sub(tail);
         let n = avail.min(out.len());
-        for i in 0..n {
-            out[i] = unsafe { (*self.buf.get())[(tail + i) & RING_MASK] };
+        for (i, slot) in out.iter_mut().take(n).enumerate() {
+            *slot = unsafe { (*self.buf.get())[(tail + i) & RING_MASK] };
         }
         self.tail.store(tail.wrapping_add(n), Ordering::Release);
         n
@@ -113,7 +113,7 @@ impl SpectrumTap {
         if !self.enabled.load(Ordering::Relaxed) || channels == 0 {
             return;
         }
-        if samples.len() % channels != 0 {
+        if !samples.len().is_multiple_of(channels) {
             return;
         }
         let inv = 1.0 / channels as f32;
@@ -153,6 +153,12 @@ impl SpectrumTap {
         if let Err(e) = spawned {
             tracing::warn!("频谱 FFT 线程创建失败（本会话无可视化）: {e}");
         }
+    }
+}
+
+impl Default for SpectrumTap {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -232,7 +238,7 @@ pub fn compute_bands(samples: &[f32; FFT_SIZE], sample_rate: f32) -> Vec<u8> {
     let half = FFT_SIZE / 2;
     let mut bands = vec![0u8; BANDS];
     let mut bin_lo = 1usize; // 跳过 DC
-    for b in 0..BANDS {
+    for (b, slot) in bands.iter_mut().enumerate() {
         let f_hi = 20.0f32 * 1000f32.powf((b + 1) as f32 / BANDS as f32);
         let bin_hi = ((f_hi * FFT_SIZE as f32 / sr).ceil() as usize).min(half);
         let bin_hi = bin_hi.max(bin_lo + 1); // 每带至少 1 bin
@@ -245,7 +251,7 @@ pub fn compute_bands(samples: &[f32; FFT_SIZE], sample_rate: f32) -> Vec<u8> {
         // 幅值 → dB → 归一化（窗增益补偿 +6dB，忽略）
         let db = 20.0 * (peak / FFT_SIZE as f32 * 2.0).max(1e-9).log10();
         let norm = ((db - DB_FLOOR) / -DB_FLOOR).clamp(0.0, 1.0);
-        bands[b] = (norm * 255.0) as u8;
+        *slot = (norm * 255.0) as u8;
     }
     bands
 }

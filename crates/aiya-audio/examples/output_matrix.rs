@@ -212,14 +212,13 @@ fn run(op: &Opened, clock: Clock, strategy: Strategy, period: Duration) -> Stats
                 due.clamp(0, i64::from(buf)) as usize
             }
         };
-        if writable > 0 {
-            if render
+        if writable > 0
+            && render
                 .write_to_device(writable, &zeros[..writable * ba], None)
                 .is_ok()
             {
                 written += writable as u64;
             }
-        }
 
         let elapsed = t0.elapsed().as_secs_f64();
         let lag = written as i64 - (elapsed * rate() as f64) as i64;
@@ -248,6 +247,10 @@ fn pctl(v: &mut [u64], p: f64) -> u64 {
     v.sort_unstable();
     v[((v.len() as f64 - 1.0) * p).round() as usize]
 }
+
+/// 一组用例：描述 / 共享模式 / 时钟 / 设备周期覆盖 / 时长 / 写入策略。
+/// 单独起名是因为下面十来处 push 都要写全它，内联写会难读。
+type Case<'a> = (&'a str, Share, Clock, Option<i64>, i64, Strategy);
 
 fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
@@ -287,7 +290,7 @@ fn main() {
     );
     println!("{}", "-".repeat(96));
 
-    let mut cases: Vec<(&str, Share, Clock, Option<i64>, i64, Strategy)> = vec![];
+    let mut cases: Vec<Case> = vec![];
     if !only_exclusive {
         cases.push(("shared+events / padding", Share::Shared, Clock::Events, None, 2_000_000, Strategy::Padding));
         cases.push(("shared+events / accounted", Share::Shared, Clock::Events, None, 2_000_000, Strategy::Accounted));
@@ -337,5 +340,5 @@ fn main() {
         }
     }
     println!();
-    let _ = wasapi::deinitialize();
+    wasapi::deinitialize();
 }

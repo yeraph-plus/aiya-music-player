@@ -485,7 +485,7 @@ fn verify_asset(path: &std::path::Path, kind: AssetKind) -> Result<usize, String
     }
     let file = std::fs::File::open(path).map_err(|e| format!("打开{}失败：{e}", kind.label()))?;
     match zip::ZipArchive::new(file) {
-        Ok(z) if z.len() > 0 => Ok(z.len()),
+        Ok(z) if !z.is_empty() => Ok(z.len()),
         Ok(_) => Err(format!("{} 是空压缩包（构建有问题）", kind.label())),
         Err(_) => Err(format!(
             "{} 不是有效的压缩包（{} 字节）——多半是下到了错误页，\
@@ -640,7 +640,7 @@ fn install_bundle_to(
     emit: &dyn Fn(serde_json::Value),
 ) -> Result<ToolEntry, String> {
     if target.exists() {
-        std::fs::remove_dir_all(&target).map_err(|e| format!("清理旧套件包失败：{e}"))?;
+        std::fs::remove_dir_all(target).map_err(|e| format!("清理旧套件包失败：{e}"))?;
     }
     std::fs::create_dir_all(target).map_err(|e| format!("创建目标目录失败：{e}"))?;
     emit(serde_json::json!({
@@ -726,12 +726,13 @@ pub fn start_install(app: tauri::AppHandle, track: String) -> Result<(), String>
                 }
             })();
             match result {
-                Ok(entry) => match remember_entry(&app, &entry) {
+                Ok(entry) => {
                     // 记不住也不算彻底失败：PATH 与源码树仍可能命中，
                     // 只是下次启动要多一次探测。如实报给 UI。
-                    Err(e) => emit(serde_json::json!({ "type": "warning", "message": e })),
-                    Ok(()) => {}
-                },
+                    if let Err(e) = remember_entry(&app, &entry) {
+                        emit(serde_json::json!({ "type": "warning", "message": e }));
+                    }
+                }
                 Err(message) => emit(serde_json::json!({ "type": "error", "message": message })),
             }
             let status = probe(&app);

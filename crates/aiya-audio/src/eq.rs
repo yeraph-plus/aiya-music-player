@@ -76,6 +76,9 @@ struct Coeffs {
 
 impl Coeffs {
     /// 按频段类型算系数。`band == 0` 低架、`band == 9` 高架、其余峰值。
+    // `!(f0 > 0.0)` 是刻意的：写成 `f0 <= 0.0` 时 NaN 会让比较返回 false，NaN 被放过后
+    // 面的 powf/cos 会把整条 EQ 系数污染成 NaN（静音或爆音）。取反写法对 NaN 为 true。
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     fn design(band: usize, gain_db: f32, f0: f32, sample_rate: f32) -> Option<Coeffs> {
         if !(f0 > 0.0) || f0 >= 0.45 * sample_rate {
             return None; // 超 Nyquist：公式会产生 NaN，跳过该段
@@ -237,7 +240,7 @@ mod tests {
         let mut off = Eq::new(EqParams::default(), 48_000, 2);
         let mut on = Eq::new(EqParams { enabled: true, ..Default::default() }, 48_000, 2);
         assert!(off.is_bypass() && on.is_bypass());
-        let mut a = src.clone();
+        let a = src.clone();
         off.process_frame(&mut []);
         let mut b = src.clone();
         for frame in b.chunks_mut(2) {
