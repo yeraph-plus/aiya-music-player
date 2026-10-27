@@ -212,6 +212,19 @@ done = of(events, "moveDone")[0]
 assert done["same"] == 3 and done["planned"] == 0 and done["moved"] == 0, done
 print("[4e] move 幂等 OK: same=3")
 
+# 4f 库根写成 ~/xxx → 必须展开后再判存在（不是拼出 <cwd>/~ 去搬文件）
+with open(os.path.join(BEETSDIR, "config.yaml"), "w", encoding="utf-8") as f:
+    f.write("directory: ~/aiya-maint-nonexistent\n")
+events, rc = run([{"id": 13, "cmd": "move_items", "directory": "", "pretend": True}])
+failed = [e for e in events if e.get("type") == "sessionFailed"]
+assert failed, events
+msg = failed[0]["error"]["beets_message"]
+assert "~" not in msg, f"路径没展开就去搬文件：{msg}"
+assert os.path.expanduser("~").lower() in msg.lower(), msg
+print("[4f] ~ 展开 OK:", msg[:60])
+with open(os.path.join(BEETSDIR, "config.yaml"), "w", encoding="utf-8") as f:
+    f.write(f"directory: {LIBDIR}\nimport://n    copy: no\n")
+
 # ---- 场景 5：目标冲突 —— 不改名、不覆盖（beets 自己会静默改成 name.1.ext）----
 _lib, items = beets_items()
 victim = sorted(items, key=lambda x: x.id)[2]

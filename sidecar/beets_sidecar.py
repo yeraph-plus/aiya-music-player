@@ -705,6 +705,9 @@ def _configured_directory() -> str | None:
     拿这个默认值去 move 等于把用户的曲库搬进他真实的音乐文件夹。
 
     只认行首无缩进的 `directory:`（缩进的属于别的 section）。
+    返回值做了 `expanduser`：手写 `directory: ~/Music` 是合法 YAML，而
+    `Library(path, "~/Music")` 不会展开 `~`（beets 的 `as_filename()` 才会），
+    不展开就会拼出 `<cwd>/~/Music` 这种路径去搬文件。
     """
     from beets import config as beets_config
 
@@ -716,7 +719,7 @@ def _configured_directory() -> str | None:
                     continue
                 if line.startswith("directory:"):
                     val = line[len("directory:"):].strip().strip("'\"")
-                    return val or None
+                    return os.path.expanduser(val) if val else None
     except OSError:
         return None
     return None
