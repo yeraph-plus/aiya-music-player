@@ -20,15 +20,28 @@
 import math
 import os
 import struct
+import sys
 import tempfile
 import wave
+
+# 把 stdout/stderr 固定成 UTF-8：这三个脚本的 print 全是中文，而 Windows 上
+# **管道** stdout 默认按 locale 编码（英文系统就是 cp1252），第一个中文就
+# UnicodeEncodeError。2026-10-27 CI 第一次实跑就栽在这上面（本地是 UTF-8，
+# 复现方法：`PYTHONIOENCODING=cp1252 python beets-tool/tests/smoke_apply.py`）。
+# CI 里另设了 PYTHONUTF8 / PYTHONIOENCODING；这里兜一层，让本机任何 shell 都能跑。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):      # 被重定向成非文本流时不管
+        pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOL = os.path.dirname(HERE)          # beets-tool/
 REPO = os.path.dirname(TOOL)          # 仓库根
 
-# 三个音高，与开发机那三个 wav 同构，便于日志里对上号
-_TONES = ((440, "中音测试 440Hz"), (220, "低音测试 220Hz"), (880, "高音测试 880Hz"))
+# 三个音高。文件名保持 ASCII：合成物是临时产物，没必要带上中文名去考验
+# 别处的编码假设（runner 的 ANSI 代码页不是 UTF-8，见文件末尾的说明）。
+_TONES = ((440, "mid"), (220, "low"), (880, "high"))
 
 _cache = None
 
@@ -63,7 +76,7 @@ def _generate(count):
     paths = []
     for i in range(count):
         freq, label = _TONES[i % len(_TONES)]
-        path = os.path.join(directory, f"{label}.wav")
+        path = os.path.join(directory, f"aiya-tone-{label}-{freq}hz.wav")
         _synth(path, freq)
         paths.append(path)
     print(f"[i] 没有测试音源，已合成 {len(paths)} 个 wav 到 {directory}")

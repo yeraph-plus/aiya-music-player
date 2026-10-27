@@ -104,8 +104,11 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 探测到的 `found`，不是退出码**——退出码会骗人。
 
 发布地址可覆盖，播放器不用为换地址发版：`AIYA_BEETS_RELEASE_BASE` 环境变量 >
-设置 `beets.releaseBase` > 内置常量。本地验证整条下载路径可以起一个静态服务器
-（`beets-tool/dist` 下 `python -m http.server 8000`，再把上面的环境变量指过去）。
+内置常量（默认指向本仓的 `releases/latest/download`）。本地验证整条下载路径可以起一个
+静态服务器（`beets-tool/dist` 下 `python -m http.server 8000`，再把环境变量指过去）。
+
+曾经还有一层「设置 `beets.releaseBase`」，2026-10-27 删掉了：那个键没有任何 UI 入口，
+写了没人能设，是条死分支。要支持镜像源得先给入口、再留分支。
 
 下载回来的文件会过一遍形状校验（两条轨道都是 zip 容器）：没发布时 GitHub 回的是
 一个 200 的 HTML 错误页，不校验的话用户只会看到"不是有效 zip"，指不到真正原因。
@@ -159,7 +162,7 @@ docs/33 M1–M4（beets 两侧分离、协议 v1、两条安装轨道、刷新�
 | 类别 | 待办 |
 |---|---|
 | 发布阻塞 | 代码签名（host 与 audio-host 两个 exe，P0-1）、CSP 与 capabilities 收窄（P0-3）、干净机「安装→运行→卸载」（P0-4）、4h soak（P0-5）、杀软误报（P0-6） |
-| beets 分发 | 首次真发布两个资产、两条安装轨道在「无 Python / 有 Python」机器各走通一遍、`beets.releaseBase` 死分支（P1-2） |
+| beets 分发 | 首次真发布两个资产、两条安装轨道在「无 Python / 有 Python」机器各走通一遍（P1-1、P1-3） |
 | 功能欠账 | 手改标签 `modify_items`、查重删除、adopt 单向、replaygain/lyrics 缺依赖、猜你喜欢 |
 | 质量 | `cargo clippy -D warnings` 首跑、mock 缺「未装 beets」场景、联网契约默认跳过、真机走查（docs/23 §7、docs/28 §5） |
 

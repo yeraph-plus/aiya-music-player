@@ -928,9 +928,11 @@ changed = scan.imported > 0 || scan.updated > 0 || scan.missing > 0
 
 原文只写了"下载 → 展开 → 校验入口"。M4 补了三件让它能被验证的事：
 
-1. **`RELEASE_BASE` 可配置**：`AIYA_BEETS_RELEASE_BASE` 环境变量 > 设置
-   `beets.releaseBase` > 常量默认。真发布时改常量或让 CI 指过去，播放器不用发版；
+1. **`RELEASE_BASE` 可配置**：`AIYA_BEETS_RELEASE_BASE` 环境变量 > 常量默认。
+   真发布时改常量或让 CI 指过去，播放器不用发版；
    本地可以用 `python -m http.server` 把整条下载路径真跑一遍。
+   *（2026-10-27 补记：原先中间还有一层「设置 `beets.releaseBase`」，因没有任何 UI
+   入口——设置页、schema、mock 都没有——已删除，见 docs/35 P1-2。留着等于写了没人能设。）*
 2. **发布物形状校验**（`verify_asset`）：两条轨道的产物都是 zip 容器。
    没发布时 GitHub 回的是一个 **200 的 HTML 错误页**，`ureq` 不认为是错误——
    不校验的话用户看到的是后面解压时报的"不是有效 zip"，完全指不到原因。

@@ -416,14 +416,18 @@ const RELEASE_BASE: &str = "https://github.com/yeraph-plus/aiya-music-player/rel
 const INSTALLER_ASSET: &str = "aiya-beets-installer.pyz";
 const BUNDLE_ASSET: &str = "aiya-beets-bundle-win-x64.zip";
 
-/// 发布物根地址：`AIYA_BEETS_RELEASE_BASE` > 设置 `beets.releaseBase` > 默认。
+/// 发布物根地址：`AIYA_BEETS_RELEASE_BASE` > 默认常量。
+///
+/// 曾经还有一层「设置 `beets.releaseBase`」，2026-10-27 删掉了：那个键在设置页、
+/// schema、mock 里都没有入口，也就是**写了没人能设**——三层优先级实际只有两层
+/// 生效，剩下一层是死分支。真要支持镜像源，顺序是先给入口再留分支，反过来等于
+/// 没做。眼下环境变量这一层够用：CI 与本地演练都用它指过去。
 ///
 /// 尾斜杠统一去掉：`{base}/{asset}` 拼出来不能出现 `//`（有些静态服务器会 404）。
-fn release_base(app: &tauri::AppHandle) -> String {
+fn release_base() -> String {
     let raw = std::env::var("AIYA_BEETS_RELEASE_BASE")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| setting_str(app, "beets.releaseBase"))
         .unwrap_or_else(|| RELEASE_BASE.to_string());
     raw.trim().trim_end_matches('/').to_string()
 }
@@ -497,7 +501,6 @@ fn verify_asset(path: &std::path::Path, kind: AssetKind) -> Result<usize, String
 /// 两个来源都过 [`verify_asset`]：本地文件同样可能是半截下载
 /// （浏览器中断、解压工具写了一半），而"形状不对"的错误在这里说最清楚。
 fn fetch_asset(
-    app: &tauri::AppHandle,
     env_key: &str,
     asset: &str,
     kind: AssetKind,
@@ -516,7 +519,7 @@ fn fetch_asset(
         return Err(format!("{env_key} 指向的文件不存在：{}", p.display()));
     }
 
-    let base = release_base(app);
+    let base = release_base();
     let url = format!("{base}/{asset}");
     emit(serde_json::json!({
         "type": "progress", "stage": "download",
@@ -716,7 +719,7 @@ pub fn start_install(app: tauri::AppHandle, track: String) -> Result<(), String>
                         ("AIYA_BEETS_BUNDLE", BUNDLE_ASSET, AssetKind::Bundle)
                     }
                 };
-                let path = fetch_asset(&app, env_key, asset, kind, &emit)?;
+                let path = fetch_asset(env_key, asset, kind, &emit)?;
                 match track {
                     InstallTrack::Installer => install_via_installer(&app, &path, &emit),
                     InstallTrack::Bundle => install_via_bundle(&app, &path, &emit),

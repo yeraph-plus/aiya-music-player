@@ -93,6 +93,11 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_TERM_COLOR: always
+      # runner 的默认 ANSI 代码页不是 UTF-8，而这三个 smoke 的 print 全是中文。
+      # 不管 stdout 是管道还是控制台，Python 都会按 locale 编码输出，
+      # cp1252 下第一个中文就 UnicodeEncodeError。开发机上永远是 UTF-8，看不出来。
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
     steps:
       - uses: actions/checkout@v4
 
@@ -113,14 +118,43 @@ jobs:
           beets-tool/.venv/Scripts/pip install -r beets-tool/requirements.lock
           beets-tool/.venv/Scripts/pip install -e "beets-tool[dev]"
 
-      # 三个 smoke 各自独立，拆成三步是为了失败时一眼看出是哪一层
+      # 三个 smoke 各自独立，拆成三步是为了失败时一眼看出是哪一层。
+      #
+      # 每步都包一层 Tee-Object + `::error` 注解：失败时把最后 25 行贴到
+      # **注解**里。理由很实际——job 日志要鉴权才能拉，注解是公开可读的；
+      # 提交页上直接能看到断在哪一句，不用点进 Actions 再翻几百行。
+      # `%` 必须先转义成 `%25`，否则正文里的 %0A 会被当成换行序列。
       - name: apply smoke（导入 / 同步）
-        run: npm run smoke:beets
+        run: |
+          $log = "smoke-apply.log"
+          npm run smoke:beets 2>&1 | Tee-Object -FilePath $log | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            $lines = Get-Content $log | Select-Object -Last 25
+            $tail = ($lines | ForEach-Object { $_ -replace '%', '%25' }) -join '%0A'
+            Write-Host "::error title=apply smoke 失败::$tail"
+            exit 1
+          }
 
       - name: maintenance smoke（adopt / update / duplicates / move，15 断言）
-        run: npm run smoke:maint
+        run: |
+          $log = "smoke-maint.log"
+          npm run smoke:maint 2>&1 | Tee-Object -FilePath $log | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            $lines = Get-Content $log | Select-Object -Last 25
+            $tail = ($lines | ForEach-Object { $_ -replace '%', '%25' }) -join '%0A'
+            Write-Host "::error title=maintenance smoke 失败::$tail"
+            exit 1
+          }
 
       # 59 条消息的协议契约。联网场景（album / albumError / done）默认跳过，
       # 要跑得设 AIYA_BEETS_ONLINE=1——CI 里不开，避免受网络与 MusicBrainz 限流影响
       - name: protocol contract（协议 v1）
-        run: npm run smoke:proto
+        run: |
+          $log = "smoke-proto.log"
+          npm run smoke:proto 2>&1 | Tee-Object -FilePath $log | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            $lines = Get-Content $log | Select-Object -Last 25
+            $tail = ($lines | ForEach-Object { $_ -replace '%', '%25' }) -join '%0A'
+            Write-Host "::error title=protocol contract 失败::$tail"
+            exit 1
+          }
