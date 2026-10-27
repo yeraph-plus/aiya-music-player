@@ -35,7 +35,7 @@ image.workspace = true
 rusqlite.workspace = true
 ts-rs.workspace = true
 # 安装轨道 B：展开套件包
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 # 安装物下载（A/B 两轨道的 release 拉取）
 ureq.workspace = true
 souvlaki = "0.8"

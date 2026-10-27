@@ -456,14 +456,43 @@ impl AssetKind {
 /// 抽成独立函数是为了能被测：真机走一遍 release 下载要等发布物，
 /// 而这条路径上的坑（404 页面被当成二进制、"成功"写了 0 字节）与网络无关，
 /// 用本地 TCP 服务就能复现。
+/// 下载上限：套件包实际约 28MB，留约 9 倍余量。
+///
+/// 为什么要有：`std::io::copy` 会一直写到磁盘满。`verify_asset` 是**下载完
+/// 才跑**的，那时几个 GB 已经落盘——地址写错（指到大文件）、或被劫持到别的
+/// 主机，代价由用户的磁盘承担。声明长度超限时连写都不开始。
+const ASSET_MAX_BYTES: u64 = 256 * 1024 * 1024;
+
 fn download_to(url: &str, dest: &std::path::Path) -> Result<u64, String> {
+    use std::io::Read as _;
     let resp = ureq::get(url)
         .timeout(std::time::Duration::from_secs(120))
         .call()
         .map_err(|e| format!("下载失败（{url}）：{e}"))?;
+    if let Some(len) = resp
+        .header("content-length")
+        .and_then(|v| v.trim().parse::<u64>().ok())
+    {
+        if len > ASSET_MAX_BYTES {
+            return Err(format!(
+                "下载物声明大小 {} MB，超过 {} MB 上限（地址指错了？）：{url}",
+                len / 1024 / 1024,
+                ASSET_MAX_BYTES / 1024 / 1024
+            ));
+        }
+    }
     let mut out = std::fs::File::create(dest).map_err(|e| format!("写临时文件失败：{e}"))?;
-    let n = std::io::copy(&mut resp.into_reader(), &mut out)
-        .map_err(|e| format!("下载写入失败：{e}"))?;
+    // take(上限+1)：多读 1 字节用来区分"正好在上限"与"超了"
+    let mut body = resp.into_reader().take(ASSET_MAX_BYTES + 1);
+    let n = std::io::copy(&mut body, &mut out).map_err(|e| format!("下载写入失败：{e}"))?;
+    if n > ASSET_MAX_BYTES {
+        drop(out);
+        let _ = std::fs::remove_file(dest);
+        return Err(format!(
+            "下载物超过 {} MB 上限，已中止（地址指错了？）：{url}",
+            ASSET_MAX_BYTES / 1024 / 1024
+        ));
+    }
     Ok(n)
 }
 
@@ -651,7 +680,7 @@ fn install_bundle_to(
 
     let file = std::fs::File::open(zip_path).map_err(|e| format!("打开套件包失败：{e}"))?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("套件包不是有效 zip：{e}"))?;
-    zip.extract(target).map_err(|e| format!("展开失败：{e}"))?;
+    extract_safely(&mut zip, target)?;
 
     let manifest = target.join("manifest.json");
     if let Ok(text) = std::fs::read_to_string(&manifest) {
@@ -682,6 +711,89 @@ fn install_bundle_to(
         }
     }
     Err("套件包展开后找不到入口（缺 manifest.json 且没有 aiya-beets.exe）".to_string())
+}
+
+/// 展开套件包的一件条目该落到哪个相对路径；`None` = 拒绝。
+///
+/// 三种都要挡：`..`（`zip-slip`，能写到安装目录之外）、盘符（`C:\x` 是
+/// 绝对路径）、NTFS 数据流（`a.txt:evil` 会写进另一个文件的隐藏流）。
+/// 分隔符两种都切：zip 规范用 `/`，但坏包会用 `\`，而在 Unix 上 `\` 不是
+/// 分隔符——只用 `Path` 语义判会漏。
+fn safe_relative(name: &str) -> Option<std::path::PathBuf> {
+    let mut out = std::path::PathBuf::new();
+    for part in name.split(['/', '\\']) {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." || part.contains(':') {
+            return None;
+        }
+        out.push(part);
+    }
+    (!out.as_os_str().is_empty()).then_some(out)
+}
+
+/// 解压上限：套件包实际约 30MB，留约 16 倍余量。不是防自己人，是防
+/// "被替换过的包"把磁盘写满——那种故障现场极难归因到一次安装。
+const BUNDLE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+
+/// 展开套件包，**不用 `ZipArchive::extract`**。
+///
+/// 为什么手写（三条都实测过或写在 crate 通告里）：
+/// 1. `extract` 直接把条目名拼到目标目录下。带 `..` 或绝对路径的条目可以
+///    写到目标之外。包来源是网络（`AIYA_BEETS_BUNDLE` 还能指到任意本地
+///    文件），"反正是自己的包"不是能长期成立的假设。
+/// 2. 它会按 unix 权限位建符号链接。Windows 上建不出真链接（失败或退化成
+///    复制），失败会让整次安装中断；而"复制"会把链接指向的**包外**内容
+///    一起搬进安装目录。
+/// 3. 没有总量上限：一个改坏的包能把磁盘写满。
+///
+/// 展开失败的处置交给调用方：`install_bundle_to` 的错误路径上目标目录会被
+/// 下次安装的 `remove_dir_all` 清掉，所以这里不必回滚半成品。
+fn extract_safely<R: std::io::Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+    target: &std::path::Path,
+) -> Result<(), String> {
+    let mut written = 0u64;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| format!("读取套件包条目失败：{e}"))?;
+        // zip 9 起 `name()` 返回 Result：条目名可能是非法编码（CP437 之外的
+        // 未标注原始字节），旧版默默替换成 lossy 字符串——那会让路径校验
+        // 对着"替换后的名字"做判断，与真实落盘名不符。宁可在这里失败。
+        let name = entry
+            .name()
+            .map_err(|e| format!("读取套件包条目名失败：{e}"))?
+            .to_string();
+        let Some(rel) = safe_relative(&name) else {
+            return Err(format!("套件包含非法路径条目，拒绝展开：{name}"));
+        };
+        // 0o170000 = S_IFMT，0o120000 = S_IFLNK
+        if entry.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000) {
+            return Err(format!("套件包含符号链接条目，拒绝展开：{name}"));
+        }
+        let dest = target.join(&rel);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&dest)
+                .map_err(|e| format!("创建目录 {} 失败：{e}", dest.display()))?;
+            continue;
+        }
+        written = written.saturating_add(entry.size());
+        if written > BUNDLE_MAX_BYTES {
+            return Err(format!(
+                "套件包展开超过 {} MB 上限，已中止（包可能不完整或被替换）",
+                BUNDLE_MAX_BYTES / 1024 / 1024
+            ));
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("创建目录 {} 失败：{e}", parent.display()))?;
+        }
+        let mut out = std::fs::File::create(&dest)
+            .map_err(|e| format!("写入 {} 失败：{e}", dest.display()))?;
+        std::io::copy(&mut entry, &mut out)
+            .map_err(|e| format!("展开 {} 失败：{e}", dest.display()))?;
+    }
+    Ok(())
 }
 
 /// 记下入口，下次 `discover` 直接命中（设置优先于 PATH 与源码树）。

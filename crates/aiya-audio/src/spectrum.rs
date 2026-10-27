@@ -25,20 +25,26 @@ const FRAME_MIN_INTERVAL_MS: u64 = 30;
 /// 显示动态范围：-80dB..0dB → 0..255。
 const DB_FLOOR: f32 = -80.0;
 
-/// 单声道样本 SPSC 环。单生产者（渲染线程）单消费者（FFT 线程）。
+/// 单声道样本 SPSC 环的共享核心（生产端与 FFT 线程共享）。
 ///
 /// 安全性：UnsafeCell 槽位由 head/tail 分区——生产者只写 [tail, head+cap)
 /// 内的空槽（未发布给读者），消费者只读 [tail, head) 已发布槽；两区间
-/// 永不相交（环满时写者丢弃不越界），故无数据竞争。
-struct MonoRing {
+/// 永不相交（环满时写者丢弃不越界），故无数据竞争。每个槽在任一时刻
+/// 只属于一方。
+///
+/// 注意这个类型**自己**不保证单生产者：`push` 拿的是 `&self`（因为核心被
+/// 两个线程以 `Arc` 共享，一旦分发就再也拿不到 `&mut`）。单生产者由下面的
+/// `RingProducer` 表达。
+struct RingCore {
     buf: std::cell::UnsafeCell<Box<[f32; RING_CAP]>>,
     head: AtomicUsize, // 写位置（只由生产者改）
     tail: AtomicUsize, // 读位置（只由消费者改）
 }
 
-unsafe impl Sync for MonoRing {}
+// SAFETY: 见类型文档——buf 按 head/tail 分区，两个方向的访问永不重叠。
+unsafe impl Sync for RingCore {}
 
-impl MonoRing {
+impl RingCore {
     fn new() -> Self {
         Self {
             buf: std::cell::UnsafeCell::new(Box::new([0.0; RING_CAP])),
@@ -47,16 +53,17 @@ impl MonoRing {
         }
     }
 
-    /// 生产者推一个样本。满则丢弃（丢新保旧，SPSC 不变量安全）并计数。
-    fn push(&self, s: f32, dropped: &AtomicU64) {
+    /// 生产者推一个样本，返回是否因环满而丢弃。**只许 `RingProducer` 调用**
+    /// （同模块私有 + 那条路径上的 `&mut` 保证串行）。
+    fn push(&self, s: f32) -> bool {
         let head = self.head.load(Ordering::Relaxed);
         let tail = self.tail.load(Ordering::Acquire);
         if head.wrapping_sub(tail) >= RING_CAP {
-            dropped.fetch_add(1, Ordering::Relaxed);
-            return;
+            return false;
         }
         unsafe { (*self.buf.get())[head & RING_MASK] = s };
         self.head.store(head.wrapping_add(1), Ordering::Release);
+        true
     }
 
     /// 消费者取最多 `out.len()` 个样本，返回实际读取数。
@@ -73,12 +80,41 @@ impl MonoRing {
     }
 }
 
-/// tap 句柄：渲染线程持有（生产端），引擎线程共享订阅开关。
-#[derive(Clone)]
-pub struct SpectrumTap {
-    ring: Arc<MonoRing>,
-    enabled: Arc<AtomicBool>,
+/// 生产端句柄。**刻意不实现 `Clone`/`Copy`** —— 这是"单生产者"的类型级凭据。
+///
+/// 之前这个角色由 `MonoRing::push(&self)` 承担，而 `SpectrumTap` 当时是
+/// `Clone` 的：任何一个 clone 流到别的线程（"顺手在别处也推一份"这种改动
+/// 太自然了）就会变成数据竞争，编译器与运行期都不会有半点提示，症状是
+/// 频谱偶发撕裂这种几乎无法定位的 bug。
+///
+/// 现在 push 要 `&mut RingProducer`、句柄又不可克隆 ⇒ 全局至多一个生产端
+/// 实例，第二个写者在类型层面就写不出来。
+struct RingProducer {
+    core: Arc<RingCore>,
     dropped: Arc<AtomicU64>,
+}
+
+impl RingProducer {
+    fn new() -> Self {
+        Self { core: Arc::new(RingCore::new()), dropped: Arc::new(AtomicU64::new(0)) }
+    }
+
+    /// 推一个样本。满则丢弃（丢新保旧，SPSC 不变量安全）并计数。
+    fn push(&mut self, s: f32) {
+        if !self.core.push(s) {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// tap 句柄：渲染线程持有（生产端），引擎线程共享订阅开关。
+///
+/// **不实现 `Clone`**：`push_*` 要 `&mut self`（见 `RingProducer`），能 clone
+/// 就等于能造出第二个生产者，正是要禁止的事。控制端（`set_enabled` /
+/// `set_sample_rate` / `dropped_count`）仍是 `&self`，随便共享读。
+pub struct SpectrumTap {
+    producer: RingProducer,
+    enabled: Arc<AtomicBool>,
     /// 实际采样率（Hz），由引擎在 Load 后填充分带标定；0 = 按 48kHz 兜底
     sample_rate: Arc<AtomicU32>,
 }
@@ -86,9 +122,8 @@ pub struct SpectrumTap {
 impl SpectrumTap {
     pub fn new() -> Self {
         Self {
-            ring: Arc::new(MonoRing::new()),
+            producer: RingProducer::new(),
             enabled: Arc::new(AtomicBool::new(false)),
-            dropped: Arc::new(AtomicU64::new(0)),
             sample_rate: Arc::new(AtomicU32::new(48_000)),
         }
     }
@@ -109,7 +144,7 @@ impl SpectrumTap {
 
     /// 渲染线程：一帧（所有声道平均，未乘音量）入环。
     #[inline]
-    pub fn push_frame(&self, samples: &[f32], channels: usize) {
+    pub fn push_frame(&mut self, samples: &[f32], channels: usize) {
         if !self.enabled.load(Ordering::Relaxed) || channels == 0 {
             return;
         }
@@ -119,7 +154,7 @@ impl SpectrumTap {
         let inv = 1.0 / channels as f32;
         for frame in samples.chunks_exact(channels) {
             let mono = frame.iter().sum::<f32>() * inv;
-            self.ring.push(mono, &self.dropped);
+            self.producer.push(mono);
         }
     }
 
@@ -128,28 +163,28 @@ impl SpectrumTap {
     /// 为什么不用 push_frame 推源帧：源帧速率 = 输出帧 × rate，倍速下入环
     /// 速率跟着变（2× 溢出丢帧、0.5× 帧率腰斩），而频谱应当反映实际出声。
     #[inline]
-    pub fn push_mono(&self, mono: &[f32]) {
+    pub fn push_mono(&mut self, mono: &[f32]) {
         if !self.enabled.load(Ordering::Relaxed) {
             return;
         }
         for &s in mono {
-            self.ring.push(s, &self.dropped);
+            self.producer.push(s);
         }
     }
 
     pub fn dropped_count(&self) -> u64 {
-        self.dropped.load(Ordering::Relaxed)
+        self.producer.dropped.load(Ordering::Relaxed)
     }
 
     /// 启动 FFT 消费线程。事件经 ev_tx 出（EngineEvent::Spectrum）。
     /// 通道有界（引擎事件通道 256 容量），满时丢新帧——下一帧 30ms 后就来。
     pub fn spawn_consumer(&self, ev_tx: SyncSender<crate::EngineEvent>) {
-        let ring = Arc::clone(&self.ring);
+        let core = Arc::clone(&self.producer.core);
         let enabled = Arc::clone(&self.enabled);
         let sample_rate = Arc::clone(&self.sample_rate);
         let spawned = std::thread::Builder::new()
             .name("spectrum-fft".into())
-            .spawn(move || consume_loop(&ring, &enabled, &sample_rate, ev_tx));
+            .spawn(move || consume_loop(&core, &enabled, &sample_rate, ev_tx));
         if let Err(e) = spawned {
             tracing::warn!("频谱 FFT 线程创建失败（本会话无可视化）: {e}");
         }
@@ -164,7 +199,7 @@ impl Default for SpectrumTap {
 
 /// 消费者主循环：凑 FFT_SIZE 新样本 → 窗 → FFT → 分带 → 节流发帧。
 fn consume_loop(
-    ring: &MonoRing,
+    ring: &RingCore,
     enabled: &AtomicBool,
     sample_rate: &AtomicU32,
     ev_tx: SyncSender<crate::EngineEvent>,
@@ -307,28 +342,26 @@ mod tests {
 
     #[test]
     fn ring_basic_push_pop() {
-        let ring = MonoRing::new();
-        let dropped = AtomicU64::new(0);
+        let mut ring = RingProducer::new();
         for i in 0..100 {
-            ring.push(i as f32, &dropped);
+            ring.push(i as f32);
         }
         let mut out = [0f32; 100];
-        assert_eq!(ring.pop(&mut out), 100);
+        assert_eq!(ring.core.pop(&mut out), 100);
         assert_eq!(out[0], 0.0);
         assert_eq!(out[99], 99.0);
-        assert_eq!(ring.pop(&mut out), 0);
+        assert_eq!(ring.core.pop(&mut out), 0);
     }
 
     #[test]
     fn ring_overflow_drops_new_and_keeps_invariant() {
-        let ring = MonoRing::new();
-        let dropped = AtomicU64::new(0);
+        let mut ring = RingProducer::new();
         for i in 0..(RING_CAP as u64 + 100) {
-            ring.push(i as f32, &dropped);
+            ring.push(i as f32);
         }
-        assert_eq!(dropped.load(Ordering::Relaxed), 100); // 最后 100 个新样本被丢
+        assert_eq!(ring.dropped.load(Ordering::Relaxed), 100); // 最后 100 个新样本被丢
         let mut out = vec![0f32; RING_CAP];
-        assert_eq!(ring.pop(&mut out), RING_CAP);
+        assert_eq!(ring.core.pop(&mut out), RING_CAP);
         assert_eq!(out[0], 0.0); // 最旧的样本保留
     }
 
@@ -388,23 +421,23 @@ mod tests {
 
     #[test]
     fn tap_disabled_pushes_nothing() {
-        let tap = SpectrumTap::new();
+        let mut tap = SpectrumTap::new();
         tap.set_enabled(false);
         tap.push_frame(&[0.5, 0.5, 0.5, 0.5], 2);
         tap.push_mono(&[0.1, 0.2]);
         // 真实断言环内容：禁用时生产端必须一次都不写
         let mut out = [0f32; 8];
-        assert_eq!(tap.ring.pop(&mut out), 0, "禁用时环内必须为空");
+        assert_eq!(tap.producer.core.pop(&mut out), 0, "禁用时环内必须为空");
         assert_eq!(tap.dropped_count(), 0);
     }
 
     #[test]
     fn tap_pushes_mono_average() {
-        let tap = SpectrumTap::new();
+        let mut tap = SpectrumTap::new();
         tap.set_enabled(true);
         tap.push_frame(&[1.0, 0.0, 1.0, 0.0], 2); // 两帧 L=1 R=0 → mono=0.5
         let mut out = [0f32; 2];
-        assert_eq!(tap.ring.pop(&mut out), 2, "两帧应入环两个单声道样本");
+        assert_eq!(tap.producer.core.pop(&mut out), 2, "两帧应入环两个单声道样本");
         assert!((out[0] - 0.5).abs() < 1e-6, "mono = (1+0)/2，实际 {}", out[0]);
         assert!((out[1] - 0.5).abs() < 1e-6);
     }
@@ -413,11 +446,11 @@ mod tests {
     /// 2× 速每秒入环 2× 样本，环长期溢出）。
     #[test]
     fn push_mono_is_rate_independent() {
-        let tap = SpectrumTap::new();
+        let mut tap = SpectrumTap::new();
         tap.set_enabled(true);
         tap.push_mono(&[0.3; 32]);
         let mut out = [0f32; 64];
-        assert_eq!(tap.ring.pop(&mut out), 32);
+        assert_eq!(tap.producer.core.pop(&mut out), 32);
         assert_eq!(tap.dropped_count(), 0, "32 样本远小于环容量，不该丢");
     }
 }

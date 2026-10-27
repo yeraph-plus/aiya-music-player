@@ -230,7 +230,8 @@ fn render_loop(
 ) {
     let ev = EventTx(ev_tx);
     // tap 线程拿裸 SyncSender（自走 try_send 丢帧策略，见 consume_loop）
-    let tap = crate::spectrum::SpectrumTap::new();
+    // mut：push_* 要独占借用（单生产者是类型级约束，见 spectrum::RingProducer）
+    let mut tap = crate::spectrum::SpectrumTap::new();
     tap.spawn_consumer(ev.0.clone());
     let send = |e: EngineEvent| ev.send(e);
 
@@ -295,7 +296,7 @@ fn render_loop(
                     pending_rate,
                     pending_cfg,
                     pending_eq,
-                    &tap,
+                    &mut tap,
                     &written,
                 )
             } else {
@@ -309,7 +310,7 @@ fn render_loop(
                     pending_rate,
                     pending_cfg,
                     pending_eq,
-                    &tap,
+                    &mut tap,
                     &written,
                 )
             };
@@ -381,7 +382,7 @@ fn play_null(
     initial_rate: f32,
     initial_cfg: OutputConfig,
     initial_eq: crate::eq::EqParams,
-    tap: &crate::spectrum::SpectrumTap,
+    tap: &mut crate::spectrum::SpectrumTap,
     written: &AtomicU64,
 ) -> Result<LoadExit, AudioError> {
     let mut decoder = open_source(path)?;
@@ -632,7 +633,7 @@ fn play_file(
     initial_rate: f32,
     initial_cfg: OutputConfig,
     initial_eq: crate::eq::EqParams,
-    tap: &crate::spectrum::SpectrumTap,
+    tap: &mut crate::spectrum::SpectrumTap,
     written: &AtomicU64,
 ) -> Result<LoadExit, AudioError> {
     let mut decoder = open_source(path)?;

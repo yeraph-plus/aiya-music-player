@@ -57,6 +57,19 @@ struct Shared {
     shutting_down: AtomicBool,
 }
 
+/// 取互斥锁，**忽略毒化**（持锁线程 panic 后返回 panic 前一刻的值）。
+///
+/// 为什么不用 `.lock().unwrap()`：这些锁护的都是"最近一次写入的值"——子进程
+/// 句柄、管道写端、存活时钟、恢复现场。持锁线程 panic 一次（`BufWriter` 写
+/// 管道时的 IO panic、`Instant` 运算等）就会把锁永久标成 poisoned，之后
+/// **每一个** `.lock().unwrap()` 都 panic，症状是播放器从此彻底不能播——而
+/// 根因只是一次本来可恢复的写失败。这些数据没有跨字段不变量需要保护
+/// （每个 Mutex 只管自己那一份），读到"panic 前的值"是安全的：最坏情况是
+/// 拿着已经死掉的子进程句柄再杀一次，`kill` 会返回错误，无害。
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 pub struct SidecarHandle {
     cmd_tx: Sender<aiya_audio::EngineCommand>,
     ev_rx: Receiver<aiya_audio::EngineEvent>,
@@ -106,7 +119,7 @@ impl SidecarHandle {
         // 首连失败直接报错（setup 阶段就该失败得明确）
         let gen = 0;
         let conn = connect_once(&host_exe, &pipe_base, gen, &shared)?;
-        *shared.writer_slot.lock().unwrap() = Some(BufWriter::new(conn.writer));
+        *lock(&shared.writer_slot) = Some(BufWriter::new(conn.writer));
         spawn_reader(conn.reader, ev_tx.clone(), shared.clone(), gen, track.clone());
         spawn_writer(cmd_rx, shared.clone());
         spawn_watchdog(shared.clone(), ev_tx, pipe_base.clone(), host_exe.clone(), track.clone());
@@ -122,7 +135,7 @@ impl SidecarHandle {
     pub fn send(&self, cmd: aiya_audio::EngineCommand) {
         // 记录恢复现场所需的命令侧状态
         {
-            let mut t = self.track.lock().unwrap();
+            let mut t = lock(&self.track);
             match &cmd {
                 aiya_audio::EngineCommand::Load { path, token, .. } => {
                     t.last_path = Some(path.clone());
@@ -149,7 +162,7 @@ impl SidecarHandle {
         // 给 sidecar 一点时间自行退出，超时强杀
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            let mut guard = self.shared.child.lock().unwrap();
+            let mut guard = lock(&self.shared.child);
             if let Some(c) = guard.as_mut() {
                 if matches!(c.try_wait(), Ok(Some(_))) {
                     return;
@@ -158,7 +171,7 @@ impl SidecarHandle {
             drop(guard);
             std::thread::sleep(Duration::from_millis(50));
         }
-        if let Some(c) = self.shared.child.lock().unwrap().as_mut() {
+        if let Some(c) = lock(&self.shared.child).as_mut() {
             let _ = c.kill();
             let _ = c.wait();
         }
@@ -199,13 +212,13 @@ fn connect_once(
     let child = cmd
         .spawn()
         .map_err(|e| format!("启动 sidecar 失败：{e}"))?;
-    *shared.child.lock().unwrap() = Some(child);
+    *lock(&shared.child) = Some(child);
 
     // 连接 + 握手；任何失败路径都收尸（P2：spawn 后连接/握手失败曾把
     // 孤儿 sidecar 进程留在后台——无看门狗线程接管它）
     let result = connect_and_handshake(&pipe);
     if result.is_err() {
-        if let Some(mut c) = shared.child.lock().unwrap().take() {
+        if let Some(mut c) = lock(&shared.child).take() {
             let _ = c.kill();
             let _ = c.wait();
         }
@@ -213,7 +226,7 @@ fn connect_once(
     }
     let conn = result.unwrap();
 
-    *shared.alive.lock().unwrap() = Instant::now();
+    *lock(&shared.alive) = Instant::now();
     Ok(conn)
 }
 
@@ -291,7 +304,7 @@ fn spawn_reader(
                 }
                 // 只有当前代的线程可以刷新存活时钟
                 if shared.generation.load(Ordering::SeqCst) == generation {
-                    *shared.alive.lock().unwrap() = Instant::now();
+                    *lock(&shared.alive) = Instant::now();
                 }
                 let Ok(msg) =
                     serde_json::from_str::<aiya_audio::SidecarToHost>(line.trim())
@@ -302,7 +315,7 @@ fn spawn_reader(
                     aiya_audio::SidecarToHost::Evt(evt) => {
                         // 顺手记录恢复现场状态
                         {
-                            let mut t = track.lock().unwrap();
+                            let mut t = lock(&track);
                             match &evt {
                                 aiya_audio::EngineEvent::Position { position_ms, .. } => {
                                     t.position_ms = *position_ms;
@@ -347,7 +360,7 @@ fn spawn_writer(cmd_rx: Receiver<aiya_audio::EngineCommand>, shared: Arc<Shared>
                 Ok(b) => b,
                 Err(_) => continue,
             };
-            let mut guard = shared.writer_slot.lock().unwrap();
+            let mut guard = lock(&shared.writer_slot);
             // None = 断线中：命令丢弃（恢复由看门狗负责）
             if let Some(w) = guard.as_mut() {
                 if w.write_all(&bytes).and_then(|_| w.flush()).is_err() {
@@ -374,18 +387,18 @@ fn spawn_watchdog(
             if shared.shutting_down.load(Ordering::SeqCst) {
                 return;
             }
-            let idle = shared.alive.lock().unwrap().elapsed();
+            let idle = lock(&shared.alive).elapsed();
             if idle.as_millis() <= WATCHDOG_TIMEOUT_MS as u128 {
                 continue;
             }
             tracing::error!("sidecar 心跳超时（>{}ms），kill 并重启", WATCHDOG_TIMEOUT_MS);
 
             // kill 旧代
-            if let Some(mut c) = shared.child.lock().unwrap().take() {
+            if let Some(mut c) = lock(&shared.child).take() {
                 let _ = c.kill();
                 let _ = c.wait();
             }
-            *shared.writer_slot.lock().unwrap() = None;
+            *lock(&shared.writer_slot) = None;
             let gen = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
 
             // 重连（失败则下一轮看门狗再试）
@@ -401,7 +414,7 @@ fn spawn_watchdog(
             // 恢复字节必须在**发布 writer_slot 之前**写好：此前先发布槽再拼恢复
             // 序列，窗口内 writer 线程会把用户命令（如 Load/Play）先送进新
             // sidecar，随后被恢复序列的旧 Load 覆盖 —— 表现为"重启后跳回上一首"。
-            let t = track.lock().unwrap().clone();
+            let t = lock(&track).clone();
             let mut writer = BufWriter::new(conn.writer);
             let mut restore: Vec<u8> = Vec::new();
             // 独占偏好无条件回放（与是否装载无关）：引擎未装载时只暂存，
@@ -445,7 +458,7 @@ fn spawn_watchdog(
                 output_buffer_ms = t.output.buffer_ms,
                 "sidecar 恢复现场完成"
             );
-            *shared.writer_slot.lock().unwrap() = Some(writer);
+            *lock(&shared.writer_slot) = Some(writer);
             spawn_reader(conn.reader, ev_tx.clone(), shared.clone(), gen, track.clone());
             tracing::info!(generation = gen, "sidecar 已重启");
         })

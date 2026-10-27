@@ -789,10 +789,7 @@ fn beets_reveal(path: String) -> Result<dto::library::RevealResult, dto::ApiErro
             reason: Some("文件不存在".into()),
         });
     }
-    let revealed = std::process::Command::new("explorer")
-        .arg(format!("/select,{path}"))
-        .spawn()
-        .is_ok();
+    let revealed = proc::reveal_in_explorer(std::path::Path::new(&path));
     Ok(dto::library::RevealResult {
         revealed,
         reason: if revealed { None } else { Some("explorer 启动失败".into()) },
@@ -1304,10 +1301,7 @@ fn library_reveal_track(
     });
     match result {
         Ok(Some(path)) => {
-            let revealed = std::process::Command::new("explorer")
-                .arg(format!("/select,{path}"))
-                .spawn()
-                .is_ok();
+            let revealed = proc::reveal_in_explorer(std::path::Path::new(&path));
             Ok(dto::library::RevealResult {
                 revealed,
                 reason: if revealed { None } else { Some("explorer 启动失败".into()) },
