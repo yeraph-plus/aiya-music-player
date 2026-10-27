@@ -118,7 +118,14 @@ impl SidecarHandle {
 
         // 首连失败直接报错（setup 阶段就该失败得明确）
         let gen = 0;
+        let t_connect = Instant::now();
         let conn = connect_once(&host_exe, &pipe_base, gen, &shared)?;
+        // spawn → 握手完成。冷启动慢（杀软扫未签名 exe）时这个数会到十几秒，
+        // 而看门狗从握手那一刻开始计时，两者叠加才会出现"刚起来就被杀"。
+        tracing::info!(
+            elapsed_ms = t_connect.elapsed().as_millis() as u64,
+            "sidecar 首次握手完成"
+        );
         *lock(&shared.writer_slot) = Some(BufWriter::new(conn.writer));
         spawn_reader(conn.reader, ev_tx.clone(), shared.clone(), gen, track.clone());
         spawn_writer(cmd_rx, shared.clone());
@@ -299,7 +306,19 @@ fn spawn_reader(
             loop {
                 line.clear();
                 match reader.read_line(&mut line) {
-                    Ok(0) | Err(_) => break, // 管道断开：本代终结
+                    // 管道断开：本代终结。
+                    //
+                    // 这里必须留一行日志：读线程退出后**不再有人刷新 alive**，
+                    // 看门狗会在 5s 后把"读线程偷偷退了"报成"心跳超时"并 kill。
+                    // 此前这条 break 是静默的，一旦发生就只能看着一句假的超时日志猜。
+                    Ok(0) => {
+                        tracing::warn!(generation, "sidecar 管道 EOF，本代读取结束");
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(generation, %e, "sidecar 管道读错误，本代读取结束");
+                        break;
+                    }
                     Ok(_) => {}
                 }
                 // 只有当前代的线程可以刷新存活时钟
@@ -391,7 +410,31 @@ fn spawn_watchdog(
             if idle.as_millis() <= WATCHDOG_TIMEOUT_MS as u128 {
                 continue;
             }
-            tracing::error!("sidecar 心跳超时（>{}ms），kill 并重启", WATCHDOG_TIMEOUT_MS);
+            // 带上实际静默长度：超时值只是阈值，"静默 5.1s"和"静默 11s"
+            // 指向完全不同的原因（前者是边界抖动，后者是对方真的停了）。
+            tracing::error!(
+                idle_ms = idle.as_millis() as u64,
+                generation = shared.generation.load(Ordering::SeqCst),
+                "sidecar 心跳超时（>{}ms），kill 并重启",
+                WATCHDOG_TIMEOUT_MS
+            );
+
+            // 先分清"死了"还是"卡住"——两者的处置一样（只能重启），但归因完全不同：
+            // 已退出 = 崩溃/自杀，去查 panic 与 sidecar.log 末尾；
+            // 仍存活 = 循环卡住（管道写阻塞、线程被系统饿死），去查"心跳迟到"。
+            // 没有这一位，事后只能看到一句"心跳超时"，猜不出是哪种。
+            {
+                let mut child = lock(&shared.child);
+                let state = match child.as_mut() {
+                    Some(c) => match c.try_wait() {
+                        Ok(Some(status)) => format!("已退出 {status}"),
+                        Ok(None) => "仍存活但无消息，按僵死处理".to_string(),
+                        Err(e) => format!("try_wait 失败：{e}"),
+                    },
+                    None => "无子进程句柄".to_string(),
+                };
+                tracing::error!(state = %state, "sidecar 判死");
+            }
 
             // kill 旧代
             if let Some(mut c) = lock(&shared.child).take() {

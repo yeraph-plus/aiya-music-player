@@ -114,14 +114,34 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
         }
     }
 
-    // Ping → Pong
+    // Ping → Pong。
+    //
+    // 心跳由**独立线程**每 1s 发，随时可能插在 Pong 前面（协议上 Pong 不保证是
+    // 下一条消息）。此前这条断言之所以一直绿，是因为心跳和 Pong 都由命令循环写，
+    // 而循环里 Pong 分支在心跳分支之前——断言其实依赖了实现顺序。现在按协议测：
+    // 3s 内等到 Pong 即通过，只跳过 Hb，其它消息仍算失败（别把真问题藏起来）。
     send(&mut writer, &HostToSidecar::Ping);
-    match recv(&mut reader, Duration::from_secs(3)) {
-        Some(SidecarToHost::Pong) => println!("Ping/Pong OK"),
-        other => {
-            eprintln!("Ping 无 Pong：{other:?}");
-            return false;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut got_pong = false;
+    while Instant::now() < deadline {
+        match recv(&mut reader, Duration::from_millis(500)) {
+            Some(SidecarToHost::Pong) => {
+                got_pong = true;
+                break;
+            }
+            Some(SidecarToHost::Hb) => {} // 心跳插队，继续等
+            None => break,                // 管道断了
+            Some(other) => {
+                eprintln!("Ping 后收到非 Pong：{other:?}");
+                return false;
+            }
         }
+    }
+    if got_pong {
+        println!("Ping/Pong OK");
+    } else {
+        eprintln!("Ping 无 Pong（3s 超时）");
+        return false;
     }
 
     // 播放 2s WAV

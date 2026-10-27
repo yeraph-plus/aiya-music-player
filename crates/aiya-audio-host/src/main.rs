@@ -26,7 +26,9 @@
 
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use miow::pipe::NamedPipe;
@@ -163,7 +165,9 @@ fn run_session(pipe: &NamedPipe) -> Result<SessionEnd, String> {
     // miow 没有 try_clone：复制原始句柄，读/写各持一个（同一管道实例）
     let read_half = dup(pipe)?;
     let write_half = dup(pipe)?;
-    let mut write_half = BufWriter::new(write_half);
+    // 写端要跨线程共享：心跳线程与命令循环各写一路，靠这把锁保证一行不撕裂
+    // （管道是字节模式，两个线程各写自己的 BufWriter 会把 JSON 行搅在一起）。
+    let write_half = Arc::new(Mutex::new(BufWriter::new(write_half)));
     let mut line_reader = BufReader::new(read_half);
 
     // ---- 握手：第一条必须是 Hello，版本不匹配 exit 2（不静默降级）----
@@ -182,11 +186,52 @@ fn run_session(pipe: &NamedPipe) -> Result<SessionEnd, String> {
         eprintln!("{msg}");
         std::process::exit(2);
     }
-    write_all_msg(&mut write_half, &SidecarToHost::Welcome { protocol: PROTOCOL_VERSION })?;
+    write_msg(&write_half, &SidecarToHost::Welcome { protocol: PROTOCOL_VERSION })?;
     tracing::info!(%protocol, "握手完成");
 
+    // ---- 心跳线程：从握手完成这一刻就开始跳 ----
+    //
+    // 为什么不等引擎：Welcome 一发出去，host 的看门狗（5s）就开始计时。此前心跳
+    // 写在主循环里，而主循环要等 Engine::spawn 与 reader 线程就绪才进——初始化
+    // 慢的时候进程"握着管道却一条消息都不发"，host 无从区分"慢"与"死"，只能杀。
+    // 实测（受控注入 8s 卡顿）后果是每 5s 被杀一次、generation 一路涨到 9，
+    // 播放器永远起不来。心跳的语义就是"进程还活着"，它不该等任何初始化。
+    let hb_running = Arc::new(AtomicBool::new(true));
+    let hb_writer = Arc::clone(&write_half);
+    let hb_flag = Arc::clone(&hb_running);
+    let hb_thread = std::thread::Builder::new()
+        .name("sidecar-hb".into())
+        .spawn(move || {
+            let mut last = Instant::now();
+            while hb_flag.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(250));
+                if !hb_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                if last.elapsed() < Duration::from_secs(1) {
+                    continue;
+                }
+                // 迟到留痕：本线程被卡（等写锁、管道写阻塞）就是 host 眼里
+                // "无心跳"的直接来源，没有这行只能看到一句假的超时。
+                let gap = last.elapsed();
+                if gap > Duration::from_secs(3) {
+                    tracing::warn!(gap_ms = gap.as_millis() as u64, "心跳迟到");
+                }
+                if write_msg(&hb_writer, &SidecarToHost::Hb).is_err() {
+                    break;
+                }
+                last = Instant::now();
+            }
+        })
+        .map_err(|e| format!("起心跳线程失败：{e}"))?;
+
     // ---- 引擎 + 命令转发线程（reader 只解析入站消息并转交，engine 留主线程）----
+    //
+    // 这里到心跳循环之间的耗时不再影响存活判定（心跳已在上面独立跑）。
+    // 仍然计时：它是"第一声出声要等多久"的一部分，冷启动排查要用。
+    let t_engine = Instant::now();
     let mut engine = Engine::spawn().map_err(|e| format!("引擎启动失败：{e}"))?;
+    tracing::info!(elapsed_ms = t_engine.elapsed().as_millis() as u64, "引擎初始化完成");
     let (pong_tx, pong_rx) = mpsc::channel::<()>();
     let (cmd_tx, cmd_rx) = mpsc::channel::<HostToSidecar>();
 
@@ -215,44 +260,48 @@ fn run_session(pipe: &NamedPipe) -> Result<SessionEnd, String> {
         })
         .map_err(|e| format!("起 reader 线程失败：{e}"))?;
 
-    // ---- 命令消费 + 事件/心跳写回循环（本线程）----
-    let mut last_hb = Instant::now();
-    let mut shutdown_seen = false;
-    let end = loop {
-        // 1) 入站命令
-        while let Ok(msg) = cmd_rx.try_recv() {
-            match msg {
-                HostToSidecar::Cmd(cmd) => {
-                    shutdown_seen |= matches!(cmd, aiya_audio::EngineCommand::Shutdown);
-                    engine.send(cmd);
+    // ---- 命令消费 + 事件写回循环（本线程；心跳已在独立线程）----
+    tracing::info!(elapsed_ms = t_engine.elapsed().as_millis() as u64, "命令循环就绪");
+    // 循环放在闭包里：里面的 `?` 只结束会话，不会把心跳线程漏掉。
+    // （直接 `?` 返回的话 hb 线程还持有写端，要等它下一次写失败才退出。）
+    let session = (|| -> Result<SessionEnd, String> {
+        let mut shutdown_seen = false;
+        let end = loop {
+            // 1) 入站命令
+            while let Ok(msg) = cmd_rx.try_recv() {
+                match msg {
+                    HostToSidecar::Cmd(cmd) => {
+                        shutdown_seen |= matches!(cmd, aiya_audio::EngineCommand::Shutdown);
+                        engine.send(cmd);
+                    }
+                    HostToSidecar::Ping => {
+                        let _ = pong_tx.send(());
+                    }
+                    HostToSidecar::Hello { .. } => {} // 重复握手忽略
                 }
-                HostToSidecar::Ping => {
-                    let _ = pong_tx.send(());
-                }
-                HostToSidecar::Hello { .. } => {} // 重复握手忽略
             }
-        }
-        // Shutdown 是最后一个命令（engine 线程随即退出），直接结束会话
-        if shutdown_seen {
-            break SessionEnd::Shutdown;
-        }
-        // 2) 出站事件
-        if let Some(evt) = engine.try_recv() {
-            write_all_msg(&mut write_half, &SidecarToHost::Evt(evt))?;
-            continue;
-        }
-        // 3) Pong / 心跳
-        if pong_rx.try_recv().is_ok() {
-            write_all_msg(&mut write_half, &SidecarToHost::Pong)?;
-            continue;
-        }
-        if last_hb.elapsed() >= Duration::from_secs(1) {
-            // 心跳比 ADR 的 2s 更密，host 侧 5s 超时判定更稳
-            write_all_msg(&mut write_half, &SidecarToHost::Hb)?;
-            last_hb = Instant::now();
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
+            // Shutdown 是最后一个命令（engine 线程随即退出），直接结束会话
+            if shutdown_seen {
+                break SessionEnd::Shutdown;
+            }
+            // 2) 出站事件
+            if let Some(evt) = engine.try_recv() {
+                write_msg(&write_half, &SidecarToHost::Evt(evt))?;
+                continue;
+            }
+            // 3) Pong
+            if pong_rx.try_recv().is_ok() {
+                write_msg(&write_half, &SidecarToHost::Pong)?;
+                continue;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        Ok(end)
+    })();
+
+    hb_running.store(false, Ordering::Relaxed);
+    let _ = hb_thread.join();
+    let end = session?;
 
     engine.shutdown();
     // reader 线程阻塞在读上，管道关闭后随之退出；不 join 等它（Shutdown 要快）
@@ -297,4 +346,14 @@ fn read_line(reader: &mut impl BufRead, out: &mut String) -> std::io::Result<boo
 fn write_all_msg(writer: &mut impl Write, msg: &SidecarToHost) -> Result<(), String> {
     let bytes = encode_line(msg).map_err(|e| format!("编码失败：{e}"))?;
     writer.write_all(&bytes).and_then(|_| writer.flush()).map_err(|e| format!("写管道失败：{e}"))
+}
+
+/// 往共享写端写一条消息。
+///
+/// 心跳线程与命令循环共用同一个 `BufWriter`，锁把"写完整行 + flush"包成原子段：
+/// 管道是字节模式，两个线程各自 `write_all` 会把 JSON 行搅在一起，host 侧就会
+/// 整行解析失败并静默丢弃（症状是"偶尔丢一条事件"，比崩溃难查得多）。
+fn write_msg(writer: &Mutex<BufWriter<NamedPipe>>, msg: &SidecarToHost) -> Result<(), String> {
+    let mut guard = writer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    write_all_msg(&mut *guard, msg)
 }
