@@ -463,6 +463,40 @@ export class MockBackend {
     return { revealed: false, reason: '浏览器预览模式不可用' };
   }
 
+  /**
+   * beets 运行时安装（docs/29 批 C）的事件流演练。
+   *
+   * 形状按真后端逐字对齐：`progress`（stage + message）→ `error` 或 `done`
+   * → `finished`（带 status）。这里刻意走**失败**分支：浏览器预览没有 Python，
+   * 装不成是事实，让 UI 的错误渲染也被执行到，比假装成功有用。
+   */
+  async beetsInstall(): Promise<{ started: boolean }> {
+    const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:install', e);
+    emit({ type: 'progress', stage: 'venv', message: '创建虚拟环境（预览模式模拟）' });
+    await new Promise((r) => setTimeout(r, 250));
+    emit({ type: 'progress', stage: 'pip', message: 'pip install 在浏览器预览里不执行' });
+    await new Promise((r) => setTimeout(r, 250));
+    emit({ type: 'error', stage: 'venv', message: '浏览器预览没有系统 Python，这里是模拟失败' });
+    emit({
+      type: 'finished',
+      status: {
+        found: false,
+        interpreter: null,
+        scriptPath: null,
+        protocolVersion: null,
+        beetsVersion: null,
+        pythonVersion: null,
+        libraryPath: null,
+        libraryExists: null,
+        plugins: null,
+        configDir: null,
+        errorCode: 'E_BEETS_NOT_FOUND',
+        errorMessage: '浏览器预览不含 beets 运行时',
+      },
+    });
+    return { started: true };
+  }
+
   async scan(): Promise<ScanResult> {
     const started = Date.now();
     // 阶段顺序与真后端逐字对齐（docs/29 批 B 之后）：walking → parsing（解析与

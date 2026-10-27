@@ -55,7 +55,8 @@ src-tauri ⇠ stdout 行 JSON ⇢ sidecar/beets_sidecar.py
 |---|---|
 | `npm run dev` | 开发：`tauri dev`（自动起 vite dev server） |
 | `npm run dev:ui` | 只起前端（浏览器里跑 mock 数据，不开 Tauri） |
-| `npm run build` / `bundle` | 出安装包：`vite build` → 编 sidecar → release 编译 → NSIS |
+| `npm run build` / `bundle` | 出安装包：先 `pack:beets`，再 `vite build` → 编 sidecar → release 编译 → NSIS |
+| `npm run pack:beets` | 生成随包 beets 运行时（embeddable Python + site-packages，约 104MB） |
 | `npm run build:ui` | 只构建前端到 `ui/dist` |
 | `npm run check` | `svelte-check`（当前 0 error / 0 warning 才算过） |
 | `npm run test` | Rust 全量测试（当前 **291 条**，1 条 `--ignored` 是 perf_50k） |
@@ -72,9 +73,17 @@ src-tauri ⇠ stdout 行 JSON ⇢ sidecar/beets_sidecar.py
 | `npm run check:deps` | 依赖方向/越界检查 |
 | `npm run probe:ui` | CDP 探针（对真实窗口做 UI 断言） |
 
-打包前置做两件事：`vite build` 出前端产物，`tools/build-sidecar.mjs` 编出 `aiya-audio-host`
-到 `src-tauri/binaries/<name>-<triple>.exe`（Tauri `externalBin` 约定路径）。
-产物：`target/release/bundle/nsis/*.exe`（当前 **5.74 MiB**，release 编译约 5.5 分钟）。
+打包前置做三件事：`pack:beets` 生成 beets 运行时、`vite build` 出前端产物、
+`tools/build-sidecar.mjs` 编出 `aiya-audio-host` 到 `src-tauri/binaries/<name>-<triple>.exe`
+（Tauri `externalBin` 约定路径）。
+产物：`target/release/bundle/nsis/*.exe`（当前 **5.74 MiB** + 约 104MB beets 运行时，
+release 编译约 5.5 分钟 → 含运行时约 6 分钟）。
+
+**beets 运行时的形态**（docs/29 §15）：不是 venv —— Windows 的 venv 只是一层指向
+建库时系统 Python 的指针，打进安装包到别的机器上跑不起来（实测 `did not find
+executable`）。用的是 **embeddable Python + 独立 site-packages**，自带解释器与标准库。
+`npm run bundle` 会自动先跑 `pack:beets`（首次下载约 12MB + 装依赖，之后按 lock
+指纹跳过）。
 
 > `beforeBuildCommand` 的 cwd 是**调用 tauri CLI 时的目录**，所以别在 `ui/` 里跑 `tauri build`。
 

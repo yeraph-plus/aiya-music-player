@@ -426,6 +426,22 @@ tmp 残留 `0` 个。
 - Playwright e2e：23 passed。
 - 真实曲库基准：见 14.5（工具入库为 `examples/scan_bench.rs`，可随时复现）。
 
+### 14.7.1 并行带来的一个 flaky（已修，教训留下）
+
+`scan_cancelled_mid_batches_keeps_committed_prefix` 在批 C 的验证里红了一次，
+再跑又绿 —— 典型的竞态。根因不在产品代码：
+
+它靠进度回调置位取消，条件是 `p.phase == "parsing" && p.scanned > 0`。并行化
+之后解析常常**先于入库跑完**，于是第一批提交时 `parsed` 已经等于 `total`，
+这一条事件的 phase 是 `importing` 而不是 `parsing` —— 取消永远不置位，扫描
+正常跑完，断言以"取消没生效"的形式失败。
+
+修法：判定条件只留 `p.scanned > 0`（**不要用 phase 名当钩子**，它是内部状态
+的派生，会随实现变），并连跑 5 次确认稳定。
+
+顺带记一条同源教训：`14.6` 的死锁也是这套测试抓到的。**最小用例 + 可重复跑**
+比"跑一次通过"值钱得多 —— 这两次失败如果只跑一次都是绿的。
+
 ### 14.8 遗留
 
 - **取消延迟**：取消后要等当前在解析的几个文件跑完（每 worker 一个文件），
@@ -434,3 +450,148 @@ tmp 残留 `0` 个。
   批 B 没动（改它要连 `ScanResult` 契约与 UI 一起改，不在本批范围）。
 - **rayon 可能不是瓶颈**：Windows Defender 实时扫描在并行后参与 IO 争抢，
   实测仍有 3.5-9 倍说明不是主要瓶颈，但换机器（尤其无排除项的机器）需要复量。
+
+## 15. 批 C 落地记录（2026-10-27）
+
+### 15.1 先证伪：§5 的路线 B 不成立
+
+§11 第 4 问拍板"接受安装包 +50-80MB，走路线 B（CI 预构建 venv，整个目录打进
+安装包）"。**这个前提是错的**，动手前先实测：
+
+```text
+tools/beets-venv/pyvenv.cfg:
+  home = C:\Python314
+  executable = C:\Python314\python.exe
+  include-system-site-packages = false
+
+把整个 venv 复制到别处、把 home 改成不存在的路径：
+  python.exe -c "print(1)"
+  → did not find executable at 'C:\NoSuchPython314\python.exe'
+```
+
+结论：**Windows 的 venv 只是一层指针**，标准库和 `python314.dll` 都在建库时的
+那个系统 Python 里（`sys.base_prefix = C:\Python314`）。目标机器没装同版本
+Python，venv 就启动不了。把它打进安装包只是把 89MB 一起发出去，用户机器上
+照样跑不起来。
+
+（顺带记一条：`sys.executable` 报告的是 venv 里的路径，`sys.base_prefix` 才
+暴露真相 —— 只看前者会以为 venv 自包含。）
+
+### 15.2 改走"embeddable + site-packages"
+
+真正能随包分发的形态是 **embeddable Python 发行版**：自带解释器、标准库
+（`python314.zip`）和 DLL，靠解压目录里的 `python314._pth` 决定 `sys.path`。
+
+实测（本机，先手工拼一遍验证可行）：
+
+```text
+1. 下载 python-3.14.7-embed-amd64.zip（12.1MB）→ 解压
+2. 把 beets 的全部依赖装进 <runtime>/Lib/site-packages
+3. python314._pth 写：
+      python314.zip
+      .
+      Lib\site-packages
+
+      import site
+4. <runtime>/python.exe -c "import beets, numpy"
+   → beets 2.14.1 | numpy 2.5.4
+5. echo '{"id":1,"cmd":"status"}' | <runtime>/python.exe sidecar/beets_sidecar.py
+   → {"ok":true,"data":{"beetsVersion":"2.14.1","pythonVersion":"3.14.7",
+      "plugins":["replaygain","fromfilename","duplicates","scrub","smartplaylist"]}}
+```
+
+两个必须踩过的坑，都写进脚本注释了：
+
+1. **`_pth` 的文件名只带主次版本**（`python314._pth`）。写成 `python3147._pth`
+   解释器根本不读，症状是"pip 装成功了但 import 不到"。
+2. **`import site` 必须取消注释**。默认 `_pth` 把 `site.main()` 关掉，关了之后
+   连 `Lib\site-packages` 都不会被扫 —— `sys.path` 里明明有目录却 import 失败。
+3. pip 装出来的 wheel 是按**跑 pip 的那个解释器**的 ABI 选的（`cp314`）。用系统
+   Python 的 pip 往 embeddable 的 site-packages 里装，版本一不一致就装进
+   `cp312` 的 `.pyd`，运行期炸。所以构建脚本先 `get-pip.py` 给 embeddable
+   装上自己的 pip，再让它自己装依赖。
+
+### 15.3 探测顺序（beets.rs）
+
+```
+AIYA_BEETS_PYTHON           排障/开发时显式指定
+  → {app_data}/beets-venv   用户点"安装运行时"装的（install.py 建 venv）
+  → 随包 beets-runtime      embeddable + site-packages（构建期产物，绝大多数用户）
+  → tools/beets-venv        开发机
+  → python                  PATH 兜底（用户自己装过 beets）
+```
+
+**BEETSDIR 恒定指向 `{app_data}/beets`**（§5 拍板）。不再"只有设了
+`AIYA_BEETS_DIR` 才隔离"，因为默认落点是 `%APPDATA%\beets` —— 那是用户系统
+beets 的库，本应用去写它属于越界。`AIYA_BEETS_DIR` 仍可覆盖（dev 冒烟）。
+
+顺带修了一个真 bug：`beets_web_open` 起 `python -m beets web` 时**没带**
+sidecar 那套 env，于是 web 界面读的是 `%APPDATA%\beets`、sidecar 写的是
+`{app_data}/beets` —— 用户在浏览器里看到一份空库，只会以为"同步坏了"。
+现在两处共用 `sidecar_env()`。
+
+### 15.4 首次启动生成 config.yaml
+
+BEETSDIR 换到 app_data 之后那里是空的，beets 用内置默认 ⇒ **plugins 一个都不开**，
+§8 的首发档能力全部落空。所以首次探测时写一份：
+
+```yaml
+# AIYA Music 首次启动生成；改过之后应用不会再覆盖
+library: '<app_data>\beets\library.db'
+directory: 'D:\CkMsr\Music'        # 取第一个扫描根；读不到就省略这一行
+plugins: replaygain lyrics fromfilename duplicates scrub smartplaylist
+```
+
+- `directory` **读不到扫描根时省略**，让 beets 用它自己的默认。猜一个目录的
+  后果是把用户的文件 move 到他没预期的地方，比不写糟得多。
+- 路径用**单引号**：YAML 双引号里 `\M` 会被当转义序列，是这类配置最经典的坑。
+- 已存在就**不动**（用户手改过不能被每次启动覆盖）。
+- 首发档插件全是 beets 内置，不增加 pip 依赖、不影响离线可用性。
+
+### 15.5 运行时安装脚本（sidecar/beets_install.py）
+
+覆盖"随包运行时缺失/损坏，但机器有 Python"这条路：用系统 Python 建 venv 到
+`{app_data}/beets-venv`，装完 `import beets` 自检一次（只看 pip 退出码不够，
+装到一半的依赖也会返回 0）。
+
+- `--from-wheels <dir>`：离线 wheelhouse，同时加 `--no-index` ——
+  给了 wheelhouse 就**绝不**回落 PyPI，否则离线场景会卡在网络超时而不是
+  干净地报"缺 wheel"。
+- 输出**行帧 JSON**（与 sidecar 同风格），宿主逐行转发成 `beets:install` 事件；
+  装完由宿主再 `probe` 一次推 `{"type":"finished","status"}` ——
+  能不能用以探测结果为准，不以退出码为准。
+
+宿主侧命令 `beets_install`：立刻返回 `JobStarted`，进度走事件。没有系统 Python
+时**同步报错**（`invalidArg`），错误文案说明"随包运行时应随安装包分发"。
+
+### 15.6 打包集成
+
+- `tools/pack-beets-runtime.mjs`：下载 embeddable → 装 pip → 按
+  `tools/beets-requirements.lock` 装依赖 → 自检 `import beets, numpy`。
+  锁文件 sha256 存成 `.lock-sha256`，没变就跳过 pip（`npm run bundle` 每次
+  都带上这一步，每次都连 PyPI 核对是不可接受的）。
+- `npm run bundle` 改为先跑它再 `tauri build`：发布包**必须**带运行时。
+- `tauri.conf.json` 的 `bundle.resources` 加 `"../tools/beets-runtime": "beets-runtime"`。
+- `.gitignore` 排除 `tools/beets-runtime/` 与 `tools/.cache/`（约 100MB，可重建）。
+
+### 15.7 验证
+
+- `tools/beets-runtime` 构建产物 **103.7 MB**，自检 `beets 2.14.1 / numpy 2.5.4`。
+- 新单测 `probe_finds_bundled_runtime_beets`：随包运行时能被 probe 命中
+  （真 spawn sidecar + 收 status，不是查文件存在）。
+- 新单测 `render_config_covers_plugins_and_paths`：插件、单引号路径、
+  "无扫描根不写 directory" 三条断言。
+- `beets_install` 实测：`python sidecar/beets_install.py --target <tmp>` 建 venv +
+  装依赖 + 自检通过。
+- `cargo test -p aiya --test ipc_contract` 5 passed（新命令双向覆盖）；
+  `svelte-check` 0/0。
+
+### 15.8 遗留
+
+- **体积超出预估**：实际 103.7 MB（§5 估 40-80MB）。差在 numpy（beets 的
+  `replaygain` 依赖它）+ pip 自身。可考虑发行时裁剪 `pip` 与 `*.dist-info`
+  （约 10MB），但那样 `pip` 就不能用于现场修复，留到 P5 权衡。
+- **没有 CI 预构建**：脚本本身是 CI-ready 的（不依赖系统 Python，自动下载
+  embeddable + get-pip），但仓库还没有 CI（docs/30 P1-6）。
+- **离线 wheelhouse 没造**：`--from-wheels` 分支实现完整，但仓库里没有
+  wheelhouse 产物（`pip download` 需要一次联网准备），P5 若要做离线段再补。

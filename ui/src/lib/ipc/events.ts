@@ -49,6 +49,12 @@ export const events = {
   /** beets 导入：union 多态（progress / sessionEnd / librarySync*），终态不可丢。 */
   beetsImport: (cb: (e: DynamicJson) => void) => sub<DynamicJson>('beets:import', cb),
 
+  /**
+   * beets 运行时安装进度（docs/29 批 C）：progress / error / done / finished。
+   * `finished` 带 `status`（与 `beets_status` 同形），UI 直接用它刷新状态块。
+   */
+  beetsInstall: (cb: (e: DynamicJson) => void) => sub<DynamicJson>('beets:install', cb),
+
   /** 音频实际输出状态（模式/时钟/缓冲/格式）。偶发，不可丢。 */
   audioMode: (cb: (e: AudioModeEvent) => void) => sub<AudioModeEvent>('audio:mode', cb),
 };

@@ -1256,7 +1256,14 @@ mod tests {
             None,
             || cancel.load(std::sync::atomic::Ordering::Relaxed),
             |p| {
-                if p.phase == "parsing" && p.scanned > 0 {
+                // 判定条件用 scanned，**不要用 phase**。
+                //
+                // 并行化之后（docs/29 批 B）解析常常先于入库跑完，第一批提交时
+                // `parsed` 已经等于 total，于是这一次事件的 phase 是 `importing`
+                // 而不是 `parsing`。写成 `phase == "parsing"` 时取消就永远不会
+                // 置位，扫描会正常跑完，断言以"取消没生效"的形式间歇性失败 ——
+                // 实际抓到的就是这个（同一条测试跑两次绿、第三次红）。
+                if p.scanned > 0 {
                     cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             },
@@ -1265,7 +1272,7 @@ mod tests {
         assert!(r.cancelled);
         assert_eq!(r.scanned, BATCH_SIZE, "第二批未开始，scanned 停在批边界");
         assert_eq!(r.imported, BATCH_SIZE, "已提交的第一批保留");
-        assert_eq!(r.unchanged, 0);
+        assert_eq!(r.failed, 0, "取消不该把文件记成失败：{:?}", r.errors);
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
         assert_eq!(count, BATCH_SIZE as i64, "已提交批次落库");
     }

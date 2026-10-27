@@ -741,6 +741,17 @@ fn beets_web_open(app: AppHandle) -> Result<String, dto::ApiError> {
     beets::web_open(&app).map_err(dto::ApiError::invalid_arg)
 }
 
+/// 安装 beets 运行时到应用数据目录（docs/29 批 C）。
+///
+/// 只覆盖"随包运行时缺失/损坏 且 用户机器有 Python"这条路：用系统 Python 建
+/// venv。随包运行时是构建期产物，不经过这里。进度走 `beets:install` 事件。
+#[tauri::command]
+async fn beets_install(app: AppHandle) -> Result<dto::beets::JobStarted, dto::ApiError> {
+    beets::start_install(app)
+        .map(|_| dto::beets::JobStarted { started: true })
+        .map_err(dto::ApiError::internal)
+}
+
 #[tauri::command]
 fn library_list(
     state: State<'_, AppState>,
@@ -2886,6 +2897,7 @@ pub fn run() {
             beets_cancel,
             beets_sync,
             beets_web_open,
+            beets_install,
             library_list,
             library_albums,
             library_artists,

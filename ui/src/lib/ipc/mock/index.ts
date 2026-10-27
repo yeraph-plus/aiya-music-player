@@ -193,6 +193,10 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     // 预览里没有 beets 环境，也不该真的拉浏览器：回"未找到"语义
     case 'beets_web_open':
       throw mockError('beets_web_open');
+    // 安装运行时同理：预览环境不装东西，但要把事件流的形状演一遍，
+    // 好让 UI 的进度/终态渲染在浏览器里也能验证
+    case 'beets_install':
+      return mock.beetsInstall();
 
     default:
       throw mockError(cmd);

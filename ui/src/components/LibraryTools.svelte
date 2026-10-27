@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ExternalLink, FolderOpen, RefreshCw, ScanSearch } from '@lucide/svelte';
+  import { Download, ExternalLink, FolderOpen, RefreshCw, ScanSearch } from '@lucide/svelte';
   import ImportPanel from './ImportPanel.svelte';
   import Button from './ui/Button.svelte';
   import { beetsSession } from '../stores/beets-session.svelte';
@@ -161,12 +161,28 @@
   <ImportPanel onsynced={() => void list.reload({ restore: true })} />
 
   <div class="beets-web-row">
-    {#if ui.beets?.found}
+    {#if ui.beets === null}
+      <span class="dim">正在检测 beets 环境…</span>
+    {:else if ui.beets.found}
       <Button size="sm" onclick={() => void openBeetsWeb()}>
         {#snippet icon()}<ExternalLink size={14} />{/snippet}
         在浏览器中打开 beets Web
       </Button>
       <span class="dim">高级用户出口：beets 自带 Web 界面（localhost:8337），应用内不做 GUI。</span>
+    {:else if ui.beetsInstall.running}
+      <span class="dim">
+        正在安装 beets 运行时：{ui.beetsInstall.stage}
+        {ui.beetsInstall.message ? `· ${ui.beetsInstall.message}` : ''}
+      </span>
+    {:else}
+      <Button size="sm" onclick={() => void ui.installBeets()}>
+        {#snippet icon()}<Download size={14} />{/snippet}
+        安装 beets 运行时
+      </Button>
+      <span class="dim">
+        {ui.beetsInstall.error ??
+          '未检测到 beets。安装后可用导入整理、写标签与库对齐；库放在应用数据目录，不动你系统里的 beets。'}
+      </span>
     {/if}
   </div>
 </div>

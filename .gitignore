@@ -60,3 +60,7 @@ Thumbs.db
 # Dev-only beets 环境（体积大、可重建）
 tools/beets-venv/
 tools/beets-home/
+# 随包 beets 运行时（embeddable Python + site-packages，约 100MB）：
+# 由 node tools/pack-beets-runtime.mjs 生成，npm run bundle 会自动先跑它
+tools/beets-runtime/
+tools/.cache/

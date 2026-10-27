@@ -283,6 +283,14 @@ export const ipc = {
     sync: () => call<JobStarted>('beets_sync'),
     /** 起 beets web 并用系统浏览器打开（高级用户外链出口，docs/29 §12） */
     webOpen: () => call<string>('beets_web_open'),
+    /**
+     * 安装 beets 运行时到应用数据目录（docs/29 批 C）。
+     *
+     * 只覆盖"随包运行时缺失 且 机器有 Python"这条路（用系统 Python 建 venv）。
+     * 立刻返回「已启动」，进度走 `beets:install` 事件，最后一条是
+     * `{type:"finished", status}` —— 装完能不能用由 probe 说了算。
+     */
+    install: () => call<JobStarted>('beets_install'),
   },
 };
 

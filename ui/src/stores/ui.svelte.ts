@@ -2,7 +2,7 @@ import type { BeetsStatus, Diagnostics } from '../lib/ipc';
 import type { TrackSort } from '../lib/query';
 import type { AppSettings } from '../lib/settings';
 import { DEFAULT_SETTINGS } from '../lib/settings';
-import { ipc, type DynamicJson } from '../lib/ipc';
+import { ipc, events, type DynamicJson } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
 import { devValidate, settingsSchema, uiStateSchema, type UiState } from '../lib/ipc/schema';
 import {
@@ -424,6 +424,50 @@ class UiStore {
       this.beets = await ipc.beets.status();
     } catch (e) {
       console.warn('beets.status failed:', errorMessage(e));
+    }
+  }
+
+  /**
+   * beets 运行时安装状态（docs/29 批 C）。
+   *
+   * 放在 ui store 而不是组件里：进度来自事件流，而"组件不直接 listen"是
+   * docs/17 §4 的硬约定（多个组件同时开时事件会被订阅多次）。
+   */
+  beetsInstall = $state<{ running: boolean; stage: string; message: string; error: string | null }>({
+    running: false,
+    stage: '',
+    message: '',
+    error: null,
+  });
+
+  /** 订阅安装进度。只在 App 启动时调一次。 */
+  watchBeetsInstall(): () => void {
+    return events.beetsInstall((e) => {
+      const type = typeof e.type === 'string' ? e.type : '';
+      const stage = typeof e.stage === 'string' ? e.stage : '';
+      const message = typeof e.message === 'string' ? e.message : '';
+      if (type === 'finished') {
+        // 终态带 status：装没装成以 probe 为准，不以退出码为准
+        this.beetsInstall = { running: false, stage: 'done', message: '', error: null };
+        const status = e.status;
+        if (status && typeof status === 'object') this.beets = status as BeetsStatus;
+        return;
+      }
+      if (type === 'error') {
+        this.beetsInstall = { running: false, stage, message, error: message || '安装失败' };
+        return;
+      }
+      this.beetsInstall = { running: true, stage, message, error: null };
+    });
+  }
+
+  /** 触发安装（失败立刻抛出：没有系统 Python 这种情况要在按钮旁说清楚） */
+  async installBeets(): Promise<void> {
+    this.beetsInstall = { running: true, stage: 'venv', message: '正在准备…', error: null };
+    try {
+      await ipc.beets.install();
+    } catch (e) {
+      this.beetsInstall = { running: false, stage: '', message: '', error: errorMessage(e) };
     }
   }
 
