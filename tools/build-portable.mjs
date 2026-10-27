@@ -171,6 +171,7 @@ const { time: dTime, date: dDate } = dosTime(now);
 const chunks = [];
 const central = [];
 let offset = 0;
+let entries = 0; // 条目数（别用 central.length/2 反推：以后往 central 里多 push 一项就错）
 
 for (const abs of walk(stage)) {
   // zip 内路径用 /（Windows 解压器也认），顶层带一个目录名，解压不散落
@@ -211,6 +212,7 @@ for (const abs of walk(stage)) {
   cd.writeUInt32LE(0, 38); // 外部属性（文件）
   cd.writeUInt32LE(offset, 42);
   central.push(cd, nameBuf);
+  entries += 1;
 
   offset += local.length + nameBuf.length + payload.length;
 }
@@ -218,8 +220,8 @@ for (const abs of walk(stage)) {
 const cdBuf = Buffer.concat(central);
 const eocd = Buffer.alloc(22);
 eocd.writeUInt32LE(0x06054b50, 0);
-eocd.writeUInt16LE(central.length / 2, 8);
-eocd.writeUInt16LE(central.length / 2, 10);
+eocd.writeUInt16LE(entries, 8);
+eocd.writeUInt16LE(entries, 10);
 eocd.writeUInt32LE(cdBuf.length, 12);
 eocd.writeUInt32LE(offset, 16);
 
