@@ -111,3 +111,15 @@ AIYA_BEETS_ONLINE=1 python tests/protocol_contract.py   # 连 album/albumError/d
 仍然 load 成功）。所以这里用 `importlib.util.find_spec` 逐个试依赖，上报
 三态 `ready` / `missing_deps` / `unavailable`，并列出缺什么。只看包在不在，
 **不 import 插件模块**——插件导入有注册钩子副作用。
+
+## 许可
+
+GPL-3.0-or-later，全文见 [`LICENSE`](LICENSE)（与仓库根 `LICENSE` 同一份）。
+
+2026-10-27 统一过一次：此前这里的 `pyproject.toml` 写的是 MIT，而根 README 与
+`licenses/SOURCE-OFFER.txt` 一直说 GPL-3.0-or-later——两处声明打架。法律上 MIT
+也站得住（上游 beets 2.14.1 本身就是 MIT），选 GPL 是为了"一个仓库一个许可"。
+
+两个发布物（`.pyz` 与套件包）内都附许可全文：`aiya-beets-installer.pyz` 里在
+`aiya_beets/data/LICENSE`，套件包 zip 根目录与 `Lib/site-packages/aiya_beets/data/`
+各一份。它们都是独立发布单元，用户机器上没有仓库可指。

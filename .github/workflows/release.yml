@@ -1,0 +1,131 @@
+# 发布工作流：构建安装包与 beets 发布物，挂到 GitHub Release 上
+#
+# ## 两类 tag，两种语义
+#   · `v0.1.0`       播放器版本：NSIS 安装包 + beets 两个发布物一起挂上去
+#   · `beets-v0.1.0` 只发 beets 工具：只产出两个 beets 文件
+#
+# **为什么播放器 release 也要带 beets 的两个文件**：
+# `src-tauri/src/beets.rs` 的下载地址是
+# `https://…/releases/latest/download/<asset>`，而 `latest` 指的是"最近创建的
+# release"。如果 beets 单独发过一版，latest 就指向那个 release，播放器去下
+# 安装包之外的东西会 404。把两个文件同时挂到播放器 release 上，
+# `latest/download` 就永远能找到它们。
+# 资产名必须是 `aiya-beets-installer.pyz` 与 `aiya-beets-bundle-win-x64.zip`
+# ——它们是 `beets.rs` 里的 `INSTALLER_ASSET` / `BUNDLE_ASSET` 常量，
+# 改名前先改常量，否则用户点安装就是 404。
+#
+# ## 签名：尚未接入
+# 没有代码签名证书，两个 exe 与安装包都是未签名的（docs/35 P0-1）。
+# 这里**刻意不写半成品签名步骤**：一段导入证书却不签的脚本比没有更糟，
+# 它会让人以为签过了。证书就位后在 tauri.conf.json 配 signingIdentity，
+# 再在本文件加 signtool 步骤。
+#
+# 首次使用前确认：
+#   1. 仓库 Settings → Actions → General 允许 workflow 写 content
+#      （本文件已声明 permissions: contents: write，但组织策略可能更严）
+#   2. `licenses/SOURCE-OFFER.txt` 里的源码地址已换成真实仓库地址（docs/35 P0-2）
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "beets-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 构建并发布
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      # ---------------------------------------------------------------
+      # beets 侧发布物（两条安装轨道的产物）
+      # ---------------------------------------------------------------
+      - name: 建 beets 环境
+        run: |
+          python -m venv beets-tool/.venv
+          beets-tool/.venv/Scripts/python -m pip install --upgrade pip
+          beets-tool/.venv/Scripts/pip install -r beets-tool/requirements.lock
+          beets-tool/.venv/Scripts/pip install -e "beets-tool[dev]"
+
+      - name: 打 beets 发布物（.pyz + 套件包）
+        run: |
+          beets-tool/.venv/Scripts/python beets-tool/tools/build_installer.py
+          beets-tool/.venv/Scripts/python beets-tool/tools/build_bundle.py
+
+      # 名字错了播放器就 404，所以在这里硬校验一次
+      - name: 校验 beets 产物名
+        run: |
+          $expected = @("aiya-beets-installer.pyz", "aiya-beets-bundle-win-x64.zip")
+          foreach ($f in $expected) {
+            $p = "beets-tool/dist/$f"
+            if (-not (Test-Path $p)) { throw "缺少发布物：$p" }
+            $kb = [math]::Round((Get-Item $p).Length / 1KB)
+            Write-Host "$f  ${kb} KB"
+          }
+
+      # ---------------------------------------------------------------
+      # 播放器安装包（只在 v* tag 上构建）
+      # ---------------------------------------------------------------
+      - name: 安装前端依赖
+        if: startsWith(github.ref_name, 'v')
+        run: npm ci --prefix ui
+
+      - name: 构建 NSIS 安装包
+        if: startsWith(github.ref_name, 'v')
+        run: npm run bundle
+
+      - name: 校验安装包
+        if: startsWith(github.ref_name, 'v')
+        run: |
+          $exe = Get-ChildItem target/release/bundle/nsis/*-setup.exe -ErrorAction SilentlyContinue
+          if (-not $exe) { throw "没有产出 NSIS 安装包" }
+          $exe | ForEach-Object { Write-Host $_.Name ([math]::Round($_.Length / 1MB, 2)) "MB" }
+
+      # ---------------------------------------------------------------
+      # 发布
+      # ---------------------------------------------------------------
+      - name: 上传到 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $files = @(
+            "beets-tool/dist/aiya-beets-installer.pyz",
+            "beets-tool/dist/aiya-beets-bundle-win-x64.zip"
+          )
+          if (Test-Path "target/release/bundle/nsis") {
+            $files += (Get-ChildItem target/release/bundle/nsis/*-setup.exe).FullName
+          }
+          gh release create $tag --title $tag --generate-notes $files 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "release 已存在，改为追加上传（--clobber）"
+            gh release upload $tag $files --clobber
+          }

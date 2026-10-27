@@ -163,6 +163,15 @@ def main() -> int:
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
     )
 
+    # 许可副本放在 zip 根（解压即见）+ 包内 data/ 各一份。
+    # GPL-3.0 §4/§6 要求分发目标代码附许可全文；这个套件包是独立发布单元，
+    # 用户机器上没有仓库，指 `../LICENSE` 等于没给。
+    lic = TOOL / "LICENSE"
+    if not lic.is_file():
+        print("缺少 LICENSE：GPL 要求发布物内附许可全文", file=sys.stderr)
+        return 1
+    shutil.copyfile(lic, work / "LICENSE")
+
     # 自检：用**包里的**解释器跑，证明可执行（这一步在老机器上会抓出缺 DLL）
     probe = subprocess.run(
         [str(work / "python.exe"), "-m", "aiya_beets", "version"],

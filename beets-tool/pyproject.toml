@@ -8,7 +8,11 @@ version = "0.1.0"
 description = "AIYA Music 的 beets 侧工具：导入、整理、能力自检。独立于播放器发布。"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "GPL-3.0-or-later" }
+# 与仓库根 LICENSE 同一份全文（2026-10-27 统一：此前这里写的是 MIT，
+# 而 README 与 SOURCE-OFFER 一直说 GPL-3.0-or-later——两处声明打架）。
+# 法律上 MIT 也成立（上游 beets 2.14.1 本身就是 MIT），选 GPL 是为了
+# "一个仓库一个许可"，不为一个可选组件多解释一遍。
 # beets 声明在这里是"包元信息"：装上这个包就该能用。
 # 精确版本由 requirements.lock 控制（install.py 用它建环境），两者分工不同：
 #   · 这里给范围 —— 手工 pip install 也能跑起来

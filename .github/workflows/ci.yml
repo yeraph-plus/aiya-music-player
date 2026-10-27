@@ -1,0 +1,115 @@
+# 常规校验（PR 与 push 到 main 都跑）
+#
+# 内容与本地 `npm run verify` **刻意不完全相同**，差异只有一处：
+# 这里不跑 smoke:beets / smoke:maint（它们要真实 beets 环境，见 beets job）。
+#
+# 为什么是 windows-latest 而不是 ubuntu：
+#   · 本体只在 Windows 上发布（WASAPI / NSIS），跨平台绿灯没有意义
+#   · e2e 用系统 Edge（playwright.config.ts 的 channel: 'msedge'），Linux 上没有
+#
+# 首次推上去之后要盯一次：这套 YAML 没有在 Actions 上实跑过，
+# 本地验证的是命令本身（verify 全绿），不是 runner 环境。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Rust + 前端 + e2e
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      # e2e 用系统 Edge，不下载 Playwright 浏览器（省 150 MB，版本跟系统走）
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: 安装前端依赖
+        run: npm ci --prefix ui
+
+      # = cargo test --workspace
+      # + svelte-check
+      # + 依赖图无环（check:deps）
+      # + 边界门禁（check:boundary）
+      # + 协议镜像一致（proto:check）
+      # + vite build
+      - name: 单测与静态检查
+        run: npm run test:all
+
+      # ts-rs 生成物必须与 Rust 源一致：差异只有一个 doc comment 也算漂移
+      - name: 契约生成物一致
+        run: npm run gen:types:check
+
+      - name: e2e（mock 后端 + 系统 Edge）
+        run: npm --prefix ui run test:e2e
+
+      - name: 失败时留存 e2e 报告
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: ui/playwright-report/
+          retention-days: 7
+
+  beets:
+    name: beets 契约与维护 smoke
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # venv 路径必须是 beets-tool/.venv：package.json 的 smoke:* 脚本写死了
+      # `beets-tool\.venv\Scripts\python.exe`（Windows runner 上是同一形态）
+      - name: 建 beets 环境
+        run: |
+          python -m venv beets-tool/.venv
+          beets-tool/.venv/Scripts/python -m pip install --upgrade pip
+          beets-tool/.venv/Scripts/pip install -r beets-tool/requirements.lock
+          beets-tool/.venv/Scripts/pip install -e "beets-tool[dev]"
+
+      # 三个 smoke 各自独立，拆成三步是为了失败时一眼看出是哪一层
+      - name: apply smoke（导入 / 同步）
+        run: npm run smoke:beets
+
+      - name: maintenance smoke（adopt / update / duplicates / move，15 断言）
+        run: npm run smoke:maint
+
+      # 59 条消息的协议契约。联网场景（album / albumError / done）默认跳过，
+      # 要跑得设 AIYA_BEETS_ONLINE=1——CI 里不开，避免受网络与 MusicBrainz 限流影响
+      - name: protocol contract（协议 v1）
+        run: npm run smoke:proto

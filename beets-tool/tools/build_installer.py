@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipapp
 from pathlib import Path
 
@@ -36,24 +37,36 @@ def main() -> int:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    # 依赖清单必须在包内（安装器从 data/ 读，见 install.requirements_file）
-    data = SRC / "aiya_beets" / "data"
-    data.mkdir(parents=True, exist_ok=True)
+    # 两条硬要求：依赖清单与许可全文都必须**在包内**。
+    #   · requirements.txt：安装器从 data/ 读（见 install.requirements_file）
+    #   · LICENSE：GPL-3.0 §4/§6 要求分发目标代码附许可全文。这个 pyz 是
+    #     独立发布单元——用户拿到它时仓库不在手边，指着 `../LICENSE` 等于没给。
+    #
+    # 两者都写在**临时 staging 目录**里，不碰源码树：以前的版本直接往
+    # `SRC/aiya_beets/data/` 写，于是每次打包都会在 git 里留一个未跟踪文件
+    # （2026-10-27 换成 staging，顺便让 `.pyz` 内容与仓库状态解耦）。
     lock = TOOL / "requirements.lock"
-    if lock.is_file():
-        shutil.copyfile(lock, data / "requirements.txt")
+    lic = TOOL / "LICENSE"
+    if not lic.is_file():
+        print("缺少 LICENSE：GPL 要求发布物内附许可全文", file=sys.stderr)
+        return 1
 
-    # 清掉 __pycache__：它们会让包体积翻倍且与源码树时间戳不一致
-    for pyc in SRC.rglob("__pycache__"):
-        shutil.rmtree(pyc, ignore_errors=True)
+    with tempfile.TemporaryDirectory(prefix="aiya-pyz-") as tmp:
+        stage = Path(tmp) / "src"
+        shutil.copytree(SRC, stage, ignore=shutil.ignore_patterns("__pycache__"))
+        data = stage / "aiya_beets" / "data"
+        data.mkdir(parents=True, exist_ok=True)
+        if lock.is_file():
+            shutil.copyfile(lock, data / "requirements.txt")
+        shutil.copyfile(lic, data / "LICENSE")
 
-    zipapp.create_archive(
-        SRC,
-        target=out,
-        interpreter="/usr/bin/env python3",
-        main="aiya_beets.cli:main",
-        compressed=True,
-    )
+        zipapp.create_archive(
+            stage,
+            target=out,
+            interpreter="/usr/bin/env python3",
+            main="aiya_beets.cli:main",
+            compressed=True,
+        )
     size = out.stat().st_size
 
     # 自检：能跑起来才算打完（否则产物是死的，装到用户机器上才发现）
