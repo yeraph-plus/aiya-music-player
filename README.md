@@ -2,7 +2,8 @@
 
 > 状态：**功能完成，进入收尾**（P0–P4 + 前端 docs/24 B0–B6 + docs/25–29 + docs/33 M1–M4
 > 全部落地；剩 docs/29 批 E、docs/23 §7 走查与 P5 发布项）。
-> 上一代 Electron demo 在 `../AIYA_MUSIC`（tag `demo-final`），已归档，只作 UI/行为参考。
+> 上一代 Electron demo（tag `demo-final`）已于 2026-10-27 随工作区整理删除；
+> 它的 UI/行为结论保留在 `docs/00`、`docs/07`、`docs/24`。
 > **无历史兼容**：不迁移旧库、不兼容 Electron 时代的 `media://`、不保留 Electron IPC。
 
 ## 六条已定决策（不可回退）

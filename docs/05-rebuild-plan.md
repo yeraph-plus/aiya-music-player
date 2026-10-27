@@ -35,9 +35,11 @@
 
 ```bash
 # 伪命令：把 demo renderer 原样复制到新仓库
-cp -r ../AIYA_MUSIC/apps/desktop/src/renderer/src ui/src
-cp -r ../AIYA_MUSIC/packages/contracts ui/contracts   # 先当“UI 兼容契约”
+cp -r ../AIYA_MUSIC/apps/desktop/src/renderer/src ui/src        # 2026-10-23 已执行
+cp -r ../AIYA_MUSIC/packages/contracts ui/contracts             # 先当“UI 兼容契约”
 ```
+
+> `../AIYA_MUSIC` 已于 2026-10-27 删除，上面两条命令只作历史记录，**不要重跑**。
 
 - 组件/样式/`lib` 不改；只加 `compat/`。
 - `main.ts` 改 3 行首屏主题。
