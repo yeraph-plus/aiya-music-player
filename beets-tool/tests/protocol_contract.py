@@ -35,9 +35,10 @@ TOOL_SRC = os.path.join(TOOL, "src")
 SCHEMA_PATH = os.path.join(TOOL, "protocol", "v1.schema.json")
 PYTHON = os.environ.get("AIYA_BEETS_PYTHON") or os.path.join(
     TOOL, ".venv", "Scripts", "python.exe")
-TEST_MUSIC = os.environ.get("AIYA_TEST_MUSIC") or r"D:\MUSIC_Player\test-music"
-
 sys.path.insert(0, TOOL_SRC)
+sys.path.insert(0, HERE)
+# 测试音源：真音源优先，没有就合成（见 _testmusic.py——CI 上没有 D 盘）
+from _testmusic import resolve as _resolve_test_music  # noqa: E402
 from aiya_beets import protocol as P  # noqa: E402
 
 SCHEMA_BYTES = open(SCHEMA_PATH, "rb").read()
@@ -99,13 +100,7 @@ assert len(schema_codes) == len(SCHEMA["$defs"]["ErrorCode"]["enum"]), "错误�
 print(f"[2] 错误码双向一致 OK：{len(schema_codes)} 个")
 
 # ---------------- 3. 实跑：真实流量 ----------------
-SRC_WAV = sorted(
-    os.path.join(TEST_MUSIC, f)
-    for f in os.listdir(TEST_MUSIC) if f.lower().endswith(".wav")
-) if os.path.isdir(TEST_MUSIC) else []
-if not SRC_WAV:
-    print(f"[skip] 没有测试音源（{TEST_MUSIC}）：设 AIYA_TEST_MUSIC 指向含 .wav 的目录")
-    raise SystemExit(2)
+SRC_WAV = _resolve_test_music(3)
 
 WORK = tempfile.mkdtemp(prefix="aiya-proto-")
 BEETSDIR = os.path.join(WORK, "beetsdir")

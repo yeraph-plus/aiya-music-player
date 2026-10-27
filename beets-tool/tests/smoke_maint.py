@@ -20,11 +20,11 @@ TOOL_SRC = os.path.join(TOOL, "src")
 # 解释器：优先 $AIYA_BEETS_PYTHON；否则用仓库根的 dev venv（tools/ 里，不入库）
 PYTHON = os.environ.get("AIYA_BEETS_PYTHON") or os.path.join(
     TOOL, ".venv", "Scripts", "python.exe")
-TEST_MUSIC = os.environ.get("AIYA_TEST_MUSIC") or r"D:\MUSIC_Player\test-music"
-SRC_WAV = sorted(
-    os.path.join(TEST_MUSIC, f)
-    for f in os.listdir(TEST_MUSIC) if f.lower().endswith(".wav")
-)
+# 测试音源：真音源优先，没有就合成（见 _testmusic.py）
+sys.path.insert(0, HERE)
+from _testmusic import resolve as _resolve_test_music  # noqa: E402
+
+SRC_WAV = _resolve_test_music(3)
 assert len(SRC_WAV) == 3, SRC_WAV
 
 WORK = tempfile.mkdtemp(prefix="aiya-bd-")

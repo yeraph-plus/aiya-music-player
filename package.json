@@ -25,7 +25,7 @@
     "test:audio": "node tools/run.mjs cargo test -p aiya-audio",
     "test:player": "node tools/run.mjs cargo test -p aiya-player",
     "test:app": "node tools/run.mjs cargo test -p aiya",
-    "test:all": "npm run test && npm run check && npm run check:deps && npm run check:boundary && npm run proto:check && npm run build:ui",
+    "test:all": "npm run build:sidecar && npm run test && npm run check && npm run check:deps && npm run check:boundary && npm run proto:check && npm run build:ui",
     "smoke:engine": "node tools/run.mjs cargo run -q -p aiya-audio --example engine_smoke",
     "smoke:offset": "node tools/run.mjs cargo run -q -p aiya-audio --example start_offset_smoke",
     "smoke:switch": "node tools/run.mjs cargo run -q -p aiya-audio --example switch_smoke",

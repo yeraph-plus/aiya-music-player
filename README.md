@@ -70,12 +70,12 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 | `npm run beets:release` | 两个发布物一起出 |
 | `npm run build:ui` | 只构建前端到 `ui/dist` |
 | `npm run check` | `svelte-check`（当前 0 error / 0 warning 才算过） |
-| `npm run test` | Rust 全量测试（当前 **320 条**，1 条 `--ignored` 是 perf_50k） |
+| `npm run test` | Rust 全量测试（当前 **336 条**，1 条 `--ignored` 是 perf_50k） |
 | `npm run test:data` / `test:audio` / `test:player` / `test:app` | 单 crate 测试 |
-| `npm run test:all` | Rust 全量 + UI 类型检查 + UI 构建 |
+| `npm run test:all` | 先编 sidecar（`src-tauri/build.rs` 要它，干净检出缺了会编译失败）→ Rust 全量 + UI 类型检查 + UI 构建 |
 | `npm run gen:types` / `gen:types:check` | 从 Rust 生成 TS 类型 / 只校验不写盘 |
 | `npm run verify` | `test:all` + `gen:types:check` + beets 导入/维护冒烟 |
-| `npm run test:e2e` | Playwright（`ui/` 下跑；mock 后端 + 系统 Edge，24 条） |
+| `npm run test:e2e` | Playwright（`ui/` 下跑；mock 后端 + 系统 Edge，26 条） |
 | `npm run smoke:engine` / `smoke:offset` / `smoke:switch` / `smoke:rate` | 真机 WASAPI 出声冒烟（需要声卡） |
 | `npm run smoke:supervisor` | sidecar 握手/心跳/看门狗冒烟（不需要声卡） |
 | `npm run smoke:beets` | beets apply 五场景（隔离 `BEETSDIR`，不动真实库；跑在 `beets-tool/tests/`） |
@@ -145,15 +145,22 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 
 **已完成**：P0 宿主 + P1 数据只读 + P2 播放纵切（含 sidecar 进程化）+ P3 beets 预览/应用 +
 P4 体验/系统 + 前端 B0–B6（UI 重做）+ T 系列视觉批 + docs/27 列表工具条 + docs/28 导航拆页 +
-docs/29 批 A（扫描入库页 + 多目录）。
+docs/29 批 A/B/D（扫描入库页、多目录、rayon 两段式进度、beets 命令面）+
+docs/33 M1–M4（beets 两侧分离、协议 v1、两条安装轨道、刷新管线）+ docs/34（扫描入库页
+按对象重整）+ 仓库托管准备（CI 与 release 工作流）。
 
-**剩余**（详细证据与方案见 [`30-pre-handover-audit-2026-10-27.md`](docs/30-pre-handover-audit-2026-10-27.md)）：
+> 批 C「beets venv 预构建分发」**已被 docs/33 取代**，不再做：改由 `beets-tool/` 独立发布
+> `.pyz`（要系统 Python）与 embeddable 套件包（自带解释器）两条轨道，播放器侧只保留客户端。
+
+**剩余**：唯一一份"还剩什么"的总表是
+[`docs/35-closing-ledger-2026-10-27.md`](docs/35-closing-ledger-2026-10-27.md)——
+它按 P0/P1/P2 分档，每条带判据与出处。摘要：
 
 | 类别 | 待办 |
 |---|---|
-| 功能 | docs/29 批 B（扫描 worker 拆分 + rayon 两段式进度）、批 C（beets venv 预构建分发）、批 D（beets 命令面扩展） |
-| 发布 | 代码签名（host 与 sidecar 两个 exe）、SOURCE-OFFER 源码地址核实、安装→运行→卸载在干净机复验、4h soak、杀软误报 |
-| 加固 | CSP 与 capabilities 收窄（UI 已定稿，可单独一批做）、`cargo clippy -D warnings` 首次全量（toolchain 未装 clippy） |
-| 走查 | 真机三项（docs/23 §7）：快捷键 16 动作逐条、主题×密度目视、960px 下队列抽屉 |
+| 发布阻塞 | 代码签名（host 与 audio-host 两个 exe，P0-1）、CSP 与 capabilities 收窄（P0-3）、干净机「安装→运行→卸载」（P0-4）、4h soak（P0-5）、杀软误报（P0-6） |
+| beets 分发 | 首次真发布两个资产、两条安装轨道在「无 Python / 有 Python」机器各走通一遍、`beets.releaseBase` 死分支（P1-2） |
+| 功能欠账 | 手改标签 `modify_items`、查重删除、adopt 单向、replaygain/lyrics 缺依赖、猜你喜欢 |
+| 质量 | `cargo clippy -D warnings` 首跑、mock 缺「未装 beets」场景、联网契约默认跳过、真机走查（docs/23 §7、docs/28 §5） |
 
 自动更新按计划后置到 v2。

@@ -1,4 +1,8 @@
 // 生成 3 个不同音高的测试 WAV（5 秒各，带音量渐弱尾）
+//
+// 用法：cargo run -p aiya-audio --example gen_music [输出目录]
+// 不给参数就写当前目录下的 test-music/。别写死绝对路径——这个仓库是要公开的，
+// 硬编码开发机路径在别人机器上会直接在别人盘根下建档。
 use std::io::Write;
 use std::path::Path;
 
@@ -30,7 +34,8 @@ fn write_wav(path: &Path, sample_rate: u32, seconds: f64, freq: f32) {
 }
 
 fn main() {
-    let dir = Path::new("D:/MUSIC_Player/test-music");
+    let dir = std::env::args().nth(1).unwrap_or_else(|| "test-music".into());
+    let dir = Path::new(&dir);
     std::fs::create_dir_all(dir).unwrap();
     write_wav(&dir.join("低音测试 220Hz.wav"), 44_100, 5.0, 220.0);
     write_wav(&dir.join("中音测试 440Hz.wav"), 48_000, 5.0, 440.0);

@@ -75,3 +75,8 @@ tools/.cache/
 beets-tool/dist/
 # 自带的 embeddable 解释器（官方 zip 展开，约 12MB + 依赖）：build_bundle.py 现下
 beets-tool/.runtime/
+
+# 测试音源：`cargo run -p aiya-audio --example gen_music` 默认就写到这里。
+# 是生成物不是源码——beets 三个 smoke 找不到真音源时会自己合成（见
+# beets-tool/tests/_testmusic.py），所以这目录不需要入库。
+/test-music/

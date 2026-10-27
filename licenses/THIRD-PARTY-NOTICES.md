@@ -77,7 +77,7 @@ AIYA Music 本体以 **GPL-3.0-or-later** 发布（全文见仓库根 `LICENSE`�
 
 `aiya.exe` 与 `aiya-audio-host.exe` 的完整对应源码（含构建脚本）：
 
-- 仓库：<https://github.com/aiya-music/aiya-music>（对应 tag 见应用「关于」页版本号）
+- 仓库：<https://github.com/yeraph-plus/aiya-music-player>（对应 tag 见应用「关于」页版本号）
 - 或随安装包同目录的 `licenses/SOURCE-OFFER.txt` 中给出的书面要约
 
 若你在别处分发本程序的二进制，须一并提供同样的源码获取方式。

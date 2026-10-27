@@ -9,7 +9,7 @@
 程序同一仓库（`beets-tool/`）；用户也可以完全不装它，播放与曲库不受影响。
 
 对应源码可从以下位置取得（版本号见应用「关于」页 / 安装包文件名）：
-  https://github.com/aiya-music/aiya-music
+  https://github.com/yeraph-plus/aiya-music-player
 
 若该地址不可用，任何持有本安装包的人可书面索取，我们承诺在收到请求后
 三年内提供对应版本的完整源码（含构建脚本、Cargo.lock、前端源码），

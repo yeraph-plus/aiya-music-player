@@ -14,7 +14,7 @@ grep -n "^#\+.*\(未完成\|遗留\|剩余\|仍欠\|后续\|待办\)" docs/*.md
 # 发布材料的真实状态（下面 P0 各项都是这样核出来的）
 grep -n "signingIdentity\|csp" src-tauri/tauri.conf.json
 head -20 licenses/SOURCE-OFFER.txt
-ls -d .github                                            # → 不存在
+ls .github/workflows                                      # 2026-10-27 之前不存在
 cargo clippy --version                                   # → 组件未安装
 ```
 
@@ -31,10 +31,16 @@ cargo clippy --version                                   # → 组件未安装
       SmartScreen 首次运行不再拦。
       *出处：docs/13 §7；docs/30 §9「发布」行。*
 
-- [ ] **P0-2 SOURCE-OFFER 源码地址核实**：`licenses/SOURCE-OFFER.txt` 写的是
-      `https://github.com/aiya-music/aiya-music`，仓库真实托管地址未确认。这是
-      GPL-3.0 §6(d) 的法定要约，地址错=许可不合规。
-      **判据**：地址能打开且指向本仓；否则改成真实地址。
+- [x] **P0-2 SOURCE-OFFER 源码地址核实**（2026-10-27 完成）：仓库定为
+      `https://github.com/yeraph-plus/aiya-music-player`，三处同步改掉：
+      `licenses/SOURCE-OFFER.txt`、`licenses/THIRD-PARTY-NOTICES.md`（§三 源码获取方式）、
+      `README.md`（进度表下的剩余链接）。
+      **顺带修的一处**：`src-tauri/src/beets.rs` 的 `RELEASE_BASE` 原来指向
+      `github.com/aiya-music/aiya-beets/…`——那是个**不存在的独立 beets 仓库**。
+      改成同仓 `…/aiya-music-player/releases/latest/download`，与 release.yml
+      「beets 资产挂在同一个 release 上」的设计一致。
+      **仍待验**：地址要等仓库公开后能打开才算真成立（现在的判据是"文件已指向真仓"，
+      不是"链接已可访问"）。首次 push 后点一次即可销项。
       *出处：docs/30 §9；docs/33 §8.2（分包后此文件已改过一次文案）。*
 
 - [ ] **P0-3 CSP 与 capabilities 收窄**：`src-tauri/tauri.conf.json` 里 `"csp": null`；
@@ -63,10 +69,11 @@ cargo clippy --version                                   # → 组件未安装
 
 ## P1 beets 分发链（功能不可用，但核心播放不受影响）
 
-- [ ] **P1-1 真 release 地址**：`src-tauri/src/beets.rs` 的 `RELEASE_BASE` 是占位域名
-      （`.../aiya-beets/releases/latest/download`），beets 侧从没打过 `beets-v*` tag。
+- [ ] **P1-1 真 release 地址**：`RELEASE_BASE` 已改指向
+      `https://github.com/yeraph-plus/aiya-music-player/releases/latest/download`（2026-10-27），
+      但 beets 侧**从没打过 `beets-v*` tag**，`latest/download` 现在还下不到东西。
       **判据**：`beets-tool/` 打出 `.pyz` 与 `bundle.zip` → 传 release → 干净机点安装
-      → `status.found == true`。地址可用 `AIYA_BEETS_RELEASE_BASE` 指过去，不必先改常量。
+      → `status.found == true`。地址可用 `AIYA_BEETS_RELEASE_BASE` 指过去做本地演练。
       *出处：docs/33 §M4「仍欠的」。*
 
 - [ ] **P1-2 `beets.releaseBase` 设置键没有 UI 入口**（本轮盘点新发现）：
@@ -146,13 +153,27 @@ cargo clippy --version                                   # → 组件未安装
 
 ## P2 质量与覆盖
 
-- [x] **P2-9 CI 已建**（2026-10-27）：`.github/workflows/ci.yml` 两个 job——
+- [x] **P2-9 CI 已建并已实跑**（2026-10-27）：`.github/workflows/ci.yml` 两个 job——
       `verify`（cargo test + svelte-check + check:deps + check:boundary + proto:check +
       vite build + gen:types:check + e2e）与 `beets`（建 venv → 三个 smoke）。
       用 `windows-latest`：本体只在 Windows 发布，e2e 又用系统 Edge
       （`channel: 'msedge'`），Linux 上没有可比环境。
-      **遗留**：这套 YAML 未在 Actions 上实跑过——本地验的是命令本身（verify 全绿），
-      不是 runner 环境。首次 push 后要盯一次。
+
+      **首次实跑（run 40451976473）两个 job 全红**，红的都是同一类问题——
+      **"本地有、干净检出没有"的隐式假设**，不是逻辑错误：
+
+      | job | 断在哪 | 根因 | 修法 |
+      |---|---|---|---|
+      | verify | 编译 `src-tauri` 时 build script 失败 | `bundle.resources` 要 `binaries/aiya-audio-host-*.exe`，那是构建产物（已 ignore），CI 从没构建过 | `npm run build:sidecar` 放进 `test:all` 第一步；`build.rs` 先自检并直接印出解法 |
+      | beets | `smoke_apply.py` 第 21 行 | 三个 smoke 把音源写死成开发机的 `D:\MUSIC_Player\test-music` | `beets-tool/tests/_testmusic.py`：真音源优先，没有就现场合成 3 个 1s WAV |
+
+      失败原文（本地复现，删掉 `src-tauri/binaries/` + `touch build.rs`）：
+      `resource path 'binaries\aiya-audio-host-x86_64-pc-windows-msvc.exe' doesn't exist`
+
+      顺带修的同源问题：`crates/aiya-audio/examples/gen_music.rs` 把输出目录也写死成
+      同一个绝对路径（改成 `argv[1]`，默认 `./test-music`）；`.gitignore` 加 `/test-music/`。
+
+      **仍待验**：修完要再推一次、看两个 job 变绿才算真销项。
       *出处：docs/30 §9「故意没做」。*
 
 - [ ] **P2-10 `cargo clippy -D warnings` 从未跑过**：clippy 组件没装
@@ -172,10 +193,10 @@ cargo clippy --version                                   # → 组件未安装
 
 ## 文档
 
-- [ ] **P2-13 README「进度与剩余」表过时**：仍把"批 B / 批 C / 批 D"列为待办，
-      实际三者全完成（批 C 后来被 docs/33 整体改方案）。这是全仓唯一一处
-      "文档与仓库不一致"。
-      *出处：`README.md:144-159`。*
+- [x] **P2-13 README「进度与剩余」表过时**（2026-10-27 完成）：原来仍把"批 B / 批 C / 批 D"
+      列为待办。实际批 B（rayon 两段式）与批 D（命令面）已完成，批 C（venv 预构建分发）
+      **被 docs/33 整体取代**。现在表只留摘要，指向本台账，不再逐条维护两份。
+      *出处：`README.md` 进度与剩余一节。*
 
 - [ ] **P2-14 真机走查**（只有人能看，测不了）：
       docs/23 §7 三条——快捷键 16 动作逐条点、主题×密度目视（紧凑档 42px 行高在 9 列下）、
@@ -189,9 +210,10 @@ cargo clippy --version                                   # → 组件未安装
 ## 建议顺序（三条路线，按目标选一条）
 
 **A. 想尽快有一个能发给别人装的版本**（最短路径，约 1 天 + 1 台干净机）
-`P0-2`（改一行地址）→ `P0-3`（CSP）→ `P1-2`（拆死分支，10 分钟）→
-`P0-1`（签名）→ `P0-4`（干净机）→ `P0-6`（杀软，紧随签名）→ `P2-13`（README 表）
+`P0-3`（CSP）→ `P1-2`（拆死分支，10 分钟）→
+`P0-1`（签名）→ `P0-4`（干净机）→ `P0-6`（杀软，紧随签名）
 
+> `P0-2`（源码要约地址）与 `P2-13`（README 表）已在仓库托管那一轮做掉；
 > `P0-5` soak 可以并行跑，它不挡构建，只挡"敢不敢说不崩"。
 
 **B. 想把 beets 能力真正交付出去**（约 2–3 天，需要一台无 Python 的机器）

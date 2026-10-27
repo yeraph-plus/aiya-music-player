@@ -406,9 +406,13 @@ impl InstallTrack {
 /// 也让两条轨道的下载路径能在本地用 `python -m http.server` 真实走一遍
 /// （`AIYA_BEETS_RELEASE_BASE=http://127.0.0.1:8000`）。
 ///
-/// 地址本身仍是占位的：真发布之后改这一行，或让用户/CI 用环境变量指过去。
+/// 指向本仓的 `latest/download`：beets 的 `.pyz` 与套件包跟播放器安装包挂在
+/// **同一个 release** 上（见 `.github/workflows/release.yml`）。`latest` 指的是
+/// "最近创建的 release"，所以 `v*` 与 `beets-v*` 两种 release 都必须带这两个资产，
+/// 否则单独发一版 beets 会让播放器在这里 404。
+///
 /// 下载失败会给"下到了什么"的明确错误（见 `verify_asset`），而不是静默卡住。
-const RELEASE_BASE: &str = "https://github.com/aiya-music/aiya-beets/releases/latest/download";
+const RELEASE_BASE: &str = "https://github.com/yeraph-plus/aiya-music-player/releases/latest/download";
 const INSTALLER_ASSET: &str = "aiya-beets-installer.pyz";
 const BUNDLE_ASSET: &str = "aiya-beets-bundle-win-x64.zip";
 
