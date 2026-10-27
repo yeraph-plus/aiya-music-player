@@ -72,7 +72,20 @@ pub fn spawn(app: AppHandle, hwnd: isize) -> Option<Sender<SmtcUpdate>> {
         while let Ok(update) = rx.recv() {
             match update {
                 SmtcUpdate::Track { title, artist, album, duration_ms, cover_path } => {
-                    let cover_url = cover_path.as_ref().and_then(|p| file_uri(p));
+                    let cover_url = cover_path.as_deref().and_then(cover_url);
+                    // debug 级（默认 info 看不到）：排查媒体浮层"没封面/不能拖"时
+                    // 用它确认三件事——封面路径拿到没有、缩略图通道是否启用、时长有没有值。
+                    // 0x800700A1 那类问题全部发生在这里之后，没有这行就无法区分
+                    // "没进缩略图分支"和"进了但失败"。
+                    tracing::debug!(
+                        thumb = cover_url.is_some(),
+                        cover = cover_path
+                            .as_ref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default(),
+                        duration_ms = duration_ms.unwrap_or(0),
+                        "SMTC 推送曲目"
+                    );
                     let meta = souvlaki::MediaMetadata {
                         title: Some(&title),
                         artist: artist.as_deref(),
@@ -120,10 +133,46 @@ fn playback_state(playing: bool, position_ms: u64) -> souvlaki::MediaPlayback {
     }
 }
 
-fn file_uri(path: &std::path::Path) -> Option<String> {
-    // Windows 本地路径 → 规范 file:///C:/...（P2：此前手工拼 file://C:/...，
-    // "C:" 被当 authority；且 '%' 未编码，路径含 % 字面量时会被双重解码）。
-    // url::Url::from_file_path 产 canonical 形式并做百分号编码。
+/// 交给 souvlaki 的封面 URL。
+///
+/// ## 为什么不是规范 file URL（这就是 0x800700A1 的根因）
+///
+/// souvlaki 0.8.3 的 Windows 后端（`platform/windows/mod.rs` 的 `set_metadata`）
+/// 拿到 cover_url 后只做一件事：
+///
+/// ```ignore
+/// let path = url.trim_start_matches("file://");
+/// StorageFile::GetFileFromPathAsync(&HSTRING::from(path))?;
+/// ```
+///
+/// 它**不解百分号编码、也不认三斜杠形式**。所以此前用
+/// `Url::from_file_path` 生成的规范形式 `file:///C:/a%20b/x.jpg` 喂进去，
+/// trim 之后是 `/C:/a%20b/x.jpg` —— 一个在 Windows 上不存在的路径，
+/// `GetFileFromPathAsync` 报 0x800700A1（ERROR_BAD_PATHNAME）。
+/// 更糟的是 `set_metadata` 里这一句带 `?`：缩略图失败会**直接 return**，
+/// 后面的 StartTime/EndTime/MinSeekTime/MaxSeekTime 全都没设上，
+/// 媒体浮层因此没有进度区间（不能拖），而日志里只有一行看起来无关的 WARN。
+///
+/// 所以这里按它的口味给：`file://` + 原生绝对路径（反斜杠、空格原样，
+/// 不做百分号编码——它不解码，编码了反而找不到文件）。UNC 路径同样成立：
+/// `file://\\server\share\x.jpg` trim 完还是 `\\server\share\x.jpg`。
+///
+/// 顺带：文件不存在时返回 None 而不是让它报错。封面缓存被清理后，
+/// 宁可少一张图，也不能因为一张图把时长/进度区间一起丢进去。
+#[cfg(windows)]
+fn cover_url(path: &std::path::Path) -> Option<String> {
+    if !path.is_file() {
+        return None;
+    }
+    // to_str 而不是 display()：display() 对非 UTF-8 是 lossy 替换，
+    // 替换后的路径指不到真文件，等于把"找不到"伪装成"找到"。
+    let raw = path.to_str()?;
+    path.is_absolute().then(|| format!("file://{raw}"))
+}
+
+/// 非 Windows 后端（MPRIS）要的是真的 file URI，规范形式即可。
+#[cfg(not(windows))]
+fn cover_url(path: &std::path::Path) -> Option<String> {
     tauri::Url::from_file_path(path).ok().map(|u| u.to_string())
 }
 
@@ -256,3 +305,56 @@ pub fn set_prevent_sleep(prevent: bool) {
 
 #[cfg(not(windows))]
 pub fn set_prevent_sleep(_prevent: bool) {}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    /// 复刻 souvlaki 的取路径逻辑，断言它拿到的确实是能用的本地路径。
+    ///
+    /// 这个断言盯着的是**跨 crate 的隐式契约**：souvlaki 不文档化它要什么形态的
+    /// URL，只在自己实现里 trim 一次。升级 souvlaki 时这条测试会先叫。
+    #[test]
+    fn cover_url_survives_souvlaki_trim() {
+        let file = std::env::temp_dir().join("aiya smtc cover.txt");
+        std::fs::write(&file, b"x").unwrap();
+
+        let url = cover_url(&file).expect("存在的文件应当给出 URL");
+        assert!(url.starts_with("file://"), "souvlaki 只认 file:// 前缀：{url}");
+
+        // souvlaki 的原话：url.trim_start_matches("file://")
+        let stripped = url.trim_start_matches("file://");
+        assert_eq!(stripped, file.to_str().unwrap(), "trim 之后必须正好是原生路径");
+        assert_eq!(
+            stripped.chars().nth(1),
+            Some(':'),
+            "盘符必须在第一位：前导斜杠会被 GetFileFromPathAsync 判成 0x800700A1，实际 {stripped}"
+        );
+        assert!(!stripped.contains("%20"), "不做百分号编码——souvlaki 不解码");
+        std::fs::remove_file(&file).ok();
+    }
+
+    /// 反例留档：规范 file URL 正是 0x800700A1 的来源，别改回去。
+    #[test]
+    fn canonical_file_url_would_lose_the_drive_root() {
+        let canonical = tauri::Url::from_file_path("C://a b//cover.jpg")
+            .unwrap()
+            .to_string();
+        assert_eq!(canonical, "file:///C:/a%20b/cover.jpg");
+        let stripped = canonical.trim_start_matches("file://");
+        assert!(
+            stripped.starts_with('/'),
+            "规范形式 trim 后留着前导斜杠 → ERROR_BAD_PATHNAME：{stripped}"
+        );
+        assert_ne!(stripped, "C://a b//cover.jpg");
+    }
+
+    /// 封面文件被清理掉时不许硬报错：少一张图可以，连带把时长/进度区间
+    /// 一起丢掉不行（souvlaki 的 `?` 会让 set_metadata 提前返回）。
+    #[test]
+    fn missing_cover_is_skipped() {
+        let gone = std::env::temp_dir().join("aiya-no-such-cover-xyz.jpg");
+        std::fs::remove_file(&gone).ok();
+        assert_eq!(cover_url(&gone), None);
+    }
+}
