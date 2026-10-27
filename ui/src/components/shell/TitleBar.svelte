@@ -1,10 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { ChevronLeft, Copy, Minus, Search, Square, X } from '@lucide/svelte';
   import IconButton from '../ui/IconButton.svelte';
   import Tooltip from '../ui/Tooltip.svelte';
   import { registerSearchFocus } from '../../lib/focus-search';
+  import {
+    closeWindow,
+    isNative,
+    isWindowMaximized,
+    minimizeWindow,
+    onWindowResized,
+    toggleMaximizeWindow,
+  } from '../../lib/window-chrome';
   import { nav } from '../../stores/nav.svelte';
   import { ui } from '../../stores/ui.svelte';
 
@@ -19,10 +26,6 @@
    * 返回键读 `nav.canGoBack`（与侧栏共用同一个历史栈），不是自己猜"上一页是谁"。
    */
 
-  const native = '__TAURI_INTERNALS__' in window;
-  // 浏览器预览（mock 传输）下没有 Tauri 元数据，getCurrentWindow 会直接抛错，必须惰性创建
-  const appWindow = native ? getCurrentWindow() : null;
-
   let maximized = $state(false);
   let input = $state<HTMLInputElement | null>(null);
 
@@ -30,17 +33,18 @@
     // 搜索框的焦点注册从 AppShell 上移到这里：按钮和输入框在同一个组件里，
     // 不再需要一个 bind:this + $effect 把引用从壳传出来
     const disposeSearch = registerSearchFocus(() => input?.focus());
-    if (!appWindow) return disposeSearch;
+    if (!isNative) return disposeSearch;
 
-    void appWindow.isMaximized().then((value) => (maximized = value));
     // 最大化状态可能被系统改（拖到屏幕边缘吸附、Win+↑），不能只信本地开关
-    const unlisten = appWindow.onResized(() => {
-      void appWindow.isMaximized().then((value) => (maximized = value));
-    });
+    const syncMaximized = (): void => {
+      void isWindowMaximized().then((value) => (maximized = value));
+    };
+    syncMaximized();
+    const stopResizeWatch = onWindowResized(syncMaximized);
 
     return () => {
       disposeSearch();
-      void unlisten.then((stop) => stop());
+      stopResizeWatch();
     };
   });
 </script>
@@ -109,7 +113,7 @@
   <div class="window-controls">
     <Tooltip label="最小化">
       {#snippet trigger(props)}
-        <button {...props} aria-label="最小化" disabled={!native} onclick={() => void appWindow?.minimize()}>
+        <button {...props} aria-label="最小化" disabled={!isNative} onclick={minimizeWindow}>
           <Minus size={15} />
         </button>
       {/snippet}
@@ -119,8 +123,8 @@
         <button
           {...props}
           aria-label={maximized ? '还原' : '最大化'}
-          disabled={!native}
-          onclick={() => void appWindow?.toggleMaximize()}
+          disabled={!isNative}
+          onclick={toggleMaximizeWindow}
         >
           {#if maximized}<Copy size={13} />{:else}<Square size={12} />{/if}
         </button>
@@ -132,8 +136,8 @@
           {...props}
           class="window-close"
           aria-label="关闭"
-          disabled={!native}
-          onclick={() => void appWindow?.close()}
+          disabled={!isNative}
+          onclick={closeWindow}
         >
           <X size={15} />
         </button>

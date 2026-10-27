@@ -1,4 +1,5 @@
 import type { SpectrumSource } from './spectrum-source';
+import { onThemeChange, themeColor } from './accent';
 
 /**
  * pro 频谱渲染器（2026-10-25 重写，原 audioMotion-analyzer 适配层已删）。
@@ -66,6 +67,31 @@ const LED_GAP = 2;
 const RADIAL_INNER = 0.28;
 /** 反射形态的实体区高度占比（其余给倒影） */
 const REFLEX_BODY = 0.62;
+/** 渐变贴图的高度（像素）：绘制时纵向拉伸到柱高，256 档足够平滑 */
+const GRAD_STEPS = 256;
+
+/**
+ * 竖直渐变贴图（1×256），绘制时 `drawImage` 拉伸。
+ *
+ * 为什么不是每根柱子 `createLinearGradient`：那是每帧每柱一个新
+ * `CanvasGradient` 对象（bars/reflex 形态 48 柱 × 每帧，60fps 下每秒
+ * 数千次分配），而渐变的两端颜色只在切主题时变。贴图一次建好、每帧只是
+ * 一次 GPU 纹理拉伸——观感一致（渐变的插值方向本来就是纵向均匀的）。
+ */
+function makeGradientSheet(bottom: string, top: string): HTMLCanvasElement {
+  const sheet = document.createElement('canvas');
+  sheet.width = 1;
+  sheet.height = GRAD_STEPS;
+  const c = sheet.getContext('2d');
+  if (c) {
+    const g = c.createLinearGradient(0, GRAD_STEPS, 0, 0);
+    g.addColorStop(0, bottom);
+    g.addColorStop(1, top);
+    c.fillStyle = g;
+    c.fillRect(0, 0, 1, GRAD_STEPS);
+  }
+  return sheet;
+}
 
 export function createProSpectrum(
   container: HTMLElement,
@@ -77,13 +103,25 @@ export function createProSpectrum(
   container.replaceChildren(canvas);
   const ctx = canvas.getContext('2d');
 
-  const styles = getComputedStyle(container);
-  const accent = styles.getPropertyValue('--accent').trim() || '#7c9cff';
+  // 主题色只在切主题/换背景方案时变，取一次缓存住（见 accent.ts）。
+  // 这几项随主题重建，所以是 let 而不是 const。
+  let accent = themeColor('--accent');
   // 渐变：暗底 → 主题色 → 亮顶，观感对齐原 audioMotion 的 aiya-accent 渐变
-  const gradBottom = mix(accent, '#000000', 0.45);
-  const gradTop = mix(accent, '#ffffff', 0.55);
-  const peakColor = styles.getPropertyValue('--text-2').trim() || 'rgba(128,128,128,.8)';
-  const unlitColor = styles.getPropertyValue('--text-3').trim() || 'rgba(128,128,128,.25)';
+  let gradBottom = mix(accent, '#000000', 0.45);
+  let gradTop = mix(accent, '#ffffff', 0.55);
+  let peakColor = themeColor('--text-2');
+  let unlitColor = themeColor('--text-3');
+  let gradSheet = makeGradientSheet(gradBottom, gradTop);
+
+  /** 换主题：重算颜色并重建贴图（面板常驻，不能等下次打开才更新） */
+  const stopThemeWatch = onThemeChange(() => {
+    accent = themeColor('--accent');
+    gradBottom = mix(accent, '#000000', 0.45);
+    gradTop = mix(accent, '#ffffff', 0.55);
+    peakColor = themeColor('--text-2');
+    unlitColor = themeColor('--text-3');
+    gradSheet = makeGradientSheet(gradBottom, gradTop);
+  });
 
   let mode: ProSpectrumMode = PRO_MODES.includes(initialMode) ? initialMode : 'bars';
   let frameId = 0;
@@ -134,12 +172,9 @@ export function createProSpectrum(
     frameId = requestAnimationFrame(draw);
   }
 
-  /** 竖向渐变（暗底 → 亮顶） */
-  function barGradient(_x: number, y: number, height: number): CanvasGradient {
-    const g = ctx!.createLinearGradient(0, y + height, 0, y);
-    g.addColorStop(0, gradBottom);
-    g.addColorStop(1, gradTop);
-    return g;
+  /** 竖直渐变填充（暗底 → 亮顶）：拉伸贴图，不新建渐变对象 */
+  function fillGradient(x: number, y: number, w: number, h: number): void {
+    ctx!.drawImage(gradSheet, 0, 0, 1, GRAD_STEPS, x, y, w, h);
   }
 
   function drawBars(w: number, h: number, count: number, bands: Float32Array, reflex: boolean): void {
@@ -151,8 +186,7 @@ export function createProSpectrum(
       const x = i * slot + (slot - barW) / 2;
       const bh = v * (bodyH - 4);
       if (bh > 0.5) {
-        ctx!.fillStyle = barGradient(x, bodyH - bh, bh);
-        ctx!.fillRect(x, bodyH - bh, barW, bh);
+        fillGradient(x, bodyH - bh, barW, bh);
       }
       const pk = peaks[i]!;
       if (pk > 0.005) {
@@ -164,8 +198,7 @@ export function createProSpectrum(
         const rh = Math.min(bh * 0.55, (h - bodyH) * 0.9);
         if (rh > 0.5) {
           ctx!.globalAlpha = 0.28;
-          ctx!.fillStyle = barGradient(x, bodyH, rh);
-          ctx!.fillRect(x, bodyH + 2, barW, rh);
+          fillGradient(x, bodyH + 2, barW, rh);
           ctx!.globalAlpha = 1;
         }
       }
@@ -210,8 +243,7 @@ export function createProSpectrum(
       const bh = (v * (h - 6)) / 2;
       if (bh > 0.5) {
         // 上半亮（渐变），下半暗（同一色的暗变体），中轴对称
-        ctx!.fillStyle = barGradient(x, mid - bh, bh);
-        ctx!.fillRect(x, mid - bh, barW, bh);
+        fillGradient(x, mid - bh, barW, bh);
         ctx!.fillStyle = gradBottom;
         ctx!.globalAlpha = 0.6;
         ctx!.fillRect(x, mid, barW, bh);
@@ -290,6 +322,7 @@ export function createProSpectrum(
       disposed = true;
       cancelAnimationFrame(frameId);
       ro.disconnect();
+      stopThemeWatch();
       container.replaceChildren();
     },
   };

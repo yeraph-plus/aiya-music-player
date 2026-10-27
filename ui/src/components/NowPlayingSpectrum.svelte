@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { themeColor } from '../lib/accent';
   import type { SpectrumStyle } from '../lib/settings';
   import type { SpectrumSource } from '../lib/spectrum-source';
 
@@ -260,8 +261,8 @@
       display[i] = display[i] + ((bands[i] as number) - display[i]) * 0.25;
     }
 
-    const styles = getComputedStyle(target);
-    const accent = styles.getPropertyValue('--accent').trim() || '#7c9cff';
+    // 主题色取缓存值：每帧 getComputedStyle 会强制一次样式解析（见 accent.ts）
+    const accent = themeColor('--accent');
 
     if (style === 'radial') {
       // 环形直接用 48 带（绕圆一周，首尾相接天然对称，无需镜像）

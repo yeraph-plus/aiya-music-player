@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { themeColor } from '../lib/accent';
   import type { SpectrumSource } from '../lib/spectrum-source';
 
   interface Props {
@@ -90,8 +91,8 @@
     ctx.clearRect(0, 0, width, height);
 
     const bands = source.frame();
-    const styles = getComputedStyle(target);
-    const barColor = styles.getPropertyValue('--accent').trim() || '#7c9cff';
+    // 主题色取缓存值：每帧 getComputedStyle 会强制一次样式解析（见 accent.ts）
+    const barColor = themeColor('--accent');
 
     // 低分辨率 buffer：模糊代价 ∝ 像素数，这里省一个数量级
     const BW = 160;

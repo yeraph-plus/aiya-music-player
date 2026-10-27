@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import IconButton from './ui/IconButton.svelte';
+  import { themeColor } from '../lib/accent';
   import type { SpectrumSource } from '../lib/spectrum-source';
   import {
     createProSpectrum,
@@ -67,9 +68,9 @@
     const bands = source.frame();
     if (peaks.length !== bands.length) peaks = new Float32Array(bands.length);
 
-    const styles = getComputedStyle(target);
-    const barColor = styles.getPropertyValue('--accent').trim() || '#7c9cff';
-    const peakColor = styles.getPropertyValue('--text-2').trim() || 'rgba(128,128,128,.8)';
+    // 主题色取缓存值：每帧 getComputedStyle 会强制一次样式解析（见 accent.ts）
+    const barColor = themeColor('--accent');
+    const peakColor = themeColor('--text-2');
 
     const count = bands.length;
     const slot = width / count;
