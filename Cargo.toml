@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "crates/aiya-data", "crates/aiya-audio", "crates/aiya-audio-host", "crates/aiya-player"]
+members = ["src-tauri", "crates/aiya-data", "crates/aiya-audio", "crates/aiya-audio-host", "crates/aiya-player", "crates/aiya-beets-client"]
 
 [workspace.package]
 version = "0.1.0"

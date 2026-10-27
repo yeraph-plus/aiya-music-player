@@ -1,0 +1,11 @@
+[package]
+name = "aiya-beets-client"
+version.workspace = true
+edition.workspace = true
+description = "外部整理工具（beets）的宿主侧 client：起短进程、说 NDJSON 协议、消费结果。不含任何环境知识。"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

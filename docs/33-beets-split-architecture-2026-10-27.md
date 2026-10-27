@@ -1,7 +1,8 @@
 # beets 两侧分离架构设计
 
-> 状态：**已拍板（2026-10-27），M1 待开工**。日期：2026-10-27。
+> 状态：**已拍板（2026-10-27）；M1 已完成（2026-10-27），M2–M4 待开工**。日期：2026-10-27。
 > 拍板结果见 §10：monorepo 独立发布 + 短进程 stdio 胶水 + **播放器不代装 Python**（两条安装轨道）。
+> M1 落地记录见 §13（含实测数据与两处对本文的修正）。
 > 前置：docs/29 批 A–D 已交付；docs/31 集成验收计划、docs/32 组件化调研已完成。
 > 本文取代 docs/32 §5（分发形态）与 §6（刷新管线所有权），并明确作废批 C 的随包运行时决策。
 >
@@ -152,12 +153,26 @@ crates/aiya-beets-client/
     └── proto_mirror.rs  # 对着随仓镜像的 schema 验字段（防冻结后漂移）
 ```
 
-**这个 crate 里不允许出现的东西**（评审硬门禁）：
+**这个 crate 里不允许出现的东西**（评审硬门禁，已机器化：`npm run check:boundary`，
+脚本 `tools/check-boundary.mjs`，纳入 `test:all`）：
 
-- 不出现 `python`、`venv`、`pip`、`site-packages` 等字样
-- 不出现任何 beets 插件名（`replaygain` / `lyrics` / ...）
+- 不出现解释器/虚拟环境/包管理的痕迹：`venv`、`virtualenv`、`pyvenv.cfg`、
+  `site-packages`、`pip`、`python.exe`、`Scripts/`
+- 不出现任何 beets 插件名（`replaygain` / `lyrics` / `fromfilename` /
+  `duplicates` / `scrub` / `smartplaylist` / `chroma` / `lastgenre` /
+  `fetchart` / `embedart`）
 - 不出现 `library.db` / `config.yaml` / `path_formats`
-- 不出现 `Library` / `Item` / `MoveOperation` 这些 beets 概念
+- 不出现 `Library` / `MoveOperation` / `ImportSession` 这些 beets 对象模型
+
+**两条刻意的豁免**（写进脚本注释，否则门禁会变成噪音然后被关掉）：
+
+| 豁免 | 理由 |
+|---|---|
+| `pythonVersion`（只在 `#[serde(rename)]` 处） | 那是**协议线上字段名**，改名就不是这份协议了。crate 的 Rust 标识符是 `runtime_version`，只在 serde 映射处出现真名——这正好是"知道字段、不知道它意味着什么"的分界 |
+| `beets` 本身不作禁用词 | 包名 `aiya-beets-client` 与协议字段 `beetsVersion` / `beetsMessage` 必然带它。禁的是**内部概念**（插件名、库文件、对象模型），不是产品名 |
+
+门禁用大小写敏感 + 词边界：否则 `Stdio::piped` 会命中小写 `pip`、
+`library_path` 会命中 `Library`——第一版就是这么误报的，全靠词边界才干净。
 
 `beets.rs` 拆分后的归属：
 
@@ -698,3 +713,82 @@ beets 二进制 → **播放器不再是 beets 的再分发者**，GPL 义务大
 | docs/29 §16（批 D 四件套） | 实现有效，只是搬到 beets 侧 |
 | docs/31（集成验收计划） | §5 内置包验收降级为可选离线包（§8.2）；§10 合并进本文 §10；**§3 测试分层、§4 插件适配度矩阵、§6 固定调用命令继续有效**，成为 beets 侧仓库的测试基线（矩阵结论改成 `capabilities` 三态上报） |
 | docs/32（组件化调研） | §5 分发形态、§7 推荐方案（组件注册表 + 双后端）由本文取代；§4 的实测数据（89 vs 112 MB、dump 1 s、无 watcher、beets items 无 `updated_at`）继续引用 |
+
+---
+
+## 13. M1 落地记录（2026-10-27）
+
+### 13.1 做了什么
+
+新建 `crates/aiya-beets-client`（纯 Rust，不依赖 Tauri），把协议层从 `beets.rs`
+整体搬走：
+
+| 模块 | 内容 | 为什么不放在宿主 |
+|---|---|---|
+| `launch.rs` | `Launcher`：入口 + 参数 + 环境变量的启动描述 | 这是"环境知识"与"协议"的分界。crate 只认"起这个程序"，不知道它是解释器还是 exe |
+| `proto.rs` | `Envelope` / `StatusReport`（serde 名与线上 JSON 严格一致） | 协议镜像的地基；M3 的 `proto_mirror.rs` 直接对着它验 |
+| `session.rs` | 起进程、NDJSON 行读、超时收尸、会话槽、取消、`EventSink` | 与业务无关的进程生命周期，最容易两边各写一份、各漂各的 |
+| `tool.rs` | `BeetsTool` trait + `StdioTool` 实现 | 将来换常驻 worker / socket 时，`src-tauri` 调用点一个字不改 |
+| `error.rs` | `ToolError` 六分类（Spawn/Timeout/Protocol/Rejected/Busy/Io） | UI 要按失败类型给不同 UX，`String` 做不到分派 |
+
+`EventSink` 是这次唯一新增的抽象：crate 里不再有 `app.emit(...)`，
+`TauriSink` 把它接回 Tauri 事件。这层适配只有一行实质代码，但它把
+"crate 不依赖 Tauri"从约定变成了**编译期事实**。
+
+`beets.rs` 侧：删掉 `query_sidecar` / `spawn_session` / `spawn_reader` /
+`session_slot` / `session_flag` / `reserve_session` / `acquire_session` /
+`release_session` 的实现，改为 `run_session()` 一个统一入口。**环境知识
+（`ensure_script` / `beets_paths` / `interpreter_candidates` / `render_config` /
+`sidecar_env` / `start_install`）一行没动**——那是 M2 的事。
+
+### 13.2 两处对本文的修正
+
+**① §3.2 的禁词清单按"精确规则 + 豁免"落地，不是字面 grep。**
+照字面执行时，第一版门禁把 `Stdio::piped`（命中小写 `pip`）、
+`library_path`（命中 `Library`）、`pythonVersion`（协议字段）全判成违规。
+噪音化的门禁最后一定会被关掉，所以落成 `tools/check-boundary.mjs`：
+大小写敏感 + 词边界 + 两条写明理由的豁免（见 §3.2 表格）。
+
+**② `StatusReport` 的 Rust 字段名用中性词，serde 名用协议真名。**
+
+| 线上字段 | crate 标识符 | 宿主 DTO |
+|---|---|---|
+| `beetsVersion` | `tool_version` | `beets_version` |
+| `pythonVersion` | `runtime_version` | `python_version` |
+| `libraryDirectory` | `library_root` | `library_directory` |
+
+这样 crate 里连"对面是 Python 写的"都读不出来，而线上形状一个字节没变
+（`proto.rs` 的单测把 camelCase 字段名钉住，改了就红）。
+
+### 13.3 验证（全部实跑）
+
+| 项 | 结果 |
+|---|---|
+| `cargo test --workspace` | **311 passed**（原 295 + client 新增 16） |
+| 其中真进程测试 | `probe_finds_dev_venv_beets` / `probe_finds_bundled_runtime_beets` / `dump_parse_and_sync_end_to_end` 全过——走的是新 crate 的 status 查询与 dump 收集 |
+| `npm run verify` | exit 0（含 `check:boundary`、`smoke:beets` 5 场景 ALL PASS、`smoke:maint` 15 断言 ALL PASS） |
+| `npm --prefix ui run test:e2e` | 24 passed（UI 未改，作为"行为零变化"的对照） |
+| `beets.rs` 行数 | 1316 → **1044**（M2 删环境知识后目标 ~400） |
+| 边界门禁 | 12 条规则，0 违规 |
+
+### 13.4 刻意没做的事（免得被当成遗漏）
+
+- Python 源码仍 `include_str!`（M1 明确不搬，保证行为不变）
+- `interpreter_candidates` / `render_config` / `FIRST_WAVE_PLUGINS` /
+  `start_install` 原地不动
+- 协议版本校验没加（`StatusReport::speaks()` 只提供判断，不拦截——
+  现状是版本不符也照常工作）
+- `tools/pack-beets-runtime.mjs`、`tauri.conf.json` 的 `resources` 未动
+
+### 13.5 留给 M2 的接口面
+
+`src-tauri/src/beets.rs` 里现在只剩三处需要改：
+
+```rust
+// ① 发现：interpreter_candidates → client 的 locate 策略
+// ② 启动：launcher_for() → 由工具侧自报入口
+// ③ 安装：start_install → 换成"下载 + 展开 + 校验 + 跑一次 status"
+```
+
+`run_session()` / `collect_items()` / `run_sync()` 三处的形状在 M2 之后
+不需要改——它们已经只依赖 `StdioTool` + `EventSink`。

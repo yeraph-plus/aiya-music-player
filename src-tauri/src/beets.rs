@@ -3,12 +3,19 @@
 //! 探测顺序：AIYA_BEETS_PYTHON env → dev venv（仅 debug 构建）→ 系统 python。
 //! sidecar 脚本 include_str! 进二进制，写到 app_data/sidecar/（dev/release 行为一致）。
 //! v1 不捆绑 Python/beets：没装就返回 not_found，设置页给安装指引，播放功能不受影响。
+//!
+//! **进程与协议不在这里**（docs/33 M1）：起进程、写 NDJSON、超时收尸、会话
+//! 互斥、取消全部在 `aiya-beets-client`。本文件只做两件事——
+//! ① 环境侧决策（找哪个入口、带什么环境变量、配置放哪）；
+//! ② 结果侧落地（协议形状 → UI DTO、dump 结果 → 自有库对账）。
+//! M2 会把 ① 整体搬到工具侧，届时这里只剩 ②。
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
-use serde::Deserialize;
+use aiya_beets_client::{BeetsTool, EventSink, Launcher, StatusReport, StdioTool, ToolError};
 use tauri::{Emitter, Manager};
 
 /// 设置页 beets 状态区数据源。形状定义搬去 `dto::beets`（契约归 dto），
@@ -226,102 +233,65 @@ fn interpreter_candidates(app: &tauri::AppHandle) -> Vec<String> {
     out
 }
 
-/// 向解释器发一条 status/ping 请求并等响应（行帧 JSON，超时保护）。
+/// 事件出口：把 client 抽象出来的通道接到 Tauri 事件上。
+///
+/// 这层适配只有一行实质代码，但它把「crate 不依赖 Tauri」变成硬约束——
+/// client 里再也写不出 `app.emit(...)`，宿主形态也就不会渗回协议层。
+struct TauriSink(tauri::AppHandle);
+
+impl EventSink for TauriSink {
+    fn emit(&self, channel: &'static str, payload: serde_json::Value) {
+        let _ = self.0.emit(channel, payload);
+    }
+}
+
+/// 「怎么起这个工具」的完整描述：入口 + 参数 + 环境。
+///
+/// 这三样就是 docs/33 说的**环境知识**，也是 M2 要整体搬去工具侧的部分。
+/// 集中在一个函数里的好处是：将来换发现机制只改这里，所有调用点一行不动。
+fn launcher_for(python: &str, script: &str, beets_home: Option<&std::path::Path>) -> Launcher {
+    Launcher::new(python).arg(script).envs(sidecar_env(beets_home, python))
+}
+
+/// 协议报告 → UI 契约。
+///
+/// 两边字段名不同是刻意的：crate 用中性词（`tool_version` / `runtime_version` /
+/// `library_root`，因为它不知道对面是什么），UI 沿用用户看得懂的说法。
+/// 转换只在这一处，改协议时只要改这个函数。
+fn status_from_report(python: &str, script: &str, report: StatusReport) -> BeetsStatus {
+    BeetsStatus {
+        found: true,
+        interpreter: Some(python.into()),
+        script_path: Some(script.into()),
+        protocol_version: report.protocol_version,
+        beets_version: report.tool_version,
+        python_version: report.runtime_version,
+        library_path: report.library_path,
+        library_exists: report.library_exists,
+        library_directory: report.library_root,
+        plugins: report.plugins,
+        config_dir: report.config_dir,
+        error_code: None,
+        error_message: None,
+    }
+}
+
+/// 一次 status 查询，结果翻成 UI 形状。
+///
+/// 两种失败必须分开（探测循环靠这个区分"跳下一个"和"记诊断"）：
+/// - 工具**明确说不行**（`Rejected`）→ 返回 `Ok(found:false)`：解释器活着但
+///   没装工具，是继续试下一个候选的**正常信号**。
+/// - 起不来 / 超时 / 协议乱 → `Err`，循环把它当最后一条诊断记下。
 fn query_sidecar(
     python: &str,
     script: &str,
     timeout: Duration,
     beets_home: Option<&std::path::Path>,
 ) -> Result<BeetsStatus, String> {
-    let mut child = std::process::Command::new(python)
-        .arg(script)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .envs(sidecar_env(beets_home, python))
-        .spawn()
-        .map_err(|e| format!("spawn {python}: {e}"))?;
-
-    // 写请求（drop stdin 让读循环可以结束——本命令是一次性查询）
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        let _ = writeln!(stdin, r#"{{"id":1,"cmd":"status"}}"#);
-    }
-
-    // 读响应：单独线程 + 超时，避免 beets 卡住拖死宿主。
-    // 容错非 JSON 行（beets 2.14 坑⑤：新库首写会往 stdout 打迁移提示）：
-    // 循环读到第一条可解析 JSON 行才算响应。
-    //
-    // 按字节读再显式 from_utf8：`lines()` 遇非法字节直接返回 Err 并结束迭代，
-    // 调用方只看到"没拿到响应"——真正的编码问题被埋掉。这里逐行判编码，
-    // 非法行记日志后跳过（配合 sidecar_env 的 PYTHONIOENCODING，正常不会出现）。
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut stdout = child.stdout.take().expect("stdout piped");
-    std::thread::spawn(move || {
-        use std::io::BufRead;
-        let mut reader = std::io::BufReader::new(&mut stdout);
-        let mut buf: Vec<u8> = Vec::new();
-        loop {
-            buf.clear();
-            match reader.read_until(b'\n', &mut buf) {
-                Ok(0) => break,   // EOF
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(error = %e, "读 beets status 响应失败");
-                    break;
-                }
-            }
-            match std::str::from_utf8(&buf) {
-                Ok(s) => {
-                    if serde_json::from_str::<serde_json::Value>(s.trim()).is_ok() {
-                        let _ = tx.send(s.trim().to_string());
-                        break;
-                    }
-                }
-                Err(e) => tracing::warn!(
-                    error = %e,
-                    len = buf.len(),
-                    "beets 响应含非法 UTF-8 字节（PYTHONIOENCODING 未生效？），跳过该行"
-                ),
-            }
-        }
-    });
-    let line = match rx.recv_timeout(timeout) {
-        Ok(l) => l,
-        Err(_) => {
-            // 超时收尸（P2：此前直接 return，卡死的 sidecar 进程泄漏）
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!("sidecar 响应超时（{timeout:.0?}）"));
-        }
-    };
-    let _ = child.kill();
-    let _ = child.wait();
-
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Envelope {
-        ok: bool,
-        data: Option<serde_json::Value>,
-        error: Option<SidecarError>,
-    }
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct SidecarError {
-        code: String,
-        stage: String,
-        beets_message: String,
-    }
-
-    let env: Envelope =
-        serde_json::from_str(line.trim()).map_err(|e| format!("解析 sidecar 响应: {e}"))?;
-    if !env.ok {
-        let err = env.error.unwrap_or(SidecarError {
-            code: "E_UNKNOWN".into(),
-            stage: "unknown".into(),
-            beets_message: "no error detail".into(),
-        });
-        return Ok(BeetsStatus {
+    let tool = StdioTool::new(launcher_for(python, script, beets_home));
+    match tool.status(timeout) {
+        Ok(report) => Ok(status_from_report(python, script, report)),
+        Err(ToolError::Rejected { code, stage, message }) => Ok(BeetsStatus {
             found: false,
             interpreter: Some(python.into()),
             script_path: Some(script.into()),
@@ -333,29 +303,11 @@ fn query_sidecar(
             library_directory: None,
             plugins: None,
             config_dir: None,
-            error_code: Some(err.code),
-            error_message: Some(format!("[{}] {}", err.stage, err.beets_message)),
-        });
+            error_code: Some(code),
+            error_message: Some(format!("[{stage}] {message}")),
+        }),
+        Err(e) => Err(e.to_string()),
     }
-    let data = env.data.unwrap_or(serde_json::Value::Null);
-    Ok(BeetsStatus {
-        found: true,
-        interpreter: Some(python.into()),
-        script_path: Some(script.into()),
-        protocol_version: data.get("protocolVersion").and_then(|v| v.as_u64()).map(|v| v as u32),
-        beets_version: data.get("beetsVersion").and_then(|v| v.as_str()).map(Into::into),
-        python_version: data.get("pythonVersion").and_then(|v| v.as_str()).map(Into::into),
-        library_path: data.get("libraryPath").and_then(|v| v.as_str()).map(Into::into),
-        library_exists: data.get("libraryExists").and_then(|v| v.as_bool()),
-        library_directory: data.get("libraryDirectory").and_then(|v| v.as_str()).map(Into::into),
-        plugins: data
-            .get("plugins")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(Into::into)).collect()),
-        config_dir: data.get("configDir").and_then(|v| v.as_str()).map(Into::into),
-        error_code: None,
-        error_message: None,
-    })
 }
 
 /// 完整探测：按候选解释器逐个试，第一个能给出 status 的胜出。
@@ -520,256 +472,65 @@ fn pick_interpreter(app: &tauri::AppHandle, script: &str) -> Option<String> {
 
 /* ---------------- B3：会话槽 + 取消 ---------------- */
 
-/// 活跃导入会话的 stdin（preview/apply 互斥 + cancel 写入口）。
+/// 取消当前会话：写 cancel 行 → 关 stdin（对面收尾后 EOF 退出）。
 ///
-/// 所有权流转：start_* 先占 session_flag 再 spawn → spawn 完成后 stdin 放入
-/// 槽 → reader 见终止事件（done/applyDone/cancelled/sessionFailed）或进程
-/// 退出时取走 drop → cancel 命令取走、写 cancel 行再 drop。任一时刻至多
-/// 一个持有者。
-type SessionStdin = std::process::ChildStdin;
-
-fn session_slot() -> &'static std::sync::Mutex<Option<SessionStdin>> {
-    static SLOT: std::sync::OnceLock<std::sync::Mutex<Option<SessionStdin>>> =
-        std::sync::OnceLock::new();
-    SLOT.get_or_init(|| std::sync::Mutex::new(None))
-}
-
-/// 会话占用标志（spawn 前置占位）。P1：此前槽位在 spawn **之后**才 acquire，
-/// 并发 preview/apply 会双双 spawn sidecar——败者的请求行已进 sidecar 队列
-/// 会照常执行（写标签/动 beets 库），且败者没有 reader → 事件不发、进程泄漏。
-fn session_flag() -> &'static std::sync::atomic::AtomicBool {
-    static FLAG: std::sync::OnceLock<std::sync::atomic::AtomicBool> =
-        std::sync::OnceLock::new();
-    FLAG.get_or_init(|| std::sync::atomic::AtomicBool::new(false))
-}
-
-fn reserve_session() -> bool {
-    use std::sync::atomic::Ordering;
-    session_flag()
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_ok()
-}
-
-/// 占用会话槽（stdin 保管）。flag 已由 reserve_session 占住，理论上不会失败。
-fn acquire_session(stdin: SessionStdin) -> Result<(), String> {
-    let mut guard = session_slot().lock().map_err(|_| "session slot poisoned")?;
-    if guard.is_some() {
-        return Err("已有 beets 导入任务在执行（可先取消）".into());
-    }
-    *guard = Some(stdin);
-    Ok(())
-}
-
-/// 释放会话槽 + 占用标志（reader/cancel/失败路径调用）。
-fn release_session() -> Option<SessionStdin> {
-    use std::sync::atomic::Ordering;
-    session_flag().store(false, Ordering::SeqCst);
-    session_slot().lock().ok().and_then(|mut g| g.take())
-}
-
-/// 取消当前导入：写 cancel 行（sidecar 在下个检查点收尾并发 cancelled 事件）
-/// 随后关闭 stdin（工作收尾后 EOF 退出）。无活跃会话返回 false。
+/// 实现在 client crate 里（会话槽是进程级静态状态，只能有一份）。这里保留
+/// 一个同名入口是为了命令层不用知道 crate 结构。
 pub fn cancel_session() -> bool {
-    let Some(mut stdin) = release_session() else {
-        return false;
-    };
-    {
-        use std::io::Write;
-        let _ = writeln!(stdin, r#"{{"id":0,"cmd":"cancel"}}"#);
-    }
-    drop(stdin); // EOF：sidecar 工作收尾后主循环退出
-    true
+    aiya_beets_client::session::cancel()
 }
 
-/// 起一次性 sidecar 子进程并写入请求；stdin 交还调用方（保活以支持取消）。
-fn spawn_session(
-    python: &str,
-    script: &std::path::Path,
-    request: &serde_json::Value,
-    beets_home: Option<&std::path::Path>,
-) -> Result<(std::process::Child, SessionStdin), String> {
-    let mut child = std::process::Command::new(python)
-        .arg(script)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .envs(sidecar_env(beets_home, python))
-        .spawn()
-        .map_err(|e| format!("spawn beets sidecar: {e}"))?;
-
-    use std::io::Write;
-    let mut stdin = child.stdin.take().expect("stdin piped");
-    writeln!(stdin, "{request}").map_err(|e| format!("写请求: {e}"))?;
-    Ok((child, stdin))
-}
-
-/// 转发 stdout 行事件到 `event` 通道；见终止事件（done/applyDone/cancelled/
-/// sessionFailed/adoptDone/updateDone/duplicatesDone/moveDone）后关 stdin 让
-/// sidecar EOF 退出，进程退出后收尾清槽。
-/// 内置空闲看门狗：10 分钟无任何 stdout 输出判卡死（匹配是网络操作，但正常
-/// 路径每个专辑都有 progress 事件），kill 子进程并发 sessionFailed——
-/// 此前导入会话无任何超时保护，卡死即槽位永久占死。
+/// 起会话：把请求交给 client，事件转进 `channel`，结束后跑 `on_exit`。
 ///
-/// `event` 由调用方给：导入链路走 `beets:import`（前端 ImportPanel 在听），
-/// 批 D 的曲库维护走 `beets:maintenance`——两条链路语义不同，混在一个通道里
-/// 会让"导入进度条"突然收到"整理文件"的事件。
-const SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
-
-fn spawn_reader(
-    mut child: std::process::Child,
-    app: tauri::AppHandle,
-    event: &'static str,
-    on_exit: impl FnOnce(&tauri::AppHandle) + Send + 'static,
+/// `channel` 由调用方给：导入链路走 `beets:import`（ImportPanel 在听），
+/// 曲库维护走 `beets:maintenance`——两条链路语义不同，混在一个通道里会让
+/// "导入进度条"突然收到"整理文件"的事件。
+///
+/// `busy` 是并发占位失败时的文案：两条链路的用户可见说法不同（导入面板说
+/// "导入任务"，维护卡片说"任务"），保留原样免得 UI 提示语义变糊。
+fn run_session(
+    tool: StdioTool,
+    app: &tauri::AppHandle,
+    request: serde_json::Value,
+    channel: &'static str,
+    busy: &str,
+    on_exit: Box<dyn FnOnce() + Send + 'static>,
 ) -> Result<(), String> {
-    let mut stdout = child.stdout.take().expect("stdout piped");
-    // 管道线程：阻塞读原始行进 channel（超时判断在会话线程做）。
-    // 按字节 read_until + 显式 from_utf8：`lines()` 遇非法字节会 Err 并结束，
-    // 会话线程只能看到 channel 断开（= "sidecar 退出了"），编码问题完全没有痕迹。
-    // 现在非法行记 valid_up_to 日志后跳过，会话继续。
-    let (line_tx, line_rx) = std::sync::mpsc::channel::<String>();
-    let pipe_thread = std::thread::Builder::new()
-        .name("beets-pipe-recv".into())
-        .spawn(move || {
-            use std::io::BufRead;
-            let mut reader = std::io::BufReader::new(&mut stdout);
-            let mut buf: Vec<u8> = Vec::new();
-            loop {
-                buf.clear();
-                match reader.read_until(b'\n', &mut buf) {
-                    Ok(0) => break,
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::warn!(error = %e, "读 beets sidecar 输出失败");
-                        break;
-                    }
-                }
-                match std::str::from_utf8(&buf) {
-                    Ok(s) => {
-                        let s = s.trim_end().to_string();
-                        if line_tx.send(s).is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) => tracing::warn!(
-                        valid_up_to = e.valid_up_to(),
-                        len = buf.len(),
-                        "beets sidecar 输出含非法 UTF-8 字节（PYTHONIOENCODING 未生效？），丢弃该行"
-                    ),
-                }
-            }
-        });
-    if let Err(e) = pipe_thread {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(format!("起 pipe 线程: {e}"));
-    }
-
-    let session_thread = {
-        // Arc<Mutex<Child>>：会话线程持有（kill/wait），外层失败路径也要收尸
-        let child = std::sync::Arc::new(std::sync::Mutex::new(child));
-        let child_for_fail = std::sync::Arc::clone(&child);
-        let spawned = std::thread::Builder::new()
-            .name("beets-session-reader".into())
-            .spawn(move || {
-                let mut idle = SESSION_IDLE_TIMEOUT;
-                loop {
-                    match line_rx.recv_timeout(idle) {
-                        Ok(line) => {
-                            idle = SESSION_IDLE_TIMEOUT; // 有输出就续命
-                            let trimmed = line.trim();
-                            if trimmed.is_empty() {
-                                continue;
-                            }
-                            match serde_json::from_str::<serde_json::Value>(trimmed) {
-                                Ok(evt) => {
-                                    let terminal = evt.get("type").and_then(|t| t.as_str())
-                                        .is_some_and(|t| matches!(
-                                            t, "done" | "applyDone" | "cancelled" | "sessionFailed"));
-                                    let _ = app.emit(event, evt);
-                                    if terminal {
-                                        break;
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!(%e, %trimmed, "beets sidecar 非法事件行，忽略");
-                                }
-                            }
-                        }
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                            tracing::error!("beets 会话空闲超时（10 分钟无输出），看门狗终止");
-                            {
-                                let mut c = child.lock().unwrap();
-                                let _ = c.kill();
-                            }
-                            let _ = app.emit(
-                                event,
-                                serde_json::json!({
-                                    "type": "sessionFailed",
-                                    "error": {
-                                        "code": "E_SESSION_TIMEOUT", "stage": "watchdog",
-                                        "beets_message": "会话 10 分钟无输出，已被看门狗终止",
-                                    },
-                                }),
-                            );
-                            break;
-                        }
-                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break, // sidecar 退出
-                    }
-                }
-                // 关 stdin → sidecar 主循环 EOF 退出；收尸防僵尸
-                drop(release_session());
-                {
-                    let mut c = child.lock().unwrap();
-                    let _ = c.wait();
-                }
-                on_exit(&app);
-                let _ = app.emit(event, serde_json::json!({ "type": "sessionEnd" }));
-            });
-        spawned.map_err(|e| {
-            let mut c = child_for_fail.lock().unwrap();
-            let _ = c.kill();
-            let _ = c.wait();
-            drop(release_session());
-            format!("起 reader 线程: {e}")
+    let sink: Arc<dyn EventSink> = Arc::new(TauriSink(app.clone()));
+    tool.start_session(request, channel, sink, on_exit)
+        .map_err(|e| match e {
+            ToolError::Busy => busy.to_string(),
+            other => other.to_string(),
         })
-    };
-    session_thread?;
-    Ok(())
 }
 
 /// 启动一次 preview_import：一次性子进程，stdout 每行 = 一个事件，
 /// 逐行转发到 Tauri 事件 `beets:import`。完成（进程退出）后自动回收。
 ///
-/// 低频操作，不值得养常驻会话；每命令 ~300ms 的 Python 启动开销可接受。
-/// 返回 ok=false 表示没找到可用解释器（UI 显示指引）。
+/// 低频操作，不值得养常驻会话；每命令 ~300ms 的启动开销可接受。
+/// 返回 Err 表示没找到可用解释器（UI 显示指引）。
 pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
     let script = ensure_script(&app)?;
     let script_str = script.to_string_lossy().into_owned();
 
-    // 快速探测：无 beets 的解释器对 preview 同样没用，要跳过
+    // 快速探测：没有这个工具的解释器对 preview 同样没用，要跳过
     let python = pick_interpreter(&app, &script_str)
         .ok_or_else(|| "no beets interpreter available".to_string())?;
     let home = beets_paths(&app).home;
+    let tool = StdioTool::new(launcher_for(&python, &script_str, Some(&home)));
 
-    let req = serde_json::json!({ "id": 1, "cmd": "preview_import", "paths": paths });
-    // P1：先占会话标志再 spawn，失败路径释放（并发请求第二个直接被拒，
-    // 不会像以前那样 spawn 出第二个照常执行的 sidecar）
-    if !reserve_session() {
-        return Err("已有 beets 导入任务在执行（可先取消）".into());
-    }
-    let result = (|| {
-        let (child, stdin) = spawn_session(&python, &script, &req, Some(&home))?;
-        acquire_session(stdin)?;
-        spawn_reader(child, app, "beets:import", |_| {})
-    })();
-    if result.is_err() {
-        release_session();
-    }
-    result
+    run_session(
+        tool,
+        &app,
+        serde_json::json!({ "id": 1, "cmd": "preview_import", "paths": paths }),
+        "beets:import",
+        "已有 beets 导入任务在执行（可先取消）",
+        Box::new(|| {}),
+    )
 }
 
 /// B2：应用导入决策。decisions 形状由契约定义（ApplyDecision），
-/// 宿主不解释语义，只透传给 sidecar；完成后自动 beets 对齐读模型（自闭环）。
+/// 宿主不解释语义，只透传；完成后自动把工具侧结果对齐自有库（自闭环）。
 pub fn start_apply(
     app: tauri::AppHandle,
     decisions: Vec<serde_json::Value>,
@@ -780,37 +541,34 @@ pub fn start_apply(
     let python = pick_interpreter(&app, &script_str)
         .ok_or_else(|| "no beets interpreter available".to_string())?;
     let home = beets_paths(&app).home;
+    let tool = StdioTool::new(launcher_for(&python, &script_str, Some(&home)));
 
-    let req = serde_json::json!({ "id": 1, "cmd": "apply_import", "decisions": decisions });
-    // P1：同 start_preview，先占位再 spawn
-    if !reserve_session() {
-        return Err("已有 beets 导入任务在执行（可先取消）".into());
-    }
-    let result = (|| {
-        let (child, stdin) = spawn_session(&python, &script, &req, Some(&home))?;
-        acquire_session(stdin)?;
-        spawn_reader(child, app, "beets:import", move |app| {
+    // on_exit 里拿一份 AppHandle（会话线程要能独立跑，不能借用 &app）
+    let exit_app = app.clone();
+    run_session(
+        tool,
+        &app,
+        serde_json::json!({ "id": 1, "cmd": "apply_import", "decisions": decisions }),
+        "beets:import",
+        "已有 beets 导入任务在执行（可先取消）",
+        Box::new(move || {
             if let Some(params) = refresh {
-                // 自闭环（docs/08 §5）：beets 刚写完库就是最新权威，
+                // 自闭环（docs/08 §5）：工具刚写完库就是最新权威，
                 // 直接全量对齐自有 DB，替代旧"重扫受影响目录"路径。
-                run_sync(app, params);
+                run_sync(&exit_app, params);
             }
-        })
-    })();
-    if result.is_err() {
-        release_session();
-    }
-    result
+        }),
+    )
 }
 
 /// 批 D 曲库维护任务的统一入口（adopt / update / duplicates / move）。
 ///
-/// 四条命令的公共部分完全一样：占会话槽 → 起一次性 sidecar → 事件流走
+/// 四条命令的公共部分完全一样：占会话位 → 起一次性子进程 → 事件流走
 /// `beets:maintenance` → 进程退出后按需跑一次读模型对账。差别只有 req 载荷
-/// 和"要不要对账"，所以合成一个函数，避免四份几乎相同的 spawn 代码各自漂移
-/// （漏了 release_session、漏了 ensure_config 之类）。
+/// 和"要不要对账"，所以合成一个函数，避免四份几乎相同的代码各自漂移
+/// （漏了释放、漏了 ensure_config 之类）。
 ///
-/// `refresh` 为什么只有 adopt/move 给：这两条会改 beets 库的**内容与路径**——
+/// `refresh` 为什么只有 adopt/move 给：这两条会改库的**内容与路径**——
 /// adopt 把文件登记进库（对账后 `tracks.beets_item_id` 才有值，而后续 move
 /// 的路径跟随正是靠这个双键，docs/29 §12）；move 把文件搬走，路径漂移必须
 /// 立刻跟随，不能等用户下次扫描。update 只改标签（路径不变）、duplicates
@@ -824,30 +582,28 @@ fn start_maintenance(
     let script_str = script.to_string_lossy().into_owned();
     let python = pick_interpreter(&app, &script_str)
         .ok_or_else(|| "no beets interpreter available".to_string())?;
-    // move 的目标根只认 config.yaml 的 directory（sidecar 侧有硬校验），
-    // 确保它存在后再起会话；这里失败不算致命——真缺的话 sidecar 会给出
+    // move 的目标根只认配置里显式写的 directory（工具侧有硬校验），
+    // 确保它存在后再起会话；这里失败不算致命——真缺的话对面会给出
     // "没有 directory"的明确错误
     if let Err(e) = ensure_config(&app) {
         tracing::warn!(error = %e, "维护任务前生成 beets config 失败");
     }
     let home = beets_paths(&app).home;
+    let tool = StdioTool::new(launcher_for(&python, &script_str, Some(&home)));
 
-    if !reserve_session() {
-        return Err("已有 beets 任务在执行（可先取消）".into());
-    }
-    let result = (|| {
-        let (child, stdin) = spawn_session(&python, &script, &payload, Some(&home))?;
-        acquire_session(stdin)?;
-        spawn_reader(child, app, "beets:maintenance", move |app| {
+    let exit_app = app.clone();
+    run_session(
+        tool,
+        &app,
+        payload,
+        "beets:maintenance",
+        "已有 beets 任务在执行（可先取消）",
+        Box::new(move || {
             if let Some(params) = refresh {
-                run_sync(app, params);
+                run_sync(&exit_app, params);
             }
-        })
-    })();
-    if result.is_err() {
-        release_session();
-    }
-    result
+        }),
+    )
 }
 
 /// 建 beets 库基线：把自有库里的文件按现状登记进 beets 库。
@@ -963,56 +719,28 @@ fn collect_items(
     script: &std::path::Path,
     beets_home: Option<&std::path::Path>,
 ) -> Result<Vec<aiya_data::beets_sync::BeetsItem>, String> {
-    let (child, stdin) = spawn_session(
-        python,
-        script,
+    let launcher = launcher_for(python, &script.to_string_lossy(), beets_home);
+    let (child, stdin) = aiya_beets_client::session::spawn_session(
+        &launcher,
         &serde_json::json!({ "id": 1, "cmd": "dump_items" }),
-        beets_home,
-    )?;
-    // dump 是一次性收集：不留 stdin 挂着，sidecar 处理完 EOF 退出
+    )
+    .map_err(|e| e.to_string())?;
+    // dump 是一次性收集：不留 stdin 挂着，对面处理完 EOF 退出
     drop(stdin);
     let child = std::sync::Arc::new(std::sync::Mutex::new(child));
-    let mut stdout = {
+    let stdout = {
         let mut c = child.lock().map_err(|_| "child lock poisoned")?;
         c.stdout.take().expect("stdout piped")
     };
 
-    // 读线程：逐行带编码检查地送进 channel（超时/收尸在主线程）
+    // 读线程：逐行带编码检查地送进 channel（超时/收尸在主线程）。
+    // 编码处理与事件链路共用同一份实现，避免两处各自漂移。
     let (tx, rx) = std::sync::mpsc::channel::<String>();
-    {
-        let spawned = std::thread::Builder::new()
-            .name("beets-dump-recv".into())
-            .spawn(move || {
-                use std::io::BufRead;
-                let mut reader = std::io::BufReader::new(&mut stdout);
-                let mut buf: Vec<u8> = Vec::new();
-                loop {
-                    buf.clear();
-                    match reader.read_until(b'\n', &mut buf) {
-                        Ok(0) => break,
-                        Ok(_) => {}
-                        Err(_) => break,
-                    }
-                    match std::str::from_utf8(&buf) {
-                        Ok(s) => {
-                            if tx.send(s.trim_end().to_string()).is_err() {
-                                break;
-                            }
-                        }
-                        Err(e) => tracing::warn!(
-                            valid_up_to = e.valid_up_to(),
-                            len = buf.len(),
-                            "dump 输出含非法 UTF-8 字节，丢弃该行"
-                        ),
-                    }
-                }
-            });
-        if let Err(e) = spawned {
-            let mut c = child.lock().map_err(|_| "child lock poisoned")?;
-            let _ = c.kill();
-            let _ = c.wait();
-            return Err(format!("起 dump 读线程: {e}"));
-        }
+    if let Err(e) = aiya_beets_client::session::spawn_line_reader(stdout, tx, "beets-dump-recv") {
+        let mut c = child.lock().map_err(|_| "child lock poisoned")?;
+        let _ = c.kill();
+        let _ = c.wait();
+        return Err(format!("起 dump 读线程: {e}"));
     }
 
     let mut items = Vec::new();
@@ -1021,7 +749,7 @@ fn collect_items(
         match rx.recv_timeout(DUMP_TIMEOUT) {
             Ok(line) => {
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
-                    continue; // 非 JSON 行（beets 新库迁移提示等）
+                    continue; // 非 JSON 行（首次初始化时的迁移提示等）
                 };
                 match v.get("type").and_then(|t| t.as_str()) {
                     Some("item") => {
