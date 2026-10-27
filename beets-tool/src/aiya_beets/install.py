@@ -30,6 +30,13 @@ from pathlib import Path
 
 from . import env
 
+# Windows 上 pip / 解释器都是控制台程序，而调用它们的本进程是从播放器
+# （GUI 子系统）经 CREATE_NO_WINDOW 拉起的 —— 自己**没有**控制台。
+# 关键：父进程的 CREATE_NO_WINDOW **不会**传给子进程，所以每个子进程都会
+# 被 Windows 分配一个新的黑窗（用户点一次「安装组件」能连看好几个框）。
+# 每处 subprocess 都要单独补；POSIX 上没这个参数，用空 dict 绕过。
+_NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+
 
 def emit(obj: dict) -> None:
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
@@ -86,8 +93,22 @@ def main(argv: list[str] | None = None) -> int:
     if not py.exists():
         emit({"type": "progress", "stage": "venv", "message": f"创建虚拟环境 {target}"})
         try:
-            # with_pip=True 走 ensurepip（系统 Python 自带），不联网
-            venv.create(str(target), with_pip=True, clear=False)
+            # with_pip=False + 自己跑 ensurepip：EnvBuilder 内部用
+            # subprocess.check_output 调 ensurepip，没有地方传 creationflags，
+            # 在无控制台的父进程下会单独闪一个黑窗。命令与它内部完全相同
+            # （-Im ensurepip --upgrade --default-pip），只是句柄可控。
+            venv.create(str(target), with_pip=False, clear=False)
+            pip_setup = subprocess.run(
+                [str(py), "-Im", "ensurepip", "--upgrade", "--default-pip"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                **_NO_WINDOW,
+            )
+            if pip_setup.returncode != 0:
+                detail = (pip_setup.stderr or pip_setup.stdout).strip()[:300]
+                raise RuntimeError(f"ensurepip 退出码 {pip_setup.returncode}：{detail}")
         except Exception as e:  # noqa: BLE001 —— 任何失败都要报给 UI，不能静默
             emit({"type": "error", "stage": "venv", "message": f"{type(e).__name__}: {e}"})
             return 3
@@ -116,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
         errors="replace",
         env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+        **_NO_WINDOW,
     ) as proc:
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -136,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
         errors="replace",
         env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+        **_NO_WINDOW,
     )
     if check.returncode != 0:
         emit({"type": "error", "stage": "verify", "message": check.stderr.strip()[:500]})

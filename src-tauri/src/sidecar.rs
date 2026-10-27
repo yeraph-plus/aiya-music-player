@@ -184,12 +184,19 @@ fn connect_once(
     shared: &Arc<Shared>,
 ) -> Result<Connection, String> {
     let pipe = format!(r"\\.\pipe\{pipe_base}-{generation}");
-    let child = Command::new(host_exe)
-        .args(["--pipe", &pipe])
+    let mut cmd = Command::new(host_exe);
+    cmd.args(["--pipe", &pipe])
         .stdout(Stdio::null())
         // stderr 落 {app_data}/logs/sidecar.log：引擎进程自己的 tracing
         // 此前被 Stdio::null() 丢掉，崩溃/设备失败完全没有痕迹
-        .stderr(crate::logging::sidecar_stderr())
+        .stderr(crate::logging::sidecar_stderr());
+
+    // 不给子进程分配控制台：audio-host 是控制台子系统程序（为了 --selftest
+    // 能正常输出，见那个 crate 顶部注释），被 GUI 主进程拉起时 Windows 会给它
+    // 新建一个黑窗。这个标志是父进程侧的闸门，子进程自己改 subsystem 管不到。
+    crate::proc::no_window(&mut cmd);
+
+    let child = cmd
         .spawn()
         .map_err(|e| format!("启动 sidecar 失败：{e}"))?;
     *shared.child.lock().unwrap() = Some(child);

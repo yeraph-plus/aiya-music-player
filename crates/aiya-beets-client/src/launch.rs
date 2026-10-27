@@ -78,6 +78,18 @@ impl Launcher {
         if let Some(dir) = &self.working_dir {
             cmd.current_dir(dir);
         }
+        // 这个工具是控制台程序（解释器或套件包里的可执行文件都一样），从
+        // 播放器（GUI 子系统）拉起时 Windows 会单独分配一个黑窗，一直杵到
+        // 操作结束。CREATE_NO_WINDOW 压掉它。
+        //
+        // 上面的 stdio 三项都显式赋值了（管道/null），不依赖继承控制台 ——
+        // 该标志恰好也会掐掉继承，所以不用额外处理。
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
         cmd
     }
 

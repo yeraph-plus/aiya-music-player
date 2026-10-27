@@ -533,10 +533,14 @@ fn fetch_asset(
 /// beets 知识；装什么、装到哪由安装器自己决定（它只接受 `--target`）。
 fn find_system_python() -> Option<String> {
     for cand in ["python", "python3"] {
-        let ok = std::process::Command::new(cand)
+        let mut probe = std::process::Command::new(cand);
+        probe
             .arg("-V")
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // Python 是控制台程序：不加这个，点「安装组件」时先闪一个黑框
+        crate::proc::no_window(&mut probe);
+        let ok = probe
             .status()
             .map(|s| s.success())
             .unwrap_or(false);
@@ -561,15 +565,18 @@ fn install_via_installer(
         "message": format!("用 {python} 安装组件到 {}", target.display()),
     }));
 
-    let mut child = std::process::Command::new(&python)
-        .arg(pyz)
+    let mut cmd = std::process::Command::new(&python);
+    cmd.arg(pyz)
         .arg("install")
         .arg("--target")
         .arg(&target)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .envs(tool_env(app))
+        .envs(tool_env(app));
+    // 安装要跑几十秒，黑框会一直杵在那儿——比一闪而过更难看
+    crate::proc::no_window(&mut cmd);
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("启动安装器失败：{e}"))?;
 

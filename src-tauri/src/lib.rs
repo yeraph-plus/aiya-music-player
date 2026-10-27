@@ -36,6 +36,7 @@ mod beets;
 pub mod dto;
 mod logging;
 mod paths;
+mod proc;
 mod pump;
 mod refresh;
 mod sidecar;

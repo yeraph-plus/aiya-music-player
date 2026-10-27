@@ -10,6 +10,20 @@
 //! 协议（aiya_audio::proto）：握手 Hello/Welcome 校验 `PROTOCOL_VERSION`，
 //! 不兼容直接退出（exit 2），不静默降级；下行每 1s 心跳（host 侧 5s 超时 kill+restart）。
 
+// 这里**刻意不加** `#![windows_subsystem = "windows"]`（主程序 src-tauri/src/main.rs
+// 有，它是 GUI 程序）。本进程保持控制台子系统（PE subsystem = 3），原因：
+//
+//   - 黑窗不是靠改这里解决的，是宿主 spawn 时的 CREATE_NO_WINDOW
+//     （src-tauri/src/sidecar.rs）。那是父进程侧的闸门，对该 CUI 子进程同样有效，
+//     而且不依赖 exe 自身的链接方式。
+//   - 改成 GUI 子系统会**真的弄丢** `--selftest` 的输出：实测在 PowerShell 里
+//     `& aiya-audio-host.exe --selftest > out.txt` 得到 0 字节（PowerShell 不为
+//     GUI 子系统程序接管 stdout，也不等它）。Git Bash 下能拿到是因为 msys 走管道，
+//     换个 shell 就复发——这种"只在某些 shell 下能用"的诊断工具比没有更坏。
+//
+// 双击本 exe 会闪一下黑框（然后 exit 64「缺少 --pipe 参数」），这是保留 CUI 的
+// 唯一代价；它本就不是给人双击的。
+
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
 use std::sync::mpsc;
