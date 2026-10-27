@@ -22,6 +22,8 @@ export type {
   ScanOptions,
   /** beets 应用决策（`candidate` 原样回传，宿主不解读） */
   ApplyDecision,
+  /** beets 工具的安装轨道（installer = 要系统 Python / bundle = 自带解释器） */
+  BeetsInstallTrack,
   /** 没有固定形状的载荷（设置 / UiState） */
   DynamicJson,
 } from './client';

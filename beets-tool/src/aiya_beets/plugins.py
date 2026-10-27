@@ -1,0 +1,97 @@
+"""插件能力自检：声明清单 + 三态上报。
+
+## 为什么需要这个模块（docs/31 P0-1）
+
+`config['plugins']` 是**愿望清单**：写着 `lyrics` 不等于 lyrics 能用。
+实测（beets 2.14.1）：`plugins.load_plugins()` 对插件导入异常**只写日志、
+不抛错**，于是缺 `bs4` 的 lyrics 照样"加载成功"，而真正调用时才炸。
+宿主如果按 config 里列的名字判断能力，必然假绿。
+
+所以能力只能自报，且必须三态：
+    ready        插件存在 + 依赖齐全 → 真能干活
+    missing_deps 插件存在但依赖缺 → 界面上写清楚缺什么
+    unavailable  当前 beets 版本里没这个插件（升级/裁剪导致）
+
+检测方式刻意**不 import 插件模块**：`beetsplug.lyrics` 导入失败时
+sys.modules 会留下半成品，重试行为不可预测；而且导入有注册钩子副作用。
+用 `importlib.util.find_spec` 只看"包在不在"，零副作用。
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import shutil
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class PluginSpec:
+    """一个插件声明：叫什么、依赖什么、为什么开它。"""
+
+    name: str
+    py_deps: tuple[str, ...] = ()
+    exe_deps: tuple[str, ...] = ()
+    note: str = ""
+
+
+# 首发档插件（原先是播放器 Rust 里的 FIRST_WAVE_PLUGINS，docs/33 §3.1 搬到这边）。
+# 现在每个都带"为什么开它"和"它还需要什么"——这才是能维护的形态。
+DEFAULT_PLUGINS: tuple[PluginSpec, ...] = (
+    PluginSpec("replaygain", exe_deps=("ffmpeg",), note="提供 gain_db，引擎链路直接消费"),
+    PluginSpec("lyrics", py_deps=("bs4",), note="歌词抓取，LRC 字段可直供"),
+    PluginSpec("fromfilename", note="无标签文件按文件名兜底猜"),
+    PluginSpec("duplicates", note="库内查重（维护四件套之一）"),
+    PluginSpec("scrub", note="导入时清掉脏标签"),
+    PluginSpec("smartplaylist", note="beets 查询导出 m3u，与推荐页衔接"),
+)
+
+READY = "ready"
+MISSING_DEPS = "missing_deps"
+UNAVAILABLE = "unavailable"
+
+
+def _has_module(name: str) -> bool:
+    """只查"包在不在"，不执行模块代码。"""
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def capability_report(enabled: list[str] | None = None) -> list[dict]:
+    """逐个声明插件给三态。
+
+    `enabled` = config.yaml 里实际写着的插件名（None = 全部声明都算）。
+    未在 enabled 里的插件仍然上报（状态里带 `enabled: false`）——
+    用户需要知道"有这个东西，但我没开"，而不是从列表里消失。
+    """
+    enabled_set = set(enabled or [])
+    report = []
+    for spec in DEFAULT_PLUGINS:
+        missing_py = [d for d in spec.py_deps if not _has_module(d)]
+        missing_exe = [d for d in spec.exe_deps if shutil.which(d) is None]
+        missing = missing_py + missing_exe
+        if not _has_module(f"beetsplug.{spec.name}"):
+            state = UNAVAILABLE
+        elif missing:
+            state = MISSING_DEPS
+        else:
+            state = READY
+        report.append(
+            {
+                "name": spec.name,
+                "state": state,
+                "enabled": spec.name in enabled_set,
+                "missing": missing,
+                "note": spec.note,
+            }
+        )
+    return report
+
+
+def summary(report: list[dict]) -> dict:
+    """给 UI 一行话用的计数：ready / missing / unavailable 各几个。"""
+    counts = {READY: 0, MISSING_DEPS: 0, UNAVAILABLE: 0}
+    for item in report:
+        counts[item["state"]] = counts.get(item["state"], 0) + 1
+    return counts

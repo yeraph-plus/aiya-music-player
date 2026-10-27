@@ -2,7 +2,7 @@ import type { BeetsStatus, Diagnostics } from '../lib/ipc';
 import type { TrackSort } from '../lib/query';
 import type { AppSettings } from '../lib/settings';
 import { DEFAULT_SETTINGS } from '../lib/settings';
-import { ipc, events, type DynamicJson } from '../lib/ipc';
+import { ipc, events, type BeetsInstallTrack, type DynamicJson } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
 import { devValidate, settingsSchema, uiStateSchema, type UiState } from '../lib/ipc/schema';
 import {
@@ -461,8 +461,9 @@ class UiStore {
    * 放在 ui store 而不是组件里：进度来自事件流，而"组件不直接 listen"是
    * docs/17 §4 的硬约定（多个组件同时开时事件会被订阅多次）。
    */
-  beetsInstall = $state<{ running: boolean; stage: string; message: string; error: string | null }>({
+  beetsInstall = $state<{ running: boolean; track: BeetsInstallTrack; stage: string; message: string; error: string | null }>({
     running: false,
+    track: 'installer',
     stage: '',
     message: '',
     error: null,
@@ -476,26 +477,44 @@ class UiStore {
       const message = typeof e.message === 'string' ? e.message : '';
       if (type === 'finished') {
         // 终态带 status：装没装成以 probe 为准，不以退出码为准
-        this.beetsInstall = { running: false, stage: 'done', message: '', error: null };
+        this.beetsInstall = { running: false, track: this.beetsInstall.track, stage: 'done', message: '', error: null };
         const status = e.status;
         if (status && typeof status === 'object') this.beets = status as BeetsStatus;
         return;
       }
       if (type === 'error') {
-        this.beetsInstall = { running: false, stage, message, error: message || '安装失败' };
+        this.beetsInstall = {
+          running: false,
+          track: this.beetsInstall.track,
+          stage,
+          message,
+          error: message || '安装失败',
+        };
         return;
       }
-      this.beetsInstall = { running: true, stage, message, error: null };
+      this.beetsInstall = { running: true, track: this.beetsInstall.track, stage, message, error: null };
     });
   }
 
-  /** 触发安装（失败立刻抛出：没有系统 Python 这种情况要在按钮旁说清楚） */
-  async installBeets(): Promise<void> {
-    this.beetsInstall = { running: true, stage: 'venv', message: '正在准备…', error: null };
+  /**
+   * 触发安装（docs/33 §6.2）。
+   *
+   * 两条轨道都只是「下载 → 展开 → 记入口 → 跑一次 status」；选哪条由用户的
+   * 机器决定（没 Python 只能走 bundle），所以这里不做任何预判，把失败原样
+   * 抛给按钮旁的文字。
+   */
+  async installBeets(track: BeetsInstallTrack = 'installer'): Promise<void> {
+    this.beetsInstall = {
+      running: true,
+      track,
+      stage: 'download',
+      message: '正在准备…',
+      error: null,
+    };
     try {
-      await ipc.beets.install();
+      await ipc.beets.install(track);
     } catch (e) {
-      this.beetsInstall = { running: false, stage: '', message: '', error: errorMessage(e) };
+      this.beetsInstall = { running: false, track, stage: '', message: '', error: errorMessage(e) };
     }
   }
 

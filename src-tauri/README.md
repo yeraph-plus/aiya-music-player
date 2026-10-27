@@ -7,7 +7,8 @@ Tauri 2 宿主只做适配与系统集成：
 - `aiya-artwork://` 协议；
 - SMTC（隐藏顶层窗口 + WinRT）；
 - audio sidecar supervisor（v1 原生 `aiya-audio-host`，ADR-0006；启动/握手/心跳/重启）；
-- beets bridge（spawn Python sidecar，stdio JSON；只在用户启用时启动）；
+- beets 工具桥（发现入口 → 起 `aiya-beets` 进程 → stdio NDJSON；没装就一句可解释的「未找到」，
+  播放链路完全不经过它）；
 - 日志、panic hook、诊断指标导出。
 
 不在这里写 SQL、解码、队列规则。具体边界见 [`../docs/03-backend-boundary.md`](../docs/03-backend-boundary.md)。

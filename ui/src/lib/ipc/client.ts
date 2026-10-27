@@ -114,6 +114,18 @@ export type ApplyDecision = {
 /** 没有固定形状的载荷（设置/UI 状态）：由 zod 兜住，见 `schema.ts`。 */
 export type DynamicJson = Record<string, unknown>;
 
+/**
+ * beets 工具的两条安装轨道（docs/33 §6.2）。
+ *
+ * - `installer`：`.pyz` 安装器，用**系统** Python 建 venv。体积小，但要求机器上
+ *   有 3.10–3.14 的 Python。
+ * - `bundle`：免安装套件包，自带解释器（约 31MB 下载 / 112MB 落盘），解压即用。
+ *
+ * 播放器对两者做同一件事：下载 → 展开 → 记入口 → 跑一次 status 验证。
+ * 它**不判断**哪条更合适——那是用户的机器状况决定的。
+ */
+export type BeetsInstallTrack = 'installer' | 'bundle';
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
 }
@@ -281,16 +293,17 @@ export const ipc = {
     cancel: () => call<CancelRequested>('beets_cancel'),
     /** 手动触发 beets → 自有读模型全量对齐；汇总走 `librarySynced` 事件 */
     sync: () => call<JobStarted>('beets_sync'),
-    /** 起 beets web 并用系统浏览器打开（高级用户外链出口，docs/29 §12） */
-    webOpen: () => call<string>('beets_web_open'),
     /**
-     * 安装 beets 运行时到应用数据目录（docs/29 批 C）。
+     * 装 beets 工具到应用数据目录（docs/33 §6.2 两条轨道）。
      *
-     * 只覆盖"随包运行时缺失 且 机器有 Python"这条路（用系统 Python 建 venv）。
-     * 立刻返回「已启动」，进度走 `beets:install` 事件，最后一条是
-     * `{type:"finished", status}` —— 装完能不能用由 probe 说了算。
+     * 播放器只做「下载 → 展开 → 记入口 → 跑一次 status 验证」，成功判据是
+     * probe 的 `found`，**不是**退出码。立刻返回「已启动」，进度走
+     * `beets:install` 事件，最后一条是 `{type:"finished", status}`。
+     *
+     * `track` 缺省 = `installer`（体积小、优先试；机器没 Python 会明确报错，
+     * 再由用户改选 `bundle`）。
      */
-    install: () => call<JobStarted>('beets_install'),
+    install: (track: BeetsInstallTrack = 'installer') => call<JobStarted>('beets_install', { track }),
 
     /*
      * ---- 批 D：曲库维护四件套 ----

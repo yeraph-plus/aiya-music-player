@@ -3,7 +3,10 @@
 本安装包内含 GPL-3.0-or-later 程序：
   - aiya.exe（AIYA Music 主程序）
   - aiya-audio-host.exe（音频引擎 sidecar）
-  - beets_sidecar.py（beets 协议桥）
+
+本安装包**不含 beets 工具**（docs/33 两侧分离）。beets 工具（Python 包
+`aiya-beets`）是独立的可选组件，按 GPL-3.0-or-later 单独发布，其源码与本
+程序同一仓库（`beets-tool/`）；用户也可以完全不装它，播放与曲库不受影响。
 
 对应源码可从以下位置取得（版本号见应用「关于」页 / 安装包文件名）：
   https://github.com/aiya-music/aiya-music

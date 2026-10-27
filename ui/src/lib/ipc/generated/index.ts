@@ -11,6 +11,8 @@ export * from './AudioErrorCode';
 export * from './AudioModeEvent';
 export * from './AudioModeInfo';
 export * from './AudioSource';
+export * from './BeetsPluginHealth';
+export * from './BeetsPluginSummary';
 export * from './BeetsStatus';
 export * from './CancelRequested';
 export * from './ChosenRoot';

@@ -176,14 +176,24 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
         found: true,
         interpreter: 'preview',
         scriptPath: null,
+        entrySource: 'settings',
         protocolVersion: 3,
         beetsVersion: '2.14.1 (preview)',
         pythonVersion: '3.14 (preview)',
+        pythonSupported: true,
         libraryPath: 'D:/MUSIC_Player/test-music/.beets/library.db',
         libraryExists: true,
         libraryDirectory: 'D:/MUSIC_Player/test-music',
         plugins: ['replaygain', 'lyrics', 'duplicates'],
+        // 三态自检：与真工具同形状（含"配置里开着但依赖没装"这一态，docs/31 P0-1）
+        pluginHealth: [
+          { name: 'replaygain', state: 'ready', enabled: true, missing: [], note: '响度归一化，需要 ffmpeg' },
+          { name: 'lyrics', state: 'missing_deps', enabled: true, missing: ['bs4'], note: '歌词抓取' },
+          { name: 'duplicates', state: 'ready', enabled: true, missing: [], note: '查找重复曲目' },
+        ],
+        pluginSummary: { ready: 2, missingDeps: 1, unavailable: 0 },
         configDir: 'D:/MUSIC_Player/test-music/.beets',
+        dataHome: 'D:/MUSIC_Player/test-music/.aiya-beets',
         errorCode: null,
         errorMessage: null,
       };
@@ -197,13 +207,10 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return mock.beetsSync();
     case 'beets_cancel':
       return { requested: false };
-    // 预览里没有 beets 环境，也不该真的拉浏览器：回"未找到"语义
-    case 'beets_web_open':
-      throw mockError('beets_web_open');
-    // 安装运行时同理：预览环境不装东西，但要把事件流的形状演一遍，
-    // 好让 UI 的进度/终态渲染在浏览器里也能验证
+    // 安装工具同理：预览环境不装东西，但要把事件流的形状演一遍，
+    // 好让 UI 的进度/终态渲染在浏览器里也能验证。两条轨道都演练到。
     case 'beets_install':
-      return mock.beetsInstall();
+      return mock.beetsInstall(a.track === 'bundle' ? 'bundle' : 'installer');
     // ---- 批 D：曲库维护四件套（事件流演练，见 MockBackend.beetsMaintenance）----
     case 'beets_adopt':
       return mock.beetsMaintenance('adopt', false);

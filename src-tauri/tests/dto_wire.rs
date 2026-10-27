@@ -423,16 +423,31 @@ fn small_result_dtos_keep_their_exact_keys() {
 fn beets_status_protocol_version_is_number() {
     let st = aiya_lib::dto::beets::BeetsStatus {
         found: true,
-        interpreter: Some("python".into()),
+        interpreter: Some("aiya-beets.exe".into()),
         script_path: None,
+        entry_source: Some("settings".into()),
         protocol_version: Some(3),
         beets_version: Some("2.14.1".into()),
         python_version: None,
+        python_supported: Some(true),
         library_path: None,
         library_exists: Some(true),
         library_directory: Some("D:\\Music".into()),
-        plugins: Some(vec!["fetchart".into()]),
+        plugins: Some(vec!["alpha".into()]),
+        plugin_health: Some(vec![aiya_lib::dto::beets::BeetsPluginHealth {
+            name: "alpha".into(),
+            state: "ready".into(),
+            enabled: true,
+            missing: vec![],
+            note: String::new(),
+        }]),
+        plugin_summary: Some(aiya_lib::dto::beets::BeetsPluginSummary {
+            ready: 1,
+            missing_deps: 0,
+            unavailable: 0,
+        }),
         config_dir: None,
+        data_home: None,
         error_code: None,
         error_message: None,
     };
@@ -443,6 +458,16 @@ fn beets_status_protocol_version_is_number() {
     // 库根目录：UI 用它显示"整理到 <dir>"，并在 null 时禁用整理文件
     assert_eq!(v["libraryDirectory"], "D:\\Music");
     assert!(v["scriptPath"].is_null());
+    // 入口来源与能力三态：设置页靠它们回答"为什么用的这个 / 到底能干什么"
+    assert_eq!(v["entrySource"], "settings");
+    assert_eq!(v["pluginHealth"][0]["state"], "ready");
+    assert_eq!(v["pluginSummary"]["missingDeps"], 0);
+    assert!(v["pythonSupported"].is_boolean());
+    // 入口来源与能力三态：设置页要靠它们回答"为什么用的这个 / 到底能干什么"
+    assert_eq!(v["entrySource"], "settings");
+    assert_eq!(v["pluginHealth"][0]["state"], "ready");
+    assert_eq!(v["pluginSummary"]["missingDeps"], 0);
+    assert!(v["pythonSupported"].is_boolean());
 }
 
 /// 诊断页两张表的 wire 形状。

@@ -39,8 +39,7 @@
       "../LICENSE": "licenses/LICENSE",
       "../licenses/THIRD-PARTY-NOTICES.md": "licenses/THIRD-PARTY-NOTICES.md",
       "../licenses/CARGO-DEPS.md": "licenses/CARGO-DEPS.md",
-      "../licenses/SOURCE-OFFER.txt": "licenses/SOURCE-OFFER.txt",
-      "../tools/beets-runtime": "beets-runtime"
+      "../licenses/SOURCE-OFFER.txt": "licenses/SOURCE-OFFER.txt"
     },
     "publisher": "AIYA Music",
     "copyright": "GPL-3.0-or-later",

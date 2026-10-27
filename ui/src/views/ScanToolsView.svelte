@@ -119,15 +119,30 @@
         {#if beets?.found}
           <div class="diag-grid">
             <div class="wide"><span>曲库</span><b class="path" title={beets.libraryPath ?? ''}>{beets.libraryExists ? shortenPath(beets.libraryPath ?? '') : '尚未创建（首次导入时生成）'}</b></div>
-            <div class="wide"><span>插件</span><b>{beets.plugins?.length ? beets.plugins.join(', ') : '无'}</b></div>
+            <div class="wide"><span>入口</span><b>{beets.entrySource ?? '未知'}</b></div>
             <div class="wide"><span>配置目录</span><b class="path" title={beets.configDir ?? ''}>{shortenPath(beets.configDir ?? '')}</b></div>
           </div>
+          {#if beets.pluginHealth?.length}
+            <div class="plugin-list">
+              {#each beets.pluginHealth as p (p.name)}
+                <div class="plugin-row" data-state={p.state}>
+                  <b>{p.name}</b>
+                  <span class="plugin-state">
+                    {p.state === 'ready' ? '可用' : p.state === 'missing_deps' ? '缺依赖' : '不可用'}
+                  </span>
+                  {#if p.missing.length}<span class="dim">缺 {p.missing.join('、')}</span>{/if}
+                  {#if p.note}<span class="dim">{p.note}</span>{/if}
+                </div>
+              {/each}
+            </div>
+          {:else if beets.plugins?.length}
+            <div class="dim">配置里启用的插件：{beets.plugins.join(', ')}（工具未提供自检结果）</div>
+          {/if}
           <div class="dim">标签匹配/候选/diff 由 beets 完成（写权威）；未安装时播放功能不受影响。</div>
         {:else if beets}
           <div class="dim">
-            安装后重启应用即可启用导入整理功能：
-            <code>pipx install beets</code> 或 <code>uv tool install beets</code>（推荐），
-            或 <code>pip install beets</code>。
+            还没装 beets 工具。到「扫描入库」页点「快速安装」（需系统 Python 3.10–3.14）
+            或「免安装包」（自带运行时，不依赖系统 Python）。
             {#if beets.errorMessage}
               <br /><span class="danger">{beets.errorMessage}</span>
             {/if}

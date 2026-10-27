@@ -1,17 +1,17 @@
-//! beets sidecar 宿主侧：解释器探测 + status 查询（docs/08-beets.md B0）。
+//! beets 侧工具（`aiya-beets`）的宿主侧：**发现入口 + 结果落地**。
 //!
-//! 探测顺序：AIYA_BEETS_PYTHON env → dev venv（仅 debug 构建）→ 系统 python。
-//! sidecar 脚本 include_str! 进二进制，写到 app_data/sidecar/（dev/release 行为一致）。
-//! v1 不捆绑 Python/beets：没装就返回 not_found，设置页给安装指引，播放功能不受影响。
+//! 这个文件里**不再有 beets 的环境知识**（docs/33 M2）：
+//! 没有 include_str!、没有解释器探测、没有 config.yaml 拼装、没有插件清单。
+//! 播放器只做两件事：
+//!   ① 找到工具的入口（四个来源，见 `discover`），带上数据目录起进程；
+//!   ② 把工具报回来的结果落地（协议形状 → UI DTO、dump → 自有库对账）。
 //!
-//! **进程与协议不在这里**（docs/33 M1）：起进程、写 NDJSON、超时收尸、会话
-//! 互斥、取消全部在 `aiya-beets-client`。本文件只做两件事——
-//! ① 环境侧决策（找哪个入口、带什么环境变量、配置放哪）；
-//! ② 结果侧落地（协议形状 → UI DTO、dump 结果 → 自有库对账）。
-//! M2 会把 ① 整体搬到工具侧，届时这里只剩 ②。
+//! 工具怎么装、装到哪、配置怎么写、开哪些插件，全归 `beets-tool/` 那边。
+//! 唯一共享的东西是数据目录约定 `{app_data}/beets`（docs/33 §3.1）。
+//!
+//! **未安装时核心播放功能必须全通**——beets 是增强能力，不是依赖。
 
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,215 +22,212 @@ use tauri::{Emitter, Manager};
 /// 这里 `pub use` 回来，本文件其余调用点不用改。
 pub use crate::dto::beets::BeetsStatus;
 
-const SIDECAR_SCRIPT: &str = include_str!("../../sidecar/beets_sidecar.py");
-/// 运行时安装脚本（docs/29 批 C）。与 sidecar 一起落盘 —— 它要读同目录的
-/// requirements，两个文件放一起最简单。
-const INSTALL_SCRIPT: &str = include_str!("../../sidecar/beets_install.py");
-/// 依赖清单：`tools/beets-requirements.lock` 是**唯一真源**，
-/// 构建期（pack-beets-runtime.mjs）与运行期（install.py）共用这一份。
-const REQUIREMENTS: &str = include_str!("../../tools/beets-requirements.lock");
+/* ---------------- 发现（docs/33 §6.1） ---------------- */
 
-/// 内容不同才写（升级友好；也让"脚本被手改过"能被发现并纠正）。
-fn write_if_changed(path: &std::path::Path, content: &str) -> Result<(), String> {
-    let mismatch = std::fs::read_to_string(path).map(|old| old != content).unwrap_or(true);
-    if mismatch {
-        std::fs::write(path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
-    }
-    Ok(())
+/// 工具入口：程序 + 参数。
+///
+/// 为什么是「程序 + 参数」而不是单个可执行路径：源码树里跑是
+/// `<venv>/python.exe -m aiya_beets`，装好的包是 `aiya-beets.exe`。
+/// 统一成这个形状后，三种形态共用同一套代码。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolEntry {
+    pub program: String,
+    pub args: Vec<String>,
 }
 
-/// sidecar 脚本落盘位置：{app_data}/sidecar/beets_sidecar.py。
-/// 同时落安装脚本与依赖清单（install.py 从自己所在目录读 requirements）。
-fn ensure_script(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("app_data_dir: {e}"))?
-        .join("sidecar");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create_dir: {e}"))?;
-    let path = dir.join("beets_sidecar.py");
-    write_if_changed(&path, SIDECAR_SCRIPT)?;
-    write_if_changed(&dir.join("beets_install.py"), INSTALL_SCRIPT)?;
-    write_if_changed(&dir.join("beets_requirements.txt"), REQUIREMENTS)?;
-    Ok(path)
+/// 入口是从哪找到的。UI/日志要显示它——"为什么用的是这个"是排障的第一个问题。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntrySource {
+    /// `AIYA_BEETS_BIN` 环境变量（开发/排障）
+    Env,
+    /// 设置里记录的路径（安装器写的）
+    Settings,
+    /// PATH 上的 `aiya-beets`
+    Path,
+    /// 仓库源码树（仅 debug 构建）
+    Dev,
 }
 
-/// beets 相关路径。每次现算（几次 stat），不做缓存 —— 也就不会有
-/// "缓存了旧位置"这类只在重装后才发现的问题。
-struct BeetsPaths {
-    /// `{app_data}/beets` —— BEETSDIR。配置与 beets 库都放这儿，
-    /// 不与用户系统 beets（`%APPDATA%\beets`）抢同一个库。
-    home: PathBuf,
-    /// 用户装到应用数据目录的 venv（`beets_install` 的产物）
-    user_venv: PathBuf,
-    /// 随包运行时（embeddable Python + site-packages），存在才用
-    bundled: Option<PathBuf>,
-}
-
-fn beets_paths(app: &tauri::AppHandle) -> BeetsPaths {
-    let data = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."));
-    // 随包运行时：安装后在 resource_dir/beets-runtime；开发时在仓库 tools/
-    let mut bundled = None;
-    if let Ok(res) = app.path().resource_dir() {
-        let p = res.join("beets-runtime");
-        if p.join("python.exe").is_file() {
-            bundled = Some(p);
+impl EntrySource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EntrySource::Env => "env",
+            EntrySource::Settings => "settings",
+            EntrySource::Path => "path",
+            EntrySource::Dev => "dev",
         }
     }
-    if bundled.is_none() {
-        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tools/beets-runtime");
-        if p.join("python.exe").is_file() {
-            bundled = Some(p);
+}
+
+/// 数据目录约定：`{app_data}/beets`。
+///
+/// 这是播放器与工具**唯一共享的约定**（docs/33 §3.1）：播放器决定"数据放哪"
+/// （应用数据目录归宿主管），工具决定"里面怎么摆"。不传的话，工具会去
+/// `%APPDATA%\beets`，与用户自己的 beets 抢同一个库。
+pub fn data_home(app: &tauri::AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("beets")
+}
+
+/// 用户的第一个扫描根 → 工具的整理目标根。
+///
+/// 这是**用户事实**，不是 beets 知识：播放器本来就知道用户的曲库在哪。
+/// 工具拿它写进自己的配置，播放器不碰配置格式。
+fn scan_root(app: &tauri::AppHandle) -> Option<String> {
+    app.try_state::<crate::AppState>()
+        .and_then(|st| {
+            st.db()
+                .send(|conn| Ok(crate::setting_get(conn, "library.roots")))
+                .ok()
+                .flatten()
+        })
+        .and_then(|v| {
+            v.as_array()?
+                .first()
+                .and_then(|x| x.as_str())
+                .map(str::to_string)
+        })
+}
+
+fn setting_str(app: &tauri::AppHandle, key: &'static str) -> Option<String> {
+    app.try_state::<crate::AppState>()
+        .and_then(|st| st.db().send(|conn| Ok(crate::setting_get(conn, key))).ok().flatten())
+        .and_then(|v| v.as_str().map(str::to_string))
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// 参数串切分：空白分隔，支持用双引号包住带空格的项。
+///
+/// 不为它引入 shell 词法库——只需要覆盖 `-m aiya_beets` 和
+/// `"C://Program Files//x//y.exe" --flag` 这两种。
+fn split_args(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    for ch in raw.chars() {
+        match ch {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
         }
     }
-    BeetsPaths { home: data.join("beets"), user_venv: data.join("beets-venv"), bundled }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
-fn venv_python(venv: &std::path::Path) -> String {
-    venv.join("Scripts").join("python.exe").to_string_lossy().into_owned()
+/// PATH 上找可执行文件（Windows 按 PATHEXT 试后缀）。
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let exts: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".EXE;.CMD;.BAT".into())
+            .split(';')
+            .map(|s| s.to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect()
+    } else {
+        vec![String::new()]
+    };
+    let paths = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&paths) {
+        for ext in &exts {
+            let cand = dir.join(format!("{name}{ext}"));
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    None
 }
 
-/// 每次 spawn sidecar 都要带的环境（三处 spawn 共用，别再各写一份）。
+/// 按优先级找工具入口（docs/33 §6.1）。
 ///
-/// * `PYTHONIOENCODING` / `PYTHONUTF8`：把子进程的管道编码钉成 UTF-8。
-///   Windows 上 Python 默认按本地代码页（简中 = cp936）编码 stdout，带中文的
-///   路径/标题写出来就是 GBK 字节，宿主按 UTF-8 解析直接失配（旧实现的
-///   `lines()` 遇到非法字节会静默 break，整个会话无声死掉）。脚本内部也
-///   reconfigure 了一次，这里是双保险（脚本被替换/被单独调用时仍正确）。
-/// * `BEETSDIR`：**恒定指向 `{app_data}/beets`**（docs/29 §5 拍板）。
-///   不设的话 beets 用 `%APPDATA%\beets`，与用户自己的 beets 共用一个库；
-///   而本应用的语义是"beets 是本应用的写权威"，库该归应用管、可随应用卸载。
-///   `AIYA_BEETS_DIR` 仍可覆盖（dev 冒烟要隔离另一份库）。
-/// * `VIRTUAL_ENV`：解释器是 venv 时告诉子进程。beets 本身不读它，但
-///   有些工具链（pkg_resources / 插件里的 `sys.prefix` 推断）依赖它。
+/// 顺序理由：显式指定永远第一 → 安装器写下的路径最可靠 → PATH 说明用户
+/// 自己装过（pip install）→ 源码树只在开发机上存在。
 ///
-/// `beets_home`：None = 不设 BEETSDIR（测试/探测走 beets 自己的默认位置）。
-fn sidecar_env(beets_home: Option<&std::path::Path>, python: &str) -> Vec<(String, String)> {
+/// **刻意没有"猜 venv 布局"这一条**：A 轨道的入口是安装器**写进设置**的，
+/// 不是探测出来的。播放器不知道 venv 长什么样（P1 禁止），它只记住"入口在哪"。
+pub fn discover(app: &tauri::AppHandle) -> Option<(ToolEntry, EntrySource)> {
+    if let Ok(program) = std::env::var("AIYA_BEETS_BIN") {
+        if !program.trim().is_empty() {
+            let args = std::env::var("AIYA_BEETS_BIN_ARGS")
+                .map(|s| split_args(&s))
+                .unwrap_or_default();
+            return Some((ToolEntry { program, args }, EntrySource::Env));
+        }
+    }
+
+    if let Some(program) = setting_str(app, "beets.toolPath") {
+        let args = setting_str(app, "beets.toolArgs").map(|s| split_args(&s)).unwrap_or_default();
+        if PathBuf::from(&program).is_file() {
+            return Some((ToolEntry { program, args }, EntrySource::Settings));
+        }
+        tracing::warn!(path = %program, "设置里的 beets.toolPath 已不存在，继续找下一个来源");
+    }
+
+    if let Some(found) = find_on_path("aiya-beets") {
+        return Some((
+            ToolEntry { program: found.to_string_lossy().into_owned(), args: Vec::new() },
+            EntrySource::Path,
+        ));
+    }
+
+    // 开发便利：仓库里就有源码 + dev 环境。仅 debug 构建，release 不编译这段。
+    #[cfg(debug_assertions)]
+    {
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let py = repo.join("beets-tool/.venv/Scripts/python.exe");
+        if py.is_file() && repo.join("beets-tool/src/aiya_beets").is_dir() {
+            return Some((
+                ToolEntry {
+                    program: py.to_string_lossy().into_owned(),
+                    args: vec!["-m".into(), "aiya_beets".into()],
+                },
+                EntrySource::Dev,
+            ));
+        }
+    }
+
+    None
+}
+
+/// 起进程时的环境。只给**事实**，不给 beets 知识。
+///
+/// * `AIYA_BEETS_HOME`：数据根（播放器给）
+/// * `AIYA_BEETS_SCAN_ROOT`：用户第一个扫描根（播放器给，工具拿去写整理目标根）
+/// * `PYTHONIOENCODING` / `PYTHONUTF8`：管道编码钉 UTF-8。工具内部也 reconfigure
+///   了一次，这里是双保险（工具被替换/被单独调用时仍正确）。这两个是 Python
+///   通用变量，不是 beets 知识，留着不亏。
+fn tool_env(app: &tauri::AppHandle) -> Vec<(String, String)> {
     let mut env = vec![
         ("PYTHONIOENCODING".to_string(), "utf-8".to_string()),
         ("PYTHONUTF8".to_string(), "1".to_string()),
+        ("AIYA_BEETS_HOME".to_string(), data_home(app).to_string_lossy().into_owned()),
     ];
-    // AIYA_BEETS_DIR 永远优先（dev 冒烟要把库隔离到别处）
-    let dir = match std::env::var("AIYA_BEETS_DIR") {
-        Ok(dir) => Some(PathBuf::from(dir)),
-        Err(_) => beets_home.map(|p| p.to_path_buf()),
-    };
-    if let Some(dir) = dir {
-        let _ = std::fs::create_dir_all(&dir);
-        env.push(("BEETSDIR".to_string(), dir.to_string_lossy().into_owned()));
+    if let Some(root) = scan_root(app) {
+        env.push(("AIYA_BEETS_SCAN_ROOT".to_string(), root));
     }
-    // venv 解释器形如 <venv>/Scripts/python.exe：pyvenv.cfg 在 <venv> 根上
-    if let Some(root) = std::path::Path::new(python).parent().and_then(|p| p.parent()) {
-        if root.join("pyvenv.cfg").is_file() {
-            env.push(("VIRTUAL_ENV".to_string(), root.to_string_lossy().into_owned()));
+    // 源码树形态需要 PYTHONPATH 才 import 得到包
+    #[cfg(debug_assertions)]
+    {
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/src");
+        if src.is_dir() {
+            env.push(("PYTHONPATH".to_string(), src.to_string_lossy().into_owned()));
         }
     }
     env
 }
 
-/// 首发档插件（docs/29 §8 拍板）。全部是 beets **内置**插件，不需要额外 pip 包，
-/// 因此写进 config 不会让运行时体积或离线可用性变差。
-const FIRST_WAVE_PLUGINS: &[&str] = &[
-    "replaygain",   // gain_db 列已在引擎链路消费
-    "lyrics",       // LRC 规划内能力，lyrics 字段可直供
-    "fromfilename", // 无标签文件导入兜底
-    "duplicates",   // 完整性维护
-    "scrub",        // 导入时清脏标签
-    "smartplaylist", // beets 查询 → m3u，与"猜你喜欢"衔接
-];
-
-/// YAML 单引号字符串：里面的反斜杠是字面量，Windows 路径不用再转义
-/// （双引号里 `\M` 会被当成转义序列，是这类配置文件最经典的坑）。
-fn yaml_path(p: &std::path::Path) -> String {
-    format!("'{}'", p.to_string_lossy().replace('\'', "''"))
-}
-
-/// 生成 config.yaml 的正文（纯函数，单测直接验文本）。
-///
-/// `scan_root` = None 时**省略 directory 这一行**：beets 会用它自己的默认。
-/// 瞎猜一个目录比不写更糟 —— 猜错等于把用户的文件 move 到他没预期的地方。
-fn render_config(home: &std::path::Path, scan_root: Option<&str>) -> String {
-    let mut text = String::new();
-    text.push_str("# AIYA Music 首次启动生成；改过之后应用不会再覆盖\n");
-    text.push_str(&format!("library: {}\n", yaml_path(&home.join("library.db"))));
-    if let Some(root) = scan_root {
-        text.push_str(&format!("directory: {}\n", yaml_path(std::path::Path::new(root))));
-    }
-    text.push_str(&format!("plugins: {}\n", FIRST_WAVE_PLUGINS.join(" ")));
-    text
-}
-
-/// 默认 config.yaml。
-///
-/// 为什么必须有：BEETSDIR 指向 `{app_data}/beets` 之后那里是空的，beets 会用
-/// 内置默认 —— plugins 一个都不开，首发档能力全部落空。
-///
-/// **已存在就不动**：用户手改过的配置不能被应用每次启动覆盖。要恢复默认就
-/// 删掉这个文件。
-fn ensure_config(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let home = match std::env::var("AIYA_BEETS_DIR") {
-        Ok(dir) => PathBuf::from(dir),
-        Err(_) => beets_paths(app).home,
-    };
-    std::fs::create_dir_all(&home).map_err(|e| format!("create beets home: {e}"))?;
-    let cfg = home.join("config.yaml");
-    if cfg.is_file() {
-        return Ok(cfg);
-    }
-
-    // directory = 第一个扫描根：导入后 move/copy 的目的地应该落在用户的库上。
-    let scan_root = {
-        use tauri::Manager;
-        app.try_state::<crate::AppState>()
-            .and_then(|st| {
-                st.db()
-                    .send(|conn| Ok(crate::setting_get(conn, "library.roots")))
-                    .ok()
-                    .flatten()
-            })
-            .and_then(|v| {
-                v.as_array()?
-                    .first()
-                    .and_then(|x| x.as_str())
-                    .map(str::to_string)
-            })
-    };
-
-    std::fs::write(&cfg, render_config(&home, scan_root.as_deref()))
-        .map_err(|e| format!("write config.yaml: {e}"))?;
-    tracing::info!(config = %cfg.display(), "已生成 beets 默认配置");
-    Ok(cfg)
-}
-
-/// 候选解释器（按优先级）。
-///
-/// 顺序理由：
-///   1. `AIYA_BEETS_PYTHON` —— 排障/开发时显式指定，永远第一
-///   2. 用户自己装的 venv —— 他主动装过，就是要用这个
-///   3. 随包运行时 —— 构建期自检过，绝大多数用户的路径
-///   4. dev venv —— 只有开发机上存在
-///   5. 系统 python —— 兜底（用户机器上自己装过 beets 的情况）
-fn interpreter_candidates(app: &tauri::AppHandle) -> Vec<String> {
-    let paths = beets_paths(app);
-    let mut out = Vec::new();
-    if let Ok(p) = std::env::var("AIYA_BEETS_PYTHON") {
-        out.push(p);
-    }
-    out.push(venv_python(&paths.user_venv));
-    if let Some(b) = &paths.bundled {
-        out.push(b.join("python.exe").to_string_lossy().into_owned());
-    }
-    out.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../tools/beets-venv/Scripts/python.exe")
-            .to_string_lossy()
-            .into_owned(),
-    );
-    out.push("python".into());
-    out
+/// 入口 + 环境 → 可直接起进程的描述。
+fn launcher_for(app: &tauri::AppHandle, entry: &ToolEntry) -> Launcher {
+    Launcher::new(&entry.program).args(entry.args.clone()).envs(tool_env(app))
 }
 
 /// 事件出口：把 client 抽象出来的通道接到 Tauri 事件上。
@@ -245,144 +242,195 @@ impl EventSink for TauriSink {
     }
 }
 
-/// 「怎么起这个工具」的完整描述：入口 + 参数 + 环境。
-///
-/// 这三样就是 docs/33 说的**环境知识**，也是 M2 要整体搬去工具侧的部分。
-/// 集中在一个函数里的好处是：将来换发现机制只改这里，所有调用点一行不动。
-fn launcher_for(python: &str, script: &str, beets_home: Option<&std::path::Path>) -> Launcher {
-    Launcher::new(python).arg(script).envs(sidecar_env(beets_home, python))
-}
-
 /// 协议报告 → UI 契约。
 ///
 /// 两边字段名不同是刻意的：crate 用中性词（`tool_version` / `runtime_version` /
 /// `library_root`，因为它不知道对面是什么），UI 沿用用户看得懂的说法。
 /// 转换只在这一处，改协议时只要改这个函数。
-fn status_from_report(python: &str, script: &str, report: StatusReport) -> BeetsStatus {
+/// 协议报告 → UI 契约。
+///
+/// 两边字段名不同是刻意的：crate 用中性词（`tool_version` / `runtime_version` /
+/// `library_root`，因为它不知道对面是什么），UI 沿用用户看得懂的说法。
+/// 转换只在这一处，改协议时只要改这个函数。
+fn status_from(entry: &ToolEntry, source: EntrySource, report: StatusReport) -> BeetsStatus {
     BeetsStatus {
         found: true,
-        interpreter: Some(python.into()),
-        script_path: Some(script.into()),
+        interpreter: Some(entry.program.clone()),
+        script_path: (!entry.args.is_empty()).then(|| entry.args.join(" ")),
+        entry_source: Some(source.as_str().into()),
         protocol_version: report.protocol_version,
         beets_version: report.tool_version,
         python_version: report.runtime_version,
+        python_supported: report.runtime_supported,
         library_path: report.library_path,
         library_exists: report.library_exists,
         library_directory: report.library_root,
         plugins: report.plugins,
+        // 能力段是工具自报的 JSON，这里才落地成 UI 形状。
+        // 解析失败不算致命：老版本工具没这个字段，UI 会显示"未知"。
+        plugin_health: report.capability_health.and_then(|v| serde_json::from_value(v).ok()),
+        plugin_summary: report.capability_summary.and_then(|v| serde_json::from_value(v).ok()),
         config_dir: report.config_dir,
+        data_home: report.data_home,
         error_code: None,
         error_message: None,
     }
 }
 
-/// 一次 status 查询，结果翻成 UI 形状。
-///
-/// 两种失败必须分开（探测循环靠这个区分"跳下一个"和"记诊断"）：
-/// - 工具**明确说不行**（`Rejected`）→ 返回 `Ok(found:false)`：解释器活着但
-///   没装工具，是继续试下一个候选的**正常信号**。
-/// - 起不来 / 超时 / 协议乱 → `Err`，循环把它当最后一条诊断记下。
-fn query_sidecar(
-    python: &str,
-    script: &str,
-    timeout: Duration,
-    beets_home: Option<&std::path::Path>,
-) -> Result<BeetsStatus, String> {
-    let tool = StdioTool::new(launcher_for(python, script, beets_home));
-    match tool.status(timeout) {
-        Ok(report) => Ok(status_from_report(python, script, report)),
-        Err(ToolError::Rejected { code, stage, message }) => Ok(BeetsStatus {
-            found: false,
-            interpreter: Some(python.into()),
-            script_path: Some(script.into()),
-            protocol_version: None,
-            beets_version: None,
-            python_version: None,
-            library_path: None,
-            library_exists: None,
-            library_directory: None,
-            plugins: None,
-            config_dir: None,
-            error_code: Some(code),
-            error_message: Some(format!("[{stage}] {message}")),
-        }),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-/// 完整探测：按候选解释器逐个试，第一个能给出 status 的胜出。
-/// 全部失败 → not_found（有 error_message 供设置页显示）。
-pub fn probe(app: &tauri::AppHandle) -> BeetsStatus {
-    let script = match ensure_script(app) {
-        Ok(p) => p,
-        Err(e) => {
-            return BeetsStatus {
-                found: false,
-                interpreter: None,
-                script_path: None,
-                protocol_version: None,
-                beets_version: None,
-                python_version: None,
-                library_path: None,
-                library_exists: None,
-                library_directory: None,
-                plugins: None,
-                config_dir: None,
-                error_code: Some("E_SCRIPT".into()),
-                error_message: Some(e),
-            };
-        }
-    };
-    let script_str = script.to_string_lossy().into_owned();
-    // 首次探测就是"准备环境"的时机：BEETSDIR 下没有 config.yaml 就写一份默认的
-    // （首发档插件在那里）。失败不阻断探测 —— 没配置时 beets 用内置默认也能跑，
-    // 只是插件全关，比"beets 完全不可用"好得多。
-    let home = beets_paths(app).home;
-    if let Err(e) = ensure_config(app) {
-        tracing::warn!(error = %e, "生成 beets 默认配置失败（继续探测）");
-    }
-    let mut last_err: Option<String> = None;
-    for python in interpreter_candidates(app) {
-        match query_sidecar(&python, &script_str, Duration::from_secs(10), Some(&home)) {
-            Ok(status) => {
-                if status.found {
-                    return status;
-                }
-                // 解释器可用但没装 beets：继续试下一个候选（随包运行时优先命中）
-                last_err = status.error_message;
-            }
-            Err(e) => last_err = Some(e),
-        }
-    }
+/// 探测失败时的空壳（带诊断）。`entry` 有值时保留入口信息——用户需要知道
+/// "我们试着用了哪个程序"，否则报错只有一句"不可用"。
+fn absent(
+    code: &str,
+    message: Option<String>,
+    entry: Option<&ToolEntry>,
+    source: Option<EntrySource>,
+) -> BeetsStatus {
     BeetsStatus {
         found: false,
-        interpreter: None,
-        script_path: Some(script_str),
+        interpreter: entry.map(|e| e.program.clone()),
+        script_path: entry.and_then(|e| (!e.args.is_empty()).then(|| e.args.join(" "))),
+        entry_source: source.map(|s| s.as_str().to_string()),
         protocol_version: None,
         beets_version: None,
         python_version: None,
+        python_supported: None,
         library_path: None,
         library_exists: None,
         library_directory: None,
         plugins: None,
+        plugin_health: None,
+        plugin_summary: None,
         config_dir: None,
-        error_code: Some("E_BEETS_NOT_FOUND".into()),
-        error_message: last_err,
+        data_home: None,
+        error_code: Some(code.into()),
+        error_message: message,
     }
 }
 
-/* ---------------- 批 C：运行时安装 ---------------- */
-
-/// PATH 里的系统 Python。
+/// 一次 status 查询。
 ///
-/// **不能用随包的 embeddable**：它没有 pip、也没有 ensurepip，建不了 venv。
-/// 这条路径只在"随包运行时不可用 + 用户机器装了 Python"时才走。
-fn system_python() -> Option<String> {
+/// 两种失败要分开：
+/// - 工具**明确说不行**（`Rejected`）→ `Ok(found:false)`：程序活着但环境不全，
+///   这是"有诊断信息"的正常结果，设置页要原样显示那段诊断。
+/// - 起不来 / 超时 / 协议乱 → `Err`，由 `probe` 包成不可达。
+fn query_sidecar(
+    app: &tauri::AppHandle,
+    entry: &ToolEntry,
+    source: EntrySource,
+    timeout: Duration,
+) -> Result<BeetsStatus, String> {
+    let tool = StdioTool::new(launcher_for(app, entry));
+    match tool.status(timeout) {
+        Ok(report) => Ok(status_from(entry, source, report)),
+        Err(ToolError::Rejected { code, stage, message }) => Ok(absent(
+            &code,
+            Some(format!("[{stage}] {message}")),
+            Some(entry),
+            Some(source),
+        )),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 当前状态。找不到入口 → not_installed（UI 显示安装指引，播放功能不受影响）。
+pub fn probe(app: &tauri::AppHandle) -> BeetsStatus {
+    let Some((entry, source)) = discover(app) else {
+        return absent(
+            "E_BEETS_NOT_INSTALLED",
+            Some("未找到 aiya-beets 组件。可在下方安装，或指定已有路径。".into()),
+            None,
+            None,
+        );
+    };
+    match query_sidecar(app, &entry, source, Duration::from_secs(10)) {
+        Ok(status) => status,
+        Err(e) => absent("E_BEETS_UNREACHABLE", Some(e), Some(&entry), Some(source)),
+    }
+}
+
+/* ---------------- 安装：两条轨道（docs/33 §6.2） ----------------
+ *
+ * 播放器只做四件事：下载 → 展开 → 记下入口 → 跑一次 status 验证。
+ * 它**不建 venv、不装 pip 包、不碰 Python 工具链**——那些全在工具侧的
+ * 安装器里（A 轨道），或干脆不需要（B 轨道自带解释器）。
+ *
+ * 成功判据刻意不是"退出码 0"，而是"装完 probe 得到 found"。退出码可能骗人：
+ * pip 装到一半也能 0，套件包解压成功也可能缺 DLL。
+ */
+
+/// 安装轨道。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallTrack {
+    /// A：本机已有 Python → 跑 `.pyz` 安装器建 venv
+    Installer,
+    /// B：免安装套件包（自带解释器，可重定位）
+    Bundle,
+}
+
+impl InstallTrack {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "auto" | "installer" | "a" => Ok(InstallTrack::Installer),
+            "bundle" | "b" => Ok(InstallTrack::Bundle),
+            other => Err(format!("未知安装轨道：{other}（可用：installer / bundle）")),
+        }
+    }
+}
+
+/// 发布物位置。M4 接真实 release 后，这里换成 manifest 拉取（可带版本号与校验和）。
+///
+/// 现在指向占位地址：下载失败会给"还没发布"的明确错误，而不是静默卡住。
+/// 开发/离线时用 `AIYA_BEETS_INSTALLER` / `AIYA_BEETS_BUNDLE` 指向本地文件。
+const RELEASE_BASE: &str = "https://github.com/aiya-music/aiya-beets/releases/latest/download";
+const INSTALLER_ASSET: &str = "aiya-beets-installer.pyz";
+const BUNDLE_ASSET: &str = "aiya-beets-bundle-win-x64.zip";
+
+fn install_root(app: &tauri::AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("beets-tool")
+}
+
+/// 取安装物：环境变量指本地文件优先，否则下载到临时目录。
+fn fetch_asset(env_key: &str, asset: &str, emit: &dyn Fn(serde_json::Value)) -> Result<PathBuf, String> {
+    if let Ok(local) = std::env::var(env_key) {
+        let p = PathBuf::from(local);
+        if p.is_file() {
+            emit(serde_json::json!({
+                "type": "progress", "stage": "prepare",
+                "message": format!("使用本地安装物：{}", p.display()),
+            }));
+            return Ok(p);
+        }
+        return Err(format!("{env_key} 指向的文件不存在：{}", p.display()));
+    }
+
+    let url = format!("{RELEASE_BASE}/{asset}");
+    emit(serde_json::json!({
+        "type": "progress", "stage": "download",
+        "message": format!("下载 {asset}"),
+    }));
+    let dest = std::env::temp_dir().join(asset);
+    let resp = ureq::get(&url)
+        .timeout(std::time::Duration::from_secs(120))
+        .call()
+        .map_err(|e| format!("下载失败（{url}）：{e}\n——若组件尚未发布，可手动下载后设置 {env_key} 指向该文件"))?;
+    let mut out = std::fs::File::create(&dest).map_err(|e| format!("写临时文件失败：{e}"))?;
+    std::io::copy(&mut resp.into_reader(), &mut out).map_err(|e| format!("下载写入失败：{e}"))?;
+    Ok(dest)
+}
+
+/// A 轨道：用本机 Python 跑安装器。
+///
+/// 找 Python 用 `python`/`python3` 试 `-V`——这是**宿主的便利探测**，不是
+/// beets 知识；装什么、装到哪由安装器自己决定（它只接受 `--target`）。
+fn find_system_python() -> Option<String> {
     for cand in ["python", "python3"] {
         let ok = std::process::Command::new(cand)
             .arg("-V")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .map(|s| s.success())
             .unwrap_or(false);
@@ -393,59 +441,182 @@ fn system_python() -> Option<String> {
     None
 }
 
-/// 安装 beets 运行时到 `{app_data}/beets-venv`（用系统 Python 建 venv）。
-///
-/// 异步：立刻返回 JobStarted，进度走 `beets:install` 事件，全部结束后再推一条
-/// `{"type":"finished","status": BeetsStatus}` —— UI 不用再单独发一次 status 查询。
-pub fn start_install(app: tauri::AppHandle) -> Result<(), String> {
-    let sidecar = ensure_script(&app)?;
-    let install_py = sidecar.with_file_name("beets_install.py");
-    let python = system_python().ok_or_else(|| {
-        "没有可用的系统 Python。随包运行时应随安装包一起分发；若它缺失，请安装 Python 3.11+ 后重试"
-            .to_string()
+fn install_via_installer(
+    app: &tauri::AppHandle,
+    pyz: &std::path::Path,
+    emit: &dyn Fn(serde_json::Value),
+) -> Result<ToolEntry, String> {
+    let python = find_system_python().ok_or_else(|| {
+        "本机没有可用的 Python。改用「免安装套件包」这条轨道，或先安装 Python 3.10+".to_string()
     })?;
-    let target = beets_paths(&app).user_venv;
+    let target = install_root(app).join("venv");
+    emit(serde_json::json!({
+        "type": "progress", "stage": "install",
+        "message": format!("用 {python} 安装组件到 {}", target.display()),
+    }));
 
     let mut child = std::process::Command::new(&python)
-        .arg(&install_py)
+        .arg(pyz)
+        .arg("install")
         .arg("--target")
         .arg(&target)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .envs(sidecar_env(None, &python))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .envs(tool_env(app))
         .spawn()
-        .map_err(|e| format!("spawn {python}: {e}"))?;
+        .map_err(|e| format!("启动安装器失败：{e}"))?;
 
-    let mut stdout = child.stdout.take().ok_or("stdout 未捕获")?;
+    let mut stdout = child.stdout.take().ok_or("安装器 stdout 未捕获")?;
+    use std::io::BufRead;
+    let reader = std::io::BufReader::new(&mut stdout);
+    let mut done = false;
+    for line in reader.lines().map_while(Result::ok) {
+        let s = line.trim();
+        if s.is_empty() {
+            continue;
+        }
+        // 安装器输出 JSON 行；万一有裸行（pip 进度条）也包成 progress，不丢信息
+        let v: serde_json::Value = serde_json::from_str(s).unwrap_or_else(|_| {
+            serde_json::json!({ "type": "progress", "stage": "pip", "message": s })
+        });
+        if v.get("type").and_then(|t| t.as_str()) == Some("done") {
+            done = true;
+        }
+        emit(v);
+    }
+    let code = child.wait().map_err(|e| format!("等待安装器退出失败：{e}"))?;
+    if !code.success() || !done {
+        return Err(format!("安装器未成功完成（退出码 {}）", code.code().unwrap_or(-1)));
+    }
+
+    // 入口：venv 里的 aiya-beets 脚本。
+    // 这是**安装器的产物约定**，不是探测：安装器把它装在这个位置，
+    // 我们就记这个位置（见 docs/33 §6.2 A 轨道）。
+    let exe = target.join("Scripts").join("aiya-beets.exe");
+    if exe.is_file() {
+        return Ok(ToolEntry { program: exe.to_string_lossy().into_owned(), args: Vec::new() });
+    }
+    // 退一步：用 venv 解释器跑模块（Scripts 里没有 console script 的旧式安装）
+    let py = target.join("Scripts").join("python.exe");
+    if py.is_file() {
+        return Ok(ToolEntry {
+            program: py.to_string_lossy().into_owned(),
+            args: vec!["-m".into(), "aiya_beets".into()],
+        });
+    }
+    Err(format!("安装完成但找不到入口（{}）", target.display()))
+}
+
+/// B 轨道：展开套件包。
+///
+/// 套件包里带 `manifest.json`（`{"entry": "aiya-beets.exe", "args": []}` 或
+/// 解释器形态），展开后照着它记入口。没有 manifest 就按约定找两个常见入口。
+fn install_via_bundle(
+    app: &tauri::AppHandle,
+    zip_path: &std::path::Path,
+    emit: &dyn Fn(serde_json::Value),
+) -> Result<ToolEntry, String> {
+    let target = install_root(app).join("bundle");
+    if target.exists() {
+        std::fs::remove_dir_all(&target).map_err(|e| format!("清理旧套件包失败：{e}"))?;
+    }
+    std::fs::create_dir_all(&target).map_err(|e| format!("创建目标目录失败：{e}"))?;
+    emit(serde_json::json!({
+        "type": "progress", "stage": "unpack",
+        "message": format!("展开套件包到 {}", target.display()),
+    }));
+
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("打开套件包失败：{e}"))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("套件包不是有效 zip：{e}"))?;
+    zip.extract(&target).map_err(|e| format!("展开失败：{e}"))?;
+
+    let manifest = target.join("manifest.json");
+    if let Ok(text) = std::fs::read_to_string(&manifest) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(entry) = v.get("entry").and_then(|x| x.as_str()) {
+                let program = target.join(entry);
+                if program.is_file() {
+                    let args = v
+                        .get("args")
+                        .and_then(|a| a.as_array())
+                        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                        .unwrap_or_default();
+                    return Ok(ToolEntry { program: program.to_string_lossy().into_owned(), args });
+                }
+            }
+        }
+    }
+
+    for name in ["aiya-beets.exe", "python.exe"] {
+        let p = target.join(name);
+        if p.is_file() {
+            let args = if name == "python.exe" {
+                vec!["-m".into(), "aiya_beets".into()]
+            } else {
+                Vec::new()
+            };
+            return Ok(ToolEntry { program: p.to_string_lossy().into_owned(), args });
+        }
+    }
+    Err("套件包展开后找不到入口（缺 manifest.json 且没有 aiya-beets.exe）".to_string())
+}
+
+/// 记下入口，下次 `discover` 直接命中（设置优先于 PATH 与源码树）。
+fn remember_entry(app: &tauri::AppHandle, entry: &ToolEntry) -> Result<(), String> {
+    let program = serde_json::json!(entry.program);
+    let args = serde_json::json!(entry.args);
+    app.try_state::<crate::AppState>()
+        .ok_or_else(|| "AppState 未就绪".to_string())?
+        .db()
+        .send(move |conn| {
+            crate::setting_set(conn, "beets.toolPath", &program).map_err(aiya_data::DbError::Sql)?;
+            crate::setting_set(conn, "beets.toolArgs", &args).map_err(aiya_data::DbError::Sql)?;
+            Ok(())
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// 安装（异步）：立刻返回，进度走 `beets:install`，结束时补一条 finished。
+///
+/// finished 带**重新探测后的 status**：UI 不用再单独发一次查询，
+/// 也不会出现"装完了但状态块还是旧值"这种中间态。
+pub fn start_install(app: tauri::AppHandle, track: String) -> Result<(), String> {
+    let track = InstallTrack::parse(&track)?;
     std::thread::Builder::new()
         .name("beets-install".into())
         .spawn(move || {
-            use std::io::BufRead;
-            let reader = std::io::BufReader::new(&mut stdout);
-            for line in reader.lines().map_while(Result::ok) {
-                let s = line.trim();
-                if s.is_empty() {
-                    continue;
-                }
-                // install.py 输出的是 JSON 行；万一有裸行（pip 的进度条被
-                // 某些终端环境刷出来）也包成 progress，不丢信息也不让前端
-                // 解析失败。
-                let v: serde_json::Value = serde_json::from_str(s).unwrap_or_else(|_| {
-                    serde_json::json!({ "type": "progress", "stage": "pip", "message": s })
-                });
+            let emit = |v: serde_json::Value| {
                 let _ = app.emit("beets:install", v);
+            };
+            let result = (|| -> Result<ToolEntry, String> {
+                let (env_key, asset) = match track {
+                    InstallTrack::Installer => ("AIYA_BEETS_INSTALLER", INSTALLER_ASSET),
+                    InstallTrack::Bundle => ("AIYA_BEETS_BUNDLE", BUNDLE_ASSET),
+                };
+                let path = fetch_asset(env_key, asset, &emit)?;
+                match track {
+                    InstallTrack::Installer => install_via_installer(&app, &path, &emit),
+                    InstallTrack::Bundle => install_via_bundle(&app, &path, &emit),
+                }
+            })();
+            match result {
+                Ok(entry) => match remember_entry(&app, &entry) {
+                    // 记不住也不算彻底失败：PATH 与源码树仍可能命中，
+                    // 只是下次启动要多一次探测。如实报给 UI。
+                    Err(e) => emit(serde_json::json!({ "type": "warning", "message": e })),
+                    Ok(()) => {}
+                },
+                Err(message) => emit(serde_json::json!({ "type": "error", "message": message })),
             }
-            let _ = child.wait();
-            // 收尾再探测一次：装完能不能用由 probe 说了算，不由退出码说了算
             let status = probe(&app);
             let _ = app.emit(
                 "beets:install",
                 serde_json::json!({ "type": "finished", "status": status }),
             );
         })
-        .map_err(|e| format!("起安装线程失败：{e}"))?;
-    Ok(())
+        .map(|_| ())
+        .map_err(|e| format!("起安装线程失败：{e}"))
 }
 
 /* ---------------- B1/B2：导入会话（事件流转发） ---------------- */
@@ -457,17 +628,15 @@ pub struct RefreshParams {
     pub scanning: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
-/// 第一个能答 status 且装了 beets 的解释器（预览/应用共用）。
-fn pick_interpreter(app: &tauri::AppHandle, script: &str) -> Option<String> {
-    let home = beets_paths(app).home;
-    for cand in interpreter_candidates(app) {
-        if let Ok(s) = query_sidecar(&cand, script, Duration::from_secs(10), Some(&home)) {
-            if s.found {
-                return Some(cand);
-            }
-        }
-    }
-    None
+/// 取工具入口并造一个可直接起进程的 tool。
+///
+/// 找不到入口时的文案要能指导用户下一步（去扫描入库页装组件），
+/// 而不是一句 "no beets interpreter available"。
+fn tool_or_err(app: &tauri::AppHandle) -> Result<StdioTool, String> {
+    let (entry, _source) = discover(app).ok_or_else(|| {
+        "未安装 beets 组件：请到「扫描入库 → 曲库维护」安装，或先设置 beets.toolPath".to_string()
+    })?;
+    Ok(StdioTool::new(launcher_for(app, &entry)))
 }
 
 /* ---------------- B3：会话槽 + 取消 ---------------- */
@@ -510,14 +679,7 @@ fn run_session(
 /// 低频操作，不值得养常驻会话；每命令 ~300ms 的启动开销可接受。
 /// 返回 Err 表示没找到可用解释器（UI 显示指引）。
 pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
-    let script = ensure_script(&app)?;
-    let script_str = script.to_string_lossy().into_owned();
-
-    // 快速探测：没有这个工具的解释器对 preview 同样没用，要跳过
-    let python = pick_interpreter(&app, &script_str)
-        .ok_or_else(|| "no beets interpreter available".to_string())?;
-    let home = beets_paths(&app).home;
-    let tool = StdioTool::new(launcher_for(&python, &script_str, Some(&home)));
+    let tool = tool_or_err(&app)?;
 
     run_session(
         tool,
@@ -536,12 +698,7 @@ pub fn start_apply(
     decisions: Vec<serde_json::Value>,
     refresh: Option<RefreshParams>,
 ) -> Result<(), String> {
-    let script = ensure_script(&app)?;
-    let script_str = script.to_string_lossy().into_owned();
-    let python = pick_interpreter(&app, &script_str)
-        .ok_or_else(|| "no beets interpreter available".to_string())?;
-    let home = beets_paths(&app).home;
-    let tool = StdioTool::new(launcher_for(&python, &script_str, Some(&home)));
+    let tool = tool_or_err(&app)?;
 
     // on_exit 里拿一份 AppHandle（会话线程要能独立跑，不能借用 &app）
     let exit_app = app.clone();
@@ -578,18 +735,7 @@ fn start_maintenance(
     payload: serde_json::Value,
     refresh: Option<RefreshParams>,
 ) -> Result<(), String> {
-    let script = ensure_script(&app)?;
-    let script_str = script.to_string_lossy().into_owned();
-    let python = pick_interpreter(&app, &script_str)
-        .ok_or_else(|| "no beets interpreter available".to_string())?;
-    // move 的目标根只认配置里显式写的 directory（工具侧有硬校验），
-    // 确保它存在后再起会话；这里失败不算致命——真缺的话对面会给出
-    // "没有 directory"的明确错误
-    if let Err(e) = ensure_config(&app) {
-        tracing::warn!(error = %e, "维护任务前生成 beets config 失败");
-    }
-    let home = beets_paths(&app).home;
-    let tool = StdioTool::new(launcher_for(&python, &script_str, Some(&home)));
+    let tool = tool_or_err(&app)?;
 
     let exit_app = app.clone();
     run_session(
@@ -666,42 +812,6 @@ pub fn sync_now(app: tauri::AppHandle, params: RefreshParams) {
         .ok();
 }
 
-/// beets Web 外链（docs/29 §12 拍板 6）：高级用户出口，应用内不做 GUI。
-///
-/// 复用 probe 找到的解释器起 `python -m beets web`（**分离进程**：不进会话
-/// 通道、stdout/stderr 丢弃，关掉应用也不影响 web 服务——它就是用户自己的
-/// beets 环境）；1.5s 后用系统默认浏览器打开 `http://localhost:8337`
-/// （beets web 默认端口）。返回打开的 URL。
-///
-/// 端口被占/插件配置报错属于用户 beets 环境问题：进程 spawn 成功就算成功，
-/// 浏览器里看不到服务是用户侧排障（页面有 beets 状态块可对照）。
-pub fn web_open(app: &tauri::AppHandle) -> Result<String, String> {
-    const WEB_URL: &str = "http://localhost:8337";
-    let interpreter = probe(app)
-        .interpreter
-        .ok_or_else(|| "未找到 beets（页面里看安装指引）".to_string())?;
-    // 必须带同一套 env：不设 BEETSDIR 的话 `beet web` 会去 %APPDATA%\beets
-    // 找库，而 sidecar 用的是 {app_data}/beets —— 浏览器里看到的是一份空库，
-    // 用户只会以为"同步坏了"。
-    let home = beets_paths(app).home;
-    std::process::Command::new(&interpreter)
-        .args(["-m", "beets", "web"])
-        .envs(sidecar_env(Some(&home), &interpreter))
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("启动 beets web 失败：{e}"))?;
-    // 给 web 服务一点启动时间再拉浏览器；失败静默——用户可以自己开 URL
-    std::thread::Builder::new()
-        .name("beets-web-open".into())
-        .spawn(move || {
-            std::thread::sleep(Duration::from_millis(1500));
-            let _ = std::process::Command::new("explorer").arg(WEB_URL).spawn();
-        })
-        .map_err(|e| format!("起浏览器线程失败：{e}"))?;
-    Ok(WEB_URL.to_string())
-}
-
 /// dump 全量收集的整体超时：本地库读取，几万条也在秒级；超过这个数就是卡死。
 const DUMP_TIMEOUT: Duration = Duration::from_secs(180);
 
@@ -714,12 +824,9 @@ const DUMP_TIMEOUT: Duration = Duration::from_secs(180);
 ///    会拿它当依据。
 /// 2. **整体超时要收尸**。卡死的 sidecar 会一直占着 stdout 读取线程，
 ///    sync 线程永远等下去（用户侧表现：手动同步按钮按了没反应）。
-fn collect_items(
-    python: &str,
-    script: &std::path::Path,
-    beets_home: Option<&std::path::Path>,
-) -> Result<Vec<aiya_data::beets_sync::BeetsItem>, String> {
-    let launcher = launcher_for(python, &script.to_string_lossy(), beets_home);
+fn collect_items(app: &tauri::AppHandle) -> Result<Vec<aiya_data::beets_sync::BeetsItem>, String> {
+    let (entry, _source) = discover(app).ok_or_else(|| "未安装 beets 组件".to_string())?;
+    let launcher = launcher_for(app, &entry);
     let (child, stdin) = aiya_beets_client::session::spawn_session(
         &launcher,
         &serde_json::json!({ "id": 1, "cmd": "dump_items" }),
@@ -809,13 +916,13 @@ fn run_sync(app: &tauri::AppHandle, params: RefreshParams) {
         let _ = app.emit("beets:import", v);
     };
 
-    let script = match ensure_script(app) {
-        Ok(p) => p,
-        Err(e) => {
-            emit(serde_json::json!({ "type": "librarySyncFailed", "message": e }));
-            return;
-        }
-    };
+    if discover(app).is_none() {
+        emit(serde_json::json!({
+            "type": "librarySyncFailed",
+            "message": "未安装 beets 组件",
+        }));
+        return;
+    }
     if params
         .scanning
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -839,11 +946,7 @@ fn run_sync(app: &tauri::AppHandle, params: RefreshParams) {
     let _guard = ScanGuard(std::sync::Arc::clone(&params.scanning));
 
     let result = (|| -> Result<aiya_data::beets_sync::SyncStats, String> {
-        let script_str = script.to_string_lossy().into_owned();
-        let home = beets_paths(app).home;
-        let python = pick_interpreter(app, &script_str)
-            .ok_or_else(|| "no beets interpreter available".to_string())?;
-        let items = collect_items(&python, &script, Some(&home))?;
+        let items = collect_items(app)?;
         let mut conn = aiya_data::open_conn(&params.db_path)
             .map_err(|e| format!("open db: {e}"))?;
         let stats = aiya_data::beets_sync::sync_items(&mut conn, &items, now_secs())
@@ -882,100 +985,124 @@ mod tests {
     fn beets_status_serializes_camel_case() {
         // BeetsStatus 只有 Deserialize；用 JSON 反序列化锚定输入形状
         let v = serde_json::json!({
-            "found": true, "interpreter": "py", "scriptPath": "/s.py",
-            "protocolVersion": 1, "beetsVersion": "2.14.1", "pythonVersion": "3.14.7",
+            "found": true, "interpreter": "py", "scriptPath": "-m aiya_beets",
+            "entrySource": "settings",
+            "protocolVersion": 3, "beetsVersion": "2.14.1", "pythonVersion": "3.14.7",
+            "pythonSupported": true,
             "libraryPath": "l.db", "libraryExists": true,
-            "plugins": ["musicbrainz"], "configDir": "c",
+            "libraryDirectory": "D:/Music",
+            "plugins": ["musicbrainz"],
+            "pluginHealth": [
+                { "name": "lyrics", "state": "missing_deps", "enabled": true,
+                  "missing": ["bs4"], "note": "歌词抓取" }
+            ],
+            "pluginSummary": { "ready": 4, "missingDeps": 2, "unavailable": 0 },
+            "configDir": "c", "dataHome": "d",
             "errorCode": null, "errorMessage": null
         });
         let st: BeetsStatus = serde_json::from_value(v).expect("camelCase 形状必须可解析");
         assert_eq!(st.beets_version.as_deref(), Some("2.14.1"));
         assert_eq!(st.library_exists, Some(true));
         assert_eq!(st.plugins, Some(vec!["musicbrainz".to_string()]));
+        assert_eq!(st.entry_source.as_deref(), Some("settings"));
+        assert_eq!(st.python_supported, Some(true));
+        assert_eq!(st.data_home.as_deref(), Some("d"));
+        // 三态是 docs/31 P0-1 的修法：不能只报"配置里开着"，要报"能不能干活"
+        let health = st.plugin_health.expect("pluginHealth 必须解析");
+        assert_eq!(health[0].state, "missing_deps");
+        assert_eq!(health[0].missing, vec!["bs4".to_string()]);
+        assert_eq!(st.plugin_summary.expect("pluginSummary").missing_deps, 2);
+    }
+
+    /// 未装工具时给的是**可解释的状态**，不是崩溃、也不是空对象。
+    ///
+    /// docs/33 §3.1 的硬原则要求"未装 beets 时核心功能全通"；依赖隔离那条
+    /// 已由 `tools/check-boundary.mjs` 守住（核心 crate 连依赖都不许有）。
+    /// 这里补的是另一半：beets 自己的命令面在未装时必须回一个带错误码的
+    /// 状态，让 UI 能说清"没装"而不是"出错了"。
+    #[test]
+    fn absent_status_carries_code_and_entry() {
+        let entry = ToolEntry { program: "C:/x/aiya-beets.exe".into(), args: vec!["serve".into()] };
+        let st = absent("E_TOOL_NOT_FOUND", Some("找不到".into()), Some(&entry), Some(EntrySource::Path));
+        assert!(!st.found);
+        assert_eq!(st.error_code.as_deref(), Some("E_TOOL_NOT_FOUND"));
+        assert_eq!(st.error_message.as_deref(), Some("找不到"));
+        // 用户排障要知道"我们试着用了哪个程序、从哪找的"
+        assert_eq!(st.interpreter.as_deref(), Some("C:/x/aiya-beets.exe"));
+        assert_eq!(st.script_path.as_deref(), Some("serve"));
+        assert_eq!(st.entry_source.as_deref(), Some("path"));
+        // 失败态不许残留任何"看起来像成功"的字段
+        assert!(st.beets_version.is_none() && st.plugin_health.is_none() && st.library_path.is_none());
     }
 
     /// dev venv 存在时（本仓库），probe 能找到 beets 2.14.x。
     #[cfg(debug_assertions)]
     #[test]
     fn probe_finds_dev_venv_beets() {
-        let venv = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tools/beets-venv/Scripts/python.exe");
+        let venv = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/.venv/Scripts/python.exe");
         if !venv.exists() {
             return; // CI/其他机器没有 venv 就跳过
         }
-        let status = probe_with(&venv.to_string_lossy());
-        assert!(status.found, "dev venv 应命中 beets: {:?}", status.error_message);
+        let status = status_via(&venv.to_string_lossy(), &["-m", "aiya_beets"]);
+        assert!(status.found, "dev 环境应命中工具: {:?}", status.error_message);
         assert!(status.beets_version.as_deref().unwrap_or_default().starts_with("2.14"));
         assert!(status.plugins.is_some());
+        // 能力三态必须报上来（这是 M2 的验收点之一：lyrics 缺 bs4 要能看见）
+        let health = status.plugin_health.expect("工具必须自报插件三态");
+        assert!(health.iter().any(|p| p.state == "ready"), "至少有一个 ready 插件");
+        assert!(health.iter().any(|p| p.name == "lyrics"), "lyrics 应在清单里");
     }
 
-    /// probe 的可注入版本：probe() 就是用候选列表循环 probe_with。
-    /// `beets_home = None`：测试走 env 里的 AIYA_BEETS_DIR / beets 默认位置，
-    /// 不碰应用的 app_data。
-    fn probe_with(python: &str) -> BeetsStatus {
-        // 复用 query_sidecar 的完整逻辑，脚本用仓库源（不依赖 app_data）
-        match query_sidecar(python, &script_path_for_test(), Duration::from_secs(10), None) {
-            Ok(s) => s,
-            Err(e) => BeetsStatus {
-                found: false,
-                interpreter: Some(python.into()),
-                script_path: None,
-                protocol_version: None,
-                beets_version: None,
-                python_version: None,
-                library_path: None,
-                library_exists: None,
-                library_directory: None,
-                plugins: None,
-                config_dir: None,
-                error_code: Some("E_SPAWN".into()),
-                error_message: Some(e),
-            },
-        }
+    /// 用指定入口跑一次 status（测试用；生产走 `probe`，那里入口来自 `discover`）。
+///
+/// `AIYA_BEETS_HOME` 不设 = 走 beets 自己的默认位置，不碰应用的 app_data。
+/// `PYTHONPATH` 指向仓库源码树，这样源码树里的工具能被 import。
+fn status_via(program: &str, args: &[&str]) -> BeetsStatus {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/src");
+    let launcher = Launcher::new(program)
+        .args(args.iter().copied())
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONPATH", src.to_string_lossy());
+    let entry = ToolEntry { program: program.into(), args: args.iter().map(|s| s.to_string()).collect() };
+    let tool = StdioTool::new(launcher);
+    match tool.status(Duration::from_secs(20)) {
+        Ok(report) => status_from(&entry, EntrySource::Dev, report),
+        Err(e) => absent("E_SPAWN", Some(e.to_string()), Some(&entry), Some(EntrySource::Dev)),
     }
+}
 
-    /// 默认 config.yaml 的正文：首发档插件、library/plugins 必备，directory 按需。
+/// B 轨道套件包（自带 embeddable 解释器 + 包在 Lib/site-packages）能命中工具。
     ///
-    /// 这三条都是"错了不会报错、只会静默不工作"的地方：少写 plugins 等于插件全关，
-    /// 写成双引号路径会被 YAML 当转义序列吃掉，多写一个猜出来的 directory 会把
-    /// 用户的文件 move 到他没预期的地方。
-    #[test]
-    fn render_config_covers_plugins_and_paths() {
-        let home = PathBuf::from(r"D:\appdata\beets");
-        let text = render_config(&home, None);
-        assert!(text.contains("plugins: replaygain"), "首发档插件必须写上：{text}");
-        assert!(text.contains("fromfilename"));
-        assert!(text.contains("duplicates"));
-        assert!(text.contains("scrub"));
-        assert!(text.contains("smartplaylist"));
-        // 单引号包住 Windows 路径，反斜杠才是字面量（双引号里 \a 会被当转义）
-        assert!(
-            text.contains(r"library: 'D:\appdata\beets\library.db'"),
-            "路径必须单引号包裹：{text}"
-        );
-        assert!(!text.contains("directory:"), "没有扫描根时不得猜一个 directory");
-
-        let with_root = render_config(&home, Some(r"D:\CkMsr\Music"));
-        assert!(
-            with_root.contains(r"directory: 'D:\CkMsr\Music'"),
-            "有扫描根时必须写进 directory：{with_root}"
-        );
-    }
-
-    /// 随包运行时（embeddable Python + site-packages）存在时，probe 能命中 beets。
+    /// 这条守的是 B 轨道的核心前提：套件包**不需要系统装 Python**，
+    /// 解压到任意路径都能跑。产物由 `beets-tool/tools/build_bundle.py` 生成，
+    /// 没生成就跳过（clean checkout / CI 上默认不跑这条）。
     ///
-    /// 这条守的是批 C 的核心前提：随包运行时**不需要系统装 Python**。
-    /// 构建产物由 `node tools/pack-beets-runtime.mjs` 生成，没生成就跳过
-    /// （CI 上默认不跑这条）。
+    /// 注意这里刻意**不**靠 `PYTHONPATH` 传包：embeddable 带 `python3xx._pth`
+    /// 时 Python 会忽略 `PYTHONPATH`，包只能落在 `Lib/site-packages`。
+    /// 换句话说本测试同时验证了「套件包是自洽的」——外部环境给不了一点帮助。
     #[cfg(debug_assertions)]
     #[test]
-    fn probe_finds_bundled_runtime_beets() {
-        let py = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tools/beets-runtime/python.exe");
+    fn probe_finds_bundle_runtime() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/dist/bundle");
+        let py = root.join("python.exe");
         if !py.exists() {
-            return; // 没构建运行时（clean checkout / CI）就跳过
+            return; // 没构建套件包（clean checkout / CI）就跳过
         }
-        let status = probe_with(&py.to_string_lossy());
-        assert!(status.found, "随包运行时应命中 beets: {:?}", status.error_message);
-        assert!(status.beets_version.as_deref().unwrap_or_default().starts_with("2.14"));
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("manifest.json")).expect("manifest"))
+                .expect("manifest json");
+        assert_eq!(manifest["entry"], "python.exe", "manifest 的 entry 必须与实测入口一致");
+        let status = status_via(&py.to_string_lossy(), &["-m", "aiya_beets"]);
+        assert!(status.found, "套件包也应命中工具: {:?}", status.error_message);
+        assert!(
+            status.beets_version.as_deref().unwrap_or_default().starts_with("2.14"),
+            "套件包自报的 beets 版本: {:?}",
+            status.beets_version
+        );
+        // 自带解释器 ⇒ 运行时版本必须自报，且被判定为支持
+        assert!(status.python_version.is_some(), "自带解释器应自报版本");
+        assert_eq!(status.python_supported, Some(true), "自带解释器应判定为支持");
     }
 
     /// 端到端：真 sidecar dump_items（dev venv + dev 隔离库，B2 冒烟留下的 3 条）
@@ -986,20 +1113,20 @@ mod tests {
     #[test]
     fn dump_parse_and_sync_end_to_end() {
         let venv = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../tools/beets-venv/Scripts/python.exe");
-        let beets_home = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tools/beets-home");
+            .join("../beets-tool/.venv/Scripts/python.exe");
+        let beets_home = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/tests/fixtures/beets-home");
         if !venv.exists() || !beets_home.exists() {
             return; // CI/其他机器没有 dev 环境就跳过
         }
-        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sidecar/beets_sidecar.py");
-
         let mut child = std::process::Command::new(&venv)
-            .arg(&script)
+            .args(["-m", "aiya_beets"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
-            // 与生产路径同一套环境（编码钉 UTF-8），再覆盖隔离库
-            .envs(sidecar_env(None, &venv.to_string_lossy()))
+            // 与生产路径同一套环境（编码钉 UTF-8 + 数据根），再覆盖隔离库
+            .env("PYTHONIOENCODING", "utf-8")
+            .env("PYTHONUTF8", "1")
+            .env("PYTHONPATH", PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/src"))
             .env("BEETSDIR", &beets_home)
             .spawn()
             .expect("spawn sidecar");
@@ -1035,10 +1162,4 @@ mod tests {
         assert_eq!(with_id as usize, items.len());
     }
 
-    fn script_path_for_test() -> String {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../sidecar/beets_sidecar.py")
-            .to_string_lossy()
-            .into_owned()
-    }
 }

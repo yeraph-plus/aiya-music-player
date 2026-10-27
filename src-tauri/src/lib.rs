@@ -734,20 +734,17 @@ fn beets_sync(app: AppHandle, state: State<'_, AppState>) -> Result<dto::beets::
     Ok(dto::beets::JobStarted { started: true })
 }
 
-/// 起 beets web 并用系统浏览器打开（docs/29 §12 拍板 6：高级用户外链出口）。
-/// 返回打开的 URL；未找到 beets 报错（UI 显示安装指引）。
-#[tauri::command]
-fn beets_web_open(app: AppHandle) -> Result<String, dto::ApiError> {
-    beets::web_open(&app).map_err(dto::ApiError::invalid_arg)
-}
-
-/// 安装 beets 运行时到应用数据目录（docs/29 批 C）。
+/// 安装 beets 侧组件（docs/33 §6.2 两条轨道）。
 ///
-/// 只覆盖"随包运行时缺失/损坏 且 用户机器有 Python"这条路：用系统 Python 建
-/// venv。随包运行时是构建期产物，不经过这里。进度走 `beets:install` 事件。
+/// `track` = `installer`（A：本机 Python 建 venv）/ `bundle`（B：免安装套件包）。
+/// 播放器只做「下载 → 展开 → 记下入口 → 跑一次 status」，不碰 Python 工具链。
+/// 进度走 `beets:install` 事件，结束时推一条 `finished` 带新 status。
 #[tauri::command]
-async fn beets_install(app: AppHandle) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    beets::start_install(app)
+async fn beets_install(
+    app: AppHandle,
+    track: Option<String>,
+) -> Result<dto::beets::JobStarted, dto::ApiError> {
+    beets::start_install(app, track.unwrap_or_default())
         .map(|_| dto::beets::JobStarted { started: true })
         .map_err(dto::ApiError::internal)
 }
@@ -3022,7 +3019,6 @@ pub fn run() {
             beets_apply,
             beets_cancel,
             beets_sync,
-            beets_web_open,
             beets_install,
             beets_adopt,
             beets_update,

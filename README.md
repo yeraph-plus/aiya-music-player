@@ -26,9 +26,10 @@ AIYA_MUSIC_TAURI/
 │   ├── aiya-player/       # 纯领域：队列、状态归约、命令/事件；不依赖 tauri/rusqlite/windows
 │   ├── aiya-data/         # SQLite v1、Repository、扫描、封面、beets 读模型；不依赖 tauri
 │   ├── aiya-audio/        # 原生引擎：Symphonia 解码 + wasapi-rs 输出 + DSP/频谱/EQ
-│   └── aiya-audio-host/   # 音频 sidecar 进程入口（命名管道行 JSON，不传 PCM）
-├── sidecar/               # beets 协议桥（beets_sidecar.py，include_str! 打进宿主）
-├── src-tauri/             # Tauri 宿主：62 条命令、事件桥、协议注册、窗口、日志
+│   ├── aiya-audio-host/   # 音频 sidecar 进程入口（命名管道行 JSON，不传 PCM）
+│   └── aiya-beets-client/ # beets 协议客户端：发现/起进程/说协议；零 Tauri、零环境知识
+├── beets-tool/            # beets 侧全部能力（独立发布单元，Python 包 aiya-beets）
+├── src-tauri/             # Tauri 宿主：命令、事件桥、协议注册、窗口、日志
 ├── ui/                    # Svelte 5 + Vite：10 views / 16 stores / 组件分 content·shell·ui
 └── tools/                 # 类型生成、依赖图、CDP 探针、notice 生成、打包辅助
 ```
@@ -40,11 +41,15 @@ ui ── lib/ipc/client.ts ──▶ src-tauri(aiya) ──┬─▶ aiya-data
                                              ├─▶ aiya-player ──▶ aiya-audio
                                              └─▶ aiya-audio      ⇠ 同一 crate 也被 sidecar 用
 src-tauri ⇠ 命名管道行 JSON ⇢ aiya-audio-host
-src-tauri ⇠ stdout 行 JSON ⇢ sidecar/beets_sidecar.py
+src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立安装，可能根本没装）
 ```
 
 `aiya-player` 不依赖 `tauri`、`tokio`、`rusqlite`、`windows`；`aiya-data` 不依赖 `tauri`、音频平台。
 违反这条，三个月后会退化回上一代的结构。
+
+**beets 是增强能力，不是播放依赖**（docs/33）：`aiya-audio` / `aiya-audio-host` /
+`aiya-player` / `aiya-data` 连 `aiya-beets-client` 都不许依赖，所以"没装 beets
+也能完整播放"是编译期事实。这条由 `npm run check:boundary` 守。
 
 ## 构建 / 测试 / 打包
 
@@ -55,11 +60,12 @@ src-tauri ⇠ stdout 行 JSON ⇢ sidecar/beets_sidecar.py
 |---|---|
 | `npm run dev` | 开发：`tauri dev`（自动起 vite dev server） |
 | `npm run dev:ui` | 只起前端（浏览器里跑 mock 数据，不开 Tauri） |
-| `npm run build` / `bundle` | 出安装包：先 `pack:beets`，再 `vite build` → 编 sidecar → release 编译 → NSIS |
-| `npm run pack:beets` | 生成随包 beets 运行时（embeddable Python + site-packages，约 104MB） |
+| `npm run build` / `bundle` | 出安装包：`vite build` → 编 sidecar → release 编译 → NSIS（**不含 beets**） |
+| `npm run beets:installer` / `beets:bundle` | 出 beets 的两个发布物：`.pyz` 安装器（33KB）/ 免安装套件包（31MB） |
+| `npm run beets:release` | 两个发布物一起出 |
 | `npm run build:ui` | 只构建前端到 `ui/dist` |
 | `npm run check` | `svelte-check`（当前 0 error / 0 warning 才算过） |
-| `npm run test` | Rust 全量测试（当前 **291 条**，1 条 `--ignored` 是 perf_50k） |
+| `npm run test` | Rust 全量测试（当前 **312 条**，1 条 `--ignored` 是 perf_50k） |
 | `npm run test:data` / `test:audio` / `test:player` / `test:app` | 单 crate 测试 |
 | `npm run test:all` | Rust 全量 + UI 类型检查 + UI 构建 |
 | `npm run gen:types` / `gen:types:check` | 从 Rust 生成 TS 类型 / 只校验不写盘 |
@@ -67,24 +73,34 @@ src-tauri ⇠ stdout 行 JSON ⇢ sidecar/beets_sidecar.py
 | `npm run test:e2e` | Playwright（`ui/` 下跑；mock 后端 + 系统 Edge，24 条） |
 | `npm run smoke:engine` / `smoke:offset` / `smoke:switch` / `smoke:rate` | 真机 WASAPI 出声冒烟（需要声卡） |
 | `npm run smoke:supervisor` | sidecar 握手/心跳/看门狗冒烟（不需要声卡） |
-| `npm run smoke:beets` | beets apply 五场景（隔离 `BEETSDIR`，不动真实库） |
+| `npm run smoke:beets` | beets apply 五场景（隔离 `BEETSDIR`，不动真实库；跑在 `beets-tool/tests/`） |
 | `npm run smoke:maint` | beets 曲库维护四件套（adopt/update/dup/move，隔离库，含冲突与库根校验） |
 | `npm run bench:50k` | 5 万首查询性能基准（release，`--ignored`） |
 | `npm run notices` | 刷新 `licenses/CARGO-DEPS.md`（依赖变更后跑） |
-| `npm run check:deps` | 依赖方向/越界检查 |
+| `npm run check:deps` | store 依赖方向/环检测 |
+| `npm run check:boundary` | 边界门禁：client 无环境知识、核心链路不依赖 beets 工具 |
 | `npm run probe:ui` | CDP 探针（对真实窗口做 UI 断言） |
 
-打包前置做三件事：`pack:beets` 生成 beets 运行时、`vite build` 出前端产物、
-`tools/build-sidecar.mjs` 编出 `aiya-audio-host` 到 `src-tauri/binaries/<name>-<triple>.exe`
-（Tauri `externalBin` 约定路径）。
-产物：`target/release/bundle/nsis/*.exe`（当前 **5.74 MiB** + 约 104MB beets 运行时，
-release 编译约 5.5 分钟 → 含运行时约 6 分钟）。
+打包前置两件事：`vite build` 出前端产物、`tools/build-sidecar.mjs` 编出
+`aiya-audio-host` 到 `src-tauri/binaries/<name>-<triple>.exe`（Tauri `externalBin`
+约定路径）。产物：`target/release/bundle/nsis/*.exe`（当前 **5.74 MiB**，release
+编译约 5.5 分钟）。
 
-**beets 运行时的形态**（docs/29 §15）：不是 venv —— Windows 的 venv 只是一层指向
-建库时系统 Python 的指针，打进安装包到别的机器上跑不起来（实测 `did not find
-executable`）。用的是 **embeddable Python + 独立 site-packages**，自带解释器与标准库。
-`npm run bundle` 会自动先跑 `pack:beets`（首次下载约 12MB + 装依赖，之后按 lock
-指纹跳过）。
+**安装包不含 beets**（docs/33 两侧分离）：以前随包塞了一份 104MB 的 beets 运行时，
+现在播放器安装包只有播放器。用户要导入整理时再装 beets 工具，两条轨道：
+
+| 轨道 | 下载 | 前提 | 落地 |
+|---|---|---|---|
+| 快速安装（`.pyz`） | 33 KB | 机器上有 Python 3.10–3.14 | 用系统 Python 在那头建 venv |
+| 免安装包（`.zip`） | 31 MB | 无 | 自带 embeddable 解释器，解压即用（展开 112 MB） |
+
+播放器对两者做同一件事：下载 → 展开 → 记入口 → 跑一次 `status` 验证。**成功判据是
+探测到的 `found`，不是退出码**——退出码会骗人。
+
+**为什么套件包能随便搬**：embeddable 解释器把「解释器 + stdlib + DLL」都放在包内，
+`sys.prefix` 由 exe 位置推出，整目录复制到任意路径都能跑（实测复制到 `%TEMP%` 后
+`sys.prefix` 跟着走）。这和 venv 相反——venv 的 `pyvenv.cfg` 里 `home` 是硬指针，
+换个路径就 `did not find executable`。
 
 > `beforeBuildCommand` 的 cwd 是**调用 tauri CLI 时的目录**，所以别在 `ui/` 里跑 `tauri build`。
 

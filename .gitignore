@@ -24,11 +24,10 @@ ui/playwright-report/
 *.sqlite-shm
 *.log
 
-# Python (beets sidecar)
+# Python (beets-tool)
 __pycache__/
 *.py[cod]
 .venv/
-sidecars/beets/.beets/
 
 # ts-rs 的默认导出目录：直接 `cargo test` 时会把类型写到各 crate 下，
 # 那不是契约产物（真正入库的是 ui/src/lib/ipc/generated/，由 npm run gen:types 生成）
@@ -57,10 +56,12 @@ Thumbs.db
 .env
 .env.*
 
-# Dev-only beets 环境（体积大、可重建）
-tools/beets-venv/
-tools/beets-home/
-# 随包 beets 运行时（embeddable Python + site-packages，约 100MB）：
-# 由 node tools/pack-beets-runtime.mjs 生成，npm run bundle 会自动先跑它
-tools/beets-runtime/
+# Dev-only：beets 工具的本地开发环境（体积大、可重建）
+# 与 beets-tool/ 里自己那套 dev 数据放一起，不混进播放器的 tools/
+beets-tool/.venv/
+beets-tool/tests/fixtures/beets-home/
 tools/.cache/
+
+# beets 工具的构建产物：.pyz 约 33KB、套件包约 31MB（展开 112MB），
+# 由 beets-tool/tools/build_*.py 现生成，不入库
+beets-tool/dist/

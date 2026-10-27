@@ -1,33 +1,24 @@
-#!/usr/bin/env python
-"""AIYA Music — beets 运行时装到应用数据目录（docs/29 批 C）。
+"""A 轨道安装器：用**本机已有的 Python** 建环境装 beets。
 
-## 为什么不是"随包带 venv"
+## 它解决的问题
 
-docs/29 §5 原本的路线 B 是"CI 预构建 venv，整个目录打进安装包"。**实测不成立**：
-Windows 的 venv 不自包含，`pyvenv.cfg` 里 `home = C:\\Python314` 指向建库时的
-系统 Python，标准库和 python314.dll 都在那儿。把 venv 拷到另一台没有同版本
-Python 的机器上，`python.exe` 直接报
-`did not find executable at '...\\python.exe'`。
+播放器不代装 Python（docs/33 §10.1 拍板 3）。用户机器上已有 Python 时，
+这条轨道最省事：建一个 venv、按 lock 装依赖、自检一次，落在
+`{app_data}/beets-tool/venv`。
 
-真正能随包分发的形态是 **embeddable Python + 独立 site-packages 目录**
-（`python-3.14.7-embed-amd64.zip` 12MB，自带解释器和标准库，靠 `python314._pth`
-把额外目录加进 sys.path）。那条路由 `tools/pack-beets-runtime.mjs` 在构建期做，
-产物进安装包，开箱即用。
+## 为什么是 venv 而不是装进系统 Python
 
-## 那这个脚本做什么
+不污染用户的全局环境，卸载 = 删目录。代价是 venv 不可重定位
+（`pyvenv.cfg` 里的 `home` 是硬指针），所以它必须**在用户机器上现建**——
+这正是本轨道与 B 轨道（自带解释器套件包，可重定位）的分工。
 
-覆盖"随包运行时缺失/损坏，但用户机器有 Python"这条路：
-用用户的系统 Python 建一个 venv，把 requirements 装进去，落在
-`{app_data}/beets-venv`。宿主探测顺序里有这个位置，装完即可用。
+## 输出
 
-## 用法
-
-    python beets_install.py --target <dir>                      # 在线（PyPI）
-    python beets_install.py --target <dir> --from-wheels <dir>  # 离线 wheelhouse
-
-输出是**行帧 JSON**（与 beets_sidecar.py 同风格）：宿主逐行读、转成进度事件。
-不用 print 打人类可读日志——宿主按行解析 stdout，混进非 JSON 行就要靠容错。
+行帧 JSON，与协议同风格（宿主逐行读、转成进度事件）。不用人类可读日志：
+宿主按行解析 stdout，混进非 JSON 行就要靠容错兜。
 """
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -37,48 +28,61 @@ import sys
 import venv
 from pathlib import Path
 
+from . import env
+
 
 def emit(obj: dict) -> None:
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
     sys.stdout.flush()
 
 
-def _req_file(explicit: str | None) -> Path:
-    """requirements 路径。
+def requirements_file(explicit: str | None = None) -> Path:
+    """lock 文件位置。
 
-    生产路径：宿主把 `beets_requirements.txt` 落在 sidecar 脚本同目录（见
-    beets.rs::ensure_script），所以默认读同目录。
-    `--requirements` 是给"手动/CI 直接跑这个脚本"用的：那种场景没有宿主落盘，
-    直接指向仓库里的 `tools/beets-requirements.lock`（唯一真源）。
+    优先包内 `data/requirements.txt`（wheel 安装后唯一存在的副本）；
+    开发时回落到仓库根的 `requirements.lock`——这样"在源码树里直接跑"
+    和"装好的包里跑"行为一致，不用靠环境变量指路。
     """
     if explicit:
         return Path(explicit)
-    return Path(__file__).with_name("beets_requirements.txt")
+    bundled = Path(__file__).with_name("data") / "requirements.txt"
+    if bundled.is_file():
+        return bundled
+    return Path(__file__).resolve().parents[2] / "requirements.lock"
 
 
-def _venv_python(target: Path) -> Path:
-    """venv 里的解释器路径。Windows 是 Scripts，其他平台是 bin（本应用只发 Windows，
-    但脚本保持可移植，方便在 Linux CI 上跑冒烟）。"""
+def venv_python(target: Path) -> Path:
+    """venv 里的解释器路径（Windows 是 Scripts，其他平台是 bin）。"""
     if os.name == "nt":
         return target / "Scripts" / "python.exe"
     return target / "bin" / "python"
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="安装 beets 到应用数据目录（venv）")
-    ap.add_argument("--target", required=True, help="venv 目标目录（{app_data}/beets-venv）")
-    ap.add_argument("--from-wheels", default=None, help="离线 wheelhouse 目录（给了就不联网）")
-    ap.add_argument("--requirements", default=None, help="依赖清单路径（默认脚本同目录）")
-    args = ap.parse_args()
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="aiya-beets install",
+        description="在目标目录建 venv 并安装 beets（需要本机 Python）",
+    )
+    ap.add_argument("--target", required=True, help="venv 目标目录")
+    ap.add_argument("--from-wheels", default=None, help="离线 wheelhouse（给了就不联网）")
+    ap.add_argument("--requirements", default=None, help="依赖清单（默认包内 data/）")
+    args = ap.parse_args(argv)
 
     target = Path(args.target)
-    req = _req_file(args.requirements)
+    req = requirements_file(args.requirements)
     if not req.is_file():
-        emit({"type": "error", "stage": "prepare", "message": f"缺少 requirements：{req}"})
+        emit({"type": "error", "stage": "prepare", "message": f"缺少依赖清单：{req}"})
         return 2
 
+    supported = env.runtime_supported()
+    emit({
+        "type": "progress", "stage": "prepare",
+        "message": f"Python {env.runtime_version()}"
+                   + ("" if supported else "（不在支持窗口内，仍尝试）"),
+    })
+
     # 1) 建 venv（已存在则复用：重复安装就是升级/修复）
-    py = _venv_python(target)
+    py = venv_python(target)
     if not py.exists():
         emit({"type": "progress", "stage": "venv", "message": f"创建虚拟环境 {target}"})
         try:
@@ -137,9 +141,6 @@ def main() -> int:
         emit({"type": "error", "stage": "verify", "message": check.stderr.strip()[:500]})
         return 6
 
-    emit({"type": "done", "stage": "done", "python": str(py), "beetsVersion": check.stdout.strip()})
+    emit({"type": "done", "stage": "done", "python": str(py),
+          "beetsVersion": check.stdout.strip()})
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

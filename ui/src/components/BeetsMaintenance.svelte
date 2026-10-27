@@ -200,7 +200,7 @@
   {/if}
 
   {#if !found}
-    <div class="dim">安装 beets 运行时后可用：建库基线把现有曲目登记进 beets，之后才能刷新标签/查重/整理。</div>
+    <div class="dim">安装 beets 工具（上面那个「快速安装 / 免安装包」）后可用：建库基线把现有曲目登记进 beets，之后才能刷新标签/查重/整理。</div>
   {/if}
 </div>
 

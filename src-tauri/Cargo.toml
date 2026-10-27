@@ -34,6 +34,10 @@ time = { version = "0.3", features = ["local-offset"] }
 image.workspace = true
 rusqlite.workspace = true
 ts-rs.workspace = true
+# 安装轨道 B：展开套件包
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# 安装物下载（A/B 两轨道的 release 拉取）
+ureq.workspace = true
 souvlaki = "0.8"
 tauri-plugin-single-instance = "2"
 [target.'cfg(windows)'.dependencies]

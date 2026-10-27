@@ -1,17 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Download, ExternalLink, FolderOpen, RefreshCw, ScanSearch } from '@lucide/svelte';
+  import { Download, FolderOpen, Package, RefreshCw, ScanSearch } from '@lucide/svelte';
   import BeetsMaintenance from './BeetsMaintenance.svelte';
   import ImportPanel from './ImportPanel.svelte';
   import Button from './ui/Button.svelte';
   import { beetsSession } from '../stores/beets-session.svelte';
-  import { ipc } from '../lib/ipc';
+  import type { BeetsInstallTrack } from '../lib/ipc';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
   import { notify } from '../stores/notify.svelte';
   import { scan } from '../stores/scan.svelte';
   import { ui } from '../stores/ui.svelte';
   import { errorMessage } from '../lib/errors';
+  import { shortenPath } from '../lib/format';
 
   /**
    * 扫描入库页的主体（docs/29 批 A 自设置页迁入）：多目录配置 + 扫描/beets
@@ -62,12 +63,29 @@
     }
   }
 
-  async function openBeetsWeb(): Promise<void> {
-    try {
-      await ipc.beets.webOpen();
-    } catch (err) {
-      notify.showError(errorMessage(err));
+  /**
+   * 工具入口是从哪找到的（docs/33 §6.1 四种来源）。
+   *
+   * 排障的第一个问题永远是"为什么用的是这个"，所以让发现层直接回答，
+   * 而不是让用户去翻日志。
+   */
+  function entrySourceText(source: string | null): string {
+    switch (source) {
+      case 'env':
+        return '环境变量 AIYA_BEETS_BIN';
+      case 'settings':
+        return '应用设置里记录的路径';
+      case 'path':
+        return '系统 PATH 上的 aiya-beets';
+      case 'dev':
+        return '源码树（开发模式）';
+      default:
+        return source ?? '未知';
     }
+  }
+
+  function installTrackText(track: BeetsInstallTrack): string {
+    return track === 'bundle' ? '免安装包' : '快速安装';
   }
 
   /**
@@ -163,29 +181,89 @@
 
   <BeetsMaintenance />
 
-  <div class="beets-web-row">
+  <div class="beets-tool-block">
     {#if ui.beets === null}
-      <span class="dim">正在检测 beets 环境…</span>
+      <span class="dim">正在检测 beets 工具…</span>
     {:else if ui.beets.found}
-      <Button size="sm" onclick={() => void openBeetsWeb()}>
-        {#snippet icon()}<ExternalLink size={14} />{/snippet}
-        在浏览器中打开 beets Web
-      </Button>
-      <span class="dim">高级用户出口：beets 自带 Web 界面（localhost:8337），应用内不做 GUI。</span>
+      {@const b = ui.beets}
+      <div class="beets-tool-head">
+        <strong>beets 工具</strong>
+        <span class="dim">
+          {b.beetsVersion ?? '未知版本'} · 运行时 {b.pythonVersion ?? '未知'}
+        </span>
+        {#if b.pythonSupported === false}
+          <span class="danger">运行时不在支持窗口内</span>
+        {/if}
+      </div>
+      <div class="beets-tool-meta">
+        <span>入口 <b>{entrySourceText(b.entrySource)}</b></span>
+        <span>库根
+          <b class="path" title={b.libraryDirectory ?? ''}>
+            {b.libraryDirectory ? shortenPath(b.libraryDirectory) : '未配置'}
+          </b>
+        </span>
+        {#if b.dataHome}
+          <span>数据 <b class="path" title={b.dataHome}>{shortenPath(b.dataHome)}</b></span>
+        {/if}
+      </div>
+      {#if b.pluginSummary}
+        {@const bad = (b.pluginHealth ?? []).filter((p) => p.missing.length > 0)}
+        <div class="beets-plugins">
+          <span>
+            插件 {b.pluginSummary.ready} 可用
+            {#if b.pluginSummary.missingDeps}· {b.pluginSummary.missingDeps} 缺依赖{/if}
+            {#if b.pluginSummary.unavailable}· {b.pluginSummary.unavailable} 不可用{/if}
+          </span>
+          {#if bad.length > 0}
+            <ul>
+              {#each bad as p (p.name)}
+                <li>
+                  <b>{p.name}</b> 缺 {p.missing.join('、')}
+                  {#if p.note}<span class="dim"> · {p.note}</span>{/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </div>
+      {/if}
     {:else if ui.beetsInstall.running}
-      <span class="dim">
-        正在安装 beets 运行时：{ui.beetsInstall.stage}
-        {ui.beetsInstall.message ? `· ${ui.beetsInstall.message}` : ''}
-      </span>
+      <div class="beets-tool-head">
+        <strong>正在安装 beets 工具</strong>
+        <span class="dim">
+          {installTrackText(ui.beetsInstall.track)} · {ui.beetsInstall.stage}
+          {ui.beetsInstall.message ? `· ${ui.beetsInstall.message}` : ''}
+        </span>
+      </div>
     {:else}
-      <Button size="sm" onclick={() => void ui.installBeets()}>
-        {#snippet icon()}<Download size={14} />{/snippet}
-        安装 beets 运行时
-      </Button>
-      <span class="dim">
-        {ui.beetsInstall.error ??
-          '未检测到 beets。安装后可用导入整理、写标签与库对齐；库放在应用数据目录，不动你系统里的 beets。'}
-      </span>
+      <div class="beets-tool-head">
+        <strong>未检测到 beets 工具</strong>
+        <span class="dim">播放与曲库不依赖它；装上才有导入整理、写标签与库对齐。</span>
+      </div>
+      <div class="beets-tool-actions">
+        <Button
+          variant="primary"
+          size="sm"
+          onclick={() => void ui.installBeets('installer')}
+          title="下载安装器（约 33KB），用系统 Python 建环境"
+        >
+          {#snippet icon()}<Download size={14} />{/snippet}
+          快速安装
+        </Button>
+        <Button
+          size="sm"
+          onclick={() => void ui.installBeets('bundle')}
+          title="下载自带运行时的套件包（约 31MB），不需要系统 Python"
+        >
+          {#snippet icon()}<Package size={14} />{/snippet}
+          免安装包
+        </Button>
+        <span class="dim">
+          快速安装要求机器上有 Python 3.10–3.14；没有就用免安装包（自带解释器，解压即用）。
+        </span>
+      </div>
+      {#if ui.beetsInstall.error}
+        <span class="danger">{ui.beetsInstall.error}</span>
+      {/if}
     {/if}
   </div>
 </div>

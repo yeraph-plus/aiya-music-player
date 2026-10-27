@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiya-beets"
+version = "0.1.0"
+description = "AIYA Music 的 beets 侧工具：导入、整理、能力自检。独立于播放器发布。"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# beets 声明在这里是"包元信息"：装上这个包就该能用。
+# 精确版本由 requirements.lock 控制（install.py 用它建环境），两者分工不同：
+#   · 这里给范围 —— 手工 pip install 也能跑起来
+#   · lock 给具体版本 —— 播放器安装器要可复现，不允许 pip 临时挑新版
+dependencies = ["beets>=2.14,<3"]
+
+[project.scripts]
+aiya-beets = "aiya_beets.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+aiya_beets = ["data/*.txt"]

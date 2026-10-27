@@ -16,7 +16,6 @@ AIYA Music 本体以 **GPL-3.0-or-later** 发布（全文见仓库根 `LICENSE`�
 |---|---|---|---|
 | AIYA Music（`aiya.exe`） | 0.1.0 | GPL-3.0-or-later | 本程序 |
 | `aiya-audio-host.exe` | 0.1.0 | GPL-3.0-or-later | 音频引擎 sidecar，与本程序同一源码树 |
-| `beets_sidecar.py` | 随版本 | GPL-3.0-or-later | beets 协议桥（本程序自有代码，运行时由用户 Python 执行） |
 | Tauri（运行时 + WebView2 引导） | 2.12.x | Apache-2.0 OR MIT | 应用壳与 IPC |
 
 ### 2. Rust 依赖（静态链接进上面两个 exe）
@@ -52,11 +51,27 @@ AIYA Music 本体以 **GPL-3.0-or-later** 发布（全文见仓库根 `LICENSE`�
 
 | 组件 | 许可 | 说明 |
 |---|---|---|
-| Python 3.10–3.14 | PSF-2.0 | 用户自备。beets 支持流程需要它 |
-| beets 2.14.x | MIT | 用户自备（`pip install beets`）。缺失时应用明示“未检测到 beets”，其余功能不受影响 |
+| Python 3.10–3.14 | PSF-2.0 | 「快速安装」轨道需要用户自备；「免安装包」轨道自带 embeddable 解释器 |
+| beets 2.14.x | MIT | 必装依赖。缺失时应用明示"未检测到 beets 工具"，播放与曲库不受影响 |
 
-这两者由用户自行安装，本程序只通过 `stdio` 启动并与其通信，
+两者都由用户侧安装，本程序只通过 `stdio` 启动并与其通信，
 **不复制、不修改、不静态链接**它们的代码。
+
+「免安装包」（`aiya-beets-bundle-win-x64.zip`，约 31 MB）是**另一个独立发布物**，
+随包分发 embeddable Python（PSF-2.0）与 beets 及其依赖（各自许可见包内
+`Lib/site-packages` 下的元数据）。它不出现在播放器安装包里。
+
+### 独立发布的组件（`aiya-beets` 工具）
+
+| 组件 | 版本 | 许可 | 说明 |
+|---|---|---|---|
+| `aiya-beets`（`beets-tool/`） | 0.1.0 | GPL-3.0-or-later | beets 工具本体，本程序自有代码。**不随播放器安装包分发** |
+| embeddable Python（免安装包内） | 3.14.x | PSF-2.0 | 仅出现在「免安装包」这个独立发布物里 |
+| beets 及其依赖（免安装包内） | 2.14.1 | 各自许可 | 清单见 `beets-tool/requirements.lock` 与包内元数据 |
+
+这个工具是**可选**的：不装它时播放、曲库、播放历史、歌单、EQ、频谱全部照常，
+只是少了导入整理与写标签。它的源码与播放器同仓库（`beets-tool/`），
+源码要约同下一节。
 
 ## 三、源码获取方式（GPL-3.0 第 6 条）
 

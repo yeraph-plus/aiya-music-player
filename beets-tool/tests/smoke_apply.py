@@ -10,12 +10,18 @@ import subprocess
 import sys
 import tempfile
 
-REPO = r"D:\MUSIC_Player\AIYA_MUSIC_TAURI"
-SIDECAR = os.path.join(REPO, "sidecar", "beets_sidecar.py")
-PYTHON = os.path.join(REPO, "tools", "beets-venv", "Scripts", "python.exe")
+HERE = os.path.dirname(os.path.abspath(__file__))
+TOOL = os.path.dirname(HERE)                 # beets-tool/
+REPO = os.path.dirname(TOOL)                 # 仓库根
+# 工具按 `python -m aiya_beets` 起（源码树跑，不需要先 pip install）
+TOOL_SRC = os.path.join(TOOL, "src")
+# 解释器：优先 $AIYA_BEETS_PYTHON；否则用仓库根的 dev venv（tools/ 里，不入库）
+PYTHON = os.environ.get("AIYA_BEETS_PYTHON") or os.path.join(
+    TOOL, ".venv", "Scripts", "python.exe")
+TEST_MUSIC = os.environ.get("AIYA_TEST_MUSIC") or r"D:\MUSIC_Player\test-music"
 SRC_WAV = sorted(
-    os.path.join(r"D:\MUSIC_Player\test-music", f)
-    for f in os.listdir(r"D:\MUSIC_Player\test-music") if f.lower().endswith(".wav")
+    os.path.join(TEST_MUSIC, f)
+    for f in os.listdir(TEST_MUSIC) if f.lower().endswith(".wav")
 )
 assert len(SRC_WAV) == 3, SRC_WAV
 
@@ -28,13 +34,14 @@ with open(os.path.join(BEETSDIR, "config.yaml"), "w", encoding="utf-8") as f:
     # copy: no —— 防止 beets 导入默认复制行为干扰（我们用 sidecar 手动控制动作）
     f.write(f"directory: {LIBDIR}\nimport:\n    copy: no\n")
 
-ENV = dict(os.environ, BEETSDIR=BEETSDIR, PYTHONIOENCODING="utf-8")
+ENV = dict(os.environ, BEETSDIR=BEETSDIR, PYTHONIOENCODING="utf-8",
+           PYTHONPATH=TOOL_SRC)
 
 
 def run_apply(decisions, timeout=120):
     """一次性 sidecar 进程跑 apply_import，返回 (events, returncode)。"""
     proc = subprocess.Popen(
-        [PYTHON, SIDECAR],
+        [PYTHON, "-m", "aiya_beets"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         text=True, encoding="utf-8", env=ENV,
     )
@@ -80,7 +87,7 @@ def decision(action, paths, album_name, artist="测试艺人", title_prefix="曲
 
 
 def beets_items():
-    sys.path.insert(0, os.path.join(REPO, "tools", "beets-venv", "Lib", "site-packages"))
+    sys.path.insert(0, os.path.join(TOOL, ".venv", "Lib", "site-packages"))
     os.environ["BEETSDIR"] = BEETSDIR
     import beets
     from beets.library import Library
@@ -182,7 +189,7 @@ decisions5 = [
     for i, paths in enumerate(src5_groups)
 ]
 proc = subprocess.Popen(
-    [PYTHON, SIDECAR],
+    [PYTHON, "-m", "aiya_beets"],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
     text=True, encoding="utf-8", env=ENV,
 )

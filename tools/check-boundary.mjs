@@ -78,4 +78,61 @@ if (violations) {
   console.error(`\n边界门禁未通过：${violations} 处违规（规则见 docs/33 §3.2）`);
   process.exit(1);
 }
-console.log(`边界门禁通过：crates/aiya-beets-client/src 无环境知识泄漏（${RULES.length} 条规则）`);
+
+/* ------------------------------------------------------------------ *
+ * 第二道：核心链路不许依赖 beets 工具（docs/33 §3.1 硬原则）
+ *
+ * 「beets 是增强能力，不是播放依赖」这句话如果只在文档里，第一天就会被
+ * 一句 `use aiya_beets_client::…` 破坏——而且破坏之后**装了的机器上一切正常**，
+ * 只有没装的用户会挂。所以把它变成门禁：音频引擎、播放器、数据层连
+ * 依赖都不许有，于是"未装 beets 时核心全通"是编译期事实，不是承诺。
+ *
+ * 只查直接依赖就够：这四个 crate 之间不互相引 beets client，且它们的
+ * 依赖闭包全在 crates/ 内部（外部 crate 不会 path 依赖我们的私有 client）。
+ * ------------------------------------------------------------------ */
+const CORE_CRATES = ['aiya-audio', 'aiya-audio-host', 'aiya-player', 'aiya-data'];
+const beetsDep = /aiya-beets-client|aiya_beets_client/;
+
+let leaks = 0;
+for (const name of CORE_CRATES) {
+  const manifest = join(ROOT, 'crates', name, 'Cargo.toml');
+  let text;
+  try {
+    text = readFileSync(manifest, 'utf8');
+  } catch {
+    continue; // crate 不存在（裁剪构建）就跳过
+  }
+  const lines = text.split('\n');
+  for (const [i, line] of lines.entries()) {
+    // 注释行不算依赖
+    if (/^\s*#/.test(line)) continue;
+    if (!beetsDep.test(line)) continue;
+    leaks++;
+    console.error(
+      `crates/${name}/Cargo.toml:${i + 1}  核心链路不许依赖 beets 工具` +
+        `（未装 beets 的用户也要能完整播放）\n    ${line.trim()}`
+    );
+  }
+}
+
+// 旧实现必须彻底消失：目录还在就说明有人又照着旧路径写代码了
+const staleDirs = ['sidecar', 'tools/beets-runtime'];
+for (const rel of staleDirs) {
+  try {
+    statSync(join(ROOT, rel));
+    leaks++;
+    console.error(`${rel}/ 仍然存在：beets 侧已迁到 beets-tool/（docs/33 §9.0）`);
+  } catch {
+    /* 不存在 = 正确 */
+  }
+}
+
+if (leaks) {
+  console.error(`\n边界门禁未通过：${leaks} 处依赖越界（规则见 docs/33 §3.1）`);
+  process.exit(1);
+}
+
+console.log(
+  `边界门禁通过：crates/aiya-beets-client/src 无环境知识泄漏（${RULES.length} 条规则）；` +
+    `核心链路（${CORE_CRATES.join('/')}）不依赖 beets 工具`
+);

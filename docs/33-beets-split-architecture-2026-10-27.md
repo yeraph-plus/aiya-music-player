@@ -634,6 +634,76 @@ beets 二进制 → **播放器不再是 beets 的再分发者**，GPL 义务大
   行为正确；未装时播放器核心功能全通；`cargo build` 产物里搜不到 `beets_sidecar`
   字符串（证明 include_str! 真删干净了）
 
+#### M2 完成记录（2026-10-27）
+
+**搬完的形态**：`beets-tool/` 是完整 Python 包（`aiya-beets` 0.1.0，协议 v3，
+`requires-python >=3.10`），有 `pyproject.toml` / `requirements.lock` / `README.md` /
+两个发布物构建脚本 / 两条冒烟测试。`sidecar/` 目录已删除，`tools/` 只剩播放器
+自己的脚本（`run.mjs` / `gen-types.mjs` / `dep-graph.mjs` / `gen-notices.mjs` /
+`cdp-probe.mjs` / `build-sidecar.mjs` / `check-boundary.mjs`）。dev 环境跟着搬：
+`beets-tool/.venv`（89 MB）+ `beets-tool/tests/fixtures/beets-home`（1.3 MB），
+两者都不入库。
+
+**播放器瘦身实测**：`src-tauri/src/beets.rs` 1316 → 1044 行，但更关键的是**删掉了
+哪一类东西**——`include_str!` ×3、`render_config`、`FIRST_WAVE_PLUGINS`、
+`interpreter_candidates`、`system_python`、`pick_interpreter`、`venv_python`、
+`sidecar_env`、`beets_paths`、`yaml_path`、`web_open` 全部消失。现在这个文件里
+没有任何一行知道 beets 怎么装、装在哪、开什么插件。
+
+**发现层四来源**（`discover(app)`）：`AIYA_BEETS_BIN` → 设置 `beets.toolPath`/
+`beets.toolArgs` → PATH 上的 `aiya-beets`（Windows 按 `PATHEXT`）→ 源码树
+（仅 debug 编译）。**刻意不猜 venv 布局**：猜错的代价是"看起来找到了但跑不起来"，
+比找不到更难排障。找到之后一律跑一次 `status` 才认 `found: true`。
+
+**协议等价比对**（新旧实现对同一请求）：`status` 共有字段**零差异**，只多 4 个
+新字段（`dataHome` / `pluginHealth` / `pluginSummary` / `pythonSupported`）；
+`ping` 完全一致；未知命令码 `E_UNKNOWN_CMD` 与 `type=sessionFailed` 都一致。
+
+**capabilities 落地**（解 P0-1）：`python -m aiya_beets doctor` 实测输出
+`ready 4 / missing_deps 2`——`replaygain` 缺 `ffmpeg`、`lyrics` 缺 `bs4`，而这两条
+在旧实现里因为 `config['plugins']` 有名字被报成"有"。三态用
+`importlib.util.find_spec` 逐个试依赖，**不 import 插件模块**（导入有注册钩子副作用）。
+
+**两个发布物已构建并自检**：`aiya-beets-installer.pyz` **33 KB**（`python tools/
+build_installer.py`，zipapp，自检版本 0.1.0 通过）；`aiya-beets-bundle-win-x64.zip`
+**30.7 MB**（`python tools/build_bundle.py`，展开 112 MB，`manifest.json` 写入口）。
+
+**踩到的坑（重要，写进 README 也写进长期记忆）**：embeddable 带 `python3xx._pth`
+时 Python **忽略 `PYTHONPATH`**。所以套件包必须把 `aiya_beets` 装进
+`Lib/site-packages`——第一版把包放在旁边靠 `PYTHONPATH` 喂，`-m aiya_beets` 直接
+`No module named aiya_beets`。那条旧测试 `probe_finds_bundled_runtime_beets`
+断言的正是"`tools/beets-runtime` 能答 status"，而它本来就答不了（那个目录只有
+解释器、没有包，以前靠 `include_str!` 把脚本写盘再 `PYTHONPATH` 指过去）。
+现在改成 `probe_finds_bundle_runtime`，验的是 B 轨道套件包**自洽**——测试里仍设了
+`PYTHONPATH`，但它被 `_pth` 忽略，所以能过就证明包真在 `site-packages` 里。
+
+**门禁加了两道**（`tools/check-boundary.mjs`）：
+1. client crate 无环境知识（M1 已加，12 条规则）；
+2. **核心链路不许依赖 beets 工具**——`aiya-audio` / `aiya-audio-host` /
+   `aiya-player` / `aiya-data` 的 `Cargo.toml` 里出现 `aiya-beets-client` 即红；
+   外加 `sidecar/`、`tools/beets-runtime/` 目录存在即红。这样"未装 beets 的机器
+   能完整播放"从承诺变成编译期事实。**负向验证做过**：临时往
+   `crates/aiya-data/Cargo.toml` 加一行依赖 → 门禁 exit 1 并指出行号，撤销后 exit 0。
+
+**验证数据**：`cargo test --workspace` **312 passed / 0 failed**（新增
+`absent_status_carries_code_and_entry`，扩写 `beets_status_serializes_camel_case`
+覆盖新字段）；`npm run verify` exit 0（含 beets apply 5 场景 + 维护 15 断言，
+搬迁后路径全改成相对推导，实测 ALL PASS）；playwright **24 passed**；
+`svelte-check` 0 error / 0 warning。
+
+**产物字符串实测**（`cargo build -p aiya` 后 `strings target/debug/aiya.exe`）：
+`beets_sidecar` 0、`beets_install.py` 0、`beets-runtime` 0，连插件名
+`replaygain` / `smartplaylist` / `fromfilename` 也都是 **0**。前半是"include_str!
+真删干净了"，后半更能说明问题——**播放器二进制里连"对面有哪些插件"都不再存在**，
+这正是 §3.2 想守的那条线。
+
+**UI 侧**：`BeetsStatus` 重新生成（多了 `entrySource` / `pythonSupported` /
+`pluginHealth` / `pluginSummary` / `dataHome`）；删掉 `beets_web_open` 命令与
+"在浏览器中打开 beets Web"按钮（beets web 缺 flask 必死，docs/31 P0-3）；
+安装区从一行 flex 改成块：未装时并排两个按钮（快速安装 / 免安装包，标注各自
+前提），装上后显示入口来源 / 库根 / 数据根 + 插件三态明细（缺什么、为什么开它）；
+`ScanToolsView` 的"插件"行从逗号串改成逐条三态列表。
+
 ### M3 — 协议冻结 v1 + 双侧契约测试
 
 - `protocol/v1.schema.json` 定稿，镜像进播放器

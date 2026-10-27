@@ -464,35 +464,50 @@ export class MockBackend {
   }
 
   /**
-   * beets 运行时安装（docs/29 批 C）的事件流演练。
+   * beets 工具安装（docs/33 §6.2 两条轨道）的事件流演练。
    *
    * 形状按真后端逐字对齐：`progress`（stage + message）→ `error` 或 `done`
-   * → `finished`（带 status）。这里刻意走**失败**分支：浏览器预览没有 Python，
-   * 装不成是事实，让 UI 的错误渲染也被执行到，比假装成功有用。
+   * → `finished`（带 status）。这里刻意走**失败**分支：浏览器预览既没有系统
+   * Python 也不会去下载 31MB 的套件包，装不成是事实，让 UI 的错误渲染也被
+   * 执行到，比假装成功有用。两条轨道给不同的 stage 文案——真实运行时两者
+   * 的步骤本来就不一样（A 建 venv / B 下载解压）。
    */
-  async beetsInstall(): Promise<{ started: boolean }> {
+  async beetsInstall(track: 'installer' | 'bundle' = 'installer'): Promise<{ started: boolean }> {
     const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:install', e);
-    emit({ type: 'progress', stage: 'venv', message: '创建虚拟环境（预览模式模拟）' });
-    await new Promise((r) => setTimeout(r, 250));
-    emit({ type: 'progress', stage: 'pip', message: 'pip install 在浏览器预览里不执行' });
-    await new Promise((r) => setTimeout(r, 250));
-    emit({ type: 'error', stage: 'venv', message: '浏览器预览没有系统 Python，这里是模拟失败' });
+    if (track === 'bundle') {
+      emit({ type: 'progress', stage: 'download', message: '下载套件包（预览模式模拟）' });
+      await new Promise((r) => setTimeout(r, 250));
+      emit({ type: 'progress', stage: 'extract', message: '解压到工具目录（预览模式模拟）' });
+      await new Promise((r) => setTimeout(r, 250));
+      emit({ type: 'error', stage: 'download', message: '浏览器预览不会真的下载套件包，这里是模拟失败' });
+    } else {
+      emit({ type: 'progress', stage: 'download', message: '下载安装器（预览模式模拟）' });
+      await new Promise((r) => setTimeout(r, 250));
+      emit({ type: 'progress', stage: 'venv', message: '创建虚拟环境（预览模式模拟）' });
+      await new Promise((r) => setTimeout(r, 250));
+      emit({ type: 'error', stage: 'venv', message: '浏览器预览没有系统 Python，这里是模拟失败' });
+    }
     emit({
       type: 'finished',
       status: {
         found: false,
         interpreter: null,
         scriptPath: null,
+        entrySource: null,
         protocolVersion: null,
         beetsVersion: null,
         pythonVersion: null,
+        pythonSupported: null,
         libraryPath: null,
         libraryExists: null,
         libraryDirectory: null,
         plugins: null,
+        pluginHealth: null,
+        pluginSummary: null,
         configDir: null,
-        errorCode: 'E_BEETS_NOT_FOUND',
-        errorMessage: '浏览器预览不含 beets 运行时',
+        dataHome: null,
+        errorCode: 'E_TOOL_NOT_FOUND',
+        errorMessage: '浏览器预览不含 beets 工具',
       },
     });
     return { started: true };

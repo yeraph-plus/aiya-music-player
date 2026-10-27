@@ -434,14 +434,73 @@
   font-size: 11px;
 }
 
-.beets-web-row {
+/* beets 工具区（docs/33）：状态摘要 + 两条安装轨道。
+   为什么不再是一行 flex：装上之后要显示入口来源 / 库根 / 数据根 / 插件三态，
+   一行挤不下；未装时又要并排放两个安装按钮，所以容器改成块 + 内部各行自己排。 */
+.beets-tool-block {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.beets-tool-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
-.beets-web-row .dim {
+.beets-tool-head .dim {
   font-size: 11.5px;
+}
+
+.beets-tool-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.beets-tool-meta b {
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.beets-tool-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.beets-tool-actions .dim {
+  font-size: 11.5px;
+}
+
+.beets-plugins {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.beets-plugins ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.beets-plugins li b {
+  font-weight: 500;
+  color: var(--text-1);
 }
 
 .library-scan-actions {

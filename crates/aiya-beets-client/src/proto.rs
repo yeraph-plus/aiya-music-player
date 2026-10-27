@@ -56,6 +56,21 @@ pub struct StatusReport {
     pub plugins: Option<Vec<String>>,
     #[serde(default)]
     pub config_dir: Option<String>,
+    /// 工具的运行时是否在支持窗口内（工具自报）。
+    #[serde(default, rename = "pythonSupported")]
+    pub runtime_supported: Option<bool>,
+    /// 工具自报的**能力健康**（形状由工具定义，client 只透传不解释）。
+    ///
+    /// 为什么用 `Value` 而不是类型化：能力清单是工具的内部结构，client
+    /// 一旦给它建模就等于"知道对面有哪些能力"——那正是边界要挡的东西。
+    /// 宿主拿到后自己映射成 UI 形状。
+    #[serde(default, rename = "pluginHealth")]
+    pub capability_health: Option<serde_json::Value>,
+    #[serde(default, rename = "pluginSummary")]
+    pub capability_summary: Option<serde_json::Value>,
+    /// 工具的数据根（宿主给的那个目录，工具回报确认）。
+    #[serde(default, rename = "dataHome")]
+    pub data_home: Option<String>,
 }
 
 impl StatusReport {
@@ -86,7 +101,11 @@ mod tests {
             "libraryExists": true,
             "libraryDirectory": "C:/Music",
             "plugins": ["alpha", "beta"],
-            "configDir": "C:/data"
+            "configDir": "C:/data",
+            "pythonSupported": true,
+            "pluginHealth": [{"name": "alpha", "state": "ready", "enabled": true, "missing": [], "note": ""}],
+            "pluginSummary": {"ready": 1, "missingDeps": 0, "unavailable": 0},
+            "dataHome": "C:/data"
         });
         let r: StatusReport = serde_json::from_value(wire).expect("线上形状必须可解析");
         assert_eq!(r.protocol_version, Some(3));
@@ -97,6 +116,14 @@ mod tests {
         assert_eq!(r.plugins.as_deref(), Some(&["alpha".to_string(), "beta".to_string()][..]));
         assert!(r.speaks(3));
         assert!(!r.speaks(2));
+        // 能力段是透传的：client 不解释形状，只保证能原样取到
+        assert_eq!(r.runtime_supported, Some(true));
+        assert_eq!(r.data_home.as_deref(), Some("C:/data"));
+        assert_eq!(
+            r.capability_health.as_ref().and_then(|v| v.get(0)).and_then(|v| v.get("state")).and_then(|v| v.as_str()),
+            Some("ready")
+        );
+        assert!(r.capability_summary.is_some());
     }
 
     /// 缺字段不是错误：工具可能还没初始化完就应答了。
