@@ -1,8 +1,14 @@
 # 发布工作流：构建安装包与 beets 发布物，挂到 GitHub Release 上
 #
-# ## 两类 tag，两种语义
+# ## 三类触发
 #   · `v0.1.0`       播放器版本：NSIS 安装包 + beets 两个发布物一起挂上去
 #   · `beets-v0.1.0` 只发 beets 工具：只产出两个 beets 文件
+#   · 手动触发         **只构建不发布**（dry run）：把安装包与两个 beets 产物都真造
+#                     一遍，验证构建链路，但最后一步跳过 `gh release create`。
+#                     为什么需要它：release 工作流最容易坏的地方是"到打 tag 才发现"，
+#                     而打 tag 会立刻产生一个公开 release，不能拿来试。
+#                     手动触发时 `github.ref_name` 是分支名，所以构建条件写成
+#                     "v* tag 或 dispatch"，上传条件写成"只在 tag 上"。
 #
 # **为什么播放器 release 也要带 beets 的两个文件**：
 # `src-tauri/src/beets.rs` 的下载地址是
@@ -95,15 +101,15 @@ jobs:
       # 播放器安装包（只在 v* tag 上构建）
       # ---------------------------------------------------------------
       - name: 安装前端依赖
-        if: startsWith(github.ref_name, 'v')
+        if: startsWith(github.ref_name, 'v') || github.event_name == 'workflow_dispatch'
         run: npm ci --prefix ui
 
       - name: 构建 NSIS 安装包
-        if: startsWith(github.ref_name, 'v')
+        if: startsWith(github.ref_name, 'v') || github.event_name == 'workflow_dispatch'
         run: npm run bundle
 
       - name: 校验安装包
-        if: startsWith(github.ref_name, 'v')
+        if: startsWith(github.ref_name, 'v') || github.event_name == 'workflow_dispatch'
         run: |
           $exe = Get-ChildItem target/release/bundle/nsis/*-setup.exe -ErrorAction SilentlyContinue
           if (-not $exe) { throw "没有产出 NSIS 安装包" }
@@ -113,6 +119,9 @@ jobs:
       # 发布
       # ---------------------------------------------------------------
       - name: 上传到 Release
+        # 只在 tag 上发布：手动触发是 dry run（`github.ref_name` 那时是分支名，
+        # 拿它去 create release 会建出一个叫 "main" 的版本）
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

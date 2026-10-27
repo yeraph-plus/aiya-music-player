@@ -74,6 +74,10 @@ cargo clippy --version                                   # → 组件未安装
       但 beets 侧**从没打过 `beets-v*` tag**，`latest/download` 现在还下不到东西。
       **判据**：`beets-tool/` 打出 `.pyz` 与 `bundle.zip` → 传 release → 干净机点安装
       → `status.found == true`。地址可用 `AIYA_BEETS_RELEASE_BASE` 指过去做本地演练。
+
+      **发布链路可以先空跑**：release.yml 支持 `workflow_dispatch`，手动触发时
+      只构建、不建 release（上传步骤条件是"只在 tag 上"）。所以"构建会不会坏"
+      这件事不需要先打 tag——打 tag 会立刻产生一个公开 release，不能拿来试。
       *出处：docs/33 §M4「仍欠的」。*
 
 - [x] **P1-2 `beets.releaseBase` 设置键没有 UI 入口**（2026-10-27 盘点发现，同日解决）：
@@ -173,10 +177,24 @@ cargo clippy --version                                   # → 组件未安装
       失败原文（本地复现，删掉 `src-tauri/binaries/` + `touch build.rs`）：
       `resource path 'binaries\aiya-audio-host-x86_64-pc-windows-msvc.exe' doesn't exist`
 
+      **第二次实跑（run 40453817867，提交 f128c39）：两个 job 全绿**。
+      `verify` 9 步全过（含 runner 上用系统 Edge 跑完 26 条 e2e）；
+      `beets` 三个 smoke 全过——那台机器上没有 `D:\MUSIC_Player\test-music`，
+      跑通的同时也证明了合成音源这条路真的可用。
+
+      第二次红的是同一位置但换了个原因：脚本 print 全中文，Windows 的**管道**
+      stdout 默认按 locale 编码（英文 runner = cp1252），第一个中文就
+      `UnicodeEncodeError`。本地复现：
+      `PYTHONIOENCODING=cp1252 python beets-tool/tests/smoke_apply.py`。
+      修法见 P2-9 上表第三行之后：job 级 `PYTHONUTF8=1` + `PYTHONIOENCODING=utf-8`，
+      脚本里再 `reconfigure` 兜一层。
+
+      **顺带补的诊断能力**：job 日志匿名拉不到（API 403），所以三个 smoke step 都包了
+      `Tee-Object` + `::error title=…::`，失败时把最后 25 行贴成注解。注解是公开可读的，
+      提交页上直接能看到断在哪一句。
+
       顺带修的同源问题：`crates/aiya-audio/examples/gen_music.rs` 把输出目录也写死成
       同一个绝对路径（改成 `argv[1]`，默认 `./test-music`）；`.gitignore` 加 `/test-music/`。
-
-      **仍待验**：修完要再推一次、看两个 job 变绿才算真销项。
       *出处：docs/30 §9「故意没做」。*
 
 - [ ] **P2-10 `cargo clippy -D warnings` 从未跑过**：clippy 组件没装
