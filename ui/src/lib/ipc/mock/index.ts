@@ -170,10 +170,13 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     /* ---------------- beets ---------------- */
     case 'beets_status':
       return {
-        // 预览环境**假装 beets 存在**：否则「曲库维护」四个按钮全是禁用态，
+        // 预览环境默认**假装 beets 存在**：否则「曲库维护」四个按钮全是禁用态，
         // 事件流渲染在浏览器里永远走不到（e2e 只能断言空态）。真后端有没有
         // beets 由探测决定，这里纯粹是给 UI 演练用的桩。
-        found: true,
+        // `?beets=absent` 把它翻成 false，用来演练"没装"这条路径。
+        // 下面那些版本字段在 found:false 时 UI 根本不读（未装态只渲染一行说明
+        // 加两个安装按钮），所以保留原值；要连它们一起伪造反而会掩盖真契约差异。
+        found: mock.beetsFound,
         interpreter: 'preview',
         scriptPath: null,
         entrySource: 'settings',
@@ -237,8 +240,11 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
  * 事件侧：`listen` 直接挂 `Emitter.on`，subscribe 立刻 resolve —— 与真
  * `listen` 的异步语义一致，`events.ts` 的 sub 不用改。
  */
-export function installMock(options: { failCommands?: string[] } = {}): () => void {
+export function installMock(
+  options: { failCommands?: string[]; beetsFound?: boolean } = {},
+): () => void {
   const mock = new MockBackend();
+  if (options.beetsFound !== undefined) mock.beetsFound = options.beetsFound;
   const failing = new Set(options.failCommands ?? []);
 
   const transport: Transport = {

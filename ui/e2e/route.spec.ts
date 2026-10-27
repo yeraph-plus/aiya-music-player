@@ -198,6 +198,28 @@ test('扫描入库页按对象分两组，诊断折叠且不再重复别处的�
   await expect(page.locator('.diag-block', { hasText: 'beets 集成' })).toHaveCount(0);
 });
 
+test('beets 未装时整理库段收成一行，且不拖累曲库段（docs/35 P2-11）', async ({ page }) => {
+  // `?beets=absent` 让 mock 的 beets_status 报 found:false。这条路径以前只有肉眼验过：
+  // mock 里 found 恒 true，所以"未装"这一屏从来没有测试断言过。
+  await page.goto('/?beets=absent');
+  await page.locator('.sidebar .nav-item', { hasText: '扫描入库' }).click();
+
+  const beets = page.locator('#tools-beets');
+  // 收拢形态：一行说明 + 两个安装按钮，其余什么都没有
+  await expect(beets).toContainText('整理库未启用');
+  await expect(beets.getByRole('button', { name: /快速安装/ })).toBeVisible();
+  await expect(beets.getByRole('button', { name: /免安装包/ })).toBeVisible();
+
+  // 导入面板与维护四件套必须整块不存在（docs/33 的原则：不是"禁用"，是不该出现）
+  await expect(beets.getByRole('heading', { name: '导入新文件夹' })).toHaveCount(0);
+  await expect(beets.locator('.maint-fold')).toHaveCount(0);
+  await expect(beets.getByRole('button', { name: '登记到整理库' })).toHaveCount(0);
+
+  // 曲库段不受影响：页面上要能看出"没装 beets 也不影响播放"
+  await expect(page.locator('#tools-library .section-heading h2')).toHaveText('曲库');
+  await expect(page.locator('#tools-library')).toContainText('首');
+});
+
 test('docs/29 批 D：整理库四件套（登记/重写标签/查重/重排文件）', async ({ page }) => {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '扫描入库' }).click();

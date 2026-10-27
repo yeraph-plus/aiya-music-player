@@ -247,6 +247,15 @@ function decodeCursorId(cursor: string): string {
 export class MockBackend {
   readonly emitter = new Emitter();
 
+  /**
+   * `beets_status` 报不报"已安装"。
+   *
+   * 默认 true：预览环境如果假装没装，维护四件套全是禁用态，事件流的渲染在
+   * 浏览器里永远走不到（e2e 只能断言空态）。但"没装"这条路径本身也得能演练，
+   * 所以留一个开关，由 `?beets=absent` 打开（见 main.ts）。
+   */
+  beetsFound = true;
+
   private tracks: TrackRow[] = buildLibrary();
   private readonly playlistSeed = buildPlaylistSeed(this.tracks);
   private playlists: PlaylistSummary[] = this.playlistSeed.summaries;

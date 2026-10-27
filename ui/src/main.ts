@@ -13,11 +13,17 @@ import { applyLook, readLook } from './lib/look';
  * 真宿主永不加载，也不会把 20KB 假数据塞进主 bundle。
  *
  * `?failCmd=library_list` 可注入一条命令失败，用来手验错误条渲染。
+ * `?beets=absent` 让 `beets_status` 报"未安装"，用来演练整理库段的收拢形态
+ * （docs/35 P2-11：这条路径以前只有肉眼验过）。
  */
 if (!('__TAURI_INTERNALS__' in window)) {
   const { installMock } = await import('./lib/ipc/mock');
-  const failCmd = new URLSearchParams(window.location.search).get('failCmd');
-  installMock(failCmd ? { failCommands: [failCmd] } : {});
+  const params = new URLSearchParams(window.location.search);
+  const failCmd = params.get('failCmd');
+  installMock({
+    ...(failCmd ? { failCommands: [failCmd] } : {}),
+    ...(params.get('beets') === 'absent' ? { beetsFound: false } : {}),
+  });
 }
 
 const target = document.getElementById('app');
