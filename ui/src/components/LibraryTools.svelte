@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Download, ExternalLink, FolderOpen, RefreshCw, ScanSearch } from '@lucide/svelte';
+  import BeetsMaintenance from './BeetsMaintenance.svelte';
   import ImportPanel from './ImportPanel.svelte';
   import Button from './ui/Button.svelte';
   import { beetsSession } from '../stores/beets-session.svelte';
@@ -159,6 +160,8 @@
   {/if}
 
   <ImportPanel onsynced={() => void list.reload({ restore: true })} />
+
+  <BeetsMaintenance />
 
   <div class="beets-web-row">
     {#if ui.beets === null}

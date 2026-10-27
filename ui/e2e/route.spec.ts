@@ -164,6 +164,48 @@ test('docs/29 批 A：扫描入库页——多目录 textarea 草稿保存 + 设
   await expect(page.locator('.settings-rail .rail-item')).toHaveCount(4);
 });
 
+test('docs/29 批 D：曲库维护四件套（建库基线/刷新标签/查找重复/整理文件）', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('.sidebar .nav-item', { hasText: '扫描入库' }).click();
+
+  const card = page.locator('.maint');
+  await expect(card).toBeVisible();
+  // 库根来自 beets 状态（config.yaml 显式配置的那个），不是猜的 ~/Music
+  await expect(card.locator('.task-status-head .dim')).toContainText('库根 D:/MUSIC_Player/test-music');
+
+  // 建库基线：事件流走到 adoptDone，汇总行显示登记数
+  await card.getByRole('button', { name: '建库基线' }).click();
+  await expect(card.locator('.maint-line')).toContainText('登记 3 首', { timeout: 10_000 });
+
+  // 刷新标签：先预览出 diff（预览态才出现「应用这些修改」）
+  await card.getByRole('button', { name: '刷新标签' }).click();
+  await expect(card.locator('.maint-line')).toContainText('待更新 3 首', { timeout: 10_000 });
+  await expect(card.locator('.maint-diff .chip').first()).toContainText('title');
+  const apply = card.getByRole('button', { name: '应用这些修改' });
+  await expect(apply).toBeVisible();
+  await apply.click();
+  await expect(card.locator('.maint-line')).toContainText('已更新 3 首', { timeout: 10_000 });
+  // 应用完成后预览按钮消失（不留一个会重复写库的入口）
+  await expect(card.getByRole('button', { name: '应用这些修改' })).toHaveCount(0);
+
+  // 查找重复：只读分组 + 每首带「定位」
+  await card.getByRole('button', { name: '查找重复' }).click();
+  await expect(card.locator('.maint-line')).toContainText('1 组重复', { timeout: 10_000 });
+  await expect(card.locator('.maint-group-head .chip')).toHaveText(/\S/);
+  await expect(card.locator('.maint-sublist .link').first()).toHaveText('定位');
+  // 应用内不提供删除入口（危险操作留给 beets CLI / 资源管理器）
+  await expect(card.getByRole('button', { name: /删除/ })).toHaveCount(0);
+
+  // 整理文件：预览出「从哪到哪」清单，确认后才真搬
+  await card.getByRole('button', { name: '整理文件' }).click();
+  await expect(card.locator('.maint-line')).toContainText('将移动 3 首', { timeout: 10_000 });
+  const rows = card.locator('.maint-list > li');
+  await expect(rows).toHaveCount(3);
+  await expect(rows.first()).toContainText('→');
+  await card.getByRole('button', { name: '确认移动' }).click();
+  await expect(card.locator('.maint-line')).toContainText('已移动 3 首', { timeout: 10_000 });
+});
+
 test('docs/28：专辑宫格（侧栏一级项）→ 卡片 → 专辑详情 → 返回回宫格', async ({ page }) => {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '专辑' }).click();

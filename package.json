@@ -35,12 +35,13 @@
     "smoke:supervisor": "node tools/run.mjs cargo run -q -p aiya-audio-host --example supervisor_smoke",
     "smoke:output": "node tools/run.mjs cargo run -q -p aiya-audio-host --example output_cfg_smoke",
     "smoke:beets": "tools\\beets-venv\\Scripts\\python.exe tools\\smoke_apply.py",
+    "smoke:maint": "tools\\beets-venv\\Scripts\\python.exe tools\\smoke_maint.py",
     "smoke:apply": "npm run smoke:beets",
     "bench:50k": "node tools/run.mjs cargo test -p aiya-data --release --test perf_50k -- --ignored --nocapture",
     "notices": "node tools/run.mjs tools/gen-notices.mjs",
     "icon:source": "node scripts/gen-icon.mjs",
     "clean": "node tools/run.mjs cargo clean",
-    "verify": "npm run test:all && npm run gen:types:check && npm run smoke:beets",
+    "verify": "npm run test:all && npm run gen:types:check && npm run smoke:beets && npm run smoke:maint",
     "verify:release": "npm run test:all && npm run bundle"
   }
 }

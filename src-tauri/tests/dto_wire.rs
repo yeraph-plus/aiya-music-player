@@ -430,6 +430,7 @@ fn beets_status_protocol_version_is_number() {
         python_version: None,
         library_path: None,
         library_exists: Some(true),
+        library_directory: Some("D:\\Music".into()),
         plugins: Some(vec!["fetchart".into()]),
         config_dir: None,
         error_code: None,
@@ -439,6 +440,8 @@ fn beets_status_protocol_version_is_number() {
     // Option<u32> 在 ts-rs 里是 bigint，必须 number（挡回归）
     assert!(v["protocolVersion"].is_number(), "protocolVersion 必须 number");
     assert!(v["libraryExists"].is_boolean());
+    // 库根目录：UI 用它显示"整理到 <dir>"，并在 null 时禁用整理文件
+    assert_eq!(v["libraryDirectory"], "D:\\Music");
     assert!(v["scriptPath"].is_null());
 }
 

@@ -170,24 +170,31 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     /* ---------------- beets ---------------- */
     case 'beets_status':
       return {
-        found: false,
-        interpreter: null,
+        // 预览环境**假装 beets 存在**：否则「曲库维护」四个按钮全是禁用态，
+        // 事件流渲染在浏览器里永远走不到（e2e 只能断言空态）。真后端有没有
+        // beets 由探测决定，这里纯粹是给 UI 演练用的桩。
+        found: true,
+        interpreter: 'preview',
         scriptPath: null,
-        protocolVersion: null,
-        beetsVersion: null,
-        pythonVersion: null,
-        libraryPath: null,
-        libraryExists: null,
-        plugins: null,
-        configDir: null,
-        errorCode: 'preview',
-        errorMessage: '浏览器预览不含 beets sidecar（导入面板只看空态）',
+        protocolVersion: 3,
+        beetsVersion: '2.14.1 (preview)',
+        pythonVersion: '3.14 (preview)',
+        libraryPath: 'D:/MUSIC_Player/test-music/.beets/library.db',
+        libraryExists: true,
+        libraryDirectory: 'D:/MUSIC_Player/test-music',
+        plugins: ['replaygain', 'lyrics', 'duplicates'],
+        configDir: 'D:/MUSIC_Player/test-music/.beets',
+        errorCode: null,
+        errorMessage: null,
       };
     case 'beets_preview':
+      void (a.paths as string[] | undefined);
+      return mock.beetsPreview();
     case 'beets_apply':
-    case 'beets_sync':
       void (a.decisions as ApplyDecision[] | undefined);
       return { started: true };
+    case 'beets_sync':
+      return mock.beetsSync();
     case 'beets_cancel':
       return { requested: false };
     // 预览里没有 beets 环境，也不该真的拉浏览器：回"未找到"语义
@@ -197,6 +204,17 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     // 好让 UI 的进度/终态渲染在浏览器里也能验证
     case 'beets_install':
       return mock.beetsInstall();
+    // ---- 批 D：曲库维护四件套（事件流演练，见 MockBackend.beetsMaintenance）----
+    case 'beets_adopt':
+      return mock.beetsMaintenance('adopt', false);
+    case 'beets_update':
+      return mock.beetsMaintenance('update', a.pretend === true);
+    case 'beets_duplicates':
+      return mock.beetsMaintenance('duplicates', false);
+    case 'beets_move':
+      return mock.beetsMaintenance('move', a.pretend === true);
+    case 'beets_reveal':
+      return { revealed: false, reason: '浏览器预览模式不可用' };
 
     default:
       throw mockError(cmd);

@@ -397,6 +397,23 @@ pub fn sync_items(conn: &mut Connection, items: &[BeetsItem], now: i64) -> DbRes
     Ok(stats)
 }
 
+/// 自有库里全部**在线**曲目路径（按路径升序，保证一次 adopt 的遍历顺序稳定）。
+///
+/// 只取 `online`：`missing` 的行是扫描器判定"文件不在了"的，把它们登记进
+/// beets 库只会立刻制造一批死条目（beets 也不会自己清理）。顺序固定是为了
+/// 让日志/失败清单可复现——同一个库两次 adopt 的失败项顺序一致才方便比。
+pub fn online_paths(conn: &Connection) -> DbResult<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT path FROM tracks WHERE availability = 'online' ORDER BY path_lower",
+    )?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,6 +439,27 @@ mod tests {
             mtime: Some(1700000000),
             rg_track_gain: Some(-8.5),
         }
+    }
+
+    #[test]
+    fn online_paths_skips_missing_and_orders_by_path() {
+        let mut conn = open_in_memory().unwrap();
+        // 三条：B（在线）/a（在线）/C（缺失）
+        sync_items(
+            &mut conn,
+            &[
+                item(1, r"C:\m\B.mp3", "B"),
+                item(2, r"C:\m\a.mp3", "a"),
+                item(3, r"C:\m\C.mp3", "C"),
+            ],
+            100,
+        )
+        .unwrap();
+        conn.execute("UPDATE tracks SET availability = 'missing' WHERE path_lower LIKE '%c.mp3'", [])
+            .unwrap();
+
+        // 只取在线行；顺序按 path_lower（小写）——不是按 id、也不是大小写敏感的 path
+        assert_eq!(online_paths(&conn).unwrap(), vec![r"C:\m\a.mp3", r"C:\m\B.mp3"]);
     }
 
     #[test]

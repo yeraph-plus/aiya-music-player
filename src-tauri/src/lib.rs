@@ -752,6 +752,132 @@ async fn beets_install(app: AppHandle) -> Result<dto::beets::JobStarted, dto::Ap
         .map_err(dto::ApiError::internal)
 }
 
+/// 在资源管理器中定位一个**绝对路径**（批 D 查重结果用）。
+///
+/// 为什么不复用 `library_reveal_track`：那条按 track id 查自有库拿路径，而
+/// 查重结果来自 beets 库——里面可能有自有库没有的条目（例如用户在 beets
+/// 侧导入过、还没对账的文件）。传路径是最直接的，也只做 `/select` 定位，
+/// 不会打开文件本身。
+#[tauri::command]
+fn beets_reveal(path: String) -> Result<dto::library::RevealResult, dto::ApiError> {
+    if path.trim().is_empty() || !std::path::Path::new(&path).is_file() {
+        return Ok(dto::library::RevealResult {
+            revealed: false,
+            reason: Some("文件不存在".into()),
+        });
+    }
+    let revealed = std::process::Command::new("explorer")
+        .arg(format!("/select,{path}"))
+        .spawn()
+        .is_ok();
+    Ok(dto::library::RevealResult {
+        revealed,
+        reason: if revealed { None } else { Some("explorer 启动失败".into()) },
+    })
+}
+
+/* ---------------- 批 D：beets 曲库维护 ---------------- */
+
+/// 维护任务启动失败的错误分类。
+///
+/// 只有"没有可用的 beets 解释器"该映射成 `beetsMissing`（UI 弹安装指引，
+/// 与 preview/apply 一致）；"已有任务在执行"、"脚本落盘失败"这些是普通失败，
+/// 塞进 `beetsMissing` 会让用户以为自己没装 beets 而反复重装。
+/// 靠消息串判断是因为这条边界本身就是 String（sidecar 是外部进程）。
+fn map_beets_start(e: String) -> dto::ApiError {
+    if e.contains("interpreter") {
+        dto::ApiError::beets_missing(e)
+    } else {
+        dto::ApiError::invalid_arg(e)
+    }
+}
+
+/// 建 beets 库基线：把自有库里的**在线**曲目按现状登记进 beets 库
+/// （as-is 入库：不联网、不改标签、不移动文件）。
+///
+/// `paths` 为空 = 取自有库全部在线路径。UI 永远传空数组进来——让前端把
+/// 上千条路径经 IPC 传一遍纯属浪费，而且它拿不到"哪些行是可播的"这个语义
+/// （那是 DB 的事实，不是 UI 的）。
+/// 完成后自动跑一次读模型对账（`beets_item_id` 要落库，后续 move 的路径
+/// 跟随才有双键依据）。
+#[tauri::command]
+async fn beets_adopt(
+    app: AppHandle,
+    paths: Vec<String>,
+) -> Result<dto::beets::JobStarted, dto::ApiError> {
+    let Some(state) = app.try_state::<AppState>() else {
+        return Err(dto::ApiError::internal("app state 不可用"));
+    };
+    let (db_path, scanning) = (state.db_path.clone(), state.scanning.clone());
+    let paths = if paths.is_empty() {
+        state
+            .db()
+            .send(|conn| aiya_data::beets_sync::online_paths(conn))
+            .map_err(dto::ApiError::from)?
+    } else {
+        paths
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let refresh = beets::RefreshParams { db_path, scanning };
+        beets::start_adopt(app, paths, Some(refresh))
+    })
+    .await
+    .map_err(dto::ApiError::internal)?
+    .map_err(map_beets_start)?;
+    Ok(dto::beets::JobStarted { started: true })
+}
+
+/// 用文件里的标签刷新 beets 库。`pretend` = 只报 diff、不写库（预览）。
+#[tauri::command]
+async fn beets_update(
+    app: AppHandle,
+    pretend: bool,
+) -> Result<dto::beets::JobStarted, dto::ApiError> {
+    tauri::async_runtime::spawn_blocking(move || beets::start_update(app, pretend))
+        .await
+        .map_err(dto::ApiError::internal)?
+        .map_err(map_beets_start)?;
+    Ok(dto::beets::JobStarted { started: true })
+}
+
+/// 按字段组查重（只读报告，不删任何文件）。
+#[tauri::command]
+async fn beets_duplicates(
+    app: AppHandle,
+    keys: Vec<String>,
+) -> Result<dto::beets::JobStarted, dto::ApiError> {
+    tauri::async_runtime::spawn_blocking(move || beets::start_duplicates(app, keys))
+        .await
+        .map_err(dto::ApiError::internal)?
+        .map_err(map_beets_start)?;
+    Ok(dto::beets::JobStarted { started: true })
+}
+
+/// 按 path_formats 整理文件（`pretend` = 只出清单，不搬文件）。
+///
+/// `directory` 是**校验值**：sidecar 拿它跟 config.yaml 的 `directory` 比对，
+/// 不一致就拒绝执行——库根只能有一处定义，两个基准搬文件会让读模型对错号。
+/// 完成后自动对齐读模型（路径漂移必须立刻跟随，不等下次扫描）。
+#[tauri::command]
+async fn beets_move(
+    app: AppHandle,
+    directory: String,
+    pretend: bool,
+) -> Result<dto::beets::JobStarted, dto::ApiError> {
+    let Some(state) = app.try_state::<AppState>() else {
+        return Err(dto::ApiError::internal("app state 不可用"));
+    };
+    let (db_path, scanning) = (state.db_path.clone(), state.scanning.clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        let refresh = beets::RefreshParams { db_path, scanning };
+        beets::start_move(app, directory, pretend, Some(refresh))
+    })
+    .await
+    .map_err(dto::ApiError::internal)?
+    .map_err(map_beets_start)?;
+    Ok(dto::beets::JobStarted { started: true })
+}
+
 #[tauri::command]
 fn library_list(
     state: State<'_, AppState>,
@@ -2898,6 +3024,11 @@ pub fn run() {
             beets_sync,
             beets_web_open,
             beets_install,
+            beets_adopt,
+            beets_update,
+            beets_duplicates,
+            beets_move,
+            beets_reveal,
             library_list,
             library_albums,
             library_artists,

@@ -40,6 +40,9 @@ export function boot(options: { onState: (state: PlayerState) => void }): () => 
   // beets 运行时安装进度（docs/29 批 C）：低频事件，但只该订阅一次
   cleanups.push(ui.watchBeetsInstall());
 
+  // 曲库维护事件（docs/29 批 D）：同样是"组件不直接 listen"，只订阅一次
+  cleanups.push(ui.watchBeetsMaint());
+
   void (async () => {
     // 三件事并发：应用信息（dataDir）、播放器快照、界面状态/设置/歌单
     const [dataDir, playerResult] = await Promise.all([library.fetchInfo(), player.fetchState()]);

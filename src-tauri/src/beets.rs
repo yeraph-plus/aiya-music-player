@@ -330,6 +330,7 @@ fn query_sidecar(
             python_version: None,
             library_path: None,
             library_exists: None,
+            library_directory: None,
             plugins: None,
             config_dir: None,
             error_code: Some(err.code),
@@ -346,6 +347,7 @@ fn query_sidecar(
         python_version: data.get("pythonVersion").and_then(|v| v.as_str()).map(Into::into),
         library_path: data.get("libraryPath").and_then(|v| v.as_str()).map(Into::into),
         library_exists: data.get("libraryExists").and_then(|v| v.as_bool()),
+        library_directory: data.get("libraryDirectory").and_then(|v| v.as_str()).map(Into::into),
         plugins: data
             .get("plugins")
             .and_then(|v| v.as_array())
@@ -371,6 +373,7 @@ pub fn probe(app: &tauri::AppHandle) -> BeetsStatus {
                 python_version: None,
                 library_path: None,
                 library_exists: None,
+                library_directory: None,
                 plugins: None,
                 config_dir: None,
                 error_code: Some("E_SCRIPT".into()),
@@ -408,6 +411,7 @@ pub fn probe(app: &tauri::AppHandle) -> BeetsStatus {
         python_version: None,
         library_path: None,
         library_exists: None,
+        library_directory: None,
         plugins: None,
         config_dir: None,
         error_code: Some("E_BEETS_NOT_FOUND".into()),
@@ -599,16 +603,22 @@ fn spawn_session(
     Ok((child, stdin))
 }
 
-/// 转发 stdout 行事件到 `beets:import`；见终止事件（done/applyDone/
-/// cancelled/sessionFailed）后关 stdin 让 sidecar EOF 退出，进程退出后收尾清槽。
+/// 转发 stdout 行事件到 `event` 通道；见终止事件（done/applyDone/cancelled/
+/// sessionFailed/adoptDone/updateDone/duplicatesDone/moveDone）后关 stdin 让
+/// sidecar EOF 退出，进程退出后收尾清槽。
 /// 内置空闲看门狗：10 分钟无任何 stdout 输出判卡死（匹配是网络操作，但正常
 /// 路径每个专辑都有 progress 事件），kill 子进程并发 sessionFailed——
 /// 此前导入会话无任何超时保护，卡死即槽位永久占死。
+///
+/// `event` 由调用方给：导入链路走 `beets:import`（前端 ImportPanel 在听），
+/// 批 D 的曲库维护走 `beets:maintenance`——两条链路语义不同，混在一个通道里
+/// 会让"导入进度条"突然收到"整理文件"的事件。
 const SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
 fn spawn_reader(
     mut child: std::process::Child,
     app: tauri::AppHandle,
+    event: &'static str,
     on_exit: impl FnOnce(&tauri::AppHandle) + Send + 'static,
 ) -> Result<(), String> {
     let mut stdout = child.stdout.take().expect("stdout piped");
@@ -675,7 +685,7 @@ fn spawn_reader(
                                     let terminal = evt.get("type").and_then(|t| t.as_str())
                                         .is_some_and(|t| matches!(
                                             t, "done" | "applyDone" | "cancelled" | "sessionFailed"));
-                                    let _ = app.emit("beets:import", evt);
+                                    let _ = app.emit(event, evt);
                                     if terminal {
                                         break;
                                     }
@@ -692,7 +702,7 @@ fn spawn_reader(
                                 let _ = c.kill();
                             }
                             let _ = app.emit(
-                                "beets:import",
+                                event,
                                 serde_json::json!({
                                     "type": "sessionFailed",
                                     "error": {
@@ -713,7 +723,7 @@ fn spawn_reader(
                     let _ = c.wait();
                 }
                 on_exit(&app);
-                let _ = app.emit("beets:import", serde_json::json!({ "type": "sessionEnd" }));
+                let _ = app.emit(event, serde_json::json!({ "type": "sessionEnd" }));
             });
         spawned.map_err(|e| {
             let mut c = child_for_fail.lock().unwrap();
@@ -750,7 +760,7 @@ pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), St
     let result = (|| {
         let (child, stdin) = spawn_session(&python, &script, &req, Some(&home))?;
         acquire_session(stdin)?;
-        spawn_reader(child, app, |_| {})
+        spawn_reader(child, app, "beets:import", |_| {})
     })();
     if result.is_err() {
         release_session();
@@ -779,7 +789,7 @@ pub fn start_apply(
     let result = (|| {
         let (child, stdin) = spawn_session(&python, &script, &req, Some(&home))?;
         acquire_session(stdin)?;
-        spawn_reader(child, app, move |app| {
+        spawn_reader(child, app, "beets:import", move |app| {
             if let Some(params) = refresh {
                 // 自闭环（docs/08 §5）：beets 刚写完库就是最新权威，
                 // 直接全量对齐自有 DB，替代旧"重扫受影响目录"路径。
@@ -791,6 +801,103 @@ pub fn start_apply(
         release_session();
     }
     result
+}
+
+/// 批 D 曲库维护任务的统一入口（adopt / update / duplicates / move）。
+///
+/// 四条命令的公共部分完全一样：占会话槽 → 起一次性 sidecar → 事件流走
+/// `beets:maintenance` → 进程退出后按需跑一次读模型对账。差别只有 req 载荷
+/// 和"要不要对账"，所以合成一个函数，避免四份几乎相同的 spawn 代码各自漂移
+/// （漏了 release_session、漏了 ensure_config 之类）。
+///
+/// `refresh` 为什么只有 adopt/move 给：这两条会改 beets 库的**内容与路径**——
+/// adopt 把文件登记进库（对账后 `tracks.beets_item_id` 才有值，而后续 move
+/// 的路径跟随正是靠这个双键，docs/29 §12）；move 把文件搬走，路径漂移必须
+/// 立刻跟随，不能等用户下次扫描。update 只改标签（路径不变）、duplicates
+/// 纯只读，都不需要自动对账。
+fn start_maintenance(
+    app: tauri::AppHandle,
+    payload: serde_json::Value,
+    refresh: Option<RefreshParams>,
+) -> Result<(), String> {
+    let script = ensure_script(&app)?;
+    let script_str = script.to_string_lossy().into_owned();
+    let python = pick_interpreter(&app, &script_str)
+        .ok_or_else(|| "no beets interpreter available".to_string())?;
+    // move 的目标根只认 config.yaml 的 directory（sidecar 侧有硬校验），
+    // 确保它存在后再起会话；这里失败不算致命——真缺的话 sidecar 会给出
+    // "没有 directory"的明确错误
+    if let Err(e) = ensure_config(&app) {
+        tracing::warn!(error = %e, "维护任务前生成 beets config 失败");
+    }
+    let home = beets_paths(&app).home;
+
+    if !reserve_session() {
+        return Err("已有 beets 任务在执行（可先取消）".into());
+    }
+    let result = (|| {
+        let (child, stdin) = spawn_session(&python, &script, &payload, Some(&home))?;
+        acquire_session(stdin)?;
+        spawn_reader(child, app, "beets:maintenance", move |app| {
+            if let Some(params) = refresh {
+                run_sync(app, params);
+            }
+        })
+    })();
+    if result.is_err() {
+        release_session();
+    }
+    result
+}
+
+/// 建 beets 库基线：把自有库里的文件按现状登记进 beets 库。
+/// `paths` 为空 = 由宿主取自有库全部在线路径（UI 不该为了这个传 1800 个路径）。
+pub fn start_adopt(
+    app: tauri::AppHandle,
+    paths: Vec<String>,
+    refresh: Option<RefreshParams>,
+) -> Result<(), String> {
+    start_maintenance(
+        app,
+        serde_json::json!({ "id": 1, "cmd": "adopt_library", "paths": paths }),
+        refresh,
+    )
+}
+
+/// 用文件标签刷新 beets 库（`pretend` = 只报 diff 不写库）。
+pub fn start_update(app: tauri::AppHandle, pretend: bool) -> Result<(), String> {
+    start_maintenance(
+        app,
+        serde_json::json!({ "id": 1, "cmd": "update_library", "pretend": pretend }),
+        None,
+    )
+}
+
+/// 按字段组查重（只读）。
+pub fn start_duplicates(app: tauri::AppHandle, keys: Vec<String>) -> Result<(), String> {
+    start_maintenance(
+        app,
+        serde_json::json!({ "id": 1, "cmd": "find_duplicates", "keys": keys }),
+        None,
+    )
+}
+
+/// 按 path_formats 整理文件（`pretend` = 只出清单不搬文件）。
+/// `directory` 是校验值：与 config.yaml 的 directory 不一致会被 sidecar 拒绝。
+pub fn start_move(
+    app: tauri::AppHandle,
+    directory: String,
+    pretend: bool,
+    refresh: Option<RefreshParams>,
+) -> Result<(), String> {
+    start_maintenance(
+        app,
+        serde_json::json!({
+            "id": 1, "cmd": "move_items",
+            "directory": directory, "pretend": pretend,
+        }),
+        refresh,
+    )
 }
 
 /// 手动触发一次读模型对齐（设置页/导入面板按钮；B4 的自动同步基座）。
@@ -1089,6 +1196,7 @@ mod tests {
                 python_version: None,
                 library_path: None,
                 library_exists: None,
+                library_directory: None,
                 plugins: None,
                 config_dir: None,
                 error_code: Some("E_SPAWN".into()),

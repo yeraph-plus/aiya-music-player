@@ -25,6 +25,13 @@ pub struct BeetsStatus {
     pub python_version: Option<String>,
     pub library_path: Option<String>,
     pub library_exists: Option<bool>,
+    /// 库根目录（`config.yaml` 里**显式配置**的 `directory`；None = 没配过）。
+    ///
+    /// 为什么单独给一个字段：beets 的 `config['directory']` 恒有值（内置默认
+    /// `~/Music`），拿它显示会误导用户；而"整理文件"的目标根只认显式配置的
+    /// 那一个（没配就拒绝执行，见 sidecar `_configured_directory`）。UI 用它
+    /// 显示目标目录，并在 None 时禁用"整理文件"。
+    pub library_directory: Option<String>,
     pub plugins: Option<Vec<String>>,
     pub config_dir: Option<String>,
     pub error_code: Option<String>,

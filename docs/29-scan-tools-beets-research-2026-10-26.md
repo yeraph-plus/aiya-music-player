@@ -595,3 +595,138 @@ plugins: replaygain lyrics fromfilename duplicates scrub smartplaylist
   embeddable + get-pip），但仓库还没有 CI（docs/30 P1-6）。
 - **离线 wheelhouse 没造**：`--from-wheels` 分支实现完整，但仓库里没有
   wheelhouse 产物（`pip download` 需要一次联网准备），P5 若要做离线段再补。
+
+## 16. 批 D 落地记录（2026-10-27）
+
+### 16.1 开工前的事实核查（推翻了两个想当然）
+
+§10 第 4 条写的批 D 是"sidecar 加 query_items / modify_items / refile_items /
+find_duplicates / update_library；UI 高级查询、重复管理、元数据编辑入口"。
+动手前先核了三条事实，范围因此变了两次：
+
+**事实 1：beets 库是空的。** `%APPDATA%\dev.aiya.music\beets` 目录都不存在，
+dev 库 `tools/beets-home/library.db` 只有 3 条测试残留。原因是整条链路**只有
+`apply_import` 会写 beets 库**——用户用自有扫描器入库的 1846 首从没进过 beets。
+所以 update / duplicates / move 三条命令在真机上首跑全是"无对象"。
+
+> 结论：批 D 必须补一条 §10 没写的命令——**adopt（建库基线）**，
+> 也就是 beets 的 as-is 入库：读标签入库，不联网、不改标签、不移动文件。
+> 没有它，后面三条是空转的。
+
+**事实 2：beets 2.14 的 `items.path` 存的是相对路径。** 直接查 DB：
+
+```
+sqlite> SELECT id, path FROM items;
+1|Non-Album/冒烟艺人/曲目A.wav
+```
+
+绝对路径靠 `Library.directory` 现场拼。推论很硬：**move 的目标根和 dump 的
+解析根必须同一个**，否则 `beets_sync` 会拿错位路径去对账（整库误判
+orphan/imported）。
+
+**事实 3：`config['directory']` 恒有值。** config.yaml 不存在的库也返回
+`~/Music`（来自 `config_default.yaml`），无法区分"用户配过"与"用的默认"。
+拿它去 move 等于把用户曲库搬进他真实的音乐文件夹。
+
+> 结论（事实 2+3 的合解）：**move 的库根只认 config.yaml 里显式写的
+> `directory`，调用方传的值只作校验**。不一致 → 拒绝执行；没配置 → 拒绝执行。
+> 判断"显式配置过"只能读 config.yaml 原文（`_configured_directory`），
+> 问 beets 问不出来。
+
+**事实 4：duplicates 默认 keys 是 `mb_trackid/mb_albumid`。** as-is 入库的曲目
+这两个字段全是 NULL，用默认 key 查重必然零命中——看上去像"查重坏了"，实际是
+条件不适用。所以 keys 做成参数，默认给 `title + artist`。
+
+**范围结论（相对 §10 收窄）**：做 `adopt_library` / `update_library` /
+`find_duplicates` / `move_items` 四条；`query_items` 按拍板 5 排除（不是
+"规划好的扫描指令"）；`modify_items` 一并后置——它对应"元数据修正"需求，
+但手改标签的 UI 是另一个交互尺度（字段编辑器 + 校验 + 撤销），塞进这批会
+让"命令面"和"编辑器"两个东西互相拖。
+
+### 16.2 sidecar：四条命令的实现取舍
+
+全部走**进程内 beets API**，不 spawn `python -m beets <cmd>`：CLI 的输出是给
+人看的文本，转结构化事件既脆弱又拿不到逐曲粒度；而 `Library`/`Item` 这套对象
+本来就够用（`beet update` 与 `beet move` 的核心也是同一批调用）。代价是要自己
+复刻命令的判定逻辑——每处复刻在注释里标了 beets 源码位置，升级版本照着比对。
+
+| 命令 | 照抄的 beets 语义 | 复刻要点 |
+|---|---|---|
+| `adopt_library` | `import -A`（as-is） | `Item.from_path` + `lib.add`，已在库跳过；一个大事务（1846 条逐条 fsync 太慢），取消是 `return` 非回滚（幂等，重跑即可） |
+| `update_library` | `update.py::update_items` | ①文件没了→删库行 ②**mtime 没变→跳过不重读**（这是 update 快的全部原因）③逐字段 diff 有变化才 `store`，没变化只落新 mtime |
+| `find_duplicates` | `duplicates.py::_group_by` | 非 strict 分支：**全空才跳过**，部分空仍参与分组；分组 key 用小写归一值，**展示用首条原值**（否则 UI 上看到"曲目a"，用户对着库里的"曲目A"找不到） |
+| `move_items` | `move.py` + `Item.move` | 目标==源→same（`normcase` 比，Windows 盘符/分隔符大小写不同）；目标已存在→conflict 不改名不覆盖（beets 的 `move_file` 会静默改成 `name.1.ext`） |
+
+三条细节：
+
+- **`_item_brief` 的 `size` 要现读磁盘**：`size` 不是 Item 字段（`getattr` 为
+  None），读不到给 0（文件已不在时照样要能显示这一行）。
+- **上限三件套**：错误 50 条（`MAINT_MAX_ERRORS`）、明细 500 条
+  （`MAINT_MAX_DETAIL`）、进度步长 20 文件（`MAINT_PROGRESS_STEP`）。几千条
+  明细会让一次会话的 stdout 涨到几十 MB，而用户根本看不过来。
+- **协议版本 2 → 3**：加了四条命令，`status` 报的 `protocolVersion` 要跟上。
+  `status` 同时新增 `libraryDirectory`（= `_configured_directory()`），
+  UI 拿它显示"库根"并在 None 时禁用整理文件。
+
+### 16.3 宿主：一条入口 + 一个事件通道
+
+四条命令的公共部分（占会话槽 → 起 sidecar → 转发事件 → 按需对账）合成
+`start_maintenance`。**`spawn_reader` 加了 `event` 参数**：导入链路仍走
+`beets:import`（ImportPanel 在听），维护走 `beets:maintenance`——混在一个通道
+里会让"导入进度条"突然收到"整理文件"的事件。
+
+对账（`run_sync` → `librarySynced`）只有 adopt 与 move 给：
+
+- **adopt 后必须对账**：`tracks.beets_item_id` 要靠对账才填上，而后面 move 的
+  路径跟随恰恰依赖这个双键（§12 的结论）。不做这一步，move 之后 dump 出来的
+  新路径在自有库里 path 不匹配、item_id 为空 → 判定 orphan 而不是 relocate。
+- **move 后必须对账**：路径漂移要立刻跟随，不等用户下次扫描。
+- update 改的是标签（路径不变）、duplicates 纯只读，都不自动对账。
+
+`beets_adopt` 的 `paths` 参数：**UI 永远传空数组**，空 = 宿主取自有库全部
+在线路径（`beets_sync::online_paths`）。让前端把 1846 条路径经 IPC 传一遍纯属
+浪费，而且"哪些行可播"是 DB 的事实，不是 UI 的。
+
+新增 `beets_reveal(path)`：查重结果的「定位」。不复用
+`library_reveal_track`——那条按 track id 查自有库拿路径，而查重结果来自
+beets 库，可能有自有库没有的条目（用户在 beets 侧导入过、还没对账的）。
+
+### 16.4 顺手修掉一个批 A 的 bug（批次外，但挡路）
+
+**从侧栏进「扫描入库」页，诊断区永远"正在读取…"、beets 块永远"正在检测…"。**
+根因：`ui.openPage` 只在 `page === 'settings'` 时触发 `refreshDiagnostics`，
+而 tools 页的诊断/beets 数据靠 `nav.apply`（返回栈还原路径）才有——侧栏
+点击走的是 `openPage`。批 A 的 e2e 只断言了目录 textarea 与设置页分区，
+没看这两块内容，所以没拦住。
+
+批 D 的「曲库维护」直接依赖 beets 状态（是否可用、库根是什么），这个洞必须
+一起补：`openPage` 与 bootstrap 的恢复路径都扩到 `settings | tools`。
+
+### 16.5 验证
+
+- `cargo test --workspace`：**295 passed / 0 failed**（1 ignored = perf_50k）。
+  新增 `online_paths_skips_missing_and_orders_by_path`（只取 online + 按
+  path_lower 排序）；`dto_wire` 补 `libraryDirectory` 的 wire 断言。
+- `tools/smoke_maint.py`（新，纳入 `npm run verify`）：隔离 BEETSDIR + 独立库
+  目录，14 个断言全过——adopt 幂等、update 的 mtime 预筛与 pretend 不写库、
+  查重分组与空 key 跳过、move 的"库根不一致拒绝/未配置拒绝/预览不动文件/
+  执行后源目录搬空/再跑全 same/冲突不覆盖"。
+- `svelte-check` 0/0；`gen-types` 52 类型一致；依赖图 108 模块 / 375 依赖无环。
+- Playwright **24 passed / 23.3s**（新增一条：四个按钮的事件流渲染——基线
+  汇总、diff 预览→应用→预览按钮消失、查重分组+定位、整理清单→确认移动）。
+  这条 e2e 正是抓 16.4 那个 bug 的地方（先红后绿）。
+
+### 16.6 遗留
+
+- **`modify_items`（手改标签）没做**：见 16.1 的范围结论，它需要字段编辑器
+  那套交互，单独一批更合适。届时可以复用 `update_library` 的 diff 结构
+  反向（把"目标值"写成用户输入）。
+- **查重只有报告**：按拍板"只读报告 + 定位"，应用内不删文件。真要清理走
+  `beet dup -d` 或资源管理器。若以后要加应用内删除，必须走回收站并且
+  逐项确认（personal_files_safety 那套规矩）。
+- **adopt 不认 beets 侧已有条目**：它以自有库为准单向登记。反向（beets 有、
+  自有没有 → 让用户决定是否纳入曲库）目前还是 `sync_items` 的 `imported`
+  计数，没做成 UI 流程。
+- **move 的 path_formats 是 beets 默认**：`$albumartist/$album/$track $title`。
+  用户改 config 才会变，应用内不做模板编辑（那是 beets 的地盘）。预览里
+  能逐条看到"从哪到哪"，是这条命令的安全阀。

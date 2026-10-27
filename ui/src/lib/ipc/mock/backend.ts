@@ -488,12 +488,131 @@ export class MockBackend {
         pythonVersion: null,
         libraryPath: null,
         libraryExists: null,
+        libraryDirectory: null,
         plugins: null,
         configDir: null,
         errorCode: 'E_BEETS_NOT_FOUND',
         errorMessage: '浏览器预览不含 beets 运行时',
       },
     });
+    return { started: true };
+  }
+
+  /**
+   * 导入预览 / 同步的事件流演练（批 D 把 mock 的 beets 状态改成"存在"之后
+   * 才需要）：不演这两条的话，预览里点「选择文件夹」或「从 beets 同步」会让
+   * 会话停在 previewing/syncing 永不解锁——假数据也要能自圆其说。
+   */
+  async beetsPreview(): Promise<{ started: boolean }> {
+    const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:import', e);
+    emit({ type: 'progress', session: 'imp_01', stage: 'scan', current: 0, total: 0, path: null });
+    await new Promise((r) => setTimeout(r, 120));
+    emit({ type: 'done', session: 'imp_01', albums: 0 });
+    return { started: true };
+  }
+
+  async beetsSync(): Promise<{ started: boolean }> {
+    const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:import', e);
+    await new Promise((r) => setTimeout(r, 120));
+    emit({
+      type: 'librarySynced',
+      matched: this.tracks.length,
+      updated: 0,
+      imported: 0,
+      unchanged: this.tracks.length,
+      orphaned: 0,
+    });
+    return { started: true };
+  }
+
+  /**
+   * 曲库维护事件流演练（docs/29 批 D）。
+   *
+   * 为什么预览里要**假装成功**：这四条命令的核心是"事件流怎么画"，而浏览器
+   * 里没有 beets。真后端的事件形状写在 `sidecar/beets_sidecar.py`，这里
+   * 逐字对齐（progress → 明细 → xxxDone），字段名一个都不能改——否则 e2e
+   * 绿了、真机一片空白。
+   */
+  async beetsMaintenance(
+    kind: 'adopt' | 'update' | 'duplicates' | 'move',
+    pretend: boolean,
+  ): Promise<{ started: boolean }> {
+    const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:maintenance', e);
+    const stage = kind;
+    const total = 3;
+    // 展示用素材：`TrackRow` 没有 path（那是 DB 的行投影，路径不外传），
+    // 这里按标题编一个像样的路径出来——事件里的 path 只是给人看的文本
+    const sample = this.tracks.slice(0, total).map((t, i) => ({
+      id: i + 1,
+      path: `D:/MUSIC_Player/test-music/${t.artist ?? '未知艺人'}/${t.title}.mp3`,
+      title: t.title ?? '',
+      artist: t.artist ?? '',
+      album: t.album ?? '',
+      length: (t.durationMs ?? 0) / 1000,
+      bitrate: 320,
+      format: 'MP3',
+      size: 1024,
+    }));
+    for (let i = 0; i <= total; i++) {
+      emit({ type: 'progress', session: `${stage}_01`, stage, current: i, total, path: null });
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    if (kind === 'adopt') {
+      emit({ type: 'adoptDone', session: 'adopt_01', total, added: total, skipped: 0, failed: 0, errors: [] });
+    } else if (kind === 'update') {
+      emit({
+        type: 'updateDone',
+        session: 'update_01',
+        pretend,
+        total,
+        changed: sample.length,
+        unchanged: 0,
+        missing: 0,
+        failed: 0,
+        errors: [],
+        details: sample.map((s) => ({ path: s.path, changes: { title: { from: `${s.title} (旧)`, to: s.title } } })),
+        detailsTruncated: false,
+      });
+    } else if (kind === 'duplicates') {
+      const pair = sample.slice(0, 2);
+      if (pair.length === 2) {
+        emit({ type: 'duplicateGroup', session: 'dup_01', key: [pair[0].title], count: 2, items: pair });
+      }
+      emit({
+        type: 'duplicatesDone',
+        session: 'dup_01',
+        keys: ['title', 'artist'],
+        totalItems: total,
+        groups: 1,
+        itemsInGroups: 2,
+        truncated: false,
+      });
+    } else {
+      for (const s of sample) {
+        emit({
+          type: 'moveItem',
+          session: 'move_01',
+          kind: pretend ? 'plan' : 'done',
+          path: s.path,
+          dest: s.path.replace(/[^/\\]+$/, `${s.artist} - ${s.title}.mp3`),
+          status: 'move',
+          reason: '',
+        });
+      }
+      emit({
+        type: 'moveDone',
+        session: 'move_01',
+        pretend,
+        directory: 'D:/MUSIC_Player/test-music',
+        total,
+        planned: sample.length,
+        moved: pretend ? 0 : sample.length,
+        same: 0,
+        conflict: 0,
+        failed: 0,
+        errors: [],
+      });
+    }
     return { started: true };
   }
 

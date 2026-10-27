@@ -55,6 +55,16 @@ export const events = {
    */
   beetsInstall: (cb: (e: DynamicJson) => void) => sub<DynamicJson>('beets:install', cb),
 
+  /**
+   * beets 曲库维护（docs/29 批 D）：progress / moveItem / duplicateGroup /
+   * adoptDone / updateDone / duplicatesDone / moveDone / cancelled / sessionFailed。
+   *
+   * 与 `beets:import` **分通道**：导入面板在听那条，混在一起会让"导入进度"
+   * 突然收到"整理文件"的事件。维护任务的对账结果仍走 `beets:import` 的
+   * `librarySynced`（那是读模型的事，与哪个命令触发无关）。
+   */
+  beetsMaintenance: (cb: (e: DynamicJson) => void) => sub<DynamicJson>('beets:maintenance', cb),
+
   /** 音频实际输出状态（模式/时钟/缓冲/格式）。偶发，不可丢。 */
   audioMode: (cb: (e: AudioModeEvent) => void) => sub<AudioModeEvent>('audio:mode', cb),
 };

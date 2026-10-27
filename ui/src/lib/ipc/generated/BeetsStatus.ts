@@ -7,4 +7,13 @@
  * 都要显示——设置页要能告诉用户是没装 Python、没装 beets、还是配置目录
  * 不存在。`error_code` / `error_message` 只在失败时填。
  */
-export type BeetsStatus = { found: boolean, interpreter: string | null, scriptPath: string | null, protocolVersion: number | null, beetsVersion: string | null, pythonVersion: string | null, libraryPath: string | null, libraryExists: boolean | null, plugins: Array<string> | null, configDir: string | null, errorCode: string | null, errorMessage: string | null, };
+export type BeetsStatus = { found: boolean, interpreter: string | null, scriptPath: string | null, protocolVersion: number | null, beetsVersion: string | null, pythonVersion: string | null, libraryPath: string | null, libraryExists: boolean | null, 
+/**
+ * 库根目录（`config.yaml` 里**显式配置**的 `directory`；None = 没配过）。
+ *
+ * 为什么单独给一个字段：beets 的 `config['directory']` 恒有值（内置默认
+ * `~/Music`），拿它显示会误导用户；而"整理文件"的目标根只认显式配置的
+ * 那一个（没配就拒绝执行，见 sidecar `_configured_directory`）。UI 用它
+ * 显示目标目录，并在 None 时禁用"整理文件"。
+ */
+libraryDirectory: string | null, plugins: Array<string> | null, configDir: string | null, errorCode: string | null, errorMessage: string | null, };

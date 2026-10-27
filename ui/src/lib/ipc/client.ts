@@ -291,6 +291,37 @@ export const ipc = {
      * `{type:"finished", status}` —— 装完能不能用由 probe 说了算。
      */
     install: () => call<JobStarted>('beets_install'),
+
+    /*
+     * ---- 批 D：曲库维护四件套 ----
+     * 四条都是**异步**的：立刻返回「已启动」，进度/结果走 `beets:maintenance`。
+     */
+    /**
+     * 建 beets 库基线：把自有库**在线**曲目按现状登记进 beets 库
+     * （as-is 入库：不联网、不改标签、不移动文件）。
+     *
+     * `paths` 传空数组 = 宿主自己取全库路径（UI 永远这么传：上千条路径不必
+     * 经 IPC，而且"哪些行可播"是 DB 的事实）。跑完自动对齐读模型。
+     */
+    adopt: (paths: string[] = []) => call<JobStarted>('beets_adopt', { paths }),
+    /** 用文件标签刷新 beets 库。`pretend` = 只出 diff 预览，不写库。 */
+    update: (pretend: boolean) => call<JobStarted>('beets_update', { pretend }),
+    /** 按字段组查重（**只读**，应用内不删文件）。`keys` 空 = sidecar 默认 title+artist。 */
+    duplicates: (keys: string[] = []) => call<JobStarted>('beets_duplicates', { keys }),
+    /**
+     * 按 beets 的 path_formats 整理文件。`pretend` = 只出「从哪到哪」清单。
+     *
+     * `directory` 是**校验值**（传 `beets.libraryDirectory`）：sidecar 拿它跟
+     * config.yaml 的 directory 比对，不一致直接拒绝——库根只能有一处定义。
+     */
+    move: (directory: string, pretend: boolean) =>
+      call<JobStarted>('beets_move', { directory, pretend }),
+    /**
+     * 在文件管理器中定位一个绝对路径（查重结果的「定位」）。
+     * 与 `library.revealTrack` 的区别：查重结果来自 beets 库，可能还没进
+     * 自有库，没有 trackId 可用。
+     */
+    reveal: (path: string) => call<RevealResult>('beets_reveal', { path }),
   },
 };
 

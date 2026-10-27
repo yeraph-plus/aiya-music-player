@@ -14,6 +14,27 @@ import { readLook } from '../lib/look';
 import { notify } from './notify.svelte';
 
 /**
+ * 查重结果里的单条曲目（docs/29 批 D）。
+ *
+ * 为什么手写而不进 `generated/`：它是 **sidecar 事件**的载荷，宿主只透传不
+ * 解释（与 `beets:import` 同一定位）——把它塞进 ts-rs 等于让 Rust 编译期
+ * 依赖 beets 的返回结构。字段与 `beets_sidecar.py::_item_brief` 一一对应。
+ */
+export interface BeetsDupItem {
+  id: number;
+  path: string;
+  title: string;
+  artist: string;
+  album: string;
+  /** 秒 */
+  length: number;
+  /** kbps */
+  bitrate: number;
+  format: string;
+  size: number;
+}
+
+/**
  * 一级路由。**12 值**，每个值对应 `App.svelte` 里的一个分支（docs/24 §3.2）。
  *
  * 2026-10-26 B4-1 拆页：此前是 `home | nowPlaying | radio | settings` 四个值，
@@ -247,9 +268,9 @@ class UiStore {
       this.playlistId = null;
     }
 
-    // 启动就落在设置页时**不会**经过 openPage，诊断块会一直空着
+    // 启动就落在设置页/扫描入库页时**不会**经过 openPage，诊断块会一直空着
     // （显示"正在读取…"直到用户手动点刷新）。这里补一次。
-    if (this.page === 'settings') void this.refreshDiagnostics();
+    if (this.page === 'settings' || this.page === 'tools') void this.refreshDiagnostics();
   }
 
   /* ---------------- 一级页面与队列抽屉 ---------------- */
@@ -260,7 +281,14 @@ class UiStore {
     this.queueOpen = false;
     this.eqOpen = false;
     this.scheduleUiSave();
-    if (page === 'settings') {
+    // 设置页与扫描入库页共用同一份诊断/beets 数据（docs/29 批 A 拆页）。
+    //
+    // **此前这里只写了 settings**：从侧栏点进「扫描入库」时诊断区永远停在
+    // "正在读取…"、beets 块永远停在"正在检测…"，只有手动点一下刷新才出来
+    // ——批 A 的 e2e 只断言了目录 textarea 与设置页分区，没看这两块内容，
+    // 所以漏掉了。批 D 的「曲库维护」直接依赖 beets 状态（库根/是否可用），
+    // 这个洞必须一起补上。
+    if (page === 'settings' || page === 'tools') {
       this.diagnostics = null;
       void this.refreshDiagnostics();
     }
@@ -468,6 +496,199 @@ class UiStore {
       await ipc.beets.install();
     } catch (e) {
       this.beetsInstall = { running: false, stage: '', message: '', error: errorMessage(e) };
+    }
+  }
+
+  /* ---------------- 批 D：曲库维护 ---------------- */
+
+  /**
+   * 维护任务状态。四条命令（adopt/update/duplicates/move）共用一份：
+   * 同一时刻只可能有一个会话（宿主侧 reserve_session 互斥），分四份只会
+   * 让组件写四遍几乎一样的渲染逻辑。
+   *
+   * `details` 每次开跑都清空——它们是"这次任务的结果"，不是历史。
+   */
+  beetsMaint = $state<{
+    kind: '' | 'adopt' | 'update' | 'duplicates' | 'move';
+    running: boolean;
+    stage: string;
+    current: number;
+    total: number;
+    /** 一行汇总（各命令的形状不同，归一成给人看的句子） */
+    summary: string;
+    error: string | null;
+    /** 是否停在预览（move/update 的 pretend 结果，等用户确认） */
+    preview: boolean;
+    /** move 的「从哪到哪」清单（含 conflict/same） */
+    moves: { path: string; dest: string; status: string; reason: string }[];
+    /** 查重分组 */
+    dupGroups: { key: string[]; items: BeetsDupItem[] }[];
+    /** update 的字段 diff 明细 */
+    updates: { path: string; changes: Record<string, { from: string; to: string }> }[];
+  }>({
+    kind: '',
+    running: false,
+    stage: '',
+    current: 0,
+    total: 0,
+    summary: '',
+    error: null,
+    preview: false,
+    moves: [],
+    dupGroups: [],
+    updates: [],
+  });
+
+  /** 明细上限：与 sidecar 的 MAINT_MAX_DETAIL 对齐，多出来的不渲染 */
+  private static readonly MAINT_DETAIL_CAP = 500;
+
+  /** 订阅维护事件。只在 App 启动时调一次。 */
+  watchBeetsMaint(): () => void {
+    return events.beetsMaintenance((e) => {
+      const type = typeof e.type === 'string' ? e.type : '';
+      const num = (k: string) => (typeof e[k] === 'number' ? (e[k] as number) : 0);
+      if (type === 'progress') {
+        this.beetsMaint = {
+          ...this.beetsMaint,
+          running: true,
+          stage: typeof e.stage === 'string' ? e.stage : '',
+          current: num('current'),
+          total: num('total'),
+        };
+        return;
+      }
+      if (type === 'moveItem') {
+        if (this.beetsMaint.moves.length >= UiStore.MAINT_DETAIL_CAP) return;
+        this.beetsMaint.moves.push({
+          path: typeof e.path === 'string' ? e.path : '',
+          dest: typeof e.dest === 'string' ? e.dest : '',
+          status: typeof e.status === 'string' ? e.status : '',
+          reason: typeof e.reason === 'string' ? e.reason : '',
+        });
+        return;
+      }
+      if (type === 'duplicateGroup') {
+        const items = Array.isArray(e.items) ? (e.items as BeetsDupItem[]) : [];
+        this.beetsMaint.dupGroups.push({
+          key: Array.isArray(e.key) ? (e.key as string[]) : [],
+          items,
+        });
+        return;
+      }
+      if (type === 'adoptDone') {
+        this.finishMaint(
+          `登记 ${num('added')} 首（已存在跳过 ${num('skipped')} 首${
+            num('failed') ? `，失败 ${num('failed')}` : ''
+          }）`,
+        );
+        return;
+      }
+      if (type === 'updateDone') {
+        // 明细也来自这里（sidecar 在终态事件里一次性给，不逐曲发）
+        const details = Array.isArray(e.details) ? e.details : [];
+        this.beetsMaint.updates = details as typeof this.beetsMaint.updates;
+        const preview = e.pretend === true;
+        this.finishMaint(
+          `${preview ? '待更新' : '已更新'} ${num('changed')} 首（未变 ${num('unchanged')}${
+            num('missing') ? `，缺失 ${num('missing')}` : ''
+          }${num('failed') ? `，失败 ${num('failed')}` : ''}）`,
+          preview,
+        );
+        return;
+      }
+      if (type === 'duplicatesDone') {
+        this.finishMaint(
+          `${num('groups')} 组重复，涉及 ${num('itemsInGroups')} 首（共 ${num('totalItems')} 首）`,
+        );
+        return;
+      }
+      if (type === 'moveDone') {
+        const preview = e.pretend === true;
+        this.finishMaint(
+          preview
+            ? `将移动 ${num('planned')} 首，冲突 ${num('conflict')} 首，原地 ${num('same')} 首`
+            : `已移动 ${num('moved')} 首，冲突 ${num('conflict')} 首，原地 ${num('same')} 首`,
+          preview,
+        );
+        return;
+      }
+      if (type === 'cancelled') {
+        this.finishMaint('已取消（已完成的部分保留）');
+        return;
+      }
+      if (type === 'sessionFailed') {
+        const err = e.error;
+        const msg =
+          err && typeof err === 'object' && typeof (err as DynamicJson).beets_message === 'string'
+            ? String((err as DynamicJson).beets_message)
+            : '维护任务失败';
+        this.beetsMaint = { ...this.beetsMaint, running: false, error: msg, summary: '' };
+      }
+    });
+  }
+
+  private finishMaint(summary: string, preview = false): void {
+    this.beetsMaint = { ...this.beetsMaint, running: false, summary, preview, error: null };
+  }
+
+  private startMaint(kind: 'adopt' | 'update' | 'duplicates' | 'move'): void {
+    this.beetsMaint = {
+      kind,
+      running: true,
+      stage: '',
+      current: 0,
+      total: 0,
+      summary: '',
+      error: null,
+      preview: false,
+      moves: [],
+      dupGroups: [],
+      updates: [],
+    };
+  }
+
+  /** 建 beets 库基线（跑完宿主自动对账，读模型里的 beets_item_id 会被填上） */
+  async adoptBeets(): Promise<void> {
+    this.startMaint('adopt');
+    try {
+      await ipc.beets.adopt();
+    } catch (e) {
+      this.beetsMaint = { ...this.beetsMaint, running: false, error: errorMessage(e) };
+    }
+  }
+
+  /** 刷新 beets 库标签。`pretend=true` 只出 diff 预览。 */
+  async updateBeets(pretend: boolean): Promise<void> {
+    this.startMaint('update');
+    try {
+      await ipc.beets.update(pretend);
+    } catch (e) {
+      this.beetsMaint = { ...this.beetsMaint, running: false, error: errorMessage(e) };
+    }
+  }
+
+  /** 查重（只读）。keys 交给调用方给预设，空数组 = sidecar 默认 title+artist */
+  async findDuplicates(keys: string[] = []): Promise<void> {
+    this.startMaint('duplicates');
+    try {
+      await ipc.beets.duplicates(keys);
+    } catch (e) {
+      this.beetsMaint = { ...this.beetsMaint, running: false, error: errorMessage(e) };
+    }
+  }
+
+  /**
+   * 整理文件。`pretend=true` 只出清单（**默认路径**），确认后传 false 执行。
+   * 库根取 `beets.libraryDirectory`：没配置就直接报错——那是唯一可信的基准。
+   */
+  async moveBeets(pretend: boolean): Promise<void> {
+    const dir = this.beets?.libraryDirectory ?? '';
+    if (pretend) this.startMaint('move');
+    else this.beetsMaint = { ...this.beetsMaint, running: true, preview: false, error: null };
+    try {
+      await ipc.beets.move(dir, pretend);
+    } catch (e) {
+      this.beetsMaint = { ...this.beetsMaint, running: false, error: errorMessage(e) };
     }
   }
 
