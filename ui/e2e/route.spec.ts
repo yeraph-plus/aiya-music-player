@@ -164,21 +164,59 @@ test('docs/29 批 A：扫描入库页——多目录 textarea 草稿保存 + 设
   await expect(page.locator('.settings-rail .rail-item')).toHaveCount(4);
 });
 
-test('docs/29 批 D：曲库维护四件套（建库基线/刷新标签/查找重复/整理文件）', async ({ page }) => {
+test('docs/33 M4：曲库段显示自动刷新（间隔 + 上次结果）', async ({ page }) => {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '扫描入库' }).click();
 
+  // 自动刷新是静默链路，这一行是唯一的可见凭据，缺了用户就无从判断它在不在跑。
+  // 它挂在**曲库段**而不是诊断区：那条管线就是曲库自己的事，不该去诊断里找。
+  // 预览环境（mock）回 intervalSecs=30 / last=null，故断"每 30 秒 · 还没跑过"。
+  const row = page.locator('.refresh-row');
+  await expect(row).toBeVisible();
+  await expect(row).toContainText('自动刷新');
+  await expect(row).toContainText('每 30 秒');
+  await expect(row).toContainText('还没跑过');
+});
+
+test('扫描入库页按对象分两组，诊断折叠且不再重复别处的内容', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('.sidebar .nav-item', { hasText: '扫描入库' }).click();
+
+  // 两组：曲库（必有）与整理库（beets，可选）。以前是七个并列段落。
+  await expect(page.locator('#tools-library .section-heading h2')).toHaveText('曲库');
+  await expect(page.locator('#tools-beets .section-heading h2')).toHaveText('整理库');
+
+  // 诊断默认收起：它是排障用的，不该占主路由的视觉重量
+  const adv = page.locator('.advanced-fold');
+  await expect(adv).toBeVisible();
+  await expect(adv).not.toHaveAttribute('open', '');
+  // details 收起时内容仍在 DOM 里，只是不可见 —— 断言"不可见"，不是"不存在"
+  await expect(page.locator('.advanced-body')).toBeHidden();
+
+  // 下放出去的两块不能在这里复活（快捷键冲突在设置页、beets 集成在整理库段）
+  await expect(page.locator('.diag-block', { hasText: '快捷键冲突' })).toHaveCount(0);
+  await expect(page.locator('.diag-block', { hasText: 'beets 集成' })).toHaveCount(0);
+});
+
+test('docs/29 批 D：整理库四件套（登记/重写标签/查重/重排文件）', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('.sidebar .nav-item', { hasText: '扫描入库' }).click();
+
+  // 四件套收在折叠区里（默认收起）：它们是对已有曲目做批量操作，
+  // 不是每天要做的事。要用先展开。
+  await page.locator('.maint-fold > summary').click();
+
   const card = page.locator('.maint');
   await expect(card).toBeVisible();
-  // 库根来自 beets 状态（config.yaml 显式配置的那个），不是猜的 ~/Music
-  await expect(card.locator('.task-status-head .dim')).toContainText('库根 D:/MUSIC_Player/test-music');
+  // 目标根来自 beets 状态（config.yaml 显式配置的那个），不是猜的 ~/Music
+  await expect(card.locator('.task-status-head .dim')).toContainText('目标根 D:/MUSIC_Player/test-music');
 
-  // 建库基线：事件流走到 adoptDone，汇总行显示登记数
-  await card.getByRole('button', { name: '建库基线' }).click();
+  // 登记到整理库：事件流走到 adoptDone，汇总行显示登记数
+  await card.getByRole('button', { name: '登记到整理库' }).click();
   await expect(card.locator('.maint-line')).toContainText('登记 3 首', { timeout: 10_000 });
 
-  // 刷新标签：先预览出 diff（预览态才出现「应用这些修改」）
-  await card.getByRole('button', { name: '刷新标签' }).click();
+  // 重写文件标签：先预览出 diff（预览态才出现「应用这些修改」）
+  await card.getByRole('button', { name: '重写文件标签' }).click();
   await expect(card.locator('.maint-line')).toContainText('待更新 3 首', { timeout: 10_000 });
   await expect(card.locator('.maint-diff .chip').first()).toContainText('title');
   const apply = card.getByRole('button', { name: '应用这些修改' });
@@ -196,8 +234,8 @@ test('docs/29 批 D：曲库维护四件套（建库基线/刷新标签/查找�
   // 应用内不提供删除入口（危险操作留给 beets CLI / 资源管理器）
   await expect(card.getByRole('button', { name: /删除/ })).toHaveCount(0);
 
-  // 整理文件：预览出「从哪到哪」清单，确认后才真搬
-  await card.getByRole('button', { name: '整理文件' }).click();
+  // 重排文件位置：预览出「从哪到哪」清单，确认后才真搬
+  await card.getByRole('button', { name: '重排文件位置' }).click();
   await expect(card.locator('.maint-line')).toContainText('将移动 3 首', { timeout: 10_000 });
   const rows = card.locator('.maint-list > li');
   await expect(rows).toHaveCount(3);

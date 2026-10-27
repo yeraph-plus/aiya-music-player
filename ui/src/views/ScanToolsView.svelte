@@ -1,242 +1,123 @@
 <script lang="ts">
-  import { RefreshCw } from '@lucide/svelte';
+  import { ChevronRight, RefreshCw } from '@lucide/svelte';
+  import BeetsSection from '../components/BeetsSection.svelte';
   import LibraryTools from '../components/LibraryTools.svelte';
-  import Icon from '../components/Icon.svelte';
   import Button from '../components/ui/Button.svelte';
   import Header from '../components/content/Header.svelte';
-  import { formatBytes, formatDateTime, formatDurationLong, shortenPath } from '../lib/format';
-  import { findConflicts, formatBinding, resolveShortcutBindings, SHORTCUT_LABELS, type ShortcutAction } from '../lib/shortcuts';
+  import { formatDateTime, shortenPath } from '../lib/format';
   import { history } from '../stores/history.svelte';
-  import { list } from '../stores/list.svelte';
   import { ui } from '../stores/ui.svelte';
 
   /**
-   * 扫描入库页（docs/29 批 A）：扫描 / beets 任务 / 多目录 / 日志诊断。
+   * 扫描入库页（docs/29 批 A 从设置页拆出；本轮按数据对象重排）。
    *
-   * 从设置页拆出的理由（用户拍板）：扫描与 beets 任务是**长时运行**的，
-   * 埋在设置页里意味着"开任务 → 关设置页 → 任务进度看不见"；升一级路由
-   * 后任务页可以停留、刷新，侧栏高亮给出稳定位置。
+   * 排版原则（本轮改动的全部理由）：**按对象分组，不按组件分组**。
    *
-   * 诊断块整段搬自 SettingsPanel（「音乐库与任务」与「诊断」两个分区撤出
-   * 设置页）。数据源不变：`ui.diagnostics` / `ui.beets`，进入页面时由
-   * `nav.apply` 触发 `refreshDiagnostics`（与设置页同一触发点）。
+   * 这一页此前是七个并列段落，分别属于三条互不相干的功能线（播放器曲库、
+   * beets 整理库、诊断），术语也各说各的——最典型的是「扫描目录」与
+   * 「导入目录」看起来是同一件事的两个按钮，实际一个写 `tracks` 表、
+   * 一个写 beets 的 `library.db`；两个都叫"库"，但只有前者是播放依赖。
+   *
+   * 现在只剩两组：**曲库**（必有）与**整理库**（可选，未装时收成一行）。
+   * 诊断只留下"出问题时唯一有用"的三样（版本/数据目录/最近错误），
+   * 收进折叠区——它们是给排障用的，不该占主路由的视觉重量。
+   *
+   * 下放出去的东西（不要去这里找）：
+   * - 快捷键冲突 → 设置 → 快捷键（那边本来就有，这里是重复的第二份）
+   * - 媒体控制 / 防休眠 / 托盘 → 设置 → 系统（各自开关旁边一行状态）
+   * - 自动刷新 → 曲库段（它就是那条管线）
+   * - 媒体流 / 最近查询 → 已删（前者是协议层泄漏自检，后者是 SQL 性能排查，
+   *   两者都属于开发者视角；真要排查看日志）
    */
   const diagnostics = $derived(ui.diagnostics);
-  const beets = $derived(ui.beets);
-  const listTimings = $derived(diagnostics?.listTimings ?? []);
   const recentErrors = $derived(diagnostics?.recentErrors ?? []);
-
-  // 快捷键冲突块沿用设置页的数据源（settings.shortcuts），只读展示
-  const bindings = $derived(resolveShortcutBindings(ui.settings.shortcuts));
-  const conflicts = $derived(findConflicts(bindings));
 </script>
 
 <div class="page-scroll tools-page">
   <Header kicker="LIBRARY TOOLS" title="扫描入库" />
 
-  <section class="tools-section" id="tools-scan">
-    <div class="section-heading"><div><h2>音乐库与任务</h2></div></div>
+  <section class="tools-section" id="tools-library">
+    <div class="section-heading">
+      <div>
+        <h2>曲库</h2>
+        <p>播放器自己的索引：读文件里的标签与时长，记住位置。只读文件，不改标签。</p>
+      </div>
+    </div>
     <LibraryTools />
   </section>
 
-  <section class="tools-section" id="tools-diagnostics">
+  <section class="tools-section" id="tools-beets">
     <div class="section-heading">
-      <div><h2>诊断与日志</h2></div>
-      <div class="diag-actions">
-        <Button size="sm" onclick={() => void ui.refreshDiagnostics()}>
-          {#snippet icon()}<Icon name="refresh" size={13} />{/snippet}
-          刷新
-        </Button>
-        <Button size="sm" onclick={() => ui.openDataDir()}>打开数据目录</Button>
-        <Button variant="danger" size="sm" onclick={() => void history.clear()}>清空播放历史</Button>
+      <div>
+        <h2>整理库</h2>
+        <p>
+          可选。beets 维护的另一套库，负责联网匹配标签、批量改写与按模板重排文件；
+          改完会单向对齐回曲库。
+        </p>
       </div>
     </div>
+    <BeetsSection />
+  </section>
 
-    {#if diagnostics}
-      <div class="diag-grid">
-        <div><span>版本</span><b>{diagnostics.version}</b></div>
-        <div><span>平台</span><b>{diagnostics.platform}</b></div>
-        <div><span>Schema</span><b>v{diagnostics.schemaVersion}</b></div>
-        <div><span>曲库</span><b>{diagnostics.tracks} 首</b></div>
-        <div><span>时长</span><b>{formatDurationLong(diagnostics.totalDurationMs)}</b></div>
-        <div><span>专辑 / 艺人</span><b>{diagnostics.albums} / {diagnostics.artists}</b></div>
-        <div><span>播放列表</span><b>{diagnostics.playlists}</b></div>
-        <div><span>历史记录</span><b>{diagnostics.historyRows}</b></div>
-        <div><span>数据库</span><b>{formatBytes(diagnostics.dbBytes)}</b></div>
-        <div class="wide"><span>数据目录</span><b class="path" title={diagnostics.dataDir}>{shortenPath(diagnostics.dataDir)}</b></div>
-      </div>
+  <section class="tools-section" id="tools-advanced">
+    <details class="advanced-fold">
+      <summary>
+        <ChevronRight size={13} class="fold-arrow" />
+        <span>高级与诊断</span>
+        <span class="dim">版本、数据目录、最近的错误</span>
+      </summary>
 
-      <div class="diag-block">
-        <div class="diag-head">
-          媒体流
-          <span class:danger={diagnostics.streams.active !== 0}>
-            打开 {diagnostics.streams.opened} / 关闭 {diagnostics.streams.closed} / 未关闭 {diagnostics.streams.active}
-          </span>
-        </div>
-        <div class="dim">连续切歌后"未关闭"应始终为 0；不为 0 说明协议层有泄漏。</div>
-      </div>
-
-      <div class="diag-block">
-        <div class="diag-head">
-          系统媒体控制
-          <span>
-            {#if !diagnostics.mediaKeys.enabled}
-              已关闭
-            {:else if diagnostics.mediaKeys.active.length > 0}
-              已启用
-            {:else}
-              未生效
-            {/if}
-          </span>
-        </div>
-        <div class="dim">
-          标题、封面与播放状态会同步到 Windows 媒体面板 / 锁屏 / 蓝牙耳机；
-          只在播放时出现会话。
-        </div>
-      </div>
-
-      <div class="diag-block">
-        <div class="diag-head">
-          系统集成
-          <span>防休眠 {diagnostics.power.active ? '已拦截' : '未拦截'} · 托盘 {diagnostics.tray ? '已创建' : '未创建'}</span>
-        </div>
-        <div class="dim">
-          播放中不应休眠（允许熄屏）；托盘图标只在"关闭窗口时最小化到托盘"打开时存在。
-        </div>
-      </div>
-
-      <div class="diag-block">
-        <div class="diag-head">
-          beets 集成
-          {#if beets === null}
-            <span class="dim">探测中…</span>
-          {:else if beets.found}
-            <span>beets {beets.beetsVersion} · Python {beets.pythonVersion}</span>
-          {:else if beets.errorCode === 'E_PROTOCOL_MISMATCH'}
-            <span class="danger">组件版本不匹配</span>
-          {:else}
-            <span class="danger">未找到 beets</span>
-          {/if}
-        </div>
-        {#if beets?.found}
+      {#if diagnostics}
+        <div class="advanced-body">
           <div class="diag-grid">
-            <div class="wide"><span>曲库</span><b class="path" title={beets.libraryPath ?? ''}>{beets.libraryExists ? shortenPath(beets.libraryPath ?? '') : '尚未创建（首次导入时生成）'}</b></div>
-            <div class="wide"><span>入口</span><b>{beets.entrySource ?? '未知'}</b></div>
-            <div class="wide"><span>配置目录</span><b class="path" title={beets.configDir ?? ''}>{shortenPath(beets.configDir ?? '')}</b></div>
+            <div><span>版本</span><b>{diagnostics.version}</b></div>
+            <div><span>平台</span><b>{diagnostics.platform}</b></div>
+            <div><span>Schema</span><b>v{diagnostics.schemaVersion}</b></div>
+            <div><span>播放列表</span><b>{diagnostics.playlists}</b></div>
+            <div class="wide"><span>数据目录</span><b class="path" title={diagnostics.dataDir}>{shortenPath(diagnostics.dataDir)}</b></div>
           </div>
-          {#if beets.pluginHealth?.length}
-            <div class="plugin-list">
-              {#each beets.pluginHealth as p (p.name)}
-                <div class="plugin-row" data-state={p.state}>
-                  <b>{p.name}</b>
-                  <span class="plugin-state">
-                    {p.state === 'ready' ? '可用' : p.state === 'missing_deps' ? '缺依赖' : '不可用'}
-                  </span>
-                  {#if p.missing.length}<span class="dim">缺 {p.missing.join('、')}</span>{/if}
-                  {#if p.note}<span class="dim">{p.note}</span>{/if}
-                </div>
-              {/each}
-            </div>
-          {:else if beets.plugins?.length}
-            <div class="dim">配置里启用的插件：{beets.plugins.join(', ')}（工具未提供自检结果）</div>
-          {/if}
-          <div class="dim">标签匹配/候选/diff 由 beets 完成（写权威）；未安装时播放功能不受影响。</div>
-        {:else if beets}
-          {#if beets.errorCode === 'E_PROTOCOL_MISMATCH'}
-            <div class="dim">
-              组件在，但说的是另一版协议，功能已禁用（库与配置不受影响）：
-              <br /><span class="danger">{beets.errorMessage}</span>
-              <br />到「扫描入库」页重装最新组件即可。
-            </div>
-          {:else}
-            <div class="dim">
-              还没装 beets 工具。到「扫描入库」页点「快速安装」（需系统 Python 3.10–3.14）
-              或「免安装包」（自带运行时，不依赖系统 Python）。
-              {#if beets.errorMessage}
-                <br /><span class="danger">{beets.errorMessage}</span>
-              {/if}
-            </div>
-          {/if}
-        {/if}
-      </div>
 
-      <div class="diag-block">
-        <div class="diag-head">最近查询<span class="dim">越多越慢时说明该看索引了</span></div>
-        {#if listTimings.length === 0}
-          <div class="dim">还没有记录</div>
-        {:else}
-          <table class="diag-table">
-            <thead><tr><th>时间</th><th>来源</th><th>行数</th><th>总数</th><th>命令耗时</th><th>SQL</th></tr></thead>
-            <tbody>
-              {#each listTimings.slice(-8).reverse() as timing}
-                <tr>
-                  <td>{formatDateTime(timing.atMs)}</td>
-                  <td>{timing.source}</td>
-                  <td>{timing.rows}</td>
-                  <td>{timing.total}</td>
-                  <td class:slow={timing.tookMs > 50}>{timing.tookMs.toFixed(1)}ms</td>
-                  <td class:slow={timing.dbTookMs > 50}>{timing.dbTookMs.toFixed(1)}ms</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        {/if}
-      </div>
+          <div class="diag-actions">
+            <Button size="sm" onclick={() => void ui.refreshDiagnostics()}>
+              {#snippet icon()}<RefreshCw size={13} />{/snippet}
+              重新读取
+            </Button>
+            <Button size="sm" onclick={() => ui.openDataDir()}>打开数据目录</Button>
+            <Button variant="danger" size="sm" onclick={() => void history.clear()}>清空播放历史</Button>
+          </div>
 
-      <div class="diag-block">
-        <div class="diag-head">
-          快捷键冲突
-          {#if conflicts.length === 0}
-            <span class="dim">无</span>
-          {:else}
-            <span class="danger">{conflicts.length} 组</span>
-          {/if}
+          <div class="diag-block">
+            <div class="diag-head">最近错误<span class="dim">最多保留 30 条，新的在上</span></div>
+            {#if recentErrors.length === 0}
+              <div class="dim">没有错误</div>
+            {:else}
+              <ul class="error-list">
+                {#each recentErrors.slice().reverse() as item}
+                  <li>
+                    <span class="dim">{formatDateTime(item.atMs)}</span>
+                    <span class="danger">{item.code}</span>
+                    {item.message}
+                    {#if item.detail}
+                      <span class="dim" title={item.detail}>（有详情）</span>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </div>
         </div>
-        {#if conflicts.length === 0}
-          <div class="dim">同一组按键绑了多个动作时会出现在这里，到「设置 → 快捷键」可以改。</div>
-        {:else}
-          <ul class="error-list">
-            {#each conflicts as conflict (conflict.binding)}
-              <li>
-                <b>{formatBinding(conflict.binding)}</b>
-                {conflict.actions.map((action) => SHORTCUT_LABELS[action as ShortcutAction]).join('、')}
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </div>
-
-      <div class="diag-block">
-        <div class="diag-head">最近错误<span class="dim">最多保留 30 条，新的在上</span></div>
-        {#if recentErrors.length === 0}
-          <div class="dim">没有错误</div>
-        {:else}
-          <ul class="error-list">
-            {#each recentErrors.slice().reverse() as item}
-              <li>
-                <span class="dim">{formatDateTime(item.atMs)}</span>
-                <span class="danger">{item.code}</span>
-                {item.message}
-                {#if item.detail}
-                  <span class="dim" title={item.detail}>（有详情）</span>
-                {/if}
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </div>
-    {:else}
-      <div class="dim"><RefreshCw size={14} class="spinning" /> 正在读取…</div>
-    {/if}
+      {:else}
+        <div class="advanced-body dim">正在读取…</div>
+      {/if}
+    </details>
   </section>
 </div>
 
 <style>
-  /* 诊断值/路径/beets 提示/错误详情是用户可能要复制的内容，
-     从全局 user-select:none 里豁免（原 SettingsPanel 同款约定，diag 样式
-     本体在全局 overlays.css，这里不复制一份） */
+  /* 诊断值/路径/错误详情是用户可能要复制的内容，
+     从全局 user-select:none 里豁免（diag 样式本体在全局 overlays.css） */
   .diag-grid,
-  .diag-block .dim,
+  .advanced-body .dim,
   .error-list {
     user-select: text;
     cursor: text;
@@ -257,5 +138,14 @@
   .section-heading h2 {
     font-size: 15px;
     font-weight: 600;
+  }
+
+  /* 分组说明：一句话说清"这组管什么"。以前靠块标题堆术语，
+     现在每组标题下面有一句人话——术语要靠解释，不靠并列 */
+  .section-heading p {
+    margin: 3px 0 0;
+    font-size: 11.5px;
+    color: var(--text-2);
+    max-width: 62ch;
   }
 </style>

@@ -21,6 +21,7 @@
 //! - [`lyrics`]：歌词
 //! - [`history`]：播放历史
 //! - [`beets`]：beets 环境与导入回执
+//! - [`refresh`]：自动刷新管线的诊断快照
 //!
 //! **参数为什么不在这里**：命令参数出错必须映射成 `invalidArg`，而 Tauri 的
 //! 参数反序列化发生在命令体之前——用强类型参数会把"参数不合法"变成 Tauri
@@ -40,9 +41,11 @@ pub mod library;
 pub mod lyrics;
 pub mod output;
 pub mod playlist;
+pub mod refresh;
 
 pub use app::{AppInfo, Diagnostics, ListTiming, RecentError, SpectrumToggle};
 pub use library::{LibraryStats, TrackDetail};
+pub use refresh::{RefreshSnapshot, RefreshState};
 pub use output::{AudioModeEvent, AudioModeInfo, DesiredOutput, EqSettings, MediaKeysInfo, PowerInfo, StreamsInfo};
 
 /// 命令失败的统一形状。替代 `{ok:false, error:{code,message}}` 信封。

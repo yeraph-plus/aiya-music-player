@@ -73,6 +73,30 @@ export type BeetsImportEvent =
   /** beets 库 → 自有 DB 全量对齐汇总（apply 完成后自动触发，也可手动） */
   | { type: 'librarySynced'; matched: number; updated: number; imported: number; unchanged: number; orphaned: number }
   | { type: 'librarySyncFailed'; message: string }
-  /** 正在扫描全库，本次对齐让位（可手动再触发） */
+  /** 正在扫描全库 / beets 会话在跑，本次刷新让位（自动触发时不会发这条） */
   | { type: 'libraryRefreshSkipped'; reason: string }
+  /* ---- 自动刷新管线终态（docs/33 §7） ---- */
+  /**
+   * 一次刷新跑完（扫描 → 对齐 → 单 bump）。
+   *
+   * **只有真的写出变化才发**，唯一例外是手动触发（用户点了按钮必须看到回应）。
+   * 所以"没收到这条"不等于管线没在工作 —— 它可能只是没发现变化，
+   * 详情看 `refresh_state` 命令返回的最近一次快照。
+   */
+  | {
+      type: 'libraryRefreshed';
+      trigger: 'timer' | 'focus' | 'action' | 'manual';
+      atMs: number;
+      changed: boolean;
+      scanned: number;
+      imported: number;
+      updated: number;
+      missing: number;
+      failed: number;
+      sync: 'ok' | 'skipped' | 'failed';
+      elapsedMs: number;
+      error: string | null;
+    }
+  /** 整条管线失败（DB 打不开之类）；beets 段单独失败只在快照里，不走这条 */
+  | { type: 'libraryRefreshFailed'; trigger: string; message: string }
   | { type: 'sessionEnd' };

@@ -36,6 +36,7 @@ mod beets;
 pub mod dto;
 mod logging;
 mod pump;
+mod refresh;
 mod sidecar;
 mod smtc;
 
@@ -225,6 +226,13 @@ pub struct AppState {
     scanning: Arc<AtomicBool>,
     /// 扫描取消请求（library_scan_cancel 置位，扫描循环轮询后自行收尾）
     scan_cancel: Arc<AtomicBool>,
+    /// 刷新管线的依赖（docs/33 §7）。`Arc` 是因为它要跨线程（定时器、会话
+    /// 收尾回调）共享同一份互斥标志——各拷一份就等于各自为政地写同一个 DB。
+    refresh: Arc<refresh::RefreshParams>,
+    /// 最近一次刷新结果（诊断区读；也用来判断"上次 beets 段失败了没"）
+    last_refresh: Mutex<Option<dto::RefreshSnapshot>>,
+    /// 叫醒定时线程的把手（窗口聚焦 / 设置变更）
+    refresh_wake: Mutex<Option<std::sync::mpsc::SyncSender<refresh::Wake>>>,
     /// 队列状态行上次落库时间（毫秒，事件泵 5s 节流用）
     last_persist_ms: std::sync::atomic::AtomicU64,
     /// SMTC 通道（smtc::spawn 成功才有）；emit_player_state 处推送
@@ -381,6 +389,7 @@ const DEFAULT_SETTINGS: &str = r#"{
   "rememberPosition": true,
   "preventSleep": true,
   "closeToTray": false,
+  "refreshSeconds": 30,
   "shortcuts": {}
 }"#;
 
@@ -502,7 +511,11 @@ fn app_get_settings(state: State<'_, AppState>) -> Result<Json, dto::ApiError> {
 }
 
 #[tauri::command]
-fn app_set_settings(state: State<'_, AppState>, settings: Json) -> Result<Json, dto::ApiError> {
+fn app_set_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: Json,
+) -> Result<Json, dto::ApiError> {
     // "改完立即生效"的项在这里做 diff：只写库不通知引擎的话，用户切了独占要等
     // 下次换曲才生效，体感是"设置没反应"。
     //
@@ -542,6 +555,10 @@ fn app_set_settings(state: State<'_, AppState>, settings: Json) -> Result<Json, 
             st.reason.clear();
         }
     }
+
+    // 刷新间隔是设置项：改完要让定时线程重读（否则"我改了 30 → 120，
+    // 结果它还在 30 秒一刷"，得重启才生效）。
+    refresh::wake_settings(&app);
 
     // 归一化开关：改完立即重算音量（不等下一曲）。Actor 持有 gain_db，
     // 只需翻开关 + 把新音量送给引擎。
@@ -698,14 +715,11 @@ async fn beets_apply(
     app: AppHandle,
     decisions: Vec<Json>,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    let (db_path, scanning) = {
-        let Some(state) = app.try_state::<AppState>() else {
-            return Err(dto::ApiError::internal("app state 不可用"));
-        };
-        (state.db_path.clone(), state.scanning.clone())
+    let Some(state) = app.try_state::<AppState>() else {
+        return Err(dto::ApiError::internal("app state 不可用"));
     };
+    let refresh = state.refresh.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let refresh = beets::RefreshParams { db_path, scanning };
         beets::start_apply(app, decisions, Some(refresh))
     })
     .await
@@ -721,17 +735,34 @@ fn beets_cancel() -> Result<dto::beets::CancelRequested, dto::ApiError> {
     Ok(dto::beets::CancelRequested { requested: beets::cancel_session() })
 }
 
-/// 手动触发一次 beets → 自有读模型的全量对齐（异步，结果走 librarySynced 事件）。
+/// 手动触发一次完整刷新（扫描 + beets 对齐），异步，结果走 `libraryRefreshed`。
+///
+/// 以前这里只做 dump+sync（不扫描）。合成一条管线之后，"用户点了立即同步"
+/// 与"30 秒定时"跑的是同一段代码——否则两条路径迟早各自漂移
+/// （典型症状：手动同步能看到 beets 的改动，自动刷新看不到）。
 #[tauri::command]
 fn beets_sync(app: AppHandle, state: State<'_, AppState>) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    beets::sync_now(
-        app,
-        beets::RefreshParams {
-            db_path: state.db_path.clone(),
-            scanning: state.scanning.clone(),
-        },
-    );
+    refresh::spawn(&app, state.refresh.clone(), refresh::Trigger::Manual);
     Ok(dto::beets::JobStarted { started: true })
+}
+
+/// 自动刷新的当前配置与最近一次结果（诊断区读）。
+#[tauri::command]
+fn refresh_state(state: State<'_, AppState>) -> Result<dto::RefreshState, dto::ApiError> {
+    let interval_secs = state
+        .settings
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get("refreshSeconds")
+        .and_then(Value::as_u64)
+        .map(|n| if n == 0 { 0 } else { n.max(10) })
+        .unwrap_or(refresh::DEFAULT_INTERVAL_SECS);
+    let last = state
+        .last_refresh
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    Ok(dto::RefreshState { interval_secs, focused: refresh::focused(), last })
 }
 
 /// 安装 beets 侧组件（docs/33 §6.2 两条轨道）。
@@ -805,7 +836,7 @@ async fn beets_adopt(
     let Some(state) = app.try_state::<AppState>() else {
         return Err(dto::ApiError::internal("app state 不可用"));
     };
-    let (db_path, scanning) = (state.db_path.clone(), state.scanning.clone());
+    let refresh = state.refresh.clone();
     let paths = if paths.is_empty() {
         state
             .db()
@@ -815,7 +846,6 @@ async fn beets_adopt(
         paths
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let refresh = beets::RefreshParams { db_path, scanning };
         beets::start_adopt(app, paths, Some(refresh))
     })
     .await
@@ -864,9 +894,8 @@ async fn beets_move(
     let Some(state) = app.try_state::<AppState>() else {
         return Err(dto::ApiError::internal("app state 不可用"));
     };
-    let (db_path, scanning) = (state.db_path.clone(), state.scanning.clone());
+    let refresh = state.refresh.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let refresh = beets::RefreshParams { db_path, scanning };
         beets::start_move(app, directory, pretend, Some(refresh))
     })
     .await
@@ -1055,7 +1084,11 @@ async fn library_scan_body(
     }
 
     // 根列表优先级（docs/29 批 A，多目录并集单库）：
-    // 显式 options.roots > settings.library.roots（数组）> 旧 settings.library.root（单串）> 系统 Music
+    // 显式 options.roots > 设置里的根。
+    //
+    // 设置那份解析交给 `refresh::roots_from_settings` 统一做：手动扫描与
+    // 自动刷新必须扫同一批目录，两处各写一遍的话迟早会不一样
+    // （症状：手动扫得到新歌，30 秒定时扫不到）。
     let mut roots: Vec<PathBuf> = if let Some(list) = options
         .as_ref()
         .and_then(|o| o.get("roots"))
@@ -1071,33 +1104,10 @@ async fn library_scan_body(
     {
         list
     } else {
-        let from_settings: Option<Vec<String>> = state
+        state
             .db()
-            .send(|conn| {
-                Ok(setting_get(conn, "library.roots")
-                    .and_then(|v| v.as_array().cloned())
-                    .map(|a| {
-                        a.into_iter()
-                            .filter_map(|s| s.as_str().map(str::to_string))
-                            .collect()
-                    })
-                    // 旧单键兼容：有数组键用数组键，否则看旧字符串键
-                    .or_else(|| {
-                        setting_get(conn, "library.root")
-                            .and_then(|v| v.as_str().map(str::to_string))
-                            .map(|s| vec![s])
-                    }))
-            })
-            .ok()
-            .flatten();
-        match from_settings {
-            Some(list) if !list.is_empty() => list.into_iter().map(PathBuf::from).collect(),
-            // 完全没有配置：回落系统 Music 目录（保持旧行为）
-            _ => vec![std::env::var("USERPROFILE")
-                .ok()
-                .map(|h| PathBuf::from(h).join("Music"))
-                .unwrap_or_default()],
-        }
+            .send(|conn| Ok(refresh::roots_from_settings(conn)))
+            .unwrap_or_default()
     };
 
     // 逐个验证：无效根跳过（不中断扫描），全部无效才报错——报错信息带上每个根，
@@ -2639,6 +2649,12 @@ pub fn run() {
         // 设置默认 false 时用户想关窗退出也退不了——设置项完全没接线）。
         // 开启设置 → 隐藏到托盘（播放不中断）；默认 → 正常关闭退出。
         .on_window_event(|window, event| {
+            // 切回窗口 = "用户刚在资源管理器/mp3tag 改完回来"（docs/33 §7.2）。
+            // 失焦时定时器暂停，聚焦时立刻补一次 —— 两者共用同一个标志。
+            if let tauri::WindowEvent::Focused(focused) = event {
+                refresh::set_focused(window.app_handle(), *focused);
+                return;
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let hide_to_tray = window
                     .app_handle()
@@ -2689,14 +2705,25 @@ pub fn run() {
                     enabled: s.enabled,
                 })
                 .unwrap_or_default();
+            let scanning = Arc::new(AtomicBool::new(false));
+            let scan_cancel = Arc::new(AtomicBool::new(false));
+            let refresh_params = Arc::new(refresh::RefreshParams {
+                db_path: db_path.clone(),
+                artwork_dir: artwork_dir.clone(),
+                scanning: Arc::clone(&scanning),
+                scan_cancel: Arc::clone(&scan_cancel),
+            });
             app.manage(AppState {
                 db: Mutex::new(db),
                 db_path,
                 artwork_dir,
                 player: Mutex::new(aiya_player::PlayerActor::new()),
                 engine: Mutex::new(engine),
-                scanning: Arc::new(AtomicBool::new(false)),
-                scan_cancel: Arc::new(AtomicBool::new(false)),
+                scanning,
+                scan_cancel,
+                refresh: Arc::clone(&refresh_params),
+                last_refresh: Mutex::new(None),
+                refresh_wake: Mutex::new(None),
                 last_persist_ms: std::sync::atomic::AtomicU64::new(0),
                 smtc_tx: Mutex::new(None),
                 smtc_track_id: Mutex::new(String::new()),
@@ -2707,6 +2734,11 @@ pub fn run() {
                 timings: Mutex::new(VecDeque::with_capacity(TIMING_LIMIT)),
                 settings: Mutex::new(settings0),
             });
+
+            // 曲库刷新管线（docs/33 §7）：定时 30 s + 窗口聚焦。
+            // 起在这里而不是首次用到时：定时器要的是"一直在跑"，用户不该为了
+            // "外部改完标签能自动发现"先去点一次什么按钮。
+            refresh::start_scheduler(app.handle().clone(), refresh_params);
 
             // 输出配置先下发：引擎未装载时只记录，首曲 Load 就用上。
             // 设备拒绝独占会回落共享、缓冲太深会自愈降级，两者都通过 AudioMode
@@ -3019,6 +3051,7 @@ pub fn run() {
             beets_apply,
             beets_cancel,
             beets_sync,
+            refresh_state,
             beets_install,
             beets_adopt,
             beets_update,

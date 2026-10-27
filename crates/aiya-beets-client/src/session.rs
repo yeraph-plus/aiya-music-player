@@ -71,6 +71,16 @@ pub fn reserve() -> bool {
         .is_ok()
 }
 
+/// 当前是否有会话占着位子（只读）。
+///
+/// 宿主用它做"让位"判断：自动刷新每 30 s 就会问一次，撞上导入/整理会话时
+/// 必须安静跳过——否则两个 sidecar 会同时读同一个 beets 库（sqlite 锁竞争），
+/// 而且自动刷新发出去的 `librarySynced` 会让正在应用的那条链路误以为
+/// "对齐完成了"，把界面的 applying 状态提前收掉。
+pub fn busy() -> bool {
+    flag().load(Ordering::SeqCst)
+}
+
 /// 把写入口放进槽位。flag 已由 `reserve` 占住，正常不会失败。
 pub fn acquire(stdin: SessionStdin) -> Result<(), ToolError> {
     let mut guard = slot().lock().map_err(|_| ToolError::Io("会话槽已中毒".into()))?;

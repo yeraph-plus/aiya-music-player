@@ -1,7 +1,7 @@
 # AIYA Music — Tauri 2 本地音乐播放器
 
-> 状态：**功能完成，进入收尾**（P0–P4 + 前端 docs/24 B0–B6 + docs/25–29 全部落地；
-> 剩 docs/29 批 B/C/D 与 P5 发布项）。
+> 状态：**功能完成，进入收尾**（P0–P4 + 前端 docs/24 B0–B6 + docs/25–29 + docs/33 M1–M4
+> 全部落地；剩 docs/29 批 E、docs/23 §7 走查与 P5 发布项）。
 > 上一代 Electron demo 在 `../AIYA_MUSIC`（tag `demo-final`），已归档，只作 UI/行为参考。
 > **无历史兼容**：不迁移旧库、不兼容 Electron 时代的 `media://`、不保留 Electron IPC。
 
@@ -102,6 +102,18 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 
 播放器对两者做同一件事：下载 → 展开 → 记入口 → 跑一次 `status` 验证。**成功判据是
 探测到的 `found`，不是退出码**——退出码会骗人。
+
+发布地址可覆盖，播放器不用为换地址发版：`AIYA_BEETS_RELEASE_BASE` 环境变量 >
+设置 `beets.releaseBase` > 内置常量。本地验证整条下载路径可以起一个静态服务器
+（`beets-tool/dist` 下 `python -m http.server 8000`，再把上面的环境变量指过去）。
+
+下载回来的文件会过一遍形状校验（两条轨道都是 zip 容器）：没发布时 GitHub 回的是
+一个 200 的 HTML 错误页，不校验的话用户只会看到"不是有效 zip"，指不到真正原因。
+
+**曲库自动刷新**（docs/33 §7）：增量扫描 → beets dump → 对齐 → 单次刷新，30 秒一次
+（窗口失焦暂停）+ 切回窗口时补一次，间隔在设置里可改（关闭 / 30 秒 / 2 分钟 / 5 分钟）。
+在别的软件里改了标签或挪了文件，半分钟内列表自己跟上。没有变化时不发事件、不重绘列表，
+所以看不到它在跑是正常的——「扫描入库 → 诊断 → 自动刷新」能看到上次时间与结果。
 
 **为什么套件包能随便搬**：embeddable 解释器把「解释器 + stdlib + DLL」都放在包内，
 `sys.prefix` 由 exe 位置推出，整目录复制到任意路径都能跑（实测复制到 `%TEMP%` 后

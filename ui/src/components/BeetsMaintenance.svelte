@@ -27,11 +27,22 @@
   /** 明细只渲染前 N 条：几千条 DOM 会把页面拖住，而用户本来也看不完 */
   const SHOW = 20;
 
+  /**
+   * 四个动作的中文名（本轮术语统一）。
+   *
+   * 旧名"建库基线 / 刷新标签 / 整理文件"是自造的：用户猜不出"基线"是什么、
+   * "刷新标签"和曲库的"重新扫描"有什么区别。新名统一成 **动作 + 对象**，
+   * 且对象一律叫「整理库」，与「曲库」区分：
+   * - 登记到整理库：把曲库已有曲目写进 beets 库（adopt），否则后三个没有对象
+   * - 按整理库重写标签：让 beets 用库里的元数据改写文件标签（写盘）
+   * - 查找重复：只读，不删文件
+   * - 按整理库重排文件：按 path_formats 移动/复制，两段式确认
+   */
   const kindLabel: Record<string, string> = {
-    adopt: '建库基线',
-    update: '刷新标签',
+    adopt: '登记到整理库',
+    update: '重写文件标签',
     duplicates: '查找重复',
-    move: '整理文件',
+    move: '重排文件位置',
   };
 
   function shortPath(p: string): string {
@@ -60,21 +71,21 @@
   <div class="task-status-head">
     <span class="task-name">
       <DatabaseZap size={14} />
-      曲库维护
+      整理已有曲目
     </span>
     <span class="dim">
-      {found ? (dir ? `库根 ${dir}` : '库根未配置（不会整理文件）') : '需要 beets'}
+      {found ? (dir ? `目标根 ${dir}` : '库根未配置（不会重排文件）') : '需要整理组件'}
     </span>
   </div>
 
   <div class="maint-actions">
     <Button size="sm" disabled={!found || busy} onclick={() => void ui.adoptBeets()}>
       {#snippet icon()}<DatabaseZap size={14} />{/snippet}
-      建库基线
+      登记到整理库
     </Button>
     <Button size="sm" disabled={!found || busy} onclick={() => void ui.updateBeets(true)}>
       {#snippet icon()}<Tags size={14} />{/snippet}
-      刷新标签
+      重写文件标签
     </Button>
     <Button size="sm" disabled={!found || busy} onclick={() => void ui.findDuplicates()}>
       {#snippet icon()}<Copy size={14} />{/snippet}
@@ -82,7 +93,7 @@
     </Button>
     <Button size="sm" disabled={!found || busy || !dir} onclick={() => void ui.moveBeets(true)}>
       {#snippet icon()}<FolderTree size={14} />{/snippet}
-      整理文件
+      重排文件位置
     </Button>
     {#if busy}
       <button class="link" onclick={() => void cancel()}>取消</button>
@@ -200,7 +211,7 @@
   {/if}
 
   {#if !found}
-    <div class="dim">安装 beets 工具（上面那个「快速安装 / 免安装包」）后可用：建库基线把现有曲目登记进 beets，之后才能刷新标签/查重/整理。</div>
+    <div class="dim">装上整理组件后可用：先把曲库里的曲目登记进整理库，之后才能重写标签 / 查重 / 重排文件。</div>
   {/if}
 </div>
 

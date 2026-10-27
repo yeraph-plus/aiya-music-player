@@ -27,10 +27,14 @@
 
   /** 文件动作（docs/08 §4.1：默认只写标签，移动/复制显式选择） */
   type MoveMode = 'apply' | 'apply_copy' | 'apply_move';
+  /**
+   * 应用时的文件动作。三种都要说得清"文件会不会动"——这是这一屏最危险的选择：
+   * 用户以为只是改标签，实际把两万首歌搬进了另一个盘。
+   */
   const MOVE_LABELS: Record<MoveMode, string> = {
-    apply: '只写标签',
-    apply_copy: '复制到 beets 库',
-    apply_move: '移动到 beets 库',
+    apply: '只写标签，文件不动',
+    apply_copy: '复制一份到整理库',
+    apply_move: '移动到整理库',
   };
 
   /** 文件动作：默认只写标签（B3 移动/复制显式选择） */
@@ -109,7 +113,7 @@
 
 <div class="side-panel">
   <header class="panel-head">
-    <h2>导入整理（beets）</h2>
+    <h2>导入新文件夹</h2>
     {#if onclose}
       <IconButton label="关闭" size="sm" onclick={onclose}>
         <Icon name="close" size={13} />
@@ -121,7 +125,7 @@
     <div class="import-actions">
       <Button variant="primary" size="sm" onclick={() => void chooseAndPreview()} disabled={running || applying}>
         {#snippet icon()}<Icon name="folder" size={13} />{/snippet}
-        选择文件夹预览
+        选择文件夹
       </Button>
       {#if running}
         <span class="dim">
@@ -154,7 +158,7 @@
           应用所选（{applyableCount} 张）
         </Button>
       {/if}
-      <Button size="sm" onclick={() => void syncNow()} disabled={syncing} title="beets 库 → 本地曲库全量对齐">从 beets 同步</Button>
+      <Button size="sm" onclick={() => void syncNow()} disabled={syncing} title="把整理库里的元数据对齐回曲库（与自动刷新是同一条管线）">从整理库对齐</Button>
     </div>
 
     {#if beets.applySummary}
@@ -181,9 +185,7 @@
     {#if beets.lastError}
       <div class="import-error">
         {beets.lastError}
-        <div class="dim">
-          需要 beets 2.14+：<code>pipx install beets</code>（装好重启应用）
-        </div>
+        <div class="dim">若提示组件缺失或版本不符，到上方「整理库」区块重装。</div>
       </div>
     {/if}
 
@@ -197,7 +199,7 @@
 
     {#if beets.albums.length === 0 && !running && beets.doneCount === null}
       <div class="dim empty-hint">
-        选择一个待整理的文件夹，beets 会只读匹配候选元数据并展示逐字段差异；
+        选一个待整理的文件夹：会联网匹配候选元数据并展示逐字段差异，
         预览阶段不写任何文件。
       </div>
     {/if}

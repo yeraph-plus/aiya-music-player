@@ -205,6 +205,9 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return { started: true };
     case 'beets_sync':
       return mock.beetsSync();
+    // 自动刷新管线的诊断查询：预览环境没有真管线，回一份"从没跑过"。
+    case 'refresh_state':
+      return { intervalSecs: 30, focused: true, last: null };
     case 'beets_cancel':
       return { requested: false };
     // 安装工具同理：预览环境不装东西，但要把事件流的形状演一遍，

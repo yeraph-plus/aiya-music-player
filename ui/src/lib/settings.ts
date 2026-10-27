@@ -89,6 +89,14 @@ export interface AppSettings {
   preventSleep: boolean;
   /** 关闭窗口时最小化到托盘而不是退出 */
   closeToTray: boolean;
+  /**
+   * 自动刷新曲库的间隔（秒）。0 = 只保留"切回窗口时刷新"。
+   *
+   * 为什么让它可配而不是写死 30 s：库大的机器上一次刷新要扫几万条目录，
+   * 有人会想调慢；反过来改标签频繁的人想调快。下限由宿主夹到 10 s
+   * （再短就该上文件监听了，那是另一套东西）。
+   */
+  refreshSeconds: number;
   /** 只存覆盖项：没写的动作走 `DEFAULT_SHORTCUTS`（改默认值不冲用户自定义） */
   shortcuts: Partial<Record<ShortcutAction, string>>;
   /**
@@ -116,6 +124,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   preventSleep: true,
   // 默认关：关窗即退出是既有行为，不制造意外
   closeToTray: false,
+  // 30 秒：外部改标签/搬文件能在半分钟内体现，而一次增量扫描只有几十毫秒
+  refreshSeconds: 30,
   shortcuts: {},
   // 共享 + 200ms + 事件驱动：最不容易出事的组合。独占要用户主动开，
   // 因为它会锁住设备（别的程序放不出声）。

@@ -131,8 +131,10 @@ class LibraryStore {
       parsed: 0,
       total: null,
       imported: 0,
+      updated: 0,
       skipped: 0,
       failed: 0,
+      missing: 0,
       currentPath: null,
       elapsedMs: 0,
     };
@@ -185,8 +187,12 @@ export interface ScanProgressView {
   parsed: number;
   total: number | null;
   imported: number;
+  /** 重新读标签并写了行的数量（与 skipped 互斥：那批连读都没读） */
+  updated: number;
   skipped: number;
   failed: number;
+  /** 本轮被标为离线的行数（只有 done 那一刻有值，中途恒 0） */
+  missing: number;
   currentPath: string | null;
   elapsedMs: number;
 }
@@ -202,8 +208,10 @@ function readScanProgress(raw: unknown): ScanProgressView {
     parsed: num('parsed'),
     total: typeof o.total === 'number' ? o.total : null,
     imported: num('imported'),
+    updated: num('updated'),
     skipped: num('skipped'),
     failed: num('failed'),
+    missing: num('missing'),
     currentPath: typeof o.currentPath === 'string' ? o.currentPath : null,
     elapsedMs: num('elapsedMs'),
   };

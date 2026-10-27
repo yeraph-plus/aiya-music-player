@@ -70,8 +70,16 @@ pub struct ScanProgress {
     pub parsed: usize,
     pub total: Option<usize>,
     pub imported: usize,
+    /// 重新读标签并写了行的数量（与 `skipped` 互斥：那一批连读都没读）
+    pub updated: usize,
     pub skipped: usize,
     pub failed: usize,
+    /// 本轮被标为 missing（文件不在）的行数。
+    ///
+    /// 只在 `done` 那一刻有值（要先走完目录才知道谁不在），中途恒 0。
+    /// 放进进度事件而不是只留在 `ScanResult` 里：UI 拿到结果后要一直显示
+    /// "上次扫描 · 离线 2"，没有这个字段就得另存一份 result。
+    pub missing: usize,
     pub current_path: Option<String>,
     pub elapsed_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -104,6 +112,13 @@ pub struct ScanResult {
     pub unchanged: usize,
     #[ts(type = "number")]
     pub failed: usize,
+    /// 本轮被标为 missing（文件不在了）的行数。
+    ///
+    /// 单独一个字段而不是并进 `updated`：这是"库里有、磁盘没有"，与
+    /// "磁盘有、重新读了标签"是相反方向的变化，混在一起就没法解释。
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub missing: usize,
     /// 遍历目录时的 walkdir 错误条数（权限不足等）；只计数不中断。
     /// `#[serde(default)]` 保持对旧调用方（缺字段反序列化）兼容。
     #[serde(default)]
@@ -291,7 +306,7 @@ fn upsert(
     t: &ParsedTrack,
     now: i64,
     artwork: Option<&StagedArtwork>,
-) -> DbResult<bool> {
+) -> DbResult<UpsertOutcome> {
     // 对账键 = path_lower（Windows 大小写不敏感语义；该列是 0001 基线里的
     // `path_lower TEXT NOT NULL UNIQUE`，早期编号 0003 的迁移已在压平基线时并入）
     let path_lower = t.path.to_lowercase();
@@ -310,7 +325,7 @@ fn upsert(
         if !must_refresh {
             if let Some(m) = t.mtime {
                 if *old_mtime == m && *old_size == t.size_bytes as i64 {
-                    return Ok(false);
+                    return Ok(UpsertOutcome::Unchanged);
                 }
             }
         }
@@ -400,7 +415,27 @@ fn upsert(
             t.mtime.unwrap_or(0),
         ],
     )?;
-    Ok(existing.is_none())
+    Ok(if existing.is_none() {
+        UpsertOutcome::Inserted
+    } else {
+        UpsertOutcome::Rewritten
+    })
+}
+
+/// 单个文件的入库结果。
+///
+/// 为什么把 `bool` 换成三态：旧接口只回答"是不是新行"，于是**重新解析并
+/// 写了行**这一档被混进 `unchanged`，扫描结果里永远看不出"标签被外部改过"。
+/// 刷新管线（docs/33 §7）要靠这个数决定"磁盘侧真的变了没有"，
+/// 而 `unchanged` 必须是"连标签都没读"的那一批。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpsertOutcome {
+    /// 库里没这一行 → 新导入
+    Inserted,
+    /// 库里有，mtime/size 变了 → 重新写了一遍
+    Rewritten,
+    /// mtime+size 与库内一致 → 早退，连标签都没读
+    Unchanged,
 }
 
 // ---------------------------------------------------------------------------
@@ -434,6 +469,7 @@ struct Tally {
     scanned: usize,
     parsed: usize,
     imported: usize,
+    updated: usize,
     unchanged: usize,
     failed: usize,
 }
@@ -451,8 +487,10 @@ fn snap(
         parsed: t.parsed,
         total,
         imported: t.imported,
+        updated: t.updated,
         skipped: t.unchanged,
         failed: t.failed,
+        missing: 0,
         current_path,
         elapsed_ms: started.elapsed().as_millis() as u64,
         message: None,
@@ -530,7 +568,7 @@ fn process_file(
 }
 
 enum CommitOutcome {
-    Done { count: usize, imported: usize, unchanged: usize },
+    Done { count: usize, imported: usize, updated: usize, unchanged: usize },
     /// 整批回滚：`count` 条全部计入 failed（批语义见 commit_batch 注释）
     RolledBack { count: usize, path: String, message: String },
 }
@@ -538,7 +576,7 @@ enum CommitOutcome {
 /// 提交攒下的一批（≤ BATCH_SIZE）。整批一个 IMMEDIATE 事务。
 fn commit_batch(conn: &mut Connection, batch: &mut Vec<Item>) -> DbResult<CommitOutcome> {
     if batch.is_empty() {
-        return Ok(CommitOutcome::Done { count: 0, imported: 0, unchanged: 0 });
+        return Ok(CommitOutcome::Done { count: 0, imported: 0, updated: 0, unchanged: 0 });
     }
     let count = batch.len();
     let now = now_secs();
@@ -546,13 +584,15 @@ fn commit_batch(conn: &mut Connection, batch: &mut Vec<Item>) -> DbResult<Commit
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(DbError::Sql)?;
     let mut imported = 0usize;
+    let mut updated = 0usize;
     let mut unchanged = 0usize;
     let mut err: Option<(String, String)> = None;
     for item in batch.iter() {
         if let Item::Parsed { parsed, artwork } = item {
             match upsert(&tx, parsed, now, artwork.as_ref()) {
-                Ok(true) => imported += 1,
-                Ok(false) => unchanged += 1,
+                Ok(UpsertOutcome::Inserted) => imported += 1,
+                Ok(UpsertOutcome::Rewritten) => updated += 1,
+                Ok(UpsertOutcome::Unchanged) => unchanged += 1,
                 Err(e) => {
                     err = Some((parsed.path.clone(), e.to_string()));
                     break;
@@ -564,7 +604,7 @@ fn commit_batch(conn: &mut Connection, batch: &mut Vec<Item>) -> DbResult<Commit
     match err {
         None => {
             tx.commit().map_err(DbError::Sql)?;
-            Ok(CommitOutcome::Done { count, imported, unchanged })
+            Ok(CommitOutcome::Done { count, imported, updated, unchanged })
         }
         Some((path, message)) => {
             tx.rollback().map_err(DbError::Sql)?;
@@ -575,8 +615,9 @@ fn commit_batch(conn: &mut Connection, batch: &mut Vec<Item>) -> DbResult<Commit
 
 fn apply_commit(tally: &mut Tally, errors: &mut Vec<ScanError>, outcome: CommitOutcome) {
     match outcome {
-        CommitOutcome::Done { count, imported, unchanged } => {
+        CommitOutcome::Done { count, imported, updated, unchanged } => {
             tally.imported += imported;
+            tally.updated += updated;
             tally.unchanged += unchanged;
             tally.scanned += count;
         }
@@ -665,6 +706,7 @@ pub fn scan_roots_ext(
             updated: 0,
             unchanged: 0,
             failed: 0,
+            missing: 0,
             walk_errors,
             cancelled: true,
             errors,
@@ -825,9 +867,10 @@ pub fn scan_roots_ext(
         let result = ScanResult {
             scanned: tally.scanned,
             imported: tally.imported,
-            updated: 0,
+            updated: tally.updated,
             unchanged: tally.unchanged,
             failed: tally.failed,
+            missing: 0, // 取消路径不跑 mark_missing（seen 不完整）
             walk_errors,
             cancelled: true,
             errors: std::mem::take(&mut errors),
@@ -837,15 +880,16 @@ pub fn scan_roots_ext(
         return Ok(result);
     }
 
-    mark_missing(conn, roots, &seen)?;
+    let missing = mark_missing(conn, roots, &seen)?;
 
     let elapsed_ms = started.elapsed().as_millis() as u64;
     let result = ScanResult {
         scanned: total,
         imported: tally.imported,
-        updated: 0,
+        updated: tally.updated,
         unchanged: tally.unchanged,
         failed: tally.failed,
+        missing,
         walk_errors,
         cancelled: false,
         errors: std::mem::take(&mut errors),
@@ -859,8 +903,10 @@ pub fn scan_roots_ext(
         parsed: total,
         total: Some(total),
         imported: result.imported,
+        updated: result.updated,
         skipped: result.unchanged,
         failed: result.failed,
+        missing: result.missing,
         current_path: None,
         elapsed_ms: result.elapsed_ms,
         message: None,
@@ -892,7 +938,7 @@ fn mark_missing(
     conn: &mut Connection,
     roots: &[std::path::PathBuf],
     seen: &std::collections::HashSet<String>,
-) -> DbResult<()> {
+) -> DbResult<usize> {
     // 前缀统一小写并以路径分隔符收尾，防止 "C:\m" 误匹配 "C:\music\..."
     let mut prefixes = Vec::with_capacity(roots.len());
     for root in roots {
@@ -904,7 +950,7 @@ fn mark_missing(
     }
     if prefixes.is_empty() {
         tracing::warn!("扫描根列表为空，跳过 missing 对账");
-        return Ok(());
+        return Ok(0);
     }
     // OR 子句按根数动态拼，参数占位符 ?1..?N
     let where_clause = prefixes
@@ -944,7 +990,7 @@ fn mark_missing(
     if missing > 0 {
         tracing::info!(missing, "scan marked missing tracks");
     }
-    Ok(())
+    Ok(missing)
 }
 
 #[cfg(test)]
@@ -1211,7 +1257,11 @@ mod tests {
         let tx = conn.transaction().unwrap();
         let inserted = upsert(&tx, &parsed, 999, None).unwrap();
         tx.commit().unwrap();
-        assert!(!inserted, "大小写变体必须命中已有行而不是新插入");
+        assert_eq!(
+            inserted,
+            UpsertOutcome::Unchanged,
+            "大小写变体必须命中已有行（且 mtime/size 未变 → 早退），而不是新插入"
+        );
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 1);
     }

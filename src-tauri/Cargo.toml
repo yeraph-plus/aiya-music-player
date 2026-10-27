@@ -40,5 +40,9 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 ureq.workspace = true
 souvlaki = "0.8"
 tauri-plugin-single-instance = "2"
+[dev-dependencies]
+# 安装轨道的临时目录（造假套件包 / 落下载文件）
+tempfile = "3"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.60", features = ["Win32_System_Power"] }

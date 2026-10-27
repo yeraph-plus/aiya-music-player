@@ -40,6 +40,7 @@ import type {
   PlaylistSummary,
   QueueSnapshot,
   RemoveTracks,
+  RefreshState,
   RepeatMode,
   RevealResult,
   ScanCancel,
@@ -173,6 +174,17 @@ export const ipc = {
     spectrumSet: (enabled: boolean) => call<SpectrumToggle>('spectrum_set', { enabled }),
   },
 
+  /**
+   * 自动刷新管线（docs/33 §7）。
+   *
+   * 只有查询：触发是宿主自己的事（定时 30 s / 窗口聚焦 / 命令收尾），
+   * 宿主不会替用户"点按钮"。手动立即刷新走 `beets.sync`。
+   */
+  refresh: {
+    /** 间隔 + 是否在前台 + 最近一次结果（诊断区读） */
+    state: () => call<RefreshState>('refresh_state'),
+  },
+
   library: {
     list: (query: TrackQueryInput) => call<TrackPage>('library_list', { query }),
     /** 按 ID 批量取（含音频规格）；返回顺序与入参一致，缺失的跳过 */
@@ -291,7 +303,12 @@ export const ipc = {
     preview: (paths: string[]) => call<JobStarted>('beets_preview', { paths }),
     apply: (decisions: ApplyDecision[]) => call<JobStarted>('beets_apply', { decisions }),
     cancel: () => call<CancelRequested>('beets_cancel'),
-    /** 手动触发 beets → 自有读模型全量对齐；汇总走 `librarySynced` 事件 */
+    /**
+     * 手动触发一次完整刷新（增量扫描 + beets 对齐）。
+     *
+     * 与自动定时跑的是**同一条管线**：结果走 `libraryRefreshed`
+     * （无变化时手动也会发一条，好让界面有回应）。
+     */
     sync: () => call<JobStarted>('beets_sync'),
     /**
      * 装 beets 工具到应用数据目录（docs/33 §6.2 两条轨道）。

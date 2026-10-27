@@ -194,6 +194,14 @@
   max-width: 460px;
 }
 
+/* 开关的实际状态（"当前：已创建"）。从诊断区下放过来的那一行：
+   贴在对应开关的说明末尾，用户不用跨页对照 */
+.setting-hint .state-tail {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-3);
+}
+
 .shortcut-list {
   display: grid;
   grid-template-columns: 1fr 1fr;

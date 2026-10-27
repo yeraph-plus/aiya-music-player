@@ -367,6 +367,7 @@ fn scan_result_sends_numbers_and_camel_case() {
         updated: 5,
         unchanged: 4,
         failed: 1,
+        missing: 2,
         walk_errors: 0,
         cancelled: false,
         errors: vec![aiya_data::scanner::ScanError {
@@ -384,6 +385,7 @@ fn scan_result_sends_numbers_and_camel_case() {
             "updated",
             "unchanged",
             "failed",
+            "missing",
             "walkErrors",
             "cancelled",
             "errors",
@@ -392,6 +394,7 @@ fn scan_result_sends_numbers_and_camel_case() {
     );
     assert!(v["elapsedMs"].is_number());
     assert!(v["walkErrors"].is_number());
+    assert_eq!(v["missing"], 2, "文件不在的数量要单独报（不是并进 updated）");
     assert_eq!(v["errors"][0]["message"], "解析失败");
 }
 

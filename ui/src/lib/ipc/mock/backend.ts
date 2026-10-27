@@ -537,6 +537,22 @@ export class MockBackend {
       unchanged: this.tracks.length,
       orphaned: 0,
     });
+    // 管线终态跟着走一条：UI 的重拉只认 libraryRefreshed（librarySynced 是
+    // 老消费者的兼容路径）。预览里没有真变化，就报一条 changed:false。
+    emit({
+      type: 'libraryRefreshed',
+      trigger: 'manual',
+      atMs: Date.now(),
+      changed: false,
+      scanned: this.tracks.length,
+      imported: 0,
+      updated: 0,
+      missing: 0,
+      failed: 0,
+      sync: 'ok',
+      elapsedMs: 120,
+      error: null,
+    });
     return { started: true };
   }
 
@@ -665,6 +681,7 @@ export class MockBackend {
       updated: 0,
       unchanged: 0,
       failed: 0,
+      missing: 0,
       walkErrors: 0,
       cancelled: false,
       errors: [],

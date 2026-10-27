@@ -17,6 +17,7 @@
   import Switch from './ui/Switch.svelte';
   import Header from './content/Header.svelte';
   import { capture } from '../stores/capture.svelte';
+  import { ui } from '../stores/ui.svelte';
 
   interface Props {
     settings: AppSettings;
@@ -24,6 +25,16 @@
   }
 
   let { settings, onsave }: Props = $props();
+
+  /**
+   * 系统集成状态（本轮从诊断区下放）。
+   *
+   * 以前「系统媒体控制 / 系统集成」是扫描入库页里的两个诊断块，说的却是
+   * 这一页两个开关的实际效果。那种排法的问题：状态与开关离得太远，
+   * 用户要对照着看，而且对一个不关心系统集成的人等于两屏噪音。
+   * 现在每个状态贴在它对应的开关说明里，一行字。
+   */
+  const sys = $derived(ui.diagnostics);
 
   /**
    * 设置页 = 左分组导航 + 右内容（docs/24 B6）。
@@ -140,6 +151,19 @@
     { value: '50', label: '50ms' },
     { value: '100', label: '100ms' },
     { value: '200', label: '200ms' },
+  ];
+
+  /**
+   * 自动刷新间隔（秒）。0 = 只保留"切回窗口时刷新"。
+   *
+   * 上限只给到 5 分钟：再慢就不如关掉定时（切回窗口已经覆盖了主要场景），
+   * 留一个"每半小时想起来才扫一次"的档位只会让用户以为它坏了。
+   */
+  const REFRESH_OPTIONS: Array<{ value: string; label: string }> = [
+    { value: '0', label: '关闭' },
+    { value: '30', label: '30 秒' },
+    { value: '120', label: '2 分钟' },
+    { value: '300', label: '5 分钟' },
   ];
 
   const CLOCK_OPTIONS: Array<{ value: string; label: string }> = [
@@ -380,6 +404,7 @@
             <div class="setting-title">关闭窗口时最小化到托盘</div>
             <div class="setting-hint">
               打开后点关闭只是隐藏窗口，播放继续；要退出请用托盘菜单或 Ctrl+Q
+              {#if sys}<span class="state-tail">当前：{sys.tray ? '已创建' : '未创建'}</span>{/if}
             </div>
           </div>
           <Switch
@@ -391,9 +416,34 @@
 
         <div class="setting-row">
           <div>
+            <div class="setting-title">曲库自动刷新</div>
+            <div class="setting-hint">
+              在别的软件里改了标签或移动了文件，播放器隔多久自己发现。
+              关闭后仍会在切回窗口时刷一次；最近一次结果看「扫描入库 → 曲库」
+            </div>
+          </div>
+          <SegmentedControl
+            label="曲库自动刷新间隔"
+            value={String(settings.refreshSeconds ?? 30)}
+            options={REFRESH_OPTIONS}
+            onchange={(value) => apply({ refreshSeconds: Number(value) })}
+          />
+        </div>
+
+        <div class="setting-row">
+          <div>
             <div class="setting-title">系统媒体键</div>
             <div class="setting-hint">
               播放器的标题、封面与播放状态同步到系统媒体面板，媒体键由系统路由，失焦也生效
+              {#if sys}
+                <span class="state-tail">
+                  当前：{!sys.mediaKeys.enabled
+                    ? '已关闭'
+                    : sys.mediaKeys.active.length > 0
+                      ? '已生效'
+                      : '未生效（还没有播放会话）'}
+                </span>
+              {/if}
             </div>
           </div>
           <Switch

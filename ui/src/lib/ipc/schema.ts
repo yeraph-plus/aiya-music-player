@@ -26,6 +26,8 @@ export const settingsSchema = z
     rememberPosition: z.boolean().optional(),
     preventSleep: z.boolean().optional(),
     closeToTray: z.boolean().optional(),
+    /** 自动刷新间隔（秒，0 = 关掉定时；下限由宿主夹到 10） */
+    refreshSeconds: z.number().int().min(0).max(3600).optional(),
     shortcuts: z.record(z.string(), z.string()).optional(),
     /** 输出配置（2026-10 起取代 `exclusiveMode: bool`） */
     output: z

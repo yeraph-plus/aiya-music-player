@@ -9,6 +9,13 @@ import type { ScanError } from "./ScanError";
  */
 export type ScanResult = { scanned: number, imported: number, updated: number, unchanged: number, failed: number, 
 /**
+ * 本轮被标为 missing（文件不在了）的行数。
+ *
+ * 单独一个字段而不是并进 `updated`：这是"库里有、磁盘没有"，与
+ * "磁盘有、重新读了标签"是相反方向的变化，混在一起就没法解释。
+ */
+missing: number, 
+/**
  * 遍历目录时的 walkdir 错误条数（权限不足等）；只计数不中断。
  * `#[serde(default)]` 保持对旧调用方（缺字段反序列化）兼容。
  */

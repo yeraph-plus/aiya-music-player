@@ -40,6 +40,8 @@ export * from './PlaylistSummary';
 export * from './PowerInfo';
 export * from './QueueSnapshot';
 export * from './RecentError';
+export * from './RefreshSnapshot';
+export * from './RefreshState';
 export * from './RemoveTracks';
 export * from './RepeatMode';
 export * from './RevealResult';

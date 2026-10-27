@@ -569,8 +569,8 @@
   }
 }
 
-/* 设置页里的 ImportPanel 不再是右侧栏形态 */
-.library-tools .side-panel {
+/* 导入面板在整理库段里不再是右侧栏形态 */
+.beets-section .side-panel {
   grid-row: auto;
   grid-column: auto;
   border: 1px solid var(--line);
@@ -578,6 +578,122 @@
   border-radius: 12px;
   backdrop-filter: none;
   background: var(--surface-2);
+}
+
+/* ---------------- 扫描入库页：曲库段 / 整理库段 / 折叠区 ----------------
+   本轮信息架构整理：这一页按"数据对象"分两组（曲库、整理库），诊断收进
+   折叠。样式与上面同源（surface-2 + 1px 边框 + 12px 圆角），不引入新视觉语言。 */
+
+.library-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+/* 一行事实（多少首/多少专辑）：用户看的是"我的库有多大"，
+   不是"系统自检是否正常"，所以这里不用 diag-grid 那套密钥式排版 */
+.facts-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.facts-row b {
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.refresh-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.refresh-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--text-3);
+}
+
+.facts-foot {
+  font-size: 11px;
+}
+
+.beets-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 折叠区：整理库的维护四件套、以及底部的诊断。
+   两者默认收起——它们都不是每天要看的东西，展开才占视觉重量。 */
+.maint-fold,
+.advanced-fold {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.maint-fold > summary,
+.advanced-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  list-style: none;
+  user-select: none;
+}
+
+.maint-fold > summary::-webkit-details-marker,
+.advanced-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.maint-fold[open] > summary,
+.advanced-fold[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.maint-fold > summary .dim,
+.advanced-fold > summary .dim {
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.fold-arrow {
+  flex: none;
+  color: var(--text-3);
+  transition: transform 0.15s ease;
+}
+
+.advanced-fold[open] .fold-arrow {
+  transform: rotate(90deg);
+}
+
+.advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 16px;
+}
+
+/* 折叠里的维护区：外层已经给了边框与底色，内层不再画一层 */
+.maint-fold .task-status {
+  border: none;
+  border-radius: 0;
+  background: transparent;
 }
 
 /* ---------------- 播放队列抽屉 ----------------

@@ -399,13 +399,30 @@ impl InstallTrack {
     }
 }
 
-/// 发布物位置。M4 接真实 release 后，这里换成 manifest 拉取（可带版本号与校验和）。
+/// 发布物的默认位置。
 ///
-/// 现在指向占位地址：下载失败会给"还没发布"的明确错误，而不是静默卡住。
-/// 开发/离线时用 `AIYA_BEETS_INSTALLER` / `AIYA_BEETS_BUNDLE` 指向本地文件。
+/// 优先级见 [`release_base`]：环境变量 > 设置 > 这里。做成可配置而不是硬编码，
+/// 是因为"发布到哪"是**发布流程**的事，不该逼着播放器改代码再发版；
+/// 也让两条轨道的下载路径能在本地用 `python -m http.server` 真实走一遍
+/// （`AIYA_BEETS_RELEASE_BASE=http://127.0.0.1:8000`）。
+///
+/// 地址本身仍是占位的：真发布之后改这一行，或让用户/CI 用环境变量指过去。
+/// 下载失败会给"下到了什么"的明确错误（见 `verify_asset`），而不是静默卡住。
 const RELEASE_BASE: &str = "https://github.com/aiya-music/aiya-beets/releases/latest/download";
 const INSTALLER_ASSET: &str = "aiya-beets-installer.pyz";
 const BUNDLE_ASSET: &str = "aiya-beets-bundle-win-x64.zip";
+
+/// 发布物根地址：`AIYA_BEETS_RELEASE_BASE` > 设置 `beets.releaseBase` > 默认。
+///
+/// 尾斜杠统一去掉：`{base}/{asset}` 拼出来不能出现 `//`（有些静态服务器会 404）。
+fn release_base(app: &tauri::AppHandle) -> String {
+    let raw = std::env::var("AIYA_BEETS_RELEASE_BASE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| setting_str(app, "beets.releaseBase"))
+        .unwrap_or_else(|| RELEASE_BASE.to_string());
+    raw.trim().trim_end_matches('/').to_string()
+}
 
 fn install_root(app: &tauri::AppHandle) -> PathBuf {
     app.path()
@@ -414,8 +431,74 @@ fn install_root(app: &tauri::AppHandle) -> PathBuf {
         .join("beets-tool")
 }
 
+/// 发布物的形状。两条轨道都是 zip 容器（`.pyz` 就是换了扩展名的 zip）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AssetKind {
+    /// A 轨道：`aiya-beets-installer.pyz`
+    Installer,
+    /// B 轨道：`aiya-beets-bundle-win-x64.zip`
+    Bundle,
+}
+
+impl AssetKind {
+    fn label(self) -> &'static str {
+        match self {
+            AssetKind::Installer => "安装器（.pyz）",
+            AssetKind::Bundle => "套件包（.zip）",
+        }
+    }
+}
+
+/// 下载到本地（覆盖写）。
+///
+/// 抽成独立函数是为了能被测：真机走一遍 release 下载要等发布物，
+/// 而这条路径上的坑（404 页面被当成二进制、"成功"写了 0 字节）与网络无关，
+/// 用本地 TCP 服务就能复现。
+fn download_to(url: &str, dest: &std::path::Path) -> Result<u64, String> {
+    let resp = ureq::get(url)
+        .timeout(std::time::Duration::from_secs(120))
+        .call()
+        .map_err(|e| format!("下载失败（{url}）：{e}"))?;
+    let mut out = std::fs::File::create(dest).map_err(|e| format!("写临时文件失败：{e}"))?;
+    let n = std::io::copy(&mut resp.into_reader(), &mut out)
+        .map_err(|e| format!("下载写入失败：{e}"))?;
+    Ok(n)
+}
+
+/// 下载/落盘之后的形状校验。
+///
+/// 为什么必须有：release 还没发布时，GitHub 返回的是一个 200 的 HTML 页面
+/// （"Not Found"），`ureq` 不认为是错误。不校验的话，用户看到的是后面
+/// `ZipArchive::new` 的一句"不是有效 zip"，完全指不到"没发布/地址错了"。
+fn verify_asset(path: &std::path::Path, kind: AssetKind) -> Result<usize, String> {
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if size == 0 {
+        return Err(format!("{} 是空文件（下载没成功）", kind.label()));
+    }
+    let file = std::fs::File::open(path).map_err(|e| format!("打开{}失败：{e}", kind.label()))?;
+    match zip::ZipArchive::new(file) {
+        Ok(z) if z.len() > 0 => Ok(z.len()),
+        Ok(_) => Err(format!("{} 是空压缩包（构建有问题）", kind.label())),
+        Err(_) => Err(format!(
+            "{} 不是有效的压缩包（{} 字节）——多半是下到了错误页，\
+             或这个版本的发布物还没传上去",
+            kind.label(),
+            size
+        )),
+    }
+}
+
 /// 取安装物：环境变量指本地文件优先，否则下载到临时目录。
-fn fetch_asset(env_key: &str, asset: &str, emit: &dyn Fn(serde_json::Value)) -> Result<PathBuf, String> {
+///
+/// 两个来源都过 [`verify_asset`]：本地文件同样可能是半截下载
+/// （浏览器中断、解压工具写了一半），而"形状不对"的错误在这里说最清楚。
+fn fetch_asset(
+    app: &tauri::AppHandle,
+    env_key: &str,
+    asset: &str,
+    kind: AssetKind,
+    emit: &dyn Fn(serde_json::Value),
+) -> Result<PathBuf, String> {
     if let Ok(local) = std::env::var(env_key) {
         let p = PathBuf::from(local);
         if p.is_file() {
@@ -423,23 +506,23 @@ fn fetch_asset(env_key: &str, asset: &str, emit: &dyn Fn(serde_json::Value)) -> 
                 "type": "progress", "stage": "prepare",
                 "message": format!("使用本地安装物：{}", p.display()),
             }));
+            verify_asset(&p, kind)?;
             return Ok(p);
         }
         return Err(format!("{env_key} 指向的文件不存在：{}", p.display()));
     }
 
-    let url = format!("{RELEASE_BASE}/{asset}");
+    let base = release_base(app);
+    let url = format!("{base}/{asset}");
     emit(serde_json::json!({
         "type": "progress", "stage": "download",
         "message": format!("下载 {asset}"),
     }));
     let dest = std::env::temp_dir().join(asset);
-    let resp = ureq::get(&url)
-        .timeout(std::time::Duration::from_secs(120))
-        .call()
-        .map_err(|e| format!("下载失败（{url}）：{e}\n——若组件尚未发布，可手动下载后设置 {env_key} 指向该文件"))?;
-    let mut out = std::fs::File::create(&dest).map_err(|e| format!("写临时文件失败：{e}"))?;
-    std::io::copy(&mut resp.into_reader(), &mut out).map_err(|e| format!("下载写入失败：{e}"))?;
+    download_to(&url, &dest).map_err(|e| {
+        format!("{e}\n——若组件尚未发布，可手动下载后设置 {env_key} 指向该文件")
+    })?;
+    verify_asset(&dest, kind)?;
     Ok(dest)
 }
 
@@ -530,20 +613,29 @@ fn install_via_installer(
     Err(format!("安装完成但找不到入口（{}）", target.display()))
 }
 
-/// B 轨道：展开套件包。
-///
-/// 套件包里带 `manifest.json`（`{"entry": "aiya-beets.exe", "args": []}` 或
-/// 解释器形态），展开后照着它记入口。没有 manifest 就按约定找两个常见入口。
+/// B 轨道：展开套件包到 `{app_data}/beets-tool/bundle`。
 fn install_via_bundle(
     app: &tauri::AppHandle,
     zip_path: &std::path::Path,
     emit: &dyn Fn(serde_json::Value),
 ) -> Result<ToolEntry, String> {
-    let target = install_root(app).join("bundle");
+    install_bundle_to(&install_root(app).join("bundle"), zip_path, emit)
+}
+
+/// 展开 + 校验入口（目标目录由调用方给，便于用假套件包测这一段）。
+///
+/// 套件包里带 `manifest.json`（`{"entry": "python.exe", "args": ["-m","aiya_beets"]}`），
+/// 展开后照着它记入口——**播放器不猜布局**：入口名是 beets 侧构建时写死的，
+/// 播放器只负责"按它说的位置看一眼在不在"。
+fn install_bundle_to(
+    target: &std::path::Path,
+    zip_path: &std::path::Path,
+    emit: &dyn Fn(serde_json::Value),
+) -> Result<ToolEntry, String> {
     if target.exists() {
         std::fs::remove_dir_all(&target).map_err(|e| format!("清理旧套件包失败：{e}"))?;
     }
-    std::fs::create_dir_all(&target).map_err(|e| format!("创建目标目录失败：{e}"))?;
+    std::fs::create_dir_all(target).map_err(|e| format!("创建目标目录失败：{e}"))?;
     emit(serde_json::json!({
         "type": "progress", "stage": "unpack",
         "message": format!("展开套件包到 {}", target.display()),
@@ -551,7 +643,7 @@ fn install_via_bundle(
 
     let file = std::fs::File::open(zip_path).map_err(|e| format!("打开套件包失败：{e}"))?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("套件包不是有效 zip：{e}"))?;
-    zip.extract(&target).map_err(|e| format!("展开失败：{e}"))?;
+    zip.extract(target).map_err(|e| format!("展开失败：{e}"))?;
 
     let manifest = target.join("manifest.json");
     if let Ok(text) = std::fs::read_to_string(&manifest) {
@@ -612,11 +704,15 @@ pub fn start_install(app: tauri::AppHandle, track: String) -> Result<(), String>
                 let _ = app.emit("beets:install", v);
             };
             let result = (|| -> Result<ToolEntry, String> {
-                let (env_key, asset) = match track {
-                    InstallTrack::Installer => ("AIYA_BEETS_INSTALLER", INSTALLER_ASSET),
-                    InstallTrack::Bundle => ("AIYA_BEETS_BUNDLE", BUNDLE_ASSET),
+                let (env_key, asset, kind) = match track {
+                    InstallTrack::Installer => {
+                        ("AIYA_BEETS_INSTALLER", INSTALLER_ASSET, AssetKind::Installer)
+                    }
+                    InstallTrack::Bundle => {
+                        ("AIYA_BEETS_BUNDLE", BUNDLE_ASSET, AssetKind::Bundle)
+                    }
                 };
-                let path = fetch_asset(env_key, asset, &emit)?;
+                let path = fetch_asset(&app, env_key, asset, kind, &emit)?;
                 match track {
                     InstallTrack::Installer => install_via_installer(&app, &path, &emit),
                     InstallTrack::Bundle => install_via_bundle(&app, &path, &emit),
@@ -642,13 +738,6 @@ pub fn start_install(app: tauri::AppHandle, track: String) -> Result<(), String>
 }
 
 /* ---------------- B1/B2：导入会话（事件流转发） ---------------- */
-
-/// 读模型刷新参数（lib.rs 注入 AppState 的克隆）。
-pub struct RefreshParams {
-    pub db_path: PathBuf,
-    /// 与 library_scan 共用的互斥标志（避免同时写同一 DB）
-    pub scanning: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
 
 /// 取工具入口并造一个可直接起进程的 tool。
 ///
@@ -718,7 +807,7 @@ pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), St
 pub fn start_apply(
     app: tauri::AppHandle,
     decisions: Vec<serde_json::Value>,
-    refresh: Option<RefreshParams>,
+    refresh: Option<Arc<crate::refresh::RefreshParams>>,
 ) -> Result<(), String> {
     let tool = tool_or_err(&app)?;
 
@@ -732,9 +821,10 @@ pub fn start_apply(
         "已有 beets 导入任务在执行（可先取消）",
         Box::new(move || {
             if let Some(params) = refresh {
-                // 自闭环（docs/08 §5）：工具刚写完库就是最新权威，
-                // 直接全量对齐自有 DB，替代旧"重扫受影响目录"路径。
-                run_sync(&exit_app, params);
+                // 自闭环（docs/08 §5）：工具刚写完库就是最新权威。
+                // 走完整刷新管线而不是只 dump+sync —— apply 会写标签改 mtime，
+                // 扫描段正好把这些文件的 mtime/size 与标签一起还原（docs/33 §7）。
+                crate::refresh::spawn(&exit_app, params, crate::refresh::Trigger::Action);
             }
         }),
     )
@@ -755,7 +845,7 @@ pub fn start_apply(
 fn start_maintenance(
     app: tauri::AppHandle,
     payload: serde_json::Value,
-    refresh: Option<RefreshParams>,
+    refresh: Option<Arc<crate::refresh::RefreshParams>>,
 ) -> Result<(), String> {
     let tool = tool_or_err(&app)?;
 
@@ -768,7 +858,7 @@ fn start_maintenance(
         "已有 beets 任务在执行（可先取消）",
         Box::new(move || {
             if let Some(params) = refresh {
-                run_sync(&exit_app, params);
+                crate::refresh::spawn(&exit_app, params, crate::refresh::Trigger::Action);
             }
         }),
     )
@@ -779,7 +869,7 @@ fn start_maintenance(
 pub fn start_adopt(
     app: tauri::AppHandle,
     paths: Vec<String>,
-    refresh: Option<RefreshParams>,
+    refresh: Option<Arc<crate::refresh::RefreshParams>>,
 ) -> Result<(), String> {
     start_maintenance(
         app,
@@ -812,7 +902,7 @@ pub fn start_move(
     app: tauri::AppHandle,
     directory: String,
     pretend: bool,
-    refresh: Option<RefreshParams>,
+    refresh: Option<Arc<crate::refresh::RefreshParams>>,
 ) -> Result<(), String> {
     start_maintenance(
         app,
@@ -824,17 +914,15 @@ pub fn start_move(
     )
 }
 
-/// 手动触发一次读模型对齐（设置页/导入面板按钮；B4 的自动同步基座）。
-pub fn sync_now(app: tauri::AppHandle, params: RefreshParams) {
-    std::thread::Builder::new()
-        .name("beets-sync".into())
-        .spawn(move || run_sync(&app, params))
-        .map(|_| ())
-        .map_err(|e| tracing::warn!(%e, "起 sync 线程失败"))
-        .ok();
+/// 组件当前是否可用（只做发现，不起进程）。
+///
+/// 刷新管线用它决定"要不要跑 beets 段"。刻意不复用 `probe`：探测要起一次
+/// 子进程（约 300 ms），而定时刷新每 30 s 就会问一次 —— 这里只需要回答
+/// "有没有入口"，有入口之后让 dump 自己失败（那时候的错误才值得报告）。
+pub fn available(app: &tauri::AppHandle) -> bool {
+    discover(app).is_some()
 }
 
-/// dump 全量收集的整体超时：本地库读取，几万条也在秒级；超过这个数就是卡死。
 const DUMP_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// 从 sidecar 收集 dump_items 全量（一次性进程，调用线程同步读）。
@@ -846,7 +934,7 @@ const DUMP_TIMEOUT: Duration = Duration::from_secs(180);
 ///    会拿它当依据。
 /// 2. **整体超时要收尸**。卡死的 sidecar 会一直占着 stdout 读取线程，
 ///    sync 线程永远等下去（用户侧表现：手动同步按钮按了没反应）。
-fn collect_items(app: &tauri::AppHandle) -> Result<Vec<aiya_data::beets_sync::BeetsItem>, String> {
+pub(crate) fn collect_items(app: &tauri::AppHandle) -> Result<Vec<aiya_data::beets_sync::BeetsItem>, String> {
     let (entry, _source) = discover(app).ok_or_else(|| "未安装 beets 组件".to_string())?;
     let launcher = launcher_for(app, &entry);
     let (child, stdin) = aiya_beets_client::session::spawn_session(
@@ -930,77 +1018,135 @@ fn collect_items(app: &tauri::AppHandle) -> Result<Vec<aiya_data::beets_sync::Be
     Ok(items)
 }
 
-/// 对齐执行体：dump 全量 → sync_items → 发 `librarySynced` 汇总。
-/// 与 library_scan 共用 scanning 互斥；正扫全库时让位（libraryRefreshSkipped）。
-fn run_sync(app: &tauri::AppHandle, params: RefreshParams) {
-    use std::sync::atomic::Ordering;
-    let emit = |v: serde_json::Value| {
-        let _ = app.emit("beets:import", v);
-    };
-
-    if discover(app).is_none() {
-        emit(serde_json::json!({
-            "type": "librarySyncFailed",
-            "message": "未安装 beets 组件",
-        }));
-        return;
-    }
-    if params
-        .scanning
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        emit(serde_json::json!({
-            "type": "libraryRefreshSkipped",
-            "reason": "scanBusy",
-        }));
-        return;
-    }
-
-    // P2：scanning 标志的 panic 保护——sync 链路里任一 panic 曾让标志永真，
-    // 之后所有扫描 E_SCAN_BUSY。Drop 兜底保证退出路径（含 unwind）必复位。
-    struct ScanGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
-    impl Drop for ScanGuard {
-        fn drop(&mut self) {
-            self.0.store(false, Ordering::SeqCst);
-        }
-    }
-    let _guard = ScanGuard(std::sync::Arc::clone(&params.scanning));
-
-    let result = (|| -> Result<aiya_data::beets_sync::SyncStats, String> {
-        let items = collect_items(app)?;
-        let mut conn = aiya_data::open_conn(&params.db_path)
-            .map_err(|e| format!("open db: {e}"))?;
-        let stats = aiya_data::beets_sync::sync_items(&mut conn, &items, now_secs())
-            .map_err(|e| format!("sync: {e}"))?;
-        let _ = conn.close();
-        Ok(stats)
-    })();
-
-    match result {
-        Ok(stats) => match serde_json::to_value(&stats) {
-            Ok(mut v) => {
-                if let Some(obj) = v.as_object_mut() {
-                    obj.insert("type".into(), serde_json::json!("librarySynced"));
-                }
-                emit(v);
-            }
-            Err(e) => emit(serde_json::json!({ "type": "librarySyncFailed", "message": e.to_string() })),
-        },
-        Err(e) => emit(serde_json::json!({ "type": "librarySyncFailed", "message": e })),
-    }
-}
-
-fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /* ---------------- 安装轨道（docs/33 §6.2） ---------------- */
+
+    /// 造一个最小 zip（内存里拼，不落盘）。
+    fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut w = zip::ZipWriter::new(&mut buf);
+            let opts = zip::write::SimpleFileOptions::default();
+            for (name, data) in entries {
+                w.start_file(*name, opts).unwrap();
+                w.write_all(data).unwrap();
+            }
+            w.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    /// 只回一次响应的迷你 HTTP 服务（模拟 release 的静态文件）。
+    ///
+    /// 为什么不用现成的测试框架：这条路径要验的是"下载回来的字节是否原样
+    /// 落盘"，一个 accept + write 就够了；引入 http 服务器 crate 只为一次
+    /// GET 不值。
+    fn serve_once(body: Vec<u8>) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let _ = sock.read(&mut buf); // 请求内容不关心，读完就回
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = sock.write_all(head.as_bytes());
+                let _ = sock.write_all(&body);
+                let _ = sock.flush();
+            }
+        });
+        (format!("http://{addr}/asset.zip"), handle)
+    }
+
+    /// 真实下载路径：字节原样落盘 + 形状校验放行。
+    #[test]
+    fn download_writes_bytes_and_verify_accepts_zip() {
+        let body = make_zip(&[("manifest.json", br#"{"entry":"python.exe","args":[]}"#)]);
+        let (url, handle) = serve_once(body.clone());
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("asset.zip");
+
+        let n = download_to(&url, &dest).expect("下载应成功");
+        handle.join().unwrap();
+        assert_eq!(n as usize, body.len());
+        assert_eq!(std::fs::read(&dest).unwrap(), body, "字节必须原样落盘");
+        assert_eq!(verify_asset(&dest, AssetKind::Bundle).unwrap(), 1, "1 个条目");
+    }
+
+    /// 最常见的真实故障：release 没发布时下到的是一个 HTML 错误页。
+    /// 这条要保证错误文案指向"下到了错误页"，而不是后面解压时报的"不是 zip"。
+    #[test]
+    fn verify_rejects_html_error_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("bundle.zip");
+        std::fs::write(&p, b"<!DOCTYPE html><title>Not Found</title>").unwrap();
+        let err = verify_asset(&p, AssetKind::Bundle).unwrap_err();
+        assert!(err.contains("不是有效的压缩包"), "{err}");
+        assert!(err.contains("错误页"), "要指得到原因：{err}");
+    }
+
+    /// 空文件是另一种常见状态（下载被中断、写到一半）。
+    #[test]
+    fn verify_rejects_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("installer.pyz");
+        std::fs::write(&p, b"").unwrap();
+        let err = verify_asset(&p, AssetKind::Installer).unwrap_err();
+        assert!(err.contains("空文件"), "{err}");
+    }
+
+    /// B 轨道的展开 + 入口校验：入口由 manifest 说了算（播放器不猜布局）。
+    #[test]
+    fn bundle_unpack_follows_manifest_entry() {
+        let zip_bytes = make_zip(&[
+            ("manifest.json", br#"{"entry":"python.exe","args":["-m","aiya_beets"]}"#),
+            ("python.exe", b"fake interpreter"),
+            ("Lib/site-packages/aiya_beets/__init__.py", b""),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("bundle.zip");
+        std::fs::write(&zip_path, &zip_bytes).unwrap();
+        let target = dir.path().join("bundle");
+
+        let entry = install_bundle_to(&target, &zip_path, &|_| {}).expect("展开应成功");
+        assert!(entry.program.ends_with("python.exe"), "{}", entry.program);
+        assert_eq!(entry.args, vec!["-m".to_string(), "aiya_beets".to_string()]);
+        assert!(target.join("Lib/site-packages/aiya_beets").is_dir(), "包必须展开到库目录");
+    }
+
+    /// manifest 缺失时按约定找入口（老套件包 / 手搓包）。
+    #[test]
+    fn bundle_unpack_falls_back_to_conventional_entry() {
+        let zip_bytes = make_zip(&[("aiya-beets.exe", b"fake")]);
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("bundle.zip");
+        std::fs::write(&zip_path, &zip_bytes).unwrap();
+        let target = dir.path().join("bundle");
+
+        let entry = install_bundle_to(&target, &zip_path, &|_| {}).expect("展开应成功");
+        assert!(entry.program.ends_with("aiya-beets.exe"), "{}", entry.program);
+        assert!(entry.args.is_empty(), "单文件入口不该带参数");
+    }
+
+    /// 一个入口都没有 → 明确失败，不能留下"装好了但跑不起来"的目录。
+    #[test]
+    fn bundle_without_entry_fails_loudly() {
+        let zip_bytes = make_zip(&[("readme.txt", b"nothing here")]);
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("bundle.zip");
+        std::fs::write(&zip_path, &zip_bytes).unwrap();
+        let target = dir.path().join("bundle");
+
+        let err = install_bundle_to(&target, &zip_path, &|_| {}).unwrap_err();
+        assert!(err.contains("找不到入口"), "{err}");
+    }
 
     /// 形状锚点：BeetsStatus 是设置页数据源，必须 camelCase 进 IPC。
     #[test]

@@ -1,8 +1,8 @@
 # beets 两侧分离架构设计
 
-> 状态：**已拍板（2026-10-27）；M1 已完成（2026-10-27），M2–M4 待开工**。日期：2026-10-27。
+> 状态：**已拍板（2026-10-27）；M1–M4 全部完成（2026-10-27）**。日期：2026-10-27。
 > 拍板结果见 §10：monorepo 独立发布 + 短进程 stdio 胶水 + **播放器不代装 Python**（两条安装轨道）。
-> M1 落地记录见 §13（含实测数据与两处对本文的修正）。
+> M1 落地记录见 §13，M2/M3/M4 落地记录见 §9 各节（含实测数据与对本文的修正）。
 > 前置：docs/29 批 A–D 已交付；docs/31 集成验收计划、docs/32 组件化调研已完成。
 > 本文取代 docs/32 §5（分发形态）与 §6（刷新管线所有权），并明确作废批 C 的随包运行时决策。
 >
@@ -554,6 +554,18 @@ beets move 造成的回环（"先搬走再清目录"会触发一串事件）、�
 **实测成本**：30 s 一次 = 60 ms 扫描 + 1 s dump ≈ 单核 3.5% 的瞬时占用，
 平均可忽略；如果实测偏高，优化手段是"mtime 快照未变则跳过 dump"。
 
+**M4 落地时的三条修正**（都是"照原文做会发现不对"的地方）：
+
+1. **"mtime 快照未变则跳过 dump"不是优化，是必需**：定时刷新真正每次都跑的只有
+   扫描（几十毫秒），dump（起进程 + 读全库，1 s 量级）只在**磁盘侧真有变化**
+   或**命令收尾/手动触发**时才跑。判据见 §9 M4 的 `Outcome::changed`。
+2. **"无变化也要 bump"不成立**：每 30 s 发一次事件会让 UI 每 30 s 重拉当前页，
+   用户滚动时列表跳一下而什么都没变。改成"无变化不发事件"，手动触发例外
+   （用户点了按钮必须看到回应）。
+3. **要多一条让位规则**：beets 会话（导入/整理）进行中时刷新必须静默跳过。
+   否则两个 sidecar 同时读同一个 beets 库，而且刷新发出去的 `librarySynced`
+   会让正在应用导入的界面误以为"对齐完成"，把 applying 状态提前收掉。
+
 ### 7.3 所有权（分包后归属）
 
 刷新是**播放器的责任**：它知道自己的 DB 长什么样、什么时候该重绘列表。
@@ -815,18 +827,153 @@ stderr。客户端的容错**保留**——它防的是进程外污染（父进�
 另外"组件与播放器分别升级"的运行时校验只做到 `status.schemaHash` 自报，
 宿主还没拿它做比对——等真有第二个版本在世时再接。
 
-### M4 — 刷新管线 + 两条安装轨道
+### M4 — 刷新管线 + 两条安装轨道（**已完成，2026-10-27**）
 
-- 增量扫描 → dump → sync → 单 bump（§7.1）
-- 30 s 定时 + 焦点触发
-- 安装 UI 两条轨道（§6.2）：A 本机安装器（下载 `.pyz` → 跑 → 收进度）、
-  B 免安装套件（下载 zip → 解压 → 校验入口）；两条都以
-  「跑一次 `aiya-beets status` 拿到 ok」为成功判据
-- beets 侧产出两个发布物：`tools/build_installer.py` / `tools/build_bundle.py`
-  （M2 已建，M3 让 `build_bundle.py` 能自行准备运行时）
-- 验收：外部改标签 / 外部移动文件，30 s 内（或切回窗口时）列表自动更新；
-  从没装过 beets 的机器上，两条轨道各走一遍完整流程；A 装到一半改走 B，
-  用户库与配置不变
+计划原文：增量扫描 → dump → sync → 单 bump（§7.1）；30 s 定时 + 焦点触发（§7.2）；
+安装 UI 两条轨道（§6.2）；beets 侧两个发布物；验收 = 外部改标签 / 外部移动文件
+30 s 内（或切回窗口时）列表自动更新，且两条轨道能各走一遍。
+
+#### 落地形态
+
+| 位置 | 内容 |
+|---|---|
+| `src-tauri/src/refresh.rs`（新） | 管线本体 + 定时线程 + 焦点闸门 + 快照记账 |
+| `crates/aiya-data/src/scanner.rs` | `upsert` 从 `bool` 改三态（`Inserted/Rewritten/Unchanged`）；`ScanResult` 新增 `updated`（真实值）与 `missing` |
+| `crates/aiya-beets-client/src/session.rs` | 新增 `busy()`：让位判断只读会话槽 |
+| `src-tauri/src/beets.rs` | 删掉 `run_sync`/`sync_now`；`collect_items` 开放给管线；安装物下载/校验重写 |
+| `src-tauri/src/dto/refresh.rs`（新） | `RefreshSnapshot` / `RefreshState`（诊断区数据源，ts-rs 生成） |
+| `src-tauri/src/lib.rs` | `AppState.refresh`（`Arc<RefreshParams>`）+ `refresh_state` 命令 + `WindowEvent::Focused` 接线 + 启动定时线程 |
+| `ui/src/stores/scan.svelte.ts` | `watchAutoRefresh()`：收到 `libraryRefreshed` 且 `changed` 才走 `afterScan()` |
+| `ui/src/views/ScanToolsView.svelte` | 诊断区新增「自动刷新」块（上次时间 / 触发源 / 结果 / 耗时） |
+| `ui/src/components/SettingsPanel.svelte` | 「曲库自动刷新」：关闭 / 30 秒 / 2 分钟 / 5 分钟 |
+
+#### 一处必须先修的前提：扫描器不报"更新"
+
+管线要靠"磁盘侧变了没有"决定跑不跑 dump，而**旧扫描器答不了这个问题**：
+`upsert` 只回 `bool`（是不是新行），于是"重新读了标签并写了行"这一档被并进
+`unchanged`。用户用 mp3tag 改完标签，扫描结果永远是"跳过 1846 首"。
+
+改成三态之后数字才有意义（`ScanResult.updated` 以前恒 0，是个从未被填的字段）：
+
+```
+scanned 1846 · imported 0 · updated 2 · unchanged 1844 · missing 0 · failed 0
+                                       ↑ 这两首就是外部改过标签的
+```
+
+`missing` 单独一个字段而不是并进 `updated`：它是"库里有、磁盘没有"，与
+"磁盘有、重新读了"是相反方向的变化，混在一起就没法向用户解释。
+
+#### 管线（顺序不能颠倒，理由见 §7.1）
+
+```text
+① scanner::scan_roots_ext   （mtime+size 预筛，没变连标签都不读）
+② beets::collect_items      （dump_items 全量，仅在需要时）
+③ beets_sync::sync_items    （分块事务，路径漂移跟随）
+④ 一次 libraryRefreshed     （changed 才发）
+```
+
+**②③ 什么时候跑**（这是"定时刷新几乎零成本"的全部秘密）：
+
+| 触发 | 扫描 | beets 段 |
+|---|---|---|
+| `timer` / `focus` | 每次都跑 | 仅当 ① 报 `imported+updated+missing > 0`，或上次 beets 段失败过 |
+| `action`（apply/adopt/move 收尾） | 跑 | **总是**（adopt 只登记不写文件，磁盘侧看起来"没变化"，但 `beets_item_id` 必须落地） |
+| `manual`（手动按钮） | 跑 | **总是**（用户点了就说明他不信缓存） |
+
+"上次 beets 段失败过 → 这次强制重试"是一条容易漏的规则：没有它，一次瞬时失败
+（工具刚崩、库被锁）会让 beets 侧**永久**不同步——定时刷新看磁盘没变就跳过，
+而用户完全无从知道"那几首的 `beets_item_id` 一直没落地"。
+
+#### 单 bump 的口径
+
+```rust
+changed = scan.imported > 0 || scan.updated > 0 || scan.missing > 0
+       || sync.updated > 0 || sync.imported > 0
+```
+
+`failed` **不算**变化：一个坏文件每 30 s 让列表重拉一次，看起来像在抽风。
+它进快照与日志，但不触发重绘。`changed == false` 时事件根本不发（手动触发除外）。
+
+#### 让位规则（三条，都实跑验证过）
+
+| 情况 | 行为 |
+|---|---|
+| `scanning` 已被占（手动扫描 / 上一次刷新没完） | 自动触发静默放弃；手动触发回 `libraryRefreshSkipped{reason:"busy"}` |
+| beets 会话进行中（导入/整理） | 同上，`reason:"beetsBusy"`。**这条是必须的**：两个 sidecar 同时读同一个 beets 库不只是锁竞争，刷新发出的 `librarySynced` 会让正在 applying 的界面以为"对齐完成"，把状态提前收掉 |
+| 窗口失焦 | 定时器空转（不扫），保留聚焦触发 |
+
+#### 触发点接线
+
+- **定时**：一条独立线程（`library-refresh-timer`），`recv_timeout(间隔)` 超时即刷；
+  与聚焦触发**共用一条线程**，天然不会两次刷新并发写库。
+- **焦点**：`WindowEvent::Focused(true)` → `refresh::set_focused()` → 往同一条线程塞一条 `Wake::Focus`。
+- **启动后补一次**：延迟 3 s（给 boot 的首屏查询让路），覆盖"上次退出到现在改过标签"。
+- **设置变更**：`app_set_settings` 里 `wake_settings()` 叫醒线程重读间隔，
+  否则"改成 2 分钟"要重启才生效。
+
+#### 前端：只认一条事件
+
+`libraryRefreshed` 是管线终态，`scan.watchAutoRefresh()` 收到且 `changed` 才
+走 `afterScan()`（`loadStats` + `loadPlaylists` + `list.reload({restore:true})`）。
+与手动扫描共用同一条收尾路径——两条链路"扫完之后该做什么"必须一致，否则
+"自动刷新后专辑封面没了"这类偏差极难查。
+
+`librarySynced` 保留（`beets-session` 的 `syncVersion` 还在用，ImportPanel 靠它
+在导入完成后重拉），两条事件是同一件事的两层，不是重复。
+
+**自动刷新刻意不弹提示**：它执行的是"用户在外面改了东西，界面自己跟上"，
+每 30 秒弹一次 toast 会让人以为出了事。要确认它活着看诊断区。
+
+#### 安装轨道：从"能跑"到"可验证"
+
+原文只写了"下载 → 展开 → 校验入口"。M4 补了三件让它能被验证的事：
+
+1. **`RELEASE_BASE` 可配置**：`AIYA_BEETS_RELEASE_BASE` 环境变量 > 设置
+   `beets.releaseBase` > 常量默认。真发布时改常量或让 CI 指过去，播放器不用发版；
+   本地可以用 `python -m http.server` 把整条下载路径真跑一遍。
+2. **发布物形状校验**（`verify_asset`）：两条轨道的产物都是 zip 容器。
+   没发布时 GitHub 回的是一个 **200 的 HTML 错误页**，`ureq` 不认为是错误——
+   不校验的话用户看到的是后面解压时报的"不是有效 zip"，完全指不到原因。
+   现在会明说"不是有效的压缩包（N 字节）——多半是下到了错误页"。
+3. **展开逻辑可单测**：`install_bundle_to(target, zip, emit)` 从 `AppHandle` 上摘下来，
+   用假套件包验证"manifest 说哪个入口就记哪个"、"没 manifest 走约定"、
+   "一个入口都没有就明确失败"。
+
+#### 验收（实跑数据）
+
+| 项 | 结果 |
+|---|---|
+| `cargo test --workspace` | **332 passed / 0 failed**（1 ignored 是 perf_50k） |
+| 新增单测 | 管线判据 3 条（`action/manual` 强制、自动触发静默、失败不算变化）+ 安装轨道 5 条（真实 HTTP 下载落盘、HTML 错误页拒绝、空文件拒绝、manifest 入口、无入口失败） |
+| `npm run verify` | exit 0（含 `proto:check`、三个 smoke） |
+| `npm run check`（svelte-check） | 0 errors / 0 warnings |
+| playwright e2e | 24 passed |
+| dev 真机 | 见下（用户实机验收步骤） |
+
+**"真实 HTTP 下载"是怎么测的**：单测里起一个只 `accept` 一次、回一段固定字节的
+迷你 TCP 服务（`TcpListener::bind("127.0.0.1:0")`），让 `download_to` 真走 ureq
+的请求/响应/写盘，再逐字节比对。这条覆盖的是"下到的字节是否原样落盘"与
+"形状校验是否放行"，与是否有外网无关。
+
+#### 真机验收步骤（三条，对应原文的验收标准）
+
+1. **外部改标签**：用 mp3tag 改一手库里某首的标题 → 切回播放器（或等 30 s）→
+   列表里的标题变了，且「扫描入库 → 诊断 → 自动刷新」显示"更新 1、触发：切回窗口"。
+2. **外部移文件**：在资源管理器里把一首歌移到库内别的位置 → 同上，那一行变成
+   "离线 1"（`missing`），文件移回则恢复（扫描器 upsert 的 `availability='online'` 兜底）。
+3. **两条安装轨道**：本机有 Python 走 A（`.pyz` → venv），没有走 B（zip → 展开）→
+   两条都以 `status.found == true` 为成功判据。用 `AIYA_BEETS_INSTALLER` /
+   `AIYA_BEETS_BUNDLE` 指本地产物即可复现，不必等 release。
+
+#### 仍欠的
+
+- **真 release 地址**：`RELEASE_BASE` 还是占位域名。发布流程（beets 侧打
+  `.pyz`/`.zip` → 传 release → 改常量或设环境变量）没有走过一遍。
+- **两条轨道真机走完整流程**：本机有 Python，A 轨道的"系统 Python 建 venv"
+  与 B 轨道的"28 MB 包下载解压"都只在逻辑层与单测里验过，没有在"从没装过
+  beets 的干净机器"上跑过。
+- **`status.schemaHash` 的运行时比对**：宿主仍只是自报，没有拿它跟镜像比。
+  现在只有一个版本在世，接了也验不出来；等第二版发布时一起接。
 
 **M1、M2 是必须的；M3、M4 可以合并或分批**。但如果 M2 之后不冻结协议，
 分包就只剩"物理分开"而没有"契约约束"，很快会漂回去。
