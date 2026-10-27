@@ -14,7 +14,7 @@ import platform
 from . import cfg
 from .beetslib import configured_directory
 from .plugins import capability_report, summary
-from .protocol import PROTOCOL_VERSION
+from .protocol import PROTOCOL_VERSION, SCHEMA_SHA256
 
 # 支持的运行时窗口。下限是语法/标准库要求（`X | None`、tomllib），
 # 上限是"没测过的版本不承诺"——不是硬拒绝，只是 status 里标出来。
@@ -69,6 +69,9 @@ def status_payload() -> dict:
     caps = capability_report(plugins)
     return {
         "protocolVersion": PROTOCOL_VERSION,
+        # 契约指纹（本模块只报不解释）：播放器拿它跟镜像里的 sha256 比，
+        # 一眼看出"装的是不是同一版契约"，比逐字段对更早发现问题
+        "schemaHash": SCHEMA_SHA256,
         "beetsVersion": getattr(beets, "__version__", None),
         "pythonVersion": runtime_version(),
         "pythonSupported": runtime_supported(),
@@ -98,6 +101,7 @@ def capabilities_payload() -> dict:
     caps = capability_report(enabled)
     return {
         "protocolVersion": PROTOCOL_VERSION,
+        "schemaHash": SCHEMA_SHA256,
         "plugins": caps,
         "summary": summary(caps),
         "runtimeSupported": runtime_supported(),

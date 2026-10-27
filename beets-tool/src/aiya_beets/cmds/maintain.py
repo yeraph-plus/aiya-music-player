@@ -285,22 +285,38 @@ def move_items(req_id, directory: str, pretend: bool, gen: int) -> None:
     """
     from beets.util import MoveOperation
 
+    from ..protocol import (
+        E_LIBRARY_DIR_MISMATCH,
+        E_NO_LIBRARY_DIR,
+        ProtocolError,
+    )
+
     session = f"move_{req_id:02d}"
     configured = configured_directory()
+    # 三种拒绝都是**业务判定**，必须带自己的码回（以前抛 ValueError 被顶层
+    # 兜底成 E_INTERNAL，宿主只能显示"工具内部异常"——而这三条恰恰是
+    # 用户能自己解决的事：去配扫描目录、别在未知位置搬文件）。
     if not configured:
-        raise ValueError(
+        raise ProtocolError(
+            E_NO_LIBRARY_DIR, "move",
             "beets 配置里没有 directory（库根目录）：请先在「扫描入库」页设置扫描目录，"
-            "或手改 beets 的 config.yaml"
+            "或手改 beets 的 config.yaml",
         )
     want = (directory or "").strip()
     if want and os.path.normcase(os.path.abspath(want)) != os.path.normcase(
         os.path.abspath(configured)
     ):
-        raise ValueError(
-            f"目标根不一致：应用配置 {want}，beets 配置 {configured}（拒绝在未知位置搬动文件）"
+        raise ProtocolError(
+            E_LIBRARY_DIR_MISMATCH, "move",
+            f"目标根不一致：应用配置 {want}，beets 配置 {configured}"
+            "（拒绝在未知位置搬动文件）",
+            requested=want, configured=configured,
         )
     if not os.path.isdir(configured):
-        raise ValueError(f"beets 库根目录不存在：{configured}")
+        raise ProtocolError(
+            E_NO_LIBRARY_DIR, "move", f"beets 库根目录不存在：{configured}",
+            configured=configured,
+        )
 
     lib = open_library(configured)
     items = list(lib.items())

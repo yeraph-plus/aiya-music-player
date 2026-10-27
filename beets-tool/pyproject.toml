@@ -15,6 +15,11 @@ license = { text = "MIT" }
 #   · lock 给具体版本 —— 播放器安装器要可复现，不允许 pip 临时挑新版
 dependencies = ["beets>=2.14,<3"]
 
+# 开发依赖：**只有契约测试要**（jsonschema 验 schema），工具运行时不需要。
+# 所以放在 dev extra 而不是 dependencies —— 装组件的用户不该为此多下 1MB。
+[project.optional-dependencies]
+dev = ["jsonschema>=4.20"]
+
 [project.scripts]
 aiya-beets = "aiya_beets.cli:main"
 

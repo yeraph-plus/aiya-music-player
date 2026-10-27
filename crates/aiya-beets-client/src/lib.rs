@@ -23,6 +23,13 @@
 //! 现状是播放器的 `beets.rs`（1316 行）里混着环境知识和协议处理，改一行
 //! 工具侧的逻辑要重发整个播放器。抽出来之后，两侧只通过协议耦合，
 //! 工具可以独立发布、独立升级。
+//!
+//! ## 协议
+//!
+//! 契约真源在工具侧（`beets-tool/protocol/v1.schema.json`），本仓镜像一份
+//! （`protocol/aiya-beets-v1.json`，`npm run proto:check` 守字节一致）。
+//! `tests/proto_mirror.rs` 对着镜像逐字段断言本 crate 的 serde 形状——
+//! 改了 `proto.rs` 的字段名而没改协议，那条测试会红。
 
 pub mod error;
 pub mod launch;
@@ -32,6 +39,6 @@ pub mod tool;
 
 pub use error::ToolError;
 pub use launch::Launcher;
-pub use proto::StatusReport;
-pub use session::{EventSink, NullSink, SESSION_IDLE_TIMEOUT};
+pub use proto::{StatusReport, PROTOCOL_VERSION};
+pub use session::{EventSink, NullSink, SESSION_IDLE_TIMEOUT, TERMINAL_EVENTS};
 pub use tool::{BeetsTool, StdioTool};

@@ -51,6 +51,11 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 `aiya-player` / `aiya-data` 连 `aiya-beets-client` 都不许依赖，所以"没装 beets
 也能完整播放"是编译期事实。这条由 `npm run check:boundary` 守。
 
+**两侧只通过协议耦合，协议 v1 已冻结**：真源在 `beets-tool/protocol/v1.schema.json`，
+本仓镜像 `protocol/aiya-beets-v1.json`（字节副本 + sha256）。三条测试各守一面：
+`smoke:proto`（工具自己吐的每一行都合 schema）、`cargo test -p aiya-beets-client`
+（serde 形状对得上镜像）、`proto:check`（镜像没被单方面改过）。
+
 ## 构建 / 测试 / 打包
 
 常用命令都收进根 `package.json`，在**仓库根**执行 `npm run <script>`。Rust 相关脚本统一经
@@ -65,7 +70,7 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 | `npm run beets:release` | 两个发布物一起出 |
 | `npm run build:ui` | 只构建前端到 `ui/dist` |
 | `npm run check` | `svelte-check`（当前 0 error / 0 warning 才算过） |
-| `npm run test` | Rust 全量测试（当前 **312 条**，1 条 `--ignored` 是 perf_50k） |
+| `npm run test` | Rust 全量测试（当前 **320 条**，1 条 `--ignored` 是 perf_50k） |
 | `npm run test:data` / `test:audio` / `test:player` / `test:app` | 单 crate 测试 |
 | `npm run test:all` | Rust 全量 + UI 类型检查 + UI 构建 |
 | `npm run gen:types` / `gen:types:check` | 从 Rust 生成 TS 类型 / 只校验不写盘 |
@@ -79,11 +84,12 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 | `npm run notices` | 刷新 `licenses/CARGO-DEPS.md`（依赖变更后跑） |
 | `npm run check:deps` | store 依赖方向/环检测 |
 | `npm run check:boundary` | 边界门禁：client 无环境知识、核心链路不依赖 beets 工具 |
+| `npm run proto:check` | 协议门禁：镜像 schema 与工具侧真源字节一致（`proto:sync` 才改镜像） |
 | `npm run probe:ui` | CDP 探针（对真实窗口做 UI 断言） |
 
 打包前置两件事：`vite build` 出前端产物、`tools/build-sidecar.mjs` 编出
 `aiya-audio-host` 到 `src-tauri/binaries/<name>-<triple>.exe`（Tauri `externalBin`
-约定路径）。产物：`target/release/bundle/nsis/*.exe`（当前 **5.74 MiB**，release
+约定路径）。产物：`target/release/bundle/nsis/*.exe`（当前 **6.53 MiB**，release
 编译约 5.5 分钟）。
 
 **安装包不含 beets**（docs/33 两侧分离）：以前随包塞了一份 104MB 的 beets 运行时，
@@ -92,7 +98,7 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 | 轨道 | 下载 | 前提 | 落地 |
 |---|---|---|---|
 | 快速安装（`.pyz`） | 33 KB | 机器上有 Python 3.10–3.14 | 用系统 Python 在那头建 venv |
-| 免安装包（`.zip`） | 31 MB | 无 | 自带 embeddable 解释器，解压即用（展开 112 MB） |
+| 免安装包（`.zip`） | 28 MB | 无 | 自带 embeddable 解释器，解压即用（展开 72 MB） |
 
 播放器对两者做同一件事：下载 → 展开 → 记入口 → 跑一次 `status` 验证。**成功判据是
 探测到的 `found`，不是退出码**——退出码会骗人。

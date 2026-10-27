@@ -1,3 +1,13 @@
+> **⚠️ 这份文档是 2026-10-23 的草案，已过期**（`aiya-contract-gen` 与 `compat/api.ts`
+> 那套方案没有落地）。当前契约在哪：
+>
+> - **UI ⇄ 宿主**：Rust 类型是唯一来源，`npm run gen:types` 生成
+>   `ui/src/lib/ipc/generated/`，字段名由 `src-tauri/tests/dto_wire.rs` 锚定。
+> - **播放器 ⇄ beets 组件**：`beets-tool/protocol/v1.schema.json` 是真源，
+>   本仓 `protocol/` 是镜像（见 `protocol/README.md`）。
+>
+> 留在这里只为保留当初的形状讨论，**不要照它实现**。
+
 # 契约草案（v0）
 
 > 这里先放“边界形状”，不是最终字段。实现时以 Rust 类型 + 生成物为准；本文件用于评审与 golden fixtures。

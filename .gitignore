@@ -65,3 +65,7 @@ tools/.cache/
 # beets 工具的构建产物：.pyz 约 33KB、套件包约 31MB（展开 112MB），
 # 由 beets-tool/tools/build_*.py 现生成，不入库
 beets-tool/dist/
+# 自带的 embeddable 解释器（官方 zip 展开，约 12MB + 依赖）：build_bundle.py 现下
+beets-tool/.runtime/
+# 自带的 embeddable 解释器（官方 zip 展开，约 12MB + 依赖）：build_bundle.py 现下
+beets-tool/.runtime/

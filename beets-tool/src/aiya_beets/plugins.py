@@ -90,8 +90,20 @@ def capability_report(enabled: list[str] | None = None) -> list[dict]:
 
 
 def summary(report: list[dict]) -> dict:
-    """给 UI 一行话用的计数：ready / missing / unavailable 各几个。"""
-    counts = {READY: 0, MISSING_DEPS: 0, UNAVAILABLE: 0}
+    """给 UI 一行话用的计数：ready / missingDeps / unavailable 各几个。
+
+    键名用 camelCase：线上所有其它字段都是 camelCase，这里单独用 snake
+    会让宿主 DTO（`rename_all = "camelCase"`）解析失败——而失败路径是
+    `from_value(...).ok()`，静默变成 None，UI 只是"什么都没显示"。
+    M3 冻结协议时统一，`tests/protocol_contract.py` 现在守着它。
+    """
+    counts = {"ready": 0, "missingDeps": 0, "unavailable": 0}
     for item in report:
-        counts[item["state"]] = counts.get(item["state"], 0) + 1
+        key = summary_key(item["state"])
+        counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+def summary_key(state: str) -> str:
+    """三态 → 汇总计数的键（`missing_deps` → `missingDeps`）。"""
+    return "missingDeps" if state == MISSING_DEPS else state

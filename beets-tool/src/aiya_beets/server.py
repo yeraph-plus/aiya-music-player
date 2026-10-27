@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import queue
 import sys
@@ -15,7 +16,14 @@ import traceback
 
 from . import cfg, env, protocol
 from .cmds import dump, importer, maintain
-from .runtime import bump_cancel, cancel_gen, emit, force_utf8_stdio, write_line
+from .runtime import (
+    bump_cancel,
+    cancel_gen,
+    emit,
+    force_utf8_stdio,
+    open_protocol_stream,
+    write_line,
+)
 
 
 def handle(req: dict, gen: int) -> dict | None:
@@ -30,7 +38,9 @@ def handle(req: dict, gen: int) -> dict | None:
     if cmd == "status":
         return protocol.ok_response(req_id, env.status_payload())
     if cmd == "ping":
-        return protocol.ok_response(req_id, {"protocolVersion": protocol.PROTOCOL_VERSION})
+        return protocol.ok_response(
+            req_id, {"protocolVersion": protocol.PROTOCOL_VERSION}
+        )
     if cmd == "capabilities":
         return protocol.ok_response(req_id, env.capabilities_payload())
 
@@ -38,13 +48,17 @@ def handle(req: dict, gen: int) -> dict | None:
     if cmd == "preview_import":
         paths = req.get("paths") or []
         if not paths:
-            return protocol.error_response(req_id, protocol.E_BAD_ARGS, "preview", "paths 为空")
+            return protocol.error_response(
+                req_id, protocol.E_INVALID_ARG, "preview", "paths 为空"
+            )
         importer.preview_import(req_id, [str(p) for p in paths], req.get("options") or {}, gen)
         return None
     if cmd == "apply_import":
         decisions = req.get("decisions") or []
         if not decisions:
-            return protocol.error_response(req_id, protocol.E_BAD_ARGS, "apply", "decisions 为空")
+            return protocol.error_response(
+                req_id, protocol.E_INVALID_ARG, "apply", "decisions 为空"
+            )
         importer.apply_import(req_id, decisions, gen)
         return None
 
@@ -57,7 +71,9 @@ def handle(req: dict, gen: int) -> dict | None:
     if cmd == "adopt_library":
         paths = req.get("paths") or []
         if not paths:
-            return protocol.error_response(req_id, protocol.E_BAD_ARGS, "adopt", "paths 为空")
+            return protocol.error_response(
+                req_id, protocol.E_INVALID_ARG, "adopt", "paths 为空"
+            )
         maintain.adopt_library(req_id, [str(p) for p in paths], gen)
         return None
     if cmd == "update_library":
@@ -76,6 +92,24 @@ def handle(req: dict, gen: int) -> dict | None:
     )
 
 
+# 异常归类（docs/33 §4.5）：宿主对这两类的 UX 完全不同——
+#   E_BEETS_ERROR  展示 beets 原文，用户可能自己能修（权限、库损坏、缺 ffmpeg）
+#   E_INTERNAL     我们自己的 bug，附 trace，让用户去反馈
+# 按异常模块归类而不是按消息文本：文本会变，模块名不会。
+_BEETS_MODULES = ("beets", "beetsplug", "mediafile", "sqlite3")
+# 数据目录不可写（只读盘 / 被占用 / 无权限）：用户自己能修，不是 bug
+_ACCESS_ERRNOS = {errno.EACCES, errno.EPERM, errno.EROFS}
+
+
+def classify(exc: BaseException) -> str:
+    module = type(exc).__module__.split(".")[0]
+    if module in _BEETS_MODULES:
+        return protocol.E_BEETS_ERROR
+    if isinstance(exc, OSError) and exc.errno in _ACCESS_ERRNOS:
+        return protocol.E_CONFIG
+    return protocol.E_INTERNAL
+
+
 def _not_installed(message: str) -> None:
     """beets 不可用时的应答：让宿主给出安装指引，而不是"静默失败"。"""
     write_line(
@@ -89,6 +123,8 @@ def serve() -> int:
     编码必须最先钉死：后面任何一行输出都要走 UTF-8，包括"没装 beets"那条信封。
     """
     force_utf8_stdio()
+    # 紧接着独占 stdout：下面任何 import/迁移/第三方 print 都不许进协议流
+    open_protocol_stream()
 
     # 首次启动就是"准备环境"的时机。失败不阻断——没配置时 beets 用内置默认
     # 也能跑，只是插件全关，比"完全不可用"好得多。
@@ -149,17 +185,34 @@ def serve() -> int:
                 bump_cancel()
                 emit({"type": "cancelAck"})
                 continue
+            if not isinstance(req, dict):
+                # 合法 JSON 但不是对象：`[1,2]` / `"x"` / `42` 都到这里。
+                # 不先挡住的话 `req.get` 会抛 AttributeError 被归类成 E_INTERNAL，
+                # 而它其实是调用方拼错了请求——该报参数错。
+                write_line(protocol.error_response(
+                    0, protocol.E_BAD_JSON, "parse", f"请求必须是 JSON 对象：{type(req).__name__}",
+                ))
+                continue
+            req_id = req.get("id", 0)
             try:
+                req_id = int(req_id or 0)
+            except (TypeError, ValueError):
+                # 线上 id 恒为整数：宿主按它配请求与应答，乱值归零比透传安全
+                req_id = 0
+            try:
+                protocol.check_client(req)
                 resp = handle(req, gen)
-            except Exception as e:  # noqa: BLE001 —— 顶层兜底，任何异常都要回信封
+            except protocol.ProtocolError as e:
+                # 业务判定失败（版本不符、根不一致…）：原样带码回，不当 bug
                 resp = protocol.error_response(
-                    0, protocol.E_INTERNAL, "handle", f"{type(e).__name__}: {e}",
+                    req_id, e.code, e.stage, e.message, **e.extra
+                )
+            except Exception as e:  # noqa: BLE001 —— 顶层兜底，任何异常都要回信封
+                code = classify(e)
+                resp = protocol.error_response(
+                    req_id, code, "handle", f"{type(e).__name__}: {e}",
                     trace=traceback.format_exc(limit=4),
                 )
-            try:
-                req_id = req.get("id", 0) if isinstance(req, dict) else 0
-            except Exception:  # noqa: BLE001
-                req_id = 0
         # None = 命令已用事件流自行应答（preview_import 等），不再发 id 响应
         if resp is not None:
             payload = {"id": req_id, **{k: v for k, v in resp.items() if k != "id"}}

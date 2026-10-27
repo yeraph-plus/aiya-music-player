@@ -9,7 +9,9 @@ beets 相关的全部能力都在这里：导入预览/应用、写标签、移�
 - 本目录**不知道播放器的数据模型**（没有 track id、没有播放历史、没有 SQLite 表）；
 - 播放器**不知道这里怎么装、怎么配、开什么插件**。
 
-唯一的耦合面是 `src/aiya_beets/protocol.py` 里那份 JSON 协议。
+唯一的耦合面是**协议**：`protocol/v1.schema.json`（契约真源，随本包发版）
++ `src/aiya_beets/protocol.py`（命令名/错误码常量）。播放器仓根镜像一份
+（`protocol/aiya-beets-v1.json`，字节副本），`npm run proto:check` 守字节一致。
 
 ## 跑起来
 
@@ -21,15 +23,40 @@ PYTHONPATH=src python -m aiya_beets doctor   # 人读的自检报告：运行时
 PYTHONPATH=src python -m aiya_beets capabilities  # 机器读的能力三态
 ```
 
-请求一行一个 JSON，应答/事件一行一个 JSON。改协议要同时改 `PROTOCOL_VERSION`
-和播放器侧的镜像（`crates/aiya-beets-client/src/proto.rs`）。
+请求一行一个 JSON，应答/事件一行一个 JSON。
+
+## 协议（v1 已冻结）
+
+| 文件 | 角色 |
+|---|---|
+| `protocol/v1.schema.json` | **真源**。JSON Schema 2020-12，四组 `$defs`：`Request`(11) / `Response` / `Event`(16) / `InstallerEvent` |
+| `src/aiya_beets/protocol.py` | 命令名、`PROTOCOL_VERSION`、10 个错误码、`SCHEMA_SHA256` |
+| `tests/protocol_contract.py` | 用**真实会话**逐行验 schema（离线 59 条消息 + 取消场景） |
+
+改协议的顺序（顺序错了会被测试拦住）：
+
+1. 改 `protocol/v1.schema.json`（真源）；
+2. 改 `protocol.py` 的常量（`PROTOCOL_VERSION` / `ERROR_CODES`）——**改名才 +1**，
+   加可选字段不加；
+3. `python tests/protocol_contract.py` 前先更新 `SCHEMA_SHA256`（测试会告诉你正确值）；
+4. 播放器侧 `npm run proto:sync` 同步镜像，然后 `cargo test -p aiya-beets-client`。
+
+第 3、4 步的"忘了"都会被测试拦住，这是刻意的：协议变化必须在 diff 里看得见，
+不允许静默跟随。
+
+`status` 里还会自报 `schemaHash`（同一份 sha256）。这是唯一的**运行时**凭据——
+将来播放器与组件分别升级时，靠它一眼看出"那不是同一版契约"。
 
 ## 两个发布物
 
 | 产物 | 命令 | 大小 | 前提 |
 |---|---|---|---|
 | `dist/aiya-beets-installer.pyz` | `python tools/build_installer.py` | ~33 KB | 目标机器要有 Python 3.10–3.14 |
-| `dist/aiya-beets-bundle-win-x64.zip` | `python tools/build_bundle.py` | ~31 MB（展开 ~112 MB） | 无。自带 embeddable 解释器 |
+| `dist/aiya-beets-bundle-win-x64.zip` | `python tools/build_bundle.py` | ~28 MB（展开 ~72 MB） | 无。自带 embeddable 解释器 |
+
+`build_bundle.py` **自己准备运行时**（下载官方 embeddable → 写 `_pth` → 按
+`requirements.lock` 装依赖），缓存在 `.runtime/`（不入库、可删）。以前这步在播放器
+仓里做，M2 删掉那份脚本之后套件包就再也打不出来了——所以责任搬回本目录。
 
 `.pyz` 是 zipapp：`python aiya-beets-installer.pyz install --target <dir>` 在那里
 建 venv 并装 `requirements.lock`。套件包解压即用，根目录有 `manifest.json`
@@ -47,8 +74,16 @@ PYTHONPATH=src python -m aiya_beets capabilities  # 机器读的能力三态
 ## 测试
 
 ```bash
-python tests/smoke_apply.py    # 5 场景：只写标签 / 复制 / 移动 / 目标冲突 / 取消
-python tests/smoke_maint.py    # 15 断言：adopt / update / duplicates / move
+python tests/smoke_apply.py         # 5 场景：只写标签 / 复制 / 移动 / 目标冲突 / 取消
+python tests/smoke_maint.py         # 15 断言：adopt / update / duplicates / move
+python tests/protocol_contract.py   # 契约：真实会话逐行验 schema（要 jsonschema）
+```
+
+契约测试需要 `jsonschema`（只有它需要，工具本身不依赖）：
+
+```bash
+python -m pip install -e ".[dev]"    # 或者只装 jsonschema
+AIYA_BEETS_ONLINE=1 python tests/protocol_contract.py   # 连 album/albumError/done 一起验
 ```
 
 两条都用临时 `BEETSDIR` + 临时库目录，不碰真实曲库。解释器默认取

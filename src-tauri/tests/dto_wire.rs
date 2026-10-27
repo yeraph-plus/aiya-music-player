@@ -426,7 +426,7 @@ fn beets_status_protocol_version_is_number() {
         interpreter: Some("aiya-beets.exe".into()),
         script_path: None,
         entry_source: Some("settings".into()),
-        protocol_version: Some(3),
+        protocol_version: Some(1),
         beets_version: Some("2.14.1".into()),
         python_version: None,
         python_supported: Some(true),
@@ -459,11 +459,6 @@ fn beets_status_protocol_version_is_number() {
     assert_eq!(v["libraryDirectory"], "D:\\Music");
     assert!(v["scriptPath"].is_null());
     // 入口来源与能力三态：设置页靠它们回答"为什么用的这个 / 到底能干什么"
-    assert_eq!(v["entrySource"], "settings");
-    assert_eq!(v["pluginHealth"][0]["state"], "ready");
-    assert_eq!(v["pluginSummary"]["missingDeps"], 0);
-    assert!(v["pythonSupported"].is_boolean());
-    // 入口来源与能力三态：设置页要靠它们回答"为什么用的这个 / 到底能干什么"
     assert_eq!(v["entrySource"], "settings");
     assert_eq!(v["pluginHealth"][0]["state"], "ready");
     assert_eq!(v["pluginSummary"]["missingDeps"], 0);
@@ -575,4 +570,51 @@ fn audio_source_wire_values() {
         serde_json::to_value(aiya_player::AudioSource::Stream).unwrap(),
         "stream"
     );
+}
+
+/// 能力段（`pluginHealth` / `pluginSummary`）必须与镜像 schema 的字段名逐字一致。
+///
+/// 这条是**真实 bug 的护栏**：工具侧原先发 `missing_deps`（snake），DTO 这边是
+/// `rename_all = "camelCase"`（要 `missingDeps`），而落地写法是
+/// `serde_json::from_value(..).ok()` —— 解析失败静默变成 None，UI 只是"什么都没
+/// 显示"。类型检查、ts-rs、甚至这条测试的前半段（手写 JSON 字面量）全都发现不了，
+/// 因为两边都是自己写的。只有对着**对面发的** schema 验才抓得住。
+#[test]
+fn beets_capability_dto_matches_mirrored_schema() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../protocol/aiya-beets-v1.json");
+    let schema: Value = serde_json::from_str(
+        &std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("读不到协议镜像（{}）：{e}", path.display())),
+    )
+    .expect("镜像不是合法 JSON");
+
+    let required = |name: &str| -> Vec<String> {
+        let mut v: Vec<String> = schema["$defs"][name]["required"]
+            .as_array()
+            .unwrap_or_else(|| panic!("schema 缺 $defs.{name}.required"))
+            .iter()
+            .map(|x| x.as_str().expect("required 项必须是字符串").to_string())
+            .collect();
+        v.sort();
+        v
+    };
+
+    let summary = serde_json::to_value(aiya_lib::dto::beets::BeetsPluginSummary {
+        ready: 1,
+        missing_deps: 2,
+        unavailable: 3,
+    })
+    .unwrap();
+    assert_eq!(keys(&summary), required("PluginSummary"), "pluginSummary 字段名与协议不一致");
+
+    let health = serde_json::to_value(aiya_lib::dto::beets::BeetsPluginHealth {
+        name: "alpha".into(),
+        state: "ready".into(),
+        enabled: true,
+        missing: vec![],
+        note: String::new(),
+    })
+    .unwrap();
+    assert_eq!(keys(&health), required("PluginHealth"), "pluginHealth 字段名与协议不一致");
 }

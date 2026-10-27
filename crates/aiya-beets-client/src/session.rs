@@ -108,6 +108,15 @@ pub fn spawn_session(
     launcher: &Launcher,
     request: &Value,
 ) -> Result<(Child, SessionStdin), ToolError> {
+    // 握手声明：告诉对面"我说的是 vN"。放在 client 里而不是让宿主每个请求
+    // 自己拼——版本是协议层的事实，宿主不该重复知道。
+    // 调用方显式给了就尊重它（测试要造版本不符的会话）。
+    let mut request = request.clone();
+    if let Some(obj) = request.as_object_mut() {
+        obj.entry("clientProtocol")
+            .or_insert_with(|| Value::from(crate::proto::PROTOCOL_VERSION));
+    }
+    let request = &request;
     let mut child = launcher
         .command()
         .spawn()
@@ -206,7 +215,15 @@ fn request_once(launcher: &Launcher, request: &Value, timeout: Duration) -> Resu
 /// 应答 `ok: false` 时返回 `Rejected`——把工具自己的 code/stage/消息原样带出去，
 /// 宿主不翻译（工具的诊断比宿主的猜测准）。
 pub fn query_status(launcher: &Launcher, timeout: Duration) -> Result<StatusReport, ToolError> {
-    let raw = request_once(launcher, &serde_json::json!({ "id": 1, "cmd": "status" }), timeout)?;
+    let raw = request_once(
+        launcher,
+        &serde_json::json!({
+            "id": 1,
+            "cmd": "status",
+            "clientProtocol": crate::proto::PROTOCOL_VERSION,
+        }),
+        timeout,
+    )?;
     let env: Envelope = serde_json::from_value(raw)
         .map_err(|e| ToolError::Protocol(format!("应答信封形状不对: {e}")))?;
     if !env.ok {
@@ -230,7 +247,11 @@ pub fn query_status(launcher: &Launcher, timeout: Duration) -> Result<StatusRepo
 
 /// 会话式召回的终态事件名。见到任意一个就收尾——**不能靠进程退出判断**
 /// （正常收尾和崩溃退出长得一样，混为一谈会漏掉"半份结果"）。
-const TERMINAL_EVENTS: &[&str] = &["done", "applyDone", "cancelled", "sessionFailed"];
+/// 会话终态事件名。读到其中之一就收尾（关进程、放槽位、调 `on_exit`）。
+///
+/// `pub` 是为了让 `tests/proto_mirror.rs` 拿它与镜像 schema 里的 `type`
+/// 常量集合比对——改名而忘了改这里，症状是"会话永远不结束"，很难现场定位。
+pub const TERMINAL_EVENTS: &[&str] = &["done", "applyDone", "cancelled", "sessionFailed"];
 
 /// 起会话转发线程：把每一行 JSON 转发给 `sink`，见终态事件后收尾。
 ///

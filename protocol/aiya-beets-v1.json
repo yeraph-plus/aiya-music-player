@@ -1,0 +1,799 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aiya-beets:protocol:v1",
+  "title": "aiya-beets 协议 v1",
+  "description": "AIYA Music 播放器 ⇄ aiya-beets 工具的 NDJSON 契约（docs/33 §4）。\n\n这是**真源**：本文件随 beets-tool 发版，播放器仓库镜像一份\n（`protocol/aiya-beets-v1.json`，字节相同，`npm run proto:check` 守着）。\n\n四个入口（本文件根的 oneOf 覆盖前三个，安装器流单列）：\n  · Request        客户端 → 服务端，一行一个 JSON，`cmd` 判别\n  · Response       一次性应答，有 `ok` 字段。`ok:false` 时若带 `type`，它同时是会话终止事件\n  · Event          会话事件，`type` 判别，无 `id`\n  · InstallerEvent A 轨道安装器的 stdout 帧（`type` 判别），与 serve 会话是不同的词汇表\n\n三条硬规则：\n  1. stdout 只允许 JSON 行（beets 首写杂音走 stderr 或被 reader 过滤）\n  2. 请求的 `id` 必须原样回带\n  3. 会话式命令必须先发终态（`*Done` / `cancelled` / 带 `type` 的错误信封），客户端才关 stdin",
+  "oneOf": [
+    { "$ref": "#/$defs/Request" },
+    { "$ref": "#/$defs/Response" },
+    { "$ref": "#/$defs/Event" }
+  ],
+
+  "$defs": {
+    "Path": {
+      "type": "string",
+      "description": "文件系统路径（UTF-8，未做规范化）。空的 path 在事件里合法（读不到路径的失败项），在请求里不允许。"
+    },
+    "Session": {
+      "type": "string",
+      "pattern": "^(imp|app|sync|adopt|update|dup|move)_[0-9]+$",
+      "description": "会话名 = `<前缀>_<请求 id 两位>`，前缀由命令决定：imp/app/sync/adopt/update/dup/move。客户端按它把事件归到同一次请求。"
+    },
+    "Stage": {
+      "enum": ["scan", "matching", "writing", "adopt", "update", "duplicates", "move"],
+      "description": "会话内阶段。**新增阶段值属于协议变更**（要改本文件并 `proto:sync`），因为它会出现在 UI 文案与进度条逻辑里。"
+    },
+    "ErrorCode": {
+      "enum": [
+        "E_BAD_JSON",
+        "E_INVALID_ARG",
+        "E_UNKNOWN_CMD",
+        "E_PROTOCOL_MISMATCH",
+        "E_NOT_INSTALLED",
+        "E_NO_LIBRARY_DIR",
+        "E_LIBRARY_DIR_MISMATCH",
+        "E_BEETS_ERROR",
+        "E_CONFIG",
+        "E_INTERNAL"
+      ],
+      "description": "冻结的错误码表（docs/33 §4.5）。宿主按 code 分类给 UX，**不按 beets_message 文本匹配**。\n\n有意没有 E_CANCELLED：取消是正常路径，用 `cancelled` 事件表达，不是失败。"
+    },
+    "EnvelopeError": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["code", "stage", "beets_message"],
+      "properties": {
+        "code": { "$ref": "#/$defs/ErrorCode" },
+        "stage": {
+          "type": "string",
+          "description": "失败发生在哪一步（`parse` / `dispatch` / `handle` / `preview` / `apply` / `adopt` / `move` / `handshake`）。与 `Event.stage` 不是同一枚举——它是自由文本，只用于排障定位。"
+        },
+        "beets_message": {
+          "type": "string",
+          "description": "工具/beets 的原始诊断文本。**只展示，不解析**。"
+        }
+      },
+      "description": "错误细节。`additionalProperties: true` 是刻意的：允许附带上下文（`trace` / `requested` / `configured` / `clientProtocol` / `serverProtocol`），宿主原样展示。"
+    },
+
+    "_comment_requests": {
+      "type": "object",
+      "description": "以下 11 条请求冻结于 v1。加新命令不算破坏兼容（老客户端不会发它）；改字段名/删字段算，必须 +1 版本。"
+    },
+    "Request": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "status" }
+          },
+          "description": "体检报告：协议版本、beets/Python 版本、库路径、插件三态。**全字段可空**——它要能表达\"哪一步拿到了什么\"。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "ping" }
+          },
+          "description": "最轻的存活探测：只回 `{protocolVersion}`。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "capabilities" }
+          },
+          "description": "能力清单（与 status.pluginHealth 同源，不维护第二份）。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd", "paths"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "preview_import" },
+            "paths": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Path" } },
+            "options": { "type": "object", "description": "预留：目前不解读，原样收下。" }
+          },
+          "description": "只读预览：按目录分组成\"专辑\" → MusicBrainz 匹配 → `album` / `albumError` 事件流 → `done`。**不写任何文件与库**。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd", "decisions"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "apply_import" },
+            "decisions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Decision" } }
+          },
+          "description": "应用决策：写标签 → 入库（幂等）→ 按 action 移动/复制。候选数据由客户端**原样回传**，不重跑网络匹配（\"所见即所写\"）。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "dump_items" }
+          },
+          "description": "全量导出 beets 库 → `item` 事件流 → `dumpDone`。播放器拿它对齐自有读模型。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd", "paths"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "adopt_library" },
+            "paths": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Path" } }
+          },
+          "description": "as-is 入库（= `beet import -A`）：只读标签，不联网、不改标签、不移动文件。建基线用。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "update_library" },
+            "pretend": { "type": "boolean" }
+          },
+          "description": "文件标签 → beets 库（`beet update` 语义，mtime 驱动）。`pretend: true` 只报告不改库。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "find_duplicates" },
+            "keys": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "description": "分组字段组合。空/缺省 = `[\"title\", \"artist\"]`（**不是** beets 默认的 mb_trackid/mb_albumid：as-is 入库无 MBID，用默认键必然零命中）。"
+            }
+          },
+          "description": "库内查重（`duplicates` 插件语义，**只读**）→ `duplicateGroup` → `duplicatesDone`。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "move_items" },
+            "directory": {
+              "type": "string",
+              "description": "**校验值**，不是目标：客户端传它当前的库根，与工具配置不一致就报 `E_LIBRARY_DIR_MISMATCH` 拒绝执行（不猜）。目标根唯一来源是工具自己的配置。"
+            },
+            "pretend": { "type": "boolean" }
+          },
+          "description": "按 path_formats 整理文件（`beet move` 语义）→ `moveItem` → `moveDone`。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "cancel" }
+          },
+          "description": "取消当前会话。**在 reader 线程旁路处理**（不等主循环排队），立即递增取消代数并回 `cancelAck`。"
+        }
+      ]
+    },
+
+    "Decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["album", "action", "paths", "candidate"],
+      "properties": {
+        "album": { "type": "string", "description": "预览里的专辑 id（`alb_NNN`），仅用于回执关联。" },
+        "action": {
+          "enum": ["apply", "apply_move", "apply_copy", "skip"],
+          "description": "`apply` 只写标签；`apply_move` / `apply_copy` additionally 按 path_formats 移动/复制；`skip` 计入 skipped，不动文件。"
+        },
+        "paths": { "type": "array", "items": { "$ref": "#/$defs/Path" } },
+        "candidate": { "$ref": "#/$defs/DecisionCandidate" }
+      }
+    },
+    "DecisionCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["album", "mapping"],
+      "properties": {
+        "album": { "$ref": "#/$defs/AlbumMeta" },
+        "mapping": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/TrackMeta" },
+          "description": "源文件路径 → 该曲的候选标签。路径键必须与 `paths` 里的字符串逐字一致（工具按字符串查）。"
+        }
+      }
+    },
+
+    "_comment_meta": {
+      "type": "object",
+      "description": "标签字段口径（= beetslib.DIFF_FIELDS + 文件事实）。所有值可能是 null（文件没这个标签）。"
+    },
+    "TagFields": {
+      "type": "object",
+      "properties": {
+        "title": { "type": ["string", "null"] },
+        "artist": { "type": ["string", "null"] },
+        "album": { "type": ["string", "null"] },
+        "albumartist": { "type": ["string", "null"] },
+        "year": { "type": ["integer", "null"] },
+        "track": { "type": ["integer", "null"] },
+        "disc": { "type": ["integer", "null"] },
+        "genre": { "type": ["string", "null"] }
+      }
+    },
+    "TrackMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "artist", "album", "albumartist", "year", "track", "disc", "genre", "length"],
+      "properties": {
+        "title": { "type": ["string", "null"] },
+        "artist": { "type": ["string", "null"] },
+        "album": { "type": ["string", "null"] },
+        "albumartist": { "type": ["string", "null"] },
+        "year": { "type": ["integer", "null"] },
+        "track": { "type": ["integer", "null"] },
+        "disc": { "type": ["integer", "null"] },
+        "genre": { "type": ["string", "null"] },
+        "length": { "type": "number", "description": "秒，两位小数。" }
+      },
+      "description": "候选侧单曲（来自 MusicBrainz TrackInfo）：**没有 path**——它还没有对应文件。"
+    },
+    "ItemMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "artist", "album", "albumartist", "year", "track", "disc", "genre", "length", "path"],
+      "properties": {
+        "title": { "type": ["string", "null"] },
+        "artist": { "type": ["string", "null"] },
+        "album": { "type": ["string", "null"] },
+        "albumartist": { "type": ["string", "null"] },
+        "year": { "type": ["integer", "null"] },
+        "track": { "type": ["integer", "null"] },
+        "disc": { "type": ["integer", "null"] },
+        "genre": { "type": ["string", "null"] },
+        "length": { "type": "number", "description": "秒，两位小数。" },
+        "path": { "$ref": "#/$defs/Path" }
+      },
+      "description": "当前侧单曲（来自磁盘文件标签）：比 TrackMeta 多一个 path——它本来就对应一个文件。"
+    },
+    "AlbumMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["album"],
+      "properties": {
+        "id": { "type": ["string", "null"], "description": "MusicBrainz release id。" },
+        "album": { "type": ["string", "null"] },
+        "artist": { "type": ["string", "null"] },
+        "year": { "type": ["integer", "null"] },
+        "genre": { "type": ["string", "null"] },
+        "dataSource": { "type": ["string", "null"] },
+        "tracks": { "type": "array", "items": { "$ref": "#/$defs/TrackMeta" } }
+      },
+      "description": "专辑级候选。apply 时它充当\"打底字段\"，单曲级非 null 值覆盖（beets 的 merge 语义）。"
+    },
+    "Candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "confidence", "fromScratch", "extraItems", "extraTracks", "album", "mapping"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^cand_[0-9]{3}_[0-9]{2}$" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "fromScratch": { "type": "boolean", "description": "没有任何匹配（beets 的 from_scratch）：候选是空壳，等于\"按文件名猜\"。" },
+        "extraItems": { "type": "integer", "minimum": 0, "description": "本地多出来的曲目数。" },
+        "extraTracks": { "type": "integer", "minimum": 0, "description": "候选里本库没有的曲目数。" },
+        "album": { "$ref": "#/$defs/AlbumMeta" },
+        "mapping": { "type": "object", "additionalProperties": { "$ref": "#/$defs/TrackMeta" } }
+      }
+    },
+    "AlbumPreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "paths", "recommendation", "current", "candidates"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^alb_[0-9]{3}$" },
+        "paths": { "type": "array", "items": { "$ref": "#/$defs/Path" } },
+        "recommendation": { "enum": ["none", "low", "medium", "strong"] },
+        "current": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["album", "artist", "tracks"],
+          "properties": {
+            "album": { "type": ["string", "null"] },
+            "artist": { "type": ["string", "null"] },
+            "tracks": { "type": "array", "items": { "$ref": "#/$defs/ItemMeta" } }
+          }
+        },
+        "candidates": { "type": "array", "items": { "$ref": "#/$defs/Candidate" } }
+      }
+    },
+
+    "_comment_responses": {
+      "type": "object",
+      "description": "一次性应答。`data` 的形状取决于 cmd——它不能在消息内部被判别，所以这里不约束 `data`；契约测试按命令取对应的 `*Data` 子 schema 单独验。"
+    },
+    "Response": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "ok", "data"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "ok": { "const": true },
+            "data": {}
+          },
+          "description": "成功。`id` 原样回带请求的 id。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "ok", "error"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "ok": { "const": false },
+            "error": { "$ref": "#/$defs/EnvelopeError" },
+            "type": { "const": "sessionFailed" }
+          },
+          "description": "失败。带 `type: \"sessionFailed\"` 时它同时是会话终止事件——宿主 reader 只认带 type 的终止事件，缺了会话会卡在等 EOF。"
+        }
+      ]
+    },
+    "StatusData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion", "schemaHash", "beetsVersion", "pythonVersion", "pythonSupported",
+        "libraryPath", "libraryExists", "libraryDirectory", "plugins", "pluginHealth",
+        "pluginSummary", "configDir", "dataHome"
+      ],
+      "properties": {
+        "protocolVersion": { "type": "integer", "minimum": 1 },
+        "schemaHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "契约指纹 = 本 schema 文件的 sha256。客户端拿它跟镜像里的比：不一致 = 对面装的是别的版本，比逐字段对更早发现问题。"
+        },
+        "beetsVersion": { "type": ["string", "null"] },
+        "pythonVersion": { "type": "string" },
+        "pythonSupported": { "type": "boolean" },
+        "libraryPath": { "type": "string", "description": "beets 库文件路径（恒有值）。" },
+        "libraryExists": { "type": "boolean" },
+        "libraryDirectory": {
+          "type": ["string", "null"],
+          "description": "**只认 config.yaml 原文**的 directory；null = 用户没显式配过。不要用 beets 的 config['directory']——它恒返回内置默认 ~/Music，拿它显示会误导。"
+        },
+        "plugins": { "type": "array", "items": { "type": "string" }, "description": "配置里写着的插件名（**愿望清单**，不等于能干活）。" },
+        "pluginHealth": { "type": "array", "items": { "$ref": "#/$defs/PluginHealth" }, "description": "实际能力（三态自检）。" },
+        "pluginSummary": { "$ref": "#/$defs/PluginSummary" },
+        "configDir": { "type": "string" },
+        "dataHome": { "type": "string", "description": "工具数据根（客户端给的 AIYA_BEETS_HOME 的回报）。" }
+      }
+    },
+    "PluginHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "state", "enabled", "missing", "note"],
+      "properties": {
+        "name": { "type": "string" },
+        "state": {
+          "enum": ["ready", "missing_deps", "unavailable"],
+          "description": "ready = 试过能干活；missing_deps = 插件在但缺依赖（`missing` 说清缺什么）；unavailable = 本环境里没这个插件。"
+        },
+        "enabled": { "type": "boolean", "description": "配置里是否启用了它。未启用的也上报——用户需要知道\"有这个东西但我没开\"。" },
+        "missing": { "type": "array", "items": { "type": "string" }, "description": "缺的 Python 包名或外部命令名。ready 时为空。" },
+        "note": { "type": "string", "description": "开它是为了什么（工具侧声明，UI 直接显示）。" }
+      }
+    },
+    "PluginSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ready", "missingDeps", "unavailable"],
+      "properties": {
+        "ready": { "type": "integer", "minimum": 0 },
+        "missingDeps": { "type": "integer", "minimum": 0 },
+        "unavailable": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "PingData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion"],
+      "properties": { "protocolVersion": { "type": "integer", "minimum": 1 } }
+    },
+    "CapabilitiesData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "schemaHash", "plugins", "summary", "runtimeSupported", "extras"],
+      "properties": {
+        "protocolVersion": { "type": "integer", "minimum": 1 },
+        "schemaHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "plugins": { "type": "array", "items": { "$ref": "#/$defs/PluginHealth" } },
+        "summary": { "$ref": "#/$defs/PluginSummary" },
+        "runtimeSupported": { "type": "boolean" },
+        "extras": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "声明式依赖：缺的 Python 包 → 为什么要它。安装器按这个报\"还缺什么\"。"
+        }
+      }
+    },
+
+    "_comment_events": {
+      "type": "object",
+      "description": "16 种纯事件。第 17 种终态是带 `type` 的错误信封（见 Response），不放这里——它有 `ok` 字段，属于应答的形状。"
+    },
+    "Event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "stage", "current", "total", "path"],
+          "properties": {
+            "type": { "const": "progress" },
+            "session": { "$ref": "#/$defs/Session" },
+            "stage": { "$ref": "#/$defs/Stage" },
+            "current": { "type": "integer", "minimum": 0 },
+            "total": { "type": "integer", "minimum": 0 },
+            "path": { "type": ["string", "null"] },
+            "fileCurrent": { "type": "integer", "minimum": 0, "description": "只出现在 apply：按**文件**的进度。专辑级粒度在看门狗眼里太粗。" },
+            "fileTotal": { "type": "integer", "minimum": 0 }
+          },
+          "description": "进度心跳。也是宿主的看门狗心跳：长时间没有它可按超时判定卡死。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "album"],
+          "properties": {
+            "type": { "const": "album" },
+            "session": { "$ref": "#/$defs/Session" },
+            "album": { "$ref": "#/$defs/AlbumPreview" }
+          },
+          "description": "一组文件（同目录）的匹配结果：当前标签 + 候选列表 + 每曲对齐。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "stage", "path", "beets_message"],
+          "properties": {
+            "type": { "const": "albumError" },
+            "session": { "$ref": "#/$defs/Session" },
+            "stage": { "$ref": "#/$defs/Stage" },
+            "path": { "type": "string" },
+            "beets_message": { "type": "string" }
+          },
+          "description": "单组匹配失败。**不中断整批**——其余组继续，错误进事件让 UI 可见。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "albums"],
+          "properties": {
+            "type": { "const": "done" },
+            "session": { "$ref": "#/$defs/Session" },
+            "albums": { "type": "integer", "minimum": 0 }
+          },
+          "description": "preview_import 的终态。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "albumId", "written", "moved", "failed"],
+          "properties": {
+            "type": { "const": "applied" },
+            "session": { "$ref": "#/$defs/Session" },
+            "albumId": { "type": ["string", "null"] },
+            "written": { "type": "integer", "minimum": 0 },
+            "moved": { "type": "boolean", "description": "是否选了 move/copy 动作（不是\"动成功了几首\"）。" },
+            "failed": { "type": "array", "items": { "$ref": "#/$defs/OpError" } }
+          },
+          "description": "一张专辑写完了。逐曲失败进 `failed`，不中断整张。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "applied", "skipped", "failed", "moved"],
+          "properties": {
+            "type": { "const": "applyDone" },
+            "session": { "$ref": "#/$defs/Session" },
+            "applied": { "type": "integer", "minimum": 0, "description": "处理了的专辑数（含部分失败的）。" },
+            "skipped": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0, "description": "失败**文件**数。" },
+            "moved": { "type": "integer", "minimum": 0 }
+          },
+          "description": "apply_import 的终态。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "item"],
+          "properties": {
+            "type": { "const": "item" },
+            "session": { "$ref": "#/$defs/Session" },
+            "item": { "$ref": "#/$defs/DumpItem" }
+          },
+          "description": "dump_items 的一条。逐条发（几万条也不膨胀内存）。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "items"],
+          "properties": {
+            "type": { "const": "dumpDone" },
+            "session": { "$ref": "#/$defs/Session" },
+            "items": { "type": "integer", "minimum": 0 }
+          },
+          "description": "dump_items 的终态（带总数，客户端可据此校验收齐）。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "total", "added", "skipped", "failed", "errors"],
+          "properties": {
+            "type": { "const": "adoptDone" },
+            "session": { "$ref": "#/$defs/Session" },
+            "total": { "type": "integer", "minimum": 0 },
+            "added": { "type": "integer", "minimum": 0 },
+            "skipped": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 },
+            "errors": { "type": "array", "items": { "$ref": "#/$defs/OpError" } }
+          },
+          "description": "adopt_library 的终态。可重跑（幂等）：已登记的算 skipped。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type", "session", "pretend", "total", "changed", "unchanged",
+            "missing", "failed", "errors", "details", "detailsTruncated"
+          ],
+          "properties": {
+            "type": { "const": "updateDone" },
+            "session": { "$ref": "#/$defs/Session" },
+            "pretend": { "type": "boolean" },
+            "total": { "type": "integer", "minimum": 0 },
+            "changed": { "type": "integer", "minimum": 0 },
+            "unchanged": { "type": "integer", "minimum": 0 },
+            "missing": { "type": "integer", "minimum": 0, "description": "文件已不在的条数（非 pretend 时这些行会从库里删掉）。" },
+            "failed": { "type": "integer", "minimum": 0 },
+            "errors": { "type": "array", "items": { "$ref": "#/$defs/OpError" } },
+            "details": { "type": "array", "items": { "$ref": "#/$defs/UpdateDetail" } },
+            "detailsTruncated": { "type": "boolean", "description": "明细超过上限时为 true（UI 显示\"另有 N 条未列出\"）。" }
+          },
+          "description": "update_library 的终态。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "key", "count", "items"],
+          "properties": {
+            "type": { "const": "duplicateGroup" },
+            "session": { "$ref": "#/$defs/Session" },
+            "key": { "type": "array", "items": { "type": "string" }, "description": "分组键的**原始大小写**值（展示用；分组本身按小写归一）。" },
+            "count": { "type": "integer", "minimum": 1 },
+            "items": { "type": "array", "items": { "$ref": "#/$defs/ItemBrief" } }
+          },
+          "description": "一组重复曲目。按 count 降序发（用户先要处理\"同一首歌存了五份\"）。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "keys", "totalItems", "groups", "itemsInGroups", "truncated"],
+          "properties": {
+            "type": { "const": "duplicatesDone" },
+            "session": { "$ref": "#/$defs/Session" },
+            "keys": { "type": "array", "items": { "type": "string" } },
+            "totalItems": { "type": "integer", "minimum": 0 },
+            "groups": { "type": "integer", "minimum": 0 },
+            "itemsInGroups": { "type": "integer", "minimum": 0 },
+            "truncated": { "type": "boolean" }
+          },
+          "description": "find_duplicates 的终态（`groups` 是总数，`truncated` 说明明细是否被上限截断）。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "kind", "path", "dest", "status", "reason"],
+          "properties": {
+            "type": { "const": "moveItem" },
+            "session": { "$ref": "#/$defs/Session" },
+            "kind": { "enum": ["plan", "done"], "description": "plan = pretend 预览，done = 真搬了。" },
+            "path": { "type": "string" },
+            "dest": { "type": "string" },
+            "status": { "enum": ["same", "move", "conflict"], "description": "`same` = 目标就是源（no-op）；`conflict` = 目标已存在，**不覆盖不改名**。" },
+            "reason": { "type": "string", "description": "状态说明；非冲突时为空串。" }
+          },
+          "description": "单文件整理清单/结果。预览期每条都发（用户要看\"哪个文件去哪\"）。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "pretend", "directory", "total", "planned", "moved", "same", "conflict", "failed", "errors"],
+          "properties": {
+            "type": { "const": "moveDone" },
+            "session": { "$ref": "#/$defs/Session" },
+            "pretend": { "type": "boolean" },
+            "directory": { "type": "string", "description": "实际使用的库根（来自工具配置，不是请求里的校验值）。" },
+            "total": { "type": "integer", "minimum": 0 },
+            "planned": { "type": "integer", "minimum": 0 },
+            "moved": { "type": "integer", "minimum": 0 },
+            "same": { "type": "integer", "minimum": 0 },
+            "conflict": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 },
+            "errors": { "type": "array", "items": { "$ref": "#/$defs/OpError" } }
+          },
+          "description": "move_items 的终态。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "stage"],
+          "properties": {
+            "type": { "const": "cancelled" },
+            "session": { "$ref": "#/$defs/Session" },
+            "stage": { "$ref": "#/$defs/Stage" }
+          },
+          "description": "取消的终态。**取消不是失败**，所以它是事件而不是错误信封。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": { "type": { "const": "cancelAck" } },
+          "description": "收到 cancel 的回执（无 session：它可能发生在任何会话开始之前）。"
+        }
+      ]
+    },
+
+    "DumpItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "path", "title", "artist", "albumartist", "album", "genre",
+        "year", "track", "disc", "length", "bitrate", "format",
+        "samplerate", "bitdepth", "channels", "mtime", "rg_track_gain"
+      ],
+      "properties": {
+        "id": { "type": "integer", "minimum": 0, "description": "beets 库行 id（客户端不用它做对账键——path 才是）。" },
+        "path": { "$ref": "#/$defs/Path" },
+        "title": { "type": ["string", "null"] },
+        "artist": { "type": ["string", "null"] },
+        "albumartist": { "type": ["string", "null"] },
+        "album": { "type": ["string", "null"] },
+        "genre": { "type": ["string", "null"] },
+        "year": { "type": ["integer", "null"] },
+        "track": { "type": ["integer", "null"] },
+        "disc": { "type": ["integer", "null"] },
+        "length": { "type": ["number", "null"], "description": "秒。" },
+        "bitrate": { "type": ["integer", "null"], "description": "kbps。" },
+        "format": { "type": ["string", "null"] },
+        "samplerate": { "type": ["integer", "null"] },
+        "bitdepth": { "type": ["integer", "null"] },
+        "channels": { "type": ["integer", "null"] },
+        "mtime": { "type": ["integer", "null"], "description": "unix 秒。beets 内部是 float，dump 时取整。" },
+        "rg_track_gain": { "type": ["number", "null"], "description": "dB（replaygain 插件产出）。" }
+      },
+      "description": "dump 的字段白名单（宿主读模型对齐够用的那些）。beets 字段名原样，宿主侧映射到自有列。"
+    },
+    "ItemBrief": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "title", "artist", "album", "length", "bitrate", "format", "size"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 0 },
+        "path": { "$ref": "#/$defs/Path" },
+        "title": { "type": "string" },
+        "artist": { "type": "string" },
+        "album": { "type": "string" },
+        "length": { "type": "number" },
+        "bitrate": { "type": "integer" },
+        "format": { "type": "string" },
+        "size": { "type": "integer", "minimum": 0, "description": "字节。**不是 beets 字段**（Item 没有 size），现读磁盘；读不到给 0。" }
+      },
+      "description": "查重/整理结果里的单行（文本字段已归一成空串而非 null，方便直接渲染）。"
+    },
+    "OpError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "message"],
+      "properties": {
+        "path": { "type": "string" },
+        "code": { "type": "string", "description": "少数场景细化用（如 apply 的 `conflict`）。" },
+        "message": { "type": "string" }
+      }
+    },
+    "UpdateDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "changes"],
+      "properties": {
+        "path": { "type": "string" },
+        "changes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "to"],
+            "properties": {
+              "from": { "type": "string" },
+              "to": { "type": "string" }
+            }
+          },
+          "description": "字段名 → {from, to}。值都已归一成字符串（beets 同类字段会给出不同类型，不归一会把\"没改\"判成\"改了\"）。"
+        }
+      }
+    },
+
+    "_comment_installer": {
+      "type": "object",
+      "description": "A 轨道安装器（`aiya-beets install --target …`）的 stdout 帧。与 serve 是**两套词汇表**：这里没有 session/id，`done` 的形状也不同。宿主逐行读、转成 `beets:install` 进度事件。"
+    },
+    "InstallerEvent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "stage", "message"],
+          "properties": {
+            "type": { "const": "progress" },
+            "stage": { "$ref": "#/$defs/InstallerStage" },
+            "message": { "type": "string" }
+          },
+          "description": "进度（含 pip 的逐行输出，原样透传给 UI）。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "stage", "message"],
+          "properties": {
+            "type": { "const": "error" },
+            "stage": { "$ref": "#/$defs/InstallerStage" },
+            "message": { "type": "string" }
+          },
+          "description": "安装失败。安装器随即退出非 0。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "stage", "python", "beetsVersion"],
+          "properties": {
+            "type": { "const": "done" },
+            "stage": { "const": "done" },
+            "python": { "type": "string", "description": "venv 里的解释器绝对路径。" },
+            "beetsVersion": { "type": "string", "description": "真 import 一次拿到的版本（只看 pip 退出码不够——装到一半的依赖也能返回 0）。" }
+          },
+          "description": "装完且自检通过。宿主见到它才认\"安装器成功\"，随后仍要跑一次 status 才算装好。"
+        }
+      ]
+    },
+    "InstallerStage": {
+      "enum": ["prepare", "download", "venv", "install", "pip", "verify", "done"],
+      "description": "`download` 由宿主自己发（下载阶段在宿主侧），其余来自安装器。"
+    }
+  }
+}

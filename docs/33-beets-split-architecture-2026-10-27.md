@@ -298,28 +298,50 @@ protocol/aiya-beets-v1.json             # 镜像（播放器仓根，带 sha256 
 
 | 字段 | 含义 | 不兼容时 |
 |---|---|---|
-| `protocol.version` | 服务端最新支持的版本 | — |
-| `protocol.minClient` | 服务端能接受的最低客户端版本 | 客户端太老 → 报 `E_PROTOCOL_TOO_OLD`，提示升级播放器 |
-| 客户端请求带 `clientProtocol` | 自己支持的版本 | 服务端太老 → 报 `E_PROTOCOL_TOO_OLD`，提示升级组件 |
+| `protocolVersion`（status/ping/capabilities 各报一次） | 服务端支持的版本 | 宿主探测到不符 → `found: false` + `E_PROTOCOL_MISMATCH` |
+| `clientProtocol`（每个请求可选携带） | 客户端支持的版本 | 服务端直接拒 → `E_PROTOCOL_MISMATCH`，message 里说清升哪边 |
+| `MIN_CLIENT`（服务端常量） | 能接受的最低客户端版本 | 低于它 → 同上 |
+
+**M3 落地时改了一处**：原表里有两个码（`E_PROTOCOL_TOO_OLD` / `E_PROTOCOL_MISMATCH`），
+实际只保留 `E_PROTOCOL_MISMATCH` 一个——方向信息放进 message，不放进码。
+理由：宿主的分支动作是**同一个**（禁用功能 + 提示升级），分两个码只会让 UI 写两遍
+一样的处理；而"往哪边升"是一句话的事，塞进文本比塞进枚举更合适。
 
 **不做自动降级协商。** 版本不匹配就明确报错并说清往哪边升——自动协商会
 产生"一半功能能用一半不能"的模糊状态，比直接失败更难排查。
 
-### 4.5 错误码表（冻结）
+### 4.5 错误码表（**M3 已冻结，10 个**）
 
-现状只有 `E_UNKNOWN_CMD` 一个具名码，其余靠 `beets_message` 自由文本。
-分包后错误要能被客户端分类处理，必须枚举：
+冻结前只有 `E_UNKNOWN_CMD` 一个具名码，其余靠 `beets_message` 自由文本。分包后
+错误要能被宿主分类处理，必须枚举。**这张表是双向的**：schema 里的 `ErrorCode` 枚举
+与 `protocol.ERROR_CODES` 必须一字不差，两侧各有一条测试守着。
 
 | 码 | 触发 | 客户端行为 |
 |---|---|---|
-| `E_PROTOCOL_MISMATCH` | 版本不兼容 | 提示升级，禁用功能 |
+| `E_BAD_JSON` | 请求行不是 JSON / 不是对象 | 记日志（调用方拼错了） |
+| `E_INVALID_ARG` | 参数缺失或形状不对 | 开发者问题，记日志 |
 | `E_UNKNOWN_CMD` | 命令不存在 | 记日志，说明协议漂移 |
-| `E_NOT_INSTALLED` | 库不存在 / beets 未装 | 引导安装 |
-| `E_NO_LIBRARY_DIR` | move 时 config 无 `directory` | 禁用整理按钮 |
-| `E_LIBRARY_DIR_MISMATCH` | move 传入根 ≠ config 根 | 拒绝（不猜） |
-| `E_INVALID_ARG` | 参数非法 | 开发者问题，记日志 |
-| `E_BEETS_ERROR` | beets 内部异常 | 展示 `beets_message` |
-| `E_CANCELLED` | 用户取消 | 静默 |
+| `E_PROTOCOL_MISMATCH` | 版本不兼容（方向在 message 里） | 提示升级，禁用功能 |
+| `E_NOT_INSTALLED` | 这个解释器里没有 beets | 引导安装 |
+| `E_NO_LIBRARY_DIR` | move 时配置里没有 `directory`，或目录不存在 | 禁用整理按钮，指向扫描目录设置 |
+| `E_LIBRARY_DIR_MISMATCH` | move 传入根 ≠ 配置根 | 拒绝（不猜） |
+| `E_BEETS_ERROR` | beets 自己抛的（库损坏、权限、缺 ffmpeg…） | 展示 `beets_message` |
+| `E_CONFIG` | 数据目录/配置不可写（只读盘、被占用） | 提示换位置或改权限 |
+| `E_INTERNAL` | 工具自身 bug（带 `trace`） | 请用户反馈，附 trace |
+
+**两处与原表的差异（M3 拍板）**：
+
+- **`E_CANCELLED` 不做**。取消是正常路径，用 `cancelled` **事件**表达。做成错误码会让
+  宿主的"事件流"和"一次性应答"两条路径重叠，还要为一个用户自己按的按钮显示红色。
+- **补了 `E_BAD_JSON` / `E_CONFIG` / `E_INTERNAL`**。原表漏了这三类真实大量发生的失败：
+  拼错请求、目录不可写、工具自己炸。没有它们，这些情况只能落到某个"大口袋"码上，
+  宿主分不出该提示用户、还是该让开发者看日志。
+
+原表里的 `E_NO_DIRECTORY` 与 `E_BAD_ARGS` 已改名为 `E_NO_LIBRARY_DIR` / `E_INVALID_ARG`；
+改名是**破坏性变更**，但这次改名发生在契约第一次对外发布之前（代码从未离开本仓），
+所以不涉及任何已安装的组件。改名同时修了一个真 bug：`move_items` 的三种拒绝理由
+原来抛 `ValueError`，被顶层兜底成 `E_INTERNAL`——宿主只能显示"工具内部异常"，
+而这三条恰恰都是用户能自己解决的事。
 
 ---
 
@@ -704,12 +726,94 @@ build_installer.py`，zipapp，自检版本 0.1.0 通过）；`aiya-beets-bundle
 前提），装上后显示入口来源 / 库根 / 数据根 + 插件三态明细（缺什么、为什么开它）；
 `ScanToolsView` 的"插件"行从逗号串改成逐条三态列表。
 
-### M3 — 协议冻结 v1 + 双侧契约测试
+### M3 — 协议冻结 v1 + 双侧契约测试（**已完成，2026-10-27**）
 
-- `protocol/v1.schema.json` 定稿，镜像进播放器
-- 错误码表落地（§4.5）
-- 两侧 CI 各跑契约测试
-- 验收：故意改 schema 一个字段，两侧测试都要红（证明测试有效）
+计划里的三件事都做了，另有三处是做的过程中发现必须一起做：
+
+| # | 内容 | 落点 |
+|---|---|---|
+| 1 | schema 定稿并镜像 | `beets-tool/protocol/v1.schema.json`（真源）→ `protocol/aiya-beets-v1.json`（字节副本）|
+| 2 | 错误码表落地 | `protocol.py` 的 `ERROR_CODES`（10 个）+ `$defs.ErrorCode` 枚举 |
+| 3 | 两侧契约测试 | `beets-tool/tests/protocol_contract.py` / `crates/aiya-beets-client/tests/proto_mirror.rs` |
+| +4 | **stdout 独占** | `runtime.open_protocol_stream()`（详见下） |
+| +5 | **版本闸门真的接上** | `beets.rs::version_mismatch`（原来只判断不拦截） |
+| +6 | **B 轨道能重建** | `build_bundle.py` 自己负责下载 embeddable + 装依赖 |
+
+**为什么协议版本从 3 变成 1。** 分包之前两侧永远同版本一起发，那三个数字是同一份
+代码内部的迭代次数，从未作为对外契约存在过。契约第一次对外发布就是 v1，于是
+`schema 文件名 v1`、`protocol.version`、`PROTOCOL_VERSION` 三者同一个 1。若保留 3，
+以后每次有人看代码都要解释一遍"为什么 schema 叫 v1 而版本号是 3"，而收益是零。
+
+**schema 的形状决策**（都是"冻结时定下来，以后改要付出代价"的那类）：
+
+- **三组入口 + 一组单列**：`Request`（11 条命令）/ `Response` / `Event`（16 种纯事件）
+  / `InstallerEvent`（A 轨道安装器的 stdout 帧）。第 17 种会话终态是**带 `type` 的错误
+  应答**——它有 `ok` 字段，形状属于 Response，硬塞进 Event 只会让判别逻辑含糊。
+- **`additionalProperties: false` 几乎处处开**：拼错字段名必须当场报错。唯一放开的是
+  `EnvelopeError`（允许附 `trace` / `requested` / `configured` 等上下文）。
+- **`stage` 用 enum**：新增阶段值要改协议。它出现在 UI 文案和进度条逻辑里，不是纯数据。
+- **`data` 不约束**：应答的 `data` 形状取决于 `cmd`，在单条消息里无法判别。改为
+  schema 里放 `StatusData` / `PingData` / `CapabilitiesData` 三个子 schema，契约测试
+  按命令各自验——比把 `data` 写成 `oneOf` 更准，也不会退化成"什么都接受"。
+- **`pluginSummary` 的键改成 camelCase**（`missingDeps`）。这条是**修 bug**：工具侧原来
+  发 `missing_deps`，宿主 DTO 是 `rename_all = "camelCase"`，而落地写法是
+  `from_value(..).ok()` —— 解析失败静默变 None，UI 只是"什么都没显示"。手写 JSON 的
+  单测、ts-rs、类型检查全都发现不了，因为两边都是自己写的；只有对着**对面发的** schema
+  验才抓得住。原生 bug 就这么躺了一个批次。
+
+**stdout 独占（顺手修掉的硬规则违反）**：beets 2.14 在库迁移时会往 **stdout** 打
+`Created database backup at: ...`。以前靠客户端的"裸行容错"活着，但那意味着任何第三方
+`print` 都能在事件流中间插噪声。现在 `runtime.open_protocol_stream()` 把原始 stdout
+交给协议帧、把 `sys.stdout` 指向 stderr，于是 `print` / warnings / traceback 全落到
+stderr。客户端的容错**保留**——它防的是进程外污染（父进程重定向、控制台代码页），
+不是我们自己的 bug。这条也让契约测试里"stdout 出现非 JSON 行就红"成为可写的断言。
+
+**版本闸门接上**：`speaks()` 之前只回答"是不是同一版"，没人调用。现在探测后立刻判定：
+不符 → `found: false` + `E_PROTOCOL_MISMATCH`，message 里写清升哪边；入口、版本、库根
+照样全部显示（用户要能看到"我装的是什么"）。UI 侧对应加了"版本不匹配"的专门分支——
+不能让用户以为"没装"而反复安装同一份。
+
+**镜像同步是手动动作**：`npm run proto:sync` 复制 + 记 sha256/版本，`npm run proto:check`
+只校验（进 `test:all`）。镜像必须是**字节副本**，不是"我以为等价"的重排版本。
+工具还在 `status.schemaHash` 里自报同一个 sha256，这是唯一的运行时凭据——
+将来"播放器与组件分别升级"时必须用它。
+
+**验收：负向验证（四条，全部实跑）**
+
+| # | 故意做的破坏 | 期望 | 实测 |
+|---|---|---|---|
+| A | 工具侧把 `missingDeps` 改回 `missing_deps` | 契约测试红 | `[StatusData] 不符合契约：Additional properties are not allowed ('missing_deps')`，路径 `pluginSummary` |
+| B | 客户端把 `dataHome` 的 serde 名改成 `dataRoot` | 镜像测试红 | `StatusReport 与 schema 的 StatusData 不一致：协议有而客户端没建模 ["dataHome"]` |
+| C | 只改镜像一个字节 | `proto:check` 红 | exit 1，同时报"字节不一致"与"meta sha256 不符" |
+| D | 改真源但忘了 sync | `proto:check` 红 | exit 1，指名跑 `proto:sync` |
+
+**契约测试覆盖**：离线 59 条消息、11 种事件（`progress` / `applied` / `applyDone` /
+`item` / `dumpDone` / `updateDone` / `adoptDone` / `duplicateGroup` / `duplicatesDone` /
+`moveItem` / `moveDone`）+ 取消场景 12 个请求各自恰好一个终态 + 4 个错误码精确命中。
+`album` / `albumError` / `done` 需要联网匹配 MusicBrainz，默认跳过，
+`AIYA_BEETS_ONLINE=1` 时一并验。
+
+**B 轨道重建**：`build_bundle.py` 以前依赖播放器仓的 `tools/pack-beets-runtime.mjs`
+（M2 已删），于是**干净仓库打不出套件包**。现在它自己负责：下载官方 embeddable →
+自己写 `_pth`（必须含 `Lib/site-packages`，否则包 import 不到）→ 按 lock 装依赖 →
+放包 → 自检。实测产物 **28.1 MB**（展开 72 MB）。
+
+**验证数据**（全部实跑）：
+
+| 项 | 结果 |
+|---|---|
+| `cargo test --workspace` | **320 passed / 0 failed**（1 ignored 是 perf_50k） |
+| `npm run verify` | exit 0（含 `smoke:proto`：59 条消息 + 12 个取消请求全绿） |
+| playwright | 24 passed |
+| `npm run proto:check` | 一致，v1，`sha256=630b73816102…` |
+| 安装包（`npm run bundle`） | **6.53 MiB**（M2 前 5.74 MiB + 104 MB 运行时；现在只多 0.79 MiB —— 新增的是 zip/ureq 依赖与协议层） |
+| 套件包（`npm run beets:bundle`） | 28.1 MB（展开 72 MB） |
+
+**留给 M4 的**：`RELEASE_BASE` 还是占位地址；刷新管线（增量扫描 → dump → sync →
+单 bump、30s 定时 + 焦点触发）没动；两条安装轨道的**真实发布物下载**没在真机上走过
+（`AIYA_BEETS_INSTALLER` / `AIYA_BEETS_BUNDLE` 能指本地文件，这条路径验过）。
+另外"组件与播放器分别升级"的运行时校验只做到 `status.schemaHash` 自报，
+宿主还没拿它做比对——等真有第二个版本在世时再接。
 
 ### M4 — 刷新管线 + 两条安装轨道
 
@@ -718,7 +822,8 @@ build_installer.py`，zipapp，自检版本 0.1.0 通过）；`aiya-beets-bundle
 - 安装 UI 两条轨道（§6.2）：A 本机安装器（下载 `.pyz` → 跑 → 收进度）、
   B 免安装套件（下载 zip → 解压 → 校验入口）；两条都以
   「跑一次 `aiya-beets status` 拿到 ok」为成功判据
-- beets 侧产出两个发布物：`build-installer.mjs` / `build-bundle.mjs`
+- beets 侧产出两个发布物：`tools/build_installer.py` / `tools/build_bundle.py`
+  （M2 已建，M3 让 `build_bundle.py` 能自行准备运行时）
 - 验收：外部改标签 / 外部移动文件，30 s 内（或切回窗口时）列表自动更新；
   从没装过 beets 的机器上，两条轨道各走一遍完整流程；A 装到一半改走 B，
   用户库与配置不变

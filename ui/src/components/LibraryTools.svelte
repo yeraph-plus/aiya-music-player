@@ -236,8 +236,15 @@
       </div>
     {:else}
       <div class="beets-tool-head">
-        <strong>未检测到 beets 工具</strong>
-        <span class="dim">播放与曲库不依赖它；装上才有导入整理、写标签与库对齐。</span>
+        {#if ui.beets?.errorCode === 'E_PROTOCOL_MISMATCH'}
+          <!-- 工具在，但说的不是同一版协议。装一份新的就是"升级"，所以下面
+               两个按钮照旧可用——文案必须说清这不是"没装"。 -->
+          <strong>beets 组件版本不匹配</strong>
+          <span class="dim">{ui.beets.errorMessage ?? '请重装或升级组件'}</span>
+        {:else}
+          <strong>未检测到 beets 工具</strong>
+          <span class="dim">播放与曲库不依赖它；装上才有导入整理、写标签与库对齐。</span>
+        {/if}
       </div>
       <div class="beets-tool-actions">
         <Button

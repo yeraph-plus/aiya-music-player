@@ -62,10 +62,35 @@ def write_line(payload: dict) -> None:
     """写一条完整消息（应答信封或事件）。所有 stdout 写入都走这里 + 同一把锁。"""
     text = json.dumps(payload, ensure_ascii=False) + "\n"
     with _OUT_LOCK:
-        sys.stdout.write(text)
-        sys.stdout.flush()
+        out = _PROTO or sys.stdout
+        out.write(text)
+        out.flush()
 
 
 def emit(evt: dict) -> None:
     """流式事件（进度/专辑/结果）——与响应不同，无 id，靠 type 区分。"""
     write_line(evt)
+
+
+# 协议流的真句柄。serve() 里钉死一次，之后 sys.stdout 被换成 stderr。
+_PROTO = None
+
+
+def open_protocol_stream() -> None:
+    """把 stdout 独占给协议，第三方库的 print 赶去 stderr。
+
+    为什么必须这么做（v1 冻结时实测）：beets 2.14 在库迁移时会往 **stdout**
+    打一行 `Created database backup at: ...`。协议第一条硬规则是"stdout 只
+    允许 JSON 行"——以前靠客户端容错跳过裸行活着，但那意味着任何第三方
+    print 都能在事件流中间插一条噪声，客户端还要为此养一个解析兜底。
+
+    现在反过来：协议帧走 `_PROTO`（原始 stdout），`sys.stdout` 指向 stderr，
+    于是 `print(...)`、`warnings`、traceback 全落到 stderr，stdout 干净。
+    客户端的裸行容错**保留**——它防的是进程外的污染（父进程重定向、控制台
+    代码页），不是我们自己的 bug。
+    """
+    global _PROTO
+    if _PROTO is not None:
+        return
+    _PROTO = sys.stdout
+    sys.stdout = sys.stderr

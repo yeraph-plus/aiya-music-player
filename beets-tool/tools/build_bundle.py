@@ -38,23 +38,104 @@ SRC = TOOL / "src"
 VERSION = "0.1.0"
 
 
+def protocol_version() -> int:
+    """协议版本从源码读，不手抄。
+
+    手抄过一次（3）——冻结成 v1 时忘了改这里，manifest 与 status 说的不是一个
+    数字。凡是"同一事实存两份"的地方都会漂，能算就别写。
+    """
+    sys.path.insert(0, str(SRC))
+    try:
+        from aiya_beets.protocol import PROTOCOL_VERSION
+
+        return PROTOCOL_VERSION
+    finally:
+        sys.path.pop(0)
+
+
 def _ignore(_dir: str, names: list[str]) -> set[str]:
     return {n for n in names if n == "__pycache__" or n.endswith(".pyc")}
 
 
+# 自带解释器的版本：固定而不是"取最新"。发布物的可复现性优先于拿到 patch 更新。
+EMBED_VERSION = "3.14.0"
+EMBED_URL = (
+    f"https://www.python.org/ftp/python/{EMBED_VERSION}"
+    f"/python-{EMBED_VERSION}-embed-amd64.zip"
+)
+RUNTIME_DEFAULT = TOOL / ".runtime" / f"python-{EMBED_VERSION}-embed-amd64"
+
+
+def ensure_runtime(runtime: Path) -> None:
+    """准备自带解释器目录（缺什么补什么，已存在就复用）。
+
+    这一步以前由播放器仓的 `tools/pack-beets-runtime.mjs` 干，M2 把它删了
+    （运行时不再随播放器发布）。但**B 轨道要能重建**，所以这份责任搬到这里：
+    下载官方 embeddable → 写 `_pth` → 装依赖。
+
+    `_pth` 必须自己写：官方 embeddable 默认只列 `pythonXY.zip` 和 `.`，
+    不含 `Lib/site-packages`，而 `_pth` 存在时 Python **忽略 PYTHONPATH**
+    ——包放哪都 import 不到（这个坑 M2 踩过一次，写进 README 了）。
+    """
+    if (runtime / "python.exe").is_file() and (runtime / "Lib" / "site-packages").is_dir():
+        return
+
+    if not (runtime / "python.exe").is_file():
+        runtime.parent.mkdir(parents=True, exist_ok=True)
+        print(f"下载自带解释器 {EMBED_VERSION} → {runtime}")
+        import urllib.request
+        import zipfile
+
+        tmp = runtime.parent / f"python-{EMBED_VERSION}-embed-amd64.zip"
+        if not tmp.is_file():
+            urllib.request.urlretrieve(EMBED_URL, tmp)
+        with zipfile.ZipFile(tmp) as zf:
+            zf.extractall(runtime)
+
+    # _pth：把 site-packages 列进去，否则包 import 不到
+    pth = sorted(runtime.glob("python3*._pth"))
+    if not pth:
+        raise SystemExit(f"没找到 _pth（{runtime}）：不像官方 embeddable 发行版")
+    (runtime / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True)
+    tag = pth[0].stem.split("_")[0]          # python314
+    pth[0].write_text(
+        f"{tag}.zip\n.\nLib\\site-packages\nimport site\n",
+        encoding="utf-8", newline="\n",
+    )
+
+
+def install_deps(runtime: Path) -> None:
+    """按 lock 把 beets 及其依赖装进 site-packages（已装过就跳过）。
+
+    用**当前解释器**的 pip + `--target`：不依赖系统 pip，也不改动 dev venv。
+    """
+    site = runtime / "Lib" / "site-packages"
+    if (site / "beets").is_dir():
+        return
+    req = TOOL / "requirements.lock"
+    if not req.is_file():
+        raise SystemExit(f"缺依赖清单：{req}")
+    print(f"安装依赖 → {site}（按 {req.name}）")
+    code = subprocess.call(
+        [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+         "--target", str(site), "-r", str(req)]
+    )
+    if code != 0:
+        raise SystemExit(f"pip 安装依赖失败（退出码 {code}）")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="打包 aiya-beets 免安装套件包")
-    ap.add_argument("--runtime", default=str(REPO / "tools" / "beets-runtime"),
-                    help="自带解释器目录（含 python.exe 与 Lib/site-packages）")
+    ap.add_argument("--runtime", default=str(RUNTIME_DEFAULT),
+                    help="自带解释器目录（缺就自动下载官方 embeddable 并装依赖）")
     ap.add_argument("--out", default=str(TOOL / "dist" / "aiya-beets-bundle-win-x64.zip"))
     ap.add_argument("--work", default=str(TOOL / "dist" / "bundle"))
     ap.add_argument("--no-zip", action="store_true", help="只展开目录，不打包（调试用）")
     args = ap.parse_args()
 
     runtime = Path(args.runtime)
-    if not (runtime / "python.exe").is_file():
-        print(f"运行时目录不完整（缺 python.exe）：{runtime}", file=sys.stderr)
-        return 2
+    ensure_runtime(runtime)
+    install_deps(runtime)
 
     work = Path(args.work)
     if work.exists():
@@ -73,7 +154,7 @@ def main() -> int:
     manifest = {
         "name": "aiya-beets",
         "version": VERSION,
-        "protocolVersion": 3,
+        "protocolVersion": protocol_version(),
         "entry": "python.exe",
         "args": ["-m", "aiya_beets"],
         "note": "entry 相对解压根；播放器据此记下启动入口",

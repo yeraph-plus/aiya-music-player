@@ -112,6 +112,8 @@
             <span class="dim">探测中…</span>
           {:else if beets.found}
             <span>beets {beets.beetsVersion} · Python {beets.pythonVersion}</span>
+          {:else if beets.errorCode === 'E_PROTOCOL_MISMATCH'}
+            <span class="danger">组件版本不匹配</span>
           {:else}
             <span class="danger">未找到 beets</span>
           {/if}
@@ -140,13 +142,21 @@
           {/if}
           <div class="dim">标签匹配/候选/diff 由 beets 完成（写权威）；未安装时播放功能不受影响。</div>
         {:else if beets}
-          <div class="dim">
-            还没装 beets 工具。到「扫描入库」页点「快速安装」（需系统 Python 3.10–3.14）
-            或「免安装包」（自带运行时，不依赖系统 Python）。
-            {#if beets.errorMessage}
+          {#if beets.errorCode === 'E_PROTOCOL_MISMATCH'}
+            <div class="dim">
+              组件在，但说的是另一版协议，功能已禁用（库与配置不受影响）：
               <br /><span class="danger">{beets.errorMessage}</span>
-            {/if}
-          </div>
+              <br />到「扫描入库」页重装最新组件即可。
+            </div>
+          {:else}
+            <div class="dim">
+              还没装 beets 工具。到「扫描入库」页点「快速安装」（需系统 Python 3.10–3.14）
+              或「免安装包」（自带运行时，不依赖系统 Python）。
+              {#if beets.errorMessage}
+                <br /><span class="danger">{beets.errorMessage}</span>
+              {/if}
+            </div>
+          {/if}
         {/if}
       </div>
 

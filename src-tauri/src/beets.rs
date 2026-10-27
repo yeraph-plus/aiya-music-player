@@ -45,6 +45,7 @@ pub enum EntrySource {
     /// PATH 上的 `aiya-beets`
     Path,
     /// 仓库源码树（仅 debug 构建）
+    #[cfg(debug_assertions)]
     Dev,
 }
 
@@ -54,6 +55,7 @@ impl EntrySource {
             EntrySource::Env => "env",
             EntrySource::Settings => "settings",
             EntrySource::Path => "path",
+            #[cfg(debug_assertions)]
             EntrySource::Dev => "dev",
         }
     }
@@ -242,19 +244,39 @@ impl EventSink for TauriSink {
     }
 }
 
-/// 协议报告 → UI 契约。
+/// 协议版本闸门：`None` = 兼容；`Some(文案)` = 拒用，并在文案里说清升哪一边。
 ///
-/// 两边字段名不同是刻意的：crate 用中性词（`tool_version` / `runtime_version` /
-/// `library_root`，因为它不知道对面是什么），UI 沿用用户看得懂的说法。
-/// 转换只在这一处，改协议时只要改这个函数。
+/// 为什么不做自动协商（docs/33 §4.4）：协商会产生"一半功能能用一半不能"的
+/// 模糊状态，比直接失败更难排查。两侧各自独立升级，唯一安全的做法是**要么
+/// 完全匹配、要么明确拒绝**。
+///
+/// 注意 `found: false` 的语义是"这个工具现在不可用"，不是"没装"：
+/// 入口、版本、数据根照样全部显示出来，用户能看到"我装的是 v3，它要 v1"。
+fn version_mismatch(got: Option<u32>) -> Option<String> {
+    let want = aiya_beets_client::PROTOCOL_VERSION;
+    match got {
+        Some(v) if v == want => None,
+        Some(v) if v < want => Some(format!(
+            "beets 组件协议 v{v}，播放器需要 v{want}：请升级组件",
+        )),
+        Some(v) => Some(format!(
+            "组件协议 v{v} 比播放器支持的 v{want} 新：请升级播放器",
+        )),
+        None => Some(format!(
+            "组件没有报协议版本（应为 v{want}）：请重装组件",
+        )),
+    }
+}
+
 /// 协议报告 → UI 契约。
 ///
 /// 两边字段名不同是刻意的：crate 用中性词（`tool_version` / `runtime_version` /
 /// `library_root`，因为它不知道对面是什么），UI 沿用用户看得懂的说法。
 /// 转换只在这一处，改协议时只要改这个函数。
 fn status_from(entry: &ToolEntry, source: EntrySource, report: StatusReport) -> BeetsStatus {
+    let mismatch = version_mismatch(report.protocol_version);
     BeetsStatus {
-        found: true,
+        found: mismatch.is_none(),
         interpreter: Some(entry.program.clone()),
         script_path: (!entry.args.is_empty()).then(|| entry.args.join(" ")),
         entry_source: Some(source.as_str().into()),
@@ -272,8 +294,8 @@ fn status_from(entry: &ToolEntry, source: EntrySource, report: StatusReport) -> 
         plugin_summary: report.capability_summary.and_then(|v| serde_json::from_value(v).ok()),
         config_dir: report.config_dir,
         data_home: report.data_home,
-        error_code: None,
-        error_message: None,
+        error_code: mismatch.as_ref().map(|_| "E_PROTOCOL_MISMATCH".to_string()),
+        error_message: mismatch,
     }
 }
 
@@ -987,7 +1009,7 @@ mod tests {
         let v = serde_json::json!({
             "found": true, "interpreter": "py", "scriptPath": "-m aiya_beets",
             "entrySource": "settings",
-            "protocolVersion": 3, "beetsVersion": "2.14.1", "pythonVersion": "3.14.7",
+            "protocolVersion": 1, "beetsVersion": "2.14.1", "pythonVersion": "3.14.7",
             "pythonSupported": true,
             "libraryPath": "l.db", "libraryExists": true,
             "libraryDirectory": "D:/Music",
@@ -1033,6 +1055,40 @@ mod tests {
         assert_eq!(st.entry_source.as_deref(), Some("path"));
         // 失败态不许残留任何"看起来像成功"的字段
         assert!(st.beets_version.is_none() && st.plugin_health.is_none() && st.library_path.is_none());
+    }
+
+    /// 协议版本不符 → **工具存在但不可用**，且必须说清升哪一边。
+    ///
+    /// 这条守的是 docs/33 §4.4 的"不做自动协商"：两侧独立发布之后，
+    /// 版本不匹配是**常态**，不能表现为"功能时好时坏"，只能表现为
+    /// 一句能照做的话。
+    #[test]
+    fn protocol_mismatch_marks_tool_unusable() {
+        let entry = ToolEntry { program: "aiya-beets".into(), args: vec![] };
+        let mut report = StatusReport { protocol_version: Some(99), ..Default::default() };
+        report.tool_version = Some("9.9.9".into());
+
+        let st = status_from(&entry, EntrySource::Path, report.clone());
+        assert!(!st.found, "版本不符不能算可用");
+        assert_eq!(st.error_code.as_deref(), Some("E_PROTOCOL_MISMATCH"));
+        let msg = st.error_message.clone().unwrap_or_default();
+        assert!(msg.contains("升级播放器"), "组件太新时应提示升级播放器：{msg}");
+        // 版本/入口照样显示：用户要能看到"我装的是什么"
+        assert_eq!(st.protocol_version, Some(99));
+        assert_eq!(st.beets_version.as_deref(), Some("9.9.9"));
+
+        // 反向：组件太老 → 提示升级组件
+        let old = status_from(&entry, EntrySource::Path, StatusReport {
+            protocol_version: Some(0),
+            ..Default::default()
+        });
+        assert!(!old.found);
+        assert!(old.error_message.unwrap_or_default().contains("升级组件"));
+
+        // 不报版本（老工具/被裁剪的输出）也要拒，不能默认信任
+        let silent = status_from(&entry, EntrySource::Path, StatusReport::default());
+        assert!(!silent.found);
+        assert_eq!(silent.error_code.as_deref(), Some("E_PROTOCOL_MISMATCH"));
     }
 
     /// dev venv 存在时（本仓库），probe 能找到 beets 2.14.x。
@@ -1094,7 +1150,19 @@ fn status_via(program: &str, args: &[&str]) -> BeetsStatus {
                 .expect("manifest json");
         assert_eq!(manifest["entry"], "python.exe", "manifest 的 entry 必须与实测入口一致");
         let status = status_via(&py.to_string_lossy(), &["-m", "aiya_beets"]);
-        assert!(status.found, "套件包也应命中工具: {:?}", status.error_message);
+        assert!(
+            status.found,
+            "套件包应命中工具，但被拒了（协议 v{:?}，播放器要 v{}）：{:?}\n  \
+             → 多半是 dist/bundle 还是上次构建的旧版，跑 npm run beets:bundle 重新打包",
+            status.protocol_version,
+            aiya_beets_client::PROTOCOL_VERSION,
+            status.error_message,
+        );
+        assert_eq!(
+            status.protocol_version,
+            Some(aiya_beets_client::PROTOCOL_VERSION),
+            "套件包报的协议版本与播放器不一致"
+        );
         assert!(
             status.beets_version.as_deref().unwrap_or_default().starts_with("2.14"),
             "套件包自报的 beets 版本: {:?}",

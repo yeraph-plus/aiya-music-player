@@ -177,7 +177,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
         interpreter: 'preview',
         scriptPath: null,
         entrySource: 'settings',
-        protocolVersion: 3,
+        protocolVersion: 1,
         beetsVersion: '2.14.1 (preview)',
         pythonVersion: '3.14 (preview)',
         pythonSupported: true,
