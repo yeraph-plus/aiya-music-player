@@ -453,6 +453,16 @@ tmp 残留 `0` 个。
 
 ## 15. 批 C 落地记录（2026-10-27）
 
+> **⚠ 本节的分发决策已作废（2026-10-27 晚）**：随包 embeddable 运行时
+> （`resources/beets-runtime`、`tools/pack-beets-runtime.mjs`）不再采用，
+> 改为 beets 作为独立工具分发、播放器只留 client。见
+> `docs/33-beets-split-architecture-2026-10-27.md`。
+>
+> 本节仍然有效的部分：①「venv 预构建不可重定位」的实测结论（`pyvenv.cfg`
+> 的 `home` 是硬指针）——它否定的是"预构建后打包"，不否定"目标机器现场建 venv"；
+> ②embeddable 与 `_pth` 对 `sys.path` 的影响；③首发插件清单的三处踩坑。
+> 作废的只有"把运行时打进安装包"这一个决定。
+
 ### 15.1 先证伪：§5 的路线 B 不成立
 
 §11 第 4 问拍板"接受安装包 +50-80MB，走路线 B（CI 预构建 venv，整个目录打进
