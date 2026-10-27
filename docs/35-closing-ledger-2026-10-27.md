@@ -67,6 +67,12 @@ cargo clippy --version                                   # 2026-10-27 装上并�
       *出处：docs/30 §7 第 4 条；docs/13 §7。*
 
 - [ ] **P0-4 干净机「安装 → 运行 → 卸载」闭环**：没在从未装过本程序的机器上走过一遍。
+      已做的部分（2026-10-27，本机）：`npm run bundle` 真打出了 NSIS——
+      `target/release/bundle/nsis/AIYA Music_0.1.0_x64-setup.exe`（6,867,752 字节 /
+      6.55 MiB，release 编译 7m50s + makensis 成功）；资产名 `*-setup.exe` 与
+      `release.yml` 的通配一致；beets 两个资产名在 `beets.rs` 常量、`release.yml`
+      期望、两个 build 脚本默认值上**三方逐字相同**（否则线上必 404）。
+      签名状态实测 `Get-AuthenticodeSignature` = `NotSigned`，即 P0-2 未做。
       **判据**：虚机或备用机：装 → 首次启动建库 → 播放一首 → 卸载 → 残留检查
       （`%APPDATA%\dev.aiya.music`、`%LOCALAPPDATA%`、注册表 uninstall 键）。
       *出处：docs/13 §7。*
@@ -78,6 +84,12 @@ cargo clippy --version                                   # 2026-10-27 装上并�
 
 - [ ] **P0-6 杀软误报观察**：未签名 + 无声誉，Defender / 火绒对大二进制（尤其
       `aiya-audio-host.exe`）的处置未观察。
+      已做的部分（2026-10-27，本机）：Defender 签名 `1.461.216.0`（0.6 天龄）、
+      实时防护开着，对 `AIYA Music_0.1.0_x64-setup.exe`、`target/release/aiya.exe`、
+      `aiya-audio-host-x86_64-pc-windows-msvc.exe` 三个文件各做一次自定义扫描：
+      全部通过，`Get-MpThreatDetection` 里 `aiya*` 零命中。
+      **但这只是 Defender 一家、而且只扫静态文件**——真正的误报大多发生在
+      "下载 → 首次运行"（MotW/声誉）与别的引擎上。
       **判据**：装 P0-1 之后在两台干净机各跑一次首次安装与首启，
       有拦截就记下触发规则。（**依赖 P0-1，不能并行**）
       *出处：docs/13 §7。*
@@ -233,13 +245,17 @@ cargo clippy --version                                   # 2026-10-27 装上并�
       （证明机械改动没改行为）。已进 `npm run verify` 与 CI（`check:clippy`）。
       *出处：docs/30 §9「故意没做」。*
 
-- [ ] **P2-11 mock 里 `beets.found` 恒为 `true`**：所以"未装 beets 时整理库段收成一行"
-      只有肉眼验过，没有测试。
-      **判据**：mock 加一个 `found: false` 的场景开关 + 一条 e2e。
+- [x] **P2-11 mock 里 `beets.found` 恒为 `true`**（2026-10-27 做掉）：MockBackend 加
+      `beetsFound` 字段（默认 true 保住原来预览体验），main.ts 读 `?beets=absent`
+      翻成 false，与既有 `?failCmd=` 同一套路。新 e2e 断言收拢形态——"整理库未启用" +
+      两个安装按钮，而导入面板 / 维护折叠 /"登记到整理库"按钮**整块不存在**
+      （不是禁用，docs/33 的原则）。e2e 26 → 27 passed。
       *出处：docs/34 §6。*
 
-- [ ] **P2-12 联网契约场景平时不跑**：`protocol_contract.py` 里 album / albumError / done
-      三类事件要 `AIYA_BEETS_ONLINE=1`，默认跳过（要联网匹配）。
+- [x] **P2-12 联网契约场景**（2026-10-27 手动跑过一次）：
+      `AIYA_BEETS_ONLINE=1 npm run smoke:proto` → `[5] 联网预览 OK：['album',
+      'done', 'progress']`，事件总数 86 → 90，ALL PASS。
+      **仍不进 CI**：受 MusicBrainz 限流影响，绿灯会变随机红灯。要跑得手动加这个环境变量。
       *出处：beets-tool/tests/protocol_contract.py §5；docs/33 §4.4。*
 
 ---
@@ -273,10 +289,10 @@ cargo clippy --version                                   # 2026-10-27 装上并�
 `P1-4`（等 v2 协议，可延）
 
 **C. 想砍掉"看不见的任务"这类长期摩擦**
-`P1-5`（任务登记表）→ `P2-11`（补 mock 场景，它正是这张表最容易漏的测试）
+`P1-5`（任务登记表）——`P2-11`（mock 未装场景）已做，它正是这张表最容易漏的测试
 
 **D. 想让后来接手的人少踩坑**
-`P2-9`（CI）与 `P2-10`（clippy）已做；剩下 `P2-11` + `P2-14`
+`P2-9`（CI）与 `P2-10`（clippy）已做；剩下 `P2-14`
 
 ---
 
