@@ -66,6 +66,7 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 | `npm run dev` | 开发：`tauri dev`（自动起 vite dev server） |
 | `npm run dev:ui` | 只起前端（浏览器里跑 mock 数据，不开 Tauri） |
 | `npm run build` / `bundle` | 出安装包：`vite build` → 编 sidecar → release 编译 → NSIS（**不含 beets**） |
+| `npm run portable` | 出便携版 zip：两个 exe + 许可 + `portable.txt`（免安装，数据留在解压目录的 `data/`） |
 | `npm run beets:installer` / `beets:bundle` | 出 beets 的两个发布物：`.pyz` 安装器（33KB）/ 免安装套件包（31MB） |
 | `npm run beets:release` | 两个发布物一起出 |
 | `npm run build:ui` | 只构建前端到 `ui/dist` |
@@ -91,6 +92,24 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 `aiya-audio-host` 到 `src-tauri/binaries/<name>-<triple>.exe`（Tauri `externalBin`
 约定路径）。产物：`target/release/bundle/nsis/*.exe`（当前 **6.53 MiB**，release
 编译约 5.5 分钟）。
+
+### 两种发布形态
+
+| 文件 | 给谁 | 安装后的东西 |
+|---|---|---|
+| `AIYA Music_<ver>_x64-setup.exe` | 常规用户 | NSIS 当前用户安装，开始菜单快捷方式 + 卸载登记 |
+| `AIYA-Music_<ver>_x64-portable.zip` | 不想安装 / 想放 U 盘的人 | 解压即用，不写注册表；数据在 `data/` 下随目录走 |
+
+两个都是**未签名**的（2026-10-27 决定：不买代码签名证书）。首次运行时 Windows
+SmartScreen 会提示"未知发布者 / 已保护你的电脑"，这是预期行为，不是文件损坏：
+点「更多信息」→「仍要运行」。便携版 zip 内的 `README.txt` 也写了同一段，用户
+拿到文件时不必回到仓库找说明。
+
+**便携版怎么判定**：`src-tauri/src/paths.rs` 只看 exe 同目录有没有 `portable.txt`
+（标记文件，不探测"目录可不可写"——探测会让同一个二进制在不同机器落到不同位置）。
+命中则数据根目录变成 `<exe目录>/data`，SQLite / 封面缓存 / 日志 / beets 库 / beets
+工具 / WebView2 缓存全在里面；删掉 `portable.txt` 就退回 `%APPDATA%\dev.aiya.music`。
+这是**全仓唯一**能回答"数据放哪"的地方（以前有四处各自调 `app_data_dir`）。
 
 **安装包不含 beets**（docs/33 两侧分离）：以前随包塞了一份 104MB 的 beets 运行时，
 现在播放器安装包只有播放器。用户要导入整理时再装 beets 工具，两条轨道：
@@ -161,9 +180,15 @@ docs/33 M1–M4（beets 两侧分离、协议 v1、两条安装轨道、刷新�
 
 | 类别 | 待办 |
 |---|---|
-| 发布阻塞 | 代码签名（host 与 audio-host 两个 exe，P0-1）、CSP 与 capabilities 收窄（P0-3）、干净机「安装→运行→卸载」（P0-4）、4h soak（P0-5）、杀软误报（P0-6） |
+| 发布阻塞 | 干净机「安装→运行→卸载」（P0-4）、4h soak（P0-5）、杀软误报观察（P0-6） |
 | beets 分发 | 首次真发布两个资产、两条安装轨道在「无 Python / 有 Python」机器各走通一遍（P1-1、P1-3） |
 | 功能欠账 | 手改标签 `modify_items`、查重删除、adopt 单向、replaygain/lyrics 缺依赖、猜你喜欢 |
-| 质量 | `cargo clippy -D warnings` 首跑、mock 缺「未装 beets」场景、联网契约默认跳过、真机走查（docs/23 §7、docs/28 §5） |
+| 质量 | 联网契约默认跳过、真机走查（docs/23 §7、docs/28 §5） |
+
+**代码签名：决定不做**（2026-10-27）。证书要按年付费，个人开源项目不划算；代价是
+首次运行有一条 SmartScreen 提示（两个 exe 与安装包都未签，实测
+`Get-AuthenticodeSignature` = `NotSigned`）。补偿手段是同时发布便携版 zip：
+不想安装/不想让安装程序落盘的用户可以先试便携版。CSP 与 capabilities 收窄（P0-3）
+同期已完成。
 
 自动更新按计划后置到 v2。

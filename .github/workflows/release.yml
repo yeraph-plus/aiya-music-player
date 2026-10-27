@@ -1,10 +1,10 @@
 # 发布工作流：构建安装包与 beets 发布物，挂到 GitHub Release 上
 #
 # ## 三类触发
-#   · `v0.1.0`       播放器版本：NSIS 安装包 + beets 两个发布物一起挂上去
+#   · `v0.1.0`       播放器版本：NSIS 安装包 + 便携版 zip + beets 两个发布物一起挂上去
 #   · `beets-v0.1.0` 只发 beets 工具：只产出两个 beets 文件
-#   · 手动触发         **只构建不发布**（dry run）：把安装包与两个 beets 产物都真造
-#                     一遍，验证构建链路，但最后一步跳过 `gh release create`。
+#   · 手动触发         **只构建不发布**（dry run）：把安装包、便携包与两个 beets 产物
+#                     都真造一遍，验证构建链路，但最后一步跳过 `gh release create`。
 #                     为什么需要它：release 工作流最容易坏的地方是"到打 tag 才发现"，
 #                     而打 tag 会立刻产生一个公开 release，不能拿来试。
 #                     手动触发时 `github.ref_name` 是分支名，所以构建条件写成
@@ -20,11 +20,15 @@
 # ——它们是 `beets.rs` 里的 `INSTALLER_ASSET` / `BUNDLE_ASSET` 常量，
 # 改名前先改常量，否则用户点安装就是 404。
 #
-# ## 签名：尚未接入
-# 没有代码签名证书，两个 exe 与安装包都是未签名的（docs/35 P0-1）。
-# 这里**刻意不写半成品签名步骤**：一段导入证书却不签的脚本比没有更糟，
-# 它会让人以为签过了。证书就位后在 tauri.conf.json 配 signingIdentity，
-# 再在本文件加 signtool 步骤。
+# ## 签名：**决定不做**（2026-10-27）
+# 不买代码签名证书：两个 exe 与安装包保持未签名，首次运行由 Windows SmartScreen
+# 提示「未知发布者」，README 与便携包内的 README.txt 写明「更多信息 → 仍要运行」。
+# 代价是 P0-6（杀软/声誉观察）永远带着一个已知的提示，收益是零成本、零证书运维。
+# 所以本文件**没有**签名步骤——不是还没写，是决定不写。
+#
+# 作为补偿，发布物里多一份**便携版 zip**（`npm run portable`）：
+# 免安装、不写注册表、数据全在解压目录的 data/ 下，用户看到安全提示时可以
+# 先用它试，不必让安装程序落盘。
 #
 # 首次使用前确认：
 #   1. 仓库 Settings → Actions → General 允许 workflow 写 content
@@ -51,6 +55,12 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      # Windows runner 的**管道** stdout 按 locale 编码（英文镜像是 cp1252），
+      # 中文 print 会 UnicodeEncodeError。两个 build 脚本里已各自 reconfigure
+      # 兜底，这里再设一次是为了 pip / beets 之类的**子进程**（它们继承 env、
+      # 不继承我们的 reconfigure）。两处都要，缺一处就会在别的路径上复发。
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
 
     steps:
       - uses: actions/checkout@v4
@@ -108,12 +118,21 @@ jobs:
         if: startsWith(github.ref_name, 'v') || github.event_name == 'workflow_dispatch'
         run: npm run bundle
 
-      - name: 校验安装包
+      # 便携版：把 release 的两个 exe 收成 zip（免安装、数据随目录走）。
+      # 必须在 bundle 之后——它要的正是 bundle 编出来的 target/release/*.exe。
+      - name: 打便携版
+        if: startsWith(github.ref_name, 'v') || github.event_name == 'workflow_dispatch'
+        run: npm run portable
+
+      - name: 校验安装包与便携包
         if: startsWith(github.ref_name, 'v') || github.event_name == 'workflow_dispatch'
         run: |
           $exe = Get-ChildItem target/release/bundle/nsis/*-setup.exe -ErrorAction SilentlyContinue
           if (-not $exe) { throw "没有产出 NSIS 安装包" }
           $exe | ForEach-Object { Write-Host $_.Name ([math]::Round($_.Length / 1MB, 2)) "MB" }
+          $zip = Get-ChildItem target/release/bundle/portable/*-portable.zip -ErrorAction SilentlyContinue
+          if (-not $zip) { throw "没有产出便携包" }
+          $zip | ForEach-Object { Write-Host $_.Name ([math]::Round($_.Length / 1MB, 2)) "MB" }
 
       # ---------------------------------------------------------------
       # 发布
@@ -132,6 +151,9 @@ jobs:
           )
           if (Test-Path "target/release/bundle/nsis") {
             $files += (Get-ChildItem target/release/bundle/nsis/*-setup.exe).FullName
+          }
+          if (Test-Path "target/release/bundle/portable") {
+            $files += (Get-ChildItem target/release/bundle/portable/*-portable.zip).FullName
           }
           gh release create $tag --title $tag --generate-notes $files 2>$null
           if ($LASTEXITCODE -ne 0) {

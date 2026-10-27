@@ -67,10 +67,7 @@ impl EntrySource {
 /// （应用数据目录归宿主管），工具决定"里面怎么摆"。不传的话，工具会去
 /// `%APPDATA%\beets`，与用户自己的 beets 抢同一个库。
 pub fn data_home(app: &tauri::AppHandle) -> PathBuf {
-    app.path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("beets")
+    crate::paths::data_root(app).join("beets")
 }
 
 /// 用户的第一个扫描根 → 工具的整理目标根。
@@ -433,10 +430,7 @@ fn release_base() -> String {
 }
 
 fn install_root(app: &tauri::AppHandle) -> PathBuf {
-    app.path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("beets-tool")
+    crate::paths::data_root(app).join("beets-tool")
 }
 
 /// 发布物的形状。两条轨道都是 zip 容器（`.pyz` 就是换了扩展名的 zip）。

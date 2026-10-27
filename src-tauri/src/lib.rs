@@ -35,6 +35,7 @@ use aiya_data::scanner;
 mod beets;
 pub mod dto;
 mod logging;
+mod paths;
 mod pump;
 mod refresh;
 mod sidecar;
@@ -338,20 +339,13 @@ impl AppState {
 }
 
 fn default_db_path(app: &AppHandle) -> PathBuf {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."));
+    let dir = paths::data_root(app);
     let _ = std::fs::create_dir_all(&dir);
     dir.join("library.sqlite")
 }
 
 fn default_artwork_dir(app: &AppHandle) -> PathBuf {
-    app.path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("cache")
-        .join("artwork")
+    paths::data_root(app).join("cache").join("artwork")
 }
 
 /* ---------------- 工具：settings 表读写 ---------------- */
@@ -2636,6 +2630,9 @@ fn make_thumb(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
 }
 
 /* ---------------- 装配 ---------------- */
+
+/// 便携版环境准备（`main` 在建任何窗口之前调用，见 `paths::prepare_portable_env`）。
+pub use paths::prepare_portable_env;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

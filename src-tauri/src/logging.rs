@@ -20,7 +20,6 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use tauri::Manager;
 use tracing_subscriber::layer::SubscriberExt;
 
 /// 保留天数（按文件名日期排序，删最旧的）
@@ -208,11 +207,9 @@ pub fn init(app: &tauri::AppHandle) {
         return;
     }
 
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map(|d| d.join("logs"))
-        .unwrap_or_else(|_| std::env::temp_dir().join("aiya-logs"));
+    // 数据根目录由 paths 统一裁决（便携版在程序目录旁）；日志跟着走，
+    // 否则"设置里说数据在 D 盘、日志却在 C 盘"。
+    let dir = crate::paths::data_root(app).join("logs");
     if let Err(e) = fs::create_dir_all(&dir) {
         eprintln!("[aiya] 日志目录创建失败 {}: {e}", dir.display());
         return;

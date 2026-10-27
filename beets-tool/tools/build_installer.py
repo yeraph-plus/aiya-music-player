@@ -29,6 +29,24 @@ TOOL = HERE.parent                              # beets-tool
 SRC = TOOL / "src"
 
 
+def _force_utf8_stdio() -> None:
+    """把这个脚本自己的 stdout/stderr 切成 UTF-8。
+
+    为什么必须做：Windows 上**管道**里的 stdout 按 locale 编码（英文 runner 是
+    cp1252），中文 print 直接 `UnicodeEncodeError`。GitHub Actions 的 release
+    工作流就是这么崩的（崩在下面那句 `print(f"OK …")`）。
+
+    为什么不能用 `os.environ.setdefault("PYTHONUTF8", "1")`（以前就是这么写的）：
+    那个变量只在**解释器启动前**有效，脚本里设它时 stdio 早就用 locale 编码打开了
+    ——看着像修了，实际是空操作。`reconfigure` 改的是已打开流本身。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass   # 被重定向成非 TextIOWrapper（如管道给别的程序）就算了
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="打包 aiya-beets 安装器（.pyz）")
     ap.add_argument("--out", default=str(TOOL / "dist" / "aiya-beets-installer.pyz"))
@@ -70,8 +88,14 @@ def main() -> int:
     size = out.stat().st_size
 
     # 自检：能跑起来才算打完（否则产物是死的，装到用户机器上才发现）
+    # 子进程的 stdio 是管道、编码由它自己决定，所以显式给 UTF-8 环境
     probe = subprocess.run(
-        [sys.executable, str(out), "version"], capture_output=True, text=True, encoding="utf-8"
+        [sys.executable, str(out), "version"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
     )
     if probe.returncode != 0 or not probe.stdout.strip():
         print(f"打包自检失败：{probe.stdout} {probe.stderr}", file=sys.stderr)
@@ -82,5 +106,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    os.environ.setdefault("PYTHONUTF8", "1")
+    _force_utf8_stdio()
     sys.exit(main())

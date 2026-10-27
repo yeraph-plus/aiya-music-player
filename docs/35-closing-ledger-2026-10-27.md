@@ -25,11 +25,26 @@ cargo clippy --version                                   # 2026-10-27 装上并�
 
 ## P0 发布阻断（不解决不能发版）
 
-- [ ] **P0-1 代码签名**：host 与 audio-host 两个 exe 都没签，`tauri.conf.json`
-      无 `signingIdentity` / `certificateThumbprint`。
-      **判据**：`pnpm tauri build` 产物用 `signtool verify /pa` 通过，两个 exe 都签；
-      SmartScreen 首次运行不再拦。
+- [x] **P0-1 代码签名：决定不做**（2026-10-27 拍板）。不买证书，两个 exe 与安装包
+      保持未签名，首次运行的 SmartScreen 提示如实保留并在两处写明处置方式
+      （`README.md`「两种发布形态」、便携包内 `README.txt`）。
+      **为什么不做**：证书按年付费 + 私钥/通行证运维，换来的只是"首次运行少一次点击"，
+      对个人开源项目不划算；而且签名不能替代杀软声誉（新证书照样会被陌生引擎拦）。
+      **补偿**：`release.yml` 多产一份**便携版 zip**（`npm run portable`）——免安装、
+      不写注册表、数据随目录走，用户看到提示时可以先用它试。
+      **实测**：`Get-AuthenticodeSignature` = `NotSigned`（旧判据的证据保留在此）；
+      便携包 `AIYA-Music_0.1.0_x64-portable.zip` 9.3 MB / 8 个条目，Windows 自带
+      `Expand-Archive` 能解（第三方解压器兼容性由此间接证明）。
+      **便携判定**：`paths.rs` 只看 exe 同目录的 `portable.txt`（标记文件而非
+      "目录可不可写"探测——探测会让同一个二进制在不同机器落到不同位置）；命中则
+      数据根目录 = `<exe目录>/data`，SQLite / 封面 / 日志 / beets 库 / beets 工具 /
+      WebView2 缓存全在里面。全仓五处 `app_data_dir()` 已收敛到 `paths::data_root`。
       *出处：docs/13 §7；docs/30 §9「发布」行。*
+
+- [x] **P0-1b 便携版随发布产出**（2026-10-27 完成，原本不在表上）：见上一条。
+      `tools/build-portable.mjs` 自写 zip（Node 内置 deflate + 自算 CRC32），
+      写完立刻按中央目录读回来验条目数与顶层结构——`sidecar.rs` 的
+      `locate_host_exe` 找的是**同目录**的 `aiya-audio-host.exe`，进了子目录就启动失败。
 
 - [x] **P0-2 SOURCE-OFFER 源码地址核实**（2026-10-27 完成）：仓库定为
       `https://github.com/yeraph-plus/aiya-music-player`，三处同步改掉：
@@ -90,10 +105,11 @@ cargo clippy --version                                   # 2026-10-27 装上并�
       全部通过，`Get-MpThreatDetection` 里 `aiya*` 零命中。
       **但这只是 Defender 一家、而且只扫静态文件**——真正的误报大多发生在
       "下载 → 首次运行"（MotW/声誉）与别的引擎上。
-      **判据**：装 P0-1 之后在两台干净机各跑一次首次安装与首启，
-      有拦截就记下触发规则。（**依赖 P0-1，不能并行**）
+      **判据**：在两台干净机各跑一次首次安装与首启（安装版、便携版各一次），
+      有拦截就记下触发规则。**签名已决定不做（P0-1），所以这条不再被它挡着，
+      可以直接跑**；「未知发布者」提示是已知项、不算误报，误报指引擎真把文件
+      当恶意软件处置（删/隔离/拦截执行）。
       *出处：docs/13 §7。*
-
 ---
 
 ## P1 beets 分发链（功能不可用，但核心播放不受影响）
@@ -279,10 +295,11 @@ cargo clippy --version                                   # 2026-10-27 装上并�
 ## 建议顺序（三条路线，按目标选一条）
 
 **A. 想尽快有一个能发给别人装的版本**（最短路径，约 1 天 + 1 台干净机）
-`P0-1`（签名）→ `P0-4`（干净机）→ `P0-6`（杀软，紧随签名）
+`P0-4`（干净机，安装版 + 便携版都试）→ `P0-6`（杀软，紧随其后）→ `P0-5`（soak，可并行）
 
+> `P0-1` 签名**已决定不做**（2026-10-27），并补了便携版作为补偿；
 > `P0-2`（源码要约地址）、`P1-2`（死分支）、`P0-3`（CSP）与 `P2-13`（README 表）
-> 已在前面几轮做掉；`P0-5` soak 可以并行跑，它不挡构建，只挡"敢不敢说不崩"。
+> 也已在前面几轮做掉。剩的三条都只有人能跑，agent 只能准备产物与判据。
 
 **B. 想把 beets 能力真正交付出去**（约 2–3 天，需要一台无 Python 的机器）
 `P1-1`（真发布）→ `P1-3`（两条轨道）→ `P2-4`（插件依赖，同时决定"摘还是补"）→
@@ -341,10 +358,30 @@ workflow 里有一步硬校验名字。
 
 ### 刻意没做的
 
-- **签名步骤没有写进 release.yml**。没有证书，写一段"导入证书但不签"的脚本比没有更糟
-  ——会让人以为签过了。见 P0-1。
+- **签名步骤没有写进 release.yml**。**不是"还没写"，是决定不做**（2026-10-27，
+  见 P0-1）：不买证书，SmartScreen 提示如实保留并在 README 与便携包 README.txt
+  里写明"更多信息 → 仍要运行"。补偿是同时发便携版 zip。
 - **不在 CI 里跑 `AIYA_BEETS_ONLINE=1`**：联网匹配受 MusicBrainz 限流影响，
   绿灯会变成随机红灯。
+
+### release 首跑踩到的坑：中文 print 在 cp1252 管道里崩（2026-10-27）
+
+`build_installer.py` 与 `build_bundle.py` 的进度输出是中文，Windows runner 的
+**管道** stdout 按 locale 编码（英文镜像是 cp1252），于是
+`UnicodeEncodeError: 'charmap' codec can't encode characters`——两个产物都没打出来。
+CI 的 beets job 早先踩过同一个坑（当时靠 job env 解决），release job 漏了 `env`。
+
+**修法两层，缺一层就会在别的路径上复发**：
+1. 脚本自己 `sys.stdout.reconfigure(encoding="utf-8")`（`_force_utf8_stdio()`）——
+   改的是**已打开**的流。此前 `build_installer.py` 写的是
+   `os.environ.setdefault("PYTHONUTF8", "1")`，那是空操作：该变量只在解释器启动前
+   有效，脚本里设它时 stdio 早就用 locale 编码开好了。
+2. `release.yml` 的 job `env` 设 `PYTHONUTF8=1` + `PYTHONIOENCODING=utf-8`——
+   管的是 pip / beets 这些**子进程**（它们继承环境变量，不继承我们的 reconfigure）。
+
+**复现与验证**：`PYTHONIOENCODING=cp1252 beets-tool/.venv/Scripts/python.exe
+beets-tool/tools/build_installer.py` —— 修前崩在 `OK …自检版本`，修后 exit 0；
+把 `_force_utf8_stdio()` 临时去掉（负向对照）立刻复现同一个栈。
 
 ---
 

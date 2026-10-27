@@ -10,6 +10,7 @@
     "dev:ui": "npm --prefix ui run dev",
     "build": "npm run bundle",
     "bundle": "node tools/run.mjs ui/node_modules/@tauri-apps/cli/tauri.js build",
+  "portable": "node tools/build-portable.mjs",
     "build:ui": "npm --prefix ui run build",
     "build:sidecar": "node tools/run.mjs tools/build-sidecar.mjs",
     "gen:types": "node tools/gen-types.mjs",
@@ -49,6 +50,6 @@
     "icon:source": "node scripts/gen-icon.mjs",
     "clean": "node tools/run.mjs cargo clean",
     "verify": "npm run test:all && npm run check:clippy && npm run gen:types:check && npm run smoke:beets && npm run smoke:maint && npm run smoke:proto",
-    "verify:release": "npm run test:all && npm run bundle"
+    "verify:release": "npm run test:all && npm run bundle && npm run portable"
   }
 }

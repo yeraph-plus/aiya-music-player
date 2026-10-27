@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -36,6 +37,21 @@ TOOL = HERE.parent                              # beets-tool
 REPO = TOOL.parent
 SRC = TOOL / "src"
 VERSION = "0.1.0"
+
+
+def _force_utf8_stdio() -> None:
+    """把这个脚本自己的 stdout/stderr 切成 UTF-8。
+
+    Windows 上**管道**里的 stdout 按 locale 编码（英文 runner 是 cp1252），
+    中文 print 直接 `UnicodeEncodeError` —— release 工作流实测崩在
+    `下载自带解释器 … →` 那句。`PYTHONUTF8` 环境变量只在解释器启动前有效，
+    脚本里设太晚（build_installer 以前那个 `os.environ.setdefault` 就是空操作）。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
 
 
 def protocol_version() -> int:
@@ -118,7 +134,10 @@ def install_deps(runtime: Path) -> None:
     print(f"安装依赖 → {site}（按 {req.name}）")
     code = subprocess.call(
         [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
-         "--target", str(site), "-r", str(req)]
+         "--target", str(site), "-r", str(req)],
+        # pip 的 stdio 是我们的管道，编码由它自己决定；包名里有非 ASCII 时
+        # cp1252 会崩（且报错信息本身也是乱码），统一给 UTF-8
+        env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
     )
     if code != 0:
         raise SystemExit(f"pip 安装依赖失败（退出码 {code}）")
@@ -177,7 +196,7 @@ def main() -> int:
         [str(work / "python.exe"), "-m", "aiya_beets", "version"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         # 继承当前环境（缺 SYSTEMROOT 等基础变量时解释器起不来，看起来像"包坏了"）
-        env={**__import__("os").environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+        env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
     )
     if probe.returncode != 0 or not probe.stdout.strip():
         print(f"套件包自检失败：{probe.stdout} {probe.stderr[:400]}", file=sys.stderr)
@@ -200,4 +219,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    _force_utf8_stdio()
     sys.exit(main())
