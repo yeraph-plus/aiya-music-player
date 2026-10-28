@@ -32,6 +32,7 @@ use aiya_data::playlist as playlist_repo;
 use aiya_data::repo::{self, TrackWindowQuery};
 use aiya_data::scanner;
 
+mod app_id;
 mod beets;
 pub mod dto;
 mod logging;
@@ -2631,6 +2632,10 @@ pub use paths::prepare_portable_env;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 应用身份必须在**任何 UI 出现之前**设置（微软对 AppUserModelID 的硬要求）：
+    // 窗口一旦建出来，壳层就已经按"没有身份"缓存过这条会话了，之后再设不生效。
+    // 放在这里而不是 setup 里，是因为 config 里的窗口在 Builder 构建时就创建了。
+    app_id::install();
     tauri::Builder::default()
         // 单实例必须最先注册：二次启动唤起已有窗口（docs/05 §7 验收）
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -2666,6 +2671,8 @@ pub fn run() {
             // 第一件事：日志。此后的任何失败（建库、起 sidecar）才有据可查，
             // 否则 release 里所有 tracing 输出进虚空。
             logging::init(app.handle());
+            // 身份是 run() 最前面设的（要早于任何 UI），结果等日志能落盘了再打。
+            app_id::log_outcome();
 
             let db_path = default_db_path(app.handle());
             let db = aiya_data::open(&db_path)
