@@ -290,6 +290,21 @@ cargo clippy --version                                   # 2026-10-27 装上并�
       图标工具条 hover。
       *出处：docs/23 §7；docs/28 §5。*
 
+- [ ] **P2-15 AUMID 只做了两处中的一处半**（`f48e2ee` 做了进程级 + 注册表登记）
+      **做掉的**：`SetCurrentProcessExplicitAppUserModelID`（在 `run()` 最前，早于
+      建窗）+ `HKCU\Software\Classes\AppUserModelId\AIYA.Music.Desktop` 登记
+      （DisplayName + IconUri=current_exe）。后者写在运行期而非安装期，因为
+      **便携版从不经过 NSIS**，只写安装器则便携版永远没名字。
+      **还欠两条**：
+      ① 开始菜单快捷方式的 `System.AppUserModel.ID` 属性 —— 这是"任务栏固定项
+      能对上号"的那一半，需要 NSIS 里调 COM property store，且 dev 无快捷方式
+      根本验不了；**判据**：装一遍后固定到任务栏，重启 exe，固定项不能变成两个。
+      ② 卸载不清上面那条 per-user 类键（约 100 字节，不改行为）；要清得加
+      NSIS uninstall 钩子。
+      **先看浮层的应用名**：若登记已够用（浮层显示 AIYA Music），①可只做"固定项
+      不分裂"这一件事；若仍显示"未知应用"，说明壳层只认快捷方式，①变必做。
+      *出处：微软 AUMID 文档（进程 + 快捷方式两处都要标）；本轮 dev 实测。*
+
 ---
 
 ## 建议顺序（三条路线，按目标选一条）
