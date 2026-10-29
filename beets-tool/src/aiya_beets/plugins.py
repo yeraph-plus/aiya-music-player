@@ -87,6 +87,71 @@ DEFAULT_PLUGINS: tuple[PluginSpec, ...] = (
     PluginSpec("smartplaylist", note="beets 查询导出 m3u，与推荐页衔接"),
 )
 
+@dataclass(frozen=True)
+class IndexPluginSpec:
+    """索引家（DB1）允许的插件：**名字 + 强制参数 + 写盘标志**三元组。
+
+    ## 为什么不能只有名字（docs/45 §6.2）
+
+    白名单只写名字，挡不住"插件默认值自己写盘"这件事。实测（docs/45 §3.7）：
+    `xtractor` 的 `write` 默认就是 `yes`，命中即 `item.try_write()` 把 bpm
+    写回音频文件——一句话就破掉"索引家永不改文件"的前提，而且没有任何报错。
+
+    所以每个条目必须带 `forced`：渲染配置时把这些键值原样写进 config.yaml，
+    渲染后再由 `cfg.verify_config` 反向断言。`writes_files=True` 的插件
+    永远不许出现在索引家（`embedart` / `convert` / `scrub` 属这一类），
+    由白名单结构本身拒绝，而不是靠调用方记得别加。
+
+    `needs_network` / `needs_exe` 只用于 UI 提示（开了就得联网 / 得有二进制），
+    不参与门禁——批 1 里索引家的默认清单只有 `xtractor`（拍板 C）。
+    """
+
+    name: str
+    forced: tuple[tuple[str, str], ...] = ()
+    writes_files: bool = False
+    needs_network: bool = False
+    needs_exe: tuple[str, ...] = ()
+    note: str = ""
+
+
+# 索引家白名单。刻意**只收"只算不写"的插件**：
+#   xtractor  音频特征（本地算，需要 Essentia 二进制）
+#   lastgenre 流派推断（联网查 MusicBrainz；auto 关掉，分析由 enrich 显式触发）
+#   chroma    指纹识别（联网 + 必须有 fpcalc）
+# scrub 看着像"清理"其实写标签；embedart/convert 直接产出文件——都不在这里。
+INDEX_PLUGINS: tuple[IndexPluginSpec, ...] = (
+    IndexPluginSpec(
+        "xtractor",
+        forced=(("auto", "no"), ("write", "no")),
+        note="音频特征（bpm/danceability/mood/intervals）；需要 Essentia 二进制",
+    ),
+    IndexPluginSpec(
+        "lastgenre",
+        forced=(("auto", "no"),),
+        needs_network=True,
+        note="流派推断（联网查询）；索引步骤不应因此变慢",
+    ),
+    IndexPluginSpec(
+        "chroma",
+        forced=(("auto", "no"),),
+        needs_network=True,
+        needs_exe=("fpcalc",),
+        note="音频指纹识别（需要 fpcalc + 联网）",
+    ),
+)
+
+# 首批默认只开 xtractor（拍板 C）：另外两个会把"索引"这一步拖上网络/外部二进制。
+INDEX_DEFAULT_PLUGINS: tuple[str, ...] = ("xtractor",)
+
+
+def find_index_plugin(name: str) -> IndexPluginSpec | None:
+    """按名字查索引家白名单（大小写敏感，插件名本身全小写）。"""
+    for spec in INDEX_PLUGINS:
+        if spec.name == name:
+            return spec
+    return None
+
+
 READY = "ready"
 MISSING_DEPS = "missing_deps"
 UNAVAILABLE = "unavailable"

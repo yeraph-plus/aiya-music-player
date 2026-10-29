@@ -208,26 +208,55 @@ pub fn discover(app: &tauri::AppHandle) -> Option<(ToolEntry, EntrySource)> {
 /// 起进程时的环境。只给**事实**，不给 beets 知识。
 ///
 /// * `AIYA_BEETS_HOME`：数据根（播放器给）
+/// * `BEETSDIR`：**必须显式下发且与上面一致**（docs/45 §6.3）
 /// * `AIYA_BEETS_SCAN_ROOT`：用户第一个扫描根（播放器给，工具拿去写整理目标根）
 /// * `PYTHONIOENCODING` / `PYTHONUTF8`：管道编码钉 UTF-8。工具内部也 reconfigure
 ///   了一次，这里是双保险（工具被替换/被单独调用时仍正确）。这两个是 Python
 ///   通用变量，不是 beets 知识，留着不亏。
+///
+/// ## 为什么要显式下发 `BEETSDIR`
+///
+/// 工具侧的家（`config.yaml` / 锁 / ops 登记簿 / 断点）全按 `AIYA_BEETS_HOME`
+/// 定位，而 beets 自己只认 `BEETSDIR`。以前靠工具"翻译"这一个方向，且遇到
+/// **外部已存在的** `BEETSDIR` 就直接让步——dev shell 里 export 过一个，
+/// 于是出现"beets 写 A 家、锁建在 B 家"：双家隔离静默失效，症状是"索引跑完了
+/// 却查不到"。现在两侧都钉死：宿主显式覆盖（`env()` 优先于继承值），
+/// 工具侧再在两者不等时 fail-fast。
 fn tool_env(app: &tauri::AppHandle) -> Vec<(String, String)> {
+    // 源码树形态需要 PYTHONPATH 才 import 得到包
+    #[cfg(debug_assertions)]
+    let dev_src = {
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/src");
+        if src.is_dir() {
+            Some(src)
+        } else {
+            None
+        }
+    };
+    #[cfg(not(debug_assertions))]
+    let dev_src: Option<PathBuf> = None;
+
+    env_pairs(&data_home(app), scan_root(app), dev_src)
+}
+
+/// `tool_env` 的纯函数部分：给定事实 → 环境键值对（可单测，不需要 AppHandle）。
+fn env_pairs(
+    home: &std::path::Path,
+    root: Option<String>,
+    dev_src: Option<PathBuf>,
+) -> Vec<(String, String)> {
+    let home_str = home.to_string_lossy().into_owned();
     let mut env = vec![
         ("PYTHONIOENCODING".to_string(), "utf-8".to_string()),
         ("PYTHONUTF8".to_string(), "1".to_string()),
-        ("AIYA_BEETS_HOME".to_string(), data_home(app).to_string_lossy().into_owned()),
+        ("AIYA_BEETS_HOME".to_string(), home_str.clone()),
+        ("BEETSDIR".to_string(), home_str),
     ];
-    if let Some(root) = scan_root(app) {
+    if let Some(root) = root {
         env.push(("AIYA_BEETS_SCAN_ROOT".to_string(), root));
     }
-    // 源码树形态需要 PYTHONPATH 才 import 得到包
-    #[cfg(debug_assertions)]
-    {
-        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/src");
-        if src.is_dir() {
-            env.push(("PYTHONPATH".to_string(), src.to_string_lossy().into_owned()));
-        }
+    if let Some(src) = dev_src {
+        env.push(("PYTHONPATH".to_string(), src.to_string_lossy().into_owned()));
     }
     env
 }
@@ -1274,6 +1303,45 @@ pub fn start_move(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /* ---------------- 环境：两家的家必须同步（docs/45 §6.3） ---------------- */
+
+    /// `BEETSDIR` 必须与 `AIYA_BEETS_HOME` 同值：工具侧按后者定位锁/登记簿，
+    /// beets 只认前者。两者分家时症状是"索引跑完了却查不到"，所以这条不是
+    /// 风格问题，是双家隔离的地基。
+    #[test]
+    fn env_pins_beetsdir_to_home() {
+        let home = std::path::Path::new(r"D:\data\beets-index");
+        let env = env_pairs(home, None, None);
+        let get = |k: &str| {
+            env.iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.as_str())
+                .unwrap_or("")
+        };
+        assert_eq!(get("AIYA_BEETS_HOME"), r"D:\data\beets-index");
+        assert_eq!(get("BEETSDIR"), get("AIYA_BEETS_HOME"));
+        // 没有扫描根时不写这个键（工具侧据此省略 directory 行）
+        assert!(env.iter().all(|(k, _)| k != "AIYA_BEETS_SCAN_ROOT"));
+    }
+
+    #[test]
+    fn env_passes_scan_root_and_dev_src() {
+        let home = std::path::Path::new("/tmp/beets");
+        let env = env_pairs(
+            home,
+            Some("/music".to_string()),
+            Some(PathBuf::from("/repo/beets-tool/src")),
+        );
+        let get = |k: &str| {
+            env.iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.as_str())
+                .unwrap_or("")
+        };
+        assert_eq!(get("AIYA_BEETS_SCAN_ROOT"), "/music");
+        assert_eq!(get("PYTHONPATH"), "/repo/beets-tool/src");
+    }
 
     /* ---------------- 安装轨道（docs/33 §6.2） ---------------- */
 

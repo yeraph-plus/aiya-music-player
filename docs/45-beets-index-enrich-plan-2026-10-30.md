@@ -1,6 +1,7 @@
 # beets 索引增强（关联表 + 宿主回填）实施方案
 
-> 状态：**方案待拍板（本批只调研与实测，不改项目代码）**。日期：2026-10-30。
+> 状态：**批 1 已实施**（§11 记实际落点与偏差）；批 0 仍受 Essentia 二进制阻塞。
+> 日期：2026-10-30。
 > 前置：docs/44（双家隔离与单向查询调研）、docs/43（UI 重做 / 零接触终态）、
 > docs/42（进程形态不变）、docs/33（两侧分离）、docs/40（动态歌单规则）。
 > 本文取代 docs/44 §9 的实施细节；**docs/44 的能力分类与拍板方向不变**，
@@ -436,6 +437,59 @@ beets 写 A 库、锁建在 B 家**，双家隔离静默失效。两条一起做
 | D | DB1 的 YAML 编辑器 | **不开放**（只服务 DB2），否则"文件不动"前提守不住 |
 | E | `status='empty'` 的文件默认是否重试 | **不重试**，只在"强制重算"时再排队 |
 | F | Essentia 许可（AGPL 二进制 + CC BY-NC-ND 模型）是否可接受 | 需你判断；不接受的话整条 mood/energy 能力线去掉，只留 bpm/danceability 之外的 lastgenre |
+
+**当前处置（2026-10-30 用户指示"开工"）**：B/C/D/E 按建议值执行，A 未执行（受 §3.9 阻塞），
+F 仍待用户判断。批 1 与字段契约无关，故先做——§8 里"批 0 必须先于批 1"的理由是
+mood 列是否成立，那是批 3 的事。
+
+---
+
+## 11. 实施记录
+
+### 11.1 批 1（双家隔离）已落地
+
+| 落点 | 文件 | 做法 |
+|---|---|---|
+| profile 化 | `cfg.py` | `AIYA_BEETS_PROFILE=index\|workbench`（默认 workbench，行为与 v1 一致）；未知值 → `ConfigConflict`，不静默回落 |
+| 索引家模板 | `cfg.py::_render_index` | `directory` 恒为 `{home}/scratch`（忽略传入的扫描根）；`import` 六键 + 每个插件的强制参数按表渲染 |
+| 渲染后自检 | `cfg.py::verify_config` | 自写极简 YAML 子集解析（不用 `yaml.safe_load`：门禁必须在被手改坏的文本上也能给可读结论）；缺键也报错，不靠默认值 |
+| 自愈 | `cfg.py::ensure_config` | 索引家每次启动重渲染（内容相同不落盘），落盘后过闸——外部污染会被写回模板 |
+| 白名单三元组 | `plugins.py::IndexPluginSpec` | 名字 + `forced` 参数 + `writes_files` 标志；写盘插件由结构拒绝（`embedart`/`convert`/`scrub` 不在表内） |
+| `BEETSDIR` 加固（宿主） | `src-tauri/src/beets.rs` | 抽出纯函数 `env_pairs`，显式下发 `BEETSDIR = AIYA_BEETS_HOME`（`env()` 覆盖继承值），两条单测锁住 |
+| `BEETSDIR` 加固（工具） | `cfg.py::apply_env` | 两者都在且不等 → `ConfigConflict`；`cli.main` 捕到后打一条 `E_CONFIG` 信封（id=0）+ 退出码 2 |
+| 配置时机 | `cli.py` / `server.py` | `ensure_config` 从 `serve()` 前移到 `cli.main`（apply_env 之后、import beets 之前），`status/capabilities/doctor/serve` 四条命令看到同一份事实 |
+| 契约测试 | `beets-tool/tests/config_contract.py` | 8 组：模板 / 负向五连 / 三元组 / 环境两态 / 自愈 / 两家 status / 两家锁 / 冲突 fail-fast；`npm run smoke:config`，已进 `verify` |
+
+**顺手修掉的既有问题**：`status` 以前对新家（还没有 config.yaml）报的是 beets 默认家的
+库路径——因为它只 `apply_env` 不 `ensure_config`，而 beets 的默认 `library` 落在
+`%APPDATA%\beets`。双家隔离一上来就会被这个"报错位"带偏，故一并前移。
+
+**负向验证（都做过，改坏→红→撤销→绿）**：
+
+| 破坏 | 期望 | 结果 |
+|---|---|---|
+| 模板 `import.write` 改 `yes` | `[1]` 红 | ✅ 断言打印出整张表，`write: yes` 一眼可见 |
+| 摘掉 `verify_config` 的 import 段检查 | `[2]` 红 | ✅ "闸没红：import.write 被改成 yes" |
+| 索引家改成"只写一次"（不自愈） | `[5]` 红 | ✅ 闸在 `ensure_config` 内直接抛 `ConfigGateError` |
+| 宿主摘掉 `BEETSDIR` 下发 | Rust 单测红 | ✅ `left: "" right: "D:\\data\\beets-index"` |
+
+### 11.2 与文档的偏差
+
+1. **批 0 未做**（`essentia.upf.edu` / `archive.org` 本机均 502，PyPI 无 Windows wheel）。
+   批 1 不依赖它；批 0 的出口条件（3 个文件出数 + 耗时 + 体积）仍待网络或手动投喂 zip。
+2. `INDEX_PLUGINS` 里的 `lastgenre` / `chroma` 强制了 `auto: no`：它们本来默认在 import
+   阶段跑，而索引步骤不该在"补登"时顺带联网。这两个键在批 2 联调时用真插件复核。
+3. 索引家 home 路径（`{app_data}/beets-index`）**还没在宿主侧落地**：批 1 只保证
+   "给哪个 home 就是哪个家"。谁起这个会话属批 2/3（`enrich` 命令 + Tauri 侧两套 launcher）。
+
+### 11.3 批 2 开工时要注意
+
+- 协议面三处改动（`Stage+=enrich`、`Session` 前缀 `enr`、`Event+=enrichItem/enrichDone`）
+  必须走 `proto:sync`，客户端 `TERMINAL_EVENTS` 同步加；
+- 假插件轨道：先让 `enrich` 在**没有 Essentia** 时也能跑通全链路（写死字段），
+  真 xtractor 只在批 5 接入；
+- `status` 现已有 `dataHome` / `libraryLock`，批 2 加"这个家是谁"时注意别破坏
+  `config_contract.py` 对四路路径的断言。
 
 ---
 

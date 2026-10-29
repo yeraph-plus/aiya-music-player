@@ -2080,9 +2080,7 @@ fn playlist_summary_by_id(
 ) -> rusqlite::Result<Option<dto::playlist::PlaylistSummary>> {
     let sql = format!("{PLAYLIST_SELECT} WHERE p.id = ?1");
     match conn.query_row(&sql, [id], playlist_row) {
-        Ok(mut v) => {
-            Ok(Some(v))
-        }
+        Ok(v) => Ok(Some(v)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e),
     }
@@ -2096,7 +2094,7 @@ fn playlist_list_all(
     let rows = stmt.query_map([], playlist_row)?;
     let mut out = Vec::new();
     for r in rows {
-        let mut summary = r?;
+        let summary = r?;
         out.push(summary);
     }
     Ok(out)

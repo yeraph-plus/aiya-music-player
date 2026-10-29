@@ -14,7 +14,7 @@ import sys
 import threading
 import traceback
 
-from . import cfg, env, lockfile, ops, protocol
+from . import env, lockfile, ops, protocol
 from .cmds import dump, importer, maintain, market
 from .runtime import (
     bump_cancel,
@@ -175,12 +175,9 @@ def serve() -> int:
     # 紧接着独占 stdout：下面任何 import/迁移/第三方 print 都不许进协议流
     open_protocol_stream()
 
-    # 首次启动就是"准备环境"的时机。失败不阻断——没配置时 beets 用内置默认
-    # 也能跑，只是插件全关，比"完全不可用"好得多。
-    try:
-        cfg.ensure_config()
-    except OSError as e:
-        print(f"[aiya-beets] 生成默认配置失败：{e}", file=sys.stderr)
+    # 配置准备已提前到 `cli.main`（apply_env 之后、import beets 之前）：
+    # 那里同时服务 status/capabilities/doctor，四条命令看到的是同一份事实。
+    # 这里不再补一次——index 家每次都会重渲染，重复调用只会制造两份时机。
 
     try:
         import beets  # noqa: F401

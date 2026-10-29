@@ -20,11 +20,30 @@ import sys
 from . import __version__
 
 
+def _config_refusal(err: Exception) -> int:
+    """环境自相矛盾时的启动应答：一条错误信封，然后退出。
+
+    为什么不用 traceback：这句话要显示给用户（"你把 BEETSDIR 和
+    AIYA_BEETS_HOME 指到了两个地方"），而宿主只读得懂 NDJSON。id=0 与
+    `_not_installed` 同款——那不是任何请求的应答，是"进程还没开始干活"。
+    """
+    from .protocol import E_CONFIG, error_response
+    from .runtime import force_utf8_stdio, write_line
+
+    force_utf8_stdio()
+    write_line(error_response(0, E_CONFIG, "startup", str(err)))
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     # 数据目录必须在任何 import beets 之前翻译成 BEETSDIR（见 cfg.apply_env）
     from . import cfg
 
-    cfg.apply_env()
+    try:
+        cfg.apply_env()
+        prof = cfg.profile()
+    except cfg.ConfigConflict as e:
+        return _config_refusal(e)
 
     args = list(sys.argv[1:] if argv is None else argv)
     # 无参数 = serve（播放器固定一条命令）；有参数时不猜，交给 argparse
@@ -64,8 +83,19 @@ def main(argv: list[str] | None = None) -> int:
             *(["--requirements", ns.requirements] if ns.requirements else []),
         ])
 
-    # serve 必须**先于**任何"能不能用"的检查：它要在 import beets 之前把
-    # config.yaml 准备好（beets 一导入就把配置读进内存，之后写的文件不生效）。
+    # 读配置的命令必须在 import beets **之前**把 config.yaml 备好：beets 一导入
+    # 就把配置读进内存，之后写的文件对它不生效。以前这一步藏在 serve() 里，
+    # 于是 `status` 对新家（还没 config）报的是 beets 默认家的库路径——双家隔离
+    # 一上来就报错位。现在统一在这里做，所有读命令看到的是同一份事实。
+    try:
+        cfg.ensure_config(None, prof)
+    except OSError as e:
+        # 写不了配置不该让整个应用不可用：beets 用内置默认也能跑，只是插件全关
+        print(f"[aiya-beets] 生成配置失败：{e}", file=sys.stderr)
+    except cfg.ConfigGateError as e:
+        return _config_refusal(e)
+
+    # serve 必须**先于**任何"能不能用"的检查：它的准备动作都在上面做完了。
     if ns.cmd == "serve":
         from .server import serve
 
