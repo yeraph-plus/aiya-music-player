@@ -281,23 +281,25 @@
     font-size: 12px;
   }
 
-  .pl-count {
-    flex: none;
-    font-size: 10.5px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* 动态歌单徽标：activity 图标（心电波形=随规则动的曲目），主题色描边。
-     不抢名称的视觉权重——与字高同量级 */
+  /* 动态歌单徽标：activity 图标（心电波形=随规则动的曲目），主题色。
+     无边框——细边框在一行里太抢，靠颜色就够识别 */
   .pl-badge {
     flex: none;
     display: inline-flex;
     align-items: center;
-    padding: 2.5px 3px;
-    border-radius: 3px;
-    border: 1px solid var(--accent);
+    padding: 2px;
     color: var(--accent);
+  }
+
+  .pl-count {
+    flex: none;
+    font-size: 10px;
+    line-height: 1;
+    padding: 3px 6px;
+    border-radius: 999px;
+    background: var(--surface-hover); /* 半透明底：两个主题各自成立，不写死色值 */
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
   }
 
   .side-empty {
