@@ -162,6 +162,37 @@ pub fn gc_unreferenced(conn: &Connection, cache_dir: &Path) -> DbResult<usize> {
     Ok(orphans.len())
 }
 
+/// 实体封面回填：albums/artists 的 `artwork_id` 从曲目聚合——取曲目中
+/// **出现次数最多**的封面（并列取 id 最小，稳定），曲目全部无封面时清 NULL。
+/// 此前 schema 里这两列从不被写入（恒 NULL），专辑宫格只能显示占位图、
+/// 内页走"首曲封面"回落（首曲被删则封面跳变）。调用时机：扫描收尾与
+/// beets 同步收尾各一次，对存量库等价于持续回填；迁移 0006 做首次回填。
+///
+/// **必须在 gc_unreferenced 之前调用**：回填建立的实体引用要先于
+/// "删无引用封面"的对账，否则刚该被引用的原图会被 GC 误删。
+/// 返回 (albums, artists) 变更行数。
+pub fn refresh_entity_artwork(conn: &Connection) -> DbResult<(usize, usize)> {
+    let albums = conn
+        .execute(
+            "UPDATE albums SET artwork_id = (\
+               SELECT t.artwork_id FROM tracks t \
+               WHERE t.album_id = albums.id AND t.artwork_id IS NOT NULL \
+               GROUP BY t.artwork_id ORDER BY COUNT(*) DESC, t.artwork_id ASC LIMIT 1)",
+            [],
+        )
+        .map_err(DbError::Sql)?;
+    let artists = conn
+        .execute(
+            "UPDATE artists SET artwork_id = (\
+               SELECT t.artwork_id FROM tracks t \
+               WHERE t.artist_id = artists.id AND t.artwork_id IS NOT NULL \
+               GROUP BY t.artwork_id ORDER BY COUNT(*) DESC, t.artwork_id ASC LIMIT 1)",
+            [],
+        )
+        .map_err(DbError::Sql)?;
+    Ok((albums, artists))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +260,54 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "残留 tmp: {leftovers:?}");
+    }
+
+    /// 实体封面回填：多数票胜出（并列取 id 小者稳定）、曲目全部无封面时清 NULL
+    /// （ albums/artists.artwork_id 此前从不写入，2026-10-30 起由此函数维护）。
+    #[test]
+    fn refresh_entity_artwork_picks_majority_and_clears_stale() {
+        let conn = open_in_memory().unwrap();
+        // a1: 三首曲目两票 art-a 一票 art-b → art-a 胜；ar1 同曲 → art-a
+        conn.execute_batch(
+            "INSERT INTO artworks (id, content_hash, mime, cache_key, created_at) VALUES
+               ('aw_a','ha','image/png','a.png',0), ('aw_b','hb','image/png','b.png',0);
+             INSERT INTO albums (id, title, title_norm) VALUES
+               ('al1','专辑','专辑');
+             INSERT INTO artists (id, name, name_norm) VALUES
+               ('ar1','艺人','艺人');
+             INSERT INTO tracks (id, title, title_norm, added_at, path, path_lower,
+                                 album_id, artist_id, artwork_id) VALUES
+               ('t1','一','一',0,'/1.flac','/1.flac','al1','ar1','aw_a'),
+               ('t2','二','二',0,'/2.flac','/2.flac','al1','ar1','aw_a'),
+               ('t3','三','三',0,'/3.flac','/3.flac','al1','ar1','aw_b');
+             INSERT INTO albums (id, title, title_norm) VALUES
+               ('al2','无封面专辑','无封面专辑');",
+        )
+        .unwrap();
+
+        let (albums, artists) = refresh_entity_artwork(&conn).unwrap();
+        assert_eq!(albums, 2, "两张专辑都参与对账");
+        assert_eq!(artists, 1);
+
+        let got: String = conn
+            .query_row("SELECT artwork_id FROM albums WHERE id = 'al1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(got, "aw_a", "多数票胜出（2 票 art-a vs 1 票 art-b）");
+        let got: String = conn
+            .query_row("SELECT artwork_id FROM artists WHERE id = 'ar1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(got, "aw_a");
+        let nulls: i64 = conn
+            .query_row("SELECT COUNT(*) FROM albums WHERE artwork_id IS NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(nulls, 1, "无封面曲目支撑的专辑保持 NULL");
+
+        // 曲目全部失去封面 → 实体引用清除（GC 口径一致，不留悬空引用）
+        conn.execute("UPDATE tracks SET artwork_id = NULL", []).unwrap();
+        refresh_entity_artwork(&conn).unwrap();
+        let stale: i64 = conn
+            .query_row("SELECT COUNT(*) FROM albums WHERE artwork_id IS NOT NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stale, 0, "曲目无封面后实体引用必须清除");
     }
 }

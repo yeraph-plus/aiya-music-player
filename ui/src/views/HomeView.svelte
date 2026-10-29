@@ -116,7 +116,8 @@
             onclick={() => void playPlaylist(playlist.id)}
           >
             {#if playlist.artworkId}
-              <img src={artworkUrl(playlist.artworkId, 320) ?? ''} alt="" loading="lazy" />
+              <!-- 256 档：148px 卡在 150% 缩放下需要 ~222 物理像素，96 档会模糊 -->
+              <img src={artworkUrl(playlist.artworkId, 256) ?? ''} alt="" loading="lazy" />
             {:else}
               <span class="playlist-card-icon"><ListMusic size={26} /></span>
             {/if}

@@ -413,6 +413,12 @@ pub fn sync_items(conn: &mut Connection, items: &[BeetsItem], now: i64) -> DbRes
         .filter(|ex| matches!(ex.beets_item_id, Some(id) if !seen_beets_ids.contains(&id)))
         .count();
 
+    // beets 对齐可能带来封面变化（track 的 artwork_id 随字段更新）→
+    // 实体封面同步回填（与扫描收尾同一函数；失败不影响同步结果）
+    if let Err(e) = crate::artwork::refresh_entity_artwork(conn) {
+        tracing::warn!(error = %e, "beets 同步后实体封面回填失败（跳过）");
+    }
+
     Ok(stats)
 }
 

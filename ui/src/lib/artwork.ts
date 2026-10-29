@@ -21,6 +21,13 @@ const DEFAULT_SIZE = 96;
  */
 export function artworkUrl(artworkId: string | null, size: number = DEFAULT_SIZE): string | null {
   if (!artworkId) return null;
+  // 档外值静默落 96 曾把首页大图打模糊（调用方传 320 → 96 被上采样 1.5 倍，
+  // 2026-10-30）：dev 下喊出来，别让这类事再无声发生；生产保持静默纠偏。
+  if (import.meta.env.DEV && !(ARTWORK_SIZES as readonly number[]).includes(size)) {
+    console.warn(
+      `[artwork] size=${size} 不在 ${ARTWORK_SIZES.join('/')} 档内，已回落 ${DEFAULT_SIZE}`,
+    );
+  }
   const safe = (ARTWORK_SIZES as readonly number[]).includes(size) ? size : DEFAULT_SIZE;
   // Tauri 2 的自定义协议在 Windows 上经 `http://<scheme>.localhost` 暴露。
   // 后端注册 aiya-artwork scheme 并带 ACAO:* —— artwork-blob 的 fetch 与

@@ -1021,6 +1021,17 @@ pub fn scan_roots_ext(
 
     let missing = mark_missing(conn, roots, &seen)?;
 
+    // 实体封面回填（albums/artists.artwork_id 从曲目聚合）：必须在 GC
+    // **之前**——回填建立的实体引用要先于"删无引用封面"的对账，否则刚该
+    // 被引用的原图会被 GC 误删。失败只记日志不拖垮扫描结果。
+    match crate::artwork::refresh_entity_artwork(conn) {
+        Ok((albums, artists)) if albums + artists > 0 => {
+            tracing::debug!(albums, artists, "实体封面已回填");
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "实体封面回填失败（跳过，不影响扫描结果）"),
+    }
+
     // 封面 GC：所有批次提交完之后做一次对账（增量扫描同样收尾跑）——
     // 删除不再被 tracks/albums/artists 引用（含 missing 行的引用）的
     // artwork 行与 originals/ 原图，否则行与文件只增不减。GC 是内务，
