@@ -301,6 +301,54 @@ mod lib_tests {
             "cutoff 不得越过未来"
         );
     }
+
+    /* ---------------- 智能歌单摘要统计 ---------------- */
+
+    /// 零匹配是智能歌单的常态（规则先建、曲目后进）：摘要读取不得因
+    /// 封面子查询空结果集而报 QueryReturnedNoRows——此前它把"创建成功
+    /// 但摘要失败"炸成整个命令的内部错误，歌单建了 UI 却不刷新
+    /// （2026-10-29 动态歌单回归：'米哈'/'崩坏'两条都是这么"消失"的）。
+    #[test]
+    fn smart_summary_survives_zero_matches() {
+        let mut conn = aiya_data::db::open_in_memory().expect("内存库");
+        let rule = serde_json::json!({
+            "all": [{"field": "album", "op": "contains", "value": "不存在的专辑"}],
+            "sort": "title",
+            "direction": "asc"
+        });
+        aiya_data::playlist::create_smart(&mut conn, "sp0", "空结果歌单", &rule, 0).unwrap();
+        let summary = crate::playlist_summary_by_id(&conn, "sp0")
+            .expect("零匹配不得报错")
+            .expect("歌单行必须存在");
+        assert_eq!(summary.track_count, 0);
+        assert_eq!(summary.duration_ms, 0);
+        assert_eq!(summary.artwork_id, None);
+    }
+
+    /// 有匹配时摘要口径正确：计数来自规则实时查询，封面取排序后第一个
+    /// （本例曲目无封面 → None 而不是报错）。
+    #[test]
+    fn smart_summary_counts_real_matches() {
+        let mut conn = aiya_data::db::open_in_memory().expect("内存库");
+        conn.execute(
+            "INSERT INTO tracks (id, title, title_norm, added_at, path, path_lower, genre_norm, duration_ms)
+             VALUES ('t1', 'A', 'a', 0, 'D:/m/a.flac', 'd:/m/a.flac', 'pop', 120000)",
+            [],
+        )
+        .unwrap();
+        let rule = serde_json::json!({
+            "all": [{"field": "genre", "op": "eq", "value": "Pop"}],
+            "sort": "title",
+            "direction": "asc"
+        });
+        aiya_data::playlist::create_smart(&mut conn, "sp1", "流行", &rule, 0).unwrap();
+        let summary = crate::playlist_summary_by_id(&conn, "sp1")
+            .expect("有匹配不得报错")
+            .expect("歌单行必须存在");
+        assert_eq!(summary.track_count, 1);
+        assert_eq!(summary.duration_ms, 120000);
+        assert_eq!(summary.artwork_id, None);
+    }
 }
 
 /* ---------------- 应用状态 ---------------- */
@@ -911,17 +959,23 @@ async fn beets_preview(
 /// （含 `candidate` 深层对象），宿主只透传不解读——在这里定形状等于
 /// 让宿主编译期依赖 beets 的返回结构，而那份结构是 sidecar 的事（docs/17 §3.2）。
 /// P1：探测最多 ~30s 阻塞，spawn_blocking 卸载。
+///
+/// `resume`（v2）：中断后续跑。UI 重发**同一批** decisions（会话 store 里
+/// 留着），sidecar 按内容指纹跳过断点里已完成的——move/copy 中断后源文件
+/// 已移走，不 resume 的重跑会对它们报错。
 #[tauri::command]
 async fn beets_apply(
     app: AppHandle,
     decisions: Vec<Json>,
+    resume: Option<bool>,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
     let Some(state) = app.try_state::<AppState>() else {
         return Err(dto::ApiError::internal("app state 不可用"));
     };
     let refresh = state.refresh.clone();
+    let resume = resume.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        beets::start_apply(app, decisions, Some(refresh))
+        beets::start_apply(app, decisions, resume, Some(refresh))
     })
     .await
     .map_err(dto::ApiError::internal)?
@@ -2045,8 +2099,15 @@ fn apply_smart_stats(
         "SELECT COUNT(*), COALESCE(SUM(t.duration_ms),0) {}",
         plan.count_from()
     );
+    // 规则条件带 `?` 占位符，绑定值必须跟 clauses 顺序一致——此前绑定空
+    // 数组，任何带条件的规则统计都报 InvalidParameterCount（内部错误）
+    let binds = plan.sql_binds();
     let (count, duration): (i64, i64) = conn
-        .query_row(&stats_sql, [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row(
+            &stats_sql,
+            rusqlite::params_from_iter(binds.iter()),
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .map_err(aiya_data::DbError::Sql)?;
     summary.track_count = count;
     summary.duration_ms = duration;
@@ -2056,9 +2117,22 @@ fn apply_smart_stats(
         plan.count_from(),
         plan.order_sql
     );
+    // 封面查询必须容忍零匹配：query_row 对空结果集返回 QueryReturnedNoRows，
+    // 而空结果对智能歌单是常态（规则先建、曲目后进），不是错误——
+    // 此前它把"创建成功但摘要读取失败"整个命令炸成内部错误，歌单建了
+    // UI 却不刷新（2026-10-29 动态歌单回归）。
+    use rusqlite::OptionalExtension;
+    // 两种"没有封面"都要兜住：零匹配（optional → None）与首曲无封面
+    // （行在、值为 NULL → 闭包显式取 Option，flatten 收一层）。
     summary.artwork_id = conn
-        .query_row(&art_sql, [], |r| r.get(0))
-        .map_err(aiya_data::DbError::Sql)?;
+        .query_row(
+            &art_sql,
+            rusqlite::params_from_iter(binds.iter()),
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(aiya_data::DbError::Sql)?
+        .flatten();
     Ok(())
 }
 

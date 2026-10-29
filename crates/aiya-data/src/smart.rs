@@ -225,6 +225,32 @@ impl SmartPlan {
             format!(" WHERE {}", parts.join(" AND "))
         }
     }
+
+    /// 规则条件的绑定值（顺序 = clauses 顺序）。repo 的 binder 机制和
+    /// 宿主的摘要统计（直接消费 count_from() 拼出的 SQL）吃同一批值；
+    /// 绑定顺序必须与 WHERE 片段拼接顺序一致——每条子句恰好一个 `?`。
+    pub fn sql_binds(&self) -> Vec<rusqlite::types::Value> {
+        self.clauses.iter().map(|(_, v)| to_sql_value(v)).collect()
+    }
+}
+
+/// serde_json::Value → SQLite 绑定值。repo 的 binder 与 SmartPlan::sql_binds
+/// 共用同一套转换（整数走 INTEGER、浮点 REAL、其余按字符串），两处口径
+/// 不一致会静默改变匹配语义——别在别处再造转换。
+pub fn to_sql_value(v: &Value) -> rusqlite::types::Value {
+    match v {
+        Value::Null => rusqlite::types::Value::Null,
+        Value::Bool(b) => rusqlite::types::Value::Integer(*b as i64),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                rusqlite::types::Value::Integer(i)
+            } else {
+                rusqlite::types::Value::Real(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        Value::String(s) => rusqlite::types::Value::Text(s.clone()),
+        other => rusqlite::types::Value::Text(other.to_string()),
+    }
 }
 
 /// contains 条件的绑定值：`%needle%`（needle 先 norm 再转义 LIKE 通配符）。

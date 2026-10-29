@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use rusqlite::types::{ToSql, Value as SqlValue};
+use rusqlite::types::ToSql;
 use rusqlite::{Connection, Row};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::db::{DbError, DbResult};
 use crate::norm::norm;
+use crate::smart::to_sql_value;
 
 type Binder = Box<dyn Fn(&mut Vec<Box<dyn ToSql>>) + Send>;
 
@@ -451,22 +452,6 @@ fn bind_all(
         stmt.raw_bind_parameter(i + 1, p.as_ref()).map_err(DbError::Sql)?;
     }
     Ok(())
-}
-
-fn to_sql_value(v: &Value) -> SqlValue {
-    match v {
-        Value::Null => SqlValue::Null,
-        Value::Bool(b) => SqlValue::Integer(*b as i64),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                SqlValue::Integer(i)
-            } else {
-                SqlValue::Real(n.as_f64().unwrap_or(0.0))
-            }
-        }
-        Value::String(s) => SqlValue::Text(s.clone()),
-        other => SqlValue::Text(other.to_string()),
-    }
 }
 
 pub fn row_to_track(r: &Row<'_>) -> rusqlite::Result<TrackRow> {
