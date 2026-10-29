@@ -54,7 +54,7 @@ class PlaylistsStore {
 
   /**
    * 新建。成功返回新 id（调用方可能要跳过去），失败返回 null。
-   * `rule` 给了 = 智能歌单（曲目由规则决定，seedIds 无意义）。
+   * `rule` 给了 = 动态歌单（曲目由规则决定，seedIds 无意义）。
    */
   async create(name: string, seedIds?: string[], rule?: SmartRule): Promise<string | null> {
     let id: string;
@@ -69,7 +69,7 @@ class PlaylistsStore {
     return id;
   }
 
-  /** 保存智能歌单规则。若正在看它则重载列表（规则的变更立刻反映到曲目） */
+  /** 保存动态歌单规则。若正在看它则重载列表（规则的变更立刻反映到曲目） */
   async setRule(playlist: PlaylistSummary, rule: SmartRule): Promise<boolean> {
     try {
       await ipc.playlist.setRule(playlist.id, rule);

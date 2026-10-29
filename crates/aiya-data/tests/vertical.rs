@@ -168,7 +168,7 @@ fn vertical_scan_query_playlist() {
     db.close();
 }
 
-/// 智能歌单纵切（docs/40 §1 方案 A）：beets 同步 genre → 规则建单 →
+/// 动态歌单纵切（docs/40 §1 方案 A）：beets 同步 genre → 规则建单 →
 /// Playlist 来源按 kind 自动路由到规则查询 → 手动歌单守卫仍然生效。
 #[test]
 fn vertical_smart_playlist_rule_query() {
@@ -255,7 +255,7 @@ fn vertical_smart_playlist_rule_query() {
     })
     .unwrap();
 
-    // 2) 建智能歌单：genre eq "Rock"（norm 后大小写不敏感）+ 按标题升序
+    // 2) 建动态歌单：genre eq "Rock"（norm 后大小写不敏感）+ 按标题升序
     db.send(|conn| {
         aiya_data::playlist::create_smart(
             conn,
@@ -368,7 +368,7 @@ fn vertical_smart_playlist_rule_query() {
                 .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
         })
         .unwrap_err();
-    assert!(err.to_string().contains("智能歌单"), "实际错误：{err}");
+    assert!(err.to_string().contains("动态歌单"), "实际错误：{err}");
 
     db.close();
 }

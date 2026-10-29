@@ -302,9 +302,9 @@ mod lib_tests {
         );
     }
 
-    /* ---------------- 智能歌单摘要统计 ---------------- */
+    /* ---------------- 动态歌单摘要统计 ---------------- */
 
-    /// 零匹配是智能歌单的常态（规则先建、曲目后进）：摘要读取不得因
+    /// 零匹配是动态歌单的常态（规则先建、曲目后进）：摘要读取不得因
     /// 封面子查询空结果集而报 QueryReturnedNoRows——此前它把"创建成功
     /// 但摘要失败"炸成整个命令的内部错误，歌单建了 UI 却不刷新
     /// （2026-10-29 动态歌单回归：'米哈'/'崩坏'两条都是这么"消失"的）。
@@ -1590,7 +1590,7 @@ async fn library_artists(
     Ok(page)
 }
 
-/// 曲库现有流派列表（智能歌单"流派"条件的下拉数据源）。
+/// 曲库现有流派列表（动态歌单"流派"条件的下拉数据源）。
 #[tauri::command]
 async fn library_genres(state: State<'_, AppState>) -> Result<Vec<String>, dto::ApiError> {
     let db = state.db().clone();
@@ -2053,8 +2053,8 @@ fn library_remove_tracks(
 /// 顺序由 `sort_position`（0002 迁移新增）承载 —— 侧栏拖动排序要能持久化，
 /// 靠 created_at 假装顺序的话重启就回到创建顺序。
 ///
-/// 智能歌单（0003）：末两列带出 kind / rule_json，聚合子查询的结果由
-/// `apply_smart_stats` 用规则实时查询**覆盖**（playlist_items 对智能歌单恒空）。
+/// 动态歌单（0003）：末两列带出 kind / rule_json，聚合子查询的结果由
+/// `apply_smart_stats` 用规则实时查询**覆盖**（playlist_items 对动态歌单恒空）。
 const PLAYLIST_SELECT: &str = "SELECT p.id, p.name, p.created_at, p.updated_at, p.sort_position, p.kind, p.rule_json,
        (SELECT COUNT(*) FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id
          WHERE pi.playlist_id = p.id),
@@ -2083,8 +2083,8 @@ fn playlist_row(r: &rusqlite::Row) -> rusqlite::Result<dto::playlist::PlaylistSu
     })
 }
 
-/// 智能歌单的摘要统计：曲目数 / 总时长 / 首个有封面曲目都按规则**实时查询**
-/// （playlist_items 聚合子查询对智能歌单恒为 0/空，必须覆盖）。
+/// 动态歌单的摘要统计：曲目数 / 总时长 / 首个有封面曲目都按规则**实时查询**
+/// （playlist_items 聚合子查询对动态歌单恒为 0/空，必须覆盖）。
 /// 手动歌单不进这个函数——它的数字本来就来自 playlist_items。
 fn apply_smart_stats(
     conn: &rusqlite::Connection,
@@ -2118,7 +2118,7 @@ fn apply_smart_stats(
         plan.order_sql
     );
     // 封面查询必须容忍零匹配：query_row 对空结果集返回 QueryReturnedNoRows，
-    // 而空结果对智能歌单是常态（规则先建、曲目后进），不是错误——
+    // 而空结果对动态歌单是常态（规则先建、曲目后进），不是错误——
     // 此前它把"创建成功但摘要读取失败"整个命令炸成内部错误，歌单建了
     // UI 却不刷新（2026-10-29 动态歌单回归）。
     use rusqlite::OptionalExtension;
@@ -2220,8 +2220,8 @@ fn playlist_create(
     // 歌单 id 由名字派生（同名即同一歌单，重复创建不重复建行）
     let pid = ids::playlist_id(&name);
     let now = now_secs();
-    // 带 rule = 智能歌单（docs/40 §1）：规则入库前编译校验；track_ids 忽略
-    // （智能歌单不物化曲目，UI 也不会同时给）
+    // 带 rule = 动态歌单（docs/40 §1）：规则入库前编译校验；track_ids 忽略
+    // （动态歌单不物化曲目，UI 也不会同时给）
     if let Some(rule) = rule {
         playlist_write(&state, move |conn| {
             playlist_repo::create_smart(conn, &pid, &name, &rule, now)?;
@@ -2246,7 +2246,7 @@ fn playlist_create(
     }
 }
 
-/// 更新智能歌单的规则（统一模态框"编辑"的保存动作之一）。
+/// 更新动态歌单的规则（统一模态框"编辑"的保存动作之一）。
 #[tauri::command]
 fn playlist_set_rule(
     state: State<'_, AppState>,
@@ -2258,7 +2258,7 @@ fn playlist_set_rule(
         match playlist_repo::set_rule(conn, &id, &rule, now) {
             Ok(true) => {}
             Ok(false) => return Ok(None),
-            // 手动歌单设规则是 UI 的 bug（编辑入口只对智能歌单开），明确报错
+            // 手动歌单设规则是 UI 的 bug（编辑入口只对动态歌单开），明确报错
             Err(e) => return Err(e),
         }
         playlist_summary_by_id(conn, &id).map_err(aiya_data::DbError::Sql)

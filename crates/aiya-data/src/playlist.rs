@@ -106,7 +106,7 @@ pub fn create(
     Ok(outcome)
 }
 
-/// 建智能歌单（docs/40 §1 方案 A）：曲目不物化，规则存 `rule_json`。
+/// 建动态歌单（docs/40 §1 方案 A）：曲目不物化，规则存 `rule_json`。
 /// 规则在入库前先编译一遍（`SmartPlan::parse`）——写库时校验比读库时炸友好得多。
 pub fn create_smart(
     conn: &mut Connection,
@@ -136,7 +136,7 @@ pub fn create_smart(
     Ok(())
 }
 
-/// 更新智能歌单的规则。返回 false = 歌单不存在；手动歌单 = `Custom` 错误
+/// 更新动态歌单的规则。返回 false = 歌单不存在；手动歌单 = `Custom` 错误
 ///（手动/智能互不转换，docs/40 §1.4 拍板）。
 pub fn set_rule(
     conn: &mut Connection,
@@ -194,7 +194,7 @@ pub fn clear(conn: &mut Connection, playlist_id: &str, now: i64) -> DbResult<boo
     Ok(true)
 }
 
-/// 智能歌单的曲目列表是规则的**投影**——加歌/删歌/排序/清空都没有意义
+/// 动态歌单的曲目列表是规则的**投影**——加歌/删歌/排序/清空都没有意义
 /// （改规则才是改内容）。手动歌单这些写操作照旧；守卫放在数据层，命令层
 /// 与未来的新调用方都绕不过去。
 fn ensure_manual(conn: &Connection, playlist_id: &str) -> DbResult<()> {
@@ -205,7 +205,7 @@ fn ensure_manual(conn: &Connection, playlist_id: &str) -> DbResult<()> {
     )?;
     if kind == "smart" {
         return Err(DbError::Custom(
-            "智能歌单的曲目由规则决定，不支持手动修改；请编辑歌单规则".into(),
+            "动态歌单的曲目由规则决定，不支持手动修改；请编辑歌单规则".into(),
         ));
     }
     Ok(())

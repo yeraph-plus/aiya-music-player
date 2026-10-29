@@ -97,7 +97,7 @@ pub enum Direction {
 pub enum TrackSource {
     Library,
     Playlist { playlist_id: String },
-    /// 智能歌单（0003 迁移）：曲目列表不物化，打开时按 `rule_json` 实时查询
+    /// 动态歌单（0003 迁移）：曲目列表不物化，打开时按 `rule_json` 实时查询
     /// （`smart::load_plan` 编译成 WHERE/ORDER BY）。UI 仍发 `kind:'playlist'`，
     /// 由 `list_tracks` 查 kind 后路由到这里。
     SmartPlaylist { playlist_id: String },
@@ -140,9 +140,9 @@ pub struct TrackWindowQuery {
     /// 同时给时 never 优先。
     #[serde(default)]
     pub last_played_never: Option<bool>,
-    /// 列表筛选器的临时条件（`[{field,op,value},...]`）——与智能歌单同一批
+    /// 列表筛选器的临时条件（`[{field,op,value},...]`）——与动态歌单同一批
     /// 字段键（smart::parse_conds 解析），但**只在本次查询生效、不落库**。
-    /// 解析失败明确报错（与智能歌单同原则），UI 侧 validateRule 先拦一道。
+    /// 解析失败明确报错（与动态歌单同原则），UI 侧 validateRule 先拦一道。
     #[serde(default)]
     pub conds: Option<serde_json::Value>,
     /// 嵌套形状 `{ source: { kind: "library" } }`，与 contracts/query.ts 的
@@ -231,7 +231,7 @@ fn join_and_order(q: &TrackWindowQuery) -> (&'static str, &'static str) {
     match &q.source {
         TrackSource::Library => (JOIN, ""),
         TrackSource::Playlist { .. } => (JOIN_PLAYLIST, " ORDER BY pi.position ASC"),
-        // 智能歌单：JOIN 与曲库同源（ar/al 别名给排序用）；ORDER BY 由计划动态给
+        // 动态歌单：JOIN 与曲库同源（ar/al 别名给排序用）；ORDER BY 由计划动态给
         TrackSource::SmartPlaylist { .. } => (JOIN, ""),
         TrackSource::Recent => (
             JOIN_AGG,
@@ -263,7 +263,7 @@ fn key_expr(q: &TrackWindowQuery) -> Option<&'static str> {
 
 /// 只构造 WHERE 子句与绑定器（页数据与 COUNT 共用，保证两边口径一致）。
 /// `cursor_filter` 的占位符排在 WHERE 末尾（对应 binders 尾部追加的游标绑定）。
-/// `smart` 是智能歌单的已编译计划；`conds` 是筛选器临时条件（同样已编译）。
+/// `smart` 是动态歌单的已编译计划；`conds` 是筛选器临时条件（同样已编译）。
 /// 占位符顺序 = 推入顺序（search → artist → album → time → conds →
 /// playlist → smart → cursor）。
 fn build_where(
@@ -345,7 +345,7 @@ fn build_where(
     // 歌单来源：JOIN_PLAYLIST 从 playlist_items 出发，必须按 playlist_id 过滤，
     // 否则任何歌单都返回全部曲目（P0）。占位符顺序 = binder 推入顺序
     // （search → artist → album → playlist → smart → cursor）。
-    // 智能歌单（smart 接管）不走 playlist_items —— 条件在 plan.clauses 里。
+    // 动态歌单（smart 接管）不走 playlist_items —— 条件在 plan.clauses 里。
     if let (TrackSource::Playlist { playlist_id }, None) = (&q.source, smart) {
         let pid = playlist_id.clone();
         binders.push(Box::new(move |v: &mut Vec<Box<dyn ToSql>>| {
@@ -353,7 +353,7 @@ fn build_where(
         }));
         where_clauses.push("pi.playlist_id = ?".to_string());
     }
-    // 智能歌单规则条件：每条子句恰好一个 `?`，绑定顺序 = clauses 顺序
+    // 动态歌单规则条件：每条子句恰好一个 `?`，绑定顺序 = clauses 顺序
     if let Some(plan) = smart {
         for (clause, value) in &plan.clauses {
             let v = value.clone();
@@ -384,14 +384,14 @@ fn build_head(
 ) -> (String, Vec<Binder>) {
     let (where_sql, binders) = build_where(q, cursor_filter, smart, conds);
     let (join, fixed_order) = join_and_order(q);
-    // 智能歌单（无论 UI 发 Playlist 还是 SmartPlaylist 来源）都从 tracks 出发
+    // 动态歌单（无论 UI 发 Playlist 还是 SmartPlaylist 来源）都从 tracks 出发
     // —— playlist_items 对它恒空，JOIN_PLAYLIST 会把结果集清成 0 行
     let join = if smart.is_some() { JOIN } else { join };
     // JOIN 换掉后 pi 别名不存在，Playlist 来源自带的"位置序"（pi.position）
-    // 也必须一起丢——智能歌单没有手动顺序语义，走下面的列头排序。
+    // 也必须一起丢——动态歌单没有手动顺序语义，走下面的列头排序。
     let fixed_order = if smart.is_some() { "" } else { fixed_order };
     let order_sql = if fixed_order.is_empty() {
-        // 智能歌单的排序也吃 q.sort（2026-10-28 拍板：排序由列表视图的列头
+        // 动态歌单的排序也吃 q.sort（2026-10-28 拍板：排序由列表视图的列头
         // 处理，规则编辑器不再暴露排序键）。UI 的 sort 状态默认 title/asc，
         // 与规则里的兼容默认一致；用户点列头后随点击走。
         // 规则里的 order_sql 仍被 `apply_smart_stats`（侧栏摘要计数）使用。
@@ -413,12 +413,12 @@ fn count_from(q: &TrackWindowQuery, smart: Option<&crate::smart::SmartPlan>) -> 
     let has_search = q.search.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false);
     let base = match &q.source {
         TrackSource::Library => "FROM tracks t".to_string(),
-        // 智能歌单与曲库同源（playlist_items 对它恒空）
+        // 动态歌单与曲库同源（playlist_items 对它恒空）
         TrackSource::Playlist { .. } if smart.is_some() => "FROM tracks t".to_string(),
         TrackSource::Playlist { .. } => {
             "FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id".to_string()
         }
-        // 智能歌单条件全部自包含（t.* / IN 子查询），不需要外层 ar/al JOIN
+        // 动态歌单条件全部自包含（t.* / IN 子查询），不需要外层 ar/al JOIN
         TrackSource::SmartPlaylist { .. } => "FROM tracks t".to_string(),
         // 与 JOIN_AGG 同源：只关心 history 里出现过的曲目
         TrackSource::Recent | TrackSource::MostPlayed => {
@@ -492,8 +492,8 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
     let started = Instant::now();
     let limit = q.limit.clamp(1, 500) as i64;
 
-    // ---------- 智能歌单计划（来源是 SmartPlaylist 才有）----------
-    // 在这里查 kind 而不是让 UI 发新 kind：UI 对手动/智能歌单发同一个
+    // ---------- 动态歌单计划（来源是 SmartPlaylist 才有）----------
+    // 在这里查 kind 而不是让 UI 发新 kind：UI 对手动/动态歌单发同一个
     // `kind:'playlist'` 查询，路由是数据层自己的事（collect_track_ids 走
     // list_tracks，自动同源）。
     let smart_plan = match &q.source {
@@ -520,7 +520,7 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
     };
     let smart = smart_plan.as_ref();
 
-    // ---------- 筛选器临时条件（与智能歌单同键，不落库）----------
+    // ---------- 筛选器临时条件（与动态歌单同键，不落库）----------
     let cond_clauses = crate::smart::conds_from_value(
         q.conds.as_ref().unwrap_or(&serde_json::Value::Null),
     )?;
@@ -806,7 +806,7 @@ mod tests {
         assert_eq!(page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t3"]);
     }
 
-    /// 筛选器临时条件（conds）：与智能歌单同键编译成 WHERE，不落库。
+    /// 筛选器临时条件（conds）：与动态歌单同键编译成 WHERE，不落库。
     #[test]
     fn filter_conds_narrow_results() {
         let conn = open_in_memory().unwrap();

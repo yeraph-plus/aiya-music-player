@@ -3,7 +3,7 @@
  * - 入库时间：**日期区间**（YYYY-MM-DD，本地时区；五轮拍板——固定预设档
  *   换成区间输入，"7 天内"这类滚动窗口用户自己选日期表达不了）。上界含
  *   当天（查询时换算成次日 0 点的**开区间**，与后端 addedToMs 语义对齐）。
- * - 字段条件 `conds`：与智能歌单**同一批键**（genre/artist/album/year/
+ * - 字段条件 `conds`：与动态歌单**同一批键**（genre/artist/album/year/
  *   playCount × eq/contains/gte/lte），但只在本次查询生效、**不落库**——
  *   歌单的规则是持久语义，筛选器是临时意图，共用解析、分道保存。
  *   （筛选 UI 只暴露 genre/artist/album/year；playCount 是歌单规则用键，
@@ -17,7 +17,7 @@
 
 import type { SmartField, SmartOp } from './smart';
 
-/** 筛选器临时条件（与智能歌单同键；value 文本字段 string、数字字段 number） */
+/** 筛选器临时条件（与动态歌单同键；value 文本字段 string、数字字段 number） */
 export interface FilterCond {
   field: SmartField;
   op: SmartOp;
@@ -61,7 +61,7 @@ export function localDayMs(s: string): number | null {
 
 /**
  * 筛选器 → 查询入参片段。日期只在两端都合法时才产生时间字段；
- * conds 原样透传（后端用与智能歌单同一套解析，未知键明确报错）。
+ * conds 原样透传（后端用与动态歌单同一套解析，未知键明确报错）。
  */
 export function timeFilterToQuery(
   f: TrackTimeFilter,

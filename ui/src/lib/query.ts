@@ -49,7 +49,7 @@ const baseQuery = z.object({
   /** 时间筛选（筛选器模态框，lib/time-filter.ts 换算）：毫秒，to 为开区间 */
   addedFromMs: z.number().int().nonnegative().optional(),
   addedToMs: z.number().int().nonnegative().optional(),
-  /** 筛选器临时条件（与智能歌单同键，不落库）；旧 lastPlayed* 档已移除 */
+  /** 筛选器临时条件（与动态歌单同键，不落库）；旧 lastPlayed* 档已移除 */
   conds: z
     .array(
       z.object({

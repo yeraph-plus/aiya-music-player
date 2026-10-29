@@ -1,4 +1,4 @@
-//! 智能歌单：rule_json → SQL 计划（docs/40 §1 方案 A 拍板版）。
+//! 动态歌单：rule_json → SQL 计划（docs/40 §1 方案 A 拍板版）。
 //!
 //! 规则**存播放器、查播放器**：`playlists.rule_json` 是唯一真源，打开歌单时
 //! 对本地 SQLite 实时查询——与推荐页"最近添加/常听榜"同款动态查询先例。
@@ -93,7 +93,7 @@ pub struct Cond {
     pub value: CondValue,
 }
 
-/// 排序键（与曲库列表同一批语义；playlist 来源的手动顺序对智能歌单无意义）。
+/// 排序键（与曲库列表同一批语义；playlist 来源的手动顺序对动态歌单无意义）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortKey {
     Title,
@@ -114,7 +114,7 @@ impl SortKey {
     }
 
     fn expr(self, desc: bool) -> &'static str {
-        // 方向拼进键里而不是让 repo 拼：智能歌单的 ORDER BY 是动态字符串，
+        // 方向拼进键里而不是让 repo 拼：动态歌单的 ORDER BY 是动态字符串，
         // repo 那套 &'static 固定顺序塞不进来
         match self {
             SortKey::Title => {
@@ -264,7 +264,7 @@ const JOIN_SMART: &str = "LEFT JOIN artists ar ON ar.id = t.artist_id \
      LEFT JOIN albums al ON al.id = t.album_id";
 
 /// 解析条件数组（`[{field,op,value}, ...]`）为 repo 可绑定的子句序列。
-/// 智能歌单的 `all` 与**列表筛选器的 conds**（2026-10-28：同一批字段键，
+/// 动态歌单的 `all` 与**列表筛选器的 conds**（2026-10-28：同一批字段键，
 /// 但筛选器不落库）共用这一套解析与类型校验。
 fn parse_conds(arr: &[Value]) -> DbResult<Vec<(String, Value)>> {
     let mut clauses = Vec::new();
@@ -306,7 +306,7 @@ fn parse_conds(arr: &[Value]) -> DbResult<Vec<(String, Value)>> {
 
 /// 列表筛选器的临时条件 → WHERE 子句（不入 rule_json、不落库）。
 /// 入参是 `[{field,op,value}, ...]` 数组 JSON；未知 field/op 与类型错配
-/// **明确报错**（与智能歌单同一原则：UI 的 bug 不该静默变成全量列表）。
+/// **明确报错**（与动态歌单同一原则：UI 的 bug 不该静默变成全量列表）。
 pub fn conds_from_value(v: &Value) -> DbResult<Vec<(String, Value)>> {
     match v {
         Value::Null => Ok(Vec::new()),
@@ -386,7 +386,7 @@ pub fn load_plan(conn: &Connection, playlist_id: &str) -> DbResult<SmartPlan> {
         )
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => {
-                DbError::Custom(format!("智能歌单不存在: {playlist_id}"))
+                DbError::Custom(format!("动态歌单不存在: {playlist_id}"))
             }
             other => DbError::Sql(other),
         })?;
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn filter_conds_compile_and_reject() {
-        // 筛选器临时条件（与智能歌单同键、不落库）走同一套解析
+        // 筛选器临时条件（与动态歌单同键、不落库）走同一套解析
         let clauses = conds_from_value(&json!([
             { "field": "genre", "op": "contains", "value": "rock" },
             { "field": "year", "op": "gte", "value": 2000 }

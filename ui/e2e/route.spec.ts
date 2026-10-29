@@ -381,7 +381,7 @@ test('docs/40：插件市场（展开懒加载 → 白名单三态 → 安装事
   await expect(fetchart.getByRole('button', { name: '安装' })).toHaveCount(0);
 });
 
-test('docs/40 二轮：动态歌单模态框（Switch → 条件模式行 → 创建智能歌单）', async ({ page }) => {
+test('docs/40 二轮：动态歌单模态框（Switch → 条件模式行 → 创建动态歌单）', async ({ page }) => {
   await page.goto('/');
 
   // 侧栏「歌单」标题旁的新建入口 → 统一模态框（无描述行，类型是开关）
@@ -409,13 +409,13 @@ test('docs/40 二轮：动态歌单模态框（Switch → 条件模式行 → �
   await dialog.locator('input[type="number"]').fill('10');
   await expect(dialog.locator('.rule-meta [role="combobox"]')).toHaveCount(0);
 
-  // 创建 → 侧栏出现带「智」徽标的歌单
+  // 创建 → 侧栏出现带 activity 图标徽标的歌单（2026-10-30：智字换图标）
   await dialog.locator('.prompt-body input[type="text"]').first().fill('我的流行电台');
   await dialog.getByRole('button', { name: '创建' }).click();
   await expect(dialog).toHaveCount(0);
   const item = page.locator('.sidebar .playlist-item', { hasText: '我的流行电台' });
   await expect(item).toHaveCount(1);
-  await expect(item.locator('.pl-badge')).toHaveText('智');
+  await expect(item.locator('.pl-badge svg')).toBeVisible();
 });
 
 test('docs/28：专辑宫格（侧栏一级项）→ 卡片 → 专辑详情 → 返回回宫格', async ({ page }) => {

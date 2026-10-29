@@ -11,7 +11,7 @@
 //!
 //! 边界：自有无、beets 有的路径 → 新导入；自有无、beets 也无 → 扫描器的地盘；
 //! beets_item_id 指向的 item 已从 beets 库消失 → 只计数（orphaned），不删行。
-//! genre 随 0003 迁移入库（智能歌单的标签数据源，docs/40 §1）：协议 DumpItem
+//! genre 随 0003 迁移入库（动态歌单的标签数据源，docs/40 §1）：协议 DumpItem
 //! 本来就带 genre，这里只补迁移；beets 侧变 None 不清已有值（全文件惯例）。
 
 use std::collections::{HashMap, HashSet};

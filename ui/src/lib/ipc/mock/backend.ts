@@ -924,7 +924,7 @@ export class MockBackend {
       description: null,
       kind: isSmart ? 'smart' : 'manual',
       ruleJson: isSmart ? JSON.stringify(rule) : null,
-      // 智能歌单的 trackCount 是规则的投影；mock 没有规则查询引擎，给 0（空态可看）
+      // 动态歌单的 trackCount 是规则的投影；mock 没有规则查询引擎，给 0（空态可看）
       trackCount: isSmart ? 0 : (trackIds?.length ?? 0),
       durationMs: 0,
       artworkId: null,
@@ -1429,7 +1429,7 @@ export class MockBackend {
       // from 含、to 开区间，毫秒比较
       if (q.addedFromMs !== undefined && t.addedAtMs < q.addedFromMs) return false;
       if (q.addedToMs !== undefined && t.addedAtMs >= q.addedToMs) return false;
-      // 筛选器临时条件（与智能歌单同键，语义对齐 smart.rs build_clause）：
+      // 筛选器临时条件（与动态歌单同键，语义对齐 smart.rs build_clause）：
       // 文本走 norm 后 =/LIKE，数字直接比较；artist/album 用子串
       for (const c of q.conds ?? []) {
         const norm = (s: string) => s.trim().toLowerCase();

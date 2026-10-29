@@ -1,5 +1,5 @@
 /**
- * 智能歌单规则的前端形状（与 Rust `aiya-data/src/smart.rs` 一一对应）。
+ * 动态歌单规则的前端形状（与 Rust `aiya-data/src/smart.rs` 一一对应）。
  *
  * **真源在 Rust**：解析与校验以 smart.rs 为准（未知 field/op 直接报错，
  * 不静默忽略）。这里只做 UI 编辑期的即时校验（让用户在保存前就看到

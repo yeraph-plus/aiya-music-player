@@ -1,5 +1,15 @@
 <script lang="ts">
-  import { DatabaseZap, Disc, House, Library, Mic2, Plus, Radio, Settings } from '@lucide/svelte';
+  import {
+    Activity,
+    DatabaseZap,
+    Disc,
+    House,
+    Library,
+    Mic2,
+    Plus,
+    Radio,
+    Settings,
+  } from '@lucide/svelte';
   import { artworkUrl } from '../../lib/artwork';
   import { nav } from '../../stores/nav.svelte';
   import { overlay } from '../../stores/overlay.svelte';
@@ -140,7 +150,9 @@
           />
           <span class="pl-name">{playlist.name}</span>
           {#if playlist.kind === 'smart'}
-            <span class="pl-badge" title="智能歌单：曲目随规则动态生成">智</span>
+            <span class="pl-badge" title="动态歌单：曲目随规则动态生成">
+              <Activity size={10} strokeWidth={2.4} aria-hidden="true" />
+            </span>
           {/if}
           <span class="pl-count">{playlist.trackCount}</span>
         </button>
@@ -276,12 +288,13 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* 智能歌单徽标：一个字，够小不抢名称的视觉权重 */
+  /* 动态歌单徽标：activity 图标（心电波形=随规则动的曲目），主题色描边。
+     不抢名称的视觉权重——与字高同量级 */
   .pl-badge {
     flex: none;
-    font-size: 9.5px;
-    line-height: 1;
-    padding: 2px 3px;
+    display: inline-flex;
+    align-items: center;
+    padding: 2.5px 3px;
     border-radius: 3px;
     border: 1px solid var(--accent);
     color: var(--accent);

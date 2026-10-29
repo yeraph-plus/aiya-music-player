@@ -52,7 +52,7 @@ pub fn clear(conn: &mut Connection) -> DbResult<bool> {
 ///
 /// 语义约定（2026-10-28 拍板）：history 表 = "保留周期内的播放记录"。
 /// **只删 history 行，不动 tracks 的统计列**——`play_count` 是累计
-/// 总次数（智能歌单的 playCount 条件用它，语义是"听过多少次"而非
+/// 总次数（动态歌单的 playCount 条件用它，语义是"听过多少次"而非
 /// "周期内听过几次"），`last_played_at` 是"最后一次"，两者都没有
 /// 膨胀问题。周期内的"最近播放" tab 与常听榜靠聚合 history 行自然
 /// 遵循周期（裁剪在启动/每次写历史/设置变更时执行，表内容≈周期内）。

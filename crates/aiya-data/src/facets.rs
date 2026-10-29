@@ -188,7 +188,7 @@ pub fn list_artists(conn: &Connection, search: Option<&str>) -> DbResult<ArtistP
     Ok(ArtistPage { items: out, total })
 }
 
-/// 曲库现有流派列表（按 norm 序去重），智能歌单"流派"条件的下拉数据源。
+/// 曲库现有流派列表（按 norm 序去重），动态歌单"流派"条件的下拉数据源。
 ///
 /// 按 `genre_norm` 分组、显示组内字典序最小的原文——同一个流派可能有
 /// "Pop"/"pop" 两种写法，显示哪个都要稳定（MIN 保证确定，不随扫描顺序漂）。

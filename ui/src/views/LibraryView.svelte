@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ArrowDown, ArrowUp } from '@lucide/svelte';
   import Icon from '../components/Icon.svelte';
   import Header from '../components/content/Header.svelte';
   import Button from '../components/ui/Button.svelte';
@@ -94,7 +95,7 @@
   /**
    * 排序控件开关（2026-10-28 拍板扩展）：曲库页非 all tab 的顺序是语义；
    * 手动歌单的顺序也是语义（拖拽排序 + pi.position），不吃列头；
-   * 智能歌单没有手动顺序（它是一条查询），排序交给列头——规则编辑器
+   * 动态歌单没有手动顺序（它是一条查询），排序交给列头——规则编辑器
    * 已不再暴露排序键。
    */
   const canSort = $derived(
@@ -176,10 +177,21 @@
               class:on={ui.libraryTab === tab.key}
               role="tab"
               aria-selected={ui.libraryTab === tab.key}
-              title={tab.key === 'all' ? '再点一次重新加载' : '再点一次切换最新/最旧（最近→最早）顺序'}
+              title={tab.key === 'all'
+                ? '再点一次重新加载'
+                : `再点一次切换最新/最旧顺序（当前：${ui.direction === 'desc' ? '倒序' : '正序'}）`}
               onclick={() => list.openLibraryTab(tab.key)}
             >
               {tab.label}
+              <!-- 方向箭头只画在活跃 tab 上：ui.direction 是全局共享状态，
+                   非活跃 tab 的箭头会说谎（2026-10-30） -->
+              {#if ui.libraryTab === tab.key && tab.key !== 'all'}
+                {#if ui.direction === 'desc'}
+                  <ArrowDown size={11} strokeWidth={2.4} aria-hidden="true" />
+                {:else}
+                  <ArrowUp size={11} strokeWidth={2.4} aria-hidden="true" />
+                {/if}
+              {/if}
             </button>
           {/each}
         </div>
@@ -373,6 +385,9 @@
   }
 
   .lib-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
     padding: 2px 0;
     border: none;
     background: none;

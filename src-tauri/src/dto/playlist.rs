@@ -18,7 +18,7 @@ pub struct PlaylistSummary {
     pub description: Option<String>,
     /// manual / smart（0003 迁移；0003 之前的行默认 manual）
     pub kind: String,
-    /// 智能歌单规则 JSON 原文（手动歌单恒 null；UI 用 JSON.parse 解析——
+    /// 动态歌单规则 JSON 原文（手动歌单恒 null；UI 用 JSON.parse 解析——
     /// 存字符串而不是对象，是为了 DTO 形状稳定：规则内部结构归 smart.rs 管）
     #[ts(type = "string | null")]
     pub rule_json: Option<String>,
