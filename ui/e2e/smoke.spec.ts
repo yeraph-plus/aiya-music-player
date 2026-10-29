@@ -137,9 +137,20 @@ test('曲库 tab：最近添加/最近播放切换（2026-10-28 自推荐页迁�
   await expect(page.locator('.lib-tab.on')).toHaveText('最近添加');
   await firstRow(page).waitFor({ state: 'visible' });
 
-  // 切「最近播放」再回「全部曲目」：恢复原 tab 语义
+  // 同 tab 二次点击 = 翻转正倒序（2026-10-30）：首行必须变化
+  const addedDescFirst = await firstRow(page).textContent();
+  await tabs.filter({ hasText: '最近添加' }).click();
+  await expect(firstRow(page)).not.toHaveText(addedDescFirst ?? '', { timeout: 5_000 });
+
+  // 切「最近播放」：同样支持二次点击翻转（mock 种子 35% 已播，顺序可翻）
   await tabs.filter({ hasText: '最近播放' }).click();
   await expect(page.locator('.main h1')).toHaveText('最近播放');
+  await firstRow(page).waitFor({ state: 'visible' });
+  const recentDescFirst = await firstRow(page).textContent();
+  await tabs.filter({ hasText: '最近播放' }).click();
+  await expect(firstRow(page)).not.toHaveText(recentDescFirst ?? '', { timeout: 5_000 });
+
+  // 回「全部曲目」：恢复原 tab 语义
   await tabs.filter({ hasText: '全部曲目' }).click();
   await expect(page.locator('.main h1')).toHaveText('全部曲目');
   await firstRow(page).waitFor({ state: 'visible' });

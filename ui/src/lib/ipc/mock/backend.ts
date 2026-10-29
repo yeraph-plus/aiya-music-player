@@ -1472,9 +1472,15 @@ export class MockBackend {
 
     const source = q.source;
     if (source.kind === 'recent') {
+      // 方向跟随查询（曲库 tab 二次点击翻转，与 repo.rs join_and_order 同口径）；
+      // id 恒升序保稳定
+      const d = q.direction === 'desc' ? -1 : 1;
       return [...rows]
         .filter((t) => t.lastPlayedAtMs !== null)
-        .sort((a, b) => (b.lastPlayedAtMs ?? 0) - (a.lastPlayedAtMs ?? 0) || a.id.localeCompare(b.id));
+        .sort(
+          (a, b) =>
+            d * ((a.lastPlayedAtMs ?? 0) - (b.lastPlayedAtMs ?? 0)) || a.id.localeCompare(b.id),
+        );
     }
     if (source.kind === 'mostPlayed') {
       // 与 Rust repo.rs join_and_order 逐字对齐：次数 desc → 最近播放 desc → id。

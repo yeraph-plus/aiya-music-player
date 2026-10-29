@@ -289,17 +289,24 @@ class ListStore {
   }
 
   /**
-   * 曲库页 tab 切换（2026-10-28）。**同一个 tab 再点一次 = 重新拉**，
-   * 与 openLibrary 的"再点刷新"语义一致。
+   * 曲库页 tab 切换（2026-10-28）。**同一个 tab 再点一次**：
+   * added/recent = 翻转该 tab 的正倒序（与列头"点同字段反向"同语义，
+   * 2026-10-30）；all 维持"再点一次 = 重新拉"。
    *
    * 排序的进出账：进「最近添加」时把当前排序存起来、换成 added desc
-   * （该 tab 的语义顺序）；回「全部曲目」时原样还——用户在全部曲目里
-   * 自定义的排序不该被 tab 逛一圈偷改掉。「最近播放」不动排序
-   * （后端按 source 固定倒序，sort 字段不参与）。
+   * （该 tab 的语义顺序）；进「最近播放」存排序、换 recent 语义的 desc
+   * （方向仍可二次点击翻转，sort 字段后端忽略）；回「全部曲目」时原样
+   * 还——用户在全部曲目里自定义的排序不该被 tab 逛一圈偷改掉。
+   * tab 自身不记忆方向：每次进入都从语义默认（倒序）开始。
    */
   openLibraryTab(tab: 'all' | 'recent' | 'added'): void {
     clearTimeout(this.searchTimer);
     if (ui.libraryTab === tab) {
+      if (tab === 'added' || tab === 'recent') {
+        ui.direction = ui.direction === 'asc' ? 'desc' : 'asc';
+        void this.reload();
+        return;
+      }
       void this.reload();
       return;
     }
@@ -307,6 +314,8 @@ class ListStore {
     ui.libraryTab = tab;
     if (tab === 'added') {
       ui.sort = 'added';
+      ui.direction = 'desc';
+    } else if (tab === 'recent') {
       ui.direction = 'desc';
     } else if (tab === 'all' && this.savedSort) {
       ui.sort = this.savedSort.sort;

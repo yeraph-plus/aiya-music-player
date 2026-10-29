@@ -222,16 +222,25 @@ const JOIN_AGG: &str = "FROM (SELECT track_id, COUNT(*) AS played_count, MAX(pla
      LEFT JOIN albums al ON al.id = t.album_id \
      LEFT JOIN artists al_ar ON al_ar.id = al.artist_id";
 
-/// JOIN 与固定排序（playlist/recent/mostPlayed 不吃用户 sort）。
-/// mostPlayed 的次键是最近播放时间（docs/28）：次数并列时"最近还在听"
-/// 排前面——推荐页 top-15 的第 15 名争夺战里，半年没听的那首先出去。
+/// JOIN 与排序（playlist/recent/mostPlayed 不吃用户 sort 字段）。
+/// 例外：recent 吃 `direction`——曲库页「最近播放」tab 二次点击翻转正倒序
+/// （2026-10-30），sort 字段仍忽略；mostPlayed 的次键是最近播放时间
+/// （docs/28）：次数并列时"最近还在听"排前面——推荐页 top-15 的第 15 名
+/// 争夺战里，半年没听的那首先出去。
 fn join_and_order(q: &TrackWindowQuery) -> (&'static str, &'static str) {
     match &q.source {
         TrackSource::Library => (JOIN, ""),
         TrackSource::Playlist { .. } => (JOIN_PLAYLIST, " ORDER BY pi.position ASC"),
         // 智能歌单：JOIN 与曲库同源（ar/al 别名给排序用）；ORDER BY 由计划动态给
         TrackSource::SmartPlaylist { .. } => (JOIN, ""),
-        TrackSource::Recent => (JOIN_AGG, " ORDER BY hs.recent_t0 DESC, t.id DESC"),
+        TrackSource::Recent => (
+            JOIN_AGG,
+            if q.direction == Direction::Desc {
+                " ORDER BY hs.recent_t0 DESC, t.id DESC"
+            } else {
+                " ORDER BY hs.recent_t0 ASC, t.id ASC"
+            },
+        ),
         TrackSource::MostPlayed => (
             JOIN_AGG,
             " ORDER BY hs.played_count DESC, hs.recent_t0 DESC, t.id ASC",
@@ -894,6 +903,9 @@ mod tests {
         let conn = open_in_memory().unwrap();
         insert_fixtures(&conn);
         let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
+        // recent 吃 direction（2026-10-30）：本测试的意图是"默认语义顺序"，
+        // 显式给 Desc——q_library 缺省 Asc，不显式给会翻成最早优先
+        q.direction = Direction::Desc;
 
         q.source = TrackSource::Recent;
         let page = list_tracks(&conn, &q).unwrap();
@@ -921,6 +933,32 @@ mod tests {
             page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
             vec!["t1", "t4", "t2"],
             "tie on play_count resolves by last-played recency"
+        );
+    }
+
+    /// 曲库页「最近播放」tab 二次点击翻转正倒序（2026-10-30）：
+    /// recent 来源的 ORDER BY 跟随 direction，t.id 作稳定次键。
+    #[test]
+    fn recent_direction_flips_order() {
+        let conn = open_in_memory().unwrap();
+        insert_fixtures(&conn);
+        let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
+        q.source = TrackSource::Recent;
+
+        q.direction = Direction::Desc;
+        let page = list_tracks(&conn, &q).unwrap();
+        assert_eq!(
+            page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec!["t2", "t1"],
+            "倒序（语义默认）：最近播的在前"
+        );
+
+        q.direction = Direction::Asc;
+        let page = list_tracks(&conn, &q).unwrap();
+        assert_eq!(
+            page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec!["t1", "t2"],
+            "升序：最早播的在前（sort 字段仍被忽略，只翻方向）"
         );
     }
 

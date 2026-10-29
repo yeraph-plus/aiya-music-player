@@ -82,7 +82,8 @@
   /**
    * 曲库页 tab 索引（2026-10-28：最近播放/最近添加从推荐页迁来，成为
    * 「全部曲目」旁的小标题 tab）。排序控件只在「全部曲目」给——
-   * 另两个 tab 的顺序是语义（后端固定倒序），sort 表头没有意义。
+   * 另两个 tab 的顺序是语义（默认倒序），再点一次整 tab 翻转正倒序
+   * （2026-10-30，list.openLibraryTab），sort 表头仍然没有意义。
    */
   const LIB_TABS = [
     { key: 'all', label: '全部曲目' },
@@ -175,6 +176,7 @@
               class:on={ui.libraryTab === tab.key}
               role="tab"
               aria-selected={ui.libraryTab === tab.key}
+              title={tab.key === 'all' ? '再点一次重新加载' : '再点一次切换最新/最旧（最近→最早）顺序'}
               onclick={() => list.openLibraryTab(tab.key)}
             >
               {tab.label}
@@ -317,6 +319,15 @@
         <EmptyState title="这个播放列表还是空的" hint="在曲库里选中歌曲，右键或批量操作加入这里">
           {#snippet action()}
             <Button onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>去曲库看看</Button>
+          {/snippet}
+        </EmptyState>
+      {:else if view.kind === 'library' && ui.libraryTab === 'recent' && (library.stats?.tracks ?? 0) > 0}
+        <!-- 「最近播放」空 ≠ 空库：库里有歌只是还没播过，"添加曲库"文案
+             会把用户引去重扫（2026-10-30 分模式差分）。库真空的时候仍走
+             下面的"曲库还是空的"——那才是该给的动作 -->
+        <EmptyState title="还没有播放记录" hint="双击任意曲目开始播放，听过的会出现在这里">
+          {#snippet action()}
+            <Button onclick={() => list.openLibraryTab('all')}>先看全部曲目</Button>
           {/snippet}
         </EmptyState>
       {:else}
