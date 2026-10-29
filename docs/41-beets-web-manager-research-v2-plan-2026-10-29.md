@@ -298,6 +298,122 @@ AcoustID/指纹层**预留不实现**（依赖 chroma 插件启用情况，宁�
 
 ---
 
-## 10. 落地记录（实施后追加）
+## 10. 落地记录
 
-（占位——按惯例记录实测数据：契约测试用例数变化、smoke 续跑场景的 mtime 对比、双实例锁拒行为、schemaHash 不匹配的 UI 表现。）
+### 10.0 实施前评审（2026-10-29，第一轮 bug 修补之后）
+
+用户在两批之间做了一轮 beets 兼容 bug 修补（会话槽世代号防迟到清理、取消 15s 强杀兜底、
+单行 10MB 上限、一次性查询纳入会话互斥、对账 back_key 修复、genre 迁移等，全部未提交）。
+逐行读最新代码后评审结论：**基于现状迭代，不重构 beets-tool**。判据：
+
+1. 修补的每一刀都落在局部，没有一处穿越层界——bug 全是实现层的，没有一个是架构层的；
+2. 代码浸着昂贵实测教训（cp936 编码、beets stdout 噪声、`~/Music` 默认值陷阱、uv venv
+   无 pip……每条都有"为什么"注释），重写等于重新交一遍学费；
+3. ~2000 行 Python + 双侧契约测试资产，测试是真正的护城河；
+4. 本方案的五个缺口全部是加法（新模块），不需要先推翻什么。
+
+可证伪的重写边界：beets 3.0 大版本破坏 autotag API / 单曲级决策成为需求（协议 v3 级重设计）/
+sidecar 出现常驻形态。三者之外一律迭代。
+
+**对本文的修正**（读码发现）：① 那轮修补把 `query_status`/`query_plugin_catalog` 纳入了
+会话互斥——§6.6 的 schemaHash 比对**不能**设计成"每次变更命令前现查 status"（会撞 Busy），
+实施改为宿主在 status 探测路径算 `schemaMatched`，UI 据此禁用整理段；② 积弊清单三项
+（dump 无取消、market 取消杀不掉 pip、候选 id pattern 999 上限）随本批顺手清掉。
+
+### 10.1 实施记录（2026-10-29，按 §6.9 批次）
+
+**批 1 协议 v2**：`v1.schema.json` → `v2.schema.json`（git mv），全部 §6.2 变更落地；
+`PROTOCOL_VERSION=2`、`ERROR_CODES` 11 个、toolVersion 0.2.0；镜像
+`protocol/aiya-beets-v2.json` + meta（sha256 `a9f9490e…`，tag `beets-v0.2.0` 指向待发版本）。
+`Candidate`/`AlbumPreview` 的 id pattern 放宽到 `[0-9]+`；`Stage` 枚举加 `sync`
+（dump 的 cancelled 事件需要阶段值）。
+
+**批 2 sidecar**：新增 `ops.py`（ops.jsonl 登记簿：重放只认 done，payloadHash =
+去 id/cmd/requestId/clientProtocol 的规范 JSON）、`lockfile.py`（命令级独占锁，
+`LOCKED_CMDS = apply/adopt/update/move/dump`，POSIX flock / Windows msvcrt）、
+`checkpoints.py`（decision 级断点，键 = sorted(paths)+candidate 的 sha256，零失败才记账）、
+`evidence.py`（四层判定，版本保持归一化，fromScratch 短路 similarity，整层计算
+try/except 降级不连累 preview）。server 次序：**重放 → 锁 → 登记 running**；重放改写
+session 字段；错误路径 `_op_fail()` 落 failed。apply 的 blankIdentity 门看**合并后**
+标签（文件原 tag 可以补候选的缺）。adopt 不设门（原样入库按设计吃无标签文件）。
+
+**批 3 Rust**：`new_request_id()`（`{cmd}-{毫秒}-{进程内序号}`）；`start_apply` 加
+`resume` 参数透传到 `beets_apply` Tauri 命令（Option<bool>）；`status_from` 算
+`schema_matched`（`include_str!` 嵌入 meta.json 的 sha256，严格比对：没报 = 不匹配）；
+`E_LIBRARY_BUSY` 的 holder 同时进 message（Display 原样带 UI）与 extras（机器可读）。
+**顺带修掉一个既有 bug**：`EnvelopeError` 误挂 `rename_all = "camelCase"`，而线上
+字段是 snake 的 `beets_message`——ok:false 信封永远解析失败（正常 status 走 ok:true
+所以从未暴露，v2 拒旧组件的路径一跑就现形）。改回按线上原名字段并修正 wire 锚点测试。
+
+**批 4 UI**：候选卡证据徽标（四档，similarity 弱化显示）+ reasons 行；失败态「续跑」
+按钮（`resumeLast()` 重发 lastDecisions + resume:true）；汇总行显示续跑跳过数；
+`BeetsSection` 库占用徽标（held 时显示 holder）+ schema 不匹配警告条（不匹配时
+整理段整体收起）；mock 的 status 桩补 v2 字段。
+
+**批 5 测试与门禁（实测数据）**：
+
+| 门禁 | 结果 |
+|---|---|
+| `smoke:proto`（契约） | ALL PASS：59 条消息 + 取消场景 + **新增场景 2.5**（重放 added=3 ≠ 重执行 0、键冲突 E_INVALID_ARG、blankIdentity 拒写 3/3、searchIds 拒绝）；Event 校验 97 行、Response 9 行 |
+| `smoke:beets`（apply 冒烟） | ALL PASS：7 场景；**新增 [6] 断点续跑**（move 中断重跑：不带 resume 失败 3/3，resume 后 resumedSkipped=1 且 6 首全在库）、**[7] 续跑不重写**（mtime 逐字节不变） |
+| `smoke:maint` | ALL PASS（15 断言，未受影响） |
+| `smoke:lock`（新增） | ALL PASS：跨进程互斥 + holder 可读（`pid=…,cmd=…`）、持有者被杀后锁立即释放（5s 内轮询到 free）、本进程接管后 probe=held、同进程续持幂等 |
+| `cargo test --workspace` | 415 通过 / 0 失败（含镜像契约 5 条、dto wire 20 条） |
+| clippy `-D warnings` | 通过 |
+| `gen:types:check` / `proto:check` / `check:boundary` / `check:deps` / `check:ui-layers` | 全部通过 |
+| `svelte-check` | 0 errors / 0 warnings |
+| `build:ui` | 通过（4.8s） |
+
+**实施中发现并修正的两个环境事实**（后续测试都会再踩）：
+
+1. **Windows 的 msvcrt 字节锁会波及同文件其他字节的读**——锁 [4096,4097) 时用 Python
+   `open()` 读头部会直接 `PermissionError`（越界加锁把文件语义整个拽歪）。解法：
+   锁与持有者信息**分成两个文件**（`library.lock` 纯锁对象 + `library.lock.holder`
+   纯元数据），探针永远不读锁字节。
+2. **uv 建的 venv，`python.exe` 是 trampoline**——`Popen.pid` 不是真解释器的 pid，
+   `kill` 只杀跳板留下真身继续持锁。测试断言要用持有者**自报**的 pid，清理要用
+   `taskkill /F /T` 树杀。播放器真机路径不受影响（sidecar 由宿主直接管理生命周期）。
+
+### 10.2 遗留（更新 §8）
+
+- `beets-v0.2.0` tag：bundle 自检已报 0.2.0，meta.json 指向它；**发布前安装轨道 B 的
+  下载校验会 404**——发版时切 tag 即闭合。
+- P1-3（双轨道干净机器安装验证）仍欠，与本批无关。
+- evidence 的指纹层（AcoustID/chroma）按 §6.5 预留未实现：等 chroma 插件启用后有
+  可靠的指纹一致性事实再补层，宁缺勿滥。
+- ops.jsonl 的 UI 展示留给 P1-5 任务注册表。
+
+### 10.3 独立审查记录（2026-10-30）
+
+对本批（v2 + 四模块 + 宿主/UI）的独立审查。**修复 3 处（均为本批引入）**：
+
+1. **P1·UI 死胡同**：`schemaMatched=false` 时警告条写"请重装"，但安装按钮只在
+   "未启用"分支渲染——用户看得见提示、找不着入口。修复：安装动作抽成 snippet，
+   契约不一致分支同样渲染。
+2. **P1·canResume 误报**：`cancelled` 事件不区分阶段，预览阶段取消会把**上一批**
+   已完成的 decisions 误报成"可续跑"（checkpoint 会全跳过，白转一圈还重跑刷新）。
+   修复：按 `stage === 'writing'` 门控；`reset()` 一并清 lastDecisions。
+3. **P3·锁 fail-open 时 status 谎报**：锁文件建不了（如数据目录只读）时 acquire
+   静默放行、probe 却报 "free"。修复：记 `_unavailable`，probe 如实报 "unknown"。
+
+**核实无问题的关键交互**（逐条对着代码走查）：collect_items 对 `cancelled`/缺失
+dumpDone 一律报错丢弃（不会拿半份 dump 对账）；安装 finished.status 走
+`readBeetsStatus` 收口；重放路径不碰库不加锁、
+session 改写、终态唯一；Recorder 线程安全（cancelAck 无副作用）；checkpoint 键
+稳定性成立（UI 回传候选先于首次键计算，续跑重发同一对象）；searchIds 校验先于
+任何事件；requestId 冲突在拿锁之前抛出（不留 running 残留）。
+
+**审查顺带发现的既有问题（非本批引入，已被本批修复）**：`collect_items` 起 dump
+不经会话槽——v2 之前用户 apply 可与后台 dump **并发写同一 sqlite 库**（真实竞态，
+静默发生）；现在被库锁关闭，apply 得到带 holder 的 `E_LIBRARY_BUSY` 明确拒绝。
+
+**接受的权衡（记录不修）**：① schema 哈希严格比对的操作性后果——纯增量 schema
+改动（不升版本号）也会让"新工具 + 旧播放器"停用整理段，即任何 schema 字节改动
+都要求双侧同步发版；这是 P1-4 的本意（严格不猜），若实际频繁咬人，软化方案是
+"protocolVersion 相同时降级为警告"。② pretend update 也拿独占锁并进审计（略过严，
+安全方向）。③ dump 期间 apply 被拒（此前是静默竞态，报错文案带 holder，可接受）。
+④ 排队期间被取消的请求会先拿锁再在首个检查点取消，ops.jsonl 留少量噪声条目
+（有修剪，无害）。
+
+审查后修复的回归验证：`svelte-check` 0/0、`smoke_lock`/`smoke:proto` ALL PASS、
+`build:ui` 通过。
