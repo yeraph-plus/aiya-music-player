@@ -91,19 +91,10 @@ pub struct ArtistFacet {
     pub total_duration_ms: i64,
 }
 
-/// LIKE 通配符按字面转义（与 repo::build_where 同一套规则；独立成小函数
-/// 是因为两边的 WHERE 构造完全不同，为此抽公共模块得不偿失）。
+/// LIKE 通配符按字面转义（与 repo::build_where / smart 同一套 `escape_like`；
+/// 这里补 norm：浏览页搜索与实体 norm 列对齐大小写/空白语义）。
 fn escape_like(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in norm(s).chars() {
-        match c {
-            '%' => out.push_str("\\%"),
-            '_' => out.push_str("\\_"),
-            '\\' => out.push_str("\\\\"),
-            _ => out.push(c),
-        }
-    }
-    out
+    crate::norm::escape_like(&norm(s))
 }
 
 fn like_pattern(search: Option<&str>) -> Option<String> {
@@ -195,6 +186,33 @@ pub fn list_artists(conn: &Connection, search: Option<&str>) -> DbResult<ArtistP
     let total = out.len() as i64;
     out.truncate(FACET_LIMIT);
     Ok(ArtistPage { items: out, total })
+}
+
+/// 曲库现有流派列表（按 norm 序去重），智能歌单"流派"条件的下拉数据源。
+///
+/// 按 `genre_norm` 分组、显示组内字典序最小的原文——同一个流派可能有
+/// "Pop"/"pop" 两种写法，显示哪个都要稳定（MIN 保证确定，不随扫描顺序漂）。
+/// 空 genre 不出现（没有"无流派"标签可筛，那是空条件的事）。
+/// 与 facets 其它查询同样的量级假设：流派数远小于专辑数，一条 GROUP BY
+/// 足够，不做分页。
+pub fn distinct_genres(conn: &Connection) -> DbResult<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT MIN(genre) \
+         FROM tracks \
+         WHERE genre IS NOT NULL AND genre != '' \
+         GROUP BY genre_norm \
+         ORDER BY genre_norm ASC",
+    )?;
+    let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        // MIN 忽略 NULL，但 WHERE 已排除 NULL——这里 Option 只是防御
+        if let Some(genre) = row? {
+            out.push(genre);
+        }
+    }
+    out.truncate(FACET_LIMIT);
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -308,5 +326,28 @@ mod tests {
         assert_eq!(list_albums(&conn, Some("   ")).unwrap().items.len(), 2);
         assert_eq!(list_artists(&conn, Some("")).unwrap().items.len(), 2);
         assert_eq!(list_albums(&conn, None).unwrap().items.len(), 2);
+    }
+
+    #[test]
+    fn distinct_genres_dedups_by_norm_and_skips_empty() {
+        let conn = open_in_memory().unwrap();
+        fixtures(&conn);
+        // 三个流派值：Pop/pop 同 norm 归一组；空串与 NULL 不出现。
+        // genre_norm 是普通列（不是生成列），UPDATE 必须两个一起写——
+        // beets_sync 写入时也是成对填的。
+        conn.execute(
+            "UPDATE tracks SET genre='Pop', genre_norm='pop' WHERE id='t1'", []).unwrap();
+        conn.execute(
+            "UPDATE tracks SET genre='pop', genre_norm='pop' WHERE id='t2'", []).unwrap();
+        conn.execute(
+            "UPDATE tracks SET genre='Rock', genre_norm='rock' WHERE id='t3'", []).unwrap();
+        conn.execute(
+            "INSERT INTO tracks (id,title,title_norm,artist_id,album_id,duration_ms,added_at,path,path_lower,size_bytes,mtime,genre) \
+             VALUES ('t4','x','x','a1','al1',1,1,'/m/4.flac','/m/4.flac',1,1,'')",
+            [],
+        )
+        .unwrap();
+        let got = distinct_genres(&conn).unwrap();
+        assert_eq!(got, vec!["Pop".to_string(), "Rock".to_string()]);
     }
 }

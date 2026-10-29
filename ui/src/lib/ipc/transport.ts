@@ -1,8 +1,8 @@
 /**
  * 宿主通信的**唯一换气口**（命令 + 事件）。
  *
- * 为什么要有这一层：批次 4 要恢复浏览器预览（`npm run dev:ui` 无 Rust 可跑），
- * 而 `client.ts` / `events.ts` 里如果各自写一遍
+ * 为什么要有这一层：批次 4 要恢复浏览器预览（ui/ 目录下 `npm run dev`，
+ * 无 Rust 可跑），而 `client.ts` / `events.ts` 里如果各自写一遍
  * `if (thereIsNoTauri) useMock()`，Tauri 生产包里就会留下两条分支和一个
  * 永远走不到的死代码块。改成注入：默认实现是 Tauri，预览时由
  * `lib/ipc/mock` 在 `main.ts` 里**动态 import** 后整体替换 —— 生产构建里

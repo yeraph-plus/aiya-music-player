@@ -89,12 +89,14 @@ fn track_row_has_no_path_and_uses_ms() {
         last_played_at_ms: Some(1_700_000_100_000),
         gain_db: None,
         availability: "online".into(),
+        genre: Some("流行".into()),
     };
     let v = serde_json::to_value(&row).unwrap();
     let ks = keys(&v);
     // 时间字段必须带单位后缀
     assert!(ks.contains(&"addedAtMs".to_string()), "键：{ks:?}");
     assert!(ks.contains(&"lastPlayedAtMs".to_string()), "键：{ks:?}");
+    assert!(ks.contains(&"genre".to_string()), "键：{ks:?}");
     assert!(!ks.contains(&"addedAt".to_string()), "秒级旧字段必须消失：{ks:?}");
     // 毫秒值原样透出
     assert_eq!(v["addedAtMs"], 1_700_000_000_000i64);
@@ -127,6 +129,8 @@ fn player_state_error_is_structured_and_path_is_hidden() {
             title: "标题".into(),
             artist: None,
             album: None,
+            artist_id: None,
+            album_id: None,
             duration_ms: Some(1000),
             artwork_id: None,
             gain_db: None,
@@ -243,6 +247,8 @@ fn playlist_summary_converts_seconds_to_ms() {
         id: "pl_1".into(),
         name: "通勤".into(),
         description: None,
+        kind: "manual".into(),
+        rule_json: None,
         track_count: 12,
         duration_ms: 3_600_000,
         artwork_id: Some("a1".into()),
@@ -257,6 +263,8 @@ fn playlist_summary_converts_seconds_to_ms() {
             "id",
             "name",
             "description",
+            "kind",
+            "ruleJson",
             "trackCount",
             "durationMs",
             "artworkId",
@@ -272,6 +280,8 @@ fn playlist_summary_converts_seconds_to_ms() {
     assert_eq!(v["createdAtMs"], 1_700_000_000_000i64);
     assert_eq!(v["durationMs"], 3_600_000i64);
     assert!(v["description"].is_null(), "description 必须存在且为 null");
+    assert_eq!(v["kind"], "manual");
+    assert!(v["ruleJson"].is_null(), "手动歌单 ruleJson 必须存在且为 null");
 }
 
 #[test]
@@ -283,6 +293,8 @@ fn playlist_add_result_nests_summary() {
             id: "pl_1".into(),
             name: "通勤".into(),
             description: None,
+            kind: "manual".into(),
+            rule_json: None,
             track_count: 3,
             duration_ms: 0,
             artwork_id: None,
@@ -420,6 +432,39 @@ fn small_result_dtos_keep_their_exact_keys() {
 
     let req = serde_json::to_value(aiya_lib::dto::beets::CancelRequested { requested: false }).unwrap();
     assert_eq!(keys(&req), sorted(&["requested"]));
+
+    // 市场目录项：键名必须与工具侧 market_report() 逐字对齐（source 是
+    // `builtin`/`pypi:<包名>` 字符串，不在 Rust 侧拆字段）
+    let item = serde_json::to_value(aiya_lib::dto::beets::BeetsMarketItem {
+        name: "lyrics".into(),
+        note: "歌词抓取".into(),
+        source: "pypi:beautifulsoup4".into(),
+        state: "missing_deps".into(),
+        enabled: false,
+        missing: vec!["bs4".into()],
+    })
+    .unwrap();
+    assert_eq!(
+        keys(&item),
+        sorted(&["name", "note", "source", "state", "enabled", "missing"])
+    );
+
+    // beets 配置快照（docs/40 十三轮）：inbox / 输出根 / 排除表计数。
+    // UI 的待整理目录行与输出根 radio 都吃这份——键名错位 = 又一个
+    // "from_value 落空 UI 什么都不显示"
+    let cfg = serde_json::to_value(aiya_lib::dto::beets::BeetsConfig {
+        inbox: Some("E:\\Downloads\\music".into()),
+        target_root: None,
+        effective_target: Some("D:\\Music".into()),
+        imported_count: 7,
+    })
+    .unwrap();
+    assert_eq!(
+        keys(&cfg),
+        sorted(&["inbox", "targetRoot", "effectiveTarget", "importedCount"])
+    );
+    assert_eq!(cfg["importedCount"], 7);
+    assert!(cfg["targetRoot"].is_null());
 }
 
 #[test]

@@ -161,6 +161,12 @@ pub struct TrackRef {
     pub title: String,
     pub artist: Option<String>,
     pub album: Option<String>,
+    /// 艺人/专辑详情页跳转键（正在播放页的歌手/专辑行可点）。
+    /// `#[serde(default)]`：旧版持久化队列里没有这两列，反序列化补 None。
+    #[serde(default)]
+    pub artist_id: Option<String>,
+    #[serde(default)]
+    pub album_id: Option<String>,
     #[ts(type = "number | null")]
     pub duration_ms: Option<i64>,
     pub artwork_id: Option<String>,
@@ -242,6 +248,57 @@ pub enum AudioSource {
     Stream,
 }
 
+/// 随机模式的播放历史栈：Prev 的"上一首"来源。
+///
+/// 存**队列原序下标**（queue index），恢复时在 order 里反查位置。只在
+/// shuffle 开启时入栈；关闭洗牌 / ReplaceAll / 清空队列即清空——历史跟着
+/// "这一次的随机排列"走，排列一变历史就没有意义（hydrate 不恢复历史同理：
+/// 排列不落库是既定决策）。
+///
+/// 容量截断：长时间连播无界增长没有意义，只保留最近 [`PlayHistory::CAP`] 首。
+#[derive(Debug, Default)]
+pub struct PlayHistory {
+    stack: Vec<usize>,
+}
+
+impl PlayHistory {
+    /// 容量上限。超限丢最旧的一条。
+    pub const CAP: usize = 1000;
+
+    /// 压入一条"离开的曲目"（queue 下标）。
+    pub fn push(&mut self, queue_index: usize) {
+        if self.stack.len() >= Self::CAP {
+            self.stack.remove(0);
+        }
+        self.stack.push(queue_index);
+    }
+
+    /// 弹出最近一条**仍然有效**的历史项；队列缩短后越界的下标直接丢弃。
+    pub fn pop(&mut self, queue_len: usize) -> Option<usize> {
+        while let Some(i) = self.stack.pop() {
+            if i < queue_len {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    pub fn clear(&mut self) {
+        self.stack.clear();
+    }
+
+    /// 当前栈深（仅测试断言用）。
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.stack.len()
+    }
+
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.stack.is_empty()
+    }
+}
+
 /// 播放状态快照（对齐 PlayerState 契约形状，camelCase serde）。
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
@@ -250,14 +307,19 @@ pub struct PlayerState {
     pub queue_length: usize,
     #[ts(type = "number")]
     pub queue_version: u64,
-    /// 当前曲目在播放顺序（order）中的下标；空队列 = `null`。
+    /// 当前曲目在**队列原序（queue）中的下标**；空队列 = `null`。
+    ///
+    /// 注意与 `cursor` 的区别：`cursor` 是当前曲在播放顺序（order）中的**位置**，
+    /// `index` 是当前曲在队列原序中的**下标**（实现上恒等于 `order[cursor]`）。
+    /// 洗牌开启时 order 是 queue 的一个排列，二者指向的数字不同——
+    /// UI 拿 `index` 对队列原序列表，宿主拿 `cursor` 对 queue_snapshot()。
     ///
     /// 为什么不用 -1 哨兵（docs/17 §9.2 偏差 1 的偿还）：`null` 在 TS 侧
     /// 无法与合法下标 0 混淆，`-1` 可以（漏判 `>= 0` 就是越界写）。缺值
     /// 一律 `null` 是本契约的既定规则，index/cursor 是最后两个例外。
     #[ts(type = "number | null")]
     pub index: Option<usize>,
-    /// 播放顺序位置（随机模式下与 index 不同）；空队列 = `null`。
+    /// 当前曲在播放顺序（order）中的位置（随机模式下与 index 不同）；空队列 = `null`。
     #[ts(type = "number | null")]
     pub cursor: Option<usize>,
     pub repeat: RepeatMode,
@@ -363,6 +425,8 @@ mod tests {
                 title: "曲".into(),
                 artist: Some("人".into()),
                 album: None,
+                artist_id: None,
+                album_id: None,
                 duration_ms: Some(5000),
                 artwork_id: Some("aw_x".into()),
                 gain_db: Some(-3.0),

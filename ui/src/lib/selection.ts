@@ -10,7 +10,12 @@
 
 export type Selection = ReadonlySet<number>;
 
-/** 一次批量操作的上限，与 apps/desktop/src/main/ipc.ts 的 MAX_BATCH 一致 */
+/**
+ * 一次批量操作的上限。UI 侧故意比主进程紧一档：主进程批量收集 ID 的
+ * 硬上限是 `src-tauri/src/lib.rs` 的 `ID_COLLECT_CAP`（50_000），超限截断
+ * 只记 warn——两边一致时界面能选出"看起来合法、一操作就被截断"的选择集，
+ * 那比直接不让选更糟。
+ */
 export const SELECTION_CAP = 5000;
 
 export const EMPTY_SELECTION: Selection = new Set<number>();

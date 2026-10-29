@@ -24,7 +24,7 @@
 // 双击本 exe 会闪一下黑框（然后 exit 64「缺少 --pipe 参数」），这是保留 CUI 的
 // 唯一代价；它本就不是给人双击的。
 
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -145,7 +145,7 @@ fn serve_forever(pipe_name: &str) -> Result<(), String> {
         }
         server.connect().map_err(|e| format!("等待连接失败：{e}"))?;
         tracing::info!("host 已连接，开始握手");
-        match run_session(&server) {
+        match run_session(&server, &mut orphan_deadline) {
             Ok(SessionEnd::Shutdown) => {
                 tracing::info!("收到 Shutdown，正常退出");
                 return Ok(());
@@ -160,8 +160,12 @@ fn serve_forever(pipe_name: &str) -> Result<(), String> {
     }
 }
 
-/// 一次完整会话：握手 → 引擎 ↔ 管道转发。
-fn run_session(pipe: &NamedPipe) -> Result<SessionEnd, String> {
+/// 一次完整会话：握手 → 引擎 ↔ 管道转发。`orphan_deadline` 在握手成功后
+/// 被本函数清零（见函数内注释）。
+fn run_session(
+    pipe: &NamedPipe,
+    orphan_deadline: &mut Option<Instant>,
+) -> Result<SessionEnd, String> {
     // miow 没有 try_clone：复制原始句柄，读/写各持一个（同一管道实例）
     let read_half = dup(pipe)?;
     let write_half = dup(pipe)?;
@@ -187,6 +191,10 @@ fn run_session(pipe: &NamedPipe) -> Result<SessionEnd, String> {
         std::process::exit(2);
     }
     write_msg(&write_half, &SidecarToHost::Welcome { protocol: PROTOCOL_VERSION })?;
+    // 握手成功 = 宿主确实活着：清掉上一轮会话遗留的孤儿退场窗口。不清的话
+    // 窗口"只生效一次"——本会话再次出错时死线早已过期，会跳过重连宽限直接
+    // 退场。此后若会话出错，serve_forever 的 Err 分支会重新起算 8s。
+    *orphan_deadline = None;
     tracing::info!(%protocol, "握手完成");
 
     // ---- 心跳线程：从握手完成这一刻就开始跳 ----
@@ -243,8 +251,13 @@ fn run_session(pipe: &NamedPipe) -> Result<SessionEnd, String> {
                 line.clear();
                 match read_line(&mut line_reader, &mut line) {
                     Ok(true) => {}
-                    // EOF 或错误：host 没了（主循环写心跳/事件时也会失败，双保险）
-                    _ => break,
+                    // EOF = host 没了；Err = 读错误或超长行被拒（见 read_line）。
+                    // 退出线程让 cmd_tx 掉线，会话循环凭 Disconnected 结束会话。
+                    Ok(false) => break,
+                    Err(e) => {
+                        tracing::warn!(%e, "管道读取失败，reader 线程退出");
+                        break;
+                    }
                 }
                 let msg: HostToSidecar = match serde_json::from_str(line.trim()) {
                     Ok(m) => m,
@@ -267,31 +280,40 @@ fn run_session(pipe: &NamedPipe) -> Result<SessionEnd, String> {
     let session = (|| -> Result<SessionEnd, String> {
         let mut shutdown_seen = false;
         let end = loop {
-            // 1) 入站命令
-            while let Ok(msg) = cmd_rx.try_recv() {
-                match msg {
-                    HostToSidecar::Cmd(cmd) => {
-                        shutdown_seen |= matches!(cmd, aiya_audio::EngineCommand::Shutdown);
-                        engine.send(cmd);
+            // 1) 入站命令（排空）。reader 线程退出（EOF/读错误/超长行）后
+            //    cmd_tx 随之 drop：命令永远进不来而心跳还在写，host 会误以为
+            //    sidecar 活着 —— 必须立刻结束会话，走重连/退场流程。
+            loop {
+                match cmd_rx.try_recv() {
+                    Ok(msg) => match msg {
+                        HostToSidecar::Cmd(cmd) => {
+                            shutdown_seen |= matches!(cmd, aiya_audio::EngineCommand::Shutdown);
+                            engine.send(cmd);
+                        }
+                        HostToSidecar::Ping => {
+                            let _ = pong_tx.send(());
+                        }
+                        HostToSidecar::Hello { .. } => {} // 重复握手忽略
+                    },
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        return Err("管道读端已断开（EOF/读错误/超长行），命令通道已关闭".into());
                     }
-                    HostToSidecar::Ping => {
-                        let _ = pong_tx.send(());
-                    }
-                    HostToSidecar::Hello { .. } => {} // 重复握手忽略
                 }
             }
             // Shutdown 是最后一个命令（engine 线程随即退出），直接结束会话
             if shutdown_seen {
                 break SessionEnd::Shutdown;
             }
-            // 2) 出站事件
-            if let Some(evt) = engine.try_recv() {
-                write_msg(&write_half, &SidecarToHost::Evt(evt))?;
-                continue;
-            }
-            // 3) Pong
+            // 2) Pong —— 必须排在事件**之前**：播放中 Position 约 10ms 一条，
+            //    事件流永远非空，Pong 排在后面就永远轮不到（host 探活全超时）。
             if pong_rx.try_recv().is_ok() {
                 write_msg(&write_half, &SidecarToHost::Pong)?;
+                continue;
+            }
+            // 3) 出站事件
+            if let Some(evt) = engine.try_recv() {
+                write_msg(&write_half, &SidecarToHost::Evt(evt))?;
                 continue;
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -332,13 +354,31 @@ fn dup(pipe: &NamedPipe) -> Result<NamedPipe, String> {
     Ok(unsafe { NamedPipe::from_raw_handle(out as RawHandle) })
 }
 
+/// 入站单行字节阈值。协议里最大的是 Load 一类 JSON 行，KB 量级，1MB 已是
+/// 百倍余量；`read_line` 本会无界吃到换行为止，不设阈值的话对端持续发送
+/// 不带换行的字节就能一直吃内存。
+const MAX_LINE_BYTES: usize = 1024 * 1024;
+
 /// 读一行；返回 false 表示流结束/错误。
+///
+/// 行长受 [`MAX_LINE_BYTES`] 硬约束：`take(阈值+1)` 兜底，多读 1 字节用于
+/// 区分「恰好满阈值」与「超过阈值」。超限返回错误——此时该行还没读完，
+/// 连接已不可信，调用方应结束会话（reader 线程退出 → 命令通道断开）。
 fn read_line(reader: &mut impl BufRead, out: &mut String) -> std::io::Result<bool> {
     out.clear();
-    match reader.read_line(out) {
-        Ok(0) => Ok(false),
-        Ok(_) => Ok(true),
-        Err(e) => Err(e),
+    let mut limited = reader.take((MAX_LINE_BYTES + 1) as u64);
+    match limited.read_line(out)? {
+        0 => Ok(false),
+        _ => {
+            // 去掉行尾换行再比长度：内容超阈值 = 协议违规
+            if out.trim_end_matches(['\r', '\n']).len() > MAX_LINE_BYTES {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("入站行超过 {MAX_LINE_BYTES} 字节上限，断开会话"),
+                ));
+            }
+            Ok(true)
+        }
     }
 }
 

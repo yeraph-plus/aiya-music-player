@@ -135,6 +135,14 @@ impl SpectrumTap {
         self.enabled.store(enabled, Ordering::Release);
     }
 
+    /// 订阅开关的当前值。给渲染路径在**进入重采样前**判断：关闭时连
+    /// "输出帧→单声道"的混算都跳过（与 push_mono 的检查同源），保证
+    /// "关闭零开销"在两条推样本路径上一致。
+    #[inline]
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
     /// 分带频率标定用实际采样率（Load 成功后由引擎线程调用）。
     pub fn set_sample_rate(&self, sample_rate: u32) {
         if sample_rate >= 8_000 {
@@ -422,6 +430,10 @@ mod tests {
     #[test]
     fn tap_disabled_pushes_nothing() {
         let mut tap = SpectrumTap::new();
+        tap.set_enabled(false);
+        assert!(!tap.is_enabled(), "is_enabled 必须与订阅开关同源");
+        tap.set_enabled(true);
+        assert!(tap.is_enabled());
         tap.set_enabled(false);
         tap.push_frame(&[0.5, 0.5, 0.5, 0.5], 2);
         tap.push_mono(&[0.1, 0.2]);

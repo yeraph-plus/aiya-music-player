@@ -1,4 +1,5 @@
 import type { TrackRow } from './ipc/generated/TrackRow';
+import { errorMessage } from './errors';
 
 /**
  * 稀疏分页窗口。
@@ -129,7 +130,8 @@ export class TrackWindow {
       })
       .catch((err: unknown) => {
         if (generation !== this.generation) return;
-        this.errors.set(page, err instanceof Error ? err.message : String(err));
+        // errorMessage 归一化 ApiError 普通对象；String(err) 会得到 [object Object]
+        this.errors.set(page, errorMessage(err));
         this.notify();
       })
       .finally(() => {

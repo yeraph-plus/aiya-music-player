@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Lyrics } from '../lib/ipc';
+  import EmptyState from './ui/EmptyState.svelte';
   import { findActiveLine } from '../lib/lyrics';
   import { anchorAt, projectPosition } from '../lib/lyrics-clock';
 
@@ -92,12 +93,13 @@
     onwheel={() => (userScrolledAt = Date.now())}
   >
     {#if loading}
-      <div class="lyrics-empty">正在查找歌词…</div>
+      <EmptyState fill title="正在查找歌词…" />
     {:else if !lyrics?.found}
-      <div class="lyrics-empty">
-        《{trackTitle ?? '当前曲目'}》没有歌词<br />
-        <span class="dim">在同目录放一个同名的 .lrc 文件即可显示</span>
-      </div>
+      <EmptyState
+        fill
+        title={`《${trackTitle ?? '当前曲目'}》没有歌词`}
+        hint="在同目录放一个同名的 .lrc 文件即可显示"
+      />
     {:else}
       <!-- 上下各半高空白占位（用户拍板）：歌词区上下居中——激活行跟随滚动
            本来就把激活行滚到容器中线，占位让**第一句之前 / 最后一句之后**

@@ -17,6 +17,7 @@ pub mod playlist_io;
 pub mod queue;
 pub mod repo;
 pub mod scanner;
+pub mod smart;
 
 pub use artwork::{link, stage, save_artwork, StagedArtwork, ARTWORK_SCHEME, find_artwork};
 pub use db::{DbError, DbHandle, DbResult, open, open_conn};

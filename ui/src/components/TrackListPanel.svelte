@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import Button from './ui/Button.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
+  import PlaylistList from './PlaylistList.svelte';
   import TrackList from './TrackList.svelte';
   import { errorMessage } from '../lib/errors';
   import { SELECTION_CAP } from '../lib/selection';
@@ -14,14 +16,18 @@
   import { ui } from '../stores/ui.svelte';
 
   /**
-   * 列表区（docs/28）：TrackList 的全部 store 接线收在这里，供
+   * 列表区（docs/28）：全部 store 接线收在这里，供
    * LibraryView（曲库/歌单/搜索）与 AlbumView/ArtistView（详情页）共用。
    *
-   * 为什么要抽：docs/27 把批量动作接进 TrackList 后， LibraryView 的
-   * `<TrackList>` 标签带上了 25 个 prop + 6 个 handler——拆详情页时
+   * 为什么要抽：docs/27 把批量动作接进列表组件后， LibraryView 的
+   * 列表标签带上了 25 个 prop + 6 个 handler——拆详情页时
    * 原样复制两份是 3×250 行的接线抄写，漏一个 prop 的症状是"某个页面
    * 的批量按钮点了没反应"。现在接线只有这一份，页面只声明**差异**：
-   * 排序可用性、删除按钮文案、筛选器有无、拖拽排序、自跳转失效与空态。
+   * 排序可用性、删除按钮文案、筛选器有无与空态。
+   *
+   * 2026-10-28 拆分后本组件还负责**选表**：歌单视图渲染 `PlaylistList`
+   * （可拖放排序，moveItem 也归这里），其余视图渲染 `TrackList`
+   * （管理列表）。接线只有一份、组件选对了，行为分支就不散落在页面里。
    *
    * 失败/启动中的兜底空态也归这里（错误条里有原因 → "重试"；否则页面
    * 自己的 `empty` snippet）——这两个状态与页面无关，各页抄一遍只会漂移。
@@ -33,8 +39,12 @@
     removeLabel: string;
     /** 筛选器按钮是否出现（曲库页开；歌单/详情页是固定上下文不给筛） */
     showFilter: boolean;
-    /** 拖拽排序（歌单视图独有） */
-    onmove?: (from: number, to: number) => void;
+    /**
+     * 拖放排序回调。**传了就渲染 PlaylistList（可拖表），不传渲染
+     * TrackList（管理表）**——判据由页面给：手动歌单的顺序是用户语义
+     * 可拖；智能歌单是查询结果、曲库/详情页是查询语义，都不可拖。
+     */
+    dragSort?: (from: number, to: number) => void;
     /**
      * 详情页把自己的列链接废掉（docs/28）：专辑页上"查看专辑"指向的就是
      * 当前页，nav 会当成"刷新"重拉列表——滚动位置凭空丢一次，还让人以为
@@ -50,7 +60,7 @@
     canSort,
     removeLabel,
     showFilter,
-    onmove,
+    dragSort,
     disableArtistLink = false,
     disableAlbumLink = false,
     empty,
@@ -119,62 +129,73 @@
       overlay.dialog = { kind: 'removeTracks', ids };
     })();
   }
-</script>
 
-{#if list.total > 0}
-  <TrackList
-    store={list.trackWindow}
-    version={list.version}
-    total={list.total}
-    query={ui.search}
-    sort={ui.sort}
-    direction={ui.direction}
-    {canSort}
-    onsort={(field) => list.setSort(field)}
-    currentId={playerState?.current?.id ?? null}
-    selectedIndex={selection.selectedIndex}
-    selection={selection.selection}
-    restoreScrollTop={list.restoreScrollTop}
-    rowHeight={ui.rowHeight}
-    playing={playerState?.status === 'playing'}
-    onplay={(index) => void list.playIndex(index)}
-    onselect={handleSelect}
-    oncheck={handleCheck}
-    oncheckall={() => selection.toggleAll(list.total)}
-    onmenu={(event, index, track) => {
+  /** 歌单视图拖拽排序的落点（PlaylistList 专用）：手动歌单的顺序是用户语义 */
+  function movePlaylistItem(from: number, to: number): void {
+    dragSort?.(from, to);
+  }
+
+  /** 两个列表组件共用的 props（接线只有这一份，页面只声明差异） */
+  const shared = $derived({
+    store: list.trackWindow,
+    version: list.version,
+    total: list.total,
+    query: ui.search,
+    sort: ui.sort,
+    direction: ui.direction,
+    canSort,
+    onsort: (field: (typeof ui)['sort']) => list.setSort(field),
+    currentId: playerState?.current?.id ?? null,
+    selectedIndex: selection.selectedIndex,
+    selection: selection.selection,
+    restoreScrollTop: list.restoreScrollTop,
+    rowHeight: ui.rowHeight,
+    playing: playerState?.status === 'playing',
+    onplay: (index: number) => void list.playIndex(index),
+    onselect: handleSelect,
+    oncheck: handleCheck,
+    oncheckall: () => selection.toggleAll(list.total),
+    onmenu: (event: MouseEvent, index: number, track: Parameters<typeof overlay.openTrackMenu>[3]) => {
       // 右键的行不在选择集里 → 先单选它（handleSelect 裸点语义），
       // 在选择集里则整组保留；菜单按 multi 对整组生效（docs/27 第 6 点）
       if (!selection.selection.has(index)) handleSelect(index, event);
       overlay.openTrackMenu(event.clientX, event.clientY, index, track, selection.size > 1);
-    }}
-    onscroll={(top) => list.setScroll(top)}
-    onrestored={() => (list.restoreScrollTop = null)}
-    onretry={() => void list.reload()}
-    {onmove}
-    batchMode={ui.batchMode}
-    onbatchmode={setBatchMode}
-    onplayall={() => void list.playAll()}
-    onenqueue={enqueueSelection}
-    onaddto={addSelectionToPlaylist}
-    onremove={removeSelection}
-    {removeLabel}
-    filterCount={showFilter ? (list.timeFilterOn ? 1 : 0) : undefined}
-    onfilteropen={() => (overlay.dialog = { kind: 'trackFilter' })}
-    onopenartist={(id) => nav.go({ kind: 'artist', id })}
-    onopenalbum={(id) => nav.go({ kind: 'album', id })}
-    {disableArtistLink}
-    {disableAlbumLink}
-  />
+    },
+    onscroll: (top: number) => list.setScroll(top),
+    onrestored: () => (list.restoreScrollTop = null),
+    onretry: () => void list.reload(),
+    batchMode: ui.batchMode,
+    onbatchmode: setBatchMode,
+    onplayall: () => void list.playAll(),
+    onenqueue: enqueueSelection,
+    onaddto: addSelectionToPlaylist,
+    onremove: removeSelection,
+    removeLabel,
+    filterCount: showFilter ? (list.timeFilterOn ? 1 : 0) : undefined,
+    onfilteropen: () => (overlay.dialog = { kind: 'trackFilter' }),
+    onopenartist: (id: string) => nav.go({ kind: 'artist', id }),
+    onopenalbum: (id: string) => nav.go({ kind: 'album', id }),
+    disableArtistLink,
+    disableAlbumLink,
+  });
+</script>
+
+{#if list.total > 0}
+  {#if dragSort}
+    <PlaylistList {...shared} onmove={movePlaylistItem} />
+  {:else}
+    <TrackList {...shared} />
+  {/if}
 {:else if !list.booted}
-  <div class="empty"><strong>正在启动…</strong></div>
+  <EmptyState fill title="正在启动…" />
 {:else if notify.error}
   <!-- 查询失败时 total 也是 0，但这时候说"曲库还是空的"是错的：
        用户会去设置页重新扫描，而真正该做的是重试查询 -->
-  <div class="empty">
-    <strong>列表加载失败</strong>
-    <span>上方错误条里有原因</span>
-    <Button onclick={() => void list.reload()}>重试</Button>
-  </div>
+  <EmptyState fill title="列表加载失败" hint="上方错误条里有原因">
+    {#snippet action()}
+      <Button onclick={() => void list.reload()}>重试</Button>
+    {/snippet}
+  </EmptyState>
 {:else}
   {@render empty()}
 {/if}

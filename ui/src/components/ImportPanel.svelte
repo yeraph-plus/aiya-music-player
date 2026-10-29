@@ -1,15 +1,22 @@
 <script lang="ts">
   import type { AlbumPreview, CandidatePreview } from '../lib/beets';
   import type { ApplyDecision } from '../lib/ipc';
+  import { ipc } from '../lib/ipc';
   import { beetsSession as beets } from '../stores/beets-session.svelte';
+  import { beetsConfig } from '../stores/beets-config.svelte';
+  import { errorMessage } from '../lib/errors';
+  import { shortenPath } from '../lib/format';
   import Icon from './Icon.svelte';
   import Button from './ui/Button.svelte';
   import IconButton from './ui/IconButton.svelte';
+  import Select from './ui/Select.svelte';
 
   /**
-   * beets 导入面板（B1 预览 + B2 应用 + B3 移动/复制/取消）：
-   * 选文件夹 → 专辑卡片 → 候选/逐字段 diff → 应用（写标签，可选移动/复制
-   * 到 beets 库）→ 取消随时可用（收尾到最近检查点）。
+   * beets 导入面板（B1 预览 + B2 应用 + B3 移动/复制/取消）。
+   * docs/40 十三轮起主入口是**固定的待整理目录**：文件丢进去 → 「整理入库」
+   * → 专辑卡片 → 候选/逐字段 diff → 应用（写标签，可选移动/复制）→ 曲库
+   * 自动刷新。选好的目录与曲库目录重叠会被后端拒绝（copy 留原件会重复入库）。
+   * 「浏览其他文件夹」降级为次要入口，给临时目录的高级用法留着。
    * 预览阶段零文件改动；应用阶段候选数据原样回传（所见即所写）。
    *
    * 会话状态（phase/进度/错误/结果）全部来自 stores/beets-session.svelte.ts：
@@ -33,16 +40,58 @@
    */
   const MOVE_LABELS: Record<MoveMode, string> = {
     apply: '只写标签，文件不动',
-    apply_copy: '复制一份到整理库',
-    apply_move: '移动到整理库',
+    apply_copy: '复制一份到整理库（原文件保留）',
+    apply_move: '移动到整理库（原文件不在）',
   };
 
   /** 文件动作：默认只写标签（B3 移动/复制显式选择） */
   let moveMode = $state<MoveMode>('apply');
 
+  const moveOptions: Array<{ value: string; label: string }> = Object.entries(MOVE_LABELS).map(
+    ([value, label]) => ({ value, label }),
+  );
+
   const running = $derived(beets.phase === 'previewing');
   const applying = $derived(beets.phase === 'applying');
   const syncing = $derived(beets.phase === 'syncing');
+  const inbox = $derived(beetsConfig.inbox);
+
+  // 配置（inbox/输出根）随面板挂载拉一次；store 幂等
+  $effect(() => {
+    void beetsConfig.load();
+  });
+
+  /** 待整理目录行内置报错（选择/更换被后端校验拒绝时的人话提示） */
+  let inboxError = $state<string | null>(null);
+
+  /** 选择/更换待整理目录：系统对话框 → 后端校验落库（重叠会明确报错） */
+  async function changeInbox(): Promise<void> {
+    inboxError = null;
+    let path: string | null = null;
+    try {
+      const chosen = await ipc.library.chooseRoot();
+      path = chosen?.path ?? null;
+    } catch (e) {
+      inboxError = errorMessage(e);
+      return;
+    }
+    if (!path) return; // 用户取消
+    try {
+      await beetsConfig.setInbox(path);
+    } catch (e) {
+      inboxError = errorMessage(e);
+    }
+  }
+
+  /** 打开待整理目录（往里拖文件的入口）；没设置时这里不可见 */
+  async function openInbox(): Promise<void> {
+    inboxError = null;
+    try {
+      await beetsConfig.openInbox();
+    } catch (e) {
+      inboxError = errorMessage(e);
+    }
+  }
 
   // store 的 syncVersion 递增 = 一次新的曲库对齐完成 → 通知主视图重拉。
   // 以挂载时的版本为基线，避免打开面板时被旧会话的对齐结果误触发。
@@ -113,7 +162,7 @@
 
 <div class="side-panel">
   <header class="panel-head">
-    <h2>导入新文件夹</h2>
+    <h2>整理入库</h2>
     {#if onclose}
       <IconButton label="关闭" size="sm" onclick={onclose}>
         <Icon name="close" size={13} />
@@ -122,10 +171,41 @@
   </header>
 
   <div class="import-body">
+    <!-- 待整理目录（docs/40 十三轮）：入库流程的固定起点。文件丢进来 →
+         「整理入库」→ 下面出专辑卡片。重叠校验在后端（invalid_arg 人话提示） -->
+    <div class="inbox-row">
+      <div class="inbox-cell">
+        <span class="inbox-label">待整理目录</span>
+        {#if inbox}
+          <span class="inbox-path" title={inbox}>{shortenPath(inbox)}</span>
+        {:else}
+          <span class="dim">还没设置：选一个曲库目录之外的文件夹，把要整理的文件丢进去</span>
+        {/if}
+      </div>
+      <div class="inbox-actions">
+        {#if inbox}
+          <IconButton label="打开待整理目录" size="sm" onclick={() => void openInbox()}>
+            <Icon name="folder" size={13} />
+          </IconButton>
+          <Button size="sm" onclick={() => void changeInbox()} disabled={running || applying}>更换</Button>
+        {:else}
+          <Button size="sm" onclick={() => void changeInbox()} disabled={running || applying}>选择待整理目录</Button>
+        {/if}
+      </div>
+    </div>
+    {#if inboxError}
+      <div class="import-error" role="alert">{inboxError}</div>
+    {/if}
+
     <div class="import-actions">
-      <Button variant="primary" size="sm" onclick={() => void chooseAndPreview()} disabled={running || applying}>
-        {#snippet icon()}<Icon name="folder" size={13} />{/snippet}
-        选择文件夹
+      {#if inbox}
+        <Button variant="primary" size="sm" onclick={() => void beets.previewInbox(inbox)} disabled={running || applying}>
+          {#snippet icon()}<Icon name="folder" size={13} />{/snippet}
+          整理入库
+        </Button>
+      {/if}
+      <Button size="sm" onclick={() => void chooseAndPreview()} disabled={running || applying} title="临时从别的文件夹导入（不走待整理目录）">
+        浏览其他文件夹
       </Button>
       {#if running}
         <span class="dim">
@@ -144,16 +224,15 @@
         <Button size="sm" onclick={() => void cancelSession()} ariaLabel="取消当前 beets 导入">取消</Button>
       {/if}
       {#if beets.doneCount !== null && !running && !applying}
-        <select
-          class="cand-select mode-select"
-          value={moveMode}
-          onchange={(e) => (moveMode = (e.currentTarget as HTMLSelectElement).value as MoveMode)}
-          title="移动/复制按 beets 的 path_formats 计算目标路径；目标已存在时该曲目不覆盖，报冲突"
-        >
-          {#each Object.entries(MOVE_LABELS) as [mode, label] (mode)}
-            <option value={mode}>{label}</option>
-          {/each}
-        </select>
+        <span class="mode-select">
+          <Select
+            label="移动/复制模式"
+            value={moveMode}
+            options={moveOptions}
+            onchange={(v) => (moveMode = v as MoveMode)}
+            title="移动/复制按 beets 的 path_formats 计算目标路径；目标已存在时该曲目不覆盖，报冲突"
+          />
+        </span>
         <Button variant="primary" size="sm" onclick={() => void applyAll()} disabled={applyableCount === 0}>
           应用所选（{applyableCount} 张）
         </Button>
@@ -234,19 +313,21 @@
         {#if album.candidates.length === 0}
           <div class="dim">无候选（未联网或匹配不上）</div>
         {:else if !beets.results[album.id]}
-          <select
-            class="cand-select"
+          <Select
+            label="候选匹配"
             value={beets.picked[album.id] ?? ''}
             disabled={applying}
-            onchange={(e) => (beets.picked[album.id] = (e.currentTarget as HTMLSelectElement).value || null)}
-          >
-            <option value="">保持当前标签（不修改）</option>
-            {#each album.candidates as c (c.id)}
-              <option value={c.id}>
-                {c.album.album ?? '?'} — {c.album.artist ?? '?'} {c.album.year ?? ''}（{(c.confidence * 100).toFixed(0)}%）
-              </option>
-            {/each}
-          </select>
+            options={[
+              { value: '', label: '保持当前标签（不修改）' },
+              ...album.candidates.map((c) => ({
+                value: c.id,
+                label:
+                  `${c.album.album ?? '?'} — ${c.album.artist ?? '?'} ${c.album.year ?? ''}` +
+                  `（${(c.confidence * 100).toFixed(0)}%）`,
+              })),
+            ]}
+            onchange={(v) => (beets.picked[album.id] = v || null)}
+          />
 
           {#if candidateMeta(album)}
             <table class="diff-table">
@@ -294,6 +375,47 @@
     padding: 12px;
     overflow-y: auto;
   }
+
+  /* 待整理目录行（docs/40 十三轮）：入库流程的固定起点。
+     边框盒与快捷键须知同语言——它是"先看一眼再动手"的操作前提 */
+  .inbox-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface-2);
+  }
+
+  .inbox-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .inbox-label {
+    font-size: 11px;
+    color: var(--text-3);
+  }
+
+  .inbox-path {
+    font-size: 12px;
+    font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .inbox-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+  }
+
   .import-actions {
     display: flex;
     align-items: center;
@@ -333,9 +455,11 @@
   .rec.strong {
     color: var(--accent);
   }
-  .cand-select {
-    width: 100%;
-    font-size: 12px;
+  /* kit Select 的触发器自带 width:100%（专辑卡里正好占满）；
+     动作行里的模式下拉不占满——外层包一层 fit-content 收缩到内容宽 */
+  .mode-select {
+    display: block;
+    width: fit-content;
   }
   .diff-table {
     width: 100%;
@@ -384,8 +508,5 @@
   }
   .fail-line.conflict {
     color: var(--warn);
-  }
-  .mode-select {
-    width: auto;
   }
 </style>

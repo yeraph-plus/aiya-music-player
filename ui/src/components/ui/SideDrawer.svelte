@@ -23,7 +23,7 @@
    *
    * 几何：浮在主区之上、**不与顶栏/播放条贴边**——上下各让出一条栏高
    * 再加 10px 外边距，四角圆角、整卡悬浮（与窗控三键所在顶栏、播放条
-   * 都保持呼吸距离）。背景与顶栏/播放条同透明度档（95% color-mix）。
+   * 都保持呼吸距离）。背景用 surface-4（不透明，见下方样式注释）。
    *
    * 焦点语义：打开时焦点移入面板（Esc 直接可用），关闭时还原到打开前的
    * 元素（触发键）——与 bits-ui Dialog 的行为对齐，只是手写。
@@ -68,11 +68,12 @@
       aria-hidden="true"
     ></div>
     <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -- 面板容器，role 由脚本层管理焦点 -->
+    <!-- 无 aria-modal：不拦截主区交互（遮罩只盖中段、播放条/顶栏仍可点），
+         也不做焦点圈禁——标了 true 就是失实承诺，读屏会以为必须先离开抽屉 -->
     <div
       bind:this={panel}
       class="sd-panel"
       role="dialog"
-      aria-modal="true"
       aria-label={label}
       tabindex="-1"
       transition:fly={{ x: 440, duration: reducedMotion ? 0 : 240 }}
@@ -113,8 +114,11 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    /* 与顶栏（surface-2 95%）同透明度档：背景从卡下透出来 */
-    background: color-mix(in srgb, var(--surface-2) 95%, transparent);
+    /* **不透明**（用户拍板，撤掉与顶栏同档的 95% 半透明）：抽屉是内容
+     * 密集的旁路界面，底下频谱在动时半透明会让队列行读不稳。用
+     * surface-4——token 表里专门给"底下有列表在动的浮层"的最实一档
+     * （97/98%，视觉等同不透明），菜单也是这一档。 */
+    background: var(--surface-4);
     border: 1px solid var(--line);
     border-radius: 14px;
     box-shadow: -18px 0 44px var(--shadow);

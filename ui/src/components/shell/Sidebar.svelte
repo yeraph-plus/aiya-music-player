@@ -1,15 +1,12 @@
 <script lang="ts">
   import { DatabaseZap, Disc, House, Library, Mic2, Plus, Radio, Settings } from '@lucide/svelte';
   import { artworkUrl } from '../../lib/artwork';
-  import { shortenPath } from '../../lib/format';
-  import { library } from '../../stores/library.svelte';
   import { nav } from '../../stores/nav.svelte';
   import { overlay } from '../../stores/overlay.svelte';
   import { playlists } from '../../stores/playlists.svelte';
   import { ui } from '../../stores/ui.svelte';
   import Cover from '../ui/Cover.svelte';
   import IconButton from '../ui/IconButton.svelte';
-  import StatBlock from '../ui/StatBlock.svelte';
 
   /**
    * 侧栏：**零 prop**，自己读 store、自己调 `nav.go`。
@@ -19,18 +16,19 @@
    * 用 prop 传回调时，AppShell 得给每一条入口写一个转发函数 —— 那次改名的教训是
    * "入口散在模板里，漏一个就变成点了没反应"。现在"我要去哪"直接说给 nav。
    *
-  * ### 一级导航的七项（docs/25 §3 重排 + docs/28 修订 + docs/29 批 A）
-
-  * 推荐 / 曲库 / 专辑 / 艺人 / 扫描入库 / FM 电台 / 设置。
-  * - **正在播放撤出侧栏**（用户拍板）：唯一入口改在播放条左侧的歌曲区域
-  *   ——"正在听什么"的信息本身就在那里，点它是比找侧栏更短的路。
-  * - **「首页」改名「推荐」**：歌单宫格 + 三段预览本来就是推荐位，名字跟上。
-  * - **最近播放 / 常听单页退役**（docs/28）：常听收进推荐页 top-15 段，
-  *   最近播放被筛选器取代；腾出的两个席位给**专辑 / 艺人宫格页**。
-  * - **「扫描入库」升一级导航**（docs/29 批 A，用户拍板）：扫描 / beets 任务
-  *   / 日志诊断从设置页拆出——任务是长时跑的，值得一个可停留可刷新的一级页。
-  * - **FM 电台回归**：占位页也给出入口比死链接消失好——用户知道这功能在规划里。
-  */
+   * ### 一级导航（2026-10-28 用户拍板重排）
+   *
+   * 上组：推荐 / 曲库 / 专辑 / 艺人 / FM 电台；底部：扫描入库 / 设置。
+   * - **「正在播放」撤出侧栏**：唯一入口改在播放条左侧的歌曲区域
+   *   ——"正在听什么"的信息本身就在那里，点它是比找侧栏更短的路。
+   * - **「扫描入库 / 设置」沉到侧栏底部**（用户拍板）：内容导航和工具/
+   *   配置是两类心智——听歌的东西在上，管理应用的东西在下（浏览器/
+   *   IDE 的通行排法）。原底部统计卡片撤销，统计迁往首页卡片与扫描入库页。
+   * - **「最近播放 / 常听单页」退役**（docs/28）：常听收进推荐页 top-15 段。
+   * - **「扫描入库」升一级导航**（docs/29 批 A）：扫描 / beets 任务 / 日志
+   *   诊断从设置页拆出——任务是长时跑的，值得一个可停留可刷新的一级页。
+   * - **FM 电台回归**：占位页也给出入口比死链接消失好——用户知道这功能在规划里。
+   */
 
   const PAGES = [
     { key: 'home', label: '推荐', icon: House, go: () => nav.go({ kind: 'dashboard' }) },
@@ -53,16 +51,20 @@
       go: () => nav.go({ kind: 'browse', view: 'artists' }),
     },
     {
-      key: 'tools',
-      label: '扫描入库',
-      icon: DatabaseZap,
-      go: () => nav.go({ kind: 'page', page: 'tools' }),
-    },
-    {
       key: 'radio',
       label: 'FM 电台',
       icon: Radio,
       go: () => nav.go({ kind: 'page', page: 'radio' }),
+    },
+  ] as const;
+
+  /** 底部工具组：与内容导航分开渲染，但高亮/路由行为完全一致。 */
+  const FOOTER_PAGES = [
+    {
+      key: 'tools',
+      label: '扫描入库',
+      icon: DatabaseZap,
+      go: () => nav.go({ kind: 'page', page: 'tools' }),
     },
     {
       key: 'settings',
@@ -80,7 +82,7 @@
    * 详情页是从宫格或列表链接点进来的，高亮跟着"内容类别"走而不是
    * "路由值"，否则详情页上侧栏零高亮（e2e「高亮恰好一个」会抓住）。
    */
-  function isActive(key: (typeof PAGES)[number]['key']): boolean {
+  function isActive(key: (typeof PAGES | typeof FOOTER_PAGES)[number]['key']): boolean {
     if (key === 'albums') return ui.page === 'albums' || ui.page === 'album';
     if (key === 'artists') return ui.page === 'artists' || ui.page === 'artist';
     return ui.page === key;
@@ -89,8 +91,6 @@
   function playlistActive(id: string): boolean {
     return ui.page === 'playlist' && ui.playlistId === id;
   }
-
-  const stats = $derived(library.stats);
 </script>
 
 <aside class="sidebar">
@@ -114,7 +114,7 @@
       <IconButton
         label="新建歌单"
         size="sm"
-        onclick={() => (overlay.dialog = { kind: 'createPlaylist' })}
+        onclick={() => (overlay.dialog = { kind: 'playlistEdit' })}
       >
         <Plus size={14} />
       </IconButton>
@@ -139,6 +139,9 @@
             radius="sm"
           />
           <span class="pl-name">{playlist.name}</span>
+          {#if playlist.kind === 'smart'}
+            <span class="pl-badge" title="智能歌单：曲目随规则动态生成">智</span>
+          {/if}
           <span class="pl-count">{playlist.trackCount}</span>
         </button>
       {:else}
@@ -147,23 +150,20 @@
     </div>
   </div>
 
+  <!-- 底部工具组（用户拍板）：原统计卡片撤销（统计迁首页卡片 + 扫描入库页），
+       席位让给「扫描入库 / 设置」——内容导航在上、应用管理在下的两类心智。 -->
   <div class="sidebar-footer">
-    {#if stats}
-      <!-- 三个数字并排：tabular 数字保证滚动更新时不抖（StatBlock 自带） -->
-      <div class="stat-row">
-        <StatBlock size="sm" value={stats.tracks} label="曲目" />
-        <StatBlock size="sm" value={stats.albums} label="专辑" />
-        <StatBlock size="sm" value={stats.artists} label="艺人" />
-      </div>
-      {#if stats.missingLocations > 0}
-        <span class="warn">{stats.missingLocations} 个位置缺失</span>
-      {/if}
-    {:else}
-      <span class="dim">尚未建立曲库</span>
-    {/if}
-    {#if library.dataDir}
-      <span class="dim path" title={library.dataDir}>{shortenPath(library.dataDir, 2)}</span>
-    {/if}
+    {#each FOOTER_PAGES as item (item.key)}
+      <button
+        class="nav-item"
+        class:active={isActive(item.key)}
+        aria-current={isActive(item.key) ? 'page' : undefined}
+        onclick={item.go}
+      >
+        <item.icon size={16} strokeWidth={1.8} />
+        <span>{item.label}</span>
+      </button>
+    {/each}
   </div>
 </aside>
 
@@ -176,9 +176,10 @@
     flex-direction: column;
     gap: 6px;
     min-height: 0;
-    border-right: 1px solid var(--line);
     /* 半透明（T4c）：全应用背景从底下透出来。不用 backdrop-filter——
-     * 持久壳层垫着动画频谱 canvas 就是每帧重模糊（docs/25 §5 红线）。 */
+     * 持久壳层垫着动画频谱 canvas 就是每帧重模糊（docs/25 §5 红线）。
+     * 右侧边线已撤（用户拍板"区域之间不留 border"）：与主区的分隔靠
+     * 侧栏与主区底色的阶差。 */
     background: color-mix(in srgb, var(--surface-2) 82%, transparent);
   }
 
@@ -275,6 +276,17 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* 智能歌单徽标：一个字，够小不抢名称的视觉权重 */
+  .pl-badge {
+    flex: none;
+    font-size: 9.5px;
+    line-height: 1;
+    padding: 2px 3px;
+    border-radius: 3px;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+
   .side-empty {
     margin: 0;
     padding: 8px 10px;
@@ -282,39 +294,15 @@
     color: var(--text-3);
   }
 
-  /* ---------------- 底部统计 ---------------- */
+  /* ---------------- 底部工具组 ---------------- */
 
+  /* 原统计卡片席位。border-top 不再加（区域间不留 border 是本轮总规矩），
+     与歌单区的分隔靠 margin；按钮复用 .nav-item 的皮，视觉与上组一致。 */
   .sidebar-footer {
     flex: none;
-    margin-top: auto;
-    padding: 10px 2px 0;
-    border-top: 1px solid var(--line);
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    font-size: 11px;
-    line-height: 1.6;
-    word-break: break-all;
-  }
-
-  .stat-row {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 6px;
-  }
-
-  .warn {
-    color: var(--warn);
-  }
-
-  .dim {
-    color: var(--text-2);
-  }
-
-  .path {
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    gap: 2px;
+    margin-top: 6px;
   }
 </style>

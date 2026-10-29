@@ -62,6 +62,26 @@ class LibraryStore {
     return ipc.library.list(query);
   }
 
+  /**
+   * 曲库流派列表（智能歌单"流派"条件的下拉数据源）。
+   * 带会话级缓存 + 60s TTL：流派集合只在扫描/beets 同步后才会变，模态框
+   * 每次打开都查一遍是浪费；扫描走 `invalidateGenres()` 精确失效，beets
+   * 同步没有统一收尾钩子，用 TTL 兜底。
+   */
+  #genresCache: { items: string[]; at: number } | null = null;
+  async genres(): Promise<string[]> {
+    if (this.#genresCache && Date.now() - this.#genresCache.at < 60_000) {
+      return this.#genresCache.items;
+    }
+    const items = await ipc.library.genres();
+    this.#genresCache = { items, at: Date.now() };
+    return items;
+  }
+  /** 扫描/同步完成后调：让下一次 genres() 重拉 */
+  invalidateGenres(): void {
+    this.#genresCache = null;
+  }
+
   /** 按 ID 批量取（含音频规格）。失败降级为空数组：队列面板少一行说明比整块报错好 */
   async tracks(ids: string[]): Promise<TrackDetail[]> {
     try {
@@ -114,12 +134,28 @@ class LibraryStore {
     this.roots = (await ipc.library.rootsSet(roots)).roots;
   }
 
-  /** 订阅扫描进度；返回清理函数 */
+  /** 移除目录的影响面（曲目数，UI 确认条用）。失败抛出 */
+  async countForRemoval(paths: string[]): Promise<number> {
+    return (await ipc.library.rootsCount(paths)).count;
+  }
+
+  /** 从曲库删除这些目录下的曲目（只删索引不动磁盘）。失败抛出 */
+  async pruneRoots(paths: string[]): Promise<number> {
+    return (await ipc.library.rootsPrune(paths)).removed;
+  }
+
+  /** 清空整个曲库记录（只删索引不动磁盘，歌单壳保留）。失败抛出 */
+  async clearLibrary(): Promise<number> {
+    return (await ipc.library.clear()).removed;
+  }
+
+  /** 订阅扫描进度；`done`/`cancelled` 都收尾（取消也可能已提交了批次，
+   *  统计/歌单/列表同样需要重拉）。返回清理函数 */
   watchScan(onDone: () => void): () => void {
     return events.scanProgress((raw) => {
       const progress = readScanProgress(raw);
       this.scan = progress;
-      if (progress.phase === 'done') onDone();
+      if (progress.phase === 'done' || progress.phase === 'cancelled') onDone();
     });
   }
 

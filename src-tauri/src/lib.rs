@@ -71,7 +71,87 @@ fn now_secs() -> i64 {
 
 #[cfg(test)]
 mod lib_tests {
+    use crate::history_cutoff_days;
     use crate::pump::position_emit_due;
+
+    /// 目录前缀归一化：小写 + 尾部分隔符。尾分隔符是命门——不带的话
+    /// `D:\Music` 会误伤 `D:\Music Backup`（前缀字符串包含关系）。
+    #[test]
+    fn root_prefix_normalizes_case_and_separator() {
+        assert_eq!(crate::root_prefix_lower("D:\\CkMsr\\Music"), "d:\\ckmsr\\music\\");
+        assert_eq!(crate::root_prefix_lower("d:/music/"), "d:/music/");
+        assert_eq!(crate::root_prefix_lower("  D:\\X  "), "d:\\x\\");
+        assert_eq!(crate::root_prefix_lower("D:\\"), "d:\\", "盘根不再补分隔符");
+    }
+
+    /// 前缀清除的完整语义：只删该目录下、不误伤兄弟目录（Music Backup）、
+    /// 外键级联清掉歌单项/队列项/历史（2026-10-28"目录移除不掉"缺陷的回归锚）。
+    #[test]
+    fn prefix_prune_deletes_only_under_root_with_cascade() {
+        let mut conn = aiya_data::db::open_in_memory().expect("内存库");
+        for (id, path) in [
+            ("t1", "D:\\CkMsr\\Music\\a.flac"),
+            ("t2", "D:\\CkMsr\\Music Backup\\b.flac"),
+            ("t3", "D:\\FM_Stations\\x.flac"),
+        ] {
+            conn.execute(
+                "INSERT INTO tracks (id, title, title_norm, added_at, path, path_lower)
+                 VALUES (?1, ?1, ?1, 0, ?2, ?3)",
+                rusqlite::params![id, path, path.to_lowercase()],
+            )
+            .unwrap();
+        }
+        // t1 被歌单、队列、历史三方引用；t3 只进歌单（对照组）
+        conn.execute("INSERT INTO playlists (id, name, name_norm, created_at, updated_at) VALUES ('p1','歌单','歌单',0,0)", [])
+            .unwrap();
+        for (pid, pos, tid) in [(1, 0, "t1"), (2, 1, "t3")] {
+            conn.execute(
+                "INSERT INTO playlist_items (id, playlist_id, track_id, position, added_at)
+                 VALUES (?1, 'p1', ?2, ?3, 0)",
+                rusqlite::params![format!("pi{pid}"), tid, pos],
+            )
+            .unwrap();
+        }
+        conn.execute("INSERT INTO queue_items (position, track_id) VALUES (0, 't1')", []).unwrap();
+        aiya_data::history::record(&mut conn, "t1", 1_700_000_000, 30).unwrap();
+
+        // 统计：只有 t1 在 D:\CkMsr\Music 下
+        let prefix = crate::root_prefix_lower("D:\\CkMsr\\Music");
+        assert_eq!(crate::count_tracks_under_prefix(&conn, &prefix).unwrap(), 1);
+
+        // 删除：1 行，t2/t3 幸存
+        let removed = conn
+            .execute(
+                "DELETE FROM tracks WHERE substr(path_lower, 1, ?2) = ?1",
+                rusqlite::params![prefix, prefix.chars().count() as i64],
+            )
+            .unwrap();
+        assert_eq!(removed, 1);
+        let left: Vec<String> = {
+            let mut st = conn.prepare("SELECT id FROM tracks ORDER BY id").unwrap();
+            let rows = st.query_map([], |r| r.get::<_, String>(0)).unwrap();
+            rows.map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(left, vec!["t2".to_string(), "t3".to_string()]);
+
+        // 级联：t1 的歌单项/队列项/历史都没了，t3 的歌单项还在
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM playlist_items WHERE track_id = 't1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM queue_items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "队列项随曲目级联清除");
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM history", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "播放历史随曲目级联清除");
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM playlist_items WHERE track_id = 't3'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "不受影响的曲目歌单项必须保留");
+    }
 
     /// 历史统计的 SQL 曾经查 `t.artist`——tracks 表没有这一列，prepare 直接
     /// 报 "no such column"，命令恒返回 internal，历史页永远是空态。这条测试
@@ -197,6 +277,30 @@ mod lib_tests {
             assert_eq!(out, snake);
         }
     }
+
+    /* ---------------- 保留周期钳制 ---------------- */
+
+    /// historyDays 极端值不得让裁剪下限回绕（P2）：release 下
+    /// `days * 86_400` 溢出回绕成负数时，cutoff 落到未来，一次裁剪
+    /// 就把整个播放历史清空。钳到 1..=3650 + saturating_mul 后不可能。
+    #[test]
+    fn history_cutoff_clamps_extreme_days() {
+        const DAY: i64 = 86_400;
+        let now = 1_770_000_000;
+        // 常规值原样
+        assert_eq!(history_cutoff_days(90, now), Some(now - 90 * DAY));
+        assert_eq!(history_cutoff_days(1, now), Some(now - DAY));
+        // <= 0 = 永久保留（约定语义，不动）
+        assert_eq!(history_cutoff_days(0, now), None);
+        assert_eq!(history_cutoff_days(-5, now), None);
+        // 极端大值：钳到上限，cutoff 永远是"过去的时刻"
+        assert_eq!(history_cutoff_days(i64::MAX, now), Some(now - 3650 * DAY));
+        assert_eq!(history_cutoff_days(100_000, now), Some(now - 3650 * DAY));
+        assert!(
+            history_cutoff_days(i64::MAX, now).unwrap() < now,
+            "cutoff 不得越过未来"
+        );
+    }
 }
 
 /* ---------------- 应用状态 ---------------- */
@@ -263,10 +367,27 @@ pub struct AppState {
     /// 这类开关每拍都要读。走 DB 就是每拍一次跨线程往返（DB 单 worker 串行），
     /// 泵会被自己的读库拖慢。启动时灌一次，`app_set_settings` 写入时同步。
     settings: Mutex<Value>,
+    /// 正在运行的 beets 安装子进程句柄（A 轨道安装线程存入，
+    /// `RunEvent::Exit` 收尾处 kill+wait——安装器可能卡在 pip 阶段好几分钟，
+    /// 不能让它在主进程退出后变孤儿）。
+    beets_install_child: Mutex<Option<std::process::Child>>,
 }
 
 /// 列表耗时环的容量。UI 只展示最近 8 条，留 20 条给"翻两页才看出趋势"。
 const TIMING_LIMIT: usize = 20;
+
+/// 保留天数 → 裁剪下限（纯计算，可测）。`None` = 永久保留。
+///
+/// `days <= 0` 视为永久；上限 3650（约 10 年）：极端大值在 release 下
+/// `days * 86_400` 回绕成负数，cutoff 越过未来 → 一次裁剪清空全部历史。
+/// saturating_mul 兜住剩余边界。
+fn history_cutoff_days(days: i64, now_secs: i64) -> Option<i64> {
+    const MAX_HISTORY_DAYS: i64 = 3650;
+    if days <= 0 {
+        return None;
+    }
+    Some(now_secs - days.clamp(1, MAX_HISTORY_DAYS).saturating_mul(86_400))
+}
 
 impl AppState {
     /// 记一条列表耗时（环形，满了丢最旧）。
@@ -338,6 +459,35 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = settings.clone();
     }
+
+    /// 最近播放保留周期（天）→ 裁剪下限（unix 秒）。`None` = 永久保留。
+    ///
+    /// 缺失/类型坏按默认 90（与前端 DEFAULT_SETTINGS 一致，防配置损坏变成
+    /// 无限膨胀）；数值钳制见 [`history_cutoff_days`]。
+    fn history_cutoff(&self, now_secs: i64) -> Option<i64> {
+        let days = self
+            .settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get("historyDays")
+            .and_then(Value::as_i64)
+            .unwrap_or(90);
+        history_cutoff_days(days, now_secs)
+    }
+
+    /// 按保留周期裁剪播放历史（启动 / 每次写历史 / 设置变更时调用）。
+    fn prune_history(&self) {
+        let Some(cutoff) = self.history_cutoff(now_secs()) else {
+            return;
+        };
+        let result: aiya_data::DbResult<usize> =
+            self.db().send(move |conn| aiya_data::history::prune(conn, cutoff));
+        match result {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(removed = n, "按保留周期裁剪了播放历史"),
+            Err(e) => tracing::warn!(error = %e, "播放历史裁剪失败"),
+        }
+    }
 }
 
 fn default_db_path(app: &AppHandle) -> PathBuf {
@@ -350,6 +500,36 @@ fn default_artwork_dir(app: &AppHandle) -> PathBuf {
     paths::data_root(app).join("cache").join("artwork")
 }
 
+/// 启动期致命错误的唯一用户可见出口：release 无控制台、setup 失败时窗口还没建，
+/// 不弹框 = 用户双击后"什么都不发生"。只用于确定无法继续启动的场合
+/// （数据库打不开等）；可降级的故障一律降级继续跑，不走这里。
+#[cfg(windows)]
+fn fatal_dialog(message: &str) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_SETFOREGROUND};
+    let wide = |s: &str| -> Vec<u16> {
+        std::ffi::OsStr::new(s)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    };
+    let text = wide(message);
+    let caption = wide("AIYA Music");
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            caption.as_ptr(),
+            MB_ICONERROR | MB_SETFOREGROUND,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn fatal_dialog(message: &str) {
+    tracing::error!(%message, "启动失败");
+}
+
 /* ---------------- 工具：settings 表读写 ---------------- */
 
 fn setting_get(conn: &rusqlite::Connection, key: &str) -> Option<Value> {
@@ -358,6 +538,13 @@ fn setting_get(conn: &rusqlite::Connection, key: &str) -> Option<Value> {
     })
     .ok()
     .and_then(|s| serde_json::from_str(&s).ok())
+}
+
+/// 键是否存在（不解析值）。`roots_from_settings` 用它区分"空数组（权威）"
+/// 与"键没写过（回落旧键）"——只看 `setting_get` 区分不了这两者。
+pub(crate) fn setting_has(conn: &rusqlite::Connection, key: &str) -> bool {
+    conn.query_row("SELECT 1 FROM settings WHERE key = ?1", [key], |_| Ok(()))
+        .is_ok()
 }
 
 fn setting_set(conn: &rusqlite::Connection, key: &str, value: &Value) -> rusqlite::Result<()> {
@@ -386,6 +573,7 @@ const DEFAULT_SETTINGS: &str = r#"{
   "preventSleep": true,
   "closeToTray": false,
   "refreshSeconds": 30,
+  "historyDays": 90,
   "shortcuts": {}
 }"#;
 
@@ -437,6 +625,12 @@ fn player_set_eq(app_state: State<'_, AppState>, eq: Json) -> Result<dto::EqSett
     for b in &mut v.bands {
         *b = b.clamp(-aiya_audio::EQ_GAIN_LIMIT_DB, aiya_audio::EQ_GAIN_LIMIT_DB);
     }
+    v.bass_db = v
+        .bass_db
+        .clamp(-aiya_audio::EQ_GAIN_LIMIT_DB, aiya_audio::EQ_GAIN_LIMIT_DB);
+    v.treble_db = v
+        .treble_db
+        .clamp(-aiya_audio::EQ_GAIN_LIMIT_DB, aiya_audio::EQ_GAIN_LIMIT_DB);
     v.pregain = v
         .pregain
         .clamp(-aiya_audio::EQ_PREGAIN_LIMIT_DB, aiya_audio::EQ_PREGAIN_LIMIT_DB);
@@ -450,6 +644,8 @@ fn player_set_eq(app_state: State<'_, AppState>, eq: Json) -> Result<dto::EqSett
         &app_state,
         aiya_audio::EngineCommand::SetEq(aiya_audio::EqParams {
             bands: std::array::from_fn(|i| v.bands[i]),
+            bass_db: v.bass_db,
+            treble_db: v.treble_db,
             pregain: v.pregain,
             enabled: v.enabled,
         }),
@@ -470,6 +666,8 @@ fn player_get_eq(app_state: State<'_, AppState>) -> Result<dto::EqSettings, dto:
         .unwrap_or_else(|| dto::EqSettings {
             enabled: false,
             bands: vec![0.0; aiya_audio::EQ_BAND_HZ.len()],
+            bass_db: 0.0,
+            treble_db: 0.0,
             pregain: 0.0,
         }))
 }
@@ -555,6 +753,13 @@ fn app_set_settings(
     // 刷新间隔是设置项：改完要让定时线程重读（否则"我改了 30 → 120，
     // 结果它还在 30 秒一刷"，得重启才生效）。
     refresh::wake_settings(&app);
+
+    // 保留周期（historyDays）变更：立即按新周期裁剪一次，不等下次写历史。
+    // 无差别跑（而不是 diff 旧值）——缓存此刻已是新值，diff 要再开一次库；
+    // 空裁剪 0 行删除，代价可忽略。
+    if settings.get("historyDays").and_then(Value::as_i64).is_some() {
+        state.prune_history();
+    }
 
     // 归一化开关：改完立即重算音量（不等下一曲）。Actor 持有 gain_db，
     // 只需翻开关 + 把新音量送给引擎。
@@ -742,6 +947,237 @@ fn beets_sync(app: AppHandle, state: State<'_, AppState>) -> Result<dto::beets::
     Ok(dto::beets::JobStarted { started: true })
 }
 
+/* ---------------- beets 配置：待整理目录与整理输出根（docs/40 十三轮） ----------------
+ *
+ * 用户拍板的入库模型：待整理目录（inbox，用户自选的外部目录）→ beets 整理 →
+ * 唯一勾选的整理输出根（曲库目录之一）。三个约束都来自拍板：
+ * 1. inbox 必须用户自选，且**不得与任何曲库目录重叠**（相等或在内部都算）——
+ *    copy 模式下原件留在 inbox，重叠的话整理副本会被扫描器再扫一遍，重复入库；
+ * 2. 整理输出根**单选**（radio），存 `beets.targetRoot`；一个都没勾时回退
+ *    第一个曲库目录（与十三轮之前的行为一致，老配置不受影响）；
+ * 3. 保留原文件与否（copy/move）是导入时用户逐次选的（ImportPanel 的
+ *    moveMode），不是这里的配置。
+ *
+ * 另有一个配套机制：`beets.inboxImported` 排除表。inbox 是固定目录，copy
+ * 之后原件一直躺在那——不排除的话下次"整理入库"会把同一批文件再导一遍
+ * （beets 库重复条目 → dump 同步 → 曲库出现离线重复行）。应用成功后 UI
+ * 把源路径记进来，preview 时带 `options.excludePaths` 让工具跳过它们。
+ */
+
+/// Windows 路径归一（**仅用于比较**，展示/落库保留用户原始输入）：
+/// 分隔符统一成 `\`、小写、去尾分隔符。
+pub(crate) fn canon_path(p: &str) -> String {
+    p.trim().replace('/', "\\").trim_end_matches('\\').to_lowercase()
+}
+
+/// inbox 与扫描根重叠校验：相等或位于其内部都算冲突。
+fn path_conflicts_with_roots(path: &str, roots: &[String]) -> bool {
+    let c = canon_path(path);
+    if c.is_empty() {
+        return true;
+    }
+    roots.iter().any(|r| {
+        let rc = canon_path(r);
+        c == rc || c.starts_with(&format!("{rc}\\"))
+    })
+}
+
+/// 从 settings 读一个字符串键（空串视为未设置）。
+fn setting_str_value(conn: &rusqlite::Connection, key: &str) -> Option<String> {
+    setting_get(conn, key)
+        .and_then(|v| v.as_str().map(str::to_string))
+        .filter(|s| !s.trim().is_empty())
+}
+
+fn beets_config(conn: &rusqlite::Connection) -> dto::beets::BeetsConfig {
+    let roots = read_roots(conn);
+    let inbox = setting_str_value(conn, "beets.inboxPath");
+    let target = setting_str_value(conn, "beets.targetRoot");
+    let effective = target
+        .clone()
+        .filter(|t| roots.iter().any(|r| canon_path(r) == canon_path(t)))
+        .or_else(|| roots.first().cloned());
+    let imported_count = setting_get(conn, "beets.inboxImported")
+        .and_then(|v| v.as_array().cloned())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    dto::beets::BeetsConfig {
+        inbox,
+        target_root: target,
+        effective_target: effective,
+        imported_count,
+    }
+}
+
+/// 曲库目录变化后调用：整理输出根若不再在列表里就清掉（回退首根）。
+/// roots_set（覆盖写）与 library_choose_root（追加）之后都要走一遍。
+fn clear_target_if_invalid(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    let roots = read_roots(conn);
+    if let Some(t) = setting_str_value(conn, "beets.targetRoot") {
+        if !roots.iter().any(|r| canon_path(r) == canon_path(&t)) {
+            setting_set(conn, "beets.targetRoot", &Value::Null)?;
+        }
+    }
+    Ok(())
+}
+
+/// beets 配置快照（UI 的待整理目录行与输出根 radio 都从这里读）。
+#[tauri::command]
+fn beets_config_get(state: State<'_, AppState>) -> Result<dto::beets::BeetsConfig, dto::ApiError> {
+    state
+        .db()
+        .send(|conn| Ok(beets_config(conn)))
+        .map_err(|e| dto::ApiError::internal(format!("读取 beets 配置失败：{e}")))
+}
+
+/// 设置待整理目录。`None` = 清除（顺带清空已导入记录——旧记录对新目录无意义）。
+#[tauri::command]
+fn beets_set_inbox(
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<dto::beets::BeetsConfig, dto::ApiError> {
+    // 两段式（读 roots → 校验 → 写）：db().send 的闭包只能回 DbError，
+    // 校验放外面才能把「与曲库目录重叠」表达成 invalid_arg（UI 可识别人话提示）
+    let trimmed = path.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if let Some(p) = trimmed {
+        let roots = state
+            .db()
+            .send(|conn| Ok(read_roots(conn)))
+            .map_err(|e| dto::ApiError::internal(format!("读取曲库目录失败：{e}")))?;
+        if path_conflicts_with_roots(p, &roots) {
+            return Err(dto::ApiError::invalid_arg(
+                "待整理目录不能与曲库目录相同或在其内部",
+            ));
+        }
+    }
+    let inbox = trimmed.map(str::to_string);
+    state
+        .db()
+        .send(move |conn| {
+            setting_set(conn, "beets.inboxPath", &json!(inbox)).map_err(aiya_data::DbError::Sql)?;
+            setting_set(conn, "beets.inboxImported", &Value::Null)
+                .map_err(aiya_data::DbError::Sql)?;
+            Ok(beets_config(conn))
+        })
+        .map_err(|e| dto::ApiError::internal(format!("保存待整理目录失败：{e}")))
+}
+
+/// 勾选整理输出根（单选）：必须是曲库目录之一。换选只影响未来的移动/导入，
+/// beets 存的是绝对路径，旧条目不受影响。
+#[tauri::command]
+fn beets_set_target(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<dto::beets::BeetsConfig, dto::ApiError> {
+    let p = path.trim().to_string();
+    let roots = state
+        .db()
+        .send(|conn| Ok(read_roots(conn)))
+        .map_err(|e| dto::ApiError::internal(format!("读取曲库目录失败：{e}")))?;
+    if !roots.iter().any(|r| canon_path(r) == canon_path(&p)) {
+        return Err(dto::ApiError::invalid_arg("整理输出目录必须是曲库目录之一"));
+    }
+    state
+        .db()
+        .send(move |conn| {
+            setting_set(conn, "beets.targetRoot", &json!(p)).map_err(aiya_data::DbError::Sql)?;
+            Ok(beets_config(conn))
+        })
+        .map_err(|e| dto::ApiError::internal(format!("保存整理输出目录失败：{e}")))
+}
+
+/// 在资源管理器打开待整理目录（用户往里拖文件的入口）。
+#[tauri::command]
+fn beets_open_inbox(state: State<'_, AppState>) -> Result<(), dto::ApiError> {
+    let inbox = state
+        .db()
+        .send(|conn| Ok(beets_config(conn).inbox))
+        .map_err(|e| dto::ApiError::internal(format!("读取待整理目录失败：{e}")))?;
+    let Some(dir) = inbox else {
+        return Err(dto::ApiError::invalid_arg("还没设置待整理目录"));
+    };
+    let _ = std::process::Command::new("explorer").arg(dir).spawn();
+    Ok(())
+}
+
+/// 排除表硬上限：超过就丢最老的（防常年 copy 用户把 settings 表撑爆；
+/// 2000 条对"待整理目录"是足够宽裕的滚动窗口）。
+const INBOX_IMPORTED_CAP: usize = 2000;
+
+/// 记录"已从待整理目录成功导入"的源文件路径（preview 排除表）。
+/// 幂等：重复记录同一路径只留一条（大小写不敏感）。
+#[tauri::command]
+fn beets_inbox_imported_add(
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<dto::beets::BeetsConfig, dto::ApiError> {
+    state
+        .db()
+        .send(move |conn| {
+            let mut list: Vec<String> = setting_get(conn, "beets.inboxImported")
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default();
+            for p in paths {
+                let p = p.trim();
+                if p.is_empty() {
+                    continue;
+                }
+                let pc = canon_path(p);
+                if !list.iter().any(|e| canon_path(e) == pc) {
+                    list.push(p.to_string());
+                }
+            }
+            if list.len() > INBOX_IMPORTED_CAP {
+                let drop = list.len() - INBOX_IMPORTED_CAP;
+                list.drain(0..drop);
+            }
+            setting_set(conn, "beets.inboxImported", &json!(list))
+                .map_err(aiya_data::DbError::Sql)?;
+            Ok(beets_config(conn))
+        })
+        .map_err(|e| dto::ApiError::internal(format!("记录已导入文件失败：{e}")))
+}
+
+/// 单元测试：路径重叠校验是这套入库模型的安全边界（inbox 混进扫描根 =
+/// 重复曲目），正反例都要钉死。
+#[cfg(test)]
+mod beets_config_tests {
+    use super::{canon_path, path_conflicts_with_roots};
+
+    fn roots() -> Vec<String> {
+        vec!["D:\\Music".into(), "E:\\Audio\\FLAC".into()]
+    }
+
+    #[test]
+    fn canon_unifies_separators_case_and_trailing_slash() {
+        assert_eq!(canon_path("D:/Music/"), canon_path("d:\\music"));
+        assert_eq!(canon_path(" D:\\Music "), "d:\\music");
+    }
+
+    #[test]
+    fn inbox_equal_to_root_conflicts() {
+        assert!(path_conflicts_with_roots("D:/Music", &roots()));
+    }
+
+    #[test]
+    fn inbox_inside_root_conflicts() {
+        assert!(path_conflicts_with_roots("D:\\Music\\New\\Albums", &roots()));
+        assert!(path_conflicts_with_roots("d:/music/new", &roots()));
+    }
+
+    #[test]
+    fn sibling_directory_is_allowed() {
+        // 经典前缀陷阱：D:\Music Backup 不能被 D:\Music 误伤
+        assert!(!path_conflicts_with_roots("D:\\Music Backup", &roots()));
+        assert!(!path_conflicts_with_roots("E:\\Downloads", &roots()));
+    }
+
+    #[test]
+    fn empty_path_conflicts() {
+        assert!(path_conflicts_with_roots("  ", &roots()));
+    }
+}
+
 /// 自动刷新的当前配置与最近一次结果（诊断区读）。
 #[tauri::command]
 fn refresh_state(state: State<'_, AppState>) -> Result<dto::RefreshState, dto::ApiError> {
@@ -751,7 +1187,9 @@ fn refresh_state(state: State<'_, AppState>) -> Result<dto::RefreshState, dto::A
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get("refreshSeconds")
         .and_then(Value::as_u64)
-        .map(|n| if n == 0 { 0 } else { n.max(10) })
+        // 与 refresh::interval_secs 同一口径（下限 10 / 上限 1 h），否则
+        // 诊断页显示的间隔和定时器实际跑的对不上
+        .map(|n| if n == 0 { 0 } else { n.clamp(10, 3600) })
         .unwrap_or(refresh::DEFAULT_INTERVAL_SECS);
     let last = state
         .last_refresh
@@ -897,8 +1335,33 @@ async fn beets_move(
     Ok(dto::beets::JobStarted { started: true })
 }
 
+/// 插件市场目录（docs/40 §3 白名单）：三态 + 来源档，一次性短进程查询。
 #[tauri::command]
-fn library_list(
+async fn beets_plugin_catalog(
+    app: AppHandle,
+) -> Result<Vec<dto::beets::BeetsMarketItem>, dto::ApiError> {
+    tauri::async_runtime::spawn_blocking(move || beets::plugin_catalog(&app))
+        .await
+        .map_err(dto::ApiError::internal)?
+        .map_err(map_beets_start)
+}
+
+/// 安装一个白名单插件（仅 pypi 档有意义）。事件流走 `beets:maintenance`
+/// （pluginProgress → pluginDone），与维护四件套共用同一会话槽。
+#[tauri::command]
+async fn beets_plugin_install(
+    app: AppHandle,
+    name: String,
+) -> Result<dto::beets::JobStarted, dto::ApiError> {
+    tauri::async_runtime::spawn_blocking(move || beets::start_plugin_install(app, name))
+        .await
+        .map_err(dto::ApiError::internal)?
+        .map_err(map_beets_start)?;
+    Ok(dto::beets::JobStarted { started: true })
+}
+
+#[tauri::command]
+async fn library_list(
     state: State<'_, AppState>,
     query: Json,
 ) -> Result<aiya_data::repo::TrackPage, dto::ApiError> {
@@ -911,10 +1374,17 @@ fn library_list(
     // 埋点要用的元信息必须在 `q` 被 move 进闭包之前取出
     let source = source_label(&q.source);
     let cursor = q.cursor.clone();
-    let page = state
-        .db()
-        .send(move |conn| repo::list_tracks(conn, &q))
-        .map_err(dto::ApiError::from)?;
+    // P2（docs/38）：此命令曾是同步——Tauri 2 的同步命令跑在主线程，每页
+    // 都要在主线程干等 DB 线程回包（5 万行深页 10–35ms），快速滚动时多页
+    // 请求在主线程排成连续冻结段。改 async + spawn_blocking：等待发生在
+    // tokio 池，主线程全程空闲。DbHandle 是克隆型句柄（db.rs §161）。
+    let db = state.db().clone();
+    let page = tauri::async_runtime::spawn_blocking(move || {
+        db.send(move |conn| repo::list_tracks(conn, &q))
+    })
+    .await
+    .map_err(dto::ApiError::internal)?
+    .map_err(dto::ApiError::from)?;
     state.push_timing(dto::ListTiming {
         at_ms: now_ms_u64() as i64,
         source,
@@ -935,7 +1405,7 @@ fn source_label(source: &aiya_data::repo::TrackSource) -> String {
     use aiya_data::repo::TrackSource;
     match source {
         TrackSource::Library => "library".into(),
-        TrackSource::Playlist { .. } => "playlist".into(),
+        TrackSource::Playlist { .. } | TrackSource::SmartPlaylist { .. } => "playlist".into(),
         TrackSource::Recent => "recent".into(),
         TrackSource::MostPlayed => "mostPlayed".into(),
     }
@@ -1033,26 +1503,50 @@ fn library_stats(state: State<'_, AppState>) -> Result<dto::LibraryStats, dto::A
 /// 一次性返回前 N（`facets::FACET_LIMIT`），无游标——聚合本身是全表
 /// GROUP BY，5 万行量级个位数毫秒，分页反而多余。
 #[tauri::command]
-fn library_albums(
+async fn library_albums(
     state: State<'_, AppState>,
     search: Option<String>,
 ) -> Result<aiya_data::facets::AlbumPage, dto::ApiError> {
-    state
-        .db()
-        .send(move |conn| aiya_data::facets::list_albums(conn, search.as_deref()))
-        .map_err(dto::ApiError::from)
+    // P2（docs/38）：与 library_list 同理——宫格滚动/搜索每键一次，
+    // 不能占主线程等 DB。GROUP BY 本身个位数毫秒，卸载是零成本保险。
+    let db = state.db().clone();
+    let page = tauri::async_runtime::spawn_blocking(move || {
+        db.send(move |conn| aiya_data::facets::list_albums(conn, search.as_deref()))
+    })
+    .await
+    .map_err(dto::ApiError::internal)?
+    .map_err(dto::ApiError::from)?;
+    Ok(page)
 }
 
 /// 艺人浏览聚合。与 `library_albums` 同形状（拆两条命令的理由见 facets.rs 头注释）。
 #[tauri::command]
-fn library_artists(
+async fn library_artists(
     state: State<'_, AppState>,
     search: Option<String>,
 ) -> Result<aiya_data::facets::ArtistPage, dto::ApiError> {
-    state
-        .db()
-        .send(move |conn| aiya_data::facets::list_artists(conn, search.as_deref()))
-        .map_err(dto::ApiError::from)
+    // P2（docs/38）：与 library_albums 同理。
+    let db = state.db().clone();
+    let page = tauri::async_runtime::spawn_blocking(move || {
+        db.send(move |conn| aiya_data::facets::list_artists(conn, search.as_deref()))
+    })
+    .await
+    .map_err(dto::ApiError::internal)?
+    .map_err(dto::ApiError::from)?;
+    Ok(page)
+}
+
+/// 曲库现有流派列表（智能歌单"流派"条件的下拉数据源）。
+#[tauri::command]
+async fn library_genres(state: State<'_, AppState>) -> Result<Vec<String>, dto::ApiError> {
+    let db = state.db().clone();
+    let genres = tauri::async_runtime::spawn_blocking(move || {
+        db.send(move |conn| aiya_data::facets::distinct_genres(conn))
+    })
+    .await
+    .map_err(dto::ApiError::internal)?
+    .map_err(dto::ApiError::from)?;
+    Ok(genres)
 }
 
 /// 扫描：阻塞直到完成（进度经 `scan:progress` 事件推送，UI 侧节流渲染）。
@@ -1097,10 +1591,15 @@ async fn library_scan_body(
     {
         list
     } else {
-        state
-            .db()
-            .send(|conn| Ok(refresh::roots_from_settings(conn)))
-            .unwrap_or_default()
+        // DB 故障要如实报 internal，不能吞成"未配置扫描目录"（那会把用户
+        // 引去改配置，而配置根本没坏）。scanning 已置位，提前返回前先复位。
+        match state.db().send(|conn| Ok(refresh::roots_from_settings(conn))) {
+            Ok(roots) => roots,
+            Err(e) => {
+                state.scanning.store(false, Ordering::SeqCst);
+                return Err(dto::ApiError::internal(e));
+            }
+        }
     };
 
     // 逐个验证：无效根跳过（不中断扫描），全部无效才报错——报错信息带上每个根，
@@ -1218,6 +1717,7 @@ async fn library_choose_root(
             roots.push(chosen);
         }
         setting_set(conn, "library.roots", &json!(roots))?;
+        clear_target_if_invalid(conn)?;
         Ok(roots)
     });
     let roots = saved.map_err(|e| dto::ApiError::internal(format!("无法保存曲库目录：{e}")))?;
@@ -1226,7 +1726,7 @@ async fn library_choose_root(
 
 /// 读 settings 里的根列表：`library.roots` 数组优先，旧 `library.root` 单串兜底。
 /// 仅在持有连接的调用里用（内部 helper）。
-fn read_roots(conn: &rusqlite::Connection) -> Vec<String> {
+pub(crate) fn read_roots(conn: &rusqlite::Connection) -> Vec<String> {
     setting_get(conn, "library.roots")
         .and_then(|v| v.as_array().cloned())
         .map(|a| {
@@ -1253,22 +1753,23 @@ fn library_roots_get(state: State<'_, AppState>) -> Result<dto::library::Library
     Ok(dto::library::LibraryRoots { roots })
 }
 
-/// 覆盖写扫描根列表（textarea 的保存动作）。
-/// 归一化在服务端再做一遍：trim、去空行、大小写不敏感去重——客户端可能绕过校验。
+/// 覆盖写扫描根列表（目录条目列表的保存动作）。
+///
+/// 参数收 `Vec<String>` 强类型而不是 `Json`：客户端传的就是数组本身
+/// （Tauri 按参数名 `roots` 取值），此前用 `Json` 再 `.get("roots")` 是
+/// 把"参数对象"和"参数值"搞混了——实测每次都报「缺少 roots 数组」。
+/// 归一化在服务端再做一遍：trim、去空行、去引号、大小写不敏感去重。
 #[tauri::command]
 fn library_roots_set(
     state: State<'_, AppState>,
-    roots: Json,
+    roots: Vec<String>,
 ) -> Result<dto::library::LibraryRoots, dto::ApiError> {
-    let raw = roots
-        .get("roots")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| dto::ApiError::invalid_arg("缺少 roots 数组"))?;
     let mut cleaned: Vec<String> = Vec::new();
-    for item in raw {
-        let Some(s) = item.as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+    for item in roots {
+        let s = item.trim();
+        if s.is_empty() {
             continue;
-        };
+        }
         // 去掉从别处复制路径时可能带上的引号
         let s = s.trim_matches('"').trim_matches('\'').trim().to_string();
         let lower = s.to_lowercase();
@@ -1281,10 +1782,103 @@ fn library_roots_set(
         .db()
         .send(move |conn| {
             setting_set(conn, "library.roots", &json!(to_save))?;
+            // 目录列表变了：整理输出根若被移除就清掉（回退首根）
+            clear_target_if_invalid(conn)?;
             Ok(())
         })
         .map_err(|e| dto::ApiError::internal(format!("保存扫描目录失败：{e}")))?;
     Ok(dto::library::LibraryRoots { roots: cleaned })
+}
+
+/// 把用户输入的目录归一化成 `path_lower` 前缀（带尾部分隔符）。
+///
+/// 扫描器落库时 `path_lower = path.to_lowercase()`（scanner.rs），这里必须
+/// 用同一归一化。尾部分隔符必须有：不带的话 `D:\Music` 会误伤 `D:\Music Backup`。
+/// 盘根（`D:\`）本身就以分隔符结尾，不动。
+fn root_prefix_lower(path: &str) -> String {
+    let s = path.trim().to_lowercase();
+    if s.ends_with('\\') || s.ends_with('/') || s.is_empty() {
+        s
+    } else {
+        format!("{s}\\")
+    }
+}
+
+/// 前缀命中数。用 `substr` 前缀比较而不是 LIKE：路径里的 `%`/`_` 得转义，
+/// 得不偿失。全表扫不走索引，但这是低频用户操作，5 万行也是毫秒级。
+fn count_tracks_under_prefix(conn: &rusqlite::Connection, prefix: &str) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM tracks WHERE substr(path_lower, 1, ?2) = ?1",
+        rusqlite::params![prefix, prefix.chars().count() as i64],
+        |r| r.get(0),
+    )
+}
+
+/// 移除这些目录时会波及多少曲目（UI 确认条用，只读不删）。
+#[tauri::command]
+fn library_roots_count(
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<dto::library::RootsTrackCount, dto::ApiError> {
+    let count = state
+        .db()
+        .send(move |conn| {
+            let mut total = 0i64;
+            for p in &paths {
+                let prefix = root_prefix_lower(p);
+                if prefix == "\\" {
+                    continue;
+                }
+                total += count_tracks_under_prefix(conn, &prefix)?;
+            }
+            Ok(total)
+        })
+        .map_err(|e| dto::ApiError::internal(format!("统计目录曲目失败：{e}")))?;
+    Ok(dto::library::RootsTrackCount { count })
+}
+
+/// 从曲库删除这些目录下的曲目（**只删索引，不动磁盘文件**，与
+/// `library_remove_tracks` 同一语义；playlist_items / queue_items / history
+/// 靠外键级联清理）。逐目录自洽提交：中途失败已删的部分保留，重试幂等
+/// （前缀已删空再删是 0 行）。
+#[tauri::command]
+fn library_roots_prune(
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<dto::library::RemoveTracks, dto::ApiError> {
+    let removed = state
+        .db()
+        .send(move |conn| {
+            let mut removed = 0i64;
+            for p in &paths {
+                let prefix = root_prefix_lower(p);
+                if prefix == "\\" {
+                    continue;
+                }
+                removed += conn.execute(
+                    "DELETE FROM tracks WHERE substr(path_lower, 1, ?2) = ?1",
+                    rusqlite::params![prefix, prefix.chars().count() as i64],
+                )? as i64;
+            }
+            Ok(removed)
+        })
+        .map_err(|e| dto::ApiError::internal(format!("清除目录曲目失败：{e}")))?;
+    Ok(dto::library::RemoveTracks { removed })
+}
+
+/// 清空整个曲库记录（**只删索引，不动磁盘文件**）。歌单条目 / 队列 / 播放
+/// 历史靠外键级联清空，歌单壳（名称/规则）保留。用户重建曲库的入口：
+/// 目录换盘、索引损坏重扫，都比逐目录删除省事。
+#[tauri::command]
+fn library_clear(state: State<'_, AppState>) -> Result<dto::library::RemoveTracks, dto::ApiError> {
+    let removed = state
+        .db()
+        .send(|conn| {
+            let n = conn.execute("DELETE FROM tracks", [])? as i64;
+            Ok(n)
+        })
+        .map_err(|e| dto::ApiError::internal(format!("清空曲库失败：{e}")))?;
+    Ok(dto::library::RemoveTracks { removed })
 }
 
 #[tauri::command]
@@ -1404,7 +1998,10 @@ fn library_remove_tracks(
 /// 摘要查询：行字段 + 3 个聚合子查询（曲目数 / 总时长 / 首个有封面的曲目）。
 /// 顺序由 `sort_position`（0002 迁移新增）承载 —— 侧栏拖动排序要能持久化，
 /// 靠 created_at 假装顺序的话重启就回到创建顺序。
-const PLAYLIST_SELECT: &str = "SELECT p.id, p.name, p.created_at, p.updated_at, p.sort_position,
+///
+/// 智能歌单（0003）：末两列带出 kind / rule_json，聚合子查询的结果由
+/// `apply_smart_stats` 用规则实时查询**覆盖**（playlist_items 对智能歌单恒空）。
+const PLAYLIST_SELECT: &str = "SELECT p.id, p.name, p.created_at, p.updated_at, p.sort_position, p.kind, p.rule_json,
        (SELECT COUNT(*) FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id
          WHERE pi.playlist_id = p.id),
        (SELECT COALESCE(SUM(t.duration_ms),0) FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id
@@ -1421,13 +2018,48 @@ fn playlist_row(r: &rusqlite::Row) -> rusqlite::Result<dto::playlist::PlaylistSu
         name: r.get(1)?,
         // schema v1 没有 description 列，恒 null（字段留着是为了形状不变）
         description: None,
+        kind: r.get(5)?,
+        rule_json: r.get(6)?,
         created_at_ms: r.get::<_, i64>(2)? * 1000,
         updated_at_ms: r.get::<_, i64>(3)? * 1000,
         sort_position: r.get(4)?,
-        track_count: r.get(5)?,
-        duration_ms: r.get(6)?,
-        artwork_id: r.get(7)?,
+        track_count: r.get(7)?,
+        duration_ms: r.get(8)?,
+        artwork_id: r.get(9)?,
     })
+}
+
+/// 智能歌单的摘要统计：曲目数 / 总时长 / 首个有封面曲目都按规则**实时查询**
+/// （playlist_items 聚合子查询对智能歌单恒为 0/空，必须覆盖）。
+/// 手动歌单不进这个函数——它的数字本来就来自 playlist_items。
+fn apply_smart_stats(
+    conn: &rusqlite::Connection,
+    summary: &mut dto::playlist::PlaylistSummary,
+) -> aiya_data::DbResult<()> {
+    let Some(rule_json) = summary.rule_json.as_deref() else {
+        return Ok(());
+    };
+    let plan = aiya_data::smart::SmartPlan::parse(Some(rule_json))?;
+    // COUNT + SUM 与曲目列表同一份 WHERE（口径一致，页里显示的条数 = 侧栏数字）
+    let stats_sql = format!(
+        "SELECT COUNT(*), COALESCE(SUM(t.duration_ms),0) {}",
+        plan.count_from()
+    );
+    let (count, duration): (i64, i64) = conn
+        .query_row(&stats_sql, [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(aiya_data::DbError::Sql)?;
+    summary.track_count = count;
+    summary.duration_ms = duration;
+    // 封面取排序后的第一个有封面曲目（与手动歌单"第一个有封面的"同一语义）
+    let art_sql = format!(
+        "SELECT t.artwork_id {}{} LIMIT 1",
+        plan.count_from(),
+        plan.order_sql
+    );
+    summary.artwork_id = conn
+        .query_row(&art_sql, [], |r| r.get(0))
+        .map_err(aiya_data::DbError::Sql)?;
+    Ok(())
 }
 
 fn playlist_summary_by_id(
@@ -1436,7 +2068,13 @@ fn playlist_summary_by_id(
 ) -> rusqlite::Result<Option<dto::playlist::PlaylistSummary>> {
     let sql = format!("{PLAYLIST_SELECT} WHERE p.id = ?1");
     match conn.query_row(&sql, [id], playlist_row) {
-        Ok(v) => Ok(Some(v)),
+        Ok(mut v) => {
+            if v.kind == "smart" {
+                apply_smart_stats(conn, &mut v)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            }
+            Ok(Some(v))
+        }
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e),
     }
@@ -1450,7 +2088,11 @@ fn playlist_list_all(
     let rows = stmt.query_map([], playlist_row)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r?);
+        let mut summary = r?;
+        if summary.kind == "smart" {
+            apply_smart_stats(conn, &mut summary)?;
+        }
+        out.push(summary);
     }
     Ok(out)
 }
@@ -1497,22 +2139,55 @@ fn playlist_create(
     state: State<'_, AppState>,
     name: String,
     track_ids: Option<Vec<String>>,
+    rule: Option<Json>,
 ) -> Result<dto::playlist::PlaylistSummary, dto::ApiError> {
     let name = playlist_repo::sanitize_name(&name)
         .map_err(|e| dto::ApiError::invalid_arg(e.to_string()))?;
-    let track_ids = track_ids.unwrap_or_default();
     // 歌单 id 由名字派生（同名即同一歌单，重复创建不重复建行）
     let pid = ids::playlist_id(&name);
     let now = now_secs();
-    let pid_for_db = pid.clone();
+    // 带 rule = 智能歌单（docs/40 §1）：规则入库前编译校验；track_ids 忽略
+    // （智能歌单不物化曲目，UI 也不会同时给）
+    if let Some(rule) = rule {
+        playlist_write(&state, move |conn| {
+            playlist_repo::create_smart(conn, &pid, &name, &rule, now)?;
+            Ok(Some(
+                playlist_summary_by_id(conn, &pid)
+                    .map_err(aiya_data::DbError::Sql)?
+                    .ok_or_else(|| aiya_data::DbError::Custom("歌单创建后读不到".into()))?,
+            ))
+        })
+    } else {
+        let track_ids = track_ids.unwrap_or_default();
+        let pid_for_db = pid.clone();
+        playlist_write(&state, move |conn| {
+            playlist_repo::create(conn, &pid_for_db, &name, &track_ids, now)?;
+            // 建完读不到 = 事务里出了意料之外的事，不是"歌单不存在"
+            Ok(Some(
+                playlist_summary_by_id(conn, &pid_for_db)
+                    .map_err(aiya_data::DbError::Sql)?
+                    .ok_or_else(|| aiya_data::DbError::Custom("歌单创建后读不到".into()))?,
+            ))
+        })
+    }
+}
+
+/// 更新智能歌单的规则（统一模态框"编辑"的保存动作之一）。
+#[tauri::command]
+fn playlist_set_rule(
+    state: State<'_, AppState>,
+    id: String,
+    rule: Json,
+) -> Result<dto::playlist::PlaylistSummary, dto::ApiError> {
+    let now = now_secs();
     playlist_write(&state, move |conn| {
-        playlist_repo::create(conn, &pid_for_db, &name, &track_ids, now)?;
-        // 建完读不到 = 事务里出了意料之外的事，不是"歌单不存在"
-        Ok(Some(
-            playlist_summary_by_id(conn, &pid_for_db)
-                .map_err(aiya_data::DbError::Sql)?
-                .ok_or_else(|| aiya_data::DbError::Custom("歌单创建后读不到".into()))?,
-        ))
+        match playlist_repo::set_rule(conn, &id, &rule, now) {
+            Ok(true) => {}
+            Ok(false) => return Ok(None),
+            // 手动歌单设规则是 UI 的 bug（编辑入口只对智能歌单开），明确报错
+            Err(e) => return Err(e),
+        }
+        playlist_summary_by_id(conn, &id).map_err(aiya_data::DbError::Sql)
     })
 }
 
@@ -1950,10 +2625,28 @@ fn queue_persist_from_actor(
     }
 }
 
-/// 全量落库（queue_items 重写 + 状态行）：切歌/清空时调用。
-fn persist_queue_full(state: &AppState, actor: &aiya_player::PlayerActor) {
-    let p = queue_persist_from_actor(actor, state.setting_flag("rememberPosition", true));
-    let ids = actor.queue_ids();
+/// 全量落库所需的数据快照。player 锁内取，锁外写——拆成两半是因为
+/// `save_queue_full` 走 DbHandle 单 worker 串行，锁内等它会把命令路径、
+/// 事件泵、SMTC 全部拖住。
+struct QueueFullPersist {
+    p: aiya_data::QueuePersist,
+    ids: Vec<String>,
+}
+
+/// 锁内：取全量落库数据（不做 IO）。
+fn queue_full_persist_snapshot(
+    state: &AppState,
+    actor: &aiya_player::PlayerActor,
+) -> QueueFullPersist {
+    QueueFullPersist {
+        p: queue_persist_from_actor(actor, state.setting_flag("rememberPosition", true)),
+        ids: actor.queue_ids(),
+    }
+}
+
+/// 锁外：全量落库（queue_items 重写 + 状态行）。切歌/清空后调用。
+fn persist_queue_full_snapshot(state: &AppState, snap: QueueFullPersist) {
+    let QueueFullPersist { p, ids } = snap;
     let result: aiya_data::DbResult<()> = state
         .db()
         .send(move |conn| aiya_data::save_queue_full(conn, &p, &ids));
@@ -1986,12 +2679,15 @@ fn apply_engine_intents(state: &AppState, actor: &mut aiya_player::PlayerActor) 
 fn drive_and_emit(state: &State<'_, AppState>, app: &AppHandle) -> aiya_player::PlayerState {
     let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let acted = apply_engine_intents(state, &mut actor);
-    // 切歌/停止立即全量落库（队列结构可能变了；exit 时不必依赖节流尾巴）
-    if acted {
-        persist_queue_full(state, &actor);
-    }
+    // 门控 acted：只有真的下发了引擎意图（切歌/停止）才全量落库。
+    // 锁内只取数据，写库在锁外（save_queue_full 全量重写走单 worker，
+    // player 锁内等它会把命令/泵/SMTC 全拖住）。
+    let persist = acted.then(|| queue_full_persist_snapshot(state, &actor));
     let snapshot = actor.state();
     drop(actor);
+    if let Some(snap) = persist {
+        persist_queue_full_snapshot(state, snap);
+    }
     emit_player_state(app, &snapshot);
     snapshot
 }
@@ -2035,7 +2731,8 @@ fn fetch_track_refs(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_pla
             // 徽章/规格/Hi-Res 判定都靠 current.audio（contracts Track.audio）
             let mut stmt = conn.prepare(
                 "SELECT t.id, t.title, ar.name, al.title, t.duration_ms, t.artwork_id, t.gain_db, t.path,
-                        t.codec, t.container, t.sample_rate, t.bits_per_sample, t.bitrate, t.channels
+                        t.codec, t.container, t.sample_rate, t.bits_per_sample, t.bitrate, t.channels,
+                        t.artist_id, t.album_id
                  FROM tracks t
                  LEFT JOIN artists ar ON ar.id = t.artist_id
                  LEFT JOIN albums al ON al.id = t.album_id
@@ -2068,6 +2765,8 @@ fn fetch_track_refs(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_pla
                         title: r.get(1)?,
                         artist: r.get(2)?,
                         album: r.get(3)?,
+                        artist_id: r.get(14)?,
+                        album_id: r.get(15)?,
                         duration_ms: r.get(4)?,
                         artwork_id: r.get(5)?,
                         gain_db: r.get(6)?,
@@ -2201,11 +2900,14 @@ fn cmd_seek(state: &AppState, app: &AppHandle, position_ms: u64) -> aiya_player:
 /// 走媒体键触发的那次状态更新就会少落一次库。改这里时记得同步改上面。
 fn drive_and_emit_inner(state: &AppState, app: &AppHandle) -> aiya_player::PlayerState {
     let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if apply_engine_intents(state, &mut actor) {
-        persist_queue_full(state, &actor);
-    }
+    let acted = apply_engine_intents(state, &mut actor);
+    // 门控 acted + 锁外落库：与 drive_and_emit 逐行一致（见那里的说明）
+    let persist = acted.then(|| queue_full_persist_snapshot(state, &actor));
     let snapshot = actor.state();
     drop(actor);
+    if let Some(snap) = persist {
+        persist_queue_full_snapshot(state, snap);
+    }
     emit_player_state(app, &snapshot);
     snapshot
 }
@@ -2441,6 +3143,8 @@ fn record_history(state: &AppState, track_id: &str, seconds_played: u64) {
     if let Err(e) = result {
         tracing::warn!(error = %e, "history 写入失败");
     }
+    // 每次写历史顺手裁剪：写是 history 唯一的增长点，增长点带清理就不会膨胀
+    state.prune_history();
 }
 
 /// 歌词（P4）：同目录同名 .lrc → 解析。没找到回 `found=false`（UI 显示"暂无"，
@@ -2539,6 +3243,9 @@ fn history_clear(state: State<'_, AppState>) -> Result<dto::history::HistoryClea
 /// 处理 `http://aiya-artwork.localhost/artwork/<id>?size=N`。
 /// 流程：查 artworks 表 → 读原图 →（需要且可缩放时）生成缩略图缓存 → 响应。
 /// 失败一律 404（破图不该让前端 fetch 走重试）。
+/// **在阻塞池线程执行**（注册点用 asynchronous 协议 + spawn_blocking 转交，
+/// docs/38 P1）——本函数内部不做任何主线程假设；无 AppHandle 之外的
+/// 线程局部依赖。
 fn artwork_protocol(app: &AppHandle, request: tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Cow<'static, [u8]>> {
     use tauri::http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, CACHE_CONTROL, CONTENT_TYPE};
 
@@ -2664,9 +3371,20 @@ pub fn run() {
                 }
             }
         })
-        .register_uri_scheme_protocol(aiya_data::ARTWORK_SCHEME, |ctx, request| {
-            artwork_protocol(ctx.app_handle(), request)
-        })
+        // P1（docs/38）：必须是 asynchronous 版本——同步 handler 在主线程执行，
+        // 未命中缩略图缓存时 DB 往返 + 读原图 + Lanczos3 缩放（30–80ms/张）
+        // 全阻塞主线程，首次滚动长列表每张新封面卡一下。改为：handler 只在
+        // 主线程做"收包转交"，整个 artwork_protocol 在阻塞池跑完再经
+        // responder 回包——主线程零阻塞。请求对象本来就只是 URI 解析，开销可忽略。
+        .register_asynchronous_uri_scheme_protocol(
+            aiya_data::ARTWORK_SCHEME,
+            |ctx, request, responder| {
+                let app = ctx.app_handle().clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    responder.respond(artwork_protocol(&app, request));
+                });
+            },
+        )
         .setup(|app| {
             // 第一件事：日志。此后的任何失败（建库、起 sidecar）才有据可查，
             // 否则 release 里所有 tracing 输出进虚空。
@@ -2675,11 +3393,21 @@ pub fn run() {
             app_id::log_outcome();
 
             let db_path = default_db_path(app.handle());
-            let db = aiya_data::open(&db_path)
-                .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
+            // 库文件损坏已在 aiya_data::open 内部 quarantine + 重建；走到这个
+            // Err 的只剩真 IO 故障（磁盘满/权限）。必须弹原生错误框：release
+            // 无控制台、此刻也没有窗口，不弹 = 用户双击后"什么都不发生"。
+            let db = aiya_data::open(&db_path).map_err(|e| -> Box<dyn std::error::Error> {
+                tracing::error!(error = %e, db = %db_path.display(), "数据库打开失败");
+                fatal_dialog(&format!(
+                    "AIYA Music 无法打开音乐库数据库：\n{e}\n\n位置：{}\n\n请检查磁盘空间与权限后重试；若反复出现，可把该文件移走后重新启动（将重建空库）。",
+                    db_path.display()
+                ));
+                e.into()
+            })?;
             let artwork_dir = default_artwork_dir(app.handle());
             let _ = std::fs::create_dir_all(artwork_dir.join("originals"));
             let _ = std::fs::create_dir_all(artwork_dir.join("thumbs"));
+            // launch 内部已做首连降级（失败不再 Err），保留 map_err 作为兜底。
             let engine = sidecar::SidecarHandle::launch()
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
             // 设置缓存灌一次：此后泵/诊断/启动恢复都读内存，不查库。
@@ -2700,6 +3428,8 @@ pub fn run() {
                 .and_then(|v| serde_json::from_value::<dto::EqSettings>(v).ok())
                 .map(|s| aiya_audio::EqParams {
                     bands: std::array::from_fn(|i| s.bands.get(i).copied().unwrap_or(0.0)),
+                    bass_db: s.bass_db,
+                    treble_db: s.treble_db,
                     pregain: s.pregain,
                     enabled: s.enabled,
                 })
@@ -2732,6 +3462,7 @@ pub fn run() {
                 audio_state: Mutex::new(AudioStateSnapshot::default()),
                 timings: Mutex::new(VecDeque::with_capacity(TIMING_LIMIT)),
                 settings: Mutex::new(settings0),
+                beets_install_child: Mutex::new(None),
             });
 
             // 曲库刷新管线（docs/33 §7）：定时 30 s + 窗口聚焦。
@@ -2757,6 +3488,9 @@ pub fn run() {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .set_normalize(on);
+                // 启动即按保留周期裁剪播放历史：覆盖"上次把周期调小后
+                // 一直没播放"的场景（写历史 / 设置变更各自也会触发）。
+                state.prune_history();
             }
 
             // SMTC：主窗口 HWND（COM 对象要求）；失败只记日志，不影响播放
@@ -2931,26 +3665,33 @@ pub fn run() {
                     // 归约 + 旁路动作全在 PumpCore 里（可注入时钟与引擎出口，
                     // 事件序列有单元测试锁定）。锁只在归约期间持有，
                     // emit 是同步 IPC 序列化，一律放到锁外。
-                    let effects = {
+                    let (effects, persist) = {
                         let mut actor = engine
                             .player
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         let mut sent: Vec<aiya_audio::EngineCommand> = Vec::new();
-                        let effects = core.ingest(events, &mut actor, now_ms_u64(), &mut |cmd| {
-                            sent.push(cmd)
-                        });
+                        // 门控用 acted（本批是否真下发了引擎意图）：Position 节流
+                        // 也置 EmitState，但队列结构没变 —— 此前用 EmitState 门控，
+                        // 播放中每 500ms 全量 DELETE+重写一次 queue_items。
+                        let (effects, acted) =
+                            core.ingest(events, &mut actor, now_ms_u64(), &mut |cmd| {
+                                sent.push(cmd)
+                            });
                         // pending_load / pending_stop 的实际下发仍在锁内做完：
                         // 引擎通道是有界的，正常消费下不会阻塞
                         for cmd in sent {
                             engine_send(&engine, cmd);
                         }
-                        if effects.contains(&PumpEffect::EmitState) {
-                            // 意图下发可能改了队列结构 → 全量落库（与命令路径一致）
-                            persist_queue_full(&engine, &actor);
-                        }
-                        effects
+                        // 落库数据锁内取、锁外写（save_queue_full 走单 worker，
+                        // 不能在 player 锁里等它）
+                        let persist =
+                            acted.then(|| queue_full_persist_snapshot(&engine, &actor));
+                        (effects, persist)
                     };
+                    if let Some(snap) = persist {
+                        persist_queue_full_snapshot(&engine, snap);
+                    }
                     // 频谱帧（~30fps）先转发，再广播状态：UI 的动画帧不该排在
                     // 一次状态序列化之后
                     let mut emit_state = false;
@@ -3050,16 +3791,25 @@ pub fn run() {
             beets_apply,
             beets_cancel,
             beets_sync,
+            beets_config_get,
+            beets_set_inbox,
+            beets_set_target,
+            beets_open_inbox,
+            beets_inbox_imported_add,
             refresh_state,
             beets_install,
             beets_adopt,
             beets_update,
             beets_duplicates,
             beets_move,
+            beets_plugin_catalog,
+            beets_plugin_install,
+            library_genres,
             beets_reveal,
             library_list,
             library_albums,
             library_artists,
+            library_genres,
             library_tracks,
             library_stats,
             library_scan,
@@ -3067,6 +3817,9 @@ pub fn run() {
             library_choose_root,
             library_roots_get,
             library_roots_set,
+            library_roots_count,
+            library_roots_prune,
+            library_clear,
             library_reveal_track,
             library_ids_for_selection,
             library_remove_tracks,
@@ -3074,6 +3827,7 @@ pub fn run() {
             playlist_detail,
             playlist_create,
             playlist_rename,
+            playlist_set_rule,
             playlist_delete,
             playlist_reorder,
             playlist_add_tracks,
@@ -3115,6 +3869,17 @@ pub fn run() {
             // 假 ERROR 日志 + 一个要等 8s 孤儿窗口才自退的多余进程。
             if let tauri::RunEvent::Exit = event {
                 if let Some(state) = app.try_state::<AppState>() {
+                    // beets 安装子进程（A 轨道）：安装线程可能正卡在 pip 阶段，
+                    // 退出时收尸 —— 槽被 take 走后安装线程自行报"被退出中断"。
+                    if let Some(mut c) = state
+                        .beets_install_child
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take()
+                    {
+                        let _ = c.kill();
+                        let _ = c.wait();
+                    }
                     state
                         .engine
                         .lock()

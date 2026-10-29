@@ -3,8 +3,7 @@
 /* ---------------- 队列 / 歌词面板 ---------------- */
 
 .queue-panel,
-.lyrics-panel,
-.spectrum-panel {
+.lyrics-panel {
   grid-row: 1 / 2;
   grid-column: 3;
   border-left: 1px solid var(--line);
@@ -17,8 +16,7 @@
 }
 
 .queue-panel header,
-.lyrics-panel header,
-.spectrum-panel header {
+.lyrics-panel header {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -28,8 +26,7 @@
 }
 
 .queue-panel header .dim,
-.lyrics-panel header .dim,
-.spectrum-panel header .dim {
+.lyrics-panel header .dim {
   color: var(--text-2);
   font-size: 11px;
   margin-right: auto;
@@ -118,13 +115,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-.queue-empty {
-  padding: 40px 12px;
-  text-align: center;
-  color: var(--text-2);
-  font-size: 12px;
-  line-height: 1.9;
-}
+/* 队列/歌词的空态已统一到 EmptyState.svelte（.k-empty） */
 
 /* docs/25 §6：抽屉壳是 SideDrawer（窗口左缘滑出，AppShell 宿主），
    内容全出血铺满抽屉面板——几何由壳负责，这里只归零旧气泡形状。 */
@@ -142,8 +133,10 @@
   background: transparent;
 }
 
-/* EQ 抽屉体：铺满抽屉；10 段滑杆仍按 ~380px 收紧——EqPanel 默认段宽
-   34px + 间距 14px 是给整页准备的（≈500px） */
+/* EQ 抽屉体：铺满抽屉。内部尺寸（波段宽/轨道高/卡片）全部收进
+   EqPanel.svelte 自身——它只在抽屉里用，旧 popover 时代的
+   .eq-bands/.eq-band/.eq-track 覆盖已删（与组件作用域样式同优先级、
+   注入顺序靠后不生效，正是横滚 bug 的帮凶之一）。 */
 .eq-drawer-body {
   width: 100%;
   height: 100%;
@@ -154,19 +147,6 @@
 .eq-drawer-body .eq-panel {
   flex: 1;
   min-height: 0;
-}
-
-.eq-drawer-body .eq-bands {
-  gap: 8px;
-  padding: 14px 10px 6px;
-}
-
-.eq-drawer-body .eq-band {
-  width: 26px;
-}
-
-.eq-drawer-body .eq-track {
-  min-height: 150px;
 }
 
 .dim {
@@ -191,16 +171,6 @@
    flex-shrink 0——歌词再长也不许压缩占位，多出的长度交给滚动。 */
 .lyrics-pad {
   flex: 0 0 50%;
-}
-
-.lyrics-empty {
-  /* 空态/加载态没有占位参与，用 auto 外边距在容器里居中 */
-  margin: auto;
-  padding: 48px 8px;
-  text-align: center;
-  color: var(--text-2);
-  font-size: 12.5px;
-  line-height: 2;
 }
 
 .lyrics-lines {
@@ -239,39 +209,4 @@
   background: var(--accent-weak);
   /* 激活行略微放大字号（用户反馈）：视觉重心落在当前句上 */
   font-size: 14.5px;
-}
-
-.icon-btn svg {
-  display: block;
-}
-
-.icon-btn {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  color: var(--text-2);
-  font-size: 12px;
-  flex: none;
-}
-
-.icon-btn:hover:not(:disabled) {
-  color: var(--text-1);
-  background: var(--surface-hover);
-}
-
-.icon-btn:disabled {
-  opacity: 0.4;
-}
-
-.icon-btn.on {
-  color: var(--accent);
-  background: var(--accent-weak);
-}
-
-.icon-btn.tiny {
-  width: 22px;
-  height: 22px;
-  font-size: 10px;
 }

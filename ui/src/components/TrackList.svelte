@@ -1,9 +1,18 @@
 <script lang="ts">
+  /**
+   * **管理列表**（2026-10-28 拆分）：虚拟滚动 + 多选批量 + 列头排序 +
+   * 筛选器 + 右键菜单——曲库 / 搜索 / 艺人 / 专辑详情页用。
+   *
+   * 三个分支各管各的（勿再往回挂开关）：`TrackTable`（纯榜单，首页）、
+   * 本组件（管理，无拖拽——这些视图的顺序是查询语义，不能手排）、
+   * `PlaylistList`（可拖放排序，仅歌单——手动歌单的顺序是用户语义）。
+   * 行结构与 CSS 类名与 PlaylistList 刻意保持一致（`.row` / `.grid-head`，
+   * 见 lists.css），改动行渲染时两个文件要同步。
+   */
   import { Play } from '@lucide/svelte';
   import type { TrackRow } from '../lib/ipc';
   import type { TrackSort } from '../lib/query';
   import { artworkUrl } from '../lib/artwork';
-  import { startRowDrag, consumeClickSuppressed } from '../lib/drag';
   import { createVirtualWindow } from '../lib/create-virtual-window.svelte';
   import { scrollTopForRow } from '../lib/virtual';
   import CheckCell from './ui/CheckCell.svelte';
@@ -47,8 +56,6 @@
     onscroll: (scrollTop: number, firstVisible: number) => void;
     onrestored: () => void;
     onretry: (index: number) => void;
-    /** 传入即开启拖拽排序（播放列表视图） */
-    onmove?: (from: number, to: number) => void;
     /* ---------------- 工具条（docs/27 内置，替代悬浮 BatchBar） ---------------- */
     batchMode: boolean;
     onbatchmode: (on: boolean) => void;
@@ -96,7 +103,6 @@
     onscroll,
     onrestored,
     onretry,
-    onmove,
     batchMode,
     onbatchmode,
     onplayall,
@@ -115,6 +121,8 @@
 
   const ROW_HEIGHT = $derived(rowHeight);
   const OVERSCAN = 6;
+  /** 行区前的表头占位（sticky 仍是流内元素），滚动定位要把这 30px 算进去 */
+  const HEAD_HEIGHT = 30;
 
   /**
    * 滚动水管抽到 `lib/create-virtual-window`（与 QueuePanel 共用）：
@@ -135,8 +143,6 @@
   const allSelected = $derived(selectableTotal > 0 && selection.size >= selectableTotal);
   const someSelected = $derived(selection.size > 0 && !allSelected);
 
-  let dragState = $state<{ from: number; to: number; active: boolean } | null>(null);
-
   const range = $derived(vw.range);
 
   const rows = $derived.by(() => {
@@ -148,10 +154,6 @@
     }
     return out;
   });
-
-  const dropLineTop = $derived(
-    dragState && dragState.active ? range.padTop + dragState.to * ROW_HEIGHT : -1,
-  );
 
   // 可见区间变了就补页。放在 effect 里而不是渲染函数里，
   // 避免在渲染过程中触发异步状态写入。
@@ -170,22 +172,9 @@
   // 键盘选中项变化时把它滚进视野
   $effect(() => {
     if (!vw.scroller || selectedIndex < 0) return;
-    const target = scrollTopForRow(selectedIndex, ROW_HEIGHT, vw.viewportHeight, vw.scroller.scrollTop);
+    const target = scrollTopForRow(selectedIndex, ROW_HEIGHT, vw.viewportHeight, vw.scroller.scrollTop, HEAD_HEIGHT);
     if (target !== vw.scroller.scrollTop) vw.scroller.scrollTop = target;
   });
-
-  function handlePointerDown(event: PointerEvent, index: number): void {
-    if (!onmove) return;
-    startRowDrag({
-      event,
-      index,
-      count: total,
-      rowHeight,
-      scroller: vw.scroller,
-      onState: (next) => (dragState = next),
-      onDrop: (from, to) => onmove?.(from, to),
-    });
-  }
 
   /** 行内点击要排除的来源：勾选框 / 封面悬浮播放键 / 歌手·专辑跳转链接 */
   function isRowInternalTarget(target: EventTarget | null): boolean {
@@ -216,7 +205,6 @@
 
   <div
     class="list"
-    class:dragging={dragState?.active}
     bind:this={vw.scroller}
     onscroll={() => {
       // 先让水管同步 scrollTop，再上报（沿用 B4-1 前的回调形状）
@@ -260,17 +248,10 @@
             class:active={row.track.id === currentId}
             class:selected={selection.has(row.index)}
             class:focus={row.index === selectedIndex}
-            class:drag-source={dragState?.active && dragState.from === row.index}
             style={`height:${rowHeight}px`}
             role="row"
             tabindex="0"
-            onpointerdown={(event) => handlePointerDown(event, row.index)}
             onclick={(event) => {
-              // 拖拽激活后松手会派发一次残留 click，吞掉避免误选中
-              if (consumeClickSuppressed()) {
-                event.stopPropagation();
-                return;
-              }
               // 勾选列 / 播放键 / 跳转链接里的点击不是"选中这一行"。
               // Svelte 5 把 click 委托到根节点统一派发，stopPropagation 拦不住
               // 同一批委托 handler，由行自己认出来源才是可靠的那道闸。
@@ -308,7 +289,7 @@
                 ontoggle={(event) => oncheck(row.index, event)}
               />
             {/if}
-            <span class="idx">
+            <span class="idx" role="cell">
               {#if row.track.id === currentId}
                 <span class="bars" class:animated={playing} aria-label="正在播放">
                   <i></i><i></i><i></i>
@@ -319,7 +300,7 @@
             </span>
             <!-- 封面悬浮播放键（docs/27 第 4 点）：从 # 列搬到封面上，
                  行 hover 时以半透明底叠在封面中央 -->
-            <span class="cover-slot">
+            <span class="cover-slot" role="cell">
               {#if row.track.artworkId}
                 <img class="cover" src={artworkUrl(row.track.artworkId, 96) ?? ''} alt="" loading="lazy" />
               {:else}
@@ -334,12 +315,12 @@
                 <Play size={13} />
               </button>
             </span>
-            <span class="cell title" title={row.track.title}>
+            <span class="cell title" role="cell" title={row.track.title}>
               {#each highlight(row.track.title, query) as part}
                 {#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}
               {/each}
             </span>
-            <span class="cell dim">
+            <span class="cell dim" role="cell">
               {#if row.track.artistId && row.track.artist && !disableArtistLink}
                 <button
                   class="link-cell"
@@ -355,7 +336,7 @@
                 <span title={row.track.artist ?? ''}>{row.track.artist ?? '未知歌手'}</span>
               {/if}
             </span>
-            <span class="cell dim">
+            <span class="cell dim" role="cell">
               {#if row.track.albumId && row.track.album && !disableAlbumLink}
                 <button
                   class="link-cell"
@@ -371,34 +352,31 @@
                 <span title={row.track.album ?? ''}>{row.track.album ?? '—'}</span>
               {/if}
             </span>
-            <span class="cell num">{formatTime(row.track.durationMs)}</span>
+            <span class="cell num" role="cell">{formatTime(row.track.durationMs)}</span>
           </div>
         {:else if row.error}
           <div class="row failed" role="row">
-            {#if batchMode}<span class="k-check"></span>{/if}
-            <span class="idx">{row.index + 1}</span>
-            <span class="cover-slot"><span class="cover placeholder">!</span></span>
-            <span class="cell">{row.error}</span>
-            <span class="cell"></span>
-            <span class="cell"></span>
-            <span class="cell num"><button class="link" onclick={() => onretry(row.index)}>重试</button></span>
+            {#if batchMode}<span class="k-check" role="cell"></span>{/if}
+            <span class="idx" role="cell">{row.index + 1}</span>
+            <span class="cover-slot" role="cell"><span class="cover placeholder">!</span></span>
+            <span class="cell" role="cell">{row.error}</span>
+            <span class="cell" role="cell"></span>
+            <span class="cell" role="cell"></span>
+            <span class="cell num" role="cell"><button class="link" onclick={() => onretry(row.index)}>重试</button></span>
           </div>
         {:else}
           <div class="row skeleton" role="row" aria-busy="true">
-            {#if batchMode}<span class="k-check"></span>{/if}
-            <span class="idx">{row.index + 1}</span>
-            <span class="cover-slot"><span class="cover placeholder"></span></span>
-            <span class="cell shimmer"></span>
-            <span class="cell"></span>
-            <span class="cell"></span>
-            <span class="cell num"></span>
+            {#if batchMode}<span class="k-check" role="cell"></span>{/if}
+            <span class="idx" role="cell">{row.index + 1}</span>
+            <span class="cover-slot" role="cell"><span class="cover placeholder"></span></span>
+            <span class="cell shimmer" role="cell"></span>
+            <span class="cell" role="cell"></span>
+            <span class="cell" role="cell"></span>
+            <span class="cell num" role="cell"></span>
           </div>
         {/if}
       {/each}
       <div style={`height:${range.padBottom}px`} aria-hidden="true"></div>
-      {#if dropLineTop >= 0}
-        <div class="drop-line" style={`top:${dropLineTop}px`} aria-hidden="true"></div>
-      {/if}
     {/if}
   </div>
 </div>

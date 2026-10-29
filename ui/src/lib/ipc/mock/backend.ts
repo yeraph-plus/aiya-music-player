@@ -23,6 +23,8 @@ import type {
   AlbumPage,
   ArtistFacet,
   ArtistPage,
+  BeetsConfig,
+  BeetsMarketItem,
   Diagnostics,
   EqSettings,
   HistoryStats,
@@ -36,7 +38,10 @@ import type {
   PlaylistImportResult,
   PlaylistSummary,
   QueueSnapshot,
+  RemoveTracks,
   RevealResult,
+  RootsTrackCount,
+  ScanCancel,
   ScanResult,
   TrackAudio,
   TrackDetail,
@@ -126,6 +131,8 @@ function toRef(track: TrackRow): TrackRef {
     title: track.title,
     artist: track.artist,
     album: track.album,
+    artistId: track.artistId,
+    albumId: track.albumId,
     durationMs: track.durationMs,
     artworkId: track.artworkId,
     gainDb: track.gainDb,
@@ -137,6 +144,8 @@ function buildLibrary(): TrackRow[] {
   const rand = mulberry32(20261023);
   const tracks: TrackRow[] = [];
   const base = Date.UTC(2026, 8, 1) / 1000;
+  // 流派池：筛选器的"流派"条件演练用（值域与曲库 genres 命令一致）
+  const GENRE_POOL = ['流行', '民谣', '电子', '摇滚', '原声'];
   let n = 0;
   ARTIST_POOL.forEach((entry, ai) => {
     entry.albums.forEach((album, bi) => {
@@ -164,6 +173,7 @@ function buildLibrary(): TrackRow[] {
           gainDb: null,
           // 假数据全部"在线"：预览里不需要模拟灰标，那要看真库的 missing 状态
           availability: 'online',
+          genre: GENRE_POOL[Math.floor(rand() * GENRE_POOL.length)],
         });
       }
     });
@@ -196,6 +206,8 @@ function buildPlaylistSeed(tracks: TrackRow[]): {
       id,
       name,
       description: null,
+      kind: 'manual',
+      ruleJson: null,
       trackCount: slice.length,
       durationMs: slice.reduce((sum, t) => sum + (t.durationMs ?? 0), 0),
       artworkId: null,
@@ -290,6 +302,11 @@ export class MockBackend {
   private queueIds: string[] = [];
   /** 频谱假帧定时器：只在 `spectrum_set(true)` 期间跑 */
   private spectrumTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * 播放位置定时器：`playing` 期间按 ~10Hz 推进 positionMs（与真引擎的
+   * 10Hz 上报同频），整秒变化才 emit `player:state`——暂停/空闲即停。
+   */
+  private stateTimer: ReturnType<typeof setInterval> | null = null;
   /**
    * 列表耗时环（诊断页）。真记录而不是塞假数据：预览里翻两页就能看到
    * 来源/行数/耗时列有值，验收"表格接上真值"这件事。
@@ -656,6 +673,50 @@ export class MockBackend {
     return { started: true };
   }
 
+  /**
+   * 插件市场目录（docs/40 §3 白名单）。预览里放 3 项覆盖三种状态：
+   * builtin ready / pypi ready / pypi 缺依赖——「安装」按钮只在第三种出现。
+   * 内存态：装完翻绿，和真后端的复检语义一致。
+   */
+  private market: BeetsMarketItem[] = [
+    { name: 'replaygain', note: '播放音量自动拉齐', source: 'builtin', state: 'ready', enabled: false, missing: [] },
+    { name: 'lyrics', note: '歌词抓取（LRC 字段可直供）', source: 'pypi:beautifulsoup4', state: 'ready', enabled: false, missing: [] },
+    { name: 'fetchart', note: '封面抓取（本地缺图时补）', source: 'pypi:requests', state: 'missing_deps', enabled: false, missing: ['requests'] },
+  ];
+
+  async beetsPluginCatalog(): Promise<BeetsMarketItem[]> {
+    return this.market.map((m) => ({ ...m }));
+  }
+
+  async beetsPluginInstall(name: string): Promise<{ started: boolean }> {
+    const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:maintenance', e);
+    const item = this.market.find((m) => m.name === name);
+    if (!item) return { started: true };
+    emit({ type: 'pluginProgress', session: 'plug_01', stage: 'pluginInstall', message: `安装 ${item.source.replace(/^pypi:/, '')}` });
+    await new Promise((r) => setTimeout(r, 400));
+    emit({ type: 'pluginProgress', session: 'plug_01', stage: 'pluginInstall', message: 'Running setup.py install for beautifulsoup4' });
+    await new Promise((r) => setTimeout(r, 400));
+    // 复检翻绿：pip 退出码 0 不等于可用，mock 也保持"装完必须复检"的口径
+    item.state = 'ready';
+    item.missing = [];
+    emit({ type: 'pluginDone', session: 'plug_01', stage: 'pluginInstall', name, report: this.market.map((m) => ({ ...m })) });
+    return { started: true };
+  }
+
+  /**
+   * 预览环境的取消支持（八轮）：真后端走 scan_cancel 标志位，mock 用一个
+   * 布尔等价物。每步之间轮询一次，置位后发 `cancelled` 终态事件并提前返回
+   * ——与真后端"已完成批次保留、取消路径不跑对账"的语义对齐。
+   */
+  private scanRunning = false;
+  private scanCancelRequested = false;
+
+  scanCancel(): ScanCancel {
+    if (!this.scanRunning) return { cancelled: false };
+    this.scanCancelRequested = true;
+    return { cancelled: true };
+  }
+
   async scan(): Promise<ScanResult> {
     const started = Date.now();
     // 阶段顺序与真后端逐字对齐（docs/29 批 B 之后）：walking → parsing（解析与
@@ -665,6 +726,7 @@ export class MockBackend {
     //
     // `parsed > scanned` 是常态而不是 bug：解析比入库快，两者差值就是排队量，
     // 也正是 UI 要显示「解析 X · 已入库 Y」的理由。
+    // 步长 400ms：给 e2e 的「取消任务」点击留出落在扫描中途的窗口。
     const total = this.tracks.length;
     const half = Math.floor(total / 2);
     const steps: { phase: string; scanned: number; parsed: number; imported: number }[] = [
@@ -673,16 +735,50 @@ export class MockBackend {
       { phase: 'importing', scanned: total - 1, parsed: total, imported: total - 1 },
       { phase: 'done', scanned: total, parsed: total, imported: total },
     ];
-    for (const s of steps) {
-      this.emitter.emit('scan:progress', {
-        ...s,
-        total,
-        skipped: 0,
-        failed: 0,
-        currentPath: null,
-        elapsedMs: Date.now() - started,
-      });
-      await new Promise((r) => setTimeout(r, 250));
+    this.scanRunning = true;
+    this.scanCancelRequested = false;
+    try {
+      for (const s of steps) {
+        if (this.scanCancelRequested && s.phase !== 'done') {
+          const cancelledAt = s.scanned;
+          this.emitter.emit('scan:progress', {
+            phase: 'cancelled',
+            scanned: cancelledAt,
+            parsed: s.parsed,
+            total,
+            imported: s.imported,
+            updated: 0,
+            skipped: 0,
+            failed: 0,
+            missing: 0,
+            currentPath: null,
+            elapsedMs: Date.now() - started,
+          });
+          return {
+            scanned: cancelledAt,
+            imported: s.imported,
+            updated: 0,
+            unchanged: 0,
+            failed: 0,
+            missing: 0,
+            walkErrors: 0,
+            cancelled: true,
+            errors: [],
+            elapsedMs: Date.now() - started,
+          };
+        }
+        this.emitter.emit('scan:progress', {
+          ...s,
+          total,
+          skipped: 0,
+          failed: 0,
+          currentPath: null,
+          elapsedMs: Date.now() - started,
+        });
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    } finally {
+      this.scanRunning = false;
     }
     return {
       scanned: total,
@@ -721,6 +817,94 @@ export class MockBackend {
     return { roots: [...cleaned] };
   }
 
+  /** mock 库没有真实 path_lower 数据，按目录名出现次数给个示意值 */
+  rootsCount(paths: string[]): RootsTrackCount {
+    return { count: paths.length * 3 };
+  }
+
+  rootsPrune(paths: string[]): RemoveTracks {
+    void paths;
+    return { removed: 0 };
+  }
+
+  /* ---------------- beets 配置（docs/40 十三轮）：inbox / 输出根 / 排除表 ----------------
+   * 与真后端同语义的校验：inbox 不得与任何曲库目录相同或在内部（copy 留
+   * 原件会重复入库）；输出根必须在曲库目录里。mock 曲库根固定
+   * D:/MUSIC_Player/test-music，e2e 用别的目录即可绕开校验。 */
+
+  private beetsInbox: string | null = null;
+  private beetsTarget: string | null = null;
+  private inboxImported: string[] = [];
+
+  /** Windows 路径比较归一（与 Rust canon_path 同语义） */
+  private static normPath(p: string): string {
+    return p.trim().replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase();
+  }
+
+  beetsConfigGet(): BeetsConfig {
+    const roots = this.scanRoots;
+    const target = this.beetsTarget;
+    const effective =
+      target && roots.some((r) => MockBackend.normPath(r) === MockBackend.normPath(target))
+        ? target
+        : (roots[0] ?? null);
+    return {
+      inbox: this.beetsInbox,
+      targetRoot: target,
+      effectiveTarget: effective,
+      importedCount: this.inboxImported.length,
+    };
+  }
+
+  beetsSetInbox(path: string | null): BeetsConfig {
+    const p = path?.trim();
+    if (p) {
+      const c = MockBackend.normPath(p);
+      const conflict = this.scanRoots.some((r) => {
+        const rc = MockBackend.normPath(r);
+        return c === rc || c.startsWith(`${rc}\\`);
+      });
+      if (conflict) {
+        throw new Error('待整理目录不能与曲库目录相同或在其内部');
+      }
+      this.beetsInbox = p;
+    } else {
+      this.beetsInbox = null;
+    }
+    this.inboxImported = [];
+    return this.beetsConfigGet();
+  }
+
+  beetsSetTarget(path: string): BeetsConfig {
+    const p = path.trim();
+    if (!this.scanRoots.some((r) => MockBackend.normPath(r) === MockBackend.normPath(p))) {
+      throw new Error('整理输出目录必须是曲库目录之一');
+    }
+    this.beetsTarget = p;
+    return this.beetsConfigGet();
+  }
+
+  beetsInboxImportedAdd(paths: string[]): BeetsConfig {
+    for (const raw of paths) {
+      const p = raw.trim();
+      if (!p) continue;
+      const pc = MockBackend.normPath(p);
+      if (!this.inboxImported.some((e) => MockBackend.normPath(e) === pc)) {
+        this.inboxImported.push(p);
+      }
+    }
+    if (this.inboxImported.length > 2000) {
+      this.inboxImported = this.inboxImported.slice(-2000);
+    }
+    return this.beetsConfigGet();
+  }
+
+  /** 清空整个曲库记录（真后端级联清歌单条目/历史；mock 只清 tracks） */
+  clearLibrary(): RemoveTracks {    const removed = this.tracks.length;
+    this.tracks = [];
+    return { removed };
+  }
+
   /* ---------------- playlists ---------------- */
 
   playlistList(): PlaylistSummary[] {
@@ -731,22 +915,34 @@ export class MockBackend {
     return this.playlists.find((p) => p.id === id) ?? null;
   }
 
-  playlistCreate(name: string, trackIds?: string[]): PlaylistSummary {
+  playlistCreate(name: string, trackIds?: string[], rule?: Record<string, unknown>): PlaylistSummary {
     const now = Date.now();
+    const isSmart = rule != null;
     const summary: PlaylistSummary = {
       id: `pl-${now}`,
       name,
       description: null,
-      trackCount: trackIds?.length ?? 0,
+      kind: isSmart ? 'smart' : 'manual',
+      ruleJson: isSmart ? JSON.stringify(rule) : null,
+      // 智能歌单的 trackCount 是规则的投影；mock 没有规则查询引擎，给 0（空态可看）
+      trackCount: isSmart ? 0 : (trackIds?.length ?? 0),
       durationMs: 0,
       artworkId: null,
       createdAtMs: now,
       updatedAtMs: now,
       sortPosition: this.playlists.length,
     };
-    this.playlistItems.set(summary.id, [...(trackIds ?? [])]);
+    if (!isSmart) this.playlistItems.set(summary.id, [...(trackIds ?? [])]);
     this.playlists.push(summary);
     return this.syncPlaylist(summary.id) ?? summary;
+  }
+
+  playlistSetRule(id: string, rule: Record<string, unknown>): PlaylistSummary | null {
+    const p = this.playlists.find((x) => x.id === id);
+    if (!p || p.kind !== 'smart') return p ?? null;
+    p.ruleJson = JSON.stringify(rule);
+    p.updatedAtMs = Date.now();
+    return p;
   }
 
   /** 按内容表重算计数/时长（真实库是 DB 侧维护，预览手算） */
@@ -887,7 +1083,32 @@ export class MockBackend {
 
   private emitPlayer(): void {
     this.playerState = { ...this.playerState, updatedAtMs: Date.now() };
+    this.syncStateTimer();
     this.emitter.emit('player:state', this.playerState);
+  }
+
+  /** 播放状态变了就同步位置定时器的启停（所有命令都经 emitPlayer 出口） */
+  private syncStateTimer(): void {
+    if (this.playerState.status === 'playing' && this.stateTimer === null) {
+      this.stateTimer = setInterval(() => this.tickPosition(), 100);
+    } else if (this.playerState.status !== 'playing' && this.stateTimer !== null) {
+      clearInterval(this.stateTimer);
+      this.stateTimer = null;
+    }
+  }
+
+  /** 播放中的位置推进：暂停/空闲时定时器已清，不会走到这 */
+  private tickPosition(): void {
+    const duration = this.playerState.durationMs;
+    let position = this.playerState.positionMs + Math.round(100 * this.playerState.rate);
+    // 走到曲尾回到开头（预览不出声，循环推进只为让进度条/歌词时钟活着）
+    if (duration != null && duration > 0 && position >= duration) position = 0;
+    const secondBefore = Math.floor(this.playerState.positionMs / 1000);
+    this.playerState = { ...this.playerState, positionMs: position, updatedAtMs: Date.now() };
+    // 整秒才广播：10Hz 的内部推进不值得各层 rAF 都醒一次
+    if (Math.floor(position / 1000) !== secondBefore) {
+      this.emitter.emit('player:state', this.playerState);
+    }
   }
 
   playerStateNow(): PlayerState {
@@ -1137,6 +1358,8 @@ export class MockBackend {
     const LIMIT = 12;
     const applied: EqSettings = {
       enabled: eq.enabled,
+      bassDb: Math.max(-LIMIT, Math.min(LIMIT, eq.bassDb)),
+      trebleDb: Math.max(-LIMIT, Math.min(LIMIT, eq.trebleDb)),
       pregain: Math.max(-LIMIT, Math.min(LIMIT, eq.pregain)),
       bands: eq.bands.map((b) => Math.max(-LIMIT, Math.min(LIMIT, b))),
     };
@@ -1145,11 +1368,15 @@ export class MockBackend {
   }
 
   getEq(): EqSettings {
-    return loadJson('aiya.eq', {
+    // 旧 localStorage 行可能没有 bassDb/trebleDb（docs/39 前的存量），兜底 0
+    const v = loadJson('aiya.eq', {
       enabled: false,
       bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      bassDb: 0,
+      trebleDb: 0,
       pregain: 0,
     });
+    return { ...v, bassDb: v.bassDb ?? 0, trebleDb: v.trebleDb ?? 0 };
   }
 
   diagnostics(): Diagnostics {
@@ -1199,16 +1426,27 @@ export class MockBackend {
       if (q.artistId && t.artistId !== q.artistId) return false;
       if (q.albumId && t.albumId !== q.albumId) return false;
       // 时间筛选（docs/27）：语义与 Rust repo.rs 逐字对齐——
-      // from 含、to 开区间，毫秒比较；never 优先于时间范围
+      // from 含、to 开区间，毫秒比较
       if (q.addedFromMs !== undefined && t.addedAtMs < q.addedFromMs) return false;
       if (q.addedToMs !== undefined && t.addedAtMs >= q.addedToMs) return false;
-      if (q.lastPlayedNever === true) {
-        if (t.lastPlayedAtMs !== null) return false;
-      } else if (q.lastPlayedFromMs !== undefined || q.lastPlayedToMs !== undefined) {
-        // SQL 语义：NULL 与任何比较都是假——从未播放的曲目被时间范围排除
-        if (t.lastPlayedAtMs === null) return false;
-        if (q.lastPlayedFromMs !== undefined && t.lastPlayedAtMs < q.lastPlayedFromMs) return false;
-        if (q.lastPlayedToMs !== undefined && t.lastPlayedAtMs >= q.lastPlayedToMs) return false;
+      // 筛选器临时条件（与智能歌单同键，语义对齐 smart.rs build_clause）：
+      // 文本走 norm 后 =/LIKE，数字直接比较；artist/album 用子串
+      for (const c of q.conds ?? []) {
+        const norm = (s: string) => s.trim().toLowerCase();
+        if (c.field === 'genre' || c.field === 'artist' || c.field === 'album') {
+          const hay =
+            c.field === 'genre' ? (t.genre ?? '') : c.field === 'artist' ? (t.artist ?? '') : (t.album ?? '');
+          const h = hay.toLowerCase();
+          const v = norm(String(c.value));
+          if (c.op === 'eq' && h !== v) return false;
+          if (c.op === 'contains' && !h.includes(v)) return false;
+        } else {
+          const v = Number(c.value);
+          const n = c.field === 'year' ? t.year : t.playCount;
+          if (c.op === 'eq' && n !== v) return false;
+          if (c.op === 'gte' && (n ?? Number.NaN) < v) return false;
+          if (c.op === 'lte' && (n ?? Number.NaN) > v) return false;
+        }
       }
       return true;
     });

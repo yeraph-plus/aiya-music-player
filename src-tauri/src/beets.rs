@@ -70,23 +70,31 @@ pub fn data_home(app: &tauri::AppHandle) -> PathBuf {
     crate::paths::data_root(app).join("beets")
 }
 
-/// 用户的第一个扫描根 → 工具的整理目标根。
+/// 整理输出根 → 工具的 `directory:`。
 ///
 /// 这是**用户事实**，不是 beets 知识：播放器本来就知道用户的曲库在哪。
 /// 工具拿它写进自己的配置，播放器不碰配置格式。
+///
+/// 优先级（docs/40 十三轮）：用户在曲库目录里**勾选**的整理输出根（单选，
+/// `beets.targetRoot`）；没勾或勾选的目录已被移除时回退第一个扫描根——
+/// 与"勾选框出现之前"的行为一致，老配置零迁移。
 fn scan_root(app: &tauri::AppHandle) -> Option<String> {
     app.try_state::<crate::AppState>()
         .and_then(|st| {
             st.db()
-                .send(|conn| Ok(crate::setting_get(conn, "library.roots")))
+                .send(|conn| {
+                    let roots = crate::read_roots(conn);
+                    let target = crate::setting_get(conn, "beets.targetRoot")
+                        .and_then(|v| v.as_str().map(str::to_string))
+                        .filter(|s| !s.trim().is_empty());
+                    Ok(target
+                        .filter(|t| {
+                            roots.iter().any(|r| crate::canon_path(r) == crate::canon_path(t))
+                        })
+                        .or_else(|| roots.first().cloned()))
+                })
                 .ok()
                 .flatten()
-        })
-        .and_then(|v| {
-            v.as_array()?
-                .first()
-                .and_then(|x| x.as_str())
-                .map(str::to_string)
         })
 }
 
@@ -580,6 +588,13 @@ fn find_system_python() -> Option<String> {
     None
 }
 
+/// 安装器整体超时：pip 冷装（解析依赖 + 下载）正常几分钟内，
+/// 20 分钟还没完就是卡死了。
+const INSTALL_OVERALL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+/// 行间空闲超时：安装器输出连绵不断（pip 也有进度行），
+/// 60s 一行都没有 = 子进程卡死，不必等整体超时。
+const INSTALL_LINE_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
 fn install_via_installer(
     app: &tauri::AppHandle,
     pyz: &std::path::Path,
@@ -609,25 +624,113 @@ fn install_via_installer(
         .spawn()
         .map_err(|e| format!("启动安装器失败：{e}"))?;
 
-    let mut stdout = child.stdout.take().ok_or("安装器 stdout 未捕获")?;
-    use std::io::BufRead;
-    let reader = std::io::BufReader::new(&mut stdout);
-    let mut done = false;
-    for line in reader.lines().map_while(Result::ok) {
-        let s = line.trim();
-        if s.is_empty() {
-            continue;
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("安装器 stdout 未捕获".into());
         }
-        // 安装器输出 JSON 行；万一有裸行（pip 进度条）也包成 progress，不丢信息
-        let v: serde_json::Value = serde_json::from_str(s).unwrap_or_else(|_| {
-            serde_json::json!({ "type": "progress", "stage": "pip", "message": s })
-        });
-        if v.get("type").and_then(|t| t.as_str()) == Some("done") {
-            done = true;
-        }
-        emit(v);
+    };
+    // 句柄唯一所有者是共享槽（AppState.beets_install_child）：本函数此后
+    // 经槽 wait/kill，应用退出（RunEvent::Exit）也经槽收尸 —— 此前安装
+    // 线程逐行阻塞读、无超时，主进程退出时安装器跟着变孤儿进程。
+    let state = app
+        .try_state::<crate::AppState>()
+        .ok_or_else(|| "AppState 未就绪".to_string())?;
+    {
+        let mut slot = state
+            .beets_install_child
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = Some(child);
     }
-    let code = child.wait().map_err(|e| format!("等待安装器退出失败：{e}"))?;
+
+    // 读线程：逐行送 channel。安装线程 recv_timeout 做两级超时
+    // （行间空闲 / 整体），超时 kill+wait 收尸并报错 —— 阻塞读永远等不到
+    // "安装器卡死"这一天结束。
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let reader = std::thread::Builder::new()
+        .name("beets-install-recv".into())
+        .spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+                if tx.send(line).is_err() {
+                    break; // 主线程已返回/收尸
+                }
+            }
+        })
+        .map_err(|e| {
+            // 读线程没起来：安装器没人读输出会卡死在管道缓冲上，直接收尸
+            let mut slot = state
+                .beets_install_child
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(mut c) = slot.take() {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            format!("起安装器读线程失败：{e}")
+        })?;
+
+    let started = std::time::Instant::now();
+    let mut done = false;
+    let mut timed_out = false;
+    loop {
+        if started.elapsed() > INSTALL_OVERALL_TIMEOUT {
+            timed_out = true;
+            break;
+        }
+        match rx.recv_timeout(INSTALL_LINE_IDLE_TIMEOUT) {
+            Ok(line) => {
+                let s = line.trim();
+                if s.is_empty() {
+                    continue;
+                }
+                // 安装器输出 JSON 行；万一有裸行（pip 进度条）也包成 progress，不丢信息
+                let v: serde_json::Value = serde_json::from_str(s).unwrap_or_else(|_| {
+                    serde_json::json!({ "type": "progress", "stage": "pip", "message": s })
+                });
+                if v.get("type").and_then(|t| t.as_str()) == Some("done") {
+                    done = true;
+                }
+                emit(v);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                timed_out = true;
+                break;
+            }
+            // stdout 关闭 = 进程要退出了（此后 wait 很快）
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    // 收尾统一经槽，**先 kill 再 join**：超时路径上读线程还挂在 stdout 上，
+    // 不先杀进程 join 永远等不到。槽被 Exit 收尾拿走（take 后为 None）
+    // = 应用正在退出，子进程已被 kill+wait，安装就此放弃。
+    let code = {
+        let mut slot = state
+            .beets_install_child
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match slot.as_mut() {
+            Some(c) => {
+                if timed_out {
+                    let _ = c.kill();
+                }
+                let code = c.wait().map_err(|e| format!("等待安装器退出失败：{e}"))?;
+                slot.take(); // 已收尸，退出路径不必再管
+                Ok(code)
+            }
+            None => Err("安装被应用退出中断".to_string()),
+        }
+    }?;
+    // 子进程已死，管道关闭，读线程必已退出；join 只为不留悬线程
+    let _ = reader.join();
+    if timed_out {
+        return Err(format!(
+            "安装器超时未完成（行间空闲 >{INSTALL_LINE_IDLE_TIMEOUT:.0?} 或整体 >{INSTALL_OVERALL_TIMEOUT:.0?}），已终止"
+        ));
+    }
     if !code.success() || !done {
         return Err(format!("安装器未成功完成（退出码 {}）", code.code().unwrap_or(-1)));
     }
@@ -913,10 +1016,35 @@ fn run_session(
 pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
     let tool = tool_or_err(&app)?;
 
+    // 排除表是**播放器侧事实**（哪些 inbox 源文件已成功导入过），在这里注入
+    // 进协议预留的 options 对象（docs/40 十三轮）：待整理目录固定后，copy 应用的
+    // 原件一直留在 inbox，不排除的话下次整理会把同一批文件再导一遍。UI 不用
+    // 搬运这份数据，preview 命令签名保持不变。
+    let exclude: Vec<String> = app
+        .try_state::<crate::AppState>()
+        .and_then(|st| {
+            st.db()
+                .send(|conn| {
+                    Ok(crate::setting_get(conn, "beets.inboxImported")
+                        .and_then(|v| v.as_array().cloned())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect::<Vec<_>>())
+                })
+                .ok()
+        })
+        .unwrap_or_default();
+
+    let mut body = serde_json::json!({ "id": 1, "cmd": "preview_import", "paths": paths });
+    if !exclude.is_empty() {
+        body["options"] = serde_json::json!({ "excludePaths": exclude });
+    }
+
     run_session(
         tool,
         &app,
-        serde_json::json!({ "id": 1, "cmd": "preview_import", "paths": paths }),
+        body,
         "beets:import",
         "已有 beets 导入任务在执行（可先取消）",
         Box::new(|| {}),
@@ -1013,6 +1141,40 @@ pub fn start_duplicates(app: tauri::AppHandle, keys: Vec<String>) -> Result<(), 
     start_maintenance(
         app,
         serde_json::json!({ "id": 1, "cmd": "find_duplicates", "keys": keys }),
+        None,
+    )
+}
+
+/* ---------------- 插件市场（docs/40 §3 白名单版） ---------------- */
+
+/// 插件市场目录：一次性短进程查询（与 status 探测同款开销，~1s）。
+///
+/// 目录 = 工具侧白名单 + 三态复检。UI 只在 beets 可用时才展示这一区，
+/// 所以这里拿不到入口时直接报错由命令层分类即可。
+pub fn plugin_catalog(
+    app: &tauri::AppHandle,
+) -> Result<Vec<crate::dto::beets::BeetsMarketItem>, String> {
+    let (entry, _source) = discover(app)
+        .ok_or_else(|| "未安装 beets 组件：请到「扫描入库 → 曲库维护」安装".to_string())?;
+    let launcher = launcher_for(app, &entry);
+    let rows = aiya_beets_client::session::query_plugin_catalog(&launcher, Duration::from_secs(20))
+        .map_err(|e| e.to_string())?;
+    rows.into_iter()
+        .map(|row| {
+            serde_json::from_value(row)
+                .map_err(|e| format!("目录项形状不对（协议漂移？）: {e}"))
+        })
+        .collect()
+}
+
+/// 安装一个白名单插件。事件流走 `beets:maintenance`（pluginProgress →
+/// pluginDone 终态），**复用维护会话槽**：装插件和整理库操作都会在
+/// serve 进程里跑，同一时刻只能有一个，分开两个槽会让两个 pip 并发
+/// 写同一个 site-packages。装完不触发读模型对账（插件不改自有库）。
+pub fn start_plugin_install(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    start_maintenance(
+        app,
+        serde_json::json!({ "id": 1, "cmd": "plugin_install", "name": name }),
         None,
     )
 }
@@ -1380,7 +1542,14 @@ mod tests {
 ///
 /// `AIYA_BEETS_HOME` 不设 = 走 beets 自己的默认位置，不碰应用的 app_data。
 /// `PYTHONPATH` 指向仓库源码树，这样源码树里的工具能被 import。
+///
+/// 一次性查询与会话共用进程级会话槽（client 侧修复）：两个真进程 probe
+/// 并行跑会有一方拿到 Busy。生产里 probe 是用户触发的低频操作，测试里
+/// 用这把锁串行化即可。
+static REAL_PROCESS_PROBE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn status_via(program: &str, args: &[&str]) -> BeetsStatus {
+    let _probe_lock = REAL_PROCESS_PROBE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/src");
     let launcher = Launcher::new(program)
         .args(args.iter().copied())

@@ -57,15 +57,17 @@ test('EQ 抽屉：从播放条进入，预设命中打 ✓；与队列抽屉互�
   await eqTrigger.click();
   const panel = page.locator('.eq-panel');
   await expect(panel).toBeVisible();
-  await expect(panel.locator('.k-slider')).toHaveCount(11); // 10 段 + 前置增益
+  // 2026-10-28 三区制：只剩 10 段滑杆；低音/高音/前置增益三旋钮（三角布局）
+  await expect(panel.locator('.k-slider')).toHaveCount(10);
+  await expect(panel.locator('.knob[role="slider"]')).toHaveCount(3);
 
   // 开预设菜单 → 选「重低音」→ 菜单关、按钮显示命中名、滑杆值写入
-  await page.locator('.eq-panel header .link').click();
+  await panel.locator('.preset-btn').click();
   const menu = page.locator('.k-menu');
   await expect(menu).toBeVisible();
   await menu.getByRole('menuitem', { name: '重低音' }).click();
   await expect(menu).toHaveCount(0);
-  await expect(page.locator('.eq-panel header .link')).toHaveText(/预设：重低音/);
+  await expect(panel.locator('.preset-btn')).toHaveText(/重低音/);
   await expect(page.locator('.eq-band').first().locator('.eq-val')).toHaveText('+7');
   // 最后一段（16k）仍是 0 —— 重低音只抬低频
   await expect(page.locator('.eq-band').last().locator('.eq-val')).toHaveText('0');

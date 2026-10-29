@@ -52,6 +52,8 @@ pub struct TrackRow {
     /// 文件可用性：online / offline / missing。扫描器与 beets 对账都会改它，
     /// UI 用它给行打灰标（此前 DTO 里没有 → 列表看不出哪首已经找不到文件）。
     pub availability: String,
+    /// 流派（0003 迁移，beets 同步带来）。列表不显示，筛选器 conds 用。
+    pub genre: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -94,6 +96,10 @@ pub enum Direction {
 pub enum TrackSource {
     Library,
     Playlist { playlist_id: String },
+    /// 智能歌单（0003 迁移）：曲目列表不物化，打开时按 `rule_json` 实时查询
+    /// （`smart::load_plan` 编译成 WHERE/ORDER BY）。UI 仍发 `kind:'playlist'`，
+    /// 由 `list_tracks` 查 kind 后路由到这里。
+    SmartPlaylist { playlist_id: String },
     Recent,
     MostPlayed,
 }
@@ -133,6 +139,11 @@ pub struct TrackWindowQuery {
     /// 同时给时 never 优先。
     #[serde(default)]
     pub last_played_never: Option<bool>,
+    /// 列表筛选器的临时条件（`[{field,op,value},...]`）——与智能歌单同一批
+    /// 字段键（smart::parse_conds 解析），但**只在本次查询生效、不落库**。
+    /// 解析失败明确报错（与智能歌单同原则），UI 侧 validateRule 先拦一道。
+    #[serde(default)]
+    pub conds: Option<serde_json::Value>,
     /// 嵌套形状 `{ source: { kind: "library" } }`，与 contracts/query.ts 的
     /// trackSourceSchema（discriminatedUnion('kind')）同构。
     /// 注意不能用 #[serde(flatten)] 把 kind 摊到顶层 —— 那是 Electron demo
@@ -185,7 +196,7 @@ fn decode_cursor(cursor: &str) -> DbResult<(Value, String)> {
 
 const SELECT_COLS: &str = "t.id, t.title, t.artist_id, ar.name, t.album_id, al.title, al_ar.name, \
      t.duration_ms, t.track_no, t.disc_no, t.year, t.added_at, t.artwork_id, \
-     t.play_count, t.last_played_at, t.gain_db, t.availability";
+     t.play_count, t.last_played_at, t.gain_db, t.availability, t.genre";
 
 /// artist/album 展示列的两个 JOIN（页查询必带；COUNT 只在搜索时带）
 const JOIN_ARTIST_ALBUM: &str = "LEFT JOIN artists ar ON ar.id = t.artist_id \
@@ -217,6 +228,8 @@ fn join_and_order(q: &TrackWindowQuery) -> (&'static str, &'static str) {
     match &q.source {
         TrackSource::Library => (JOIN, ""),
         TrackSource::Playlist { .. } => (JOIN_PLAYLIST, " ORDER BY pi.position ASC"),
+        // 智能歌单：JOIN 与曲库同源（ar/al 别名给排序用）；ORDER BY 由计划动态给
+        TrackSource::SmartPlaylist { .. } => (JOIN, ""),
         TrackSource::Recent => (JOIN_AGG, " ORDER BY hs.recent_t0 DESC, t.id DESC"),
         TrackSource::MostPlayed => (
             JOIN_AGG,
@@ -240,21 +253,20 @@ fn key_expr(q: &TrackWindowQuery) -> Option<&'static str> {
 
 /// 只构造 WHERE 子句与绑定器（页数据与 COUNT 共用，保证两边口径一致）。
 /// `cursor_filter` 的占位符排在 WHERE 末尾（对应 binders 尾部追加的游标绑定）。
-fn build_where(q: &TrackWindowQuery, cursor_filter: Option<&str>) -> (String, Vec<Binder>) {
+/// `smart` 是智能歌单的已编译计划；`conds` 是筛选器临时条件（同样已编译）。
+/// 占位符顺序 = 推入顺序（search → artist → album → time → conds →
+/// playlist → smart → cursor）。
+fn build_where(
+    q: &TrackWindowQuery,
+    cursor_filter: Option<&str>,
+    smart: Option<&crate::smart::SmartPlan>,
+    conds: &[(String, serde_json::Value)],
+) -> (String, Vec<Binder>) {
     let mut binders: Vec<Binder> = Vec::new();
     let mut where_clauses: Vec<String> = Vec::new();
     if let Some(search) = q.search.as_deref().filter(|s| !s.trim().is_empty()) {
         // LIKE 通配符防误匹配：按字面语义转义 % _ \（\ 同时是 ESCAPE 字符）
-        let mut escaped = String::with_capacity(norm(search).len());
-        for c in norm(search).chars() {
-            match c {
-                '%' => escaped.push_str("\\%"),
-                '_' => escaped.push_str("\\_"),
-                '\\' => escaped.push_str("\\\\"),
-                _ => escaped.push(c),
-            }
-        }
-        let pattern = format!("%{escaped}%");
+        let pattern = format!("%{}%", crate::norm::escape_like(&norm(search)));
         for _ in 0..3 {
             let p = pattern.clone();
             binders.push(Box::new(move |v: &mut Vec<Box<dyn ToSql>>| {
@@ -312,15 +324,34 @@ fn build_where(q: &TrackWindowQuery, cursor_filter: Option<&str>) -> (String, Ve
             where_clauses.push("t.last_played_at < ?".to_string());
         }
     }
+    // 筛选器临时条件：每条子句恰好一个 `?`，绑定顺序 = clauses 顺序
+    for (clause, value) in conds {
+        let v = value.clone();
+        binders.push(Box::new(move |out: &mut Vec<Box<dyn ToSql>>| {
+            out.push(Box::new(to_sql_value(&v)));
+        }));
+        where_clauses.push(clause.clone());
+    }
     // 歌单来源：JOIN_PLAYLIST 从 playlist_items 出发，必须按 playlist_id 过滤，
     // 否则任何歌单都返回全部曲目（P0）。占位符顺序 = binder 推入顺序
-    // （search → artist → album → playlist → cursor）。
-    if let TrackSource::Playlist { playlist_id } = &q.source {
+    // （search → artist → album → playlist → smart → cursor）。
+    // 智能歌单（smart 接管）不走 playlist_items —— 条件在 plan.clauses 里。
+    if let (TrackSource::Playlist { playlist_id }, None) = (&q.source, smart) {
         let pid = playlist_id.clone();
         binders.push(Box::new(move |v: &mut Vec<Box<dyn ToSql>>| {
             v.push(Box::new(pid.clone()));
         }));
         where_clauses.push("pi.playlist_id = ?".to_string());
+    }
+    // 智能歌单规则条件：每条子句恰好一个 `?`，绑定顺序 = clauses 顺序
+    if let Some(plan) = smart {
+        for (clause, value) in &plan.clauses {
+            let v = value.clone();
+            binders.push(Box::new(move |out: &mut Vec<Box<dyn ToSql>>| {
+                out.push(Box::new(to_sql_value(&v)));
+            }));
+            where_clauses.push(clause.clone());
+        }
     }
     if let Some(cf) = cursor_filter {
         where_clauses.push(cf.to_string());
@@ -335,10 +366,25 @@ fn build_where(q: &TrackWindowQuery, cursor_filter: Option<&str>) -> (String, Ve
 }
 
 /// 构造页查询 SQL（SELECT ... 到 ORDER BY，不含 LIMIT/OFFSET）。
-fn build_head(q: &TrackWindowQuery, cursor_filter: Option<&str>) -> (String, Vec<Binder>) {
-    let (where_sql, binders) = build_where(q, cursor_filter);
+fn build_head(
+    q: &TrackWindowQuery,
+    cursor_filter: Option<&str>,
+    smart: Option<&crate::smart::SmartPlan>,
+    conds: &[(String, serde_json::Value)],
+) -> (String, Vec<Binder>) {
+    let (where_sql, binders) = build_where(q, cursor_filter, smart, conds);
     let (join, fixed_order) = join_and_order(q);
+    // 智能歌单（无论 UI 发 Playlist 还是 SmartPlaylist 来源）都从 tracks 出发
+    // —— playlist_items 对它恒空，JOIN_PLAYLIST 会把结果集清成 0 行
+    let join = if smart.is_some() { JOIN } else { join };
+    // JOIN 换掉后 pi 别名不存在，Playlist 来源自带的"位置序"（pi.position）
+    // 也必须一起丢——智能歌单没有手动顺序语义，走下面的列头排序。
+    let fixed_order = if smart.is_some() { "" } else { fixed_order };
     let order_sql = if fixed_order.is_empty() {
+        // 智能歌单的排序也吃 q.sort（2026-10-28 拍板：排序由列表视图的列头
+        // 处理，规则编辑器不再暴露排序键）。UI 的 sort 状态默认 title/asc，
+        // 与规则里的兼容默认一致；用户点列头后随点击走。
+        // 规则里的 order_sql 仍被 `apply_smart_stats`（侧栏摘要计数）使用。
         let dir = if q.direction == Direction::Desc { "DESC" } else { "ASC" };
         format!(" ORDER BY {} {dir}, t.id {dir}", key_expr(q).unwrap_or("t.title_norm"))
     } else {
@@ -353,13 +399,17 @@ fn build_head(q: &TrackWindowQuery, cursor_filter: Option<&str>) -> (String, Vec
 /// —— 5 万行 = 15 万次探测，实测 22.7ms；去掉 JOIN 的 `COUNT(*) FROM tracks`
 /// 只要 38µs（500 倍）。所以只有搜索谓词真的引用 `ar.name_norm` /
 /// `al.title_norm` 时才带上这两个 JOIN。
-fn count_from(q: &TrackWindowQuery) -> String {
+fn count_from(q: &TrackWindowQuery, smart: Option<&crate::smart::SmartPlan>) -> String {
     let has_search = q.search.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false);
     let base = match &q.source {
         TrackSource::Library => "FROM tracks t".to_string(),
+        // 智能歌单与曲库同源（playlist_items 对它恒空）
+        TrackSource::Playlist { .. } if smart.is_some() => "FROM tracks t".to_string(),
         TrackSource::Playlist { .. } => {
             "FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id".to_string()
         }
+        // 智能歌单条件全部自包含（t.* / IN 子查询），不需要外层 ar/al JOIN
+        TrackSource::SmartPlaylist { .. } => "FROM tracks t".to_string(),
         // 与 JOIN_AGG 同源：只关心 history 里出现过的曲目
         TrackSource::Recent | TrackSource::MostPlayed => {
             "FROM (SELECT track_id FROM history GROUP BY track_id) hs \
@@ -375,9 +425,13 @@ fn count_from(q: &TrackWindowQuery) -> String {
 }
 
 /// 构造 COUNT SQL（不含游标谓词 —— total 是"当前条件下总数"，不随翻页缩水）。
-fn build_count(q: &TrackWindowQuery) -> (String, Vec<Binder>) {
-    let (where_sql, binders) = build_where(q, None);
-    (format!("SELECT COUNT(*) {}{where_sql}", count_from(q)), binders)
+fn build_count(
+    q: &TrackWindowQuery,
+    smart: Option<&crate::smart::SmartPlan>,
+    conds: &[(String, serde_json::Value)],
+) -> (String, Vec<Binder>) {
+    let (where_sql, binders) = build_where(q, None, smart, conds);
+    (format!("SELECT COUNT(*) {}{where_sql}", count_from(q, smart)), binders)
 }
 
 fn bind_all(
@@ -435,6 +489,7 @@ pub fn row_to_track(r: &Row<'_>) -> rusqlite::Result<TrackRow> {
         last_played_at_ms: r.get::<_, Option<i64>>(14)?.map(|s| s * 1000),
         gain_db: r.get(15)?,
         availability: r.get(16)?,
+        genre: r.get(17)?,
     })
 }
 
@@ -442,6 +497,39 @@ pub fn row_to_track(r: &Row<'_>) -> rusqlite::Result<TrackRow> {
 pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPage> {
     let started = Instant::now();
     let limit = q.limit.clamp(1, 500) as i64;
+
+    // ---------- 智能歌单计划（来源是 SmartPlaylist 才有）----------
+    // 在这里查 kind 而不是让 UI 发新 kind：UI 对手动/智能歌单发同一个
+    // `kind:'playlist'` 查询，路由是数据层自己的事（collect_track_ids 走
+    // list_tracks，自动同源）。
+    let smart_plan = match &q.source {
+        TrackSource::SmartPlaylist { playlist_id } => {
+            Some(crate::smart::load_plan(conn, playlist_id)?)
+        }
+        TrackSource::Playlist { playlist_id } => {
+            // 手动/智能的分流：查一次 kind（歌单行很小，且后续 COUNT/页查询
+            // 都是大活，这一次点查成本可忽略）
+            let kind: Option<String> = conn
+                .query_row(
+                    "SELECT kind FROM playlists WHERE id = ?1",
+                    [playlist_id],
+                    |r| r.get(0),
+                )
+                .map_err(DbError::Sql)?;
+            if kind.as_deref() == Some("smart") {
+                Some(crate::smart::load_plan(conn, playlist_id)?)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    let smart = smart_plan.as_ref();
+
+    // ---------- 筛选器临时条件（与智能歌单同键，不落库）----------
+    let cond_clauses = crate::smart::conds_from_value(
+        q.conds.as_ref().unwrap_or(&serde_json::Value::Null),
+    )?;
 
     // ---------- 游标解析 ----------
     let mut cursor_filter: Option<String> = None;
@@ -466,20 +554,32 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
         offset = q.offset.unwrap_or(0) as i64;
     }
 
-    let (head, mut binders) = build_head(q, cursor_filter.as_deref());
+    let (head, mut binders) = build_head(q, cursor_filter.as_deref(), smart, &cond_clauses);
     binders.extend(cursor_binders);
+
+    // ---------- 规则上限（rule_json.limit）----------
+    // 页窗口与 total 都钳到上限内：limit=100 时第 3 页只剩不到一页的量，
+    // 探测行逻辑（limit+1）保持不变，翻过头就给空页。
+    let page_limit = match smart.and_then(|p| p.limit) {
+        Some(rl) => (rl - offset).max(0).min(limit),
+        None => limit,
+    };
 
     // ---------- COUNT（同 WHERE 但**不含游标谓词**）----------
     // 此前 COUNT 复用了带游标条件的 head，于是 total 是"游标之后的剩余量"，
     // 每翻一页递减 —— UI 拿它画滚动条/显示"N 首"会一路缩水。
     let total: i64 = {
-        let (count_sql, count_binders) = build_count(q);
+        let (count_sql, count_binders) = build_count(q, smart, &cond_clauses);
         let mut stmt = conn.prepare(&count_sql)?;
         bind_all(&mut stmt, &count_binders, None)?;
         let mut rows = stmt.raw_query();
-        match rows.next()? {
+        let raw: i64 = match rows.next()? {
             Some(row) => row.get(0)?,
             None => 0,
+        };
+        match smart.and_then(|p| p.limit) {
+            Some(rl) => raw.min(rl),
+            None => raw,
         }
     };
 
@@ -489,13 +589,15 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
     let (items, has_more): (Vec<TrackRow>, bool) = {
         let sql = format!("{head} LIMIT ? OFFSET ?");
         let mut stmt = conn.prepare(&sql)?;
-        bind_all(&mut stmt, &binders, Some((limit + 1, offset)))?;
+        bind_all(&mut stmt, &binders, Some((page_limit + 1, offset)))?;
         let mut rows = stmt.raw_query();
-        let mut out: Vec<TrackRow> = Vec::with_capacity(limit as usize + 1);
+        let mut out: Vec<TrackRow> = Vec::with_capacity(page_limit as usize + 1);
         let mut more = false;
         while let Some(r) = rows.next()? {
-            if out.len() as i64 == limit {
-                more = true; // 探测行：只判定还有下一页，不消费进结果
+            if out.len() as i64 == page_limit {
+                // 探测行：只判定还有下一页，不消费进结果。
+                // 规则上限截断（page_limit < limit）时下一页必空，不算 has_more
+                more = page_limit == limit;
                 break;
             }
             out.push(row_to_track(r)?);
@@ -669,6 +771,7 @@ mod tests {
             last_played_from_ms: None,
             last_played_to_ms: None,
             last_played_never: None,
+            conds: None,
             source: TrackSource::Library,
             limit: 2,
             mode,
@@ -707,6 +810,56 @@ mod tests {
         q.last_played_from_ms = Some(0);
         let page = list_tracks(&conn, &q).unwrap();
         assert_eq!(page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t3"]);
+    }
+
+    /// 筛选器临时条件（conds）：与智能歌单同键编译成 WHERE，不落库。
+    #[test]
+    fn filter_conds_narrow_results() {
+        let conn = open_in_memory().unwrap();
+        insert_fixtures(&conn);
+        conn.execute_batch(
+            "UPDATE tracks SET genre='Pop', genre_norm='pop' WHERE id='t1';
+             UPDATE tracks SET genre='Rock', genre_norm='rock' WHERE id='t2';",
+        )
+        .unwrap();
+
+        // genre contains "oc" → 只命中 Rock（t2）；total 同口径
+        let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
+        q.conds = Some(serde_json::json!([
+            { "field": "genre", "op": "contains", "value": "oc" }
+        ]));
+        let page = list_tracks(&conn, &q).unwrap();
+        assert_eq!(page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t2"]);
+        assert_eq!(page.total, 1);
+
+        // 坏键明确报错——UI 的 bug 不该静默变成全量列表
+        let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
+        q.conds = Some(serde_json::json!([{ "field": "bpm", "op": "eq", "value": 1 }]));
+        assert!(list_tracks(&conn, &q).is_err());
+    }
+
+    /// contains 条件的 LIKE 值按字面处理：`%`/`_` 转义，不当通配符。
+    #[test]
+    fn cond_contains_wildcards_are_literal() {
+        let conn = open_in_memory().unwrap();
+        insert_fixtures(&conn);
+        conn.execute("UPDATE tracks SET genre='Pop', genre_norm='pop' WHERE id='t1'", []).unwrap();
+
+        // "p%P" 按字面匹配（pop 里没有字面的 %）→ 0 命中；不当转义会命中 t1
+        let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
+        q.conds = Some(serde_json::json!([
+            { "field": "genre", "op": "contains", "value": "p%P" }
+        ]));
+        let page = list_tracks(&conn, &q).unwrap();
+        assert_eq!(page.total, 0, "% 必须按字面处理");
+
+        // 同一规则正常子串仍命中
+        let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
+        q.conds = Some(serde_json::json!([
+            { "field": "genre", "op": "contains", "value": "po" }
+        ]));
+        let page = list_tracks(&conn, &q).unwrap();
+        assert_eq!(page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t1"]);
     }
 
     #[test]
@@ -825,6 +978,7 @@ mod tests {
                 last_played_from_ms: None,
                 last_played_to_ms: None,
                 last_played_never: None,
+                conds: None,
                 source: TrackSource::Library,
                 limit: 2,
                 mode: Mode::Cursor,

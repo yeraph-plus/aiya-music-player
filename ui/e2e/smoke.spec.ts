@@ -33,39 +33,42 @@ test.afterEach(async () => {
   expect(runtimeErrors, '页面运行期错误').toEqual([]);
 });
 
-/** 列表里第一行真实数据（排除加载骨架与失败行） */
+/** 曲库页第一行真实数据（排除加载骨架与失败行） */
 function firstRow(page: Page) {
   return page.locator('.main .list .row:not(.skeleton):not(.failed)').first();
 }
 
-/** 首页 → PageHeader 的「浏览全部曲目」→ 曲库列表 */
+/** 侧栏「曲库」→ 曲库列表（2026-10-28：推荐页仪表盘化，「浏览全部曲目」
+ *  按钮撤销，侧栏成为列表页唯一入口） */
 async function openLibrary(page: Page): Promise<void> {
   await page.goto('/');
-  await page.locator('.main button', { hasText: '浏览全部曲目' }).click();
+  await page.locator('.sidebar .nav-item', { hasText: '曲库' }).click();
   await expect(page.locator('.main h1')).toHaveText('全部曲目');
   await firstRow(page).waitFor({ state: 'visible' });
 }
 
-test('启动装配：顶栏四件 + 推荐页标题 + 播放条空态', async ({ page }) => {
+test('启动装配：顶栏四件 + 仪表盘三级 + 播放条空态', async ({ page }) => {
   await page.goto('/');
   // 宽 TitleBar：搜索框在位、返回键此时无历史所以 disabled
   await expect(page.locator('.titlebar .tb-search input')).toBeVisible();
   await expect(page.getByRole('button', { name: '返回上一页' })).toBeDisabled();
-  // 页内标题归 PageHeader（不是顶栏）。docs/25 §3：「首页」改名「推荐」
-  await expect(page.locator('.main h1')).toHaveText('推荐');
-  await expect(page.locator('.main .ch-kicker')).toHaveText('YOUR LIBRARY');
-  // 首页三段都是紧凑表（TrackTable），不是虚拟列表
-  await expect(page.locator('.main .tt-row').first()).toBeVisible();
+  // 推荐页是仪表盘（2026-10-28）：无页标题，歌单行 / 常听榜两级；
+  // 三项统计入口二次修订撤销（侧栏已有一级导航），只剩缺失警告位
+  await expect(page.locator('.main h1')).toHaveCount(0);
+  await expect(page.locator('.main .playlist-row .playlist-card').first()).toBeVisible();
+  await expect(page.locator('.main .stat-card')).toHaveCount(0);
+  await expect(page.locator('.main .preview-list .row').first()).toBeVisible();
   await expect(page.locator('.main .list')).toHaveCount(0);
   await expect(page.locator('footer')).toContainText('未在播放');
   // 歌单摘要的加载链路：boot → playlists.refresh() → library.playlists → 侧栏。
   // 2026-10-26 这条数据从 ui store 挪到 library（避免 list/scan 与 playlists 成环），
   // 断言在这里是为了「挪完还接得上」——mock 种子固定 4 张。
   await expect(page.locator('.sidebar .playlist-item')).toHaveCount(4);
-  // docs/25 §5 T4c/T4d：背景四层是全应用的——推荐页也有背景渐变层与遮罩层；
-  // 频谱 mock 下默认关，所以环境层不在
+  // docs/25 §5 T4c/T4d：背景四层是全应用的——推荐页也有背景渐变层；
+  // 频谱 mock 下默认关，所以环境层不在。2026-10-28 用户拍板全页面统一
+  // 沉浸档：可读性遮罩 veil 整层删除（不再有 .ambient-veil），断言其缺席。
   await expect(page.locator('.ambient-art')).toHaveCount(1);
-  await expect(page.locator('.ambient-veil')).toBeVisible();
+  await expect(page.locator('.ambient-veil')).toHaveCount(0);
   await expect(page.locator('.ambient-spectrum')).toHaveCount(0);
 });
 
@@ -99,16 +102,18 @@ test('导航链：曲库 → 侧栏切专辑宫格（docs/28 一级项）→ 详
   await expect(page.locator('.main h1')).toHaveText('全部曲目');
   await expect(page.getByRole('button', { name: '返回上一页' })).toBeEnabled();
 
-  // 再退一步回到推荐页（原首页），此时栈空 → 返回键 disabled
+  // 再退一步回到推荐页（仪表盘，无页标题），此时栈空 → 返回键 disabled
   await page.getByRole('button', { name: '返回上一页' }).click();
-  await expect(page.locator('.main h1')).toHaveText('推荐');
+  await expect(page.locator('.main h1')).toHaveCount(0);
+  await expect(page.locator('.main .playlist-row .playlist-card').first()).toBeVisible();
   await expect(page.getByRole('button', { name: '返回上一页' })).toBeDisabled();
 });
 
 test('播放链路：双击行播放 → 播放条与队列激活行', async ({ page }) => {
   await openLibrary(page);
-  // B4-1 交互语义：单击=选中，双击=播放
-  await firstRow(page).dblclick();
+  // B4-1 交互语义：单击=选中，双击=播放。双击**标题单元格**——行几何中心
+  // 落在歌手/专辑跳转链接上，链接会吃掉第一下单击去导航（2026-10-28 实测）
+  await firstRow(page).locator('.cell.title').dblclick();
   // 播放条出歌名与时长（mock 的 playTracks → 状态广播 → store → 渲染）
   await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
   await expect(page.locator('footer')).toContainText(/\d+:\d{2}/);
@@ -120,24 +125,54 @@ test('播放链路：双击行播放 → 播放条与队列激活行', async ({ 
   await expect(active.locator('.q-index')).toHaveText('▶');
 });
 
-test('设置页：左分组导航 + scroll-spy + 主题切换生效', async ({ page }) => {
+test('曲库 tab：最近添加/最近播放切换（2026-10-28 自推荐页迁来）', async ({ page }) => {
+  await openLibrary(page);
+  const tabs = page.locator('.lib-tabs .lib-tab');
+  await expect(tabs).toHaveCount(3);
+  await expect(page.locator('.lib-tab.on')).toHaveText('全部曲目');
+
+  // 切「最近添加」：标题与高亮跟随，列表仍在（mock 种子有 added 排序数据）
+  await tabs.filter({ hasText: '最近添加' }).click();
+  await expect(page.locator('.main h1')).toHaveText('最近添加');
+  await expect(page.locator('.lib-tab.on')).toHaveText('最近添加');
+  await firstRow(page).waitFor({ state: 'visible' });
+
+  // 切「最近播放」再回「全部曲目」：恢复原 tab 语义
+  await tabs.filter({ hasText: '最近播放' }).click();
+  await expect(page.locator('.main h1')).toHaveText('最近播放');
+  await tabs.filter({ hasText: '全部曲目' }).click();
+  await expect(page.locator('.main h1')).toHaveText('全部曲目');
+  await firstRow(page).waitFor({ state: 'visible' });
+
+  // 歌单页没有 tab（tab 是曲库页的子状态）
+  await page.locator('.sidebar .playlist-item').first().click();
+  await expect(page.locator('.lib-tabs')).toHaveCount(0);
+});
+
+test('设置页：单页平铺 + tab 跳转定位 + 主题切换生效', async ({ page }) => {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
+  // 2026-10-28 三次修订：改回单页平铺——大标题固定「设置」，tab 只做跳转
   await expect(page.locator('.main h1')).toHaveText('设置');
-  await expect(page.locator('.main .ch-kicker')).toHaveText('PREFERENCES');
+  await expect(page.locator('.main .ch-kicker')).toHaveCount(0);
 
-  // docs/29 批 A：左栏收窄为四组（音乐库与任务/诊断 → 扫描入库页）；初始高亮第一组
-  const rail = page.locator('.settings-rail .rail-item');
-  await expect(rail).toHaveCount(4);
-  await expect(rail.first()).toHaveAttribute('aria-current', 'true');
+  // 五个 tab，初始高亮第一组；五个区块全部渲染（含小标题）。
+  // 语义是"滚动到某个区块"而不是"切换面板"→ nav + aria-current（同 content/Toolbar）
+  const tabs = page.locator('.settings-tabs .settings-tab');
+  await expect(tabs).toHaveCount(5);
+  await expect(tabs.first()).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('.group-title')).toHaveCount(5);
+  await expect(page.locator('.group-title').first()).toHaveText('外观');
 
-  // 点「快捷键」→ 平滑滚动后 scroll-spy 把高亮写回快捷键组
-  await rail.last().click();
-  await expect(page.locator('#settings-shortcuts')).toBeInViewport();
-  await expect(rail.last()).toHaveAttribute('aria-current', 'true');
-  await expect(rail.first()).not.toHaveAttribute('aria-current', 'true');
+  // 点「快捷键」→ 平滑滚动跳转，内容本就全渲染（无条件切换）
+  const shortcutTab = tabs.filter({ hasText: '快捷键' });
+  await shortcutTab.click();
+  await expect(page.locator('.shortcut-list')).toBeVisible();
+  await expect(shortcutTab).toHaveAttribute('aria-current', 'true');
+  await expect(tabs.first()).not.toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('.main h1')).toHaveText('设置');
 
-  // 主题切换即时生效（写到 <html data-theme>）
+  // 主题切换即时生效（写到 <html data-theme>）；外观区块平铺常在，直接点
   await page
     .locator('.setting-row', { hasText: '主题' })
     .locator('button', { hasText: '浅色' })
@@ -147,7 +182,7 @@ test('设置页：左分组导航 + scroll-spy + 主题切换生效', async ({ p
 
 test('正在播放页：起播后两栏沉浸布局 + 背景四层接住真实曲目', async ({ page }) => {
   await openLibrary(page);
-  await firstRow(page).dblclick();
+  await firstRow(page).locator('.cell.title').dblclick();
   await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
 
   // docs/25 §6：正在播放页唯一入口 = 播放条左侧歌曲区域（侧栏席位已撤）

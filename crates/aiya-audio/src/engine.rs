@@ -11,7 +11,7 @@
 //! f32 会让独占在消费级设备上形同虚设。位深转换是一次乘加取整，无 SRC 复杂度。
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::AtomicU64;
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,7 +20,7 @@ use wasapi::DeviceEnumerator;
 use wasapi::{Direction, SampleType, StreamMode, WaveFormat};
 
 use crate::decoder::DecodedStream;
-use crate::AudioError;
+use crate::{AudioError, AudioErrorKind};
 
 /// 引擎线程收到的命令。
 ///
@@ -74,6 +74,12 @@ pub enum EngineCommand {
     /// 10 段 EQ 整体下发（协议 v6，docs/24 B5b）。播放中热切：系数重算、
     /// 延迟线保留。生效值（clamp 后）经 `EngineEvent::EqApplied` 回报。
     SetEq(crate::eq::EqParams),
+    /// 默认渲染设备变更（引擎内部 watcher 线程 → 命令循环）。
+    ///
+    /// **不是宿主命令**：宿主永远不该发它。播放中收到 → 走 pending_switch
+    /// 淡出切流（与用户改输出设置同一条路径，重开时自然落到新默认设备）；
+    /// 空闲/曲尾/静音模式收到 → 只记录，不动任何设备。
+    DeviceChanged,
     /// 退出线程
     Shutdown,
 }
@@ -114,9 +120,10 @@ pub enum EngineEvent {
         reason: Option<String>,
     },
     /// 播放失败。`kind` 是**分类**（`fileMissing`/`io`/`decode`/
-    /// `codecUnsupported`/`deviceLost`/`unsupportedFormat`/`unknown`），在错误
-    /// 产生处由 `AudioError::kind()` 定，不经宿主猜——UI 要靠它决定
-    /// "跳下一首"还是"提示/亮灰标"。
+    /// `codecUnsupported`/`deviceLost`/`unsupportedFormat`/`internal`/
+    /// `unknown`），在错误产生处由 `AudioError::kind()` 定，不经宿主猜——
+    /// UI 要靠它决定"跳下一首"还是"提示/亮灰标"。`internal` 只在引擎
+    /// 渲染线程 panic 兜底时发出（见 `Engine::spawn`）。
     Error { token: u64, kind: String, message: String },
     /// EQ 设置已被 sidecar 接受（协议 v6）。`params` 是**生效值**（clamp 后），
     /// UI 以它为准而不是自己发出去的值。未装载时的 SetEq 回报 token=0。
@@ -131,6 +138,10 @@ const EVENT_CHANNEL_CAP: usize = 256;
 /// * 可丢类（Position/Spectrum）——满了直接丢新保旧，生产端永不被拖住；
 /// * 关键类（Loaded/Eof/StateChanged/Error）——最多等 100ms 腾位，超时丢弃
 ///   并记日志（消费端正常在微秒级取走，此路径只在宿主泵死掉时触发）。
+///
+/// 这些静默容错以 **panic=abort 为前提**（tools/build-sidecar.mjs）：sidecar
+/// 里消费端死亡必然伴随进程死亡 → 看门狗换代重建，静默只是不重复报错，不是
+/// 无条件掩盖。绕过该脚本裸跑（示例/调试）时只是诊断降级，不改变音频行为。
 #[derive(Clone)]
 struct EventTx(SyncSender<EngineEvent>);
 
@@ -162,9 +173,9 @@ pub struct Engine {
     tx: mpsc::Sender<EngineCommand>,
     rx: Receiver<EngineEvent>,
     worker: Option<std::thread::JoinHandle<()>>,
-    /// 装载后由 Load 事件填充
-    pub duration_ms: Arc<AtomicU64>,
-    pub playing: Arc<AtomicBool>,
+    /// 设备 watcher 的退出信号：shutdown 发一条、Drop 时整体丢弃（watcher
+    /// 靠 recv_timeout 的 Disconnected 退出）。生命周期与命令通道同源。
+    watcher_stop: mpsc::Sender<()>,
     /// 累计写入设备的帧数（跨曲目不清零）。
     ///
     /// 存在的理由：**"引擎报告在播"和"声音真的在走"是两件事**。独占模式曾
@@ -180,16 +191,38 @@ impl Engine {
         let (ev_tx, ev_rx) = mpsc::sync_channel::<EngineEvent>(EVENT_CHANNEL_CAP);
         let written = Arc::new(AtomicU64::new(0));
         let written_worker = Arc::clone(&written);
+        // panic 兜底（第二级防线）：sidecar 正式构建带 panic=abort（见
+        // tools/build-sidecar.mjs），panic 直接杀进程、看门狗换代重建——那是
+        // 主防线。这里 catch_unwind 服务于 panic=abort 未生效的裸跑场景
+        // （示例/调试/有人绕过构建脚本）：接住 panic、经克隆的事件端发一条
+        // `internal` 错误（token=0，宿主按"装载前错误"上报），随后线程退出，
+        // 绝不让 worker 变成"通道挂着、事件永不再来"的僵尸。
+        let ev_panic = ev_tx.clone();
         let worker = std::thread::Builder::new()
             .name("aiya-audio-engine".into())
-            .spawn(move || render_loop(cmd_rx, ev_tx, written_worker))
+            .spawn(move || {
+                let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    render_loop(cmd_rx, ev_tx, written_worker)
+                }))
+                .err();
+                if let Some(p) = panicked {
+                    let msg = panic_message(p.as_ref());
+                    tracing::error!(%msg, "engine 渲染线程 panic，线程即将退出");
+                    EventTx(ev_panic).send(EngineEvent::Error {
+                        token: 0,
+                        kind: AudioErrorKind::Internal.as_str().into(),
+                        message: format!("引擎内部错误（渲染线程崩溃）：{msg}"),
+                    });
+                }
+            })
             .map_err(|e| AudioError::Custom(e.to_string()))?;
+        let (watcher_stop, watcher_rx) = mpsc::channel::<()>();
+        spawn_device_watcher(cmd_tx.clone(), watcher_rx);
         Ok(Self {
             tx: cmd_tx,
             rx: ev_rx,
             worker: Some(worker),
-            duration_ms: Arc::new(AtomicU64::new(0)),
-            playing: Arc::new(AtomicBool::new(false)),
+            watcher_stop,
             written_frames: written,
         })
     }
@@ -199,19 +232,37 @@ impl Engine {
         self.written_frames.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// 发送命令。通道断开（worker 已死）时静默丢弃——这不是无条件容忍：
+    /// sidecar 构建 panic=abort，worker 死亡时进程随之退出、看门狗换代重建；
+    /// 裸跑场景下 catch_unwind 兜底已发过 `internal` 错误事件。此处的静默
+    /// 只是避免向已死通道重复报错。
     pub fn send(&self, cmd: EngineCommand) {
         let _ = self.tx.send(cmd);
     }
 
     /// 非阻塞取事件（PlayerActor 轮询）。
     pub fn try_recv(&self) -> Option<EngineEvent> {
-        self.rx.try_recv().ok()
+        match self.rx.try_recv() {
+            Ok(e) => Some(e),
+            Err(mpsc::TryRecvError::Empty) => None,
+            // 通道关闭 = worker 已退出（panic 兜底先报 Error 再退）。这里不
+            // panic、不刷日志：sidecar 下进程将随 panic=abort 死亡，轮询方
+            // 随之消失；裸跑下错误已随事件上送。前提同 EventTx 的注释。
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        }
     }
 
     pub fn shutdown(&mut self) {
         let _ = self.tx.send(EngineCommand::Shutdown);
+        // 先叫停 watcher：它对已退出的引擎只会白查设备、白发命令
+        let _ = self.watcher_stop.send(());
         if let Some(w) = self.worker.take() {
-            let _ = w.join();
+            if w.join().is_err() {
+                // join Err = worker 在 catch_unwind 之外 panic（理论不可达）。
+                // sidecar 下 panic=abort 根本到不了这里；留痕防"吞 join panic"
+                // 的旧病复发。
+                tracing::error!("engine worker join 失败（worker panic）");
+            }
         }
     }
 }
@@ -222,7 +273,93 @@ impl Drop for Engine {
     }
 }
 
+/// 从 panic payload 提取可读信息（&str/String 之外的 payload 兜底）。
+fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = p.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = p.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "payload 非字符串".to_string()
+    }
+}
+
+/// 默认设备轮询间隔。设备切换不是高频事件，2s 内完成迁移无感（切换本身
+/// 还有淡出与 WASAPI 重协商盖着）；更密只是白烧 COM 调用。
+const DEVICE_WATCH_INTERVAL: Duration = Duration::from_secs(2);
+
+/// 默认渲染设备 watcher：每 2s 查一次系统默认输出设备，端点 id 变化时投递
+/// `EngineCommand::DeviceChanged`，由命令循环复用现有的淡出切流/设备恢复
+/// 路径（重开流必然落到新默认设备）。
+///
+/// 本线程**绝不允许 panic**（panic=abort 下一次设备查询失败会连带杀掉整个
+/// sidecar，把监听故障升级成进程换代）：所有 COM 调用失败一律静默跳过本轮。
+/// COM 初始化失败则整个 watcher 退出——退化为"无设备迁移监听"，播放不受影响。
+fn spawn_device_watcher(cmd_tx: mpsc::Sender<EngineCommand>, stop: Receiver<()>) {
+    let spawned = std::thread::Builder::new()
+        .name("aiya-audio-devwatch".into())
+        .spawn(move || {
+            // COM 对象（DeviceEnumerator）必须在本线程初始化后使用；
+            // S_FALSE（已初始化）也算成功，只有 Err 才退出。
+            if wasapi::initialize_mta().is_err() {
+                tracing::warn!("设备 watcher COM 初始化失败，本会话不监听默认设备变更");
+                return;
+            }
+            let mut last_id: Option<String> = None;
+            loop {
+                // recv_timeout 兼作睡眠与退出信号：Engine 释放时 stop 端被丢弃，
+                // 这里立刻收到 Disconnected，不留悬空线程。
+                match stop.recv_timeout(DEVICE_WATCH_INTERVAL) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+                let Some(id) = default_render_device_id() else {
+                    // 查询失败静默跳过本轮：设备拔插瞬间 enumerator 短暂报错
+                    // 属正常，绝不 panic、也不刷错误日志
+                    continue;
+                };
+                if !device_id_changed(&last_id, &id) {
+                    continue;
+                }
+                let first_baseline = last_id.is_none();
+                last_id = Some(id.clone());
+                if first_baseline {
+                    // 首轮成功查询只建立基线，不触发迁移
+                    continue;
+                }
+                tracing::info!(device = %id, "默认渲染设备已变更，通知引擎迁移输出流");
+                let _ = cmd_tx.send(EngineCommand::DeviceChanged);
+            }
+            wasapi::deinitialize();
+        });
+    if let Err(e) = spawned {
+        // 监听线程起不来只降级（无设备迁移），不影响播放
+        tracing::warn!("设备 watcher 线程创建失败（本会话不监听默认设备变更）: {e}");
+    }
+}
+
+/// 当前默认渲染设备的端点 id（COM 失败返回 None，由调用方决定跳过本轮）。
+fn default_render_device_id() -> Option<String> {
+    let enumerator = DeviceEnumerator::new().ok()?;
+    let device = enumerator.get_default_device(&Direction::Render).ok()?;
+    device.get_id().ok()
+}
+
+/// watcher 的变更判定（纯函数）：首轮（无基线）不触发；之后 id 变化才触发。
+fn device_id_changed(last: &Option<String>, id: &str) -> bool {
+    match last {
+        None => false,
+        Some(prev) => prev != id,
+    }
+}
+
 /// 渲染循环：COM init → 设备 → mix format → 事件驱动写流。
+///
+/// 通道收发的静默容错（`Engine::send` 吞 SendError、`try_recv` 吞
+/// Disconnected、EventTx 丢弃超时事件）以 **panic=abort** 为前提
+/// （tools/build-sidecar.mjs）：消费端死亡 = 进程死亡 = 看门狗换代重建，
+/// 静默只是不重复报错，不是无条件掩盖。绕过脚本裸跑时由 `Engine::spawn`
+/// 的 catch_unwind 兜底发一条 `internal` 错误事件。
 fn render_loop(
     cmd_rx: Receiver<EngineCommand>,
     ev_tx: SyncSender<EngineEvent>,
@@ -255,13 +392,20 @@ fn render_loop(
     // EQ 参数同样跨曲目保持（协议 v6）。play_file 内部收到 SetEq 时会更新
     // 自己的实例并把最终值经 LoadExit 带回这里（与 rate/cfg 同一套账法）
     let mut pending_eq = crate::eq::EqParams::default();
+    // 音量同样跨曲目保持（对齐 pending_rate/pending_eq）。此前装载前收到的
+    // SetVolume 被静默丢弃，宿主恢复现场"先 SetVolume 后 Load"的序列里
+    // 第一首歌音量就丢了；现在暂存，装载后由 play_* 的 initial_volume 应用。
+    let mut pending_volume: f32 = 1.0;
     'outer: loop {
-        // 命令循环：等 Load 或 Shutdown（Load 前到的 SetRate/SetSpectrum 暂存生效）
+        // 命令循环：等 Load 或 Shutdown（Load 前到的 SetVolume/SetRate/
+        // SetSpectrum/EQ/输出配置暂存生效；Seek 丢弃——没有可 seek 的曲目，
+        // 宿主恢复序列的起点在 Load::start_ms 里，播放中另发 Seek）
         let (mut path, mut start_ms, mut token, mut load_paused) = loop {
             match cmd_rx.recv() {
                 Ok(EngineCommand::Load { path, start_ms, token, paused }) => {
                     break (path, start_ms, token, paused)
                 }
+                Ok(EngineCommand::SetVolume(v)) => pending_volume = v.clamp(0.0, 1.0),
                 Ok(EngineCommand::SetRate(r)) => pending_rate = r.clamp(0.5, 2.0),
                 Ok(EngineCommand::SetSpectrum(on)) => tap.set_enabled(on),
                 Ok(EngineCommand::SetOutputConfig(c)) => pending_cfg = c,
@@ -270,6 +414,11 @@ fn render_loop(
                     pending_eq = applied;
                     // 未装载阶段 token=0（"装载代数来自最近的 Load"——还没有）
                     send(EngineEvent::EqApplied { token: 0, params: applied });
+                }
+                Ok(EngineCommand::DeviceChanged) => {
+                    // 空闲时只记录（watcher 已记住新设备基线）：装载后
+                    // open_output 重新枚举默认设备，自然落到新设备
+                    tracing::debug!("默认设备变更（空闲态），装载时自然迁移");
                 }
                 Ok(EngineCommand::Shutdown) | Err(_) => break 'outer,
                 Ok(other) => {
@@ -294,6 +443,7 @@ fn render_loop(
                     token,
                     load_paused,
                     pending_rate,
+                    pending_volume,
                     pending_cfg,
                     pending_eq,
                     &mut tap,
@@ -308,6 +458,7 @@ fn render_loop(
                     token,
                     load_paused,
                     pending_rate,
+                    pending_volume,
                     pending_cfg,
                     pending_eq,
                     &mut tap,
@@ -315,18 +466,20 @@ fn render_loop(
                 )
             };
             match outcome {
-                Ok(LoadExit::Finished { cfg, eq }) => {
+                Ok(LoadExit::Finished { cfg, eq, volume }) => {
                     pending_cfg = cfg;
                     pending_eq = eq;
+                    pending_volume = volume;
                     break; // EOF/Stop/错误恢复：回顶层等下一条 Load
                 }
-                Ok(LoadExit::NewLoad { path: p, rate, start_ms: s, token: t, cfg, eq, paused }) => {
+                Ok(LoadExit::NewLoad { path: p, rate, start_ms: s, token: t, cfg, eq, paused, volume }) => {
                     path = p;
                     pending_rate = rate;
                     start_ms = s;
                     token = t;
                     pending_cfg = cfg;
                     pending_eq = eq;
+                    pending_volume = volume;
                     load_paused = paused;
                 }
                 Ok(LoadExit::Shutdown) => break 'outer,
@@ -350,10 +503,18 @@ fn render_loop(
 /// Null 输出的实时节拍（毫秒）：一次解码/推进一小批，避免忙转。
 const NULL_TICK_MS: u64 = 20;
 
+/// http(s) scheme 判定。RFC 3986 §3.1：scheme 大小写不敏感，"HTTP://"、
+/// "HtTpS://" 都是合法 URL——此前只认小写前缀，大写 scheme 会被当本地文件
+/// 打开失败（UI 表现为莫名的"文件不存在"）。按前缀长度切片比较，零分配。
+fn is_http_url(path: &str) -> bool {
+    path.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("http://"))
+        || path.get(..8).is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+}
+
 /// 按 Load 的 path 打开源：http(s) → HLS 流（docs/22 G3），否则本地文件。
 /// 判定放在 engine 入口一处，队列/UI 永远只递字符串。
 fn open_source(path: &str) -> Result<DecodedStream, AudioError> {
-    if path.starts_with("http://") || path.starts_with("https://") {
+    if is_http_url(path) {
         DecodedStream::open_hls(path)
     } else {
         DecodedStream::open_file(Path::new(path))
@@ -380,6 +541,7 @@ fn play_null(
     token: u64,
     initial_paused: bool,
     initial_rate: f32,
+    initial_volume: f32,
     initial_cfg: OutputConfig,
     initial_eq: crate::eq::EqParams,
     tap: &mut crate::spectrum::SpectrumTap,
@@ -404,6 +566,9 @@ fn play_null(
 
     let channels = decoder.channels().max(1);
     let mut rate: f32 = initial_rate;
+    // 静音模式没有输出、音量无处可用，但要记账：切回真实输出时经 LoadExit
+    // 带回，不能让"无声期间调的音量"凭空消失
+    let mut volume: f32 = initial_volume;
     let mut cfg = initial_cfg;
     // 静音模式不滤波（没有输出），但参数要记账：切回真实输出时经 LoadExit 带回
     let mut eq_params = initial_eq;
@@ -435,7 +600,7 @@ fn play_null(
                         send(EngineEvent::Position { token, position_ms: decoder.position_ms() });
                     }
                 }
-                Ok(EngineCommand::SetVolume(_)) => {}
+                Ok(EngineCommand::SetVolume(v)) => volume = v.clamp(0.0, 1.0),
                 Ok(EngineCommand::SetRate(r)) => rate = r.clamp(0.5, 2.0),
                 Ok(EngineCommand::SetSpectrum(on)) => tap.set_enabled(on),
                 Ok(EngineCommand::SetEq(p)) => {
@@ -453,6 +618,7 @@ fn play_null(
                             cfg: c,
                             eq: eq_params,
                             paused,
+                            volume,
                         });
                     }
                     cfg = c;
@@ -460,7 +626,7 @@ fn play_null(
                 Ok(EngineCommand::Stop) => {
                     send(EngineEvent::StateChanged { token, playing: false });
                     send(EngineEvent::Eof { token });
-                    return Ok(LoadExit::Finished { cfg, eq: eq_params });
+                    return Ok(LoadExit::Finished { cfg, eq: eq_params, volume });
                 }
                 Ok(EngineCommand::Load { path: p, start_ms: s, token: t, paused: np }) => {
                     return Ok(LoadExit::NewLoad {
@@ -471,6 +637,7 @@ fn play_null(
                         cfg,
                         eq: eq_params,
                         paused: np,
+                        volume,
                     });
                 }
                 Ok(EngineCommand::Shutdown) => return Ok(LoadExit::Shutdown),
@@ -512,7 +679,7 @@ fn play_null(
             send(EngineEvent::Position { token, position_ms: decoder.duration_ms() });
             send(EngineEvent::StateChanged { token, playing: false });
             send(EngineEvent::Eof { token });
-            return Ok(LoadExit::Finished { cfg, eq: eq_params });
+            return Ok(LoadExit::Finished { cfg, eq: eq_params, volume });
         }
     }
 }
@@ -520,8 +687,8 @@ fn play_null(
 /// play_file 的退出原因。NewLoad 必须把 path/起点/代数带回外层续播。
 enum LoadExit {
     /// EOF / Stop / 设备错误：回命令循环等下一条 Load。
-    /// 带回最新配置与 EQ 参数（播放中用户可能改过设置）
-    Finished { cfg: OutputConfig, eq: crate::eq::EqParams },
+    /// 带回最新配置/EQ/音量（播放中用户可能改过设置）
+    Finished { cfg: OutputConfig, eq: crate::eq::EqParams, volume: f32 },
     /// 播放中收到新 Load：直接换曲续播。
     ///
     /// `paused` 随新 Load 的暂停态走（协议 v7）：装载自带暂停时续播也保持暂停。
@@ -533,6 +700,7 @@ enum LoadExit {
         cfg: OutputConfig,
         eq: crate::eq::EqParams,
         paused: bool,
+        volume: f32,
     },
     /// 收到 Shutdown：终止渲染线程
     Shutdown,
@@ -618,6 +786,7 @@ const DEVICE_RECOVERY_ATTEMPTS: u32 = 5;
 /// `initial_paused`：装载即暂停（协议 v7；启动恢复"暂停态装载"不再先响一下）。
 /// `token`：本曲装载代数，原样回显进所有事件。
 /// `initial_rate`：Load 前收到的变速指令（如启动恢复/恢复会话）。
+/// `initial_volume`：Load 前收到的音量（恢复现场"先 SetVolume 后 Load"）。
 /// `initial_cfg`：输出配置（模式/时钟/缓冲/暂停释放）。
 /// `initial_eq`：EQ 参数（协议 v6）。随流构建滤波器，播放中可热切。
 /// `tap`：频谱采样点（跨曲目常驻；推**重采样后**的输出帧，未乘音量）。
@@ -631,6 +800,7 @@ fn play_file(
     token: u64,
     initial_paused: bool,
     initial_rate: f32,
+    initial_volume: f32,
     initial_cfg: OutputConfig,
     initial_eq: crate::eq::EqParams,
     tap: &mut crate::spectrum::SpectrumTap,
@@ -666,7 +836,7 @@ fn play_file(
     let mut pool_pos: f64 = 0.0;
     let mut decoder_eof = false;
 
-    let mut volume: f32 = 1.0;
+    let mut volume: f32 = initial_volume;
     // 当前实际增益 = 音量 × 淡入淡出系数，逐样本向目标逼近。
     // 跨 chunk 保持，否则每块首样本都会重新跳变，斜坡等于没做。
     let mut gain_now: f32 = 1.0;
@@ -795,6 +965,7 @@ fn play_file(
                         cfg: next,
                         eq: eq_params,
                         paused,
+                        volume,
                     });
                 }
                 Ok(EngineCommand::SetOutputConfig(next)) => {
@@ -814,6 +985,15 @@ fn play_file(
                         cfg = prev; // 淡出期间仍按旧配置跑
                     }
                 }
+                Ok(EngineCommand::DeviceChanged) => {
+                    // 默认设备变更（watcher 探测）：复用 pending_switch 淡出
+                    // 切流路径——与用户改输出设置完全同一条逻辑（先淡出再重开），
+                    // 重开时 open_output 重新枚举默认设备，自然落到新设备。
+                    // 不当错误处理：旧设备可能还活着，只是不再是默认。
+                    pending_switch = true;
+                    declick_target = 0.0;
+                    pending_cfg_apply = Some(cfg);
+                }
                 Ok(EngineCommand::Stop) => {
                     pending_stop = true;
                     declick_target = 0.0;
@@ -829,6 +1009,7 @@ fn play_file(
                         cfg,
                         eq: eq_params,
                         paused: np,
+                        volume,
                     });
                 }
                 Ok(EngineCommand::Shutdown) => {
@@ -906,7 +1087,7 @@ fn play_file(
             send(EngineEvent::StateChanged { token, playing: false });
             send(EngineEvent::Eof { token }); // Stop 视为曲目结束（PlayerActor 决定下一动作）
             out.stop();
-            return Ok(LoadExit::Finished { cfg, eq: eq_params });
+            return Ok(LoadExit::Finished { cfg, eq: eq_params, volume });
         }
         if let Err(e) = result {
             out.stop();
@@ -929,6 +1110,11 @@ fn play_file(
             match reopen_output(&mut out, &decoder, device_failures, &cfg) {
                 Ok(note) => {
                     device_failures += 1; // 写成功后归零；连续失败则退避递增
+                    // 重开成功 = 一条新流：给满哑流观察窗（与 play_file 开局同
+                    // 一待遇）。不重置的话，长时间退避期间的"无写入"会被
+                    // DUMB_STREAM_MS 记在新流头上，刚活过来就被判哑、再进恢复
+                    // 循环，直到重试耗尽——设备短暂抽风一次就升级成播放失败。
+                    last_write = std::time::Instant::now();
                     tracing::warn!(error = %e, attempt = device_failures, "输出设备失效，已重建（退避重试中）");
                     // 换设备后实际模式可能变（新设备不支持独占 / 反而支持）：
                     // 不告知 UI 的话，设置页会一直显示旧设备的能力
@@ -1076,6 +1262,10 @@ fn play_file(
             let max_delta = ramp_step * out_frames as f32;
             let delta = diff.clamp(-max_delta, max_delta);
             let step = delta / out_frames as f32;
+            // tap 开关在这里读一次并传下去：关闭时连"重采样输出的单声道混算"
+            // 都跳过——此前只有 push_mono 内部查开关，resample_take 的混算
+            // 无条件执行，两条路径不一致，"关闭零开销"名不副实。
+            let tap_enabled = tap.is_enabled();
             resample_take(
                 &pool,
                 pool_pos,
@@ -1087,6 +1277,7 @@ fn play_file(
                 &mut eq,
                 &mut out_f32,
                 &mut tap_mono,
+                tap_enabled,
             );
             gain_now += delta;
             if diff.abs() <= max_delta {
@@ -1160,6 +1351,7 @@ fn play_file(
                             cfg,
                             eq: eq_params,
                             paused: np,
+                            volume,
                         });
                     }
                     Ok(EngineCommand::Stop) => {
@@ -1177,9 +1369,12 @@ fn play_file(
                     | Ok(EngineCommand::Pause)
                     | Ok(EngineCommand::Resume)
                     | Ok(EngineCommand::SetVolume(_))
-                    | Ok(EngineCommand::SetRate(_)) => {
+                    | Ok(EngineCommand::SetRate(_))
+                    | Ok(EngineCommand::DeviceChanged) => {
                         // 曲尾的这些指令无意义（马上换曲/停止），丢弃即可；
-                        // 换曲后宿主会重新下发音量/倍速（见 drive 序列）
+                        // 换曲后宿主会重新下发音量/倍速（见 drive 序列）。
+                        // 设备迁移同理：EOF 后回命令循环，下一条 Load 的
+                        // open_output 自然落到新设备（watcher 已更新基线）。
                     }
                     Err(_) => {}
                 }
@@ -1191,22 +1386,38 @@ fn play_file(
                     if now >= drained_at {
                         break;
                     }
-                } else if out.client.get_current_padding().unwrap_or(0) == 0 {
-                    break;
+                } else {
+                    match out.client.get_current_padding() {
+                        Ok(0) => break,
+                        // P1：排空中 padding 查询失败 = 设备大概率已失效
+                        // （拔插/驱动复位）。此前 `unwrap_or(0)` 把 Err 抹成
+                        // "已排空"提前报 Eof——那首歌其实没放完。置
+                        // stream_err 走统一设备恢复出口，重建流后重新排空。
+                        Ok(_) => {}
+                        Err(e) => {
+                            stream_err = Some(wasapi_err(e));
+                            break;
+                        }
+                    }
                 }
                 std::thread::sleep(Duration::from_millis(10));
+            }
+            if stream_err.is_some() {
+                // 设备在排空期间失效：这不是曲终，不报 Eof/Position。
+                // 不在这里 out.stop()——恢复路径的 reopen_output 会先停旧流。
+                continue;
             }
             out.stop();
             if user_stopped {
                 send(EngineEvent::StateChanged { token, playing: false });
                 send(EngineEvent::Eof { token });
-                return Ok(LoadExit::Finished { cfg, eq: eq_params });
+                return Ok(LoadExit::Finished { cfg, eq: eq_params, volume });
             }
             send(EngineEvent::Position { token, position_ms: decoder.duration_ms() });
             send(EngineEvent::StateChanged { token, playing: false });
             send(EngineEvent::Eof { token });
             // EOF 后回命令循环等下一条 Load
-            return Ok(LoadExit::Finished { cfg, eq: eq_params });
+            return Ok(LoadExit::Finished { cfg, eq: eq_params, volume });
         }
     }
 }
@@ -1975,6 +2186,8 @@ fn writable_frames(clock: Clock, mode: OutputMode, buffer_frames: u32, padding: 
 /// 顶爆已归一化的输出电平；旁路时零开销直通。频谱 tap 吃**滤波后**的单声道：
 /// 频谱反映的应该是耳朵听到的东西，不是文件里的东西。
 /// `mono_out`：同步写出每帧的单声道平均（未乘音量），供频谱 tap 使用。
+/// `tap_enabled`：tap 订阅开关。关闭时跳过单声道混算（与
+/// `SpectrumTap::push_mono` 的开关检查同源，保证"关闭零开销"在两条路径上一致）。
 #[allow(clippy::too_many_arguments)]
 fn resample_take(
     pool: &[f32],
@@ -1987,6 +2200,7 @@ fn resample_take(
     eq: &mut crate::eq::Eq,
     out: &mut Vec<f32>,
     mono_out: &mut Vec<f32>,
+    tap_enabled: bool,
 ) {
     let pool_frames = pool.len() / channels.max(1);
     let inv_ch = 1.0 / channels.max(1) as f32;
@@ -2010,9 +2224,12 @@ fn resample_take(
             eq.process_frame(frame);
         }
     }
-    // 单声道：滤波后混（tap 反映实际出声内容）
-    for frame in out.chunks_exact(channels) {
-        mono_out.push(frame.iter().sum::<f32>() * inv_ch);
+    // 单声道：滤波后混（tap 反映实际出声内容）。tap 关闭时整段跳过，
+    // 与 push_mono 的开关检查行为对齐
+    if tap_enabled {
+        for frame in out.chunks_exact(channels) {
+            mono_out.push(frame.iter().sum::<f32>() * inv_ch);
+        }
     }
     // 音量斜坡：逐样本乘（在 EQ 之后，见函数头注释）
     for (i, s) in out.iter_mut().enumerate() {
@@ -2068,7 +2285,7 @@ mod tests {
     fn take(pool: &[f32], pos: f64, rate: f64, ch: usize, frames: usize, vol: f32) -> Vec<f32> {
         let mut out = Vec::new();
         let mut eq = crate::eq::Eq::new(crate::eq::EqParams::default(), 48_000, ch);
-        resample_take(pool, pos, rate, ch, frames, vol, 0.0, &mut eq, &mut out, &mut Vec::new());
+        resample_take(pool, pos, rate, ch, frames, vol, 0.0, &mut eq, &mut out, &mut Vec::new(), true);
         out
     }
 
@@ -2126,7 +2343,7 @@ mod tests {
         let pool = [1.0f32; 4];
         let mut out = Vec::new();
         let mut eq = crate::eq::Eq::new(crate::eq::EqParams::default(), 48_000, 1);
-        resample_take(&pool, 0.0, 1.0, 1, 4, 0.0, 0.25, &mut eq, &mut out, &mut Vec::new());
+        resample_take(&pool, 0.0, 1.0, 1, 4, 0.0, 0.25, &mut eq, &mut out, &mut Vec::new(), true);
         let expect = [0.0, 0.25, 0.5, 0.75];
         for (i, (v, e)) in out.iter().zip(expect).enumerate() {
             assert!((v - e).abs() < 1e-6, "frame {i}: {v} != {e}");
@@ -2139,8 +2356,21 @@ mod tests {
         let pool2 = [1.0f32; 2];
         let mut out = Vec::new();
         let mut eq = crate::eq::Eq::new(crate::eq::EqParams::default(), 48_000, 1);
-        resample_take(&pool2, 1.0, 1.0, 1, 2, 1.0, 0.25, &mut eq, &mut out, &mut Vec::new());
+        resample_take(&pool2, 1.0, 1.0, 1, 2, 1.0, 0.25, &mut eq, &mut out, &mut Vec::new(), true);
         assert!((out[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tap_disabled_skips_mono_mixing_but_keeps_audio() {
+        // tap 关闭：单声道混算整段跳过（与 push_mono 的开关对齐），
+        // 但音频输出本身必须原样——可视化开关不许影响声音
+        let pool = [1.0f32; 4];
+        let mut out = Vec::new();
+        let mut mono = Vec::new();
+        let mut eq = crate::eq::Eq::new(crate::eq::EqParams::default(), 48_000, 1);
+        resample_take(&pool, 0.0, 1.0, 1, 4, 1.0, 0.0, &mut eq, &mut out, &mut mono, false);
+        assert!(mono.is_empty(), "tap 关闭时不得做单声道混算");
+        assert_eq!(out, vec![1.0, 1.0, 1.0, 1.0], "音频输出不受 tap 开关影响");
     }
 
     #[test]
@@ -2366,5 +2596,44 @@ mod tests {
         // 时钟：未知按 auto
         assert_eq!(OutputConfig::from_parts("shared", 0, "nope", true).clock, ClockPref::Auto);
         assert_eq!(OutputConfig::from_parts("shared", 0, "polling", true).clock, ClockPref::Polling);
+    }
+
+    // ---- http(s) scheme 判定（RFC 3986 大小写不敏感）----
+
+    #[test]
+    fn http_scheme_is_case_insensitive() {
+        assert!(is_http_url("http://example.com/x.m3u8"));
+        assert!(is_http_url("HTTPS://example.com/live"));
+        assert!(is_http_url("HtTp://host/path"), "混合大小写也是合法 scheme");
+        // 不是 scheme 语法 / 本地路径 / 空串
+        assert!(!is_http_url("httpx://x"));
+        assert!(!is_http_url("http:/miss"));
+        assert!(!is_http_url("D:\\music\\a.mp3"));
+        assert!(!is_http_url(""));
+        // 短于前缀的输入不能 panic（切片必须用 get 而不是下标）
+        assert!(!is_http_url("http"));
+    }
+
+    // ---- 设备 watcher：变更判定 ----
+
+    #[test]
+    fn device_watcher_baseline_then_change() {
+        // 首轮（无基线）只建立基线，不触发迁移——否则每次启动都会白切一次流
+        assert!(!device_id_changed(&None, "{0.0.0.00000000}.{dev-a}"));
+        let last = Some("dev-a".to_string());
+        assert!(!device_id_changed(&last, "dev-a"), "同 id 不触发");
+        assert!(device_id_changed(&last, "dev-b"), "端点 id 变化才触发");
+    }
+
+    // ---- DeviceChanged 的 wire 形状 ----
+
+    #[test]
+    fn device_changed_is_engine_internal_but_wire_safe() {
+        // 宿主不该发它，但一旦发了也不能炸协议（serde 单元变体）。锁定形状：
+        // 改成带载荷变体会静默改变 wire 兼容性。
+        let json = serde_json::to_string(&EngineCommand::DeviceChanged).unwrap();
+        assert_eq!(json, r#"{"t":"deviceChanged"}"#);
+        let back: EngineCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, EngineCommand::DeviceChanged);
     }
 }

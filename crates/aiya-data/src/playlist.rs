@@ -19,11 +19,19 @@
 
 use std::collections::HashSet;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, TransactionBehavior};
 
 use crate::db::{DbError, DbResult};
 use crate::ids;
 use crate::norm::norm;
+
+/// 本文件的写事务统一 IMMEDIATE（不是默认 DEFERRED）：扫描连接与主 DB 线程是
+/// 两个连接，DEFERRED 事务"先读后写"时要在事务中途升级写锁——30s 的自动刷新
+/// 恰好持有写锁时，锁升级立刻 SQLITE_BUSY（busy_timeout 对升级不生效），
+/// 用户加歌/建单就失败。IMMEDIATE 在事务开始就排队等写锁，等得到。
+fn write_tx(conn: &mut Connection) -> DbResult<rusqlite::Transaction<'_>> {
+    conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(DbError::Sql)
+}
 
 /// 与旧仓库一致：名称按字符截断到 80，避免把 UTF-8 多字节字符切成半个。
 pub const MAX_NAME_CHARS: usize = 80;
@@ -79,7 +87,7 @@ pub fn create(
     now: i64,
 ) -> DbResult<AddOutcome> {
     let name_norm = norm(name);
-    let tx = conn.transaction().map_err(DbError::Sql)?;
+    let tx = write_tx(conn)?;
     // 侧栏顺序：追加到最后（sort_position 是显式列，不能靠 created_at 猜）
     let next_sort: i64 = tx.query_row(
         "SELECT COALESCE(MAX(sort_position), -1) + 1 FROM playlists",
@@ -96,6 +104,67 @@ pub fn create(
     touch(&tx, playlist_id, now)?;
     tx.commit().map_err(DbError::Sql)?;
     Ok(outcome)
+}
+
+/// 建智能歌单（docs/40 §1 方案 A）：曲目不物化，规则存 `rule_json`。
+/// 规则在入库前先编译一遍（`SmartPlan::parse`）——写库时校验比读库时炸友好得多。
+pub fn create_smart(
+    conn: &mut Connection,
+    playlist_id: &str,
+    name: &str,
+    rule: &serde_json::Value,
+    now: i64,
+) -> DbResult<()> {
+    let name_norm = norm(name);
+    // 校验（存 canonical 序列化，避免同样的规则两种写法）
+    crate::smart::SmartPlan::from_value(rule)?;
+    let rule_json = serde_json::to_string(rule).map_err(|e| DbError::Custom(e.to_string()))?;
+    let tx = write_tx(conn)?;
+    let next_sort: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(sort_position), -1) + 1 FROM playlists",
+        [],
+        |r| r.get(0),
+    )?;
+    tx.execute(
+        "INSERT INTO playlists (id, name, name_norm, created_at, updated_at, sort_position, kind, rule_json)
+         VALUES (?1, ?2, ?3, ?4, ?4, ?5, 'smart', ?6)
+         ON CONFLICT(id) DO NOTHING",
+        params![playlist_id, name, name_norm, now, next_sort, rule_json],
+    )?;
+    touch(&tx, playlist_id, now)?;
+    tx.commit().map_err(DbError::Sql)?;
+    Ok(())
+}
+
+/// 更新智能歌单的规则。返回 false = 歌单不存在；手动歌单 = `Custom` 错误
+///（手动/智能互不转换，docs/40 §1.4 拍板）。
+pub fn set_rule(
+    conn: &mut Connection,
+    playlist_id: &str,
+    rule: &serde_json::Value,
+    now: i64,
+) -> DbResult<bool> {
+    // 校验在写库前（与 create_smart 同理）
+    crate::smart::SmartPlan::from_value(rule)?;
+    let rule_json = serde_json::to_string(rule).map_err(|e| DbError::Custom(e.to_string()))?;
+    let kind: Option<String> = match conn
+        .query_row("SELECT kind FROM playlists WHERE id = ?1", [playlist_id], |r| r.get(0))
+    {
+        Ok(k) => Some(k),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(DbError::Sql(e)),
+    };
+    match kind.as_deref() {
+        None => Ok(false),
+        Some("manual") => Err(DbError::Custom("手动歌单不支持设置规则".into())),
+        Some(_) => {
+            conn.execute(
+                "UPDATE playlists SET rule_json = ?2, updated_at = ?3 WHERE id = ?1",
+                params![playlist_id, rule_json, now],
+            )?;
+            Ok(true)
+        }
+    }
 }
 
 pub fn rename(conn: &Connection, playlist_id: &str, name: &str, now: i64) -> DbResult<bool> {
@@ -117,11 +186,29 @@ pub fn clear(conn: &mut Connection, playlist_id: &str, now: i64) -> DbResult<boo
     if !exists(conn, playlist_id)? {
         return Ok(false);
     }
-    let tx = conn.transaction().map_err(DbError::Sql)?;
+    ensure_manual(conn, playlist_id)?;
+    let tx = write_tx(conn)?;
     tx.execute("DELETE FROM playlist_items WHERE playlist_id = ?1", [playlist_id])?;
     touch(&tx, playlist_id, now)?;
     tx.commit().map_err(DbError::Sql)?;
     Ok(true)
+}
+
+/// 智能歌单的曲目列表是规则的**投影**——加歌/删歌/排序/清空都没有意义
+/// （改规则才是改内容）。手动歌单这些写操作照旧；守卫放在数据层，命令层
+/// 与未来的新调用方都绕不过去。
+fn ensure_manual(conn: &Connection, playlist_id: &str) -> DbResult<()> {
+    let kind: String = conn.query_row(
+        "SELECT kind FROM playlists WHERE id = ?1",
+        [playlist_id],
+        |r| r.get(0),
+    )?;
+    if kind == "smart" {
+        return Err(DbError::Custom(
+            "智能歌单的曲目由规则决定，不支持手动修改；请编辑歌单规则".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub fn add_tracks(
@@ -134,7 +221,8 @@ pub fn add_tracks(
     if !exists(conn, playlist_id)? {
         return Ok(None);
     }
-    let tx = conn.transaction().map_err(DbError::Sql)?;
+    ensure_manual(conn, playlist_id)?;
+    let tx = write_tx(conn)?;
     let outcome = append_tracks(&tx, playlist_id, track_ids, now, mode)?;
     touch(&tx, playlist_id, now)?;
     tx.commit().map_err(DbError::Sql)?;
@@ -152,7 +240,8 @@ pub fn remove_at(
     if !exists(conn, playlist_id)? {
         return Ok(None);
     }
-    let tx = conn.transaction().map_err(DbError::Sql)?;
+    ensure_manual(conn, playlist_id)?;
+    let tx = write_tx(conn)?;
     let mut items = ordered_item_ids(&tx, playlist_id)?;
     let idx = position as usize;
     if position >= 0 && idx < items.len() {
@@ -176,7 +265,8 @@ pub fn move_item(
     if !exists(conn, playlist_id)? {
         return Ok(None);
     }
-    let tx = conn.transaction().map_err(DbError::Sql)?;
+    ensure_manual(conn, playlist_id)?;
+    let tx = write_tx(conn)?;
     let mut items = ordered_item_ids(&tx, playlist_id)?;
     let (f, t) = (from as usize, to as usize);
     if from >= 0 && to >= 0 && f < items.len() && t < items.len() && f != t {
@@ -206,7 +296,7 @@ pub fn reorder_playlists(conn: &mut Connection, from: i64, to: i64) -> DbResult<
     let mut ids = ids;
     let moved = ids.remove(f);
     ids.insert(t, moved);
-    let tx = conn.transaction().map_err(DbError::Sql)?;
+    let tx = write_tx(conn)?;
     for (i, id) in ids.iter().enumerate() {
         tx.execute(
             "UPDATE playlists SET sort_position = ?2 WHERE id = ?1",
@@ -277,11 +367,15 @@ fn append_tracks(
         rows.collect::<rusqlite::Result<HashSet<_>>>()?
     };
 
+    // 存在性校验一次性查回（`WHERE id IN (...)`）：逐条点查在几百首的批量
+    // 加歌场景是 N 次往返；ID 超过单批变量上限时分块查。
+    let in_library = existing_track_ids(conn, track_ids)?;
+
     // 先筛出真正要插的（去重/空/不存在都算 skipped），再决定位置 ——
     // 队首插入要按"实际新增条数"整体后移旧行，先插后移会出现 position 撞车。
     let mut fresh: Vec<&String> = Vec::with_capacity(track_ids.len());
     for tid in track_ids {
-        if tid.is_empty() || existing.contains(tid) || !track_exists(conn, tid)? {
+        if tid.is_empty() || existing.contains(tid) || !in_library.contains(tid.as_str()) {
             outcome.skipped += 1;
             continue;
         }
@@ -303,29 +397,41 @@ fn append_tracks(
         }
     };
 
+    // 批量写 prepare 一次循环复用，不为每条重新编译 SQL
+    let mut stmt = conn.prepare(
+        "INSERT INTO playlist_items (id, playlist_id, track_id, position, added_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
     for (i, tid) in fresh.iter().enumerate() {
-        conn.execute(
-            "INSERT INTO playlist_items (id, playlist_id, track_id, position, added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                ids::playlist_item_id(),
-                playlist_id,
-                tid.as_str(),
-                start + i as i64,
-                now
-            ],
-        )?;
+        stmt.execute(params![
+            ids::playlist_item_id(),
+            playlist_id,
+            tid.as_str(),
+            start + i as i64,
+            now
+        ])?;
         outcome.added += 1;
     }
     Ok(outcome)
 }
 
-fn track_exists(conn: &Connection, track_id: &str) -> DbResult<bool> {
-    match conn.query_row("SELECT 1 FROM tracks WHERE id = ?1", [track_id], |_| Ok(())) {
-        Ok(()) => Ok(true),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
-        Err(e) => Err(DbError::Sql(e)),
+/// 入参 ID 里真实存在于 tracks 的那部分。分块 IN 查询（单批 500 个占位符，
+/// 远低于 SQLite 变量上限），入参里的重复 ID 天然被 HashSet 去重。
+fn existing_track_ids(conn: &Connection, track_ids: &[String]) -> DbResult<HashSet<String>> {
+    let mut out = HashSet::new();
+    for chunk in track_ids.chunks(500) {
+        let placeholders = (1..=chunk.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("SELECT id FROM tracks WHERE id IN ({placeholders})");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |r| r.get::<_, String>(0))?;
+        for row in rows {
+            out.insert(row?);
+        }
     }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -540,5 +646,34 @@ mod tests {
         let out = sanitize_name(&long).unwrap();
         assert_eq!(out.chars().count(), MAX_NAME_CHARS);
         assert!(out.is_char_boundary(out.len()));
+    }
+
+    /// 存在性校验的 IN 查询按 500 分块：跨块的大批量加歌必须全部命中，
+    /// 不能只识别第一块里的 ID。
+    #[test]
+    fn batch_add_spans_multiple_in_chunks() {
+        let mut conn = fixture();
+        let ids: Vec<String> = (0..601).map(|i| format!("t{i:03}")).collect();
+        let mut sql = String::from("BEGIN;");
+        for id in &ids {
+            sql.push_str(&format!(
+                "INSERT INTO tracks (id,title,title_norm,added_at,path,path_lower)
+                 VALUES ('{id}','{id}','{id}',1,'/m/{id}','/m/{id}');"
+            ));
+        }
+        sql.push_str("COMMIT;");
+        conn.execute_batch(&sql).unwrap();
+
+        // 601 首（>500 跨两块）+ 一个不存在的 + 一个重复的
+        let mut input: Vec<String> = ids.clone();
+        input.push("不存在".into());
+        input.push(ids[0].clone());
+        let out = create(&mut conn, "p1", "大单", &input, 100).unwrap();
+        assert_eq!(out.added, 601);
+        assert_eq!(out.skipped, 2);
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM playlist_items WHERE playlist_id='p1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 601);
     }
 }

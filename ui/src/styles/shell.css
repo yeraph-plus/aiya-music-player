@@ -33,7 +33,7 @@
 }
 
 .link:hover {
-  text-decoration: underline;
+  color: var(--accent-text);
 }
 
 .scan-bar {

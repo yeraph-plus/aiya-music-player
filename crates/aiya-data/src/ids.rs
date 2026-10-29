@@ -5,6 +5,8 @@
 
 use uuid::Uuid;
 
+use crate::norm::norm;
+
 /// 本项目私有命名空间（uuid 1.28 无 uuid! 宏，用 from_u128 常量）。固定不依赖运行环境。
 pub const NS_TRACK: Uuid = Uuid::from_u128(0x8f0c_4a1e_6e2f_4b3a_9d5c_1a2b_3c4d_5e6f);
 pub const NS_ARTIST: Uuid = Uuid::from_u128(0x9a1d_5b2f_7f30_4c4b_ae6d_2b3c_4d5e_6f70);
@@ -17,12 +19,17 @@ pub fn track_id(path: &str) -> String {
     Uuid::new_v5(&NS_TRACK, path.as_bytes()).to_string()
 }
 
+/// 艺人 ID。派生输入先过 norm：同一艺人的大小写/空白变体（"Jay Chou" vs
+/// "jay  chou"）必须落到同一行，否则扫描器与 beets 各写一行艺人，
+/// 聚合浏览与按 artist_id 的筛选互相看不见对方那一半曲目。
+/// 调用方（scanner / beets_sync）传原始字符串即可，归一在这里统一做。
 pub fn artist_id(name: &str) -> String {
-    Uuid::new_v5(&NS_ARTIST, name.as_bytes()).to_string()
+    Uuid::new_v5(&NS_ARTIST, norm(name).as_bytes()).to_string()
 }
 
+/// 专辑 ID。标题与分组艺人（albumartist，缺省回落 track artist）都先 norm。
 pub fn album_id(title: &str, artist_name: &str) -> String {
-    Uuid::new_v5(&NS_ALBUM, format!("{artist_name}||{title}").as_bytes()).to_string()
+    Uuid::new_v5(&NS_ALBUM, format!("{}||{}", norm(artist_name), norm(title)).as_bytes()).to_string()
 }
 
 pub fn playlist_id(name: &str) -> String {
@@ -62,6 +69,16 @@ mod tests {
         let b = track_id("D:/music/a.flac");
         assert_eq!(a, b);
         assert_ne!(track_id("D:/music/b.flac"), a);
+    }
+
+    /// 艺人/专辑 ID 的派生输入先过 norm：大小写、多余空白不算新实体。
+    #[test]
+    fn artist_and_album_ids_are_norm_insensitive() {
+        assert_eq!(artist_id("Jay Chou"), artist_id("  jay   CHOU "));
+        assert_eq!(album_id("Fantasy", "Jay"), album_id(" fantasy ", " JAY "));
+        assert_ne!(artist_id("Jay Chou"), artist_id("周杰倫"));
+        // 与 track_id 一样派生稳定（重扫不换 ID）
+        assert_eq!(artist_id("A"), artist_id("A"));
     }
 
     /// 歌单行 id 必须每次调用都不同：它只能当行身份，不能当"位置/曲目"的

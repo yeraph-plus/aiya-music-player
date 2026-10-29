@@ -85,6 +85,27 @@ pub struct BeetsPluginSummary {
     pub unavailable: u32,
 }
 
+/// 插件市场目录项（docs/40 §3 白名单版）。
+///
+/// 形状与工具侧 `market_report()` 逐字对齐（name/note/source/state/enabled/
+/// missing）。`source` 是 `builtin` 或 `pypi:<包名>`——UI 只对 pypi 档且非
+/// ready 的项给「安装」按钮；builtin 档随 beets 内置，启停归 config，
+/// 目录报告里恒为 false。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct BeetsMarketItem {
+    pub name: String,
+    pub note: String,
+    /// `builtin` | `pypi:<包名>`
+    pub source: String,
+    /// `ready` | `missing_deps` | `unavailable`
+    pub state: String,
+    pub enabled: bool,
+    /// 缺什么（Python 包名或外部命令名）；`ready` 时为空。
+    pub missing: Vec<String>,
+}
+
 /// "任务已启动"（preview / apply / sync 三个命令共用）。
 ///
 /// 这些命令是**异步**的：真正进度走 `beets:import` 事件流，返回值只表示
@@ -103,4 +124,23 @@ pub struct JobStarted {
 #[serde(rename_all = "camelCase")]
 pub struct CancelRequested {
     pub requested: bool,
+}
+
+/// beets 配置快照（docs/40 十三轮：待整理目录 + 唯一整理输出根）。
+///
+/// 三个键各管一件事：inbox 是"待整理的歌从哪来"，targetRoot 是"整理好
+/// 的歌落到哪个曲库目录"，importedCount 是防重复导入的排除表大小。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct BeetsConfig {
+    /// 待整理目录（用户自选的外部目录；未设置 = None）
+    pub inbox: Option<String>,
+    /// 用户勾选的整理输出根（必须是曲库目录之一；未勾选 = None）
+    pub target_root: Option<String>,
+    /// 实际生效的整理输出根：targetRoot 有效用它，否则回退第一个曲库目录
+    /// （兼容"从来没碰过这个勾选框"的老配置——行为与十三轮之前一致）
+    pub effective_target: Option<String>,
+    /// 已导入记录条数（inbox 排除表，防 copy 模式重复入库）
+    pub imported_count: usize,
 }

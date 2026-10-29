@@ -10,7 +10,12 @@ import type { TrackRef } from "./TrackRef";
  */
 export type PlayerState = { queueLength: number, queueVersion: number, 
 /**
- * 当前曲目在播放顺序（order）中的下标；空队列 = `null`。
+ * 当前曲目在**队列原序（queue）中的下标**；空队列 = `null`。
+ *
+ * 注意与 `cursor` 的区别：`cursor` 是当前曲在播放顺序（order）中的**位置**，
+ * `index` 是当前曲在队列原序中的**下标**（实现上恒等于 `order[cursor]`）。
+ * 洗牌开启时 order 是 queue 的一个排列，二者指向的数字不同——
+ * UI 拿 `index` 对队列原序列表，宿主拿 `cursor` 对 queue_snapshot()。
  *
  * 为什么不用 -1 哨兵（docs/17 §9.2 偏差 1 的偿还）：`null` 在 TS 侧
  * 无法与合法下标 0 混淆，`-1` 可以（漏判 `>= 0` 就是越界写）。缺值
@@ -18,7 +23,7 @@ export type PlayerState = { queueLength: number, queueVersion: number,
  */
 index: number | null, 
 /**
- * 播放顺序位置（随机模式下与 index 不同）；空队列 = `null`。
+ * 当前曲在播放顺序（order）中的位置（随机模式下与 index 不同）；空队列 = `null`。
  */
 cursor: number | null, repeat: RepeatMode, shuffle: boolean, status: PlaybackStatus, 
 /**

@@ -20,7 +20,7 @@ AIYA Music 本体以 **GPL-3.0-or-later** 发布（全文见仓库根 `LICENSE`�
 
 ### 2. Rust 依赖（静态链接进上面两个 exe）
 
-完整清单（525 个 registry crate 的名称/版本/许可）见同目录 `CARGO-DEPS.md`。
+完整清单（registry crate 的名称/版本/许可，条目数以 `CARGO-DEPS.md` 头部为准）见同目录 `CARGO-DEPS.md`。
 关键项：
 
 | 组件 | 版本 | 许可 | 用途 |

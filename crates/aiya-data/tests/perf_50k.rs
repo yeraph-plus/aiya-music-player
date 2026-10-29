@@ -77,6 +77,7 @@ fn q_page(conn: &Connection, offset: usize) -> std::time::Duration {
         last_played_from_ms: None,
         last_played_to_ms: None,
         last_played_never: None,
+    conds: None,
         source: aiya_data::repo::TrackSource::Library,
         limit: 200,
         // 深分页必须用 Offset 模式：Cursor 模式**根本不读 offset**，
@@ -135,6 +136,7 @@ fn perf_50k_baseline() {
         last_played_from_ms: None,
         last_played_to_ms: None,
         last_played_never: None,
+    conds: None,
         source: aiya_data::repo::TrackSource::Library,
         limit: 200,
         mode: aiya_data::repo::Mode::Cursor,
@@ -161,6 +163,7 @@ fn perf_50k_baseline() {
         last_played_from_ms: None,
         last_played_to_ms: None,
         last_played_never: None,
+    conds: None,
         source: aiya_data::repo::TrackSource::Library,
         limit: 50,
         mode: aiya_data::repo::Mode::Cursor,

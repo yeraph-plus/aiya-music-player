@@ -55,11 +55,7 @@
 <div class="app">
   <!-- 背景四层（1-3 层，T4c 起 app 化；T4d 起第 1 层是固定渐变，不跟随封面）：
        绝对定位在 .app 根部、四区席位之下；沉浸档只在正在播放页 -->
-  <AmbientBackdrop
-    source={spectrumSource}
-    spectrumOn={ui.settings.spectrum}
-    immersive={ui.page === 'nowPlaying'}
-  />
+  <AmbientBackdrop source={spectrumSource} spectrumOn={ui.settings.spectrum} />
 
   <TitleBar />
   <Sidebar />
@@ -88,13 +84,14 @@
       queueOpen={ui.queueOpen}
       eqOpen={ui.eqOpen}
       eqEnabled={eq.enabled}
+      rateDraft={player.rateDraft}
       ontoggle={() => player.toggle()}
       onnext={() => player.next()}
       onprev={() => player.prev()}
       onseek={(ms) => player.seek(ms)}
       onvolume={(value) => player.setVolume(value)}
       onmute={() => player.toggleMute()}
-      onrate={(rate) => player.setRate(rate)}
+      onrate={(rate) => player.dragRate(rate)}
       onmode={() => player.cyclePlayMode()}
       onqueueopen={(open) => ui.setQueue(open)}
       oneqopen={(open) => ui.setEqDrawer(open)}

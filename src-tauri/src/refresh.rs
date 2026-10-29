@@ -119,6 +119,27 @@ impl Drop for FlagGuard {
 
 /* ---------------- 执行体 ---------------- */
 
+/// beets 段连续失败计数（进程内，跨重启不保留）。
+///
+/// beets 段失败最长要等 DUMP_TIMEOUT（180s）才返回，全程占着 scanning
+/// 互斥 —— 30s 一轮的定时刷新若每次都重试，等于"坏组件把整个刷新管线
+/// 拖死"。所以自动触发只在连续失败攒够 [`BEETS_RETRY_AFTER_FAILS`]
+/// （Timer 默认 30s 间隔下 ≈5 分钟）才再试；手动/动作触发本来就该跑。
+static BEETS_FAIL_STREAK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// 自动刷新重试 beets 段所需的连续失败次数。
+const BEETS_RETRY_AFTER_FAILS: u32 = 10;
+
+/// beets 段要不要跑。磁盘变了 / 触发方强制 → 跑；否则只有自动触发
+/// （定时/聚焦）攒够连续失败次数才为"上次失败"再试一次。
+/// 抽成纯函数是为了失败退避的三条规则能直接断言。
+fn should_run_beets(trigger: Trigger, disk_changed: bool, fail_streak: u32) -> bool {
+    if trigger.forces_beets() || disk_changed {
+        return true;
+    }
+    trigger.is_auto() && fail_streak >= BEETS_RETRY_AFTER_FAILS
+}
+
 /// 一次刷新的结果。
 struct Outcome {
     scan: aiya_data::scanner::ScanResult,
@@ -190,6 +211,11 @@ pub fn run(app: &tauri::AppHandle, params: &RefreshParams, trigger: Trigger) {
         return;
     }
     let _guard = FlagGuard(Arc::clone(&params.scanning));
+
+    // 清掉上一次手动扫描留下的取消请求：scan_cancel 只在手动扫描开头清零，
+    // 这里是自动刷新唯一会碰它的入口 —— 用户取消过一次手动扫描后，残留的
+    // true 会让此后每次自动刷新在扫描第一步就静默 Skipped("cancelled")。
+    params.scan_cancel.store(false, Ordering::SeqCst);
 
     // beets 会话进行中 → 让位。两个 sidecar 同时读同一个 beets 库不只是锁竞争：
     // 刷新发出去的 `librarySynced` 会被正在应用导入的界面当成"对齐完成"，
@@ -359,15 +385,24 @@ fn execute(
 
     /* ②③ beets 段：只在需要时跑 */
     let disk_changed = scan.imported > 0 || scan.updated > 0 || scan.missing > 0;
-    // 上次 beets 段失败过 → 这次也强制重试一次。否则一次瞬时失败
-    // （工具刚崩、库被锁）会让 beets 侧永久不同步：定时刷新看磁盘没变就跳过，
-    // 而用户完全没法知道"库里那几首的 beets_item_id 一直没落地"。
-    let retry = last_sync_failed(app);
+    // 上次 beets 段失败过 → 攒够连续失败次数才为它重试（自动触发）。
+    // 一次瞬时失败（工具刚崩、库被锁）不该永久丢同步，但也不能每 30s 就
+    // 撞一次 180s 的 dump 超时 —— 那会把 scanning 互斥整个占死。
+    let streak = BEETS_FAIL_STREAK.load(Ordering::Acquire);
+    // 这轮是"纯重试"（磁盘没变、触发方不强制）就先清零计数：失败要重新
+    // 计满才轮到下一次，否则一旦 >= 阈值，每轮定时刷新都会立刻撞一次超时。
+    if should_run_beets(trigger, false, streak) {
+        BEETS_FAIL_STREAK.store(0, Ordering::Release);
+    }
     let want_beets = beets::available(app);
-    let sync = if want_beets && (trigger.forces_beets() || disk_changed || retry) {
+    let sync = if want_beets && should_run_beets(trigger, disk_changed, streak) {
         match collect_and_sync(app, params) {
-            Ok(stats) => Some(stats),
+            Ok(stats) => {
+                BEETS_FAIL_STREAK.store(0, Ordering::Release);
+                Some(stats)
+            }
             Err(e) => {
+                BEETS_FAIL_STREAK.fetch_add(1, Ordering::AcqRel);
                 return Ok(Outcome { scan, sync: None, sync_error: Some(e) });
             }
         }
@@ -399,23 +434,31 @@ fn collect_and_sync(
 
 /// 从设置读曲库根（多目录并集单库，docs/29 批 A）。
 ///
-/// 优先级：`library.roots`（数组）> `library.root`（旧单串）> 系统 Music。
+/// 优先级：`library.roots`（数组，**键存在即权威**）> `library.root`（旧单串，
+/// 仅键缺失时兜底）> 系统 Music。
 /// 抽成公开函数是为了让 `library_scan` 复用同一份判定——两处各写一遍的话，
 /// "手动扫描扫的目录"与"自动刷新扫的目录"迟早会不一样。
 pub fn roots_from_settings(conn: &rusqlite::Connection) -> Vec<PathBuf> {
-    // 新键 `library.roots`（数组）优先；旧键 `library.root`（单串）兼容。
+    // 新键 `library.roots`（数组）**存在即权威，空数组就是空**——用户在
+    // textarea 里删光了目录，自动刷新就不该再去扫任何地方。
+    //
+    // 曾经的行为是"空数组回落旧键"：用户把列表删空后，自动刷新按旧键
+    // /系统 Music 把目录"死而复生"地扫回来，症状是"已添加的目录移除不掉"
+    // （2026-10-28 实测修复）。旧键兜底只保留给**从未写过新键**的老库。
     //
     // 这里**不能用 `?` 串起来**：`library.roots` 不存在时 `?` 会直接把整个
     // 解析判成"没配"，旧键分支永远走不到 —— 老用户的库根全在 `library.root`
     // 里，症状是"自动刷新和手动扫描都说未配置任何扫描目录"，而界面看着一切正常。
-    let from_roots = crate::setting_get(conn, "library.roots").and_then(|v| {
-        let arr: Vec<String> = v
-            .as_array()?
-            .iter()
-            .filter_map(|s| s.as_str().map(str::to_string))
-            .filter(|s| !s.trim().is_empty())
-            .collect();
-        (!arr.is_empty()).then_some(arr)
+    let from_roots = crate::setting_has(conn, "library.roots").then(|| {
+        crate::setting_get(conn, "library.roots")
+            .and_then(|v| v.as_array().cloned())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|s| s.as_str().map(str::to_string))
+                    .filter(|s| !s.trim().is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
     });
     let list = from_roots.or_else(|| {
         crate::setting_get(conn, "library.root")
@@ -544,8 +587,9 @@ fn interval_secs(app: &tauri::AppHandle) -> u64 {
             match v {
                 // 显式 0 = 关掉定时（聚焦触发仍然有效）
                 Some(0) => 0,
-                // 下限 10 s：再短就是拿电量换"几乎即时"，而 watcher 才是解法
-                Some(n) => n.max(10),
+                // 下限 10 s：再短就是拿电量换"几乎即时"，而 watcher 才是解法；
+                // 上限 1 h：坏配置写个天文数字会把定时器钉死在一个无意义的间隔上
+                Some(n) => n.clamp(10, 3600),
                 None => DEFAULT_INTERVAL_SECS,
             }
         })
@@ -561,21 +605,6 @@ fn store_last(app: &tauri::AppHandle, snapshot: RefreshSnapshot) {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(snapshot);
     }
-}
-
-fn last_snapshot(app: &tauri::AppHandle) -> Option<RefreshSnapshot> {
-    app.try_state::<crate::AppState>().and_then(|state| {
-        state
-            .last_refresh
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    })
-}
-
-/// 上次 beets 段是不是失败了（决定这次要不要强制重试）。
-fn last_sync_failed(app: &tauri::AppHandle) -> bool {
-    last_snapshot(app).is_some_and(|s| s.error.is_some())
 }
 
 /* ---------------- 事件 ---------------- */
@@ -654,13 +683,15 @@ mod tests {
         );
     }
 
-    /// 空数组不该压住旧键（用户清空过 textarea 但旧键还在的情形）。
+    /// 空数组是**权威**的：用户在 textarea 里删光了目录，就不该回落旧键
+    /// 把目录"死而复生"地扫回来（2026-10-28 实测缺陷修复）。
+    /// 旧键兜底只属于"从未写过新键"的库（见 `roots_read_legacy_single_key`）。
     #[test]
-    fn empty_array_falls_through_to_legacy() {
+    fn empty_array_is_authoritative() {
         let (_dir, conn) = temp_conn();
         crate::setting_set(&conn, "library.root", &serde_json::json!("D:/Music/Old")).unwrap();
         crate::setting_set(&conn, "library.roots", &serde_json::json!([])).unwrap();
-        assert_eq!(roots_from_settings(&conn), vec![PathBuf::from("D:/Music/Old")]);
+        assert!(roots_from_settings(&conn).is_empty());
     }
 
     /// 两个键都没有 → 回落系统 Music（目录不存在时由调用方过滤掉）。
@@ -689,6 +720,23 @@ mod tests {
         assert!(Trigger::Focus.is_auto());
         assert!(!Trigger::Action.is_auto());
         assert!(!Trigger::Manual.is_auto());
+    }
+
+    /// beets 段失败退避（P1）：自动触发不能"上次失败就每 30s 重试一次"——
+    /// 失败路径最长要等 180s 的 dump 超时，全程占着 scanning 互斥。
+    /// 规则：磁盘变了/触发方强制必跑；自动触发攒够连续失败才为失败重试。
+    #[test]
+    fn beets_retry_backs_off_until_streak_reaches_threshold() {
+        // 磁盘没变 + 失败次数不够 → 定时刷新跳过 beets 段（修复点）
+        assert!(!should_run_beets(Trigger::Timer, false, 0));
+        assert!(!should_run_beets(Trigger::Timer, false, BEETS_RETRY_AFTER_FAILS - 1));
+        // 攒够阈值 → 为追回失败跑一次
+        assert!(should_run_beets(Trigger::Timer, false, BEETS_RETRY_AFTER_FAILS));
+        assert!(should_run_beets(Trigger::Focus, false, BEETS_RETRY_AFTER_FAILS));
+        // 磁盘变了 / 手动 / 动作 → 无条件跑，与失败计数无关
+        assert!(should_run_beets(Trigger::Timer, true, 0));
+        assert!(should_run_beets(Trigger::Manual, false, 0));
+        assert!(should_run_beets(Trigger::Action, false, 0));
     }
 
     fn scan(imported: usize, updated: usize, missing: usize) -> aiya_data::scanner::ScanResult {

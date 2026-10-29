@@ -6,6 +6,7 @@
   import { formatDurationLong, formatTime } from '../lib/format';
   import { library as libraryStore } from '../stores/library.svelte';
   import Cover from './ui/Cover.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
   import IconButton from './ui/IconButton.svelte';
   import Icon from './Icon.svelte';
 
@@ -24,6 +25,12 @@
   let { ids, index, onplay, onremove, onmove, onclear, onclose }: Props = $props();
 
   const ROW_HEIGHT = 46;
+  /**
+   * 滚动内容里行区之前的占位：`.queue-list` 自身的 padding-top
+   * （player.css 6px）。插入线是 scroller 内的绝对定位元素、随内容滚，
+   * 定位是内容坐标——不补这 6px 线就会贴在目标行上沿之上一点。
+   */
+  const CONTENT_TOP = 6;
   const META_BATCH = 120;
   /** 同一 id 确认失败/缺失达到该次数后不再请求（有界负缓存，防无限重试） */
   const META_ATTEMPT_LIMIT = 3;
@@ -81,8 +88,9 @@
     return known === ids.length ? sum : 0;
   });
 
+  /** 插入线纵坐标 = 行边界 + 内容顶部占位（内容坐标，与滚动位置无关） */
   const dropLineTop = $derived(
-    dragState && dragState.active ? range.padTop + dragState.to * ROW_HEIGHT : -1,
+    dragState && dragState.active ? CONTENT_TOP + dragState.to * ROW_HEIGHT : -1,
   );
 
   $effect(() => {
@@ -123,7 +131,7 @@
   $effect(() => {
     const target = index;
     if (!vw.scroller || target == null) return;
-    const top = target * ROW_HEIGHT;
+    const top = CONTENT_TOP + target * ROW_HEIGHT;
     if (top < vw.scroller.scrollTop || top > vw.scroller.scrollTop + vw.viewportHeight - ROW_HEIGHT) {
       vw.scroller.scrollTop = Math.max(0, top - vw.viewportHeight / 3);
       vw.scrollTop = vw.scroller.scrollTop;
@@ -166,7 +174,7 @@
     onscroll={vw.handleScroll}
   >
     {#if ids.length === 0}
-      <div class="queue-empty">队列是空的<br /><span class="dim">右键曲目可加入队列</span></div>
+      <EmptyState title="队列是空的" hint="右键曲目可加入队列" />
     {:else}
       <div style={`height:${range.padTop}px`}></div>
       {#each visible as row (row.index)}

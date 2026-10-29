@@ -23,7 +23,7 @@
     disabled?: boolean;
     /** 等宽字体：路径、快捷键、数字 */
     mono?: boolean;
-    type?: 'text' | 'search' | 'number';
+    type?: 'text' | 'search' | 'number' | 'date';
     oninput?: (value: string) => void;
     /** 回车提交（搜索框、重命名对话框） */
     onenter?: () => void;
@@ -144,6 +144,11 @@
 
   .k-field-input::placeholder {
     color: var(--text-3);
+  }
+
+  /* 原生日期控件的内框留给自己画（type=date）；日历图标跟随 color-scheme */
+  .k-field-input[type='date']::-webkit-calendar-picker-indicator {
+    cursor: pointer;
   }
 
   .k-field-input:disabled {

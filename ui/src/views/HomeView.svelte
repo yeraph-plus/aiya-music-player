@@ -1,8 +1,7 @@
 <script lang="ts">
-  import { ArrowRight, Clock3, Flame, LibraryBig, ListMusic, Sparkles } from '@lucide/svelte';
-  import Header from '../components/content/Header.svelte';
-  import Button from '../components/ui/Button.svelte';
+  import { Flame, ListMusic, Play } from '@lucide/svelte';
   import InlineError from '../components/ui/InlineError.svelte';
+  import EmptyState from '../components/ui/EmptyState.svelte';
   import TrackTable from '../components/TrackTable.svelte';
   import type { TrackRow } from '../lib/ipc';
   import type { TrackSource } from '../lib/query';
@@ -16,33 +15,28 @@
   import { playlists } from '../stores/playlists.svelte';
 
   /**
-   * 推荐页（原「首页」，docs/25 §3 改名）：歌单宫格 + 三段曲目预览（最近播放 / 常听 / 最近添加）。
+   * 推荐页（原「首页」）——**仪表盘**（2026-10-28 用户拍板重排）：
    *
-   * 三段都走 `TrackTable`——docs/27 起是**纯预览表**（勾选/批量撤掉，
-   * 批量归主列表工具条），双击播放、右键菜单保留。
+   * - 第一级 歌单卡片行：封面即播放键（点击直接起播，不跳页），
+   *   卡片名点击才进歌单视图；
+   * - 第二级 常听榜：播放最多的 15 首（排序 = 次数 desc，同次数按最近优先），
+   *   第 16 名永远进不来，满额后新歌挤掉末位——天然"新增一个退出一个"。
    *
-   * docs/28：最近播放/常听单页退役后这里成了唯一出口。常听段取 **top-15**
-   * ——排序是"播放次数 desc，同次数按最近播放优先"，第 16 名永远进不来，
-   * 满额后新歌挤掉末位，天然就是"新增一个退出一个"。
+   * 2026-10-28 二次修订：三项统计入口撤销（视觉冗余——曲目/专辑/艺人
+   * 侧栏都有一级导航）。只剩缺失警告这一个功能性提醒。
+   *
+   * 标题层级（Header）与「全部曲目」路由卡撤销：仪表盘没有页标题，
+   * 侧栏已经是全局导航。「最近播放 / 最近添加」两段迁往曲库页 tab
+   * （list store 的 libraryTab），不再在这里占两屏。
    */
-  const RECENT_SIZE = 8;
   const FREQUENT_SIZE = 15;
-  const ADDED_SIZE = 8;
 
-  let recent = $state<TrackRow[]>([]);
   let frequent = $state<TrackRow[]>([]);
-  let added = $state<TrackRow[]>([]);
   let loading = $state(true);
   let loadError = $state('');
 
-  async function loadSection(source: TrackSource, limit: number, recentlyAdded = false): Promise<TrackRow[]> {
-    const page = await library.list({
-      mode: 'offset',
-      offset: 0,
-      limit,
-      source,
-      ...(recentlyAdded ? { sort: 'added' as const, direction: 'desc' as const } : {}),
-    });
+  async function loadSection(source: TrackSource, limit: number): Promise<TrackRow[]> {
+    const page = await library.list({ mode: 'offset', offset: 0, limit, source });
     return page.items;
   }
 
@@ -50,11 +44,7 @@
     loading = true;
     loadError = '';
     try {
-      [recent, frequent, added] = await Promise.all([
-        loadSection({ kind: 'recent' }, RECENT_SIZE),
-        loadSection({ kind: 'mostPlayed' }, FREQUENT_SIZE),
-        loadSection({ kind: 'library' }, ADDED_SIZE, true),
-      ]);
+      frequent = await loadSection({ kind: 'mostPlayed' }, FREQUENT_SIZE);
     } catch (error) {
       loadError = errorMessage(error);
     } finally {
@@ -65,7 +55,7 @@
   /**
    * 曲库总数变化时重载（扫描完成、批量移出曲库都会改它）。
    * 不在 `onMount` 里自己发一次：`boot` 之后 `library.stats` 才就位，
-   * 提前查会在"曲库还没准备好"的时刻白跑三条查询。
+   * 提前查会在"曲库还没准备好"的时刻白跑查询。
    */
   let lastTotal: number | null = null;
   $effect(() => {
@@ -75,10 +65,7 @@
     void load();
   });
 
-  /**
-   * 清空历史后最近播放段要跟着重拉——stats.tracks 不变，上面的 effect
-   * 不会触发，只能显式刷（播放计数归零也让常听段同步变空）。
-   */
+  /** 清空播放历史（常听榜的输入就是播放计数，清空后榜单同步变空） */
   async function clearHistory(): Promise<void> {
     await history.clear();
     void load();
@@ -91,71 +78,74 @@
       notify.showError(errorMessage(error));
     }
   }
+
+  /**
+   * 封面即播放键：直接起播整个歌单，**不切视图**——仪表盘的"随手一点就有声"。
+   * 查询用 cursor 模式（歌单顺序是语义，sort 字段被后端忽略），
+   * id 收集由后端 `collect_track_ids` 兜底（不受窗口分页 limit 钳制）。
+   */
+  async function playPlaylist(id: string): Promise<void> {
+    try {
+      await player.playQuery(
+        { mode: 'cursor', sort: 'title', direction: 'asc', source: { kind: 'playlist', playlistId: id } },
+        0,
+      );
+    } catch (error) {
+      notify.showError(errorMessage(error));
+    }
+  }
 </script>
 
 <div class="page-scroll home-page">
-  <Header
-    kicker="YOUR LIBRARY"
-    title="推荐"
-    subtitle="回到常听的音乐，或继续整理你的本地曲库。"
-  >
-    {#snippet actions()}
-      <Button onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>
-        浏览全部曲目
-        {#snippet icon()}<ArrowRight size={14} />{/snippet}
-      </Button>
-    {/snippet}
-  </Header>
-
   {#if loadError}<InlineError message={loadError} ondismiss={() => (loadError = '')} />{/if}
 
+  <!-- 第一级：歌单卡片行。封面 = 播放键，名字 = 路由入口 -->
   <section class="home-section">
     <div class="section-heading">
       <div><ListMusic size={17} /><h2>歌单</h2></div>
       <span>{playlists.items.length} 个</span>
     </div>
-    <div class="playlist-grid">
-      <button class="playlist-card library-card" onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>
-        <span class="playlist-card-icon"><LibraryBig size={23} /></span>
-        <strong>全部曲目</strong>
-        <span>{library.stats?.tracks ?? 0} 首</span>
-      </button>
+    <div class="playlist-row">
       {#each playlists.items as playlist (playlist.id)}
-        <button class="playlist-card" onclick={() => nav.go({ kind: 'playlist', id: playlist.id })}>
-          {#if playlist.artworkId}
-            <img src={artworkUrl(playlist.artworkId, 160) ?? ''} alt="" loading="lazy" />
-          {:else}
-            <span class="playlist-card-icon"><ListMusic size={23} /></span>
-          {/if}
-          <strong>{playlist.name}</strong>
-          <span>{playlist.trackCount} 首</span>
-        </button>
+        <div class="playlist-card">
+          <button
+            class="pl-cover"
+            title={`播放「${playlist.name}」`}
+            aria-label={`播放 ${playlist.name}`}
+            disabled={playlist.trackCount === 0}
+            onclick={() => void playPlaylist(playlist.id)}
+          >
+            {#if playlist.artworkId}
+              <img src={artworkUrl(playlist.artworkId, 320) ?? ''} alt="" loading="lazy" />
+            {:else}
+              <span class="playlist-card-icon"><ListMusic size={26} /></span>
+            {/if}
+            <span class="pl-play"><Play size={18} /></span>
+          </button>
+          <button class="pl-name" title={playlist.name} onclick={() => nav.go({ kind: 'playlist', id: playlist.id })}>
+            {playlist.name}
+          </button>
+          <span class="pl-count">{playlist.trackCount} 首</span>
+        </div>
       {:else}
-        <div class="playlist-empty">从曲目右键菜单或批量操作创建歌单。</div>
+        <EmptyState title="从曲目右键菜单或批量操作创建歌单。" />
       {/each}
     </div>
   </section>
 
-  <section class="home-section">
-    <div class="section-heading">
-      <div><Clock3 size={17} /><h2>最近播放</h2></div>
-      <!-- docs/28：单页退役，"查看全部"换成"清空历史"——这个动作的唯一入口 -->
-      <button class="section-link" onclick={() => void clearHistory()}>清空播放历史</button>
-    </div>
-    <TrackTable
-      rows={recent}
-      {loading}
-      empty="还没有播放记录，听几首歌后会出现在这里。"
-      valueKind="duration"
-      currentId={player.state?.current?.id ?? null}
-      onplay={(index) => void play(recent, index)}
-    />
-  </section>
+  <!-- 缺失警告（2026-10-28：三项统计入口撤销后唯一保留的统计位——
+       它不是导航是告警，点了去扫描入库页处理） -->
+  {#if library.stats && library.stats.missingLocations > 0}
+    <button class="stat-warn" onclick={() => nav.go({ kind: 'page', page: 'tools' })}>
+      {library.stats.missingLocations} 个位置缺失，去「扫描入库」查看
+    </button>
+  {/if}
 
+  <!-- 第二级：常听榜。清空历史的唯一入口挂在这里（榜单的输入就是播放计数） -->
   <section class="home-section">
     <div class="section-heading">
-      <div><Flame size={17} /><h2>常听</h2></div>
-      <span>播放最多的 15 首</span>
+      <div><Flame size={17} /><h2>常听榜</h2></div>
+      <button class="section-link" onclick={() => void clearHistory()}>清空播放历史</button>
     </div>
     <TrackTable
       rows={frequent}
@@ -164,23 +154,8 @@
       valueKind="plays"
       currentId={player.state?.current?.id ?? null}
       onplay={(index) => void play(frequent, index)}
-    />
-  </section>
-
-  <section class="home-section">
-    <div class="section-heading">
-      <div><Sparkles size={17} /><h2>最近添加</h2></div>
-      <button class="section-link" onclick={() => nav.go({ kind: 'builtin', view: 'library', sort: { field: 'added', direction: 'desc' } })}>
-        查看全部 <ArrowRight size={13} />
-      </button>
-    </div>
-    <TrackTable
-      rows={added}
-      {loading}
-      empty="曲库还是空的，到设置页选择目录并扫描。"
-      valueKind="added"
-      currentId={player.state?.current?.id ?? null}
-      onplay={(index) => void play(added, index)}
+      onopenartist={(id) => nav.go({ kind: 'artist', id })}
+      onopenalbum={(id) => nav.go({ kind: 'album', id })}
     />
   </section>
 </div>

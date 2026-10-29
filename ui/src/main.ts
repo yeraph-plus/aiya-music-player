@@ -6,7 +6,7 @@ import App from './App.svelte';
 import { applyLook, readLook } from './lib/look';
 
 /**
- * 浏览器预览（`npm run dev:ui`）的装配点：没有 Tauri 运行时就把假后端
+ * 浏览器预览（ui/ 目录下 `npm run dev`）的装配点：没有 Tauri 运行时就把假后端
  * 装进 `lib/ipc/transport`，让所有 `ipc.*` 与事件订阅照常工作。
  *
  * 用动态 import 而不是顶层静态引入：mock 在 Tauri 构建里是独立 chunk，

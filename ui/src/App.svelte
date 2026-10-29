@@ -22,7 +22,6 @@
   import AlbumView from './views/AlbumView.svelte';
   import ArtistView from './views/ArtistView.svelte';
   import BrowseView from './views/BrowseView.svelte';
-  import KitView from './views/KitView.svelte';
   import LibraryView from './views/LibraryView.svelte';
   import HomeView from './views/HomeView.svelte';
   import NowPlayingView from './views/NowPlayingView.svelte';
@@ -45,9 +44,17 @@
    * **不注册进 AppPage**：它是零件自测页，不是产品页面。进了 AppPage 就要处理
    * 持久化（用户上次停在 kit，下次启动还落在 demo 上），还要在侧栏给入口 ——
    * 两条都不该为一个自测页付。
+   *
+   * **动态 import**（不再静态引入）：静态 import 会把 KitView 及其专属零件
+   * 打进生产包，DEV 判断只能挡渲染挡不住打包。只在 dev 且查询串命中时才拉。
    */
   const showKit =
     import.meta.env.DEV && new URLSearchParams(window.location.search).get('page') === 'kit';
+
+  let KitComponent = $state<typeof import('./views/KitView.svelte')['default'] | null>(null);
+  if (showKit) {
+    void import('./views/KitView.svelte').then((m) => (KitComponent = m.default));
+  }
 
   let mediaSession: MediaSessionBridge | null = null;
 
@@ -140,8 +147,8 @@
       docs/28：专辑/艺人详情页有独立视图（含头部聚合数据），先于
       LibraryView 判断。
     -->
-    {#if showKit}
-      <KitView />
+    {#if showKit && KitComponent}
+      <KitComponent />
     {:else if ui.page === 'home'}
       <HomeView />
     {:else if ui.page === 'albums' || ui.page === 'artists'}

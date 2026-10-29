@@ -1,6 +1,7 @@
 import type { AlbumPreview, BeetsImportEvent } from '../lib/beets';
 import { events, ipc, type ApplyDecision } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
+import { beetsConfig } from './beets-config.svelte';
 
 /**
  * beets 导入会话 store（模块级单例）。
@@ -53,6 +54,9 @@ class BeetsSessionStore {
   /** 预览完成的分组数（null = 本轮还没有 done） */
   doneCount = $state<number | null>(null);
 
+  /** 本次会话下发的应用决策（applyDone 时据此把成功路径记进排除表） */
+  private lastDecisions: ApplyDecision[] = [];
+
   /** 每次 librarySynced 递增；消费方据此触发主视图重拉（刷新逻辑不进 store） */
   syncVersion = $state(0);
 
@@ -103,9 +107,19 @@ class BeetsSessionStore {
     return true;
   }
 
+  /**
+   * 整理入库（docs/40 十三轮）：对待整理目录跑预览。排除表（已导入过的
+   * inbox 源文件）由宿主在 start_preview 里注入 options，这里不感知。
+   */
+  async previewInbox(inbox: string): Promise<void> {
+    this.reset();
+    await this.preview([inbox]);
+  }
+
   /** 应用决策（写标签 + 可选移动/复制 + 随后自动对齐读模型） */
   async apply(decisions: ApplyDecision[]): Promise<void> {
     this.lastError = null;
+    this.lastDecisions = decisions;
     this.results = {};
     this.applySummary = null;
     this.synced = null;
@@ -188,11 +202,26 @@ class BeetsSessionStore {
           [evt.albumId]: { written: evt.written, moved: evt.moved, failed: evt.failed },
         };
         break;
-      case 'applyDone':
+      case 'applyDone': {
         this.applySummary = { applied: evt.applied, skipped: evt.skipped, failed: evt.failed, moved: evt.moved };
+        // docs/40 十三轮：把成功应用的源路径记进排除表（inbox copy 模式防重复
+        // 导入——原件留在待整理目录，不排除的话下次整理会再导一遍）。排除表
+        // 本体在宿主 settings 里，preview 时由宿主注入 options.excludePaths。
+        const okPaths = this.lastDecisions
+          .filter((d) => d.action !== 'skip' && (this.results[d.album]?.written ?? 0) > 0)
+          .flatMap((d) => d.paths);
+        if (okPaths.length > 0) {
+          void ipc.beets
+            .inboxImportedAdd(okPaths)
+            .then((c) => {
+              beetsConfig.importedCount = c.importedCount;
+            })
+            .catch(() => {}); // 排除表是锦上添花，失败不打断收尾流程
+        }
         // 应用完成后自动触发读模型对齐，等 librarySynced 系列事件收尾
         if (this.phase === 'applying') this.phase = 'syncing';
         break;
+      }
       case 'cancelled':
         // 取消收尾：已完成的部分保留，归 idle 解锁按钮
         this.errors = [...this.errors, { path: 'cancel', message: '已取消（已完成的部分保留）' }];

@@ -27,7 +27,7 @@ function firstRow(page: Page) {
 
 async function openLibrary(page: Page): Promise<void> {
   await page.goto('/');
-  await page.locator('.main button', { hasText: '浏览全部曲目' }).click();
+  await page.locator('.sidebar .nav-item', { hasText: '曲库' }).click();
   await expect(page.locator('.main h1')).toHaveText('全部曲目');
   await firstRow(page).waitFor({ state: 'visible' });
 }
@@ -80,13 +80,14 @@ test('列表页：批量开关控制勾选列显隐；筛选器打开模态框',
   await firstRow(page).waitFor({ state: 'visible' });
 });
 
-test('首页：预览表为纯列表（无勾选列），双击播放保留', async ({ page }) => {
+test('首页：预览列表为纯列表（无勾选列），双击播放保留', async ({ page }) => {
   await page.goto('/');
-  const row = page.locator('.main .tt-row').first();
+  // 2026-10-28：预览列表与主列表同外观（复用 .row 网格），包在 .preview-list 里
+  const row = page.locator('.main .preview-list .row').first();
   await row.waitFor({ state: 'visible' });
 
   // 纯预览：没有勾选框、没有悬浮批量条
-  await expect(page.locator('.main .tt-row .k-check')).toHaveCount(0);
+  await expect(page.locator('.main .preview-list .k-check')).toHaveCount(0);
   await expect(page.locator('.batch-bar')).toHaveCount(0);
 
   // 双击播放链路保留

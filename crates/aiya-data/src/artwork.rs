@@ -135,6 +135,33 @@ pub fn find_artwork(conn: &Connection, id: &str) -> DbResult<Option<(String, Str
     Ok(None)
 }
 
+/// 扫描收尾 GC：删除不再被任何实体引用的 artwork 行及其 originals/ 原图。
+///
+/// artworks 与 originals/ 此前只增不减——曲目删除/重扫淘汰封面后，
+/// 行和文件永久残留。对账口径：tracks/albums/artists 三处 `artwork_id`
+/// 引用任一命中即保留（**含 missing 行的引用**——文件离线不代表封面作废，
+/// 文件回来时列表直接有图）。调用时机：扫描全部批次提交完之后（见
+/// scanner::scan_roots_ext），增量扫描同样收尾跑一次。
+/// 返回清理的行数；单个文件删除失败不致命（DB 行已删，孤儿文件下次 GC 再试）。
+pub fn gc_unreferenced(conn: &Connection, cache_dir: &Path) -> DbResult<usize> {
+    let orphans: Vec<(String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, cache_key FROM artworks a WHERE
+               NOT EXISTS (SELECT 1 FROM tracks  t WHERE t.artwork_id  = a.id) AND
+               NOT EXISTS (SELECT 1 FROM albums  al WHERE al.artwork_id = a.id) AND
+               NOT EXISTS (SELECT 1 FROM artists ar WHERE ar.artwork_id = a.id)",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    for (id, cache_key) in &orphans {
+        conn.execute("DELETE FROM artworks WHERE id = ?1", [id])?;
+        // 行删了文件删不掉（占用/权限）只是留一个孤儿文件，不回滚
+        let _ = std::fs::remove_file(cache_dir.join("originals").join(cache_key));
+    }
+    Ok(orphans.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

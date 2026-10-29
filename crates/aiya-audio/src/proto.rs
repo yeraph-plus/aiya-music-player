@@ -209,25 +209,27 @@ mod tests {
             "{\"k\":\"evt\",\"m\":{\"t\":\"error\",\"token\":5,\"kind\":\"fileMissing\",\"message\":\"io: 系统找不到指定的文件。\"}}\n"
         );
 
-        // v6 形状：EQ 整体下发 + 生效值回报（camelCase 字段，bands 是数组）
+        // v6 形状：EQ 整体下发 + 生效值回报（camelCase 字段，bands 是数组）。
+        // docs/39：加 bassDb/trebleDb（serde default，旧持久化行可解析）
         let eq = encode_line(&HostToSidecar::Cmd(EngineCommand::SetEq(crate::eq::EqParams {
             bands: [6.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 3.0],
             pregain: -3.0,
             enabled: true,
+            ..Default::default()
         })))
         .unwrap();
         assert_eq!(
             std::str::from_utf8(&eq).unwrap(),
-            "{\"k\":\"cmd\",\"m\":{\"t\":\"setEq\",\"v\":{\"bands\":[6.0,0.0,0.0,0.0,0.0,-2.0,0.0,0.0,0.0,3.0],\"pregain\":-3.0,\"enabled\":true}}}\n"
+            "{\"k\":\"cmd\",\"m\":{\"t\":\"setEq\",\"v\":{\"bands\":[6.0,0.0,0.0,0.0,0.0,-2.0,0.0,0.0,0.0,3.0],\"bassDb\":0.0,\"trebleDb\":0.0,\"pregain\":-3.0,\"enabled\":true}}}\n"
         );
         let applied = encode_line(&SidecarToHost::Evt(EngineEvent::EqApplied {
             token: 7,
-            params: crate::eq::EqParams { bands: [6.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 3.0], pregain: -3.0, enabled: true },
+            params: crate::eq::EqParams { bands: [6.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 3.0], bass_db: 2.0, treble_db: -1.0, pregain: -3.0, enabled: true },
         }))
         .unwrap();
         assert_eq!(
             std::str::from_utf8(&applied).unwrap(),
-            "{\"k\":\"evt\",\"m\":{\"t\":\"eqApplied\",\"token\":7,\"params\":{\"bands\":[6.0,0.0,0.0,0.0,0.0,-2.0,0.0,0.0,0.0,3.0],\"pregain\":-3.0,\"enabled\":true}}}\n"
+            "{\"k\":\"evt\",\"m\":{\"t\":\"eqApplied\",\"token\":7,\"params\":{\"bands\":[6.0,0.0,0.0,0.0,0.0,-2.0,0.0,0.0,0.0,3.0],\"bassDb\":2.0,\"trebleDb\":-1.0,\"pregain\":-3.0,\"enabled\":true}}}\n"
         );
     }
 

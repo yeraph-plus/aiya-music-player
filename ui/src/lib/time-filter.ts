@@ -1,94 +1,79 @@
 /**
- * 列表筛选器的时间档位（docs/27）：**预设档**而非日期选择器——
- * 今天 / 7 天内 / 30 天内 / 今年，覆盖"最近收的歌、最近听的歌"两类高频意图，
- * 无需引入日期控件；后续 beets 标签字段按同样的「档位 → 查询参数」模式扩展。
+ * 列表筛选器（docs/27 + 2026-10-28 多轮重构）：
+ * - 入库时间：**日期区间**（YYYY-MM-DD，本地时区；五轮拍板——固定预设档
+ *   换成区间输入，"7 天内"这类滚动窗口用户自己选日期表达不了）。上界含
+ *   当天（查询时换算成次日 0 点的**开区间**，与后端 addedToMs 语义对齐）。
+ * - 字段条件 `conds`：与智能歌单**同一批键**（genre/artist/album/year/
+ *   playCount × eq/contains/gte/lte），但只在本次查询生效、**不落库**——
+ *   歌单的规则是持久语义，筛选器是临时意图，共用解析、分道保存。
+ *   （筛选 UI 只暴露 genre/artist/album/year；playCount 是歌单规则用键，
+ *   2026-10-28 五轮拍板：常听统计已有"最近播放"入口，筛选器不需要它。）
+ * - 「上次播放」档位已删（2026-10-28 拍板）：它与曲库页「最近播放」tab
+ *   功能重叠；播放记录的保留周期收敛到设置项 `historyDays`，由后端
+ *   裁剪 history 行统一表达，筛选器不再自带一级时间轴。
  *
- * 纯函数可表驱动单测；档位在**查询时**换算成毫秒范围（而不是应用筛选时
- * 一次性快照）——「7 天内」随时间自然滚动，不要求用户重设。
+ * 纯函数可表驱动单测。
  */
 
-export type AddedPreset = 'any' | 'today' | 'week' | 'month' | 'year';
-export type LastPlayedPreset = AddedPreset | 'never';
+import type { SmartField, SmartOp } from './smart';
+
+/** 筛选器临时条件（与智能歌单同键；value 文本字段 string、数字字段 number） */
+export interface FilterCond {
+  field: SmartField;
+  op: SmartOp;
+  value: string | number;
+}
 
 export interface TrackTimeFilter {
-  added: AddedPreset;
-  lastPlayed: LastPlayedPreset;
+  /** 入库时间区间下界（含，当天 0 点起）。null = 不限 */
+  addedFrom: string | null;
+  /** 入库时间区间上界（**含当天**）。null = 不限 */
+  addedTo: string | null;
+  conds: FilterCond[];
 }
 
-export const DEFAULT_TIME_FILTER: TrackTimeFilter = { added: 'any', lastPlayed: 'any' };
-
-/** 设置页分段控件与筛选模态框共用的档位清单（顺序即展示顺序） */
-export const ADDED_PRESETS: Array<{ value: AddedPreset; label: string }> = [
-  { value: 'any', label: '全部' },
-  { value: 'today', label: '今天' },
-  { value: 'week', label: '7 天内' },
-  { value: 'month', label: '30 天内' },
-  { value: 'year', label: '今年' },
-];
-
-export const LAST_PLAYED_PRESETS: Array<{ value: LastPlayedPreset; label: string }> = [
-  { value: 'any', label: '全部' },
-  { value: 'never', label: '从未播放' },
-  { value: 'today', label: '今天' },
-  { value: 'week', label: '7 天内' },
-  { value: 'month', label: '30 天内' },
-  { value: 'year', label: '今年' },
-];
+export const DEFAULT_TIME_FILTER: TrackTimeFilter = {
+  addedFrom: null,
+  addedTo: null,
+  conds: [],
+};
 
 export function timeFilterActive(f: TrackTimeFilter): boolean {
-  return f.added !== 'any' || f.lastPlayed !== 'any';
+  return f.addedFrom !== null || f.addedTo !== null || f.conds.length > 0;
 }
 
-/** 当天 0 点（本地时区） */
-function startOfToday(now: Date): number {
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-}
-
-function startOfYear(now: Date): number {
-  return new Date(now.getFullYear(), 0, 1).getTime();
-}
-
-/** 单个档位 → [fromMs, toMs)；to 省略 = 不设上界（后端 to 是开区间） */
-function presetRange(preset: Exclude<LastPlayedPreset, 'any' | 'never'>, now: Date): {
-  fromMs: number;
-  toMs?: number;
-} {
-  switch (preset) {
-    case 'today':
-      // 到明天 0 点：把"今天 23:59 加进来的歌"也算进去（开区间语义）
-      return { fromMs: startOfToday(now), toMs: startOfToday(now) + 86_400_000 };
-    case 'week':
-      return { fromMs: now.getTime() - 7 * 86_400_000 };
-    case 'month':
-      return { fromMs: now.getTime() - 30 * 86_400_000 };
-    case 'year':
-      return { fromMs: startOfYear(now) };
+/** 'YYYY-MM-DD' → 本地时区当天 0 点毫秒；格式非法或日期不存在返回 null */
+export function localDayMs(s: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  // Date 自动进位（2 月 30 日 → 3 月 1 日）：input[type=date] 不会给非法值，
+  // 但防御手改 URL/旧数据，进位结果与原文不符就不收
+  if (
+    d.getFullYear() !== Number(m[1]) ||
+    d.getMonth() !== Number(m[2]) - 1 ||
+    d.getDate() !== Number(m[3])
+  ) {
+    return null;
   }
+  return d.getTime();
 }
 
 /**
- * 档位筛选 → 查询入参片段。`lastPlayedNever` 与时间范围互斥，never 优先
- * （后端同规则，双保险）。`any` 档不产生任何字段。
+ * 筛选器 → 查询入参片段。日期只在两端都合法时才产生时间字段；
+ * conds 原样透传（后端用与智能歌单同一套解析，未知键明确报错）。
  */
 export function timeFilterToQuery(
   f: TrackTimeFilter,
-  now: Date = new Date(),
-): Pick<
-  import('./ipc/client').TrackQueryInput,
-  'addedFromMs' | 'addedToMs' | 'lastPlayedFromMs' | 'lastPlayedToMs' | 'lastPlayedNever'
-> {
+): Pick<import('./ipc/client').TrackQueryInput, 'addedFromMs' | 'addedToMs' | 'conds'> {
   const out: ReturnType<typeof timeFilterToQuery> = {};
-  if (f.added !== 'any') {
-    const { fromMs, toMs } = presetRange(f.added, now);
-    out.addedFromMs = fromMs;
-    if (toMs !== undefined) out.addedToMs = toMs;
-  }
-  if (f.lastPlayed === 'never') {
-    out.lastPlayedNever = true;
-  } else if (f.lastPlayed !== 'any') {
-    const { fromMs, toMs } = presetRange(f.lastPlayed, now);
-    out.lastPlayedFromMs = fromMs;
-    if (toMs !== undefined) out.lastPlayedToMs = toMs;
+  const from = f.addedFrom ? localDayMs(f.addedFrom) : null;
+  if (from !== null) out.addedFromMs = from;
+  const to = f.addedTo ? localDayMs(f.addedTo) : null;
+  // 上界含当天：+1 天取次日 0 点，配后端开区间语义（addedToMs 是 < 比较）
+  if (to !== null) out.addedToMs = to + 86_400_000;
+  if (f.conds.length > 0) {
+    out.conds = f.conds.map((c) => ({ ...c }));
   }
   return out;
 }

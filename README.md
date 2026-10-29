@@ -31,7 +31,7 @@ AIYA_MUSIC_TAURI/
 │   └── aiya-beets-client/ # beets 协议客户端：发现/起进程/说协议；零 Tauri、零环境知识
 ├── beets-tool/            # beets 侧全部能力（独立发布单元，Python 包 aiya-beets）
 ├── src-tauri/             # Tauri 宿主：命令、事件桥、协议注册、窗口、日志
-├── ui/                    # Svelte 5 + Vite：10 views / 16 stores / 组件分 content·shell·ui
+├── ui/                    # Svelte 5 + Vite：10 views / 17 stores / 组件分 content·shell·ui
 └── tools/                 # 类型生成、依赖图、CDP 探针、notice 生成、打包辅助
 ```
 
@@ -72,12 +72,12 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 | `npm run beets:release` | 两个发布物一起出 |
 | `npm run build:ui` | 只构建前端到 `ui/dist` |
 | `npm run check` | `svelte-check`（当前 0 error / 0 warning 才算过） |
-| `npm run test` | Rust 全量测试（当前 **336 条**，1 条 `--ignored` 是 perf_50k） |
+| `npm run test` | Rust 全量测试（当前 **412 条**，1 条 `--ignored` 是 perf_50k） |
 | `npm run test:data` / `test:audio` / `test:player` / `test:app` | 单 crate 测试 |
 | `npm run test:all` | 先编 sidecar（`src-tauri/build.rs` 要它，干净检出缺了会编译失败）→ Rust 全量 + UI 类型检查 + UI 构建 |
 | `npm run gen:types` / `gen:types:check` | 从 Rust 生成 TS 类型 / 只校验不写盘 |
 | `npm run verify` | `test:all` + `check:clippy`（-D warnings）+ `gen:types:check` + beets 导入/维护/契约冒烟 |
-| `npm run test:e2e` | Playwright（`ui/` 下跑；mock 后端 + 系统 Edge，26 条） |
+| `npm run test:e2e` | Playwright（`ui/` 下跑；mock 后端 + 系统 Edge，35 条） |
 | `npm run smoke:engine` / `smoke:offset` / `smoke:switch` / `smoke:rate` | 真机 WASAPI 出声冒烟（需要声卡） |
 | `npm run smoke:supervisor` | sidecar 握手/心跳/看门狗冒烟（不需要声卡） |
 | `npm run smoke:beets` | beets apply 五场景（隔离 `BEETSDIR`，不动真实库；跑在 `beets-tool/tests/`） |

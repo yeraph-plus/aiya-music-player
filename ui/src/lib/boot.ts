@@ -2,10 +2,14 @@ import { errorMessage } from './errors';
 import type { PlayerState } from './ipc/generated/PlayerState';
 import { library } from '../stores/library.svelte';
 import { list } from '../stores/list.svelte';
+import { notify } from '../stores/notify.svelte';
 import { playlists } from '../stores/playlists.svelte';
 import { scan } from '../stores/scan.svelte';
 import { player } from '../stores/player.svelte';
 import { ui } from '../stores/ui.svelte';
+
+/** 启动引导的整体时限：超过即放行主界面（IPC 挂起不该把人关在启动屏里） */
+const BOOT_TIMEOUT_MS = 8000;
 
 /**
  * 启动引导。
@@ -48,6 +52,19 @@ export function boot(options: { onState: (state: PlayerState) => void }): () => 
   // 曲库维护事件（docs/29 批 D）：同样是"组件不直接 listen"，只订阅一次
   cleanups.push(ui.watchBeetsMaint());
 
+  /**
+   * 启动守卫：引导链挂起（某条 IPC 永不 resolve）时 8s 放行主界面。
+   *
+   * `booted` 的语义是"首屏数据到过没有"，这里置位是**配合错误条一起**的：
+   * TrackListPanel 会因此走「列表加载失败 / 重试」而不是永远"正在启动…"，
+   * 也不会误显示"曲库还是空的"（那条只在无错误时出现）。
+   */
+  const guardTimer = setTimeout(() => {
+    if (list.booted) return;
+    list.booted = true;
+    notify.showError('部分数据未加载：启动引导超时，可重试或重启应用');
+  }, BOOT_TIMEOUT_MS);
+
   void (async () => {
     // 三件事并发：应用信息（dataDir）、播放器快照、界面状态/设置/歌单
     const [dataDir, playerResult] = await Promise.all([library.fetchInfo(), player.fetchState()]);
@@ -73,12 +90,15 @@ export function boot(options: { onState: (state: PlayerState) => void }): () => 
       // 音量/静音/归一化全部以后端状态为准，UI 不再"对齐"一遍。
       await player.refreshQueue(playerResult.queueVersion);
     }
-  })().catch((err) => {
-    // 引导失败不致命：设置/歌单走默认值，界面仍可用
-    console.warn('boot failed:', errorMessage(err));
-  });
+  })()
+    .catch((err) => {
+      // 引导失败不致命：设置/歌单走默认值，界面仍可用
+      console.warn('boot failed:', errorMessage(err));
+    })
+    .finally(() => clearTimeout(guardTimer));
 
   return () => {
+    clearTimeout(guardTimer);
     for (const cleanup of cleanups) cleanup();
   };
 }

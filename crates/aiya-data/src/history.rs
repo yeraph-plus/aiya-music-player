@@ -48,6 +48,21 @@ pub fn clear(conn: &mut Connection) -> DbResult<bool> {
     Ok(removed > 0)
 }
 
+/// 按保留周期裁剪历史行（防表膨胀）。`cutoff_secs` 之前的行删除。
+///
+/// 语义约定（2026-10-28 拍板）：history 表 = "保留周期内的播放记录"。
+/// **只删 history 行，不动 tracks 的统计列**——`play_count` 是累计
+/// 总次数（智能歌单的 playCount 条件用它，语义是"听过多少次"而非
+/// "周期内听过几次"），`last_played_at` 是"最后一次"，两者都没有
+/// 膨胀问题。周期内的"最近播放" tab 与常听榜靠聚合 history 行自然
+/// 遵循周期（裁剪在启动/每次写历史/设置变更时执行，表内容≈周期内）。
+///
+/// 返回删掉的行数（0 = 无需裁剪，调用方可以跳过日志）。
+pub fn prune(conn: &Connection, cutoff_secs: i64) -> DbResult<usize> {
+    let n = conn.execute("DELETE FROM history WHERE played_at < ?1", [cutoff_secs])?;
+    Ok(n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +134,28 @@ mod tests {
         let mut conn = fixture();
         let r = record(&mut conn, "不存在", 500, 10);
         assert!(r.is_err(), "FK 违例应当报错而不是静默成功");
+    }
+
+    #[test]
+    fn prune_removes_only_rows_older_than_cutoff() {
+        let mut conn = fixture();
+        record(&mut conn, "t1", 100, 10).unwrap();
+        record(&mut conn, "t2", 9_000, 10).unwrap();
+        record(&mut conn, "t1", 9_900, 10).unwrap();
+
+        // 周期内下限 5_000：t1@100 被裁，其余保留
+        let removed = prune(&conn, 5_000).unwrap();
+        assert_eq!(removed, 1);
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM history", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 2);
+
+        // 统计列不受裁剪影响（累计语义，见 prune 注释）
+        let count: i64 = conn
+            .query_row("SELECT play_count FROM tracks WHERE id='t1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+
+        // 再裁一次同一周期：幂等（0 行）
+        assert_eq!(prune(&conn, 5_000).unwrap(), 0);
     }
 }

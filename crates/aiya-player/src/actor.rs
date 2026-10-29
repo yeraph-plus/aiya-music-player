@@ -7,9 +7,11 @@
 //! 顺序模型（对齐 contracts）：`queue` 是原序，`order` 是播放顺序
 //! （shuffle 开启时打乱）。`cursor` 在 order 里走，`index` 是 order[cursor]。
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::state::{
-    AudioError, AudioSource, PlaybackStatus, PlayerCommand, PlayerState, QueueOp, QueueSnapshot,
-    RepeatMode, TrackRef,
+    AudioError, AudioSource, PlaybackStatus, PlayerCommand, PlayerState, PlayHistory, QueueOp,
+    QueueSnapshot, RepeatMode, TrackRef,
 };
 
 pub struct PlayerActor {
@@ -33,6 +35,11 @@ pub struct PlayerActor {
     /// 此前只有 pending_load，这两种迁移对引擎完全静默：UI 显示已停、
     /// 声音继续放到本曲结束。
     pending_stop: bool,
+    /// Loading 期间用户按过暂停（此前该命令被静默吞掉）：Loaded 到达且
+    /// token 匹配时直接落 Paused 而不是 Playing。
+    pending_pause: bool,
+    /// 随机模式的播放历史栈（Prev 的"上一首"来源）。存 queue 下标。
+    history: PlayHistory,
     /// Actor 自己维护的单调位置估计（无引擎回报时给 UI）
     last_reported_ms: u64,
     /// 当前曲目音源类别（docs/22 G3）。instruct_load 时按路径前缀判定：
@@ -69,6 +76,8 @@ impl PlayerActor {
             token: 0,
             pending_load: None,
             pending_stop: false,
+            pending_pause: false,
+            history: PlayHistory::default(),
             last_reported_ms: 0,
             source: AudioSource::File,
             normalize: false,
@@ -193,13 +202,14 @@ impl PlayerActor {
         self.rate = rate.clamp(0.5, 2.0);
         self.position_ms = position_ms;
         self.last_reported_ms = position_ms;
-        self.rebuild_order(None);
+        // 排列不落库 → 历史也不恢复（历史跟着"这一次的随机排列"走）
+        self.history.clear();
         let target = current_track_id
             .and_then(|id| self.queue.iter().position(|t| t.id == id))
             .unwrap_or(0);
-        if let Some(pos) = self.order.iter().position(|&i| i == target) {
-            self.cursor = pos;
-        }
+        // keep 策略与 ToggleShuffle 一致（同一实现）：洗牌时当前曲钉到 order
+        // 位 0，不打断当前歌
+        self.rebuild_order(Some(target));
         self.bump_queue_version();
         if self.queue.is_empty() {
             self.go_idle();
@@ -232,12 +242,17 @@ impl PlayerActor {
     }
 
     /// cursor 沿 order 前进一步（repeat=all 环绕）。返回是否成功。
+    ///
+    /// 随机模式下把**离开的曲目**压进历史栈——Next / 自动连播 / repeat-all
+    /// 回绕都走这里，Prev 靠它才有"上一首"可回。前进失败（队尾且 repeat=off）
+    /// 不算"到过下一曲"，不入栈。
     fn advance(&mut self) -> bool {
         let len = self.order.len();
         if len == 0 {
             return false;
         }
-        if self.cursor + 1 < len {
+        let leaving = if self.shuffle { self.order.get(self.cursor).copied() } else { None };
+        let moved = if self.cursor + 1 < len {
             self.cursor += 1;
             true
         } else {
@@ -248,7 +263,13 @@ impl PlayerActor {
                 }
                 _ => false,
             }
+        };
+        if moved {
+            if let Some(qi) = leaving {
+                self.history.push(qi);
+            }
         }
+        moved
     }
 
     /// cursor 后退一步（repeat=all 环绕）。
@@ -289,6 +310,7 @@ impl PlayerActor {
             self.position_ms = start_ms;
             self.last_reported_ms = start_ms; // 换曲必须重置，否则快照带上上一曲的残留进度
             self.pending_stop = false; // 新的装载取代旧的停止意图
+            self.pending_pause = false; // 新的装载取代旧的暂停意图
             self.duration_ms = track.duration_ms.map(|d| d.max(0) as u64);
             self.error = None;
         } else {
@@ -304,6 +326,7 @@ impl PlayerActor {
     fn go_idle(&mut self) {
         self.status = PlaybackStatus::Idle;
         self.source = AudioSource::File;
+        self.pending_pause = false;
     }
 
     /* ---------------- 命令归约 ---------------- */
@@ -322,7 +345,10 @@ impl PlayerActor {
                         self.instruct_load(true, 0);
                     }
                 }
-                PlaybackStatus::Loading => {}
+                // Loading 中按暂停不再静默吞掉：记下来，Loaded 到达时直接落 Paused
+                PlaybackStatus::Loading => {
+                    self.pending_pause = true;
+                }
             },
 
             PlayerCommand::Next => {
@@ -344,6 +370,25 @@ impl PlayerActor {
                 // 播放超过 3 秒 → 回到本曲开头（通用播放器惯例）
                 if self.position_ms > 3_000 && self.current_track().is_some() {
                     self.instruct_load(autoplay, 0);
+                } else if self.shuffle {
+                    // 随机模式：历史栈优先——随机排列下"order 里的上一首"不是
+                    // 用户来的那条路。跳过已失效的队列下标；栈空才回退沿 order
+                    // 后退的老行为（非随机模式完全不走这条分支）。
+                    match self.history.pop(self.queue.len()) {
+                        Some(qi) => {
+                            self.cursor = self
+                                .order
+                                .iter()
+                                .position(|&i| i == qi)
+                                .unwrap_or(self.cursor);
+                            self.instruct_load(autoplay, 0);
+                        }
+                        None => {
+                            // 到队首且 repeat=off 时 rewind 失败，仍按"重播本曲"处理
+                            let _ = self.rewind();
+                            self.instruct_load(autoplay, 0);
+                        }
+                    }
                 } else {
                     // 到队首且 repeat=off 时 rewind 失败，仍按"重播本曲"处理
                     let _ = self.rewind();
@@ -373,15 +418,28 @@ impl PlayerActor {
                 self.shuffle = !self.shuffle;
                 let current_queue_index = self.order.get(self.cursor).copied();
                 self.rebuild_order(current_queue_index);
+                // 关掉洗牌：历史跟着旧排列一起作废（排列不落库，历史不跨排列存活）
+                if !self.shuffle {
+                    self.history.clear();
+                }
                 self.bump_queue_version();
             }
 
             PlayerCommand::Queue(op) => match op {
                 QueueOp::ReplaceAll { tracks, start } => {
+                    // 整队替换：旧队列下标全部作废，历史一并清空
+                    self.history.clear();
                     self.queue = tracks;
                     let n = self.queue.len();
                     if n == 0 {
                         self.go_idle();
+                        // order 必须跟着 queue 一起清（2026-10-28 闪退修复）：
+                        // 只清 queue 的话 order 里还留着旧下标，宿主随后调
+                        // queue_snapshot() 时 self.queue[i] 对空 vec 取下标直接
+                        // panic——且命令跑在 WebView2 回调里（cannot unwind），
+                        // panic = 整个应用 abort。
+                        self.order.clear();
+                        self.cursor = 0;
                         self.position_ms = 0;
                         self.last_reported_ms = 0;
                         self.pending_stop = true;
@@ -403,9 +461,15 @@ impl PlayerActor {
                 QueueOp::Append { tracks } => {
                     let first_new = self.queue.len();
                     self.queue.extend(tracks);
-                    // order 重新构建（保持当前播放位置）
-                    let current_queue_index = self.order.get(self.cursor).copied();
-                    self.rebuild_order(current_queue_index);
+                    // 洗牌开启时不再整队重洗（删一首不打乱全部，加一首也不该）：
+                    // 新曲插进"未播尾部"的随机位置，当前曲与已播前缀不动
+                    if self.shuffle {
+                        self.append_shuffled(first_new);
+                    } else {
+                        // order 重新构建（保持当前播放位置）
+                        let current_queue_index = self.order.get(self.cursor).copied();
+                        self.rebuild_order(current_queue_index);
+                    }
                     self.bump_queue_version();
                     // 空队列追加后自动开始播放
                     if self.status == PlaybackStatus::Idle && !self.order.is_empty() {
@@ -480,6 +544,8 @@ impl PlayerActor {
                             self.position_ms = 0;
                             self.last_reported_ms = 0;
                             self.pending_stop = true;
+                            // 队列清空：历史栈里的下标已全部失效
+                            self.history.clear();
                         } else {
                             self.instruct_load(was_playing, 0);
                         }
@@ -511,7 +577,13 @@ impl PlayerActor {
                     // 而不是 Some(0)——进度条按 source=stream 显示"直播中"
                     self.duration_ms = if duration_ms == 0 { None } else { Some(duration_ms) };
                     if self.status == PlaybackStatus::Loading {
-                        self.status = PlaybackStatus::Playing;
+                        // Loading 期间用户按过暂停 → 落 Paused（此前被静默吞掉）
+                        let want_pause = std::mem::take(&mut self.pending_pause);
+                        self.status = if want_pause {
+                            PlaybackStatus::Paused
+                        } else {
+                            PlaybackStatus::Playing
+                        };
                     }
                 }
             }
@@ -552,26 +624,7 @@ impl PlayerActor {
         let n = self.queue.len();
         let mut order: Vec<usize> = (0..n).collect();
         if self.shuffle && n > 1 {
-            // 洗牌：deterministic 简化版 —— v1 用时间熵（UI 不需要可复现性）
-            let seed = now_ms();
-            // xorshift
-            let mut x = seed | 1;
-            for i in (1..n).rev() {
-                x ^= x << 13;
-                x ^= x >> 7;
-                x ^= x << 17;
-                let j = (x % (i as u64 + 1)) as usize;
-                order.swap(i, j);
-            }
-            // 让 keep 的曲目排到最前（shuffle 不打断当前歌）：
-            // 先洗牌再把当前曲换到 0 位，cursor 随后由下方统一指向它
-            if let Some(k) = keep {
-                if let Some(pos) = order.iter().position(|&i| i == k) {
-                    if pos != 0 {
-                        order.swap(pos, 0);
-                    }
-                }
-            }
+            Self::shuffle_order(&mut order, keep, self.shuffle_seed());
         }
         self.order = order;
         // cursor 指向 keep 的位置
@@ -584,6 +637,72 @@ impl PlayerActor {
         if self.cursor >= self.order.len() {
             self.cursor = 0;
         }
+    }
+
+    /// 洗牌核心（ToggleShuffle 与 hydrate 共用同一策略）：Fisher-Yates 全量
+    /// 打乱后把 keep 的曲换到 order 位 0 —— shuffle 不打断当前歌，从它开始
+    /// 随机往后播。
+    fn shuffle_order(order: &mut [usize], keep: Option<usize>, seed: u64) {
+        let n = order.len();
+        // xorshift（种子强制奇数：全零状态是 xorshift 的不动点）
+        let mut x = seed | 1;
+        for i in (1..n).rev() {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let j = (x % (i as u64 + 1)) as usize;
+            order.swap(i, j);
+        }
+        if let Some(k) = keep {
+            if let Some(pos) = order.iter().position(|&i| i == k) {
+                if pos != 0 {
+                    order.swap(pos, 0);
+                }
+            }
+        }
+    }
+
+    /// 洗牌开启时的追加：把新曲逐个插进"未播尾部"（cursor 之后的区段）的
+    /// 随机位置。当前曲与已播前缀的 order 位置不动——Append 不再整队重洗。
+    fn append_shuffled(&mut self, first_new: usize) {
+        let mut x = self.shuffle_seed() | 1;
+        // 空队列（无当前曲）没有"已播前缀"可让，但首曲仍按 keep 语义钉在
+        // order[0]——与 ToggleShuffle/hydrate 的"当前曲在 order 头部"不变量
+        // 一致。否则后续随机插入可能落到首曲前面，cursor 跟着漂到 1。
+        let pinned = self.order.is_empty();
+        if pinned {
+            self.order.push(first_new);
+        }
+        let tail_start = if pinned {
+            1
+        } else {
+            (self.cursor + 1).min(self.order.len())
+        };
+        for qi in first_new..self.queue.len() {
+            if pinned && qi == first_new {
+                continue; // 首曲已钉，不再重复插入
+            }
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            // 插入点 ∈ [tail_start, order.len()]（含末尾）；尾段随插入增长，
+            // 且插入位置恒在 cursor 之后 → cursor 与已播前缀的下标不变
+            let tail_len = self.order.len() - tail_start;
+            let at = tail_start + (x % (tail_len as u64 + 1)) as usize;
+            self.order.insert(at, qi);
+        }
+    }
+
+    /// 洗牌种子：时间熵 + cursor + queue_version + 进程级自增熵。
+    /// 只用毫秒会在同一毫秒内连续两次重排时得到同一种子 → 相同排列；
+    /// 掺入进程内单调递增的 tick 后，同毫秒内必然不同（XOR 同源掩码相消）。
+    fn shuffle_seed(&self) -> u64 {
+        static TICK: AtomicU64 = AtomicU64::new(0);
+        let tick = TICK.fetch_add(1, Ordering::Relaxed);
+        now_ms()
+            ^ (self.cursor as u64).rotate_left(17)
+            ^ self.queue_version.rotate_left(31)
+            ^ tick.rotate_left(7)
     }
 }
 
@@ -604,6 +723,8 @@ mod tests {
             title: format!("T{id}"),
             artist: None,
             album: None,
+            artist_id: None,
+            album_id: None,
             duration_ms: Some(180_000),
             artwork_id: None,
             gain_db: None,
@@ -637,6 +758,13 @@ mod tests {
         let s = p.state();
         assert_eq!(s.status, PlaybackStatus::Idle);
         assert_eq!(s.source, AudioSource::File, "队列空了，source 必须复位");
+
+        // 回归（2026-10-28 闪退）：清空后 order 必须同步清掉——否则
+        // queue_snapshot() 里 self.queue[i] 对空 vec 取下标直接 panic，
+        // 且 panic 发生在 WebView2 回调（cannot unwind）= 整个应用闪退。
+        let snap = p.queue_snapshot();
+        assert!(snap.ids.is_empty(), "清空后快照必须是空列表");
+        assert_eq!(snap.index, 0, "清空后 cursor 必须复位");
     }
 
     #[test]
@@ -837,6 +965,287 @@ mod tests {
         let (_, path, _, autoplay) = p.take_pending_load().unwrap();
         assert_eq!(path, "D:/m/a.flac");
         assert!(autoplay);
+    }
+
+    /* ---------------- 洗牌中的 Append（不整队重洗） ---------------- */
+
+    /// 洗牌中 Append：已有曲目的相对顺序不动，新曲只出现在未播区段
+    /// （cursor 之后）。老实现每次 Append 都全量 Fisher-Yates，删一首不重洗
+    /// 的克制策略对加一首同样适用。
+    #[test]
+    fn shuffle_append_keeps_unplayed_order() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: (0..8).map(|i| track(&format!("t{i}"))).collect(),
+            start: 0,
+        }));
+        let _ = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::ToggleShuffle);
+        let before = p.queue_snapshot().ids;
+        assert_eq!(before.len(), 8);
+
+        p.reduce(PlayerCommand::Queue(QueueOp::Append {
+            tracks: vec![track("x"), track("y")],
+        }));
+        let after = p.queue_snapshot().ids;
+        assert_eq!(after.len(), 10);
+
+        // 旧曲相对顺序不变：过滤掉新曲后应与追加前完全一致
+        let old: Vec<&str> =
+            after.iter().map(|s| s.as_str()).filter(|id| *id != "x" && *id != "y").collect();
+        let old_before: Vec<&str> = before.iter().map(|s| s.as_str()).collect();
+        assert_eq!(old, old_before, "Append 不得打乱既有顺序");
+
+        // 新曲只出现在未播区段（cursor 之后）
+        let cursor = p.state().cursor.unwrap();
+        for (pos, id) in after.iter().enumerate() {
+            if id == "x" || id == "y" {
+                assert!(pos > cursor, "新曲 {id} 出现在已播区段（pos={pos}，cursor={cursor}）");
+            }
+        }
+        // 当前曲不受影响
+        assert_eq!(p.state().current.unwrap().id, before[0]);
+        assert_eq!(p.state().cursor, Some(0), "当前曲位置不得移动");
+    }
+
+    /// 洗牌开启时空队列 Append 仍自动起播（append_shuffled 的退化路径）。
+    #[test]
+    fn shuffle_append_to_empty_autoplays() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::ToggleShuffle); // 先开洗牌（空队列下只是翻开关）
+        p.reduce(PlayerCommand::Queue(QueueOp::Append {
+            tracks: vec![track("a"), track("b")],
+        }));
+        let (_, path, _, autoplay) = p.take_pending_load().unwrap();
+        assert!(autoplay, "空队列追加必须自动起播");
+        let s = p.state();
+        assert_eq!(s.cursor, Some(0));
+        assert_eq!(s.index, Some(0));
+        assert_eq!(s.queue_length, 2);
+        let snap = p.queue_snapshot();
+        assert_eq!(snap.ids.len(), 2);
+        assert_eq!(path, format!("D:/m/{}.flac", snap.ids[0]), "装载的是 cursor 指向的曲");
+    }
+
+    /* ---------------- 随机模式的播放历史 ---------------- */
+
+    /// 随机连播 3 首 → Prev 回到上一首 → Prev 再回到上上首 → Next 前进行为正常。
+    #[test]
+    fn shuffle_prev_walks_history_stack() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: (0..5).map(|i| track(&format!("t{i}"))).collect(),
+            start: 0,
+        }));
+        let (tok, p0, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded { token: tok, duration_ms: 1 });
+        p.reduce(PlayerCommand::ToggleShuffle);
+        let order = p.queue_snapshot().ids;
+        assert_eq!(p.state().current.unwrap().id, order[0], "当前曲不被洗牌打断");
+
+        // 自动连播到第三首
+        p.reduce(PlayerCommand::Ended { token: tok });
+        let (tok2, p1, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded { token: tok2, duration_ms: 1 });
+        p.reduce(PlayerCommand::Ended { token: tok2 });
+        let (tok3, p2, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded { token: tok3, duration_ms: 1 });
+        assert_eq!(p2, format!("D:/m/{}.flac", order[2]), "自动连播沿 order 前进");
+
+        p.reduce(PlayerCommand::Prev);
+        let (_, back1, ..) = p.take_pending_load().unwrap();
+        assert_eq!(back1, p1, "Prev 回到上一首");
+        p.reduce(PlayerCommand::Prev);
+        let (_, back2, ..) = p.take_pending_load().unwrap();
+        assert_eq!(back2, p0, "再 Prev 回到上上首");
+
+        // Next 沿 order 前进一步：正好回到 back1
+        p.reduce(PlayerCommand::Next);
+        let (_, fwd, ..) = p.take_pending_load().unwrap();
+        assert_eq!(fwd, back1, "Next 沿 order 正常前进");
+    }
+
+    /// 历史栈只在随机模式入栈；非随机模式 Prev 行为完全不变。
+    #[test]
+    fn history_only_accumulates_in_shuffle_mode() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![track("a"), track("b"), track("c")],
+            start: 0,
+        }));
+        let (tok, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded { token: tok, duration_ms: 1 });
+        p.reduce(PlayerCommand::Ended { token: tok }); // → b
+        let (tok2, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded { token: tok2, duration_ms: 1 });
+        p.reduce(PlayerCommand::Ended { token: tok2 }); // → c
+        let (tok3, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded { token: tok3, duration_ms: 1 });
+        assert!(p.history.is_empty(), "非随机模式不入栈");
+
+        p.reduce(PlayerCommand::Prev);
+        let (_, path, ..) = p.take_pending_load().unwrap();
+        assert_eq!(path, "D:/m/b.flac", "非随机 Prev 仍沿 order 后退");
+    }
+
+    /// 历史栈的清空时机：关闭洗牌 / ReplaceAll / 清空队列。
+    #[test]
+    fn history_cleared_on_shuffle_off_and_replace_all() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: (0..5).map(|i| track(&format!("t{i}"))).collect(),
+            start: 0,
+        }));
+        let (tok, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded { token: tok, duration_ms: 1 });
+        p.reduce(PlayerCommand::ToggleShuffle);
+        p.reduce(PlayerCommand::Ended { token: tok });
+        let (tok2, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded { token: tok2, duration_ms: 1 });
+        p.reduce(PlayerCommand::Ended { token: tok2 });
+        let (tok3, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded { token: tok3, duration_ms: 1 });
+        assert_eq!(p.history.len(), 2, "两次前进应压栈两条");
+
+        // 关闭洗牌 → 清栈
+        p.reduce(PlayerCommand::ToggleShuffle);
+        assert!(p.history.is_empty(), "关闭洗牌必须清历史栈");
+
+        // 再开洗牌、前进两次攒历史，然后 ReplaceAll → 清栈
+        p.reduce(PlayerCommand::ToggleShuffle);
+        p.reduce(PlayerCommand::Ended { token: tok3 });
+        let (tok4, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded { token: tok4, duration_ms: 1 });
+        p.reduce(PlayerCommand::Ended { token: tok4 });
+        let (tok5, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded { token: tok5, duration_ms: 1 });
+        assert_eq!(p.history.len(), 2);
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: (0..3).map(|i| track(&format!("n{i}"))).collect(),
+            start: 0,
+        }));
+        assert!(p.history.is_empty(), "ReplaceAll 必须清历史栈");
+        let _ = p.take_pending_load();
+
+        // 清空队列 → 清栈
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll { tracks: vec![], start: 0 }));
+        assert!(p.history.is_empty());
+    }
+
+    /* ---------------- Loading 期间的暂停 ---------------- */
+
+    #[test]
+    fn pause_during_loading_lands_paused() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![track("a"), track("b")],
+            start: 0,
+        }));
+        let (tok, ..) = p.take_pending_load().unwrap();
+        assert_eq!(p.state().status, PlaybackStatus::Loading);
+        p.reduce(PlayerCommand::TogglePause); // Loading 中按暂停
+        p.reduce(PlayerCommand::Loaded { token: tok, duration_ms: 1 });
+        assert_eq!(p.state().status, PlaybackStatus::Paused, "Loading 期间的暂停必须生效");
+
+        p.reduce(PlayerCommand::TogglePause);
+        assert_eq!(p.state().status, PlaybackStatus::Playing);
+
+        // 新 Load 到达清掉标志：Next 装载后 Loaded → Playing（不是 Paused）
+        p.reduce(PlayerCommand::Next);
+        let (tok2, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded { token: tok2, duration_ms: 1 });
+        assert_eq!(p.state().status, PlaybackStatus::Playing, "新 Load 必须清掉暂停意图");
+    }
+
+    /// 暂停意图不跨 ReplaceAll / 队尾停止存活。
+    #[test]
+    fn pending_pause_cleared_by_replace_all_and_stop() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![track("a"), track("b")],
+            start: 0,
+        }));
+        let (tok, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::TogglePause); // 记下暂停意图
+        // 整队替换 → 新装载，暂停意图作废
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![track("c")],
+            start: 0,
+        }));
+        let (tok2, ..) = p.take_pending_load().unwrap();
+        assert_ne!(tok2, tok);
+        p.reduce(PlayerCommand::Loaded { token: tok2, duration_ms: 1 });
+        assert_eq!(p.state().status, PlaybackStatus::Playing, "ReplaceAll 必须清暂停意图");
+
+        // Loading 中按暂停 → 队尾停止（go_idle）→ 重新播放：意图不应复活
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![track("d")],
+            start: 0,
+        }));
+        let (tok3, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::TogglePause);
+        p.reduce(PlayerCommand::Ended { token: tok3 }); // repeat=off 队尾 → Idle
+        assert_eq!(p.state().status, PlaybackStatus::Idle);
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![track("e")],
+            start: 0,
+        }));
+        let (tok4, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded { token: tok4, duration_ms: 1 });
+        assert_eq!(p.state().status, PlaybackStatus::Playing, "停止后暂停意图不得复活");
+    }
+
+    /* ---------------- 洗牌种子熵 ---------------- */
+
+    /// 种子掺入进程级自增熵：同毫秒内连续两次取种子必不相同
+    /// （老实现只用 now_ms，同毫秒两次重排产生相同排列）。
+    #[test]
+    fn shuffle_seed_diverges_within_same_millisecond() {
+        let p = PlayerActor::new();
+        let s1 = p.shuffle_seed();
+        let s2 = p.shuffle_seed();
+        assert_ne!(s1, s2, "同毫秒两次取种子必须不同");
+    }
+
+    /// 同一毫秒内两次"开洗牌"不得得到相同排列。
+    #[test]
+    fn reshuffle_in_same_millisecond_differs() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: (0..24).map(|i| track(&format!("t{i}"))).collect(),
+            start: 0,
+        }));
+        let _ = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::ToggleShuffle);
+        let first = p.queue_snapshot().ids;
+        // 关了再开（同一毫秒内完成）：老实现会用相同种子得到相同排列
+        p.reduce(PlayerCommand::ToggleShuffle);
+        p.reduce(PlayerCommand::ToggleShuffle);
+        let second = p.queue_snapshot().ids;
+        assert_ne!(first, second, "同毫秒两次重排不应得到相同排列");
+    }
+
+    /* ---------------- hydrate 的洗牌策略 ---------------- */
+
+    /// hydrate 开洗牌与 ToggleShuffle 同策略：当前曲钉到 order 位 0
+    /// （此前 hydrate 用 rebuild_order(None)，当前曲落在随机位置）。
+    #[test]
+    fn hydrate_shuffle_pins_current_to_front_like_toggle() {
+        let mut p = PlayerActor::new();
+        p.hydrate(
+            (0..8).map(|i| track(&format!("t{i}"))).collect(),
+            RepeatMode::Off,
+            true,
+            0.85,
+            false,
+            1.0,
+            0,
+            Some("t5"),
+        );
+        let _ = p.take_pending_load().unwrap();
+        assert_eq!(p.state().cursor, Some(0), "hydrate 洗牌应把当前曲钉到 order 位 0");
+        assert_eq!(p.queue_snapshot().ids[0], "t5");
+        assert_eq!(p.state().current.unwrap().id, "t5");
     }
 
     #[test]

@@ -91,15 +91,22 @@ pub fn save_queue_full(
     p: &QueuePersist,
     track_ids: &[String],
 ) -> Result<(), DbError> {
-    let tx = conn.transaction().map_err(DbError::Sql)?;
+    // IMMEDIATE（对齐 history/scanner）：这是写事务，DEFERRED 的锁升级
+    // 在另一连接持写锁时立刻 BUSY，busy_timeout 不生效
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(DbError::Sql)?;
     tx.execute("DELETE FROM queue_items", [])
         .map_err(DbError::Sql)?;
-    for (i, tid) in track_ids.iter().enumerate() {
-        tx.execute(
-            "INSERT INTO queue_items (position, track_id) VALUES (?1, ?2)",
-            rusqlite::params![i as i64, tid],
-        )
-        .map_err(DbError::Sql)?;
+    // 批量写 prepare 一次循环复用
+    {
+        let mut stmt = tx
+            .prepare("INSERT INTO queue_items (position, track_id) VALUES (?1, ?2)")
+            .map_err(DbError::Sql)?;
+        for (i, tid) in track_ids.iter().enumerate() {
+            stmt.execute(rusqlite::params![i as i64, tid])
+                .map_err(DbError::Sql)?;
+        }
     }
     tx.execute(
         "UPDATE queue_state SET current_index=?1, position_ms=?2, repeat_mode=?3,

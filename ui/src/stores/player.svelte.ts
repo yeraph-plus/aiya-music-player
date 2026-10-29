@@ -22,6 +22,11 @@ import { errorMessage } from '../lib/errors';
 class PlayerStore {
   state = $state<PlayerState | null>(null);
   queueIds = $state<string[]>([]);
+  /**
+   * 倍速滑杆草稿：拖动中的本地即时显示（IPC 防抖期间画面跟手）。
+   * `null` = 无草稿，显示值以后端状态为准（对账模式与 eq store 一致）。
+   */
+  rateDraft = $state<number | null>(null);
 
   /** 队列结构版本；变化时渲染层重拉队列快照 */
   private version = -1;
@@ -51,6 +56,7 @@ class PlayerStore {
       this.pending = null;
       this.spectrum?.dispose();
       this.spectrum = null;
+      clearTimeout(this.rateTimer);
     };
   }
 
@@ -72,6 +78,8 @@ class PlayerStore {
     if (version !== undefined && version === this.version) return;
     try {
       const snapshot = await ipc.player.queue();
+      // 版本回退丢弃：暂停期间并发发出的旧请求后回来，会把队列覆盖回旧内容
+      if (snapshot.version < this.version) return;
       this.queueIds = snapshot.ids;
       this.version = snapshot.version;
     } catch (e) {
@@ -121,7 +129,38 @@ class PlayerStore {
   }
 
   setRate(value: number): void {
+    // 显式设速（快捷键/复位键）直接作废滑杆草稿：防抖中的旧草稿不能盖住新值
+    clearTimeout(this.rateTimer);
+    this.rateDraft = null;
     void ipc.player.setRate(value).catch((e) => this.fail('setRate', e));
+  }
+
+  /** 防抖句柄（dragRate / setRate 共用） */
+  private rateTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * 倍速滑杆入口：防抖 + 回写对账（与 eq store 的 apply 同一模式）。
+   * 本地即时显示（rateDraft），停手 ~300ms 才发 IPC；响应里后端 clamp
+   * 出差异、且用户此后没再动过滑杆时才回写显示值。
+   */
+  dragRate(value: number): void {
+    this.rateDraft = value;
+    clearTimeout(this.rateTimer);
+    this.rateTimer = setTimeout(() => {
+      const sent = this.rateDraft;
+      if (sent !== null) void this.commitRate(sent);
+    }, 300);
+  }
+
+  private async commitRate(sent: number): Promise<void> {
+    try {
+      const applied = await ipc.player.setRate(sent);
+      if (applied.rate !== sent && this.rateDraft === sent) this.rateDraft = applied.rate;
+    } catch (e) {
+      // 下发失败回滚显示值（null = 退回后端状态），日志留痕
+      this.rateDraft = null;
+      this.fail('setRate', e);
+    }
   }
 
   toggleMute(): void {

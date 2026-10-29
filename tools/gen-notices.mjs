@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 生成 licenses/CARGO-DEPS.md：Rust 依赖全量清单（名称/版本/许可/来源）。
 //
-// 为什么要生成而不是手写：直接依赖 15 个、传递依赖 525 个，手写必然过期。
+// 为什么要生成而不是手写：直接依赖十几个、传递依赖数百个，手写必然过期。
 // GPL-3.0 分发时"完整、对应版本的依赖清单"是合规底线，生成物随版本走。
 //
 // 用法：node tools/gen-notices.mjs   （需要 cargo 在 PATH，可用 --offline）
@@ -52,7 +52,7 @@ const md = [
   `生成时间：${new Date().toISOString().slice(0, 10)}　条目数：${rows.length}`,
   "生成命令：`node tools/gen-notices.mjs`",
   "",
-  "本仓库自有的 5 个 crate（" + [...own].sort().join("、") + "）以 GPL-3.0-or-later 发布，",
+  "本仓库自有的 " + own.size + " 个 crate（" + [...own].sort().join("、") + "）以 GPL-3.0-or-later 发布，",
   "不在此表内。下表为 crates.io 上的第三方依赖，均已静态链接进 `aiya.exe`",
   "或 `aiya-audio-host.exe`。",
   "",

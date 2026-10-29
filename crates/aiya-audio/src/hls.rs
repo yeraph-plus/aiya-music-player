@@ -7,8 +7,9 @@
 //! 调度模型（engine 只认 [`crate::decoder::DecodedStream`]，这里是其中
 //! 一个变体）：
 //! * VOD（有 `EXT-X-ENDLIST`）：顺序拉段直到 EOF，总时长 = Σ EXTINF。
-//! * live（无 ENDLIST）：段取空后回轮 playlist 追加新段；断网按失败计数
-//!   退避重连，超过上限报 `AudioError::Io`（引擎按错误恢复流程处理）。
+//! * live（无 ENDLIST）：段取空后回轮 playlist 追加新段；断网按墙钟预算
+//!   退避重连（含拉取耗时，见 [`OUTAGE_BUDGET`]），超预算报
+//!   `AudioError::Io`（引擎按错误恢复流程处理）。
 //! * 每段独立 probe（hint=aac）解码；**跨段采样率/声道变化 = 流错误**
 //!   （ADTS 允许中途换参，但我们的输出流/WASAPI 已按首段开好，换参只能断）。
 //!
@@ -42,6 +43,12 @@ pub(crate) trait Fetcher: Send {
     fn sleep(&mut self, d: Duration);
 }
 
+/// 单请求总超时（原 15s → 10s）：playlist/段都有字节硬上限（见
+/// [`PLAYLIST_MAX_BYTES`] / [`SEGMENT_MAX_BYTES`]）、正常几百 KB，10s 覆盖到
+/// 约 1Mbps 的窄带。它直接进入"单次 next_packet 最坏阻塞"的上界（推导见
+/// [`OUTAGE_BUDGET`]），调大前先看那里的账。
+const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// 生产实现：ureq 同步阻塞。引擎线程本来就是阻塞模型（读文件也是阻塞），
 /// 不为拉段引入异步运行时。
 struct HttpFetcher {
@@ -52,9 +59,8 @@ impl HttpFetcher {
     fn new() -> Self {
         Self {
             agent: ureq::AgentBuilder::new()
-                // 单请求总超时：段大小通常 <1MB，15s 足够窄带；连接失败走
-                // 调度器的退避重连，不在这里长等
-                .timeout(Duration::from_secs(15))
+                // 单请求总超时：连接失败走调度器的退避重连，不在这里长等
+                .timeout(HTTP_TIMEOUT)
                 .build(),
         }
     }
@@ -64,28 +70,56 @@ fn http_err(url: &str, e: ureq::Error) -> AudioError {
     AudioError::Io(std::io::Error::other(format!("HTTP {url}: {e}")))
 }
 
+/// 播放列表字节上限。m3u8 是纯文本，直播窗口通常 <100KB；2MB 装得下上万行
+/// 段条目。超过 = 对端失控或内容根本不是 playlist，按协议错误拒绝——
+/// 不设上限的话 `read_to_end` 会无界吃内存（ureq 开了 gzip，into_reader
+/// 返回的已是解压后的流，解压炸弹同样被这里拦住）。
+const PLAYLIST_MAX_BYTES: u64 = 2 * 1024 * 1024;
+/// 媒体段字节上限。ADTS AAC 320kbps 也才 40KB/s，10s 一段 ≈ 400KB；8MB
+/// 留足超长段/高码率的余量，同时挡住无界响应。依据同上。
+const SEGMENT_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// 读响应体，硬上限 `cap`：用 `Read::take(cap+1)` 兜底，多读 1 字节用于区分
+/// 「恰好 cap」与「超过 cap」。超限报协议错误（Decode 而非 Io：这是对端
+/// 违约，不是网络抖动）。
+fn read_capped(reader: impl Read, url: &str, cap: u64, what: &str) -> Result<Vec<u8>, AudioError> {
+    let mut bytes = Vec::new();
+    reader
+        .take(cap + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| AudioError::Io(std::io::Error::other(format!("读响应失败 {url}: {e}"))))?;
+    if bytes.len() as u64 > cap {
+        return Err(AudioError::Decode(format!(
+            "{what}超过字节上限 {cap} B（{url}），疑似对端失控，按协议错误拒绝"
+        )));
+    }
+    Ok(bytes)
+}
+
 impl Fetcher for HttpFetcher {
     fn fetch_text(&mut self, url: &str) -> Result<String, AudioError> {
         let body = self.agent.get(url).call().map_err(|e| http_err(url, e))?;
-        let mut bytes = Vec::new();
-        body.into_reader()
-            .read_to_end(&mut bytes)
-            .map_err(|e| AudioError::Io(std::io::Error::other(format!("读响应失败 {url}: {e}"))))?;
         // m3u8 规范要求 UTF-8；坏字节按 lossy 兜底（比整条流报错友好）
+        let bytes = read_capped(body.into_reader(), url, PLAYLIST_MAX_BYTES, "播放列表")?;
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
     fn fetch_bytes(&mut self, url: &str) -> Result<Vec<u8>, AudioError> {
         let body = self.agent.get(url).call().map_err(|e| http_err(url, e))?;
-        let mut bytes = Vec::new();
-        body.into_reader()
-            .read_to_end(&mut bytes)
-            .map_err(|e| AudioError::Io(std::io::Error::other(format!("读响应失败 {url}: {e}"))))?;
-        Ok(bytes)
+        read_capped(body.into_reader(), url, SEGMENT_MAX_BYTES, "媒体段")
     }
 
     fn sleep(&mut self, d: Duration) {
-        std::thread::sleep(d);
+        // 分片睡眠（每片 ≤100ms，总时长不变）：退避/轮询睡在音频线程上，
+        // 分片让长睡不再是一个不可打断的原语——进程挂起恢复、调试器中断
+        // 响应更快，将来要在片间插取消检查也有了缝。
+        const SLICE: Duration = Duration::from_millis(100);
+        let mut left = d;
+        while !left.is_zero() {
+            let s = left.min(SLICE);
+            std::thread::sleep(s);
+            left -= s;
+        }
     }
 }
 
@@ -214,14 +248,28 @@ fn extract_master_variant(text: &str) -> Option<String> {
 /// [`OUTAGE_BUDGET`]）。
 const LIVE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// 段拉取重试次数（单段）。超过后 live 跳过该段（缺口），VOD 直接报错。
+/// 次数之外还受重试墙钟窗口约束（见 [`Self::fetch_with_retry`]）。
 const SEGMENT_FETCH_RETRIES: u32 = 3;
-/// **一次网络中断的总预算**（墙钟，不是次数）。
+/// **一次网络中断的总预算**（墙钟，**含拉取耗时**，不只是睡眠）。
 ///
-/// 为什么不用"失败 N 次"：退避是同步睡在 `next_packet` 里的，次数上限换成
-/// 时间是不可控的——按次数 40 次能睡出 3 分钟（叠加 HTTP 超时更长），这期间
-/// 用户按暂停/停止毫无反应。改成一个明确的墙钟预算：熬过 20 秒还没恢复就
-/// 认输报错（UI 亮"直播中断"），至少不会假死。
-const OUTAGE_BUDGET: Duration = Duration::from_secs(20);
+/// 为什么不用"失败 N 次"：退避是同步睡在 `next_packet` 里的，按次数算出来
+/// 的是分钟级假死（叠加 HTTP 超时更长），这期间用户按暂停/停止毫无反应。
+/// 改成墙钟预算：熬过预算还没恢复就认输报错（UI 亮"直播中断"），至少不假死。
+///
+/// 为什么预算要把**拉取耗时**也算进去（`record_failure` 用本次失败拉取的
+/// 耗时回拨 `outage_since` 起点）：否则"挂满一个 HTTP 超时的拉取"发生在
+/// 预算之外，最坏阻塞 = 预算 + N×超时，预算形同虚设。
+///
+/// **单次 `next_packet` 最坏阻塞上界 = OUTAGE_BUDGET + HTTP_TIMEOUT
+/// = 8s + 10s = 18s**。推导：
+/// 1. 任何一次拉取最多挂满一个 [`HTTP_TIMEOUT`]；挂满后预算被回拨记账
+///    击穿，`record_failure` 到点认输 → 一次 `next_packet` 里**最多一次**
+///    满超时拉取，且它启动前预算内只花得下 <8s 的"快失败+退避"；
+/// 2. 其余等待全部受预算约束：退避睡眠裁剪到剩余预算（`record_failure`）、
+///    同步兜底的重试窗口 = 剩余预算（`fetch_with_retry`）、500ms 轮询间隔
+///    走 100ms 分片睡眠；
+/// 3. 健康路径段预取命中零网络等待，不受此限。
+const OUTAGE_BUDGET: Duration = Duration::from_secs(8);
 /// 退避基数：第 n 次失败睡 min(500ms × n, 5s)
 const BACKOFF_BASE: Duration = Duration::from_millis(500);
 const BACKOFF_CAP: Duration = Duration::from_secs(5);
@@ -229,6 +277,23 @@ const BACKOFF_CAP: Duration = Duration::from_secs(5);
 /// 没有这条，服务端一旦不再更新 playlist（或 URI 复用被判成旧段），就会
 /// 500ms 一轮永远静默轮询下去：不报错、不 EOF、也没声音。
 const STALL_FLOOR: Duration = Duration::from_secs(15);
+/// URI 去重集（`played`）的容量上限：4096 条 × 平均 ~150B ≈ 0.6MB 内存上界。
+/// 24/7 直播按 1s 一段一天累计 ~8.6 万 URI，无上限集合会一直涨。
+/// 超限直接清空重来：去重短暂失效——有 MEDIA-SEQUENCE 的台（主流）根本
+/// 不查这个集合（按序号判新旧），不受影响；靠 URI 去重的老式台最坏把
+/// 当前窗口里的段重播一遍（几段几秒），下一轮 refresh 即恢复，可接受。
+/// 不按 MEDIA-SEQUENCE 窗口裁剪：集合只存 URI、不携带序号，裁剪得换数据
+/// 结构，而它恰恰只在"没有序号"时才被查——cap+清空足够。
+const PLAYED_CAP: usize = 4096;
+
+/// 往去重集里记一段已消费；超过 [`PLAYED_CAP`] 清空（理由见常量注释）。
+fn remember_played(set: &mut HashSet<String>, uri: &str) {
+    if set.len() >= PLAYED_CAP {
+        set.clear();
+        tracing::debug!("HLS 去重集达到上限，已清空（URI 去重短暂失效）");
+    }
+    set.insert(uri.to_string());
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Kind {
@@ -349,7 +414,7 @@ pub(crate) struct HlsStream {
     duration_ms: u64,
     frames_played: u64,
     /// 已消费过的段 URL（去重兜底：没有 `EXT-X-MEDIA-SEQUENCE` 的 playlist
-    /// 只能靠 URI 判新旧）
+    /// 只能靠 URI 判新旧）。容量受 [`PLAYED_CAP`] 约束（超限清空）。
     played: HashSet<String>,
     /// 已消费过的最大段序号（有 MEDIA-SEQUENCE 时才是判新旧的权威依据：
     /// 服务端滚动复用段名时 URI 会重复，但序号不会）
@@ -447,7 +512,14 @@ impl HlsStream {
         if let Some(next) = pending.front() {
             prefetch.submit(&next.uri);
         }
-        let current = Some(Box::new(Self::open_segment(&mut *fetcher, &mut prefetch, &first, None)?));
+        // 打开首段：构造期还没有断网状态，给全额重试窗口
+        let current = Some(Box::new(Self::open_segment(
+            &mut *fetcher,
+            &mut prefetch,
+            &first,
+            None,
+            OUTAGE_BUDGET,
+        )?));
         let sample_rate = current.as_ref().unwrap().sample_rate();
         let channels = current.as_ref().unwrap().channels();
 
@@ -501,17 +573,19 @@ impl HlsStream {
 
     /// 打开一段：取字节（优先预取，兜底同步拉）→ probe（hint=aac，ADTS）→
     /// 校验与首段参数一致。`expected` = Some((rate, ch)) 时跨段变化报流错误。
+    /// `window` = 同步兜底的重试墙钟窗口（见 [`OUTAGE_BUDGET`]）。
     fn open_segment(
         fetcher: &mut dyn Fetcher,
         prefetch: &mut Prefetch,
         seg: &RawSegment,
         expected: Option<(u32, usize)>,
+        window: Duration,
     ) -> Result<DecodedStream, AudioError> {
         // 预取命中 = 零网络等待；没命中（预取失败/还没到）走同步重试，
         // 这条路会真的阻塞音频线程，所以只留给异常情况。
         let bytes = match prefetch.take(&seg.uri) {
             Some(b) => b,
-            None => Self::fetch_with_retry(fetcher, &seg.uri)?,
+            None => Self::fetch_with_retry(fetcher, &seg.uri, window)?,
         };
         let mut hint = symphonia::core::probe::Hint::new();
         hint.with_extension("aac");
@@ -538,19 +612,34 @@ impl HlsStream {
         Ok(stream)
     }
 
-    /// 带重试的拉取。失败计退避睡眠；返回最终错误（调用方决定跳过或失败）。
-    fn fetch_with_retry(fetcher: &mut dyn Fetcher, url: &str) -> Result<Vec<u8>, AudioError> {
+    /// 带重试的同步拉取。`window` = 重试墙钟窗口（剩余断网预算；健康时为
+    /// 全额）：这条路跑在音频线程上，耗时就是 engine 失去响应的时间，重试
+    /// 不许越过预算死线（上界推导见 [`OUTAGE_BUDGET`]）。
+    /// 失败计退避睡眠（裁剪到窗口内）；返回最终错误（调用方决定跳过或失败）。
+    fn fetch_with_retry(
+        fetcher: &mut dyn Fetcher,
+        url: &str,
+        window: Duration,
+    ) -> Result<Vec<u8>, AudioError> {
+        let deadline = Instant::now() + window;
         let mut last = None;
-        for _ in 0..SEGMENT_FETCH_RETRIES {
+        for attempt in 0..SEGMENT_FETCH_RETRIES {
+            if Instant::now() >= deadline {
+                break; // 窗口耗尽：不再发起下一次拉取
+            }
             match fetcher.fetch_bytes(url) {
                 Ok(b) => return Ok(b),
                 Err(e) => {
                     last = Some(e);
-                    fetcher.sleep(BACKOFF_BASE);
+                    // 末次失败不再睡（马上返回错误）；中途退避裁剪到窗口内
+                    if attempt + 1 < SEGMENT_FETCH_RETRIES {
+                        let remain = deadline.saturating_duration_since(Instant::now());
+                        fetcher.sleep(BACKOFF_BASE.min(remain));
+                    }
                 }
             }
         }
-        Err(last.unwrap_or_else(|| AudioError::Io(std::io::Error::other("fetch 失败"))))
+        Err(last.unwrap_or_else(|| AudioError::Io(std::io::Error::other("fetch 重试窗口耗尽"))))
     }
 
     /// live 轮询：重新拉 playlist，把没播过的新段追加到队尾。
@@ -577,7 +666,7 @@ impl HlsStream {
             if let Some(s) = seg.seq {
                 self.last_seq = Some(self.last_seq.map_or(s, |last| last.max(s)));
             }
-            self.played.insert(seg.uri.clone());
+            remember_played(&mut self.played, &seg.uri);
             self.pending.push_back(seg);
             appended = true;
         }
@@ -598,12 +687,19 @@ impl HlsStream {
 
     /// 失败记账 + 退避，**总时长受 [`OUTAGE_BUDGET`] 约束**。
     ///
+    /// `fetch_cost` = 本次失败拉取的耗时。预算是墙钟且**含拉取耗时**：首次
+    /// 失败把 `outage_since` 回拨到拉取开始前，否则"挂满一个 HTTP 超时"
+    /// 发生在预算之外，最坏阻塞 = 预算 + N×超时（推导见 [`OUTAGE_BUDGET`]）。
+    /// 后续失败不必回拨——真实流逝自然覆盖每一次拉取。
+    ///
     /// 这里的 sleep 是同步睡在 `next_packet` 里的：睡多久，engine 就有多久
     /// 处理不了 Pause/Stop/Next。所以上限必须按时间算（按次数算出来的是
     /// 分钟级假死），到点认输报错，让 UI 亮出来。
-    fn record_failure(&mut self) -> Result<(), AudioError> {
+    fn record_failure(&mut self, fetch_cost: Duration) -> Result<(), AudioError> {
         self.failures += 1;
-        self.outage_since.get_or_insert_with(Instant::now);
+        let start = Instant::now();
+        self.outage_since
+            .get_or_insert_with(|| start.checked_sub(fetch_cost).unwrap_or(start));
         let elapsed = self.outage_elapsed();
         if elapsed >= OUTAGE_BUDGET {
             return Err(AudioError::Io(std::io::Error::other(format!(
@@ -703,7 +799,12 @@ impl HlsStream {
                 match self.kind {
                     Kind::Vod => return Ok(false), // 初始就是 VOD：playlist 全量播完
                     Kind::Live => {
-                        match self.refresh() {
+                        // 计时拉取耗时：record_failure 要把它记进断网预算
+                        // （预算是墙钟、含拉取耗时，见 OUTAGE_BUDGET）
+                        let t0 = Instant::now();
+                        let result = self.refresh();
+                        let fetch_cost = t0.elapsed();
+                        match result {
                             Ok(appended) => {
                                 self.clear_outage();
                                 if !appended && self.pending.is_empty() {
@@ -721,7 +822,7 @@ impl HlsStream {
                                     self.stall_slept += self.poll_interval;
                                 }
                             }
-                            Err(_) => self.record_failure()?,
+                            Err(_) => self.record_failure(fetch_cost)?,
                         }
                         continue;
                     }
@@ -732,14 +833,24 @@ impl HlsStream {
             // 把正要同步打开的段也预取一遍，白下一份）。
             let seg = self.pending.pop_front().unwrap();
             self.prime_prefetch();
-            match Self::open_segment(
+            // 同步兜底的重试窗口 = 剩余断网预算（健康时为全额）：音频线程上
+            // 的重试不许越过预算死线（上界推导见 OUTAGE_BUDGET）
+            let window = match self.outage_since {
+                Some(_) => OUTAGE_BUDGET.saturating_sub(self.outage_elapsed()),
+                None => OUTAGE_BUDGET,
+            };
+            let t0 = Instant::now();
+            let opened = Self::open_segment(
                 &mut *self.fetcher,
                 &mut self.prefetch,
                 &seg,
                 Some((self.sample_rate, self.channels)),
-            ) {
+                window,
+            );
+            let fetch_cost = t0.elapsed();
+            match opened {
                 Ok(stream) => {
-                    self.played.insert(seg.uri.clone());
+                    remember_played(&mut self.played, &seg.uri);
                     if let Some(s) = seg.seq {
                         self.last_seq = Some(self.last_seq.map_or(s, |last| last.max(s)));
                     }
@@ -753,7 +864,7 @@ impl HlsStream {
                     // live 段坏：跳过缺口继续（下一段重新对参数——参数错仍会报）
                     Kind::Live => {
                         tracing::warn!("HLS live 段跳过（{}）：{e}", seg.uri);
-                        self.record_failure()?;
+                        self.record_failure(fetch_cost)?;
                     }
                 },
             }
@@ -1319,5 +1430,42 @@ mod tests {
         }
         let e = err.expect("停滞的直播流必须报错而不是永远轮询");
         assert!(e.to_string().contains("停止更新"), "报错要说清是停滞：{e}");
+    }
+
+    /* ---- 审查修复回归 ---- */
+
+    /// P1 锁：engine 阻塞在 `next_packet` 里时不处理任何命令，"生病路径"的
+    /// 最坏阻塞必须保持小（上界推导见 [`OUTAGE_BUDGET`] 注释）。有人想把
+    /// 这两个值调回去时，在这里失败并先想清楚 engine 侧的代价。
+    #[test]
+    fn outage_worst_case_constants_stay_small() {
+        assert_eq!(OUTAGE_BUDGET, Duration::from_secs(8));
+        assert_eq!(HTTP_TIMEOUT, Duration::from_secs(10));
+    }
+
+    /// P2：playlist / 段字节读取有硬上限，超限报协议错误；恰好在上限内放行。
+    #[test]
+    fn oversized_bodies_are_rejected_by_cap() {
+        let over = vec![0u8; (SEGMENT_MAX_BYTES + 1) as usize];
+        let err = read_capped(Cursor::new(over), "u", SEGMENT_MAX_BYTES, "媒体段").unwrap_err();
+        assert!(err.to_string().contains("超过字节上限"), "{err}");
+
+        let exact = vec![0u8; SEGMENT_MAX_BYTES as usize];
+        assert!(read_capped(Cursor::new(exact), "u", SEGMENT_MAX_BYTES, "媒体段").is_ok());
+
+        let big_list = vec![b'#'; (PLAYLIST_MAX_BYTES + 1) as usize];
+        let err =
+            read_capped(Cursor::new(big_list), "u", PLAYLIST_MAX_BYTES, "播放列表").unwrap_err();
+        assert!(matches!(err, AudioError::Decode(_)), "{err}");
+    }
+
+    /// P2：URI 去重集必须有界（24/7 直播一天 ~8.6 万 URI，无上限会一直涨）。
+    #[test]
+    fn played_dedup_set_is_bounded() {
+        let mut played = HashSet::new();
+        for i in 0..PLAYED_CAP * 2 {
+            remember_played(&mut played, &format!("http://fm.test/live/seg{i}.aac"));
+        }
+        assert!(played.len() <= PLAYED_CAP, "去重集超限：{}", played.len());
     }
 }

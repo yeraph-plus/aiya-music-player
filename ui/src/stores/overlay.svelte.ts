@@ -11,8 +11,12 @@ import type { PlaylistSummary, TrackRow } from '../lib/ipc';
  * 是动作的入参快照，跟着对话框一起生死，放这里最自然。
  */
 export type Dialog =
-  | { kind: 'createPlaylist'; seedIds?: string[] }
-  | { kind: 'renamePlaylist'; playlist: PlaylistSummary }
+  /**
+   * 歌单创建/编辑**同一个模态框**（2026-10-28 拍板）：`playlist` 缺省 = 创建，
+   * 给了 = 编辑（手动歌单改名称、智能歌单改名称+规则）。
+   * `seedIds` 是"新建并加入所选曲目"的入参快照。
+   */
+  | { kind: 'playlistEdit'; playlist?: PlaylistSummary; seedIds?: string[] }
   | { kind: 'deletePlaylist'; playlist: PlaylistSummary }
   | { kind: 'addToPlaylist'; ids: string[] }
   | { kind: 'removeTracks'; ids: string[] }

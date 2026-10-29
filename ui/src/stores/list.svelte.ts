@@ -87,13 +87,20 @@ class ListStore {
    * 排序与筛选直接搬 ui store。
    */
   query(): TrackQuery {
+    // 曲库页 tab（2026-10-28）：「最近播放」换 source（后端按播放时间倒序，
+    // sort 字段被忽略）；「最近添加」保持 library source、由 sort=added 表达。
+    // 只在曲库页生效——搜索页/专辑/艺人详情页同走 LIBRARY_VIEW，
+    // 但它们不该继承 tab 语义（tab 是曲库页的子状态）。
+    const baseSource = sourceOf(ui.view);
+    const source =
+      ui.page === 'library' && ui.libraryTab === 'recent' ? { kind: 'recent' as const } : baseSource;
     return {
       mode: 'offset',
       offset: 0,
       limit: PAGE_SIZE,
       sort: ui.sort,
       direction: ui.direction,
-      source: sourceOf(ui.view),
+      source,
       ...(ui.search.trim() ? { search: ui.search.trim() } : {}),
       ...(ui.artistId ? { artistId: ui.artistId } : {}),
       ...(ui.albumId ? { albumId: ui.albumId } : {}),
@@ -280,6 +287,39 @@ class ListStore {
     void this.reload();
     ui.scheduleUiSave();
   }
+
+  /**
+   * 曲库页 tab 切换（2026-10-28）。**同一个 tab 再点一次 = 重新拉**，
+   * 与 openLibrary 的"再点刷新"语义一致。
+   *
+   * 排序的进出账：进「最近添加」时把当前排序存起来、换成 added desc
+   * （该 tab 的语义顺序）；回「全部曲目」时原样还——用户在全部曲目里
+   * 自定义的排序不该被 tab 逛一圈偷改掉。「最近播放」不动排序
+   * （后端按 source 固定倒序，sort 字段不参与）。
+   */
+  openLibraryTab(tab: 'all' | 'recent' | 'added'): void {
+    clearTimeout(this.searchTimer);
+    if (ui.libraryTab === tab) {
+      void this.reload();
+      return;
+    }
+    if (ui.libraryTab === 'all') this.savedSort = { sort: ui.sort, direction: ui.direction };
+    ui.libraryTab = tab;
+    if (tab === 'added') {
+      ui.sort = 'added';
+      ui.direction = 'desc';
+    } else if (tab === 'all' && this.savedSort) {
+      ui.sort = this.savedSort.sort;
+      ui.direction = this.savedSort.direction;
+      this.savedSort = null;
+    }
+    selection.clear();
+    void this.reload();
+    ui.scheduleUiSave();
+  }
+
+  /** 进「最近添加」tab 前存下的用户排序（回「全部曲目」时归还） */
+  private savedSort: { sort: TrackSort; direction: 'asc' | 'desc' } | null = null;
 
   openPlaylist(id: string): void {
     clearTimeout(this.searchTimer);

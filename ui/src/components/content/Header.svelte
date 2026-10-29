@@ -33,6 +33,12 @@
     /** 标题下的补充信息，如「12 首 · 43 分钟」。**是字符串不是 snippet**：
      *  snippet 的内容渲染在父组件作用域，这里的 scoped class 命中不了它 */
     meta?: string;
+    /**
+     * 大标题形态（2026-10-28 用户拍板）：列表页取消 kicker/描述三层结构，
+     * 只留大标题 + meta 次要统计描述。封面页（歌单/详情）不用这档——
+     * 封面已经是视觉重心，标题 26px 配平。
+     */
+    big?: boolean;
     cover?: string | null;
     /**
      * 无封面时的图标位（艺人详情页的 user 徽标）。与 `cover` 的关系：
@@ -44,10 +50,10 @@
     actions?: Snippet;
   }
 
-  let { kicker, title, subtitle, meta, cover, icon, actions }: Props = $props();
+  let { kicker, title, subtitle, meta, big = false, cover, icon, actions }: Props = $props();
 </script>
 
-<header class="content-header" class:with-cover={cover !== undefined || icon !== undefined}>
+<header class="content-header" class:big class:with-cover={cover !== undefined || icon !== undefined}>
   {#if cover !== undefined}
     <!-- 92px 大封面：尺寸/圆角/占位符/投影全在 Cover 的 lg 档里（kit 是唯一出处） -->
     <Cover src={cover || null} size="lg" />
@@ -94,6 +100,19 @@
   /* 有封面时标题更大一档：封面本来就是视觉重心 */
   .with-cover h1 {
     font-size: 26px;
+  }
+
+  /* 大标题形态（列表页）：三层结构取消后的唯一视觉锚点。30px 实测偏压，
+     2026-10-28 收到 26px——与封面页标题同档，整站标题只有一个量级 */
+  .big h1 {
+    margin-top: 0;
+    font-size: 26px;
+    letter-spacing: -0.02em;
+  }
+
+  .big .ch-meta {
+    margin-top: 6px;
+    font-size: 12.5px;
   }
 
   p {

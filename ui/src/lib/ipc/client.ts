@@ -21,6 +21,8 @@ import type {
   AlbumPage,
   AppInfo,
   ArtistPage,
+  BeetsMarketItem,
+  BeetsConfig,
   BeetsStatus,
   CancelRequested,
   ChosenRoot,
@@ -43,6 +45,7 @@ import type {
   RefreshState,
   RepeatMode,
   RevealResult,
+  RootsTrackCount,
   ScanCancel,
   ScanResult,
   SpectrumToggle,
@@ -50,6 +53,7 @@ import type {
   TrackPage,
 } from './generated';
 import { transport } from './transport';
+import type { SmartRule } from '../smart';
 
 export type { ApiError, ApiErrorCode };
 
@@ -69,11 +73,12 @@ export type TrackQueryInput = {
   /** 入库时间范围（毫秒，含 from 不含 to）——筛选器模态框 */
   addedFromMs?: number | null;
   addedToMs?: number | null;
-  /** 上次播放时间范围（毫秒，含 from 不含 to） */
-  lastPlayedFromMs?: number | null;
-  lastPlayedToMs?: number | null;
-  /** 只看从未播放的曲目；与 lastPlayed 范围互斥，同给时后端 never 优先 */
-  lastPlayedNever?: boolean | null;
+  /**
+   * 筛选器临时条件（`[{field,op,value}]`）——与智能歌单同一批键
+   * （smart.rs parse_conds 解析），只在本次查询生效、不落库。
+   * 旧 lastPlayed* 字段已随「上次播放」筛选档移除（后端字段保留兼容）。
+   */
+  conds?: Array<{ field: string; op: string; value: string | number }> | null;
   source?:
     | { kind: 'library' }
     | { kind: 'playlist'; playlistId: string }
@@ -199,6 +204,12 @@ export const ipc = {
     rootsGet: () => call<LibraryRoots>('library_roots_get'),
     /** 覆盖写扫描根列表（后端再归一化：trim/去空/去引号/去重） */
     rootsSet: (roots: string[]) => call<LibraryRoots>('library_roots_set', { roots }),
+    /** 移除这些目录会波及多少曲目（path_lower 前缀统计，只读） */
+    rootsCount: (paths: string[]) => call<RootsTrackCount>('library_roots_count', { paths }),
+    /** 从曲库删除这些目录下的曲目（只删索引不动磁盘，外键级联清歌单/队列/历史） */
+    rootsPrune: (paths: string[]) => call<RemoveTracks>('library_roots_prune', { paths }),
+    /** 清空整个曲库记录（只删索引不动磁盘；歌单壳保留，条目/历史级联清空） */
+    clear: () => call<RemoveTracks>('library_clear'),
     /** 在文件管理器中定位；`revealed=false` 时看 `reason`，不是错误 */
     revealTrack: (trackId: string) => call<RevealResult>('library_reveal_track', { trackId }),
     /** 批量选择 → ID（全选 5 万首也只回一数组，UI 不必持有整库） */
@@ -213,15 +224,19 @@ export const ipc = {
      */
     albums: (search?: string) => call<AlbumPage>('library_albums', { search }),
     artists: (search?: string) => call<ArtistPage>('library_artists', { search }),
+    /** 曲库现有流派（去重，norm 序）；智能歌单"流派"条件的下拉数据源 */
+    genres: () => call<string[]>('library_genres'),
   },
 
   playlist: {
     list: () => call<PlaylistSummary[]>('playlist_list'),
     /** 不存在返回 null（详情页空态），不是错误 */
     detail: (id: string) => call<PlaylistSummary | null>('playlist_detail', { id }),
-    create: (name: string, trackIds?: string[]) =>
-      call<PlaylistSummary>('playlist_create', { name, trackIds }),
+    create: (name: string, trackIds?: string[], rule?: SmartRule) =>
+      call<PlaylistSummary>('playlist_create', { name, trackIds, rule }),
     rename: (id: string, name: string) => call<PlaylistSummary>('playlist_rename', { id, name }),
+    /** 更新智能歌单规则（手动歌单后端会明确报错） */
+    setRule: (id: string, rule: SmartRule) => call<PlaylistSummary>('playlist_set_rule', { id, rule }),
     remove: (id: string) => call<PlaylistDeleted>('playlist_delete', { id }),
     /** 侧栏拖动排序；返回排好序的完整列表（省一次 roundtrip） */
     reorder: (from: number, to: number) => call<PlaylistSummary[]>('playlist_reorder', { from, to }),
@@ -299,10 +314,22 @@ export const ipc = {
   beets: {
     /** 探测最多 ~30s（逐个候选解释器）；设置页打开时调一次即可 */
     status: () => call<BeetsStatus>('beets_status'),
-    /** 只读预览：进度走 `beets:import`；没装 beets 得 `beetsMissing` */
+    /** 只读预览：进度走 `beets:import`；没装 beets 得 `beetsMissing`。
+     *  已导入排除表（inbox 防重复）由宿主注入 options，UI 不用管 */
     preview: (paths: string[]) => call<JobStarted>('beets_preview', { paths }),
     apply: (decisions: ApplyDecision[]) => call<JobStarted>('beets_apply', { decisions }),
     cancel: () => call<CancelRequested>('beets_cancel'),
+    /** beets 配置快照：待整理目录 / 整理输出根 / 已导入记录数（docs/40 十三轮） */
+    config: () => call<BeetsConfig>('beets_config_get'),
+    /** 设置待整理目录（null = 清除）。与曲库目录重叠会被后端以 invalid_arg 拒绝 */
+    setInbox: (path: string | null) => call<BeetsConfig>('beets_set_inbox', { path }),
+    /** 勾选整理输出根（单选）：必须是曲库目录之一 */
+    setTarget: (path: string) => call<BeetsConfig>('beets_set_target', { path }),
+    /** 在资源管理器打开待整理目录（拖文件进去的入口） */
+    openInbox: () => call<null>('beets_open_inbox'),
+    /** 记录已成功导入的源路径（preview 排除表，FIFO 2000，幂等） */
+    inboxImportedAdd: (paths: string[]) =>
+      call<BeetsConfig>('beets_inbox_imported_add', { paths }),
     /**
      * 手动触发一次完整刷新（增量扫描 + beets 对齐）。
      *
@@ -352,6 +379,14 @@ export const ipc = {
      * 自有库，没有 trackId 可用。
      */
     reveal: (path: string) => call<RevealResult>('beets_reveal', { path }),
+    /** 插件市场目录（白名单 + 三态 + 来源档）。一次性短进程查询，~1s。 */
+    pluginCatalog: () => call<BeetsMarketItem[]>('beets_plugin_catalog'),
+    /**
+     * 安装白名单插件（仅 `pypi:<包名>` 档有意义；builtin 档随 beets 内置）。
+     * 进度走 `beets:maintenance`（pluginProgress → pluginDone 终态），
+     * 与维护四件套共用会话槽——装插件时其他维护任务会被拒。
+     */
+    pluginInstall: (name: string) => call<JobStarted>('beets_plugin_install', { name }),
   },
 };
 

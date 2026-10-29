@@ -20,6 +20,9 @@ pub trait BeetsTool: Send + Sync {
     fn launcher(&self) -> &Launcher;
 
     /// 一次性体检：工具版本、协议版本、数据根、能力清单。
+    ///
+    /// 与会话共用进程级互斥：已有会话在跑时返回 `Busy`（它同样在起 beets
+    /// 进程读同一个 sqlite 库，不能绕过会话槽）。
     fn status(&self, timeout: Duration) -> Result<StatusReport, ToolError>;
 
     /// 起一个会话：先占会话位，再把请求写进去，事件逐行转发给 `sink`。
@@ -72,11 +75,17 @@ impl BeetsTool for StdioTool {
         }
         let result = (|| {
             let (child, stdin) = session::spawn_session(&self.launcher, &request)?;
-            session::acquire(stdin)?;
-            session::spawn_reader(child, sink, channel, on_exit)
+            // acquire 返回本次会话的世代号：此后所有清理都带世代，旧 reader
+            // 的迟到 release 靠世代不匹配变成无害 no-op（否则它会偷走本会话
+            // 的 stdin 并清掉 busy 位，两个 beets 进程并发写同一 sqlite）。
+            let gen = session::acquire(stdin)?;
+            session::spawn_reader(child, gen, sink, channel, on_exit)
         })();
         if result.is_err() {
-            session::release();
+            // 走到这里的失败要么发生在 acquire 之前（槽必然还空着），要么
+            // spawn_reader 已在自己的错误路径里按世代清过槽——两种情况
+            // release_unacquired 都是安全的：只在槽空时把 busy 位还回去。
+            session::release_unacquired();
         }
         result
     }
@@ -114,6 +123,6 @@ mod tests {
         // 失败路径必须把位子还回来，否则后面所有操作都报"忙"
         assert!(!cancel(), "失败后不该有活跃会话");
         assert!(session::reserve(), "失败后位子必须能重新占");
-        session::release();
+        session::release_unacquired();
     }
 }

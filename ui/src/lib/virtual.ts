@@ -39,15 +39,22 @@ export function computeRange(input: RangeInput): VirtualRange {
   };
 }
 
-/** 让第 index 行进入视口（键盘上下选择时用），返回目标 scrollTop */
+/**
+ * 让第 index 行进入视口（键盘上下选择时用），返回目标 scrollTop。
+ *
+ * `contentOffset` 是滚动内容里**行区之前的占位高度**（吸顶表头是 scroller
+ * 内的流内元素、列表容器自己的 padding-top 也算）：不传的话行顶会被
+ * 表头盖住一行的高度。
+ */
 export function scrollTopForRow(
   index: number,
   rowHeight: number,
   viewportHeight: number,
   scrollTop: number,
+  contentOffset = 0,
 ): number {
   if (index < 0) return scrollTop;
-  const rowTop = index * rowHeight;
+  const rowTop = contentOffset + index * rowHeight;
   const rowBottom = rowTop + rowHeight;
   if (rowTop < scrollTop) return rowTop;
   if (rowBottom > scrollTop + viewportHeight) return rowBottom - viewportHeight;

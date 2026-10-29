@@ -42,8 +42,3 @@ export function sourceOf(view: View): TrackSource {
   if (view.kind === 'playlist') return { kind: 'playlist', playlistId: view.id };
   return { kind: 'library' };
 }
-
-/** 只有"全部曲目"有排序控件；歌单的顺序是语义的一部分 */
-export function viewCanSort(view: View): boolean {
-  return view.kind === 'library';
-}

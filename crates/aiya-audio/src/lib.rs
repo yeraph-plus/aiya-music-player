@@ -59,6 +59,12 @@ pub enum AudioErrorKind {
     Device,
     /// 设备不支持所请求的格式/模式（如必须独占被拒）
     Unsupported,
+    /// 引擎内部故障（渲染线程 panic 的兜底上报，见 `Engine::spawn`）。
+    ///
+    /// 正常播放路径不该出现；sidecar 下出现即 panic=abort 将接手杀进程、
+    /// 看门狗换代重建。宿主侧未知 kind 落到 `unknown`（`AudioErrorCode::parse`），
+    /// 向后兼容。
+    Internal,
     /// 兜底
     Unknown,
 }
@@ -73,6 +79,7 @@ impl AudioErrorKind {
             AudioErrorKind::CodecUnsupported => "codecUnsupported",
             AudioErrorKind::Device => "deviceLost",
             AudioErrorKind::Unsupported => "unsupportedFormat",
+            AudioErrorKind::Internal => "internal",
             AudioErrorKind::Unknown => "unknown",
         }
     }

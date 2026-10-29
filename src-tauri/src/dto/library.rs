@@ -149,3 +149,12 @@ pub struct RemoveTracks {
     #[ts(type = "number")]
     pub removed: i64,
 }
+
+/// 移除目录前的影响面统计（`library_roots_count`，UI 确认条用）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct RootsTrackCount {
+    #[ts(type = "number")]
+    pub count: i64,
+}

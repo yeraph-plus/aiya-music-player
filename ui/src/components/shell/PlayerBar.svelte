@@ -47,6 +47,8 @@
     eqOpen: boolean;
     /** EQ 是否启用（启用时触发键打点，不打开抽屉也能看出状态） */
     eqEnabled: boolean;
+    /** 倍速滑杆的本地草稿（player store 防抖对账，见 dragRate）；null = 跟随后端 */
+    rateDraft: number | null;
     ontoggle: () => void;
     onnext: () => void;
     onprev: () => void;
@@ -69,6 +71,7 @@
     queueOpen,
     eqOpen,
     eqEnabled,
+    rateDraft,
     ontoggle,
     onnext,
     onprev,
@@ -101,8 +104,9 @@
    * 最近网格点——这次写入走的是 `onValueChange` 通道，于是**程序化的
    * 位置更新也会回调 oninput**，`dragging` 被卡成 true，`positionMs`
    * 从此钉死在 dragMs（引擎继续报位置，但拖动镜像把它全盖住）。
-   * 播放位置的毫秒值对 step=100 几乎总是非法 → 必现；mock 后端按整秒
-   * 推位置、恰好合法 → e2e 全绿。解法：传入前自己吸附到网格，内部
+   * 播放位置的毫秒值对 step=100 几乎总是非法 → 必现；mock 后端的位置
+   * 定时器同样按 100ms 步进推进（见 mock/backend.ts 的 tickPosition），
+   * 恰好永远合法 → e2e 全绿。解法：传入前自己吸附到网格，内部
    * watch 看到的永远是合法值，不会触发那次写入。
    */
   const sliderMs = $derived(Math.round(positionMs / 100) * 100);
@@ -110,7 +114,8 @@
   const loading = $derived(player?.status === 'loading');
   const hasTrack = $derived(Boolean(player?.current));
 
-  const rate = $derived(clampRate(player?.rate ?? 1));
+  // 滑杆防抖期间显示本地草稿（即时跟手），草稿作废后回落到后端状态
+  const rate = $derived(clampRate(rateDraft ?? (player?.rate ?? 1)));
   const audio = $derived(player?.current?.audio ?? null);
   const badge = $derived(audioBadge(audio?.codec ?? null, audio?.container ?? null));
   const spec = $derived(formatAudioSpec(audio));
@@ -343,7 +348,10 @@
     gap: 16px;
     height: var(--player-h);
     padding: 0 18px;
-    border-top: 1px solid var(--line);
+    /* 边线已撤（用户拍板"区域之间不留 border"）：与主区的分隔改由一条
+     * **上抛阴影**承担——播放条是全应用最"实"的一层，阴影既给出分界，
+     * 又暗示它悬浮在背景之上（方向朝上，光从上面来）。 */
+    box-shadow: 0 -6px 18px color-mix(in srgb, var(--shadow) 50%, transparent);
     /* 半透明（docs/25 T4g 定档 95%——与顶栏同档，接近不透明）：
      * 全应用背景从底下透出来。底色用 surface-3（顶栏是 surface-2）——
      * 同档不同阶，有一点色差。原 backdrop-filter 摘除——持久壳层垫着

@@ -298,25 +298,98 @@ fn parse_file_with_meta(
     })
 }
 
+/// 改名/移动对账索引（见 [`build_relocate_index`]）：(mtime, size) → 候选行 path_lower。
+/// 只收恰好一条候选的键——多个同尺寸同时长的候选无法判定是哪一个被移动，
+/// 宁可维持现状（新插入）也不猜。
+type RelocateIndex = HashMap<(i64, i64), String>;
+
+/// 从库内快照索引构建改名/移动对账索引。
+///
+/// 收集范围 = 本轮 **没有** walk 到的行（它们正是 mark_missing 的对象），
+/// 含已是 missing 的行（文件上次扫描就不在、这次换个名字回来）。
+/// `mtime == 0` 表示"当初没读到修改时间"，与预筛同一口径不参与对账。
+fn build_relocate_index(
+    index: &HashMap<String, IndexEntry>,
+    seen: &std::collections::HashSet<String>,
+) -> RelocateIndex {
+    let mut map: RelocateIndex = HashMap::new();
+    let mut ambiguous: std::collections::HashSet<(i64, i64)> = std::collections::HashSet::new();
+    for (path_lower, entry) in index {
+        if entry.mtime == 0 || seen.contains(path_lower) {
+            continue;
+        }
+        let key = (entry.mtime, entry.size);
+        if ambiguous.contains(&key) {
+            continue;
+        }
+        if map.insert(key, path_lower.clone()).is_some() {
+            // 同一 (mtime, size) 有第二行 → 判定不了，两个都不收
+            map.remove(&key);
+            ambiguous.insert(key);
+        }
+    }
+    map
+}
+
 /// 把一条解析结果 upsert 进库。`artwork` 是解析线程已经落好盘的封面
 /// （None = 这首没有封面 / 未启用封面缓存）。
+/// `reloc` 是改名/移动对账索引（测试直调 upsert 时传 None）。
 /// 返回 true = 新插入；false = unchanged 跳过。
 fn upsert(
     conn: &Connection,
     t: &ParsedTrack,
     now: i64,
     artwork: Option<&StagedArtwork>,
+    reloc: Option<&mut RelocateIndex>,
 ) -> DbResult<UpsertOutcome> {
     // 对账键 = path_lower（Windows 大小写不敏感语义；该列是 0001 基线里的
     // `path_lower TEXT NOT NULL UNIQUE`，早期编号 0003 的迁移已在压平基线时并入）
     let path_lower = t.path.to_lowercase();
-    let existing: Option<(String, i64, i64, String)> = conn
+    let mut existing: Option<(String, i64, i64, String)> = conn
         .query_row(
             "SELECT id, mtime, size_bytes, availability FROM tracks WHERE path_lower = ?1",
             [&path_lower],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .ok();
+
+    // 改名/移动对账（P1：文件改名 = 旧行被标 missing + 新路径重复插入，
+    // 播放统计和歌单引用全留在死行上）。path 未命中、且"本轮没 walk 到"的
+    // 行里恰好一条 (size, mtime) 完全相等 —— 那就是同一份文件被改名/移动了
+    //（rename 不改 mtime 与 size）。做 relocate：行身份（主键 id）不变，
+    // 只更新路径字段；随后的 INSERT ON CONFLICT(path_lower) 命中迁好的行，
+    // 照常刷标签并把 availability 翻回 online。参考 beets_sync::relocate_track
+    // 的同一先例。0 条或多条候选维持现状（新插入 / 标 missing），不猜。
+    if existing.is_none() {
+        if let Some(mtime) = t.mtime {
+            let candidate_key = reloc
+                .as_ref()
+                .and_then(|idx| idx.get(&(mtime, t.size_bytes as i64)))
+                .cloned();
+            if let Some(key) = &candidate_key {
+                let row_id: Option<String> = conn
+                    .query_row(
+                        "SELECT id FROM tracks
+                         WHERE path_lower = ?1 AND size_bytes = ?2 AND mtime = ?3",
+                        rusqlite::params![key, t.size_bytes as i64, mtime],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                if let Some(row_id) = row_id {
+                    conn.execute(
+                        "UPDATE tracks SET path = ?2, path_lower = ?3 WHERE id = ?1",
+                        rusqlite::params![row_id, t.path, path_lower],
+                    )?;
+                    tracing::info!(from = %key, to = %t.path, "文件改名/移动，自有行跟随新路径（relocate）");
+                    // 候选已消费：同一 (mtime,size) 只许 relocate 一行
+                    if let Some(idx) = reloc {
+                        idx.remove(&(mtime, t.size_bytes as i64));
+                    }                    existing = Some((row_id, mtime, t.size_bytes as i64, "missing".into()));
+                }
+            }
+        }
+    }
+
     if let Some((_, old_mtime, old_size, availability)) = &existing {
         // 1) mtime 读取失败（None）→ 必须重新解析，不走 unchanged 短路；
         // 2) 行标记为 missing（文件曾消失又出现）→ 也必须走更新路径，
@@ -573,48 +646,84 @@ fn process_file(
 
 enum CommitOutcome {
     Done { count: usize, imported: usize, updated: usize, unchanged: usize },
-    /// 整批回滚：`count` 条全部计入 failed（批语义见 commit_batch 注释）
-    RolledBack { count: usize, path: String, message: String },
+    /// 整批回滚后逐条重放的结果：只有真正失败的行进 `failures`，
+    /// 其余照常入库（`imported + updated + unchanged + failures.len()` = 批内条数）。
+    Partial {
+        imported: usize,
+        updated: usize,
+        unchanged: usize,
+        failures: Vec<(String, String)>,
+    },
 }
 
-/// 提交攒下的一批（≤ BATCH_SIZE）。整批一个 IMMEDIATE 事务。
-fn commit_batch(conn: &mut Connection, batch: &mut Vec<Item>) -> DbResult<CommitOutcome> {
+/// 提交攒下的一批（≤ BATCH_SIZE）。
+///
+/// 快路径整批一个 IMMEDIATE 事务；批内某条 upsert 失败时回滚整批，
+/// **再逐条重放**（每条独立事务）——旧实现整批回滚后把全批计 failed，
+/// 一条坏数据拖累同批 199 首无辜文件（统计失真，好文件还要等下次重扫）。
+fn commit_batch(
+    conn: &mut Connection,
+    batch: &mut Vec<Item>,
+    reloc: &mut RelocateIndex,
+) -> DbResult<CommitOutcome> {
     if batch.is_empty() {
         return Ok(CommitOutcome::Done { count: 0, imported: 0, updated: 0, unchanged: 0 });
     }
     let count = batch.len();
     let now = now_secs();
-    let tx = conn
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(DbError::Sql)?;
     let mut imported = 0usize;
     let mut updated = 0usize;
     let mut unchanged = 0usize;
-    let mut err: Option<(String, String)> = None;
-    for item in batch.iter() {
-        if let Item::Parsed { parsed, artwork } = item {
-            match upsert(&tx, parsed, now, artwork.as_ref()) {
-                Ok(UpsertOutcome::Inserted) => imported += 1,
-                Ok(UpsertOutcome::Rewritten) => updated += 1,
-                Ok(UpsertOutcome::Unchanged) => unchanged += 1,
-                Err(e) => {
-                    err = Some((parsed.path.clone(), e.to_string()));
-                    break;
+    let mut first_err: Option<(String, String)> = None;
+    {
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(DbError::Sql)?;
+        for item in batch.iter() {
+            if let Item::Parsed { parsed, artwork } = item {
+                match upsert(&tx, parsed, now, artwork.as_ref(), Some(&mut *reloc)) {
+                    Ok(UpsertOutcome::Inserted) => imported += 1,
+                    Ok(UpsertOutcome::Rewritten) => updated += 1,
+                    Ok(UpsertOutcome::Unchanged) => unchanged += 1,
+                    Err(e) => {
+                        first_err = Some((parsed.path.clone(), e.to_string()));
+                        break;
+                    }
                 }
             }
         }
+        match first_err {
+            None => tx.commit().map_err(DbError::Sql)?,
+            Some(_) => tx.rollback().map_err(DbError::Sql)?,
+        }
+    } // tx 在此 drop，conn 归还，重放才能开自己的事务
+
+    if first_err.is_none() {
+        batch.clear();
+        return Ok(CommitOutcome::Done { count, imported, updated, unchanged });
+    }
+
+    // 慢路径：逐条重放。只把真正失败的行计 failed。
+    imported = 0;
+    updated = 0;
+    unchanged = 0;
+    let mut failures: Vec<(String, String)> = Vec::new();
+    for item in batch.iter() {
+        if let Item::Parsed { parsed, artwork } = item {
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(DbError::Sql)?;
+            match upsert(&tx, parsed, now, artwork.as_ref(), Some(&mut *reloc)) {
+                Ok(UpsertOutcome::Inserted) => imported += 1,
+                Ok(UpsertOutcome::Rewritten) => updated += 1,
+                Ok(UpsertOutcome::Unchanged) => unchanged += 1,
+                Err(e) => failures.push((parsed.path.clone(), e.to_string())),
+            }
+            tx.commit().map_err(DbError::Sql)?;
+        }
     }
     batch.clear();
-    match err {
-        None => {
-            tx.commit().map_err(DbError::Sql)?;
-            Ok(CommitOutcome::Done { count, imported, updated, unchanged })
-        }
-        Some((path, message)) => {
-            tx.rollback().map_err(DbError::Sql)?;
-            Ok(CommitOutcome::RolledBack { count, path, message })
-        }
-    }
+    Ok(CommitOutcome::Partial { imported, updated, unchanged, failures })
 }
 
 fn apply_commit(tally: &mut Tally, errors: &mut Vec<ScanError>, outcome: CommitOutcome) {
@@ -625,11 +734,16 @@ fn apply_commit(tally: &mut Tally, errors: &mut Vec<ScanError>, outcome: CommitO
             tally.unchanged += unchanged;
             tally.scanned += count;
         }
-        CommitOutcome::RolledBack { count, path, message } => {
-            tally.failed += count;
-            tally.scanned += count;
-            if errors.len() < MAX_ERRORS {
-                errors.push(ScanError { path, message });
+        CommitOutcome::Partial { imported, updated, unchanged, failures } => {
+            tally.imported += imported;
+            tally.updated += updated;
+            tally.unchanged += unchanged;
+            tally.failed += failures.len();
+            tally.scanned += imported + updated + unchanged + failures.len();
+            for (path, message) in failures {
+                if errors.len() < MAX_ERRORS {
+                    errors.push(ScanError { path, message });
+                }
             }
         }
     }
@@ -732,6 +846,9 @@ pub fn scan_roots_ext(
     // 不必再查库（解析线程没有连接，也根本不该有）。
     let index = load_index(conn)?;
 
+    // 改名/移动对账索引：本轮没 walk 到的行里 (mtime, size) 唯一对应的候选。
+    let mut relocatable = build_relocate_index(&index, &seen);
+
     let mut cancelled = false;
     let mut batch: Vec<Item> = Vec::with_capacity(BATCH_SIZE);
     let mut next_report = PROGRESS_STEP;
@@ -750,6 +867,13 @@ pub fn scan_roots_ext(
         .map_err(|e| DbError::Custom(format!("解析线程池创建失败: {e}")))?;
 
     let (tx, rx) = sync_channel::<Item>(CHANNEL_CAP);
+
+    // 流水线级取消标志（区别于用户的 should_cancel）：DB 侧出错（commit 失败
+    // 早退）或 send 失败（消费者已走）时置位，producer 在每个条目处理**前**
+    // 检查并快速返回。没有这个标志，DB 出错后 producer 仍会把剩余整库解析完
+    // 才发现 channel 断了 —— 白烧几分钟 CPU/IO（此前 `let _ = tx.send` 把
+    // Disconnected 吞掉，`std::thread::scope` 又要等 par_iter 跑完）。
+    let pipeline_cancelled = std::sync::atomic::AtomicBool::new(false);
 
     // 进度上报口径统一收在这一个闭包里：phase 要同时看两个计数，
     // 散在循环各处写必然走样（旧实现就是每批自己拼一份 ScanProgress）。
@@ -777,18 +901,21 @@ pub fn scan_roots_ext(
         let (pool_ref, files_ref, index_ref) = (&pool, &files, &index);
         let cancel_ref = &should_cancel;
         let done_ref = &parsed_done;
+        let pipe_ref = &pipeline_cancelled;
         scope.spawn(move || {
             pool_ref.install(|| {
                 files_ref.par_iter().for_each(|path| {
-                    if cancel_ref() {
+                    if cancel_ref() || pipe_ref.load(Ordering::Relaxed) {
                         return;
                     }
                     let item = process_file(path, index_ref, artwork_cache);
                     done_ref.fetch_add(1, Ordering::Relaxed);
                     // channel 满时这里阻塞 —— 这就是背压本身，不是缺陷。
-                    // 发送失败只可能是消费者已经走了（出错提前返回），
-                    // 此时继续跑没有意义但也没有危害。
-                    let _ = tx.send(item);
+                    // 发送失败 = 消费者已经走了（DB 出错提前返回）：置位取消
+                    // 标志让还在排队的工作线程立刻停手，不再白解析剩余整库。
+                    if tx.send(item).is_err() {
+                        pipe_ref.store(true, Ordering::Relaxed);
+                    }
                 });
             });
         });
@@ -829,7 +956,13 @@ pub fn scan_roots_ext(
                     }
                     batch.push(item);
                     if batch.len() >= BATCH_SIZE {
-                        let outcome = commit_batch(&mut *conn, &mut batch)?;
+                        let outcome = match commit_batch(&mut *conn, &mut batch, &mut relocatable) {
+                            Ok(o) => o,
+                            Err(e) => {
+                                pipeline_cancelled.store(true, Ordering::Relaxed);
+                                return Err(e);
+                            }
+                        };
                         apply_commit(&mut tally, &mut errors, outcome);
                         // 批边界必报一次：这是用户唯一能感觉到"又前进了一批"的地方
                         // （旧实现也是每批一次）。同时前推 next_report，否则下面的
@@ -855,7 +988,13 @@ pub fn scan_roots_ext(
             if tally.parsed >= total {
                 report(&tally, last_path.clone());
             }
-            let outcome = commit_batch(&mut *conn, &mut batch)?;
+            let outcome = match commit_batch(&mut *conn, &mut batch, &mut relocatable) {
+                Ok(o) => o,
+                Err(e) => {
+                    pipeline_cancelled.store(true, Ordering::Relaxed);
+                    return Err(e);
+                }
+            };
             apply_commit(&mut tally, &mut errors, outcome);
         }
         Ok(())
@@ -881,6 +1020,18 @@ pub fn scan_roots_ext(
     }
 
     let missing = mark_missing(conn, roots, &seen)?;
+
+    // 封面 GC：所有批次提交完之后做一次对账（增量扫描同样收尾跑）——
+    // 删除不再被 tracks/albums/artists 引用（含 missing 行的引用）的
+    // artwork 行与 originals/ 原图，否则行与文件只增不减。GC 是内务，
+    // 失败只记日志不拖垮扫描结果。
+    if let Some(cache) = artwork_cache {
+        match crate::artwork::gc_unreferenced(conn, cache) {
+            Ok(0) => {}
+            Ok(removed) => tracing::info!(removed, "artwork gc 已清理无引用的封面"),
+            Err(e) => tracing::warn!(error = %e, "artwork gc 失败（跳过，不影响扫描结果）"),
+        }
+    }
 
     let elapsed_ms = started.elapsed().as_millis() as u64;
     let result = ScanResult {
@@ -914,23 +1065,9 @@ pub fn scan_roots_ext(
     Ok(result)
 }
 
-/// LIKE 通配符转义（ESCAPE '\'）：字面匹配 % _ \。
-fn like_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '%' | '_' | '\\' => {
-                out.push('\\');
-                out.push(c);
-            }
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
 /// 把「库中 online + 位于**任一**根前缀下 + 本轮未 walk 到」的曲目标为 missing。
-/// 重新出现的文件由 upsert 的 `availability = 'online'` 恢复。
+/// 重新出现的文件由 upsert 的 `availability = 'online'` 恢复；改名的文件由
+/// upsert 的 relocate 对账跟到新路径（不产生重复行）。
 ///
 /// 多根版本（docs/29 批 A）：OR 拼接各根前缀；没有任何根时**不标记**
 /// （配置为空是"用户还没填"，把整库标 missing 是灾难）。
@@ -946,7 +1083,7 @@ fn mark_missing(
         if !prefix.ends_with('\\') && !prefix.ends_with('/') {
             prefix.push(std::path::MAIN_SEPARATOR);
         }
-        prefixes.push(like_escape(&prefix));
+        prefixes.push(crate::norm::escape_like(&prefix));
     }
     if prefixes.is_empty() {
         tracing::warn!("扫描根列表为空，跳过 missing 对账");
@@ -1161,6 +1298,38 @@ mod tests {
         assert_eq!(count, 1, "same picture bytes deduped");
     }
 
+    /// P2 回归：artworks 行与 originals/ 文件只增不减。扫描收尾的 GC 必须：
+    /// 1) 被引用（含 missing 行）的封面保留；2) 引用消失后行与文件一起清掉。
+    #[test]
+    fn artwork_gc_removes_unreferenced_and_keeps_missing_refs() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let mp3 = write_test_mp3(dir.path(), "a.mp3", "带封面", "艺人");
+
+        let mut conn = open_in_memory().unwrap();
+        scan_directory(&mut conn, dir.path(), Some(cache.path()), |_| {}).unwrap();
+        let (_art_id, cache_key): (String, String) = conn
+            .query_row("SELECT id, cache_key FROM artworks", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        let original = cache.path().join("originals").join(&cache_key);
+        assert!(original.exists());
+
+        // 文件删除 → 重扫 → 曲目标 missing：missing 行的引用必须保住封面
+        std::fs::remove_file(&mp3).unwrap();
+        let r2 = scan_directory(&mut conn, dir.path(), Some(cache.path()), |_| {}).unwrap();
+        assert_eq!(r2.missing, 1);
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM artworks", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "missing 行仍引用，不 GC");
+        assert!(original.exists(), "文件也不删");
+
+        // 引用消失（曲目行删除）→ 重扫 → 行与原图一起清掉
+        conn.execute("DELETE FROM tracks", []).unwrap();
+        scan_directory(&mut conn, dir.path(), Some(cache.path()), |_| {}).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM artworks", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "无引用的 artwork 行被 GC");
+        assert!(!original.exists(), "originals/ 原图一起删");
+    }
+
     #[test]
     fn deleted_file_marked_missing_then_recovers() {
         let dir = tempfile::tempdir().unwrap();
@@ -1255,7 +1424,7 @@ mod tests {
         let mut parsed = parse_file(&dir.path().join("a.mp3")).unwrap();
         parsed.path = parsed.path.to_uppercase();
         let tx = conn.transaction().unwrap();
-        let inserted = upsert(&tx, &parsed, 999, None).unwrap();
+        let inserted = upsert(&tx, &parsed, 999, None, None).unwrap();
         tx.commit().unwrap();
         assert_eq!(
             inserted,
@@ -1264,6 +1433,159 @@ mod tests {
         );
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 1);
+    }
+
+    /// ParsedTrack 手工构造（批失败重放 / relocate 单测用；不走 lofty 解析）。
+    fn parsed_manual(path: &str, size: u64, mtime: i64) -> ParsedTrack {
+        ParsedTrack {
+            path: path.into(),
+            title: "T".into(),
+            artist: Some("Ar".into()),
+            album: Some("Al".into()),
+            album_artist: None,
+            track_no: None,
+            disc_no: None,
+            year: None,
+            duration_ms: Some(1000),
+            size_bytes: size,
+            mtime: Some(mtime),
+            sample_rate: None,
+            bit_depth: None,
+            bitrate: None,
+            channels: None,
+            container: "MP3".into(),
+            picture: None,
+        }
+    }
+
+    /// P1 回归：文件改名后重扫，必须 relocate 到同一行 —— 播放统计、歌单引用
+    /// 不丢，不产生重复行，availability 回到 online。
+    #[test]
+    fn renamed_file_relocates_to_same_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = write_test_mp3(dir.path(), "a.mp3", "改名", "歌手");
+        let mut conn = open_in_memory().unwrap();
+        let r1 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        assert_eq!(r1.imported, 1, "errors={:?}", r1.errors);
+
+        let (tid, old_path): (String, String) =
+            conn.query_row("SELECT id, path FROM tracks", [], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap();
+        // 播放统计 + 歌单引用挂在旧行上
+        conn.execute("UPDATE tracks SET play_count = 7 WHERE id = ?1", [&tid]).unwrap();
+        conn.execute(
+            "INSERT INTO playlists (id,name,name_norm,created_at,updated_at) VALUES ('p1','单','单',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO playlist_items (id,playlist_id,track_id,position,added_at) VALUES ('i1','p1',?1,0,1)",
+            [&tid],
+        )
+        .unwrap();
+
+        std::fs::rename(&mp3, dir.path().join("b.mp3")).unwrap();
+        let r2 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        assert_eq!(r2.imported, 0, "改名不得生成新行：{:?}", r2.errors);
+        assert_eq!(r2.missing, 0, "relocate 后没有行需要标 missing");
+        assert!(r2.updated >= 1, "relocate 走更新路径（重写标签）：{:?}", r2);
+
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1, "库里只有一行");
+        let (id, path, avail, plays): (String, String, String, i64) = conn
+            .query_row(
+                "SELECT id, path, availability, play_count FROM tracks",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(id, tid, "行身份（主键）不变，播放统计/引用不丢");
+        assert_ne!(path, old_path);
+        assert!(path.ends_with("b.mp3"));
+        assert_eq!(avail, "online");
+        assert_eq!(plays, 7);
+        let refs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(refs, 1, "歌单引用仍然指向改了名的同一行");
+    }
+
+    /// (mtime, size) 相同的候选有多条（比如两份同尺寸拷贝）时不得猜：
+    /// 维持现状——新插入，旧行照常标 missing。
+    #[test]
+    fn ambiguous_size_mtime_candidates_do_not_relocate() {
+        let dir = tempfile::tempdir().unwrap();
+        write_test_mp3(dir.path(), "a.mp3", "A", "B");
+        let mut conn = open_in_memory().unwrap();
+        scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        // 造一个 (mtime,size) 完全相同的干扰行（真实场景：同尺寸的拷贝文件）
+        conn.execute(
+            "INSERT INTO tracks (id,title,title_norm,added_at,path,path_lower,size_bytes,mtime)
+             SELECT 'decoy', title, title_norm, added_at, '/x/decoy.mp3', '/x/decoy.mp3',
+                    size_bytes, mtime FROM tracks WHERE id != 'decoy'",
+            [],
+        )
+        .unwrap();
+
+        std::fs::rename(dir.path().join("a.mp3"), dir.path().join("b.mp3")).unwrap();
+        let r2 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        assert_eq!(r2.imported, 1, "候选歧义 → 走新插入：{:?}", r2.errors);
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 3, "新行 + 原行 + 干扰行，谁也不被冒认");
+        let b_avail: String = conn
+            .query_row("SELECT availability FROM tracks WHERE path_lower LIKE '%b.mp3'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(b_avail, "online");
+        let old_avail: String = conn
+            .query_row("SELECT availability FROM tracks WHERE path_lower LIKE '%a.mp3'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(old_avail, "missing", "旧路径行照常标 missing");
+    }
+
+    /// P2 回归：批内一条 upsert 失败，只把真正失败的行计 failed，
+    /// 同批其余文件照常入库（旧实现整批回滚 + 全批计 failed）。
+    #[test]
+    fn batch_failure_replays_and_counts_only_real_failures() {
+        let mut conn = open_in_memory().unwrap();
+        // 外科手术式失败源：只对特定路径的 INSERT RAISE(ABORT)
+        conn.execute_batch(
+            "CREATE TRIGGER boom BEFORE INSERT ON tracks
+             WHEN NEW.path_lower = '/m/bad.mp3'
+             BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+        )
+        .unwrap();
+
+        let mut batch: Vec<Item> = Vec::new();
+        for (p, mtime) in [("/m/ok1.mp3", 100i64), ("/m/bad.mp3", 101), ("/m/ok2.mp3", 102)] {
+            batch.push(Item::Parsed { parsed: parsed_manual(p, 1234, mtime), artwork: None });
+        }
+        let outcome = commit_batch(&mut conn, &mut batch, &mut HashMap::new()).unwrap();
+        let (imported, failures) = match outcome {
+            CommitOutcome::Partial { imported, failures, .. } => (imported, failures),
+            CommitOutcome::Done { .. } => {
+                panic!("触发器保证 bad.mp3 必失败，必须走整批回滚 + 重放路径")
+            }
+        };
+        assert_eq!(imported, 2, "两条无辜文件照常入库");
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].0, "/m/bad.mp3");
+        assert!(failures[0].1.contains("boom"), "失败明细: {}", failures[0].1);
+        assert!(batch.is_empty(), "批被清空（无论成败）");
+
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 2);
+        let missing: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tracks WHERE path_lower IN ('/m/ok1.mp3','/m/ok2.mp3')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(missing, 2, "两条都在库里");
     }
 
     #[test]

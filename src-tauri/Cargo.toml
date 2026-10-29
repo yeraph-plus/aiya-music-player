@@ -46,7 +46,8 @@ tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
 # Power：防休眠（smtc.rs）；UI_Shell + Registry：应用身份 AUMID（app_id.rs）；
-# Security 是 RegCreateKeyExW 的 SECURITY_ATTRIBUTES 参数依赖。
+# Security 是 RegCreateKeyExW 的 SECURITY_ATTRIBUTES 参数依赖；
+# WindowsAndMessaging：启动期致命错误弹窗（lib.rs fatal_dialog）。
 windows-sys = { version = "0.60", features = [
     "Win32_System_Power",
     "Win32_UI_Shell",
@@ -54,4 +55,5 @@ windows-sys = { version = "0.60", features = [
     "Win32_System_Com",
     "Win32_Security",
     "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
 ] }

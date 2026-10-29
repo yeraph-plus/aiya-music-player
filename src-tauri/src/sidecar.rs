@@ -79,26 +79,36 @@ pub struct SidecarHandle {
 
 impl SidecarHandle {
     /// 定位 sidecar 可执行文件：环境变量优先，其次主程序同目录（dev/release 共用 target 目录）。
-    fn locate_host_exe() -> Result<PathBuf, String> {
+    /// 即使定位失败也返回候选路径（看门狗按它重试，spawn 时自然报"文件不存在"）；
+    /// 第二个值是失败原因，None = 定位成功。
+    fn locate_host_exe() -> (PathBuf, Option<String>) {
         if let Ok(p) = std::env::var("AIYA_AUDIO_HOST") {
             let p = PathBuf::from(p);
             if p.exists() {
-                return Ok(p);
+                return (p, None);
             }
         }
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let sibling = exe.parent().unwrap().join("aiya-audio-host.exe");
+        let sibling = match std::env::current_exe() {
+            Ok(exe) => exe
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("aiya-audio-host.exe"),
+            Err(e) => return (PathBuf::from("aiya-audio-host.exe"), Some(e.to_string())),
+        };
         if sibling.exists() {
-            return Ok(sibling);
+            return (sibling, None);
         }
-        Err(format!(
-            "找不到 sidecar：{} 不存在（dev 下先 cargo build -p aiya-audio-host）",
-            sibling.display()
-        ))
+        (
+            sibling.clone(),
+            Some(format!(
+                "找不到 sidecar：{} 不存在（dev 下先 cargo build -p aiya-audio-host）",
+                sibling.display()
+            )),
+        )
     }
 
     pub fn launch() -> Result<Self, String> {
-        let host_exe = Self::locate_host_exe()?;
+        let (host_exe, locate_err) = Self::locate_host_exe();
         let pipe_base = format!("aiya-audio-{}", std::process::id());
         let (cmd_tx, cmd_rx) = mpsc::channel::<aiya_audio::EngineCommand>();
         // 事件有界队列：Position 可丢旧帧（ADR-0002），其余不丢
@@ -116,20 +126,40 @@ impl SidecarHandle {
             shutting_down: AtomicBool::new(false),
         });
 
-        // 首连失败直接报错（setup 阶段就该失败得明确）
+        // 首连失败走启动降级而不是 Err：此前 setup 直接失败 = release 下
+        // （windows_subsystem，无控制台无窗口）panic 静默消失，用户双击后
+        // "什么都不发生"。现在应用照常起，先给 UI 一条音频错误事件，再交给
+        // 看门狗按代重试——杀软扫未签名 exe 拖慢冷启动的场景几十秒内自愈，
+        // sidecar 文件缺失时每轮重试留痕，文件就位后自动恢复。
         let gen = 0;
-        let t_connect = Instant::now();
-        let conn = connect_once(&host_exe, &pipe_base, gen, &shared)?;
-        // spawn → 握手完成。冷启动慢（杀软扫未签名 exe）时这个数会到十几秒，
-        // 而看门狗从握手那一刻开始计时，两者叠加才会出现"刚起来就被杀"。
-        tracing::info!(
-            elapsed_ms = t_connect.elapsed().as_millis() as u64,
-            "sidecar 首次握手完成"
-        );
-        *lock(&shared.writer_slot) = Some(BufWriter::new(conn.writer));
-        spawn_reader(conn.reader, ev_tx.clone(), shared.clone(), gen, track.clone());
+        match locate_err {
+            Some(e) => degrade_launch(&ev_tx, e),
+            None => {
+                let t_connect = Instant::now();
+                match connect_once(&host_exe, &pipe_base, gen, &shared) {
+                    Ok(conn) => {
+                        // spawn → 握手完成。冷启动慢（杀软扫未签名 exe）时这个数
+                        // 会到十几秒，而看门狗从握手那一刻开始计时，两者叠加才会
+                        // 出现"刚起来就被杀"。
+                        tracing::info!(
+                            elapsed_ms = t_connect.elapsed().as_millis() as u64,
+                            "sidecar 首次握手完成"
+                        );
+                        *lock(&shared.writer_slot) = Some(BufWriter::new(conn.writer));
+                        spawn_reader(
+                            conn.reader,
+                            ev_tx.clone(),
+                            shared.clone(),
+                            gen,
+                            track.clone(),
+                        );
+                    }
+                    Err(e) => degrade_launch(&ev_tx, e),
+                }
+            }
+        }
         spawn_writer(cmd_rx, shared.clone());
-        spawn_watchdog(shared.clone(), ev_tx, pipe_base.clone(), host_exe.clone(), track.clone());
+        spawn_watchdog(shared.clone(), ev_tx, pipe_base.clone(), host_exe, track.clone());
 
         Ok(Self {
             cmd_tx,
@@ -196,6 +226,17 @@ struct Connection {
     writer: File,
 }
 
+/// 首连失败的降级出口：发一条装载前错误（token=0，pump 按"无曲目错误"上报
+/// 给 UI），写端留空、reader 不起——命令静默丢弃，等看门狗 ~5s 后按代重试。
+fn degrade_launch(ev_tx: &SyncSender<aiya_audio::EngineEvent>, reason: String) {
+    tracing::error!(%reason, "sidecar 首连失败：以降级模式启动，由看门狗重试");
+    let _ = ev_tx.send(aiya_audio::EngineEvent::Error {
+        token: 0,
+        kind: aiya_audio::AudioErrorKind::Internal.as_str().into(),
+        message: format!("音频引擎暂时不可用，正在后台重试：{reason}"),
+    });
+}
+
 /// 起子进程 + 连接其命名管道 + 握手。管道名带代号，换代不冲突。
 fn connect_once(
     host_exe: &std::path::Path,
@@ -203,6 +244,13 @@ fn connect_once(
     generation: u64,
     shared: &Arc<Shared>,
 ) -> Result<Connection, String> {
+    // spawn 前查：关闭流程开始后看门狗不该再起新进程。
+    // 看门狗循环头查过一次 shutting_down，但从查到 spawn 之间隔了
+    // 判死/kill/换代几步 —— 关闭恰好插进来时，这里不拦就会留下无人收尸的
+    // 孤儿 sidecar（shutdown 已经跑完、看门狗线程随后退出）。
+    if shared.shutting_down.load(Ordering::SeqCst) {
+        return Err("正在关闭：跳过 sidecar 重连".into());
+    }
     let pipe = format!(r"\\.\pipe\{pipe_base}-{generation}");
     let mut cmd = Command::new(host_exe);
     cmd.args(["--pipe", &pipe])
@@ -220,6 +268,17 @@ fn connect_once(
         .spawn()
         .map_err(|e| format!("启动 sidecar 失败：{e}"))?;
     *lock(&shared.child) = Some(child);
+
+    // spawn 后再查：与 shutdown() 的窄竞态（检查在前、spawn 在后）兜底。
+    // 命中就立即收尸返回 —— shutdown 的等待循环/最终 kill 只认 shared.child
+    // 槽里的进程，槽被这里 take 走之后没人管它。
+    if shared.shutting_down.load(Ordering::SeqCst) {
+        if let Some(mut c) = lock(&shared.child).take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        return Err("正在关闭：已回收刚启动的 sidecar".into());
+    }
 
     // 连接 + 握手；任何失败路径都收尸（P2：spawn 后连接/握手失败曾把
     // 孤儿 sidecar 进程留在后台——无看门狗线程接管它）
@@ -332,14 +391,20 @@ fn spawn_reader(
                 };
                 match msg {
                     aiya_audio::SidecarToHost::Evt(evt) => {
-                        // 顺手记录恢复现场状态
+                        // 顺手记录恢复现场状态。按 token 归属（与命令侧记录的
+                        // last_token 比对）：切歌瞬间旧曲的迟到回报不能写进
+                        // 恢复现场，否则崩溃重启会从旧曲位置/播放态续播新曲。
                         {
                             let mut t = lock(&track);
                             match &evt {
-                                aiya_audio::EngineEvent::Position { position_ms, .. } => {
+                                aiya_audio::EngineEvent::Position { token, position_ms }
+                                    if *token == t.last_token =>
+                                {
                                     t.position_ms = *position_ms;
                                 }
-                                aiya_audio::EngineEvent::StateChanged { playing, .. } => {
+                                aiya_audio::EngineEvent::StateChanged { token, playing }
+                                    if *token == t.last_token =>
+                                {
                                     t.playing = *playing;
                                 }
                                 _ => {}

@@ -27,10 +27,25 @@ const VOLUME_STEP = 0.05;
  *    意图（移动 / 播放 / 清空选择 / 关面板 / 触发动作）。纯函数，可测试。
  * 2. 本文件：执行意图。**副作用全在这里**，所以判断错了改一处即可。
  */
+/**
+ * 焦点落在这些控件上时，单键快捷键必须让位：Space/Enter 是激活键，
+ * 方向键是控件自己的导航。此前只排除 INPUT/TEXTAREA，Tab 到按钮上按
+ * 空格会"按钮不响应 + 播放状态乱切"，聚焦列表行按空格会先起播再暂停。
+ */
+const INTERACTIVE_SELECTOR =
+  'button, select, a, [role="slider"], [role="radio"], [role="option"], [role="menuitem"], [role="tab"]';
+
 function isTyping(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   if (!el) return false;
-  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
+  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) return true;
+  return el.closest(INTERACTIVE_SELECTOR) !== null;
+}
+
+/** 真正的文本输入位（isTyping 的子集）：Esc 退出输入才需要 blur */
+function isTextEntry(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
 }
 
 function currentTrackId(): string | null {
@@ -103,14 +118,22 @@ export function runShortcut(action: ShortcutAction): void {
 }
 
 export function onKeydown(event: KeyboardEvent): void {
+  // 行组件/歌词行/Knob 等已经 preventDefault 的按键不再重复处理：
+  // 它们各自消化掉了（起播/seek/调值），全局再走一遍就是双触发
+  // （聚焦列表行按空格"先起播再暂停"、设置页旋钮方向键同时 seek）。
+  if (event.defaultPrevented) return;
+
   // 正在设置页录制快捷键：**所有**全局快捷键让路。
   // 两个 listener 都在 window 上，录制侧 stopPropagation 拦不住这一条，
   // 只能靠共享标志判断（见 stores/capture.svelte.ts）。
   if (capture.active) return;
 
   if (isTyping(event.target)) {
-    // 输入框里只接管 Esc（退出输入），其余按键留给输入法/光标
-    if (event.key === 'Escape') (event.target as HTMLElement).blur();
+    // 文本输入框里只接管 Esc（退出输入）；按钮/滑杆等控件上的按键
+    // 原样留给控件自己（Space 激活、方向步进），这里不碰焦点
+    if (event.key === 'Escape' && isTextEntry(event.target)) {
+      (event.target as HTMLElement).blur();
+    }
     return;
   }
 
@@ -135,6 +158,9 @@ export function onKeydown(event: KeyboardEvent): void {
       void list.playIndex(intent.index);
       return;
     case 'clearSelection':
+      // 队列/EQ 抽屉开着时 Esc 只归抽屉（SideDrawer 自己关）：两边同键
+      // 同帧执行会"清选择 + 关抽屉"一起发生，前者是意外副作用
+      if (ui.queueOpen || ui.eqOpen) return;
       selection.clear();
       return;
     case 'closePanel':

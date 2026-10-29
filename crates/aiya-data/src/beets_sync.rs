@@ -11,7 +11,8 @@
 //!
 //! 边界：自有无、beets 有的路径 → 新导入；自有无、beets 也无 → 扫描器的地盘；
 //! beets_item_id 指向的 item 已从 beets 库消失 → 只计数（orphaned），不删行。
-//! genre 暂不迁移：tracks 无该列且 UI 无展示位，加了没有消费者（要加时连迁移一起）。
+//! genre 随 0003 迁移入库（智能歌单的标签数据源，docs/40 §1）：协议 DumpItem
+//! 本来就带 genre，这里只补迁移；beets 侧变 None 不清已有值（全文件惯例）。
 
 use std::collections::{HashMap, HashSet};
 
@@ -32,6 +33,7 @@ pub struct BeetsItem {
     pub artist: Option<String>,
     pub albumartist: Option<String>,
     pub album: Option<String>,
+    pub genre: Option<String>,
     pub year: Option<i64>,
     pub track: Option<i64>,
     pub disc: Option<i64>,
@@ -70,6 +72,7 @@ struct Existing {
     id: String,
     path: String,
     title: String,
+    genre: Option<String>,
     artist_id: Option<String>,
     album_id: Option<String>,
     duration_ms: Option<i64>,
@@ -94,6 +97,12 @@ impl Existing {
         let target_title = non_empty(&it.title).map(str::to_string);
         if let Some(t) = target_title {
             if self.title != t {
+                return true;
+            }
+        }
+        // genre：beets 给了值才算差异（None 不清已有值）
+        if let Some(g) = non_empty(&it.genre) {
+            if self.genre.as_deref() != Some(g) {
                 return true;
             }
         }
@@ -191,12 +200,12 @@ fn insert_track(tx: &Connection, it: &BeetsItem, now: i64) -> DbResult<()> {
     tx.execute(
         "INSERT INTO tracks (
             id, title, title_norm, artist_id, album_id, duration_ms, track_no, disc_no, year,
-            added_at, artwork_id, gain_db,
+            added_at, artwork_id, gain_db, genre, genre_norm,
             codec, container, sample_rate, bits_per_sample, bitrate, channels,
             play_count, last_played_at,
             path, path_lower, size_bytes, mtime, availability, beets_item_id
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULL,?11,
-                   ?12,NULL,?13,?14,?15,?16,0,NULL,?17,?18,0,?19,'online',?20)",
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULL,?11,?12,?13,
+                   ?14,NULL,?15,?16,?17,?18,0,NULL,?19,?20,0,?21,'online',?22)",
         rusqlite::params![
             ids::track_id(&it.path),
             title,
@@ -209,6 +218,8 @@ fn insert_track(tx: &Connection, it: &BeetsItem, now: i64) -> DbResult<()> {
             it.year,
             now,
             it.rg_track_gain,
+            non_empty(&it.genre),
+            non_empty(&it.genre).map(norm),
             non_empty(&it.format),
             it.samplerate,
             it.bitdepth,
@@ -233,11 +244,12 @@ fn update_track(tx: &Connection, ex: &Existing, it: &BeetsItem) -> DbResult<()> 
            duration_ms = COALESCE(?6, duration_ms), track_no = COALESCE(?7, track_no),
            disc_no = COALESCE(?8, disc_no), year = COALESCE(?9, year),
            gain_db = COALESCE(?10, gain_db),
-           codec = COALESCE(?11, codec),
-           sample_rate = COALESCE(?12, sample_rate), bits_per_sample = COALESCE(?13, bits_per_sample),
-           bitrate = COALESCE(?14, bitrate), channels = COALESCE(?15, channels),
-           mtime = COALESCE(?16, mtime),
-           beets_item_id = ?17
+           genre = COALESCE(?11, genre), genre_norm = COALESCE(?12, genre_norm),
+           codec = COALESCE(?13, codec),
+           sample_rate = COALESCE(?14, sample_rate), bits_per_sample = COALESCE(?15, bits_per_sample),
+           bitrate = COALESCE(?16, bitrate), channels = COALESCE(?17, channels),
+           mtime = COALESCE(?18, mtime),
+           beets_item_id = ?19
          WHERE id = ?1",
         rusqlite::params![
             ex.id,
@@ -250,6 +262,8 @@ fn update_track(tx: &Connection, ex: &Existing, it: &BeetsItem) -> DbResult<()> 
             it.disc,
             it.year,
             it.rg_track_gain,
+            non_empty(&it.genre),
+            non_empty(&it.genre).map(norm),
             non_empty(&it.format),
             it.samplerate,
             it.bitdepth,
@@ -278,7 +292,7 @@ const SYNC_CHUNK: usize = 500;
 /// 比逐条回查快一个量级；WAL 下这条 SELECT 不持有写锁。
 fn load_existing(conn: &Connection) -> DbResult<HashMap<String, Existing>> {
     let mut stmt = conn.prepare(
-        "SELECT id, path, title, artist_id, album_id, duration_ms, track_no, disc_no, year,
+        "SELECT id, path, title, genre, artist_id, album_id, duration_ms, track_no, disc_no, year,
                 gain_db, codec, sample_rate, bits_per_sample, bitrate, channels, beets_item_id
          FROM tracks",
     )?;
@@ -287,19 +301,20 @@ fn load_existing(conn: &Connection) -> DbResult<HashMap<String, Existing>> {
             id: r.get(0)?,
             path: r.get(1)?,
             title: r.get(2)?,
-            artist_id: r.get(3)?,
-            album_id: r.get(4)?,
-            duration_ms: r.get(5)?,
-            track_no: r.get(6)?,
-            disc_no: r.get(7)?,
-            year: r.get(8)?,
-            gain_db: r.get(9)?,
-            codec: r.get(10)?,
-            sample_rate: r.get(11)?,
-            bits_per_sample: r.get(12)?,
-            bitrate: r.get(13)?,
-            channels: r.get(14)?,
-            beets_item_id: r.get(15)?,
+            genre: r.get(3)?,
+            artist_id: r.get(4)?,
+            album_id: r.get(5)?,
+            duration_ms: r.get(6)?,
+            track_no: r.get(7)?,
+            disc_no: r.get(8)?,
+            year: r.get(9)?,
+            gain_db: r.get(10)?,
+            codec: r.get(11)?,
+            sample_rate: r.get(12)?,
+            bits_per_sample: r.get(13)?,
+            bitrate: r.get(14)?,
+            channels: r.get(15)?,
+            beets_item_id: r.get(16)?,
         })
     })?;
     let mut out = HashMap::new();
@@ -382,8 +397,12 @@ pub fn sync_items(conn: &mut Connection, items: &[BeetsItem], now: i64) -> DbRes
             } else {
                 stats.unchanged += 1;
             }
-            existing.insert(it.path.to_lowercase(), ex);
-            by_beets_id.insert(it.id, it.path.to_lowercase());
+            // 放回对账映射：relocate 成功 → 行已在新路径，按新 key；
+            // 失败 → 行还在旧路径，必须按旧 key 放回。此前无条件按新路径放，
+            // 会把旧行挂在一个它并不在的路径 key 上，污染后续条目的对账。
+            let back_key = if path_changed { key } else { hit_key };
+            existing.insert(back_key.clone(), ex);
+            by_beets_id.insert(it.id, back_key);
         }
         tx.commit().map_err(DbError::Sql)?;
     }
@@ -427,6 +446,7 @@ mod tests {
             artist: Some("测试艺人".into()),
             albumartist: Some("测试艺人".into()),
             album: Some("测试专辑".into()),
+            genre: Some("测试流派".into()),
             year: Some(2026),
             track: Some(1),
             disc: Some(1),
@@ -614,5 +634,41 @@ mod tests {
             .query_row("SELECT year FROM tracks WHERE beets_item_id = 1", [], |r| r.get(0))
             .unwrap();
         assert_eq!(year, 2026);
+    }
+
+    /// relocate 失败（目标路径在同一次同步里已被新导入的行占用）时：
+    /// 行必须留在旧路径上（字段照常更新），且**不能**污染对账映射 ——
+    /// 否则旧行会被挂在一个它并不在的路径 key 上。
+    #[test]
+    fn failed_relocate_keeps_row_at_old_path() {
+        let mut conn = open_in_memory().unwrap();
+        // 预置：item 1 在旧路径 a.mp3
+        sync_items(&mut conn, &[item(1, r"C:\m\a.mp3", "A")], 100).unwrap();
+
+        // 同一次调用里：item 3 先新导入并占用 n.mp3；item 1 搬到同一路径
+        // → path 未命中（对账映射还是快照）→ relocate UPDATE 撞 UNIQUE
+        let items = [
+            item(3, r"C:\m\n.mp3", "N"),
+            item(1, r"C:\m\n.mp3", "A2"),
+        ];
+        let s = sync_items(&mut conn, &items, 101).unwrap();
+        assert_eq!(s.imported, 1, "item 3 是新导入");
+        assert_eq!(s.updated, 1, "item 1 relocate 失败 → 只更新字段");
+
+        let (path, title): (String, String) = conn
+            .query_row(
+                "SELECT path, title FROM tracks WHERE beets_item_id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(path, r"C:\m\a.mp3", "relocate 失败，行留在旧路径");
+        assert_eq!(title, "A2", "字段照常更新，不让失败影响整次同步");
+
+        // 行 1 仍按旧路径对账命中，不重复导入
+        let s2 = sync_items(&mut conn, &[item(1, r"C:\m\a.mp3", "A2")], 102).unwrap();
+        assert_eq!((s2.matched, s2.imported), (1, 0), "旧行没有裂成两行");
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 2, "a.mp3 与 n.mp3 各一行");
     }
 }

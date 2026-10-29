@@ -97,6 +97,11 @@ impl PumpCore {
 
     /// 处理一批引擎事件：归约进 Actor → 下发引擎意图 → 返回旁路动作。
     ///
+    /// 返回 `(effects, acted)`：`acted` = 本批是否实际下发了引擎意图
+    /// （pending_load / pending_stop）。广播状态（EmitState）不代表队列变了
+    /// ——播放中每 500ms 一次的 Position 节流也置位，调用方落库必须用
+    /// `acted` 门控，否则播放全程在反复全量重写 queue_items。
+    ///
     /// `now_ms` 由调用方注入（生产用系统时钟，测试用固定值），
     /// 这是让节流可断言的前提。
     pub fn ingest<F>(
@@ -105,7 +110,7 @@ impl PumpCore {
         actor: &mut PlayerActor,
         now_ms: u64,
         send: &mut F,
-    ) -> Vec<PumpEffect>
+    ) -> (Vec<PumpEffect>, bool)
     where
         F: FnMut(EngineCommand),
     {
@@ -214,7 +219,8 @@ impl PumpCore {
 
         // 自然播完/队尾停住都会产出意图（pending_load 或 pending_stop）；
         // 与命令路径共用同一套下发顺序。
-        if apply_engine_intents(send, actor) {
+        let acted = apply_engine_intents(send, actor);
+        if acted {
             // 换了曲：位置与节流基准都从新曲起点重算（否则新曲首帧可能被
             // 上一首的节流基准压掉，UI 短暂显示上一首的进度）
             self.last_position_ms = actor.state().position_ms;
@@ -224,7 +230,7 @@ impl PumpCore {
         if should_emit {
             effects.push(PumpEffect::EmitState);
         }
-        effects
+        (effects, acted)
     }
 }
 
@@ -250,6 +256,8 @@ mod tests {
             title: id.to_string(),
             artist: None,
             album: None,
+            artist_id: None,
+            album_id: None,
             duration_ms: Some(10_000),
             artwork_id: None,
             gain_db: None,
@@ -366,7 +374,7 @@ mod tests {
         // 引擎 ~10ms 一帧；同一 500ms 窗口内只有第一帧该广播
         let mut emits = 0usize;
         for i in 1..=10u64 {
-            let fx = core.ingest(
+            let (fx, acted) = core.ingest(
                 vec![EngineEvent::Position {
                     token,
                     position_ms: i * 10,
@@ -376,6 +384,7 @@ mod tests {
                 &mut |c| sent.push(c),
             );
             emits += fx.iter().filter(|e| **e == PumpEffect::EmitState).count();
+            assert!(!acted, "Position tick 只广播状态，不报告动了引擎");
         }
         assert_eq!(emits, 1, "10 帧 100ms 内只该广播一次");
         // 位置本身仍然逐帧记下（Eof 的 seconds_played 靠它）
@@ -391,7 +400,7 @@ mod tests {
         let token = actor.state().token;
         let mut emits = 0usize;
         for (i, now) in [1_000u64, 1_100, 1_600].into_iter().enumerate() {
-            let fx = core.ingest(
+            let (fx, acted) = core.ingest(
                 vec![EngineEvent::Position {
                     token,
                     position_ms: (i as u64 + 1) * 100,
@@ -401,6 +410,7 @@ mod tests {
                 &mut |c| sent.push(c),
             );
             emits += fx.iter().filter(|e| **e == PumpEffect::EmitState).count();
+            assert!(!acted);
         }
         assert_eq!(emits, 2, "1000 放行、1100 压掉、1600 放行");
     }
@@ -422,7 +432,7 @@ mod tests {
         assert!(matches!(cmds[1], EngineCommand::Load { token, .. } if token == new_token));
 
         // 旧曲的 Position / Eof 迟到 → 全丢，不能记到新曲头上
-        let fx = core.ingest(
+        let (fx, acted) = core.ingest(
             vec![
                 EngineEvent::Position {
                     token: stale,
@@ -435,6 +445,7 @@ mod tests {
             &mut |c: EngineCommand| sent.push(c),
         );
         assert!(fx.is_empty(), "过期 token 不该产生任何动作: {fx:?}");
+        assert!(!acted, "全被丢弃的一批不该报告动了引擎");
         assert_eq!(actor.state().position_ms, 0, "新曲位置未被旧曲覆盖");
         assert_eq!(actor.state().token, new_token, "过期 Eof 不该推进队列");
     }
@@ -454,7 +465,7 @@ mod tests {
         let mut sent = Vec::new();
 
         // 播到 4.2s 就曲终（duration 10s）→ 历史记 4s，不是整曲 10s
-        core.ingest(
+        let (fx, acted) = core.ingest(
             vec![EngineEvent::Position {
                 token,
                 position_ms: 4_200,
@@ -463,10 +474,15 @@ mod tests {
             5_000,
             &mut |c| sent.push(c),
         );
-        let fx = core.ingest(vec![EngineEvent::Eof { token }], &mut actor, 5_100, &mut |c| {
+        assert!(!acted, "Position tick 不落库");
+        assert!(
+            fx.contains(&PumpEffect::EmitState),
+            "位置广播照常（节流窗口起点）"
+        );
+        let (fx, acted) = core.ingest(vec![EngineEvent::Eof { token }], &mut actor, 5_100, &mut |c| {
             sent.push(c)
         });
-
+        assert!(acted, "曲尾推进队列（换曲/停止）必须报告 acted → 全量落库");
         assert_eq!(
             fx,
             vec![
@@ -489,10 +505,11 @@ mod tests {
         let mut core = PumpCore::new();
         let token = actor.state().token;
         let mut sent = Vec::new();
-        let fx = core.ingest(vec![EngineEvent::Eof { token }], &mut actor, 1_000, &mut |c| {
+        let (fx, acted) = core.ingest(vec![EngineEvent::Eof { token }], &mut actor, 1_000, &mut |c| {
             sent.push(c)
         });
         assert!(fx.contains(&PumpEffect::EmitState));
+        assert!(acted, "自动换曲该报告 acted");
         // 自动换曲：SetRate → Load(第二首, 起点 0, 新 token) → SetVolume
         match &sent[..] {
             [EngineCommand::SetRate(_), EngineCommand::Load { path, start_ms, token: t, .. }, EngineCommand::SetVolume(_)] => {
@@ -511,7 +528,7 @@ mod tests {
         let mut actor = playing_two();
         let mut core = PumpCore::new();
         let mut sent = Vec::new();
-        let fx = core.ingest(
+        let (fx, acted) = core.ingest(
             vec![
                 EngineEvent::Spectrum {
                     bands: vec![1, 2, 3],
@@ -532,6 +549,7 @@ mod tests {
             ]
         );
         assert!(!fx.contains(&PumpEffect::EmitState), "频谱不触发状态广播");
+        assert!(!acted);
     }
 
     #[test]
@@ -540,7 +558,7 @@ mod tests {
         let mut core = PumpCore::new();
         let mut sent = Vec::new();
         // token=0：装载前的错误（引擎侧开流失败），必须上报给 UI
-        let fx = core.ingest(
+        let (fx, acted) = core.ingest(
             vec![EngineEvent::Error {
                 token: 0,
                 kind: "deviceLost".into(),
@@ -551,6 +569,7 @@ mod tests {
             &mut |c| sent.push(c),
         );
         assert_eq!(fx, vec![PumpEffect::EmitState]);
+        assert!(!acted, "失败态不产生引擎意图，不触发全量落库");
         assert_eq!(actor.state().status, PlaybackStatus::Error);
         let err = actor.state().error.clone().expect("错误必须被记录");
         assert_eq!(err.code, aiya_player::AudioErrorCode::DeviceLost);
@@ -564,7 +583,7 @@ mod tests {
         let mut sent = Vec::new();
         let stale = actor.state().token;
         actor.reduce(PlayerCommand::Next);
-        let fx = core.ingest(
+        let (fx, _acted) = core.ingest(
             vec![EngineEvent::Error {
                 token: stale,
                 kind: "decode".into(),
@@ -586,7 +605,7 @@ mod tests {
         let mut sent = Vec::new();
         let stale = actor.state().token;
         actor.reduce(PlayerCommand::Next); // 换代
-        let fx = core.ingest(
+        let (fx, _acted) = core.ingest(
             vec![EngineEvent::Loaded {
                 token: stale,
                 duration_ms: 999_999,
@@ -601,5 +620,48 @@ mod tests {
             Some(999_999),
             "更不该把旧曲时长写到新曲上"
         );
+    }
+
+    /* ---------------- 落库门控（P1 回归） ---------------- */
+
+    /// 泵循环用 EmitState 门控全量落库的旧缺陷：播放中每 500ms 一次的
+    /// Position 节流也置位 EmitState，于是 queue_items 被反复 DELETE+重写，
+    /// 且全程持有 player 锁。acted 必须对 Position tick 恒假。
+    #[test]
+    fn position_ticks_never_report_acted() {
+        let mut actor = playing_two();
+        let mut core = PumpCore::new();
+        let token = actor.state().token;
+        // 跨多个节流窗口（500ms 一放行），每个窗口都不该报告 acted
+        for now in [1_000u64, 1_600, 2_200] {
+            let (fx, acted) = core.ingest(
+                vec![EngineEvent::Position {
+                    token,
+                    position_ms: 100,
+                }],
+                &mut actor,
+                now,
+                &mut |_| {},
+            );
+            assert!(fx.contains(&PumpEffect::EmitState), "{now} 应广播状态");
+            assert!(!acted, "{now} 的 Position tick 不得触发队列落库");
+        }
+    }
+
+    /// 真实的队列变更（曲尾换曲）必须报告 acted：否则播放器重启后
+    /// 队列停在旧曲上。与上一条互为正反两例。
+    #[test]
+    fn eof_queue_change_reports_acted() {
+        let mut actor = playing_two();
+        let mut core = PumpCore::new();
+        let token = actor.state().token;
+        let (_, acted) = core.ingest(
+            vec![EngineEvent::Eof { token }],
+            &mut actor,
+            1_000,
+            &mut |_| {},
+        );
+        assert!(acted, "曲尾自动换曲必须落库");
+        assert_eq!(actor.state().token, token + 1);
     }
 }

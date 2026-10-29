@@ -8,4 +8,9 @@ import type { TrackAudio } from "./TrackAudio";
  * **camelCase 是契约要求**：`current` 直接作为 PlayerState.current 下发，
  * UI 读 `artworkId` / `gainDb` / `audio` —— snake_case 会让封面/规格/归一化全部静默失效。
  */
-export type TrackRef = { id: string, title: string, artist: string | null, album: string | null, durationMs: number | null, artworkId: string | null, gainDb: number | null, audio: TrackAudio | null, };
+export type TrackRef = { id: string, title: string, artist: string | null, album: string | null, 
+/**
+ * 艺人/专辑详情页跳转键（正在播放页的歌手/专辑行可点）。
+ * `#[serde(default)]`：旧版持久化队列里没有这两列，反序列化补 None。
+ */
+artistId: string | null, albumId: string | null, durationMs: number | null, artworkId: string | null, gainDb: number | null, audio: TrackAudio | null, };

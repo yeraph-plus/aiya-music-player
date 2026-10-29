@@ -53,6 +53,12 @@ body {
   user-select: none;
 }
 
+/* 行拖拽进行中（lib/drag.ts 挂/摘）：指针形态与防误选是全局的事 */
+body.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
 button {
   font: inherit;
   color: inherit;
@@ -68,6 +74,37 @@ button:disabled {
 input {
   font: inherit;
   color: inherit;
+}
+
+/* ---------------- select 元素默认 ----------------
+ * Chromium 里给 select 设 background/color **不会**去掉原生控件外观——
+ * 边框和高亮仍是浏览器画的（浅色主题下尤其刺眼，2026-10-28 用户实测）。
+ * 必须 appearance:none + 自画箭头才有"配套外观"。箭头用内联 SVG（中性灰
+ * #999 在深浅两套主题上都可读；data-URI 用不了 CSS 变量，不值得为此
+ * 造一条 token）。下拉弹层本身跟随 :root 的 color-scheme，不在这里管。
+ * ImportPanel 的候选/模式 select、OverlayHost 的规则编辑器 select 都吃
+ * 这条默认；组件里只覆写 padding/字号。 */
+select {
+  font: inherit;
+  color: var(--text-1);
+  background: var(--surface-input);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  appearance: none;
+  padding: 5px 26px 5px 8px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23999' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+
+select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+select:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
 }
 
 h1,

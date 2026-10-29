@@ -58,10 +58,29 @@
 
 /* ---------------- 首页 ---------------- */
 
-.playlist-grid {
+/* 缺失警告（2026-10-28：三项统计入口撤销后唯一保留的统计位）：
+   不是装饰——点了去扫描入库页处理 */
+.stat-warn {
+  display: block;
+  margin: 0 0 4px;
+  align-self: flex-start;
+  font-size: 11.5px;
+  color: var(--warn);
+}
+
+.stat-warn:hover {
+  color: var(--accent-text);
+}
+
+/* 歌单卡片行（2026-10-28 仪表盘第一级）：横向滚动，卡片定宽。
+   封面即播放键（点击直接起播不跳页），名字才是路由入口 */
+.playlist-row {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 10px;
+  grid-auto-flow: column;
+  grid-auto-columns: 148px;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
 
 .playlist-card {
@@ -69,25 +88,25 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 5px;
-  padding: 12px;
-  border: 1px solid var(--line);
+  min-width: 0;
+}
+
+.pl-cover {
+  position: relative;
+  width: 148px;
+  height: 148px;
   border-radius: 12px;
-  background: var(--surface-2);
-  text-align: left;
-}
-
-.playlist-card:hover {
-  background: var(--surface-hover);
-  border-color: var(--line-strong);
-}
-
-.playlist-card img,
-.playlist-card-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 9px;
-  object-fit: cover;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--line);
   background: var(--surface-cover);
+}
+
+.pl-cover img,
+.playlist-card-icon {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .playlist-card-icon {
@@ -96,29 +115,52 @@
   color: var(--text-3);
 }
 
-.playlist-card.library-card .playlist-card-icon {
-  color: var(--accent-text);
-  background: var(--accent-weak);
+/* 播放悬浮层：hover 时以半透明底 + accent 圆心浮现，宣告"这格是播放键" */
+.pl-play {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 0.35);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 120ms ease;
 }
 
-.playlist-card strong {
-  font-size: 12.5px;
+.pl-cover:hover:not(:disabled) .pl-play,
+.pl-cover:focus-visible .pl-play {
+  opacity: 1;
+}
+
+.pl-cover:disabled {
+  cursor: default;
+}
+
+.pl-cover:disabled .pl-play {
+  display: none;
+}
+
+.pl-name {
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-1);
+  text-align: left;
 }
 
-.playlist-card > span:last-child {
+.pl-name:hover {
+  color: var(--accent-text);
+}
+
+.pl-count {
   font-size: 11px;
   color: var(--text-2);
-}
-
-.playlist-empty {
-  grid-column: 1 / -1;
-  padding: 14px;
-  font-size: 12px;
-  color: var(--text-3);
 }
 
 /* ---------------- 首页表格（components/TrackTable.svelte） ----------------
@@ -128,60 +170,10 @@
  * 列宽与主列表不完全一致——这里是 8 行预览，标题列给得更宽。
  */
 
-.tt {
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  overflow: hidden;
-  background: var(--surface-2);
-}
-
-.tt-head,
-.tt-row {
-  display: grid;
-  /* docs/27：纯预览表（勾选列撤掉）——封面 / 标题 / 艺人 / 专辑 / 数值 */
-  grid-template-columns: 30px minmax(0, 2.2fr) minmax(0, 1.3fr) minmax(0, 1.3fr) 62px;
-  align-items: center;
-  gap: 10px;
-  padding: 0 12px;
-}
-
-.tt-head {
-  height: 28px;
-  background: var(--surface-head);
-  border-bottom: 1px solid var(--line);
-  color: var(--text-3);
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
-}
-
-.tt-row {
-  height: 40px;
-  cursor: default;
-  border-radius: 0;
-}
-
-.tt-row + .tt-row {
-  border-top: 1px solid var(--line);
-}
-
-.tt-row:hover {
-  background: var(--surface-hover);
-}
-
-.tt-row.active .cell {
-  color: var(--accent-text);
-}
-
-.tt-row .cell {
-  font-size: 12px;
-}
-
-.tt-num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-3);
-  font-size: 11px;
-}
+/* 首页预览列表（2026-10-28）：行/表头复用 lists.css 的主列表网格
+   （.list-shell.no-batch + .row/.grid-head），此前的 .tt-* 独立表格
+   整套撤销——列宽节奏不同导致的行列错位不再可能出现。
+   空态已统一到 EmptyState.svelte（.k-empty），只留骨架一个展示块。 */
 
 .tt-skeleton {
   height: 40px;
@@ -189,12 +181,6 @@
   border-radius: 8px;
   background: var(--surface-hover);
   animation: pulse 1.2s ease-in-out infinite;
-}
-
-.tt-empty {
-  padding: 16px 12px;
-  font-size: 12px;
-  color: var(--text-3);
 }
 
 @keyframes pulse {
@@ -306,9 +292,27 @@
   white-space: nowrap;
 }
 
-.np-meta .np-album {
+/* 2026-10-28：歌手/专辑行升级为跳转入口。链接按钮压平成原行文字，
+   hover 只提亮不加下划线（全局规矩）；无 id（本地库外曲目）时退化为
+   纯文本由 np-line 承担 */
+.np-meta .np-line.np-album {
   font-size: 12.5px;
   color: var(--text-3);
+}
+
+.np-meta button.np-line {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.np-meta button.np-line:hover {
+  color: var(--accent-text);
 }
 
 /* 右列：歌词容器真透明（T4a 意图在此落地——player.css 给 .lyrics-panel 的
@@ -376,7 +380,10 @@
 /* ---------------- 设置单页 ---------------- */
 
 .settings-section {
-  max-width: 860px;
+  /* 720：控件（开关/分段）不顶着行尾——太宽的话 space-between 会把
+     控件推到离标题很远的位置，观感是"选项贴右"（2026-10-28） */
+  max-width: 720px;
+  margin: 0 auto;
   padding-bottom: 8px;
   scroll-margin-top: 8px;
 }
@@ -389,7 +396,7 @@
   gap: 12px;
 }
 
-/* 多扫描目录 textarea（docs/29 批 A：一行一个，并集单库） */
+/* 曲库目录卡片（2026-10-28 拍板：textarea 改条目列表，动作全部收进本卡） */
 .library-roots {
   padding: 14px 16px;
   border: 1px solid var(--line);
@@ -397,41 +404,137 @@
   background: var(--surface-2);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .roots-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.roots-head .dim {
-  font-size: 11.5px;
+.roots-head strong {
+  font-size: 13.5px;
 }
 
-.roots-input {
-  width: 100%;
-  resize: vertical;
-  min-height: 72px;
+/* 卡片动作行（头部右侧）：添加目录 / 立即索引 / 清空曲库 */
+.roots-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* 目录条目列表：整行一个目录（等宽字体 + 悬停出标题），右侧移除钮 */
+.root-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.root-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.root-row:hover {
+  background: var(--surface-3);
+}
+
+.root-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  color: var(--text-1);
+  user-select: text;
+  cursor: text;
+}
+
+/* 整理输出根的单选标记（docs/40 十三轮）：整行是可点的 label，
+   accent 色随原生 radio 走（accent-color 是全局 tokens 的职责） */
+.root-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 11px;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.root-target input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+.roots-empty {
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+/* 执行状态区块（并入曲库卡片）：顶部细分隔线隔开目录列表 */
+.status-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+
+/* 进行中的一行：任务名+阶段在左，取消在右（全应用唯一取消入口） */
+.status-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* 卡片内置报错：错误跟它的上下文（动作按钮/进度）在同一个视线里，
+   不再弹全局 toast。语义上就是 alert，读屏会播报 */
+.tool-error {
+  border: 1px solid var(--danger);
+  border-radius: 8px;
   padding: 8px 10px;
-  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-1);
+  word-break: break-all;
+}
+
+/* 移除/清空确认条：卡片内内联出现（不用弹窗——它是动作流程的一小步，
+   弹窗会打断节奏；但必须是 alertdialog 语义，别静默吞掉删除） */
+.roots-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
   border-radius: 8px;
   background: var(--surface-input);
-  color: var(--text-1);
-  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+}
+
+.roots-confirm-text {
   font-size: 12px;
-  line-height: 1.6;
+  color: var(--text-1);
+  word-break: break-all;
 }
 
-.roots-input:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
-}
-
-.roots-hint {
-  font-size: 11px;
+.roots-confirm-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* beets 工具区（docs/33）：状态摘要 + 两条安装轨道。
@@ -503,29 +606,6 @@
   color: var(--text-1);
 }
 
-.library-scan-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface-2);
-}
-
-.library-scan-actions p {
-  margin: 4px 0 0;
-  font-size: 11.5px;
-  color: var(--text-2);
-}
-
-.library-scan-buttons {
-  display: flex;
-  gap: 8px;
-  flex: none;
-}
-
 .task-status {
   padding: 12px 16px;
   border: 1px solid var(--line);
@@ -584,67 +664,21 @@
    本轮信息架构整理：这一页按"数据对象"分两组（曲库、整理库），诊断收进
    折叠。样式与上面同源（surface-2 + 1px 边框 + 12px 圆角），不引入新视觉语言。 */
 
-.library-facts {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 16px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface-2);
-  font-size: 11.5px;
-  color: var(--text-2);
-}
-
-/* 一行事实（多少首/多少专辑）：用户看的是"我的库有多大"，
-   不是"系统自检是否正常"，所以这里不用 diag-grid 那套密钥式排版 */
-.facts-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-}
-
-.facts-row b {
-  font-weight: 500;
-  color: var(--text-1);
-}
-
-.refresh-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-}
-
-.refresh-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-  color: var(--text-3);
-}
-
-.facts-foot {
-  font-size: 11px;
-}
-
 .beets-section {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-/* 折叠区：整理库的维护四件套、以及底部的诊断。
-   两者默认收起——它们都不是每天要看的东西，展开才占视觉重量。 */
-.maint-fold,
-.advanced-fold {
+/* 折叠区：整理库的维护四件套。默认收起——不是每天要看的东西，
+   展开才占视觉重量。（原「高级与诊断」折叠区已整体迁去设置页「关于」tab） */
+.maint-fold {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface-2);
 }
 
-.maint-fold > summary,
-.advanced-fold > summary {
+.maint-fold > summary {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -656,37 +690,17 @@
   user-select: none;
 }
 
-.maint-fold > summary::-webkit-details-marker,
-.advanced-fold > summary::-webkit-details-marker {
+.maint-fold > summary::-webkit-details-marker {
   display: none;
 }
 
-.maint-fold[open] > summary,
-.advanced-fold[open] > summary {
+.maint-fold[open] > summary {
   border-bottom: 1px solid var(--line);
 }
 
-.maint-fold > summary .dim,
-.advanced-fold > summary .dim {
+.maint-fold > summary .dim {
   font-size: 11px;
   font-weight: 400;
-}
-
-.fold-arrow {
-  flex: none;
-  color: var(--text-3);
-  transition: transform 0.15s ease;
-}
-
-.advanced-fold[open] .fold-arrow {
-  transform: rotate(90deg);
-}
-
-.advanced-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 12px 16px;
 }
 
 /* 折叠里的维护区：外层已经给了边框与底色，内层不再画一层 */

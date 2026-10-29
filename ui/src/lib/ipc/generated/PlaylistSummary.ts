@@ -7,7 +7,16 @@ export type PlaylistSummary = { id: string, name: string,
 /**
  * schema v1 没有这一列，恒为 null（保留字段是为了 v1 契约形状不变）
  */
-description: string | null, trackCount: number, 
+description: string | null, 
+/**
+ * manual / smart（0003 迁移；0003 之前的行默认 manual）
+ */
+kind: string, 
+/**
+ * 智能歌单规则 JSON 原文（手动歌单恒 null；UI 用 JSON.parse 解析——
+ * 存字符串而不是对象，是为了 DTO 形状稳定：规则内部结构归 smart.rs 管）
+ */
+ruleJson: string | null, trackCount: number, 
 /**
  * 曲目时长合计，用于显示 "1 小时 12 分"
  */

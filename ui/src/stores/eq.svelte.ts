@@ -1,5 +1,7 @@
 import type { EqSettings } from '../lib/ipc/generated';
 import { ipc } from '../lib/ipc/client';
+import { errorMessage } from '../lib/errors';
+import { notify } from './notify.svelte';
 
 /**
  * EQ 状态（协议 v6，docs/24 B5b/B5a）。
@@ -17,7 +19,6 @@ import { ipc } from '../lib/ipc/client';
 
 /** 频段短标签（与 aiya_audio::EQ_BAND_HZ 一一对应） */
 export const EQ_FREQ_LABELS = ['31', '63', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'] as const;
-
 /** 预设：10 段增益（dB）。命名取主流播放器的常见集合，数值是常识起点不是玄学 */
 export const EQ_PRESETS: Record<string, { label: string; bands: number[] }> = {
   flat: { label: '平直', bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
@@ -42,6 +43,10 @@ class EqStore {
   loaded = $state(false);
   enabled = $state(false);
   bands = $state<number[]>([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  /** 低音旋钮（dB，±12）：引擎侧 90 Hz 低架，独立于图示段（docs/39） */
+  bass = $state(0);
+  /** 高音旋钮（dB，±12）：引擎侧 7.5 kHz 高架，独立于图示段 */
+  treble = $state(0);
   pregain = $state(0);
 
   /** 当前是否恰好命中某个预设的曲线（是则菜单里显示它，否则"自定义"）。
@@ -59,6 +64,8 @@ class EqStore {
       const s = await ipc.player.getEq();
       this.enabled = s.enabled;
       this.bands = [...s.bands];
+      this.bass = s.bassDb;
+      this.treble = s.trebleDb;
       this.pregain = s.pregain;
       this.loaded = true; // 成功才置位：读失败下次打开面板会重试
     } catch {
@@ -75,13 +82,21 @@ class EqStore {
     // 快照发送时刻的值。响应**不整包回写**：往返期间（~300ms 防抖 + IPC）
     // 用户可能已经改了别的段，整包覆盖会把最新输入冲掉，滑杆闪回旧值。
     // 只回写 clamp 产生差异、且用户此后没再动过的字段。
-    const sent = { bands: [...this.bands], pregain: this.pregain };
+    const sent = { bands: [...this.bands], bassDb: this.bass, trebleDb: this.treble, pregain: this.pregain };
     try {
       const applied = await ipc.player.setEq({
         enabled: this.enabled,
         bands: sent.bands,
+        bassDb: sent.bassDb,
+        trebleDb: sent.trebleDb,
         pregain: sent.pregain,
       });
+      if (applied.bassDb !== sent.bassDb && this.bass === sent.bassDb) {
+        this.bass = applied.bassDb;
+      }
+      if (applied.trebleDb !== sent.trebleDb && this.treble === sent.trebleDb) {
+        this.treble = applied.trebleDb;
+      }
       if (applied.pregain !== sent.pregain && this.pregain === sent.pregain) {
         this.pregain = applied.pregain;
       }
@@ -90,14 +105,26 @@ class EqStore {
           this.bands[i] = applied.bands[i];
         }
       }
-    } catch {
-      // 下发失败保持画面不动（错误条由全局 transport 分类层负责的场景不管这）
+    } catch (e) {
+      // 下发失败回滚显示值（画面对齐引擎真值），并且必须让用户看见：
+      // 没有全局 transport 分类层这种机制——那句话引用的是不存在的约定
+      notify.showError(`均衡器设置失败：${errorMessage(e)}`);
     }
   }
 
   setBand(index: number, value: number): void {
     if (index < 0 || index >= this.bands.length) return;
     this.bands[index] = value;
+    this.scheduleApply();
+  }
+
+  setBass(value: number): void {
+    this.bass = value;
+    this.scheduleApply();
+  }
+
+  setTreble(value: number): void {
+    this.treble = value;
     this.scheduleApply();
   }
 
@@ -123,6 +150,8 @@ class EqStore {
   /** 全部归零（不关开关：用户重置的是曲线，不是意图） */
   reset(): void {
     this.bands = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    this.bass = 0;
+    this.treble = 0;
     this.pregain = 0;
     this.scheduleApply();
   }

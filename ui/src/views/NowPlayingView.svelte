@@ -8,6 +8,7 @@
   import type { SpectrumSource } from '../lib/spectrum-source';
   import { player } from '../stores/player.svelte';
   import { lyrics } from '../stores/lyrics.svelte';
+  import { nav } from '../stores/nav.svelte';
   import { ui } from '../stores/ui.svelte';
 
   /**
@@ -67,8 +68,28 @@
       {/if}
       <h1>{current?.title ?? '未在播放'}</h1>
       {#if current}
-        {#if current.album}<p class="np-line np-album">{current.album}</p>{/if}
-        <p class="np-line">{current.artist ?? '未知艺人'}</p>
+        {#if current.album && current.albumId}
+          <button
+            class="np-line np-album"
+            title={`查看专辑 ${current.album}`}
+            onclick={() => current?.albumId && nav.go({ kind: 'album', id: current.albumId })}
+          >
+            {current.album}
+          </button>
+        {:else if current.album}
+          <p class="np-line np-album">{current.album}</p>
+        {/if}
+        {#if current.artistId}
+          <button
+            class="np-line"
+            title={`查看歌手 ${current.artist ?? '未知艺人'}`}
+            onclick={() => current?.artistId && nav.go({ kind: 'artist', id: current.artistId })}
+          >
+            {current.artist ?? '未知艺人'}
+          </button>
+        {:else}
+          <p class="np-line">{current.artist ?? '未知艺人'}</p>
+        {/if}
       {:else}
         <p class="np-line">从推荐页或歌单选择一首歌开始</p>
       {/if}

@@ -1,6 +1,7 @@
 import type { PlaylistSummary } from '../lib/ipc';
 import { ipc } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
+import type { SmartRule } from '../lib/smart';
 import { LIBRARY_VIEW } from '../lib/view';
 import { library } from './library.svelte';
 import { list } from './list.svelte';
@@ -51,11 +52,14 @@ class PlaylistsStore {
     if (view.kind === 'playlist' && !this.byId(view.id)) ui.setView(LIBRARY_VIEW);
   }
 
-  /** 新建。成功返回新 id（调用方可能要跳过去），失败返回 null */
-  async create(name: string, seedIds?: string[]): Promise<string | null> {
+  /**
+   * 新建。成功返回新 id（调用方可能要跳过去），失败返回 null。
+   * `rule` 给了 = 智能歌单（曲目由规则决定，seedIds 无意义）。
+   */
+  async create(name: string, seedIds?: string[], rule?: SmartRule): Promise<string | null> {
     let id: string;
     try {
-      id = (await ipc.playlist.create(name, seedIds)).id;
+      id = (await ipc.playlist.create(name, rule ? undefined : seedIds, rule)).id;
     } catch (err) {
       notify.showError(errorMessage(err));
       return null;
@@ -63,6 +67,21 @@ class PlaylistsStore {
     await this.refresh();
     this.open(id);
     return id;
+  }
+
+  /** 保存智能歌单规则。若正在看它则重载列表（规则的变更立刻反映到曲目） */
+  async setRule(playlist: PlaylistSummary, rule: SmartRule): Promise<boolean> {
+    try {
+      await ipc.playlist.setRule(playlist.id, rule);
+    } catch (err) {
+      notify.showError(errorMessage(err));
+      return false;
+    }
+    await this.refresh();
+    const view = ui.view;
+    if (view.kind === 'playlist' && view.id === playlist.id) await list.reload();
+    notify.showToast('规则已保存');
+    return true;
   }
 
   async rename(playlist: PlaylistSummary, name: string): Promise<void> {
@@ -191,20 +210,30 @@ class PlaylistsStore {
    * 歌单内批量删（docs/27：工具条/右键对选择集生效）。**按下标从大到小删**：
    * removeAt 按位置删，先删后面的不会让前面未删的下标位移；
    * 全部删完只 refresh/reload 一次（逐个调 removeItemAt 会 O(n) 次重载）。
+   *
+   * 中途失败不能直接 return：已删掉的部分不会回滚，列表与选择集必须
+   * 刷回与后端一致的状态（try/finally），失败的条数一次性汇总报错。
    */
   async removeItemsAt(indices: number[]): Promise<void> {
     const view = ui.view;
     if (view.kind !== 'playlist' || indices.length === 0) return;
+    const failed: string[] = [];
     try {
       for (const index of [...indices].sort((a, b) => b - a)) {
-        await ipc.playlist.removeAt(view.id, index);
+        try {
+          await ipc.playlist.removeAt(view.id, index);
+        } catch (err) {
+          failed.push(errorMessage(err));
+        }
       }
-    } catch (err) {
-      notify.showError(errorMessage(err));
-      return;
+    } finally {
+      await this.refresh();
+      await list.reload({ restore: true });
     }
-    await this.refresh();
-    await list.reload({ restore: true });
+    if (failed.length > 0) {
+      const detail = failed.length === indices.length ? '移除失败' : `已移除 ${indices.length - failed.length} 首，${failed.length} 首失败`;
+      notify.showError(`${detail}：${failed[0]}`);
+    }
   }
 
   /** 打开歌单（切视图 + 重载 + 存状态） */

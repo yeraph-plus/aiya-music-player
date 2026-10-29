@@ -6,18 +6,18 @@
     /** 频谱数据源（48 带 tap）；null 或 spectrumOn=false 时环境层不渲染 */
     source: SpectrumSource | null;
     spectrumOn: boolean;
-    /**
-     * 沉浸档（正在播放页）：无遮罩、环境光略强；列表页：重遮罩保可读性。
-     * 两档的频谱画法一致（山形曲线 + 模糊虚化）——T4h 起"沉浸档直出"撤销，
-     * 用户要求正在播放页加回背景虚化。
-     */
-    immersive: boolean;
   }
 
-  let { source, spectrumOn, immersive }: Props = $props();
+  let { source, spectrumOn }: Props = $props();
 
   /**
    * 全应用背景（docs/25 §5 T4c app 化；T4h 起背景频谱改山形曲线）。
+   *
+   * **单一档位**（用户拍板，撤销 standard/immersive 双档）：原本列表页
+   * 走"重遮罩保可读性"（veil 压 surface-1 渐变、氛围 0.6、频谱更虚），
+   * 正在播放页走沉浸档（无遮罩、氛围满档、频谱 alpha 0.75/blur 14）。
+   * 用户反馈沉浸档的透明度观感更好 —— 现在所有页面统一走这一档，
+   * 可读性遮罩（第 3 层）整个撤销。
    *
    * 三层（第 4 层是界面布局本身，在四区席位里）：
    * - 第 1 层 背景：固定 CSS 渐变（`--ambient-bg`，tokens.css 按
@@ -28,9 +28,7 @@
    *   画在低分辨率 buffer（160×90）上再放大，理由是**性能**：大半径
    *   模糊的代价 ∝ 像素数，低分辨率上做 blur 便宜一个数量级，放大本身
    *   的双线性插值还免费送一层柔化（T4g 曾把这层插值当"虚化" bug 修掉，
-   *   现在它正是我们要的虚化）。standard 档再叠 ctx.filter blur(26px)；
-   *   沉浸档 blur 收窄到 14px（虚化但保留山的可辨识度）。
-   * - 第 3 层 可读性遮罩：只在 standard 档渲染（沉浸档撤销，T4d）。
+   *   现在它正是我们要的虚化）。blur 14px（虚化但保留山的可辨识度）。
    *
    * `prefers-reduced-motion: reduce` 时环境层整体不渲染（静态背景保留）。
    */
@@ -142,23 +140,17 @@
     ridge(octx, near, BW, BH);
     octx.globalAlpha = 1;
 
-    if (immersive) {
-      // 沉浸档（正在播放页）：背景虚化加回（T4h 用户要求），blur 收窄
-      // 保留山的可辨识度；透明度拉高——本页背景是主视觉氛围
-      ctx.filter = 'blur(14px)';
-      ctx.globalAlpha = 0.75;
-      ctx.drawImage(off, -width * 0.04, -height * 0.12, width * 1.08, height * 1.12);
-      ctx.filter = 'none';
-      ctx.globalAlpha = 1;
-    } else {
-      // standard（列表页）：更重的模糊 + 更低透明度——背景只是"隐约的光"
-      ctx.filter = 'blur(26px)';
-      ctx.globalAlpha = 0.5;
-      ctx.drawImage(off, -width * 0.05, -height * 0.1, width * 1.1, height * 1.1);
-      ctx.filter = 'none';
-      ctx.globalAlpha = 1;
-    }
+    // 单一档位（原沉浸档参数，全页面统一）：blur 收窄保留山的可辨识度，
+    // 透明度拉高——背景是主视觉氛围，不再区分"氛围页/内容页"
+    ctx.filter = 'blur(14px)';
+    ctx.globalAlpha = 0.75;
+    ctx.drawImage(off, -width * 0.04, -height * 0.12, width * 1.08, height * 1.12);
+    ctx.filter = 'none';
+    ctx.globalAlpha = 1;
 
+    // **每帧只允许排一个下一帧**——这里若出现两次 requestAnimationFrame，
+    // 调度数会按 2^n 指数增长，几秒内主线程被回调淹没、整个 UI 假死
+    // （2026-10-28 实际发生过的回归：点击全部失效就是它）。
     frameId = requestAnimationFrame(draw);
   }
 
@@ -174,13 +166,10 @@
   });
 </script>
 
-<div class="ambient-bg" class:immersive>
+<div class="ambient-bg">
   <div class="ambient-art"></div>
   {#if active}
     <canvas bind:this={canvas} class="ambient-spectrum"></canvas>
-  {/if}
-  {#if !immersive}
-    <div class="ambient-veil"></div>
   {/if}
 </div>
 
@@ -194,15 +183,11 @@
   }
 
   /* 第 1 层：固定渐变（--ambient-bg 随 html[data-ambient] 切换）。
-   * standard 档收着点（0.6）——列表页背景是氛围不是主角；沉浸档放满。 */
+   * 单一档位（用户拍板）：满档不衰减——原列表页的 0.6 随双档一起撤销。 */
   .ambient-art {
     position: absolute;
     inset: 0;
     background: var(--ambient-bg);
-    opacity: 0.6;
-  }
-
-  .immersive .ambient-art {
     opacity: 1;
   }
 
@@ -213,19 +198,5 @@
     inset: 0;
     width: 100%;
     height: 100%;
-  }
-
-  /* 第 3 层可读性遮罩：仅 standard 档存在（沉浸档不渲染）。
-   * 近乎均匀地压一层 surface-1，正文对比度优先，背景在缝隙里透出即可。 */
-  .ambient-veil {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      to top,
-      color-mix(in srgb, var(--surface-1) 88%, transparent),
-      color-mix(in srgb, var(--surface-1) 74%, transparent) 40%,
-      color-mix(in srgb, var(--surface-1) 58%, transparent) 78%,
-      color-mix(in srgb, var(--surface-1) 46%, transparent)
-    );
   }
 </style>

@@ -44,7 +44,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       void (a.options as ScanOptions | undefined);
       return mock.scan();
     case 'library_scan_cancel':
-      return { cancelled: false };
+      return mock.scanCancel();
     // 浏览器里没有系统目录选择器：返回 null = 用户取消（契约里的正常分支）
     case 'library_choose_root':
       return null;
@@ -52,6 +52,12 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return mock.rootsGet();
     case 'library_roots_set':
       return mock.rootsSet(a.roots as string[]);
+    case 'library_roots_count':
+      return mock.rootsCount(a.paths as string[]);
+    case 'library_roots_prune':
+      return mock.rootsPrune(a.paths as string[]);
+    case 'library_clear':
+      return mock.clearLibrary();
     case 'library_reveal_track':
       return mock.revealTrack(a.trackId as string);
     case 'library_ids_for_selection':
@@ -62,6 +68,8 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return mock.libraryAlbums(a.search as string | undefined);
     case 'library_artists':
       return mock.libraryArtists(a.search as string | undefined);
+    case 'library_genres':
+      return ['流行', '民谣', '电子', '摇滚', '原声'];
 
     /* ---------------- playlist ---------------- */
     case 'playlist_list':
@@ -69,7 +77,13 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     case 'playlist_detail':
       return mock.playlistDetail(a.id as string);
     case 'playlist_create':
-      return mock.playlistCreate(a.name as string, a.trackIds as string[] | undefined);
+      return mock.playlistCreate(
+        a.name as string,
+        a.trackIds as string[] | undefined,
+        a.rule as Record<string, unknown> | undefined,
+      );
+    case 'playlist_set_rule':
+      return mock.playlistSetRule(a.id as string, a.rule as Record<string, unknown>);
     case 'playlist_rename':
       return mock.playlistRename(a.id as string, a.name as string);
     case 'playlist_delete':
@@ -213,6 +227,17 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return { intervalSecs: 30, focused: true, last: null };
     case 'beets_cancel':
       return { requested: false };
+    // ---- beets 配置（docs/40 十三轮）：inbox / 输出根 / 排除表 ----
+    case 'beets_config_get':
+      return mock.beetsConfigGet();
+    case 'beets_set_inbox':
+      return mock.beetsSetInbox((a.path as string | null) ?? null);
+    case 'beets_set_target':
+      return mock.beetsSetTarget(String(a.path ?? ''));
+    case 'beets_open_inbox':
+      return null; // 浏览器里没有资源管理器
+    case 'beets_inbox_imported_add':
+      return mock.beetsInboxImportedAdd(a.paths as string[]);
     // 安装工具同理：预览环境不装东西，但要把事件流的形状演一遍，
     // 好让 UI 的进度/终态渲染在浏览器里也能验证。两条轨道都演练到。
     case 'beets_install':
@@ -228,6 +253,11 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return mock.beetsMaintenance('move', a.pretend === true);
     case 'beets_reveal':
       return { revealed: false, reason: '浏览器预览模式不可用' };
+    // ---- 插件市场（docs/40 §3 白名单）：目录 + 安装事件流演练 ----
+    case 'beets_plugin_catalog':
+      return mock.beetsPluginCatalog();
+    case 'beets_plugin_install':
+      return mock.beetsPluginInstall(String(a.name ?? ''));
 
     default:
       throw mockError(cmd);

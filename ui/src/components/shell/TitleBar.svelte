@@ -69,8 +69,8 @@
     的分工约定：两者不并存）。要 styled 提示的地方用裸 `<button>` + Tooltip（窗控三个就是这样）。
   -->
   <div class="tb-back">
-    <IconButton label="返回上一页" size="sm" disabled={!nav.canGoBack} onclick={() => nav.back()}>
-      <ChevronLeft size={16} />
+    <IconButton label="返回上一页" disabled={!nav.canGoBack} onclick={() => nav.back()}>
+      <ChevronLeft size={17} />
     </IconButton>
   </div>
 
@@ -156,11 +156,12 @@
     /* 左内距交给 .tb-brand 自己管——它的定宽与侧栏对齐（见下） */
     padding: 0;
     min-width: 0;
-    border-bottom: 1px solid var(--line);
     /* 半透明（docs/25 T4g 定档 95%——用户反馈要接近不透明）：全应用
      * 背景从底下透出来。底色用 surface-2（播放条是 surface-3）——同档
      * 不同阶，叠起来有一点色差变化。不用 backdrop-filter——它是持久壳层，
-     * 垫着动画频谱 canvas 就是每帧全条重模糊（docs/25 §5 方案 B 红线）。 */
+     * 垫着动画频谱 canvas 就是每帧全条重模糊（docs/25 §5 方案 B 红线）。
+     * 边线已撤（用户拍板"区域之间不留 border"）：顶栏与主区的分隔靠
+     * 底色阶差本身。 */
     background: color-mix(in srgb, var(--surface-2) 95%, transparent);
     user-select: none;
   }
@@ -177,30 +178,30 @@
     padding-left: 19px;
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
     letter-spacing: 0.14em;
   }
 
   .tb-mark {
     display: inline-grid;
     place-items: center;
-    width: 18px;
-    height: 18px;
-    border-radius: 5px;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
     background: var(--accent);
     color: var(--surface-1);
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 700;
     letter-spacing: 0;
   }
 
   .tb-brand strong {
-    font-size: 12px;
+    font-size: 14.5px;
     font-weight: 700;
   }
 
   .tb-sub {
-    font-size: 9px;
+    font-size: 10.5px;
     color: var(--text-2);
     letter-spacing: 0.22em;
   }
@@ -208,12 +209,14 @@
   /* ---------------- 返回 ---------------- */
 
   /*
-   * 左缘 = 侧栏宽 + 主区内容边距（--space-6，随密度 16/22/26px）：
-   * 与 .page-pad 的内容左边距同一条竖线（docs/25 §2）。搜索框跟在后面同节奏。
+   * 左缘 = 侧栏宽 + 22px：与 .page-scroll / .page-pad 的内容左边距同一条竖线。
+   * **注意补偿顶栏 flex gap（8px）**：margin 是叠加在 gap 之上的，写 22px 实际
+   * 落在 246px（实测），比页面内容左缘 238px 右偏 8px —— 之前"没对齐"就是它。
+   * 按钮用 md 档（30px），与右侧搜索胶囊同高——同排两个控件高度一致才谈得上对齐。
    */
   .tb-back {
     flex: none;
-    margin-left: var(--space-6);
+    margin-left: 14px;
   }
 
   /* ---------------- 搜索 ---------------- */
@@ -284,18 +287,29 @@
 
   /* ---------------- 窗口控制 ---------------- */
 
+  /*
+   * 三键做成**普通按钮**而不是通高热区：与返回键同用 IconButton 的 30px 方块
+   * 节奏（radius-md + hover 底色），不再 `align-self: stretch` 撑满整条 54px
+   * 顶栏——通高块在浅色主题下 hover 时像把整条栏切成三段，视觉上过重。
+   */
   .window-controls {
     flex: none;
     display: flex;
-    align-items: stretch;
-    align-self: stretch;
+    align-items: center;
+    gap: 2px;
+    padding-right: 10px;
   }
 
   .window-controls button {
-    width: 44px;
+    width: 30px;
+    height: 30px;
     display: grid;
     place-items: center;
+    border-radius: var(--radius-md);
     color: var(--text-2);
+    transition:
+      background var(--dur-fast) var(--ease),
+      color var(--dur-fast) var(--ease);
   }
 
   .window-controls button:hover:not(:disabled) {

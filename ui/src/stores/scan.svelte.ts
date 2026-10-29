@@ -4,7 +4,6 @@ import type { RefreshSnapshot } from '../lib/ipc/generated/RefreshSnapshot';
 import type { RefreshState } from '../lib/ipc/generated/RefreshState';
 import { library } from './library.svelte';
 import { list } from './list.svelte';
-import { notify } from './notify.svelte';
 
 /**
  * 扫描编排：选目录 → 扫描 → 刷新统计/歌单/列表。
@@ -26,6 +25,13 @@ class ScanStore {
    */
   refresh = $state<RefreshState | null>(null);
 
+  /**
+   * 最近一次扫描动作的错误（2026-10-28 拍板：报错内置到「执行状态」卡片，
+   * 不再走全局 toast——错误和它的上下文（进度/上次结果）应该在同一个
+   * 视线里。展示与清除都在扫描入库页的状态卡片里。
+   */
+  lastError = $state<string | null>(null);
+
   /** 拉一次刷新状态（诊断区打开 / 点刷新时）。失败静默：诊断区空着比报错好 */
   async loadRefreshState(): Promise<void> {
     try {
@@ -37,27 +43,32 @@ class ScanStore {
 
   /** 弹目录选择器，选中就扫。用户取消（返回 null）什么也不做 */
   async pickRootAndScan(): Promise<void> {
-    notify.clearError();
+    this.lastError = null;
     let path: string | null;
     try {
       path = await library.chooseRoot();
     } catch (err) {
-      notify.showError(errorMessage(err));
+      this.lastError = errorMessage(err);
       return;
     }
     if (path) await this.start();
   }
 
-  /** 用已有根目录重扫（启动时的「重新扫描」按钮 / 扫描完成后的手动触发） */
+  /**
+   * 用已有根目录重扫（启动时的「重新扫描」按钮 / 扫描完成后的手动触发）。
+   *
+   * 收尾**不在这里做**：`library.watchScan`（boot 时订阅）在 `done` /
+   * `cancelled` 两个终态事件上都会调 `afterScan`，这里再调一次就是每轮
+   * 扫描收尾跑两遍（统计/歌单/列表整套重拉）。失败分支（命令 reject，
+   * 未产生终态事件）本来就不该收尾——什么都没提交。
+   */
   async start(): Promise<void> {
-    notify.clearError();
+    this.lastError = null;
     try {
       await library.startScan();
     } catch (err) {
-      notify.showError(errorMessage(err));
-      return;
+      this.lastError = errorMessage(err);
     }
-    await this.afterScan();
   }
 
   /**
@@ -68,6 +79,7 @@ class ScanStore {
    * 里的歌还在、但侧栏计数不对"，很难发现。
    */
   async afterScan(): Promise<void> {
+    library.invalidateGenres(); // 曲目变了，流派下拉的缓存过期
     await library.loadStats();
     await library.loadPlaylists();
     await list.reload({ restore: true });
@@ -127,8 +139,8 @@ class ScanStore {
         };
         if (changed) void reload();
       } else if (type === 'libraryRefreshFailed') {
-        // 整条管线失败（DB 打不开之类）值得说一句：这是"库坏了"级别的信号
-        notify.showError(`曲库自动刷新失败：${String(raw.message ?? '未知原因')}`);
+        // 整条管线失败（DB 打不开之类）：状态卡片里要看得见"库坏了"级别的信号
+        this.lastError = `曲库自动刷新失败：${String(raw.message ?? '未知原因')}`;
       }
     });
   }

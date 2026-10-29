@@ -1,4 +1,4 @@
-import type { BeetsStatus, Diagnostics } from '../lib/ipc';
+import type { BeetsMarketItem, BeetsStatus, Diagnostics } from '../lib/ipc';
 import type { TrackSort } from '../lib/query';
 import type { AppSettings } from '../lib/settings';
 import { DEFAULT_SETTINGS } from '../lib/settings';
@@ -166,6 +166,16 @@ class UiStore {
   direction = $state<'asc' | 'desc'>('asc');
   artistId = $state<string | null>(null);
   albumId = $state<string | null>(null);
+
+  /**
+   * 曲库页的 tab 索引（2026-10-28 用户拍板：最近播放/最近添加从推荐页
+   * 迁来，成为曲库页「全部曲目」旁的 tab，不再是一级路由）。
+   *
+   * **会话态不持久化**（重启回「全部曲目」是可预期的复位）；
+   * 只在 `page === 'library'` 时参与 `list.query()` 的 source 换算——
+   * 搜索页/详情页同走 LIBRARY_VIEW 但不吃 tab，见 list store 的 query()。
+   */
+  libraryTab = $state<'all' | 'recent' | 'added'>('all');
 
   /**
    * 初始值不是纯 `DEFAULT_SETTINGS`：主题/密度先取 localStorage 镜像
@@ -418,17 +428,28 @@ class UiStore {
    * 先用新值本地生效（主题切换要跟手），再以后端返回的为准：
    * 后端会补齐默认值/拒绝非法值，这一步是"以磁盘为准"的对账。
    *
+   * 请求代次：快速连改两个设置会并发两条 setSettings，先发的可能后回来，
+   * 把"以磁盘为准"的合并结果盖回旧值。只有最新一次发出的响应允许落盘；
+   * 过期响应的失败也同样静默（新请求成功的话旧失败是噪音）。
+   *
    * 失败**默认落到全局错误条**（不再收一个可选回调）：漏传回调的调用点会让
    * 写盘失败静默吞掉，症状是"设置看着生效、重启就回滚"——比不生效更难查。
    */
+  private settingsGeneration = 0;
+
   applySettings(next: AppSettings): void {
+    const generation = (this.settingsGeneration += 1);
     this.settings = next;
     void ipc.app
       .setSettings($state.snapshot(next) as DynamicJson)
       .then((raw) => {
+        if (generation !== this.settingsGeneration) return;
         this.settings = mergeSettings(raw);
       })
-      .catch((e) => notify.showError(errorMessage(e)));
+      .catch((e) => {
+        if (generation !== this.settingsGeneration) return;
+        notify.showError(errorMessage(e));
+      });
   }
 
   openDataDir(): void {
@@ -478,8 +499,8 @@ class UiStore {
       if (type === 'finished') {
         // 终态带 status：装没装成以 probe 为准，不以退出码为准
         this.beetsInstall = { running: false, track: this.beetsInstall.track, stage: 'done', message: '', error: null };
-        const status = e.status;
-        if (status && typeof status === 'object') this.beets = status as BeetsStatus;
+        const status = readBeetsStatus(e.status);
+        if (status) this.beets = status;
         return;
       }
       if (type === 'error') {
@@ -528,7 +549,7 @@ class UiStore {
    * `details` 每次开跑都清空——它们是"这次任务的结果"，不是历史。
    */
   beetsMaint = $state<{
-    kind: '' | 'adopt' | 'update' | 'duplicates' | 'move';
+    kind: '' | 'adopt' | 'update' | 'duplicates' | 'move' | 'plugin';
     running: boolean;
     stage: string;
     current: number;
@@ -560,6 +581,39 @@ class UiStore {
 
   /** 明细上限：与 sidecar 的 MAINT_MAX_DETAIL 对齐，多出来的不渲染 */
   private static readonly MAINT_DETAIL_CAP = 500;
+
+  /**
+   * 插件市场目录（docs/40 §3 白名单版）。`null` = 还没拉过。
+   *
+   * 更新有两条路：打开市场分区时 `loadBeetsMarket()` 拉一次；装完插件
+   * 不再回查——pluginDone 终态自带复检报告，直接落进这里（少一次 ~1s
+   * 的短进程开销）。
+   */
+  beetsMarket = $state<BeetsMarketItem[] | null>(null);
+  beetsMarketError = $state<string | null>(null);
+
+  /** 拉一次插件市场目录（市场分区展开时调用）。 */
+  async loadBeetsMarket(): Promise<void> {
+    try {
+      this.beetsMarket = await ipc.beets.pluginCatalog();
+      this.beetsMarketError = null;
+    } catch (e) {
+      this.beetsMarketError = errorMessage(e);
+    }
+  }
+
+  /**
+   * 安装白名单插件（仅 pypi 档）。会话槽与维护四件套**共用**——同一时刻
+   * 只有一个 serve 会话，进度走同一条 `beets:maintenance` 流。
+   */
+  async installBeetsPlugin(name: string): Promise<void> {
+    this.startMaint('plugin');
+    try {
+      await ipc.beets.pluginInstall(name);
+    } catch (e) {
+      this.beetsMaint = { ...this.beetsMaint, running: false, error: errorMessage(e) };
+    }
+  }
 
   /** 订阅维护事件。只在 App 启动时调一次。 */
   watchBeetsMaint(): () => void {
@@ -631,6 +685,23 @@ class UiStore {
         );
         return;
       }
+      if (type === 'pluginProgress') {
+        // 逐行 pip 输出，没有 current/total——stage 直接当"最新一行"显示
+        this.beetsMaint = {
+          ...this.beetsMaint,
+          running: true,
+          stage: typeof e.message === 'string' ? e.message : '',
+        };
+        return;
+      }
+      if (type === 'pluginDone') {
+        // 终态自带复检报告（market_report），直接落目录，不再回查一次
+        const name = typeof e.name === 'string' ? e.name : '插件';
+        if (Array.isArray(e.report)) this.beetsMarket = e.report as BeetsMarketItem[];
+        else void this.loadBeetsMarket();
+        this.finishMaint(`${name} 安装完成（复检通过）`);
+        return;
+      }
       if (type === 'cancelled') {
         this.finishMaint('已取消（已完成的部分保留）');
         return;
@@ -650,7 +721,7 @@ class UiStore {
     this.beetsMaint = { ...this.beetsMaint, running: false, summary, preview, error: null };
   }
 
-  private startMaint(kind: 'adopt' | 'update' | 'duplicates' | 'move'): void {
+  private startMaint(kind: 'adopt' | 'update' | 'duplicates' | 'move' | 'plugin'): void {
     this.beetsMaint = {
       kind,
       running: true,
@@ -749,6 +820,44 @@ function mergeSettings(raw: unknown): AppSettings {
   devValidate(settingsSchema, raw, 'app.settings');
   const partial = (typeof raw === 'object' && raw !== null ? raw : {}) as Partial<AppSettings>;
   return { ...DEFAULT_SETTINGS, ...partial } as AppSettings;
+}
+
+/**
+ * 动态 JSON → `BeetsStatus`：逐字段 typeof 收口（与 `watchBeetsMaint` 同风格）。
+ *
+ * 终态载荷来自 beets 工具的 stdout，宿主只透传不解释——工具版本不齐时
+ * 缺字段是常态。`found` 是判别字段：连它都不是 boolean，整包丢弃
+ * （返回 null = 保留探测时的旧状态，别让坏载荷把设置页打成"未检测"）。
+ */
+function readBeetsStatus(raw: unknown): BeetsStatus | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.found !== 'boolean') return null;
+  const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+  const bool = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
+  const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
+  const strArr = (v: unknown): string[] | null =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : null;
+  return {
+    found: o.found,
+    interpreter: str(o.interpreter),
+    scriptPath: str(o.scriptPath),
+    entrySource: str(o.entrySource),
+    protocolVersion: num(o.protocolVersion),
+    beetsVersion: str(o.beetsVersion),
+    pythonVersion: str(o.pythonVersion),
+    pythonSupported: bool(o.pythonSupported),
+    libraryPath: str(o.libraryPath),
+    libraryExists: bool(o.libraryExists),
+    libraryDirectory: str(o.libraryDirectory),
+    plugins: strArr(o.plugins),
+    pluginHealth: Array.isArray(o.pluginHealth) ? (o.pluginHealth as BeetsStatus['pluginHealth']) : null,
+    pluginSummary: (o.pluginSummary ?? null) as BeetsStatus['pluginSummary'],
+    configDir: str(o.configDir),
+    dataHome: str(o.dataHome),
+    errorCode: str(o.errorCode),
+    errorMessage: str(o.errorMessage),
+  };
 }
 
 export const ui = new UiStore();

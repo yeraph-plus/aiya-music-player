@@ -11,6 +11,8 @@
     type ShortcutAction,
   } from '../lib/shortcuts';
   import { bindingFromEvent } from '../lib/keys';
+  import { formatDateTime } from '../lib/format';
+  import afdianQr from '../assets/afdian-qr.png';
   import Icon from './Icon.svelte';
   import Button from './ui/Button.svelte';
   import SegmentedControl from './ui/SegmentedControl.svelte';
@@ -27,55 +29,48 @@
   let { settings, onsave }: Props = $props();
 
   /**
-   * 系统集成状态（本轮从诊断区下放）。
-   *
-   * 以前「系统媒体控制 / 系统集成」是扫描入库页里的两个诊断块，说的却是
-   * 这一页两个开关的实际效果。那种排法的问题：状态与开关离得太远，
-   * 用户要对照着看，而且对一个不关心系统集成的人等于两屏噪音。
-   * 现在每个状态贴在它对应的开关说明里，一行字。
+   * 识别信息与排障数据（版本/平台/Schema/数据目录/最近错误），
+   * 2026-10-28 从扫描入库页的「高级与诊断」折叠区迁来——它们描述的是
+   * 整个应用，放在「关于」tab 比挂在入库页更对位。数据同源：
+   * `ui.diagnostics`，与系统 tab 的集成状态共用一份。
    */
   const sys = $derived(ui.diagnostics);
+  const recentErrors = $derived(sys?.recentErrors ?? []);
 
   /**
-   * 设置页 = 左分组导航 + 右内容（docs/24 B6）。
+   * 单页平铺 + tab 跳转（2026-10-28 用户拍板改回）。
    *
-   * **所有区块始终渲染**：扫描/beets 任务必须挂在常驻区块里，
-   * 条件切换会让切走的那一侧任务进度直接卸载。左栏只是滚动定位 + 高亮，
-   * 不是路由——高亮来自 scroll-spy（滚到哪个区块就亮哪组），
-   * 与 LibraryView 的「路由级 tab」是两种东西，别复用 Toolbar。
-   *
-   * docs/29 批 A：「音乐库与任务」「诊断」两分区撤出设置页，升为侧栏一级
-   * 「扫描入库」页（任务长时运行，需要可停留的一级路由）。这里只剩
-   * 外观/播放/系统/快捷键四组纯配置。
+   * 演进史：旧版「全区块平铺 + scroll-spy」的病根是点击分组靠
+   * scrollIntoView 平滑滚动、滚动中 spy 又不断写回高亮——两边互相拉扯，
+   * 切一次组高亮抖好几下。上一版改成 tab 条件渲染，抖动消失了，但用户
+   * 不喜欢"设置被切成五页"。现在是折中：**五个区块全部平铺渲染，顶部
+   * tab 只做跳转定位**——点击 scrollIntoView，没有 spy；高亮只跟点击走
+   * （tab 的语义是"跳过去"，不是"你在这"），滚动永不写回高亮，拉扯
+   * 从根上不存在。
    */
-  type Section = 'appearance' | 'playback' | 'system' | 'shortcuts';
+  type Section = 'appearance' | 'playback' | 'system' | 'shortcuts' | 'about';
   let active = $state<Section>('appearance');
-  let root = $state<HTMLElement | null>(null);
 
   const SECTIONS: Array<{ id: Section; label: string }> = [
     { id: 'appearance', label: '外观' },
     { id: 'playback', label: '播放' },
     { id: 'system', label: '系统' },
     { id: 'shortcuts', label: '快捷键' },
+    { id: 'about', label: '关于' },
   ];
 
-  /** scroll-spy：滚动容器里找最后一个顶边已越过视口上沿 1/3 的区块 */
-  function onScroll(): void {
-    if (!root) return;
-    const line = root.clientHeight / 3;
-    let current: Section = SECTIONS[0].id;
-    for (const { id } of SECTIONS) {
-      const el = root.querySelector<HTMLElement>(`#settings-${id}`);
-      if (el && el.getBoundingClientRect().top - root.getBoundingClientRect().top <= line) {
-        current = id;
-      }
-    }
-    active = current;
-  }
+  /** 各区块根元素（bind:this 填充），tab 跳转的目标 */
+  const sectionEls: Record<Section, HTMLElement | null> = {
+    appearance: null,
+    playback: null,
+    system: null,
+    shortcuts: null,
+    about: null,
+  };
 
-  function jumpTo(id: Section): void {
-    active = id;
-    root?.querySelector(`#settings-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  function jumpTo(section: Section): void {
+    active = section;
+    sectionEls[section]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   /**
@@ -166,6 +161,15 @@
     { value: '300', label: '5 分钟' },
   ];
 
+  /** 播放记录保留周期（0 = 永久）；宿主据此裁剪 history 行 */
+  const HISTORY_DAYS_OPTIONS: Array<{ value: string; label: string }> = [
+    { value: '30', label: '30 天' },
+    { value: '90', label: '90 天' },
+    { value: '180', label: '半年' },
+    { value: '365', label: '一年' },
+    { value: '0', label: '永久' },
+  ];
+
   const CLOCK_OPTIONS: Array<{ value: string; label: string }> = [
     { value: 'auto', label: '自动' },
     { value: 'events', label: '事件' },
@@ -187,30 +191,40 @@
 
 <svelte:window onkeydown={onWindowKey} />
 
-<div class="page-scroll settings-page" bind:this={root} onscroll={onScroll}>
-  <Header kicker="PREFERENCES" title="设置" />
+<div class="settings-page">
+  <!-- 头部与内容同在一根居中列（2026-10-28 用户拍板）：设置是表单式页面，
+       内容列 1020 上限后左侧留白很大，标题还贴屏幕左会显得割裂 -->
+  <div class="settings-headwrap">
+    <div class="page-pad">
+      <!-- 大标题固定「设置」+ 右侧 tab 只做跳转（2026-10-28 用户拍板改回单页） -->
+      <Header title="设置" big>
+        {#snippet actions()}
+          <!-- 语义用 nav + aria-current 而不是 role="tablist"/"tab"（同 content/Toolbar
+               的先例）：tab 只做 scrollIntoView 跳转，五个区块平铺常驻，不是「切换
+               面板」；硬套 tab 角色会让读屏软件期待一个 tabpanel。 -->
+          <nav class="settings-tabs" aria-label="设置分组">
+            {#each SECTIONS as section (section.id)}
+              <button
+                class="settings-tab"
+                class:on={active === section.id}
+                aria-current={active === section.id ? 'true' : undefined}
+                onclick={() => jumpTo(section.id)}
+              >
+                {section.label}
+              </button>
+            {/each}
+          </nav>
+        {/snippet}
+      </Header>
+    </div>
+  </div>
 
-  <div class="settings-body">
-    <!-- 左分组导航（B6）：sticky 跟随滚动；高亮由 scroll-spy 写回，
-         点击只是 scrollIntoView，不做条件切换（理由见组件头注释）。
-         aria-current 让读屏器知道"现在在哪一组"，与视觉高亮同源。 -->
-    <nav class="settings-rail" aria-label="设置分组">
-      {#each SECTIONS as section (section.id)}
-        <button
-          class="rail-item"
-          class:on={active === section.id}
-          aria-current={active === section.id ? 'true' : undefined}
-          onclick={() => jumpTo(section.id)}
-        >
-          {section.label}
-        </button>
-      {/each}
-    </nav>
-
-    <div class="settings-main">
-      <section class="settings-section" id="settings-appearance">
-        <div class="section-heading"><div><h2>外观</h2></div></div>
-        <div class="setting-row">
+  <!-- 内容容器自己滚：头部（标题+tab）固定。五个区块全部平铺渲染，
+       tab 点击只 scrollIntoView 跳转（2026-10-28 用户拍板改回单页） -->
+  <div class="settings-scroll">
+    <section class="settings-section" bind:this={sectionEls.appearance}>
+      <h3 class="group-title">外观</h3>
+      <div class="setting-row">
           <div>
             <div class="setting-title">主题</div>
             <div class="setting-hint">浅色主题适合白天与投影，切换即时生效</div>
@@ -283,9 +297,9 @@
         </div>
       </section>
 
-      <section class="settings-section" id="settings-playback">
-        <div class="section-heading"><div><h2>播放</h2></div></div>
-        <div class="setting-row">
+    <section class="settings-section" bind:this={sectionEls.playback}>
+      <h3 class="group-title">播放</h3>
+      <div class="setting-row">
           <div>
             <div class="setting-title">输出模式</div>
             <div class="setting-hint">
@@ -397,9 +411,9 @@
         </div>
       </section>
 
-      <section class="settings-section" id="settings-system">
-        <div class="section-heading"><div><h2>系统</h2></div></div>
-        <div class="setting-row">
+    <section class="settings-section" bind:this={sectionEls.system}>
+      <h3 class="group-title">系统</h3>
+      <div class="setting-row">
           <div>
             <div class="setting-title">关闭窗口时最小化到托盘</div>
             <div class="setting-hint">
@@ -419,7 +433,7 @@
             <div class="setting-title">曲库自动刷新</div>
             <div class="setting-hint">
               在别的软件里改了标签或移动了文件，播放器隔多久自己发现。
-              关闭后仍会在切回窗口时刷一次；最近一次结果看「扫描入库 → 曲库」
+              关闭后仍会在切回窗口时刷一次
             </div>
           </div>
           <SegmentedControl
@@ -427,6 +441,22 @@
             value={String(settings.refreshSeconds ?? 30)}
             options={REFRESH_OPTIONS}
             onchange={(value) => apply({ refreshSeconds: Number(value) })}
+          />
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <div class="setting-title">最近播放保留</div>
+            <div class="setting-hint">
+              播放记录只存这段时间内的（到点自动清理，防数据无限膨胀）。
+              「最近播放」列表与常听榜都按这个范围统计
+            </div>
+          </div>
+          <SegmentedControl
+            label="最近播放保留周期"
+            value={String(settings.historyDays ?? 90)}
+            options={HISTORY_DAYS_OPTIONS}
+            onchange={(value) => apply({ historyDays: Number(value) })}
           />
         </div>
 
@@ -454,9 +484,20 @@
         </div>
       </section>
 
-      <section class="settings-section" id="settings-shortcuts">
-        <div class="section-heading"><div><h2>快捷键</h2></div></div>
-        {#if conflicts.length > 0}
+    <section class="settings-section" bind:this={sectionEls.shortcuts}>
+      <h3 class="group-title">快捷键</h3>
+
+      <!--
+        录制规则 + 恢复默认（2026-10-28 十二轮拍板）：盒子放组顶——用户
+        点下任何绑定键之前就该知道 Esc/Backspace 的行为；边框套住让它像
+        一条"操作须知"，而不是飘在列表底部的尾注。
+      -->
+      <div class="shortcut-foot">
+        <span class="dim">Esc 取消录制，Backspace 清空绑定。↑/↓ 与 Enter 是列表导航，不占用快捷键。</span>
+        <Button size="sm" onclick={() => apply({ shortcuts: {} })}>恢复默认</Button>
+      </div>
+
+      {#if conflicts.length > 0}
           <div class="notice danger">
             {#each conflicts as conflict (conflict.binding)}
               <div>
@@ -482,85 +523,209 @@
             </div>
           {/each}
         </div>
-        <div class="setting-foot">
-          <span class="dim">Esc 取消录制，Backspace 清空绑定。↑/↓ 与 Enter 是列表导航，不占用快捷键。</span>
-          <Button size="sm" onclick={() => apply({ shortcuts: {} })}>恢复默认</Button>
-        </div>
       </section>
 
-    </div><!-- /settings-main -->
-  </div><!-- /settings-body -->
+    <!--
+      关于（识别信息 + 排障，从扫描入库页迁来）。2026-10-28 九轮半拍板：
+      改成与设置项同款的「一行一项」；平台/Schema/播放列表计数三行删掉
+      （内部信息或恒为 0）；「重新读取」删掉（诊断随页面加载自动拉）；
+      版本行带「获取更新」占位按钮（功能未做，恒禁用）；数据目录与
+      「打开目录」并成一行。
+    -->
+    <section class="settings-section settings-about" bind:this={sectionEls.about}>
+      <h3 class="group-title">关于</h3>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">版本</div>
+          <div class="setting-hint">{sys?.version ?? '…'}</div>
+        </div>
+        <Button size="sm" disabled title="获取更新功能尚未提供">获取更新</Button>
+      </div>
+
+      <div class="setting-row">
+        <div class="datadir-cell">
+          <div class="setting-title">数据目录</div>
+          <!-- 完整路径可复制（user-select 豁免见样式区），过长省略、悬停给全路径 -->
+          <div class="setting-hint datadir-path" title={sys?.dataDir ?? ''}>{sys?.dataDir ?? '…'}</div>
+        </div>
+        <Button size="sm" onclick={() => ui.openDataDir()}>打开目录</Button>
+      </div>
+
+      <div class="diag-block last-errors">
+        <div class="diag-head">最近错误<span class="dim">最多保留 30 条，新的在上</span></div>
+        {#if recentErrors.length === 0}
+          <div class="dim">没有错误</div>
+        {:else}
+          <ul class="error-list">
+            {#each recentErrors.slice().reverse() as item}
+              <li>
+                <span class="dim">{formatDateTime(item.atMs)}</span>
+                <span class="danger">{item.code}</span>
+                {item.message}
+                {#if item.detail}
+                  <span class="dim" title={item.detail}>（有详情）</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+
+      <!--
+        支持开发（2026-10-28 十一轮拍板）：独立区块放「关于」最下面，居中，
+        不配描述文案——图就是文案。结构按"多二维码并排"预留：以后加别的
+        平台，在 .support-items 里并排多一个 .support-item 即可。
+        爱发电二维码是静态图，不做外链——Tauri 开浏览器要走 shell open，
+        等真做「获取更新」时一起把外链基建搭起来。
+      -->
+      <div class="support-block">
+        <div class="support-items">
+          <figure class="support-item">
+            <img class="afdian-qr" src={afdianQr} alt="爱发电赞助二维码" width="160" height="160" />
+            <figcaption>支持创作，用爱发电</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+  </div><!-- /settings-scroll -->
 </div>
 
 <style>
   /* docs/19 §5：提示文案是用户可能要复制的内容，从全局 user-select:none
-     里豁免（诊断块的豁免随分区搬去了 ScanToolsView） */
+     里豁免（diag 样式本体在全局 overlays.css；「关于」的路径与错误详情
+     同样是用户可能要复制的内容，一并豁免） */
   .setting-hint,
-  .setting-foot .dim {
+  .shortcut-foot .dim,
+  .datadir-path,
+  .diag-block,
+  .error-list {
     user-select: text;
     cursor: text;
   }
 
-  /* 左分组导航 + 右内容（B6）。外层 .page-scroll 仍是唯一滚动容器，
-     左栏 sticky 跟随；右列 max-width 收窄到原 860px 内 */
-  .settings-body {
-    display: grid;
-    grid-template-columns: 148px minmax(0, 1fr);
-    gap: 22px;
-    align-items: start;
-    max-width: 1020px;
+  /* 单页平铺的区块小标题（2026-10-28 改回）：比 setting-title 大一档，
+     与 tab 的关系是"tab 跳到这" */
+  .group-title {
+    margin: 22px 0 2px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-1);
+    scroll-margin-top: 12px;
   }
 
-  .settings-rail {
-    position: sticky;
-    top: 0;
+  .settings-section:first-child .group-title {
+    margin-top: 4px;
+  }
+
+  /* 数据目录路径：等宽 + 超长省略（悬停 title 给全路径） */
+  .datadir-cell {
+    min-width: 0;
+  }
+
+  .datadir-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  }
+
+  /* 爱发电二维码：自带黑色底，圆角 + 细边框与卡片语言一致 */
+  .afdian-qr {
+    display: block;
+    width: 160px;
+    height: 160px;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+  }
+
+  /* 支持开发区块：「关于」末尾居中展示；.support-items 是并排容器，
+     以后加别的平台二维码就并排多一个 .support-item（图 + 一行小字） */
+  .support-block {
+    margin-top: 18px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .support-items {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 32px;
+  }
+
+  .support-item {
+    margin: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    align-items: center;
+    gap: 10px;
   }
 
-  .rail-item {
-    padding: 6px 10px;
-    border-radius: var(--radius-md);
-    text-align: left;
+  .support-item figcaption {
+    font-size: 12px;
+    color: var(--text-2);
+  }
+
+  /* 最近错误块：diag-block 全局只有 margin-bottom，与上方数据目录行的
+     间距落在块自己的 margin-top 上 */
+  .last-errors {
+    margin-top: 14px;
+  }
+
+  /* 大标题 + 右侧 tab（2026-10-28，与曲库页同构）：头部固定不滚，
+     内容在 .settings-scroll 容器里滚——tab 是条件渲染，没有滚动定位，
+     旧 scroll-spy 的抖动从根上消失 */
+  .settings-page {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* 居中列（1064 = 内容 1020 + 左右 padding 22×2）：头部与滚动容器同一
+     列宽，标题、tab、设置行左缘全部对齐；窄窗口 max-width 不生效，
+     行为与全宽时一致 */
+  .settings-headwrap {
+    max-width: 1064px;
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  .settings-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 22px 28px;
+    max-width: 1064px;
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  /* tab 形态与曲库页 .lib-tab 同款：纯文字 + accent 下划线，小标题档 */
+  .settings-tabs {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-left: 18px;
+  }
+
+  .settings-tab {
+    padding: 2px 0;
+    border: none;
+    background: none;
     font-size: 12.5px;
     color: var(--text-2);
-    border-left: 2px solid transparent;
-    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    border-bottom: 2px solid transparent;
   }
 
-  .rail-item:hover {
+  .settings-tab:hover {
     color: var(--text-1);
-    background: var(--surface-hover);
   }
 
-  .rail-item.on {
+  .settings-tab.on {
     color: var(--text-1);
-    background: var(--surface-hover);
-    border-left-color: var(--accent);
     font-weight: 600;
-  }
-
-  /* 窄窗口退回单列：左栏变成顶部横向条 */
-  @media (max-width: 720px) {
-    .settings-body {
-      grid-template-columns: 1fr;
-    }
-
-    .settings-rail {
-      position: static;
-      flex-direction: row;
-      flex-wrap: wrap;
-    }
-
-    .rail-item {
-      border-left: none;
-      border-radius: var(--radius-md);
-    }
-
-    .rail-item.on {
-      border-left: none;
-      outline: 1px solid var(--accent);
-    }
+    border-bottom-color: var(--accent);
   }
 </style>

@@ -5,6 +5,7 @@
   import Button from '../components/ui/Button.svelte';
   import Card from '../components/ui/Card.svelte';
   import EmptyState from '../components/ui/EmptyState.svelte';
+  import Pagination from '../components/ui/Pagination.svelte';
   import Skeleton from '../components/ui/Skeleton.svelte';
   import type { AlbumFacet, ArtistFacet } from '../lib/ipc/generated';
   import { artworkUrl } from '../lib/artwork';
@@ -35,20 +36,21 @@
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
   const rows = $derived(mode === 'artists' ? facets.artists : facets.albums);
-  /** 过滤后总数（后端截断到 500 条；total > rows.length = 还有没画出来的） */
+  /** 过滤后总数（后端截断到 500 条；仅用于头部总数文案） */
   const total = $derived(mode === 'artists' ? facets.artistsTotal : facets.albumsTotal);
-  const truncated = $derived(rows !== null && total > rows.length);
 
   $effect(() => {
     // 只追踪 mode：search 变化走 onSearchInput 的显式重拉（防抖控制在那里）。
     // 不 untrack 的话每次击键都会先触发一遍 effect 直拉，防抖形同虚设。
     const m = mode;
+    pageNo = 1; // 换模式回第 1 页（换搜索词的回页在 onSearchInput 里）
     untrack(() => void (m === 'artists' ? facets.loadArtists(search || undefined) : facets.loadAlbums(search || undefined)));
     return () => clearTimeout(searchTimer);
   });
 
   function onSearchInput(value: string): void {
     search = value;
+    pageNo = 1; // 过滤条件变了，旧的页码没有意义
     clearTimeout(searchTimer);
     searchTimer = setTimeout(
       () => void (mode === 'artists' ? facets.loadArtists(search || undefined) : facets.loadAlbums(search || undefined)),
@@ -58,15 +60,36 @@
 
   const heading = $derived(
     mode === 'artists'
-      ? { kicker: '曲库', title: '艺人', subtitle: '按名称浏览曲库里的全部艺人' }
-      : { kicker: '曲库', title: '专辑', subtitle: '按名称浏览曲库里的全部专辑' },
+      ? { title: '艺人' }
+      : { title: '专辑' },
   );
 
+  /* 次要统计描述（2026-10-28 二次修订）：只报总数，撤销「500 / 共 xxx」
+     截断式。截断说明不再有文本位——分页器本身就是可见边界 */
   const meta = $derived(
-    rows === null
-      ? ''
-      : `${rows.length}${truncated ? ` / 共 ${total}` : ''} ${mode === 'artists' ? '位艺人' : '张专辑'}`,
+    rows === null ? '' : `共 ${total} ${mode === 'artists' ? '位艺人' : '张专辑'}`,
   );
+
+  /* ---------------- 前端分页（2026-10-28） ----------------
+   * 后端 facets 命令冻结（一次 ≤500 条 + total，无 offset），分页是对
+   * 已拉取数据的纯展示切片。搜索/过滤变化时回第 1 页。 */
+  const PAGE_SIZE = 60;
+  let pageNo = $state(1);
+
+  const pageCount = $derived(Math.max(1, Math.ceil((rows?.length ?? 0) / PAGE_SIZE)));
+  /** 行数缩水（搜索/换模式后）时钳回有效页，避免停在空页 */
+  const safePage = $derived(Math.min(pageNo, pageCount));
+  const pageRows = $derived(
+    rows?.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE) ?? [],
+  );
+
+  /** 换页滚回页顶（滚动容器是页面根 .browse，分页器随内容滚到底部） */
+  function onPageChange(p: number): void {
+    pageNo = p;
+    scrollEl?.scrollTo({ top: 0 });
+  }
+
+  let scrollEl: HTMLElement | null = $state(null);
 
   /** 专辑卡片属性。艺人卡片不用封面（docs/28 修订：user 图标，见模板内分支） */
   function albumCardProps(item: AlbumFacet): { title: string; subtitle: string; cover: string | null } {
@@ -81,10 +104,10 @@
   }
 </script>
 
-<div class="page-pad browse">
-  <Header kicker={heading.kicker} title={heading.title} subtitle={heading.subtitle} {meta}>
+<div class="page-pad browse" bind:this={scrollEl}>
+  <Header title={heading.title} {meta} big>
     {#snippet actions()}
-      <div class="search" data-tauri-drag-region="false">
+      <div class="search">
         <Search size={14} aria-hidden="true" />
         <input
           type="search"
@@ -101,7 +124,7 @@
     <Skeleton kind="row" count={10} />
   {:else if rows && rows.length > 0}
     <div class="grid">
-      {#each rows as item (item.id)}
+      {#each pageRows as item (item.id)}
         {#if 'name' in item}
           <!-- 艺人卡片：user 图标（artists 表没有封面数据，不做图片获取逻辑） -->
           <Card
@@ -118,12 +141,9 @@
           />
         {/if}
       {/each}
-      {#if truncated}
-        <p class="trunc-hint" role="note">
-          共 {total} 个，仅显示名称最靠前的 {rows.length} 个——用上方搜索框按名称收窄
-        </p>
-      {/if}
     </div>
+    <!-- 底部分页（2026-10-28）：随页面滚动，滚到内容末尾才出现 -->
+    <Pagination page={safePage} pageCount={pageCount} onchange={onPageChange} />
   {:else if search.trim()}
     <EmptyState title="没有匹配的结果" hint="换个关键词，或清除过滤条件">
       {#snippet icon()}<Search size={26} />{/snippet}
@@ -152,6 +172,10 @@
     flex-direction: column;
     gap: var(--space-4);
     height: 100%;
+    /* 滚动容器是页面根（2026-10-28：分页器随内容滚，宫格不再自滚）。
+       底部 24px 与分页器上方的间隙（gap 12 + padding-top 12）严格等高 */
+    overflow-y: auto;
+    padding-bottom: 24px;
   }
 
   .search {
@@ -184,23 +208,12 @@
     outline: none;
   }
 
-  /* 卡片是横排形状，宫格里两行文本对齐 */
+  /* 卡片是横排形状，宫格里两行文本对齐。
+     2026-10-28：宫格不自滚——滚动交给页面根，分页器在内容末尾 */
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     gap: var(--space-2);
     align-content: start;
-    overflow-y: auto;
-    padding-bottom: var(--space-4);
-    min-height: 0;
-  }
-
-  /* 截断提示：grid 末尾占满整行 */
-  .trunc-hint {
-    grid-column: 1 / -1;
-    margin: 0;
-    padding: var(--space-2) 0;
-    font-size: var(--fs-sm);
-    color: var(--text-3);
   }
 </style>

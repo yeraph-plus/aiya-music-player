@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Download, Package } from '@lucide/svelte';
   import BeetsMaintenance from './BeetsMaintenance.svelte';
+  import BeetsMarket from './BeetsMarket.svelte';
   import ImportPanel from './ImportPanel.svelte';
   import Button from './ui/Button.svelte';
   import type { BeetsInstallTrack } from '../lib/ipc';
@@ -154,5 +155,7 @@
       </summary>
       <BeetsMaintenance />
     </details>
+
+    <BeetsMarket />
   {/if}
 </div>

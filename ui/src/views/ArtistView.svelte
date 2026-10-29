@@ -3,6 +3,7 @@
   import Icon from '../components/Icon.svelte';
   import Header from '../components/content/Header.svelte';
   import Button from '../components/ui/Button.svelte';
+  import EmptyState from '../components/ui/EmptyState.svelte';
   import TrackListPanel from '../components/TrackListPanel.svelte';
   import { formatDurationLong } from '../lib/format';
   import { facets } from '../stores/facets.svelte';
@@ -67,11 +68,11 @@
 -->
 <TrackListPanel canSort={true} removeLabel="从曲库中删除" showFilter={false} disableArtistLink={true}>
   {#snippet empty()}
-    <div class="empty">
-      <strong>这位艺人没有曲目</strong>
-      <span>曲目可能已被移出曲库</span>
-      <Button onclick={() => nav.go({ kind: 'browse', view: 'artists' })}>返回艺人</Button>
-    </div>
+    <EmptyState title="这位艺人没有曲目" hint="曲目可能已被移出曲库">
+      {#snippet action()}
+        <Button onclick={() => nav.go({ kind: 'browse', view: 'artists' })}>返回艺人</Button>
+      {/snippet}
+    </EmptyState>
   {/snippet}
 </TrackListPanel>
 

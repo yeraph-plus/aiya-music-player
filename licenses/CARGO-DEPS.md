@@ -1,9 +1,9 @@
 # Rust 依赖清单（自动生成，勿手改）
 
-生成时间：2026-10-23　条目数：525
+生成时间：2026-10-29　条目数：567
 生成命令：`node tools/gen-notices.mjs`
 
-本仓库自有的 5 个 crate（aiya-audio-host@0.1.0、aiya-audio@0.1.0、aiya-data@0.1.0、aiya-player@0.1.0、aiya@0.1.0）以 GPL-3.0-or-later 发布，
+本仓库自有的 6 个 crate（aiya-audio-host@0.1.0、aiya-audio@0.1.0、aiya-beets-client@0.1.0、aiya-data@0.1.0、aiya-player@0.1.0、aiya@0.1.0）以 GPL-3.0-or-later 发布，
 不在此表内。下表为 crates.io 上的第三方依赖，均已静态链接进 `aiya.exe`
 或 `aiya-audio-host.exe`。
 
@@ -11,18 +11,19 @@
 
 | 许可 | 条目数 |
 |---|---|
-| MIT OR Apache-2.0 | 228 |
-| MIT | 127 |
-| Apache-2.0 OR MIT | 48 |
+| MIT OR Apache-2.0 | 253 |
+| MIT | 133 |
+| Apache-2.0 OR MIT | 49 |
 | MIT/Apache-2.0 | 19 |
+| MPL-2.0 | 18 |
 | Unicode-3.0 | 18 |
 | Zlib OR Apache-2.0 OR MIT | 17 |
-| MPL-2.0 | 16 |
-| Unlicense OR MIT | 10 |
+| Unlicense OR MIT | 11 |
 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 5 |
+| BSD-3-Clause | 4 |
 | Apache-2.0/MIT | 4 |
 | MIT OR Apache-2.0 OR Zlib | 4 |
-| BSD-3-Clause | 3 |
+| ISC | 3 |
 | MIT / Apache-2.0 | 2 |
 | Zlib | 2 |
 | MIT OR Zlib OR Apache-2.0 | 2 |
@@ -31,6 +32,7 @@
 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | 2 |
 | Unlicense/MIT | 2 |
 | Apache-2.0 | 2 |
+| CDLA-Permissive-2.0 | 2 |
 | 0BSD OR MIT OR Apache-2.0 | 1 |
 | BSD-3-Clause AND MIT | 1 |
 | BSD-3-Clause/MIT | 1 |
@@ -38,7 +40,8 @@
 | CC0-1.0 OR MIT-0 OR Apache-2.0 | 1 |
 | (Apache-2.0 OR MIT) AND BSD-3-Clause | 1 |
 | Apache-2.0 / MIT | 1 |
-| ISC | 1 |
+| Apache-2.0 AND ISC | 1 |
+| Apache-2.0 OR ISC OR MIT | 1 |
 | Apache-2.0 WITH LLVM-exception | 1 |
 | (MIT OR Apache-2.0) AND Unicode-3.0 | 1 |
 
@@ -95,6 +98,7 @@
 | cc | 1.9.0 | MIT OR Apache-2.0 | github.com/rust-lang/cc-rs |
 | cesu8 | 1.1.0 | Apache-2.0/MIT | github.com/emk/cesu8-rs |
 | cfb | 0.14.0 | MIT | github.com/mdsteele/rust-cfb |
+| cfg_aliases | 0.2.2 | MIT | github.com/katharostech/cfg_aliases |
 | cfg-expr | 0.15.8 | MIT OR Apache-2.0 | github.com/EmbarkStudios/cfg-expr |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 | github.com/rust-lang/cfg-if |
 | chrono | 0.4.45 | MIT OR Apache-2.0 | github.com/chronotope/chrono |
@@ -115,6 +119,8 @@
 | cpufeatures | 0.2.17 | MIT OR Apache-2.0 | github.com/RustCrypto/utils |
 | crc32fast | 1.5.3 | MIT OR Apache-2.0 | github.com/srijs/rust-crc32fast |
 | crossbeam-channel | 0.5.17 | MIT OR Apache-2.0 | github.com/crossbeam-rs/crossbeam |
+| crossbeam-deque | 0.8.8 | MIT OR Apache-2.0 | github.com/crossbeam-rs/crossbeam |
+| crossbeam-epoch | 0.9.21 | MIT OR Apache-2.0 | github.com/crossbeam-rs/crossbeam |
 | crossbeam-utils | 0.8.23 | MIT OR Apache-2.0 | github.com/crossbeam-rs/crossbeam |
 | crypto-common | 0.1.7 | MIT OR Apache-2.0 | github.com/RustCrypto/traits |
 | cssparser | 0.37.0 | MPL-2.0 | github.com/servo/rust-cssparser |
@@ -146,6 +152,7 @@
 | dtoa-short | 0.3.5 | MPL-2.0 | github.com/upsuper/dtoa-short |
 | dunce | 1.0.5 | CC0-1.0 OR MIT-0 OR Apache-2.0 | gitlab.com/kornelski/dunce |
 | dyn-clone | 1.0.20 | MIT OR Apache-2.0 | github.com/dtolnay/dyn-clone |
+| either | 1.19.0 | MIT OR Apache-2.0 | github.com/rayon-rs/either |
 | embed_plist | 1.2.2 | MIT OR Apache-2.0 | github.com/nvzqz/embed-plist-rs |
 | embed-resource | 3.0.12 | MIT | github.com/nabijaczleweli/rust-embed-resource |
 | encoding_rs | 0.8.42 | (Apache-2.0 OR MIT) AND BSD-3-Clause | github.com/hsivonen/encoding_rs |
@@ -190,6 +197,7 @@
 | gdkx11 | 0.18.2 | MIT | github.com/gtk-rs/gtk3-rs |
 | gdkx11-sys | 0.18.2 | MIT | github.com/gtk-rs/gtk3-rs |
 | generic-array | 0.14.7 | MIT | github.com/fizyk20/generic-array.git |
+| getrandom | 0.2.17 | MIT OR Apache-2.0 | github.com/rust-random/getrandom |
 | getrandom | 0.3.4 | MIT OR Apache-2.0 | github.com/rust-random/getrandom |
 | getrandom | 0.4.3 | MIT OR Apache-2.0 | github.com/rust-random/getrandom |
 | gif | 0.14.2 | MIT OR Apache-2.0 | github.com/image-rs/image-gif |
@@ -269,6 +277,7 @@
 | log | 0.4.34 | MIT OR Apache-2.0 | github.com/rust-lang/log |
 | malloc_buf | 0.0.6 | MIT | github.com/SSheldon/malloc_buf |
 | markup5ever | 0.39.0 | MIT OR Apache-2.0 | github.com/servo/html5ever |
+| matchers | 0.2.0 | MIT | github.com/hawkw/matchers |
 | memchr | 2.8.3 | Unlicense OR MIT | github.com/BurntSushi/memchr |
 | memoffset | 0.9.1 | MIT | github.com/Gilnaa/memoffset |
 | mime | 0.3.17 | MIT OR Apache-2.0 | github.com/hyperium/mime |
@@ -283,9 +292,12 @@
 | ndk-context | 0.1.1 | MIT OR Apache-2.0 | github.com/rust-windowing/android-ndk-rs |
 | ndk-sys | 0.6.0+11769913 | MIT OR Apache-2.0 | github.com/rust-mobile/ndk |
 | new_debug_unreachable | 1.0.6 | MIT | github.com/mbrubeck/rust-debug-unreachable |
+| nix | 0.31.3 | MIT | github.com/nix-rust/nix |
 | nu-ansi-term | 0.50.3 | MIT | github.com/nushell/nu-ansi-term |
 | num_enum | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 | github.com/illicitonion/num_enum |
 | num_enum_derive | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 | github.com/illicitonion/num_enum |
+| num_threads | 0.1.8 | MIT OR Apache-2.0 | github.com/jhpratt/num_threads |
+| num-complex | 0.4.6 | MIT OR Apache-2.0 | github.com/rust-num/num-complex |
 | num-conv | 0.2.2 | MIT OR Apache-2.0 | github.com/jhpratt/num-conv |
 | num-integer | 0.1.47 | MIT OR Apache-2.0 | github.com/rust-num/num-integer |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 | github.com/rust-num/num-traits |
@@ -334,6 +346,7 @@
 | potential_utf | 0.1.6 | Unicode-3.0 | github.com/unicode-org/icu4x |
 | powerfmt | 0.2.1 | MIT OR Apache-2.0 | github.com/jhpratt/powerfmt |
 | precomputed-hash | 0.1.1 | MIT | github.com/emilio/precomputed-hash |
+| primal-check | 0.3.4 | MIT OR Apache-2.0 | github.com/huonw/primal |
 | proc-macro-crate | 1.3.1 | MIT OR Apache-2.0 | github.com/bkchr/proc-macro-crate |
 | proc-macro-crate | 2.0.2 | MIT OR Apache-2.0 | github.com/bkchr/proc-macro-crate |
 | proc-macro-crate | 3.5.0 | MIT OR Apache-2.0 | github.com/bkchr/proc-macro-crate |
@@ -347,6 +360,8 @@
 | r-efi | 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | github.com/r-efi/r-efi |
 | r-efi | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | github.com/r-efi/r-efi |
 | raw-window-handle | 0.6.2 | MIT OR Apache-2.0 OR Zlib | github.com/rust-windowing/raw-window-handle |
+| rayon | 1.12.0 | MIT OR Apache-2.0 | github.com/rayon-rs/rayon |
+| rayon-core | 1.13.0 | MIT OR Apache-2.0 | github.com/rayon-rs/rayon |
 | redox_syscall | 0.5.18 | MIT | gitlab.redox-os.org/redox-os/syscall |
 | redox_users | 0.5.3 | MIT | gitlab.redox-os.org/redox-os/users |
 | ref-cast | 1.0.27 | MIT OR Apache-2.0 | github.com/dtolnay/ref-cast |
@@ -356,11 +371,16 @@
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 | github.com/rust-lang/regex |
 | reqwest | 0.13.5 | MIT OR Apache-2.0 | github.com/seanmonstar/reqwest |
 | rfd | 0.16.1 | MIT | github.com/PolyMeilex/rfd |
+| ring | 0.17.14 | Apache-2.0 AND ISC | github.com/briansmith/ring |
 | rsqlite-vfs | 0.1.1 | MIT |  |
 | rusqlite | 0.40.2 | MIT | github.com/rusqlite/rusqlite |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 | github.com/djc/rustc-version-rs |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT | github.com/rust-lang/rustc-hash |
+| rustfft | 6.4.1 | MIT OR Apache-2.0 | github.com/ejmahler/RustFFT |
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | github.com/bytecodealliance/rustix |
+| rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT | github.com/rustls/rustls |
+| rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 | github.com/rustls/pki-types |
+| rustls-webpki | 0.103.16 | ISC | github.com/rustls/webpki |
 | rustversion | 1.0.23 | MIT OR Apache-2.0 | github.com/dtolnay/rustversion |
 | same-file | 1.0.6 | Unlicense/MIT | github.com/BurntSushi/same-file |
 | schemars | 0.8.22 | MIT | github.com/GREsau/schemars |
@@ -402,15 +422,19 @@
 | sqlite-wasm-rs | 0.5.5 | MIT | github.com/Spxg/sqlite-wasm-rs |
 | stable_deref_trait | 1.2.1 | MIT OR Apache-2.0 | github.com/storyyeller/stable_deref_trait |
 | static_vcruntime | 3.0.0 | MIT OR Apache-2.0 OR Zlib | github.com/ChrisDenton/static_vcruntime |
+| strength_reduce | 0.2.4 | MIT OR Apache-2.0 | github.com/ejmahler/strength_reduce |
 | string_cache | 0.9.0 | MIT OR Apache-2.0 | github.com/servo/string-cache |
 | string_cache_codegen | 0.6.1 | MIT OR Apache-2.0 | github.com/servo/string-cache |
 | strsim | 0.11.1 | MIT | github.com/rapidfuzz/strsim-rs |
+| subtle | 2.6.1 | BSD-3-Clause | github.com/dalek-cryptography/subtle |
 | swift-rs | 1.0.9 | MIT OR Apache-2.0 | github.com/Brendonovich/swift-rs |
 | symphonia | 0.5.5 | MPL-2.0 | github.com/pdeljanov/Symphonia |
 | symphonia-bundle-flac | 0.5.5 | MPL-2.0 | github.com/pdeljanov/Symphonia |
 | symphonia-bundle-mp3 | 0.5.5 | MPL-2.0 | github.com/pdeljanov/Symphonia |
 | symphonia-codec-aac | 0.5.5 | MPL-2.0 | github.com/pdeljanov/Symphonia |
+| symphonia-codec-alac | 0.5.5 | MPL-2.0 | github.com/pdeljanov/Symphonia |
 | symphonia-codec-pcm | 0.5.5 | MPL-2.0 | github.com/pdeljanov/Symphonia |
+| symphonia-codec-vorbis | 0.5.5 | MPL-2.0 | github.com/pdeljanov/Symphonia |
 | symphonia-core | 0.5.5 | MPL-2.0 | github.com/pdeljanov/Symphonia |
 | symphonia-format-isomp4 | 0.5.5 | MPL-2.0 | github.com/pdeljanov/Symphonia |
 | symphonia-format-ogg | 0.5.5 | MPL-2.0 | github.com/pdeljanov/Symphonia |
@@ -440,6 +464,7 @@
 | tauri-winres | 0.3.7 | MIT | github.com/tauri-apps/winres |
 | tempfile | 3.27.0 | MIT OR Apache-2.0 | github.com/Stebalien/tempfile |
 | tendril | 0.5.1 | MIT OR Apache-2.0 | github.com/servo/html5ever |
+| termcolor | 1.4.1 | Unlicense OR MIT | github.com/BurntSushi/termcolor |
 | thiserror | 1.0.69 | MIT OR Apache-2.0 | github.com/dtolnay/thiserror |
 | thiserror | 2.0.21 | MIT OR Apache-2.0 | github.com/dtolnay/thiserror |
 | thiserror-impl | 1.0.69 | MIT OR Apache-2.0 | github.com/dtolnay/thiserror |
@@ -470,13 +495,19 @@
 | tracing-core | 0.1.36 | MIT | github.com/tokio-rs/tracing |
 | tracing-log | 0.2.0 | MIT | github.com/tokio-rs/tracing |
 | tracing-subscriber | 0.3.23 | MIT | github.com/tokio-rs/tracing |
+| transpose | 0.2.3 | MIT OR Apache-2.0 | github.com/ejmahler/transpose |
 | tray-icon | 0.25.1 | MIT OR Apache-2.0 | github.com/tauri-apps/tray-icon |
 | try-lock | 0.2.5 | MIT | github.com/seanmonstar/try-lock |
+| ts-rs | 12.0.1 | MIT | github.com/Aleph-Alpha/ts-rs |
+| ts-rs-macros | 12.0.1 | MIT | github.com/Aleph-Alpha/ts-rs |
+| typed-path | 0.13.0 | MIT OR Apache-2.0 | github.com/chipsenkbeil/typed-path |
 | typeid | 1.0.3 | MIT OR Apache-2.0 | github.com/dtolnay/typeid |
 | typenum | 1.20.1 | MIT OR Apache-2.0 | github.com/paholg/typenum |
 | uds_windows | 1.2.1 | MIT | github.com/haraldh/rust_uds_windows |
 | unicode-ident | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 | github.com/dtolnay/unicode-ident |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 | github.com/unicode-rs/unicode-segmentation |
+| untrusted | 0.9.0 | ISC | github.com/briansmith/untrusted |
+| ureq | 2.12.1 | MIT OR Apache-2.0 | github.com/algesten/ureq |
 | url | 2.5.8 | MIT OR Apache-2.0 | github.com/servo/rust-url |
 | urlpattern | 0.6.0 | MIT | github.com/denoland/rust-urlpattern |
 | utf8_iter | 1.0.4 | Apache-2.0 OR MIT | github.com/hsivonen/utf8_iter |
@@ -503,6 +534,8 @@
 | web-time | 1.1.0 | MIT OR Apache-2.0 | github.com/daxpedda/web-time |
 | webkit2gtk | 2.0.2 | MIT | github.com/tauri-apps/webkit2gtk-rs |
 | webkit2gtk-sys | 2.0.2 | MIT | github.com/tauri-apps/webkit2gtk-rs |
+| webpki-roots | 0.26.11 | CDLA-Permissive-2.0 | github.com/rustls/webpki-roots |
+| webpki-roots | 1.0.11 | CDLA-Permissive-2.0 | github.com/rustls/webpki-roots |
 | webview2-com | 0.39.1 | MIT | github.com/wravery/webview2-rs |
 | webview2-com-macros | 0.8.1 | MIT | github.com/wravery/webview2-rs |
 | webview2-com-sys | 0.39.1 | MIT | github.com/wravery/webview2-rs |
@@ -515,19 +548,27 @@
 | windows | 0.44.0 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows | 0.62.2 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_aarch64_gnullvm | 0.42.2 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
+| windows_aarch64_gnullvm | 0.52.6 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_aarch64_gnullvm | 0.53.1 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_aarch64_msvc | 0.42.2 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
+| windows_aarch64_msvc | 0.52.6 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_aarch64_msvc | 0.53.1 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_i686_gnu | 0.42.2 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
+| windows_i686_gnu | 0.52.6 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_i686_gnu | 0.53.1 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
+| windows_i686_gnullvm | 0.52.6 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_i686_gnullvm | 0.53.1 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_i686_msvc | 0.42.2 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
+| windows_i686_msvc | 0.52.6 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_i686_msvc | 0.53.1 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_x86_64_gnu | 0.42.2 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
+| windows_x86_64_gnu | 0.52.6 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_x86_64_gnu | 0.53.1 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_x86_64_gnullvm | 0.42.2 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
+| windows_x86_64_gnullvm | 0.52.6 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_x86_64_gnullvm | 0.53.1 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_x86_64_msvc | 0.42.2 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
+| windows_x86_64_msvc | 0.52.6 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows_x86_64_msvc | 0.53.1 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows-collections | 0.3.2 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows-core | 0.62.2 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
@@ -539,9 +580,11 @@
 | windows-result | 0.4.1 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows-strings | 0.5.1 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows-sys | 0.45.0 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
+| windows-sys | 0.52.0 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows-sys | 0.60.2 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows-sys | 0.61.2 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows-targets | 0.42.2 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
+| windows-targets | 0.52.6 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows-targets | 0.53.5 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows-threading | 0.2.1 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows-version | 0.1.7 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
@@ -561,9 +604,11 @@
 | zcheapstr | 1.1.0 | MIT | github.com/z-galaxy/zcheapstr/ |
 | zerofrom | 0.1.8 | Unicode-3.0 | github.com/unicode-org/icu4x |
 | zerofrom-derive | 0.1.8 | Unicode-3.0 | github.com/unicode-org/icu4x |
+| zeroize | 1.9.1 | Apache-2.0 OR MIT | github.com/RustCrypto/utils |
 | zerotrie | 0.2.5 | Unicode-3.0 | github.com/unicode-org/icu4x |
 | zerovec | 0.11.9 | Unicode-3.0 | github.com/unicode-org/icu4x |
 | zerovec-derive | 0.11.7 | Unicode-3.0 | github.com/unicode-org/icu4x |
+| zip | 9.1.3 | MIT | github.com/zip-rs/zip2 |
 | zlib-rs | 0.6.8 | Zlib | github.com/trifectatechfoundation/zlib-rs |
 | zmij | 1.0.23 | MIT | github.com/dtolnay/zmij |
 | zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib | github.com/etemesi254/zune-image |

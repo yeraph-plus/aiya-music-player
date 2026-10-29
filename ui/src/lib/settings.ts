@@ -97,6 +97,15 @@ export interface AppSettings {
    * （再短就该上文件监听了，那是另一套东西）。
    */
   refreshSeconds: number;
+  /**
+   * 播放记录保留周期（天）。0 = 永久。
+   *
+   * 2026-10-28 拍板：最近播放的记录范围收敛到这一个设置——history 表
+   * 只存周期内的行（宿主在启动 / 每次写历史 / 改设置时裁剪），防止
+   * 重度使用一年堆几十万行。「最近播放」tab、常听榜都基于裁剪后的
+   * history，自动遵循；筛选器不再另设"上次播放"档（功能重叠）。
+   */
+  historyDays: number;
   /** 只存覆盖项：没写的动作走 `DEFAULT_SHORTCUTS`（改默认值不冲用户自定义） */
   shortcuts: Partial<Record<ShortcutAction, string>>;
   /**
@@ -126,6 +135,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   closeToTray: false,
   // 30 秒：外部改标签/搬文件能在半分钟内体现，而一次增量扫描只有几十毫秒
   refreshSeconds: 30,
+  // 90 天：轻量用户一年也不会堆到哪儿去，重度用户也有明确的"还在听"语义
+  historyDays: 90,
   shortcuts: {},
   // 共享 + 200ms + 事件驱动：最不容易出事的组合。独占要用户主动开，
   // 因为它会锁住设备（别的程序放不出声）。

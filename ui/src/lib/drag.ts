@@ -65,13 +65,32 @@ export function startRowDrag(options: RowDragOptions): void {
 
   const totalDelta = (): number => lastClientY - startY + scrollOffset;
 
+  /**
+   * 边缘自动滚动的自续循环：只要指针停在边缘带内，rAF 每帧排下一帧，
+   * 滚动不依赖 pointermove 继续（按住不动也要滚到头）；离开边缘带即停。
+   * 滚动会改变 totalDelta，插入线位置要同步重算，不然行在滚而线停在原地。
+   */
   const tick = (): void => {
     raf = 0;
     if (!scroller || !active) return;
     const rect = scroller.getBoundingClientRect();
-    if (lastClientY < rect.top + EDGE) scroller.scrollTop -= SCROLL_STEP;
-    else if (lastClientY > rect.bottom - EDGE) scroller.scrollTop += SCROLL_STEP;
+    const atTop = lastClientY < rect.top + EDGE;
+    const atBottom = lastClientY > rect.bottom - EDGE;
+    if (!atTop && !atBottom) return;
+    scroller.scrollTop += atTop ? -SCROLL_STEP : SCROLL_STEP;
     scrollOffset = scroller.scrollTop - startScrollTop;
+    to = dropIndex(index, totalDelta(), rowHeight, count);
+    onState({ from: index, to, active: true });
+    raf = requestAnimationFrame(tick);
+  };
+
+  /** 指针进入边缘带时启动循环（已在跑则不动） */
+  const ensureTicker = (): void => {
+    if (raf || !scroller || !active) return;
+    const rect = scroller.getBoundingClientRect();
+    if (lastClientY < rect.top + EDGE || lastClientY > rect.bottom - EDGE) {
+      raf = requestAnimationFrame(tick);
+    }
   };
 
   const onMove = (moveEvent: PointerEvent): void => {
@@ -85,13 +104,7 @@ export function startRowDrag(options: RowDragOptions): void {
     moveEvent.preventDefault();
     to = dropIndex(index, delta, rowHeight, count);
     onState({ from: index, to, active: true });
-
-    if (!raf && scroller) {
-      const rect = scroller.getBoundingClientRect();
-      if (lastClientY < rect.top + EDGE || lastClientY > rect.bottom - EDGE) {
-        raf = requestAnimationFrame(tick);
-      }
-    }
+    ensureTicker();
   };
 
   const finish = (commit: boolean): void => {

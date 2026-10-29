@@ -89,14 +89,18 @@ export function playlistMenuItems(
 ): MenuItem[] {
   return [
     { label: '播放', action: actions.play },
-    { label: '重命名', action: actions.rename },
+    // 智能歌单的"重命名"入口同一个模态框带出规则编辑器（2026-10-28 统一模态框）
+    { label: playlist.kind === 'smart' ? '编辑规则' : '重命名', action: actions.rename },
     { label: '上移', action: actions.moveUp, disabled: position.index <= 0 },
     {
       label: '下移',
       action: actions.moveDown,
       disabled: position.index < 0 || position.index >= position.total - 1,
     },
-    { label: '清空', action: actions.clear, disabled: playlist.trackCount === 0 },
+    // 清空只对手动歌单有意义：智能歌单的曲目是规则的投影（后端也会拒绝）
+    ...(playlist.kind === 'smart'
+      ? []
+      : [{ label: '清空', action: actions.clear, disabled: playlist.trackCount === 0 }]),
     { label: '删除', action: actions.remove, danger: true },
   ];
 }
