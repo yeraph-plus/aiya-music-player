@@ -61,6 +61,26 @@ export function scrollTopForRow(
   return scrollTop;
 }
 
+/**
+ * 把第 index 行滚到视口中部（「定位到正在播放」按钮用）。
+ *
+ * 与 `scrollTopForRow` 的差别：那个是跟随语义——行已在视野内就不动、
+ * 越界才拉回边缘；这个是跳转语义——目标通常在视野外很远，居中放置
+ * 给用户上下文（能看到目标行前后各几行）。结果钳在合法滚动范围内。
+ */
+export function centeredScrollTopForRow(
+  index: number,
+  rowHeight: number,
+  viewportHeight: number,
+  total: number,
+  contentOffset = 0,
+): number {
+  if (index < 0 || total <= 0 || rowHeight <= 0) return 0;
+  const rowTop = contentOffset + index * rowHeight;
+  const maxScroll = Math.max(0, contentOffset + total * rowHeight - viewportHeight);
+  return clamp(rowTop + rowHeight / 2 - viewportHeight / 2, 0, maxScroll);
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }

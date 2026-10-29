@@ -36,28 +36,21 @@ fn write_tx(conn: &mut Connection) -> DbResult<rusqlite::Transaction<'_>> {
 /// 与旧仓库一致：名称按字符截断到 80，避免把 UTF-8 多字节字符切成半个。
 pub const MAX_NAME_CHARS: usize = 80;
 
-/// 加歌位置语义。`Append` = 队尾追加（UI 默认）；`Next` = 插到队首。
-/// 歌单本身没有"当前播放游标"，所以 `next` 只能解释成"接下来就听这些"。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AddMode {
-    Append,
-    Next,
-}
-
-impl AddMode {
-    pub fn parse(raw: Option<&str>) -> DbResult<Self> {
-        match raw.map(str::trim) {
-            None | Some("") | Some("append") => Ok(AddMode::Append),
-            Some("next") => Ok(AddMode::Next),
-            Some(other) => Err(DbError::Custom(format!("未知的加歌模式: {other}"))),
-        }
-    }
-}
-
+/// 加歌位置语义（2026-10-30 硬迭代）：所有"添加到歌单"一律**首行插入**——
+/// 最后入库的内容在最前，歌单固定按入库倒序工作（新块整体顶到头部，
+/// 块内保持入参顺序）。旧的双模式（Append/Next）随本次迭代删除。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AddOutcome {
     pub added: i64,
     pub skipped: i64,
+}
+
+/// 动态歌单刷新结果：`added` = 本次新追加的匹配数；`total` = 刷新后表内
+/// 总曲目数（追加只进不出，total 只增不减）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RefreshOutcome {
+    pub added: i64,
+    pub total: i64,
 }
 
 /// 名称规范化 + 截断。空名直接报错（UI 侧也有校验，但命令层不能依赖它）。
@@ -100,25 +93,27 @@ pub fn create(
          ON CONFLICT(id) DO NOTHING",
         params![playlist_id, name, name_norm, now, next_sort],
     )?;
-    let outcome = append_tracks(&tx, playlist_id, track_ids, now, AddMode::Append)?;
+    let outcome = insert_head(&tx, playlist_id, track_ids, now)?;
     touch(&tx, playlist_id, now)?;
     tx.commit().map_err(DbError::Sql)?;
     Ok(outcome)
 }
 
-/// 建动态歌单（docs/40 §1 方案 A）：曲目不物化，规则存 `rule_json`。
-/// 规则在入库前先编译一遍（`SmartPlan::parse`）——写库时校验比读库时炸友好得多。
+/// 建动态歌单（2026-10-30 硬迭代：物化模型）——曲目**入库**（playlist_items），
+/// 规则存 `rule_json` 供刷新/重算；与普通歌单能力完全相同（拖拽/删曲/混入）。
+/// 建单即按规则物化一次：命中的曲目按确定性顺序（title_norm、id）写入首部。
+/// 规则在入库前先编译一遍（`SmartPlan::from_value`）——写库时校验比读库时炸友好得多。
 pub fn create_smart(
     conn: &mut Connection,
     playlist_id: &str,
     name: &str,
     rule: &serde_json::Value,
     now: i64,
-) -> DbResult<()> {
+) -> DbResult<AddOutcome> {
     let name_norm = norm(name);
-    // 校验（存 canonical 序列化，避免同样的规则两种写法）
-    crate::smart::SmartPlan::from_value(rule)?;
+    let plan = crate::smart::SmartPlan::from_value(rule)?;
     let rule_json = serde_json::to_string(rule).map_err(|e| DbError::Custom(e.to_string()))?;
+    let matched = plan.matched_ids(conn)?;
     let tx = write_tx(conn)?;
     let next_sort: i64 = tx.query_row(
         "SELECT COALESCE(MAX(sort_position), -1) + 1 FROM playlists",
@@ -131,13 +126,15 @@ pub fn create_smart(
          ON CONFLICT(id) DO NOTHING",
         params![playlist_id, name, name_norm, now, next_sort, rule_json],
     )?;
+    let outcome = insert_head(&tx, playlist_id, &matched, now)?;
     touch(&tx, playlist_id, now)?;
     tx.commit().map_err(DbError::Sql)?;
-    Ok(())
+    Ok(outcome)
 }
 
-/// 更新动态歌单的规则。返回 false = 歌单不存在；手动歌单 = `Custom` 错误
-///（手动/智能互不转换，docs/40 §1.4 拍板）。
+/// 更新动态歌单的规则：规则落库 + **替换重算**（清空现有曲目、按新规则重新
+/// 物化——所见即所得；日常增量走 refresh_smart）。返回 false = 歌单不存在；
+/// 手动歌单 = `Custom` 错误（手动/动态互不转换，docs/40 §1.4 拍板）。
 pub fn set_rule(
     conn: &mut Connection,
     playlist_id: &str,
@@ -145,7 +142,7 @@ pub fn set_rule(
     now: i64,
 ) -> DbResult<bool> {
     // 校验在写库前（与 create_smart 同理）
-    crate::smart::SmartPlan::from_value(rule)?;
+    let plan = crate::smart::SmartPlan::from_value(rule)?;
     let rule_json = serde_json::to_string(rule).map_err(|e| DbError::Custom(e.to_string()))?;
     let kind: Option<String> = match conn
         .query_row("SELECT kind FROM playlists WHERE id = ?1", [playlist_id], |r| r.get(0))
@@ -158,13 +155,70 @@ pub fn set_rule(
         None => Ok(false),
         Some("manual") => Err(DbError::Custom("手动歌单不支持设置规则".into())),
         Some(_) => {
-            conn.execute(
+            let matched = plan.matched_ids(conn)?;
+            let tx = write_tx(conn)?;
+            tx.execute(
                 "UPDATE playlists SET rule_json = ?2, updated_at = ?3 WHERE id = ?1",
                 params![playlist_id, rule_json, now],
             )?;
+            tx.execute("DELETE FROM playlist_items WHERE playlist_id = ?1", [playlist_id])?;
+            insert_head(&tx, playlist_id, &matched, now)?;
+            touch(&tx, playlist_id, now)?;
+            tx.commit().map_err(DbError::Sql)?;
             Ok(true)
         }
     }
+}
+
+/// 刷新动态歌单：重跑规则，**只追加**——命中的曲目里不在表内的，作为新块
+/// 插入首部（块内规则顺序）；已存在的曲目原位不动（策展语义：用户的排序、
+/// 手动混入的歌都不被打乱），也绝不删除已不匹配的行。刷新后计数只增不减。
+/// 歌单不存在 → `None`；手动歌单 → `Custom` 错误。
+pub fn refresh_smart(
+    conn: &mut Connection,
+    playlist_id: &str,
+    now: i64,
+) -> DbResult<Option<RefreshOutcome>> {
+    let row: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT kind, rule_json FROM playlists WHERE id = ?1",
+            [playlist_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })
+        .map_err(DbError::Sql)?;
+    let Some((kind, rule_json)) = row else {
+        return Ok(None);
+    };
+    if kind != "smart" {
+        return Err(DbError::Custom("只有动态歌单支持刷新".into()));
+    }
+    let plan = crate::smart::SmartPlan::parse(rule_json.as_deref())?;
+    let matched = plan.matched_ids(conn)?;
+
+    let tx = write_tx(conn)?;
+    let existing: HashSet<String> = {
+        let mut stmt =
+            tx.prepare("SELECT track_id FROM playlist_items WHERE playlist_id = ?1")?;
+        let rows = stmt.query_map([playlist_id], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<HashSet<_>>>()?
+    };
+    // 命中里剔除已在表内的（只加不删）；matched 已按确定性顺序排好
+    let fresh: Vec<String> =
+        matched.into_iter().filter(|id| !existing.contains(id)).collect();
+    let outcome = insert_head(&tx, playlist_id, &fresh, now)?;
+    let total: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM playlist_items WHERE playlist_id = ?1",
+        [playlist_id],
+        |r| r.get(0),
+    )?;
+    touch(&tx, playlist_id, now)?;
+    tx.commit().map_err(DbError::Sql)?;
+    Ok(Some(RefreshOutcome { added: outcome.added, total }))
 }
 
 pub fn rename(conn: &Connection, playlist_id: &str, name: &str, now: i64) -> DbResult<bool> {
@@ -186,7 +240,6 @@ pub fn clear(conn: &mut Connection, playlist_id: &str, now: i64) -> DbResult<boo
     if !exists(conn, playlist_id)? {
         return Ok(false);
     }
-    ensure_manual(conn, playlist_id)?;
     let tx = write_tx(conn)?;
     tx.execute("DELETE FROM playlist_items WHERE playlist_id = ?1", [playlist_id])?;
     touch(&tx, playlist_id, now)?;
@@ -194,36 +247,20 @@ pub fn clear(conn: &mut Connection, playlist_id: &str, now: i64) -> DbResult<boo
     Ok(true)
 }
 
-/// 动态歌单的曲目列表是规则的**投影**——加歌/删歌/排序/清空都没有意义
-/// （改规则才是改内容）。手动歌单这些写操作照旧；守卫放在数据层，命令层
-/// 与未来的新调用方都绕不过去。
-fn ensure_manual(conn: &Connection, playlist_id: &str) -> DbResult<()> {
-    let kind: String = conn.query_row(
-        "SELECT kind FROM playlists WHERE id = ?1",
-        [playlist_id],
-        |r| r.get(0),
-    )?;
-    if kind == "smart" {
-        return Err(DbError::Custom(
-            "动态歌单的曲目由规则决定，不支持手动修改；请编辑歌单规则".into(),
-        ));
-    }
-    Ok(())
-}
-
+/// 动态歌单的曲目列表此前是规则的投影（2026-10-30 硬迭代前）——加歌/删歌/
+/// 排序/清空都被 `ensure_manual` 拦下。物化模型后与普通歌单能力完全相同，
+/// 守卫删除；规则只影响"刷新/重算"两个动作，不影响手动修改。
 pub fn add_tracks(
     conn: &mut Connection,
     playlist_id: &str,
     track_ids: &[String],
-    mode: AddMode,
     now: i64,
 ) -> DbResult<Option<AddOutcome>> {
     if !exists(conn, playlist_id)? {
         return Ok(None);
     }
-    ensure_manual(conn, playlist_id)?;
     let tx = write_tx(conn)?;
-    let outcome = append_tracks(&tx, playlist_id, track_ids, now, mode)?;
+    let outcome = insert_head(&tx, playlist_id, track_ids, now)?;
     touch(&tx, playlist_id, now)?;
     tx.commit().map_err(DbError::Sql)?;
     Ok(Some(outcome))
@@ -240,7 +277,6 @@ pub fn remove_at(
     if !exists(conn, playlist_id)? {
         return Ok(None);
     }
-    ensure_manual(conn, playlist_id)?;
     let tx = write_tx(conn)?;
     let mut items = ordered_item_ids(&tx, playlist_id)?;
     let idx = position as usize;
@@ -265,7 +301,6 @@ pub fn move_item(
     if !exists(conn, playlist_id)? {
         return Ok(None);
     }
-    ensure_manual(conn, playlist_id)?;
     let tx = write_tx(conn)?;
     let mut items = ordered_item_ids(&tx, playlist_id)?;
     let (f, t) = (from as usize, to as usize);
@@ -336,24 +371,22 @@ fn rewrite_positions(conn: &Connection, item_ids: &[String]) -> DbResult<()> {
     Ok(())
 }
 
-fn next_position(conn: &Connection, playlist_id: &str) -> DbResult<i64> {
-    Ok(conn.query_row(
-        "SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_items WHERE playlist_id = ?1",
-        [playlist_id],
-        |r| r.get(0),
-    )?)
-}
-
 /// 追加曲目（去重 + 过滤已从库中删除的 ID）。
 ///
 /// 为什么过滤不存在的曲目而不是让外键报错：UI 的多选可能横跨一次重新扫描，
 /// 传进来的 ID 里混着刚被删掉的曲目；整批报错会让"加入 20 首成功 19 首"变成零。
-fn append_tracks(
+/// 首行插入（2026-10-30 语义）：去重 + 过滤已从库中删除的 ID 后，把新增块
+/// 整体顶到歌单最前（块内保持入参顺序）——最后入库的内容在最前，歌单固定
+/// 按入库倒序工作。先按"实际新增条数"整体后移旧行再插 0..n-1，顺序反了会
+/// position 撞车。
+///
+/// 为什么过滤不存在的曲目而不是让外键报错：UI 的多选可能横跨一次重新扫描，
+/// 传进来的 ID 里混着刚被删掉的曲目；整批报错会让"加入 20 首成功 19 首"变成零。
+fn insert_head(
     conn: &Connection,
     playlist_id: &str,
     track_ids: &[String],
     now: i64,
-    mode: AddMode,
 ) -> DbResult<AddOutcome> {
     let mut outcome = AddOutcome::default();
     if track_ids.is_empty() {
@@ -371,8 +404,6 @@ fn append_tracks(
     // 加歌场景是 N 次往返；ID 超过单批变量上限时分块查。
     let in_library = existing_track_ids(conn, track_ids)?;
 
-    // 先筛出真正要插的（去重/空/不存在都算 skipped），再决定位置 ——
-    // 队首插入要按"实际新增条数"整体后移旧行，先插后移会出现 position 撞车。
     let mut fresh: Vec<&String> = Vec::with_capacity(track_ids.len());
     for tid in track_ids {
         if tid.is_empty() || existing.contains(tid) || !in_library.contains(tid.as_str()) {
@@ -386,16 +417,10 @@ fn append_tracks(
         return Ok(outcome);
     }
 
-    let start = match mode {
-        AddMode::Append => next_position(conn, playlist_id)?,
-        AddMode::Next => {
-            conn.execute(
-                "UPDATE playlist_items SET position = position + ?2 WHERE playlist_id = ?1",
-                params![playlist_id, fresh.len() as i64],
-            )?;
-            0
-        }
-    };
+    conn.execute(
+        "UPDATE playlist_items SET position = position + ?2 WHERE playlist_id = ?1",
+        params![playlist_id, fresh.len() as i64],
+    )?;
 
     // 批量写 prepare 一次循环复用，不为每条重新编译 SQL
     let mut stmt = conn.prepare(
@@ -407,7 +432,7 @@ fn append_tracks(
             ids::playlist_item_id(),
             playlist_id,
             tid.as_str(),
-            start + i as i64,
+            i as i64,
             now
         ])?;
         outcome.added += 1;
@@ -488,11 +513,12 @@ mod tests {
     fn add_tracks_skips_duplicates_and_missing_tracks() {
         let mut conn = fixture();
         create(&mut conn, "p1", "去重", &v(&["t1", "t2"]), 100).unwrap();
-        let out = add_tracks(&mut conn, "p1", &v(&["t2", "t3", "不存在", ""]), AddMode::Append, 200)
+        let out = add_tracks(&mut conn, "p1", &v(&["t2", "t3", "不存在", ""]), 200)
             .unwrap()
             .expect("playlist exists");
         assert_eq!(out, AddOutcome { added: 1, skipped: 3 });
-        assert_eq!(order(&conn, "p1"), v(&["t1", "t2", "t3"]));
+        // 首行插入：新块顶到最前（2026-10-30 语义）
+        assert_eq!(order(&conn, "p1"), v(&["t3", "t1", "t2"]));
     }
 
     /// position 派生 id 的回归点：删掉一项再把同一首加回来，
@@ -503,21 +529,18 @@ mod tests {
         create(&mut conn, "p1", "回来", &v(&["t1", "t2"]), 100).unwrap();
         remove_at(&mut conn, "p1", 0, 200).unwrap().unwrap();
         assert_eq!(order(&conn, "p1"), v(&["t2"]));
-        let out = add_tracks(&mut conn, "p1", &v(&["t1"]), AddMode::Append, 300)
-            .unwrap()
-            .unwrap();
+        let out = add_tracks(&mut conn, "p1", &v(&["t1"]), 300).unwrap().unwrap();
         assert_eq!(out.added, 1, "行 id 撞车会表现为 added=0 而列表没变化");
-        assert_eq!(order(&conn, "p1"), v(&["t2", "t1"]));
+        assert_eq!(order(&conn, "p1"), v(&["t1", "t2"]), "首行插入：t1 回到最前");
         assert_eq!(positions(&conn, "p1"), vec![0, 1]);
     }
 
+    /// 双曲块首行插入：块内保持入参顺序、整块顶到最前（2026-10-30 语义）。
     #[test]
-    fn add_tracks_next_mode_inserts_at_front() {
+    fn add_tracks_inserts_block_at_head_in_input_order() {
         let mut conn = fixture();
-        create(&mut conn, "p1", "下一首", &v(&["t1", "t2"]), 100).unwrap();
-        add_tracks(&mut conn, "p1", &v(&["t3", "t4"]), AddMode::Next, 200)
-            .unwrap()
-            .unwrap();
+        create(&mut conn, "p1", "首插", &v(&["t1", "t2"]), 100).unwrap();
+        add_tracks(&mut conn, "p1", &v(&["t3", "t4"]), 200).unwrap().unwrap();
         assert_eq!(order(&conn, "p1"), v(&["t3", "t4", "t1", "t2"]));
         assert_eq!(positions(&conn, "p1"), vec![0, 1, 2, 3]);
     }
@@ -632,12 +655,117 @@ mod tests {
         assert!(exists(&conn, "a").unwrap());
     }
 
+    /* ---------------- 动态歌单物化（2026-10-30 硬迭代） ---------------- */
+
+    fn smart_rule(album: &str) -> serde_json::Value {
+        serde_json::json!({
+            "all": [{"field": "album", "op": "contains", "value": album}],
+            "sort": "title",
+            "direction": "asc"
+        })
+    }
+
+    fn smart_fixture() -> Connection {
+        let conn = open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO albums (id, title, title_norm) VALUES
+              ('al1','Hits Vol.1','hits vol.1'),
+              ('al2','Hits Vol.2','hits vol.2'),
+              ('al3','别的专辑','别的专辑');
+            INSERT INTO tracks (id,title,title_norm,added_at,path,path_lower,album_id) VALUES
+              ('t1','Alpha','alpha',1,'/m/1.flac','/m/1.flac','al1'),
+              ('t2','Beta','beta',2,'/m/2.flac','/m/2.flac','al2'),
+              ('t3','Gamma','gamma',3,'/m/3.flac','/m/3.flac','al3');
+            "#,
+        )
+        .unwrap();
+        conn
+    }
+
+    /// 建单即物化：命中曲目按确定性顺序进 playlist_items（空规则命中 0 首 = 空表）。
     #[test]
-    fn add_mode_parse_rejects_unknown() {
-        assert_eq!(AddMode::parse(None).unwrap(), AddMode::Append);
-        assert_eq!(AddMode::parse(Some("append")).unwrap(), AddMode::Append);
-        assert_eq!(AddMode::parse(Some("next")).unwrap(), AddMode::Next);
-        assert!(AddMode::parse(Some("front")).is_err());
+    fn create_smart_materializes_matches() {
+        let mut conn = smart_fixture();
+        let out = create_smart(&mut conn, "sp", "Hits", &smart_rule("Hits"), 100).unwrap();
+        assert_eq!(out.added, 2);
+        assert_eq!(order(&conn, "sp"), v(&["t1", "t2"]), "确定性顺序 = title_norm");
+        assert!(exists(&conn, "sp").unwrap());
+
+        let out = create_smart(&mut conn, "sp0", "空", &smart_rule("不存在的专辑"), 100).unwrap();
+        assert_eq!(out.added, 0);
+        assert_eq!(order(&conn, "sp0"), v(&[]));
+    }
+
+    /// 刷新只加不删：新命中的作为新块插入首部，已在表内的原位不动；
+    /// 从此不再匹配的行也保留（策展语义）；手动混入的歌刷新绝不碰。
+    #[test]
+    fn refresh_smart_appends_only_new_matches() {
+        let mut conn = smart_fixture();
+        create_smart(&mut conn, "sp", "Hits", &smart_rule("Hits"), 100).unwrap();
+        // 用户手动把 t3 加进来（非匹配曲目）+ 拖到头部语义下 t3 在最前
+        add_tracks(&mut conn, "sp", &v(&["t3"]), 200).unwrap().unwrap();
+        assert_eq!(order(&conn, "sp"), v(&["t3", "t1", "t2"]));
+
+        // 库里出现了新的命中曲目 t4（t2 改名为不再命中也不影响——只加不删）
+        conn.execute_batch(
+            "INSERT INTO albums (id, title, title_norm) VALUES ('al4','Hits Vol.3','hits vol.3');
+             INSERT INTO tracks (id,title,title_norm,added_at,path,path_lower,album_id) VALUES
+               ('t4','Delta','delta',4,'/m/4.flac','/m/4.flac','al4');",
+        )
+        .unwrap();
+        let out = refresh_smart(&mut conn, "sp", 300).unwrap().unwrap();
+        assert_eq!(out.added, 1);
+        assert_eq!(out.total, 4);
+        // 新块顶到最前，块内规则顺序；既有内容（含手动混入的 t3）原位后移
+        assert_eq!(order(&conn, "sp"), v(&["t4", "t3", "t1", "t2"]));
+
+        // 无新命中 → added 0，顺序不动
+        let out = refresh_smart(&mut conn, "sp", 400).unwrap().unwrap();
+        assert_eq!(out.added, 0);
+        assert_eq!(order(&conn, "sp"), v(&["t4", "t3", "t1", "t2"]));
+    }
+
+    /// 规则替换重算：清空现有曲目、按新规则重新物化（所见即所得）。
+    #[test]
+    fn set_rule_replaces_materialization() {
+        let mut conn = smart_fixture();
+        create_smart(&mut conn, "sp", "Hits", &smart_rule("Hits"), 100).unwrap();
+        add_tracks(&mut conn, "sp", &v(&["t3"]), 200).unwrap().unwrap();
+        assert_eq!(order(&conn, "sp"), v(&["t3", "t1", "t2"]));
+
+        assert!(set_rule(&mut conn, "sp", &smart_rule("别的"), 300).unwrap());
+        assert_eq!(order(&conn, "sp"), v(&["t3"]), "替换重算：旧物化被清掉");
+        assert!(!set_rule(&mut conn, "p-nope", &smart_rule("x"), 300).unwrap());
+        assert!(set_rule(&mut conn, "sp", &serde_json::json!({"all": []}), 400).is_ok());
+    }
+
+    /// 物化后动态歌单与普通歌单能力相同：删曲/重排/清空全部放开。
+    #[test]
+    fn smart_playlist_allows_manual_item_ops() {
+        let mut conn = smart_fixture();
+        create_smart(&mut conn, "sp", "Hits", &smart_rule("Hits"), 100).unwrap();
+        remove_at(&mut conn, "sp", 0, 200).unwrap().unwrap();
+        assert_eq!(order(&conn, "sp"), v(&["t2"]));
+        move_item(&mut conn, "sp", 0, 0, 250).unwrap().unwrap();
+        assert!(clear(&mut conn, "sp", 300).unwrap());
+        assert_eq!(order(&conn, "sp"), v(&[]));
+        // 清空后刷新照常重建
+        let out = refresh_smart(&mut conn, "sp", 400).unwrap().unwrap();
+        assert_eq!(out.added, 2);
+        assert_eq!(order(&conn, "sp"), v(&["t1", "t2"]));
+    }
+
+    /// 手动歌单不支持刷新/规则（与 set_rule 的守卫对称）。
+    #[test]
+    fn refresh_smart_rejects_manual_playlist() {
+        let mut conn = smart_fixture();
+        create(&mut conn, "p1", "手动", &v(&["t1"]), 100).unwrap();
+        assert!(matches!(
+            refresh_smart(&mut conn, "p1", 200),
+            Err(DbError::Custom(_))
+        ));
+        assert!(set_rule(&mut conn, "p1", &smart_rule("x"), 200).is_err());
     }
 
     #[test]

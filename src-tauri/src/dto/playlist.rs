@@ -55,6 +55,18 @@ pub struct PlaylistAddResult {
     pub summary: PlaylistSummary,
 }
 
+/// 刷新动态歌单的结果。`added` = 本次新追加的匹配数；`total` = 刷新后
+/// 表内总曲目数（追加只进不出）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistRefresh {
+    #[ts(type = "number")]
+    pub added: i64,
+    #[ts(type = "number")]
+    pub total: i64,
+}
+
 /// 删除歌单的结果。`deleted = false` 表示本来就不存在（幂等成功）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]

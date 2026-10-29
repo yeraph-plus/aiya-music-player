@@ -2,7 +2,7 @@
 /**
  * 协议镜像同步 / 校验（docs/33 §4.4）。
  *
- * 真源在工具侧（`beets-tool/protocol/v1.schema.json`），播放器仓根镜像一份。
+ * 真源在工具侧（`beets-tool/protocol/v2.schema.json`），播放器仓根镜像一份。
  * 镜像**必须是字节副本**，不是"我以为等价"的重排版本——重排会让 diff 看着
  * 一样、实际 $defs 顺序变了。
  *
@@ -21,9 +21,9 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const SRC = resolve(ROOT, 'beets-tool/protocol/v1.schema.json');
-const MIRROR = resolve(ROOT, 'protocol/aiya-beets-v1.json');
-const META = resolve(ROOT, 'protocol/aiya-beets-v1.meta.json');
+const SRC = resolve(ROOT, 'beets-tool/protocol/v2.schema.json');
+const MIRROR = resolve(ROOT, 'protocol/aiya-beets-v2.json');
+const META = resolve(ROOT, 'protocol/aiya-beets-v2.meta.json');
 const PROTOCOL_PY = resolve(ROOT, 'beets-tool/src/aiya_beets/protocol.py');
 const INIT_PY = resolve(ROOT, 'beets-tool/src/aiya_beets/__init__.py');
 
@@ -51,7 +51,7 @@ if (!isCheck) {
   mkdirSync(dirname(MIRROR), { recursive: true });
   writeFileSync(MIRROR, srcBytes);
   const meta = {
-    source: 'beets-tool/protocol/v1.schema.json',
+    source: 'beets-tool/protocol/v2.schema.json',
     protocolVersion,
     toolVersion,
     tag: `beets-v${toolVersion}`,
@@ -59,7 +59,7 @@ if (!isCheck) {
     note: '字节副本；改协议请改真源后跑 npm run proto:sync，并在 diff 里看变化',
   };
   writeFileSync(META, JSON.stringify(meta, null, 2) + '\n');
-  console.log(`镜像已更新：protocol/aiya-beets-v1.json  sha256=${srcHash.slice(0, 12)}…  v${protocolVersion}`);
+  console.log(`镜像已更新：protocol/aiya-beets-v2.json  sha256=${srcHash.slice(0, 12)}…  v${protocolVersion}`);
   process.exit(0);
 }
 

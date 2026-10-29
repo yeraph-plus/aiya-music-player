@@ -69,7 +69,28 @@ def write_line(payload: dict) -> None:
 
 def emit(evt: dict) -> None:
     """流式事件（进度/专辑/结果）——与响应不同，无 id，靠 type 区分。"""
+    rec = _OP_RECORDER
+    if rec is not None:
+        # v2 幂等登记簿：命令执行期间挂上的收集器在事件出口抄一份账
+        # （终态事件触发落账，见 ops.Recorder）。progress 不记（量大且
+        # 重放无意义）；cancelAck 来自 reader 线程但彼时 recorder 必为 None。
+        rec.on_event(evt)
     write_line(evt)
+
+
+# v2：当前命令的 ops 登记簿收集器。只在主循环派发命令期间非 None；
+# 事件流全在主线程发出，这里不需要锁。
+_OP_RECORDER = None
+
+
+def set_op_recorder(recorder) -> None:
+    """server 派发变更命令时挂上收集器；命令收尾（含异常路径）清掉。"""
+    global _OP_RECORDER
+    _OP_RECORDER = recorder
+
+
+def op_recorder():
+    return _OP_RECORDER
 
 
 # 协议流的真句柄。serve() 里钉死一次，之后 sys.stdout 被换成 stderr。

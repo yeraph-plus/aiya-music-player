@@ -552,36 +552,6 @@ export class MockBackend {
     return { started: true };
   }
 
-  async beetsSync(): Promise<{ started: boolean }> {
-    const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:import', e);
-    await new Promise((r) => setTimeout(r, 120));
-    emit({
-      type: 'librarySynced',
-      matched: this.tracks.length,
-      updated: 0,
-      imported: 0,
-      unchanged: this.tracks.length,
-      orphaned: 0,
-    });
-    // 管线终态跟着走一条：UI 的重拉只认 libraryRefreshed（librarySynced 是
-    // 老消费者的兼容路径）。预览里没有真变化，就报一条 changed:false。
-    emit({
-      type: 'libraryRefreshed',
-      trigger: 'manual',
-      atMs: Date.now(),
-      changed: false,
-      scanned: this.tracks.length,
-      imported: 0,
-      updated: 0,
-      missing: 0,
-      failed: 0,
-      sync: 'ok',
-      elapsedMs: 120,
-      error: null,
-    });
-    return { started: true };
-  }
-
   /**
    * 曲库维护事件流演练（docs/29 批 D）。
    *
@@ -924,7 +894,6 @@ export class MockBackend {
       description: null,
       kind: isSmart ? 'smart' : 'manual',
       ruleJson: isSmart ? JSON.stringify(rule) : null,
-      // 动态歌单的 trackCount 是规则的投影；mock 没有规则查询引擎，给 0（空态可看）
       trackCount: isSmart ? 0 : (trackIds?.length ?? 0),
       durationMs: 0,
       artworkId: null,
@@ -932,9 +901,41 @@ export class MockBackend {
       updatedAtMs: now,
       sortPosition: this.playlists.length,
     };
-    if (!isSmart) this.playlistItems.set(summary.id, [...(trackIds ?? [])]);
+    // 物化模型（2026-10-30）：动态歌单建单即按规则入库，与手动歌单同一张表
+    this.playlistItems.set(summary.id, isSmart ? this.matchRule(rule) : [...(trackIds ?? [])]);
     this.playlists.push(summary);
     return this.syncPlaylist(summary.id) ?? summary;
+  }
+
+  /** 规则求值（mock 版）：字段/操作符与 smart.ts、后端 parse_conds 同一套键 */
+  private matchRule(rule: Record<string, unknown> | undefined): string[] {
+    if (!rule) return [];
+    const conds = (rule['all'] as Array<Record<string, unknown>> | undefined) ?? [];
+    const hits = this.tracks.filter((t) =>
+      conds.every((c) => {
+        const field = String(c['field']);
+        const op = String(c['op']);
+        const value = c['value'];
+        switch (field) {
+          case 'genre': {
+            const v = String(value).toLowerCase();
+            const g = (t.genre ?? '').toLowerCase();
+            return op === 'eq' ? g === v : g.includes(v);
+          }
+          case 'artist':
+            return (t.artist ?? '').toLowerCase().includes(String(value).toLowerCase());
+          case 'album':
+            return (t.album ?? '').toLowerCase().includes(String(value).toLowerCase());
+          case 'year':
+            return t.year != null && (op === 'gte' ? t.year >= Number(value) : t.year <= Number(value));
+          case 'playCount':
+            return op === 'gte' ? t.playCount >= Number(value) : t.playCount <= Number(value);
+          default:
+            return false;
+        }
+      }),
+    );
+    return hits.map((t) => t.id);
   }
 
   playlistSetRule(id: string, rule: Record<string, unknown>): PlaylistSummary | null {
@@ -942,7 +943,22 @@ export class MockBackend {
     if (!p || p.kind !== 'smart') return p ?? null;
     p.ruleJson = JSON.stringify(rule);
     p.updatedAtMs = Date.now();
-    return p;
+    // 替换重算：清空现有曲目、按新规则重新物化（与宿主同语义）
+    this.playlistItems.set(id, this.matchRule(rule));
+    return this.syncPlaylist(id);
+  }
+
+  /** 刷新动态歌单：重跑规则只追加新命中（块保持规则顺序，顶到最前） */
+  playlistRefresh(id: string): { added: number; total: number } {
+    const p = this.playlists.find((x) => x.id === id);
+    if (!p || p.kind !== 'smart') throw new Error('E_NOT_FOUND');
+    const rule = JSON.parse(p.ruleJson ?? '{}') as Record<string, unknown>;
+    const current = this.playlistItems.get(id) ?? [];
+    const known = new Set(current);
+    const fresh = this.matchRule(rule).filter((tid) => !known.has(tid));
+    this.playlistItems.set(id, [...fresh, ...current]);
+    this.syncPlaylist(id);
+    return { added: fresh.length, total: current.length + fresh.length };
   }
 
   /** 按内容表重算计数/时长（真实库是 DB 侧维护，预览手算） */
@@ -981,15 +997,14 @@ export class MockBackend {
     return this.playlists;
   }
 
-  playlistAddTracks(id: string, trackIds: string[], mode?: 'append' | 'next'): PlaylistAddResult {
+  playlistAddTracks(id: string, trackIds: string[]): PlaylistAddResult {
     const p = this.playlists.find((x) => x.id === id);
     if (!p) throw new Error('E_NOT_FOUND');
     const current = this.playlistItems.get(id) ?? [];
     const known = new Set(current);
-    // 去重语义与宿主一致：已在歌单里的算 skipped，不重复插入
+    // 去重语义与宿主一致：已在歌单里的算 skipped；首行插入（块保持入参顺序）
     const fresh = trackIds.filter((tid) => !known.has(tid));
-    const next = mode === 'next' ? [...fresh, ...current] : [...current, ...fresh];
-    this.playlistItems.set(id, next);
+    this.playlistItems.set(id, [...fresh, ...current]);
     const summary = this.syncPlaylist(id) ?? p;
     return { added: fresh.length, skipped: trackIds.length - fresh.length, summary };
   }

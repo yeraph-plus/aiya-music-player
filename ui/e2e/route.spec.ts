@@ -405,8 +405,8 @@ test('docs/40 二轮：动态歌单模态框（Switch → 条件模式行 → �
   await row.getByRole('combobox', { name: '流派' }).click();
   await page.getByRole('option', { name: '流行' }).click();
 
-  // 上限单独一行；排序不再出现在编辑器里（由列表列头接管）
-  await dialog.locator('input[type="number"]').fill('10');
+  // 上限输入已随物化模型移除（2026-10-30）；排序在编辑器里不出现
+  await expect(dialog.locator('input[type="number"]')).toHaveCount(0);
   await expect(dialog.locator('.rule-meta [role="combobox"]')).toHaveCount(0);
 
   // 创建 → 侧栏出现带 activity 图标徽标的歌单（2026-10-30：智字换图标）
@@ -416,6 +416,14 @@ test('docs/40 二轮：动态歌单模态框（Switch → 条件模式行 → �
   const item = page.locator('.sidebar .playlist-item', { hasText: '我的流行电台' });
   await expect(item).toHaveCount(1);
   await expect(item.locator('.pl-badge svg')).toBeVisible();
+
+  // 物化模型（2026-10-30）：建单即按规则入库 → 打开有行；头部有"刷新"按钮，
+  // 无新命中时刷新提示"没有新增"
+  await item.click();
+  await expect(page.locator('.main h1')).toHaveText('我的流行电台');
+  await expect(page.locator('.main .list .row').first()).toBeVisible();
+  await page.getByRole('button', { name: '刷新' }).click();
+  await expect(page.locator('.k-toast')).toContainText('没有新增');
 });
 
 test('docs/28：专辑宫格（侧栏一级项）→ 卡片 → 专辑详情 → 返回回宫格', async ({ page }) => {

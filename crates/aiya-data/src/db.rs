@@ -33,6 +33,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0004_history_retention.sql"),
     include_str!("../migrations/0005_facet_norm_indexes.sql"),
     include_str!("../migrations/0006_entity_artwork.sql"),
+    include_str!("../migrations/0007_dynamic_materialized.sql"),
 ];
 
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;

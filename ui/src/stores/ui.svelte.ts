@@ -855,6 +855,11 @@ function readBeetsStatus(raw: unknown): BeetsStatus | null {
     pluginSummary: (o.pluginSummary ?? null) as BeetsStatus['pluginSummary'],
     configDir: str(o.configDir),
     dataHome: str(o.dataHome),
+    // v2：schemaMatched 是宿主算好的 boolean（缺字段 = 老工具，按不匹配处理）；
+    // 库锁三态与持有者原样透传
+    schemaMatched: o.schemaMatched === true,
+    libraryLock: str(o.libraryLock),
+    libraryLockHolder: str(o.libraryLockHolder),
     errorCode: str(o.errorCode),
     errorMessage: str(o.errorMessage),
   };

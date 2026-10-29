@@ -990,17 +990,6 @@ fn beets_cancel() -> Result<dto::beets::CancelRequested, dto::ApiError> {
     Ok(dto::beets::CancelRequested { requested: beets::cancel_session() })
 }
 
-/// 手动触发一次完整刷新（扫描 + beets 对齐），异步，结果走 `libraryRefreshed`。
-///
-/// 以前这里只做 dump+sync（不扫描）。合成一条管线之后，"用户点了立即同步"
-/// 与"30 秒定时"跑的是同一段代码——否则两条路径迟早各自漂移
-/// （典型症状：手动同步能看到 beets 的改动，自动刷新看不到）。
-#[tauri::command]
-fn beets_sync(app: AppHandle, state: State<'_, AppState>) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    refresh::spawn(&app, state.refresh.clone(), refresh::Trigger::Manual);
-    Ok(dto::beets::JobStarted { started: true })
-}
-
 /* ---------------- beets 配置：待整理目录与整理输出根（docs/40 十三轮） ----------------
  *
  * 用户拍板的入库模型：待整理目录（inbox，用户自选的外部目录）→ beets 整理 →
@@ -1459,7 +1448,7 @@ fn source_label(source: &aiya_data::repo::TrackSource) -> String {
     use aiya_data::repo::TrackSource;
     match source {
         TrackSource::Library => "library".into(),
-        TrackSource::Playlist { .. } | TrackSource::SmartPlaylist { .. } => "playlist".into(),
+        TrackSource::Playlist { .. } => "playlist".into(),
         TrackSource::Recent => "recent".into(),
         TrackSource::MostPlayed => "mostPlayed".into(),
     }
@@ -2054,7 +2043,9 @@ fn library_remove_tracks(
 /// 靠 created_at 假装顺序的话重启就回到创建顺序。
 ///
 /// 动态歌单（0003）：末两列带出 kind / rule_json，聚合子查询的结果由
-/// `apply_smart_stats` 用规则实时查询**覆盖**（playlist_items 对动态歌单恒空）。
+/// 歌单摘要查询：末两列带出 kind / rule_json，聚合子查询按 playlist_items
+/// 统计（曲目数 / 总时长 / 首个有封面曲目）。动态歌单物化后（2026-10-30）
+/// 与手动歌单走完全相同的统计口径。
 const PLAYLIST_SELECT: &str = "SELECT p.id, p.name, p.created_at, p.updated_at, p.sort_position, p.kind, p.rule_json,
        (SELECT COUNT(*) FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id
          WHERE pi.playlist_id = p.id),
@@ -2083,59 +2074,6 @@ fn playlist_row(r: &rusqlite::Row) -> rusqlite::Result<dto::playlist::PlaylistSu
     })
 }
 
-/// 动态歌单的摘要统计：曲目数 / 总时长 / 首个有封面曲目都按规则**实时查询**
-/// （playlist_items 聚合子查询对动态歌单恒为 0/空，必须覆盖）。
-/// 手动歌单不进这个函数——它的数字本来就来自 playlist_items。
-fn apply_smart_stats(
-    conn: &rusqlite::Connection,
-    summary: &mut dto::playlist::PlaylistSummary,
-) -> aiya_data::DbResult<()> {
-    let Some(rule_json) = summary.rule_json.as_deref() else {
-        return Ok(());
-    };
-    let plan = aiya_data::smart::SmartPlan::parse(Some(rule_json))?;
-    // COUNT + SUM 与曲目列表同一份 WHERE（口径一致，页里显示的条数 = 侧栏数字）
-    let stats_sql = format!(
-        "SELECT COUNT(*), COALESCE(SUM(t.duration_ms),0) {}",
-        plan.count_from()
-    );
-    // 规则条件带 `?` 占位符，绑定值必须跟 clauses 顺序一致——此前绑定空
-    // 数组，任何带条件的规则统计都报 InvalidParameterCount（内部错误）
-    let binds = plan.sql_binds();
-    let (count, duration): (i64, i64) = conn
-        .query_row(
-            &stats_sql,
-            rusqlite::params_from_iter(binds.iter()),
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .map_err(aiya_data::DbError::Sql)?;
-    summary.track_count = count;
-    summary.duration_ms = duration;
-    // 封面取排序后的第一个有封面曲目（与手动歌单"第一个有封面的"同一语义）
-    let art_sql = format!(
-        "SELECT t.artwork_id {}{} LIMIT 1",
-        plan.count_from(),
-        plan.order_sql
-    );
-    // 封面查询必须容忍零匹配：query_row 对空结果集返回 QueryReturnedNoRows，
-    // 而空结果对动态歌单是常态（规则先建、曲目后进），不是错误——
-    // 此前它把"创建成功但摘要读取失败"整个命令炸成内部错误，歌单建了
-    // UI 却不刷新（2026-10-29 动态歌单回归）。
-    use rusqlite::OptionalExtension;
-    // 两种"没有封面"都要兜住：零匹配（optional → None）与首曲无封面
-    // （行在、值为 NULL → 闭包显式取 Option，flatten 收一层）。
-    summary.artwork_id = conn
-        .query_row(
-            &art_sql,
-            rusqlite::params_from_iter(binds.iter()),
-            |r| r.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .map_err(aiya_data::DbError::Sql)?
-        .flatten();
-    Ok(())
-}
-
 fn playlist_summary_by_id(
     conn: &rusqlite::Connection,
     id: &str,
@@ -2143,10 +2081,6 @@ fn playlist_summary_by_id(
     let sql = format!("{PLAYLIST_SELECT} WHERE p.id = ?1");
     match conn.query_row(&sql, [id], playlist_row) {
         Ok(mut v) => {
-            if v.kind == "smart" {
-                apply_smart_stats(conn, &mut v)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            }
             Ok(Some(v))
         }
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -2163,9 +2097,6 @@ fn playlist_list_all(
     let mut out = Vec::new();
     for r in rows {
         let mut summary = r?;
-        if summary.kind == "smart" {
-            apply_smart_stats(conn, &mut summary)?;
-        }
         out.push(summary);
     }
     Ok(out)
@@ -2265,6 +2196,32 @@ fn playlist_set_rule(
     })
 }
 
+/// 刷新动态歌单：重跑规则，只追加新命中的曲目（已在表内的原位不动，
+/// 已不匹配的也不删）。返回本次新增数与刷新后总数。
+#[tauri::command]
+fn playlist_refresh(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<dto::playlist::PlaylistRefresh, dto::ApiError> {
+    let now = now_secs();
+    state
+        .db()
+        .send(move |conn| {
+            let Some(outcome) = playlist_repo::refresh_smart(conn, &id, now)? else {
+                return Ok(None);
+            };
+            Ok(Some(dto::playlist::PlaylistRefresh {
+                added: outcome.added,
+                total: outcome.total,
+            }))
+        })
+        .map_err(dto::ApiError::from)
+        .and_then(|inner| match inner {
+            Some(v) => Ok(v),
+            None => Err(dto::ApiError::not_found("动态歌单不存在")),
+        })
+}
+
 #[tauri::command]
 fn playlist_rename(
     state: State<'_, AppState>,
@@ -2317,13 +2274,11 @@ fn playlist_add_tracks(
     state: State<'_, AppState>,
     id: String,
     track_ids: Vec<String>,
-    mode: Option<String>,
 ) -> Result<dto::playlist::PlaylistAddResult, dto::ApiError> {
-    let mode = playlist_repo::AddMode::parse(mode.as_deref())
-        .map_err(|e| dto::ApiError::invalid_arg(e.to_string()))?;
+    // 2026-10-30 语义：加歌一律首行插入（最后入库的在最前），不再有 append/next 分档
     let now = now_secs();
     playlist_write(&state, move |conn| {
-        let Some(outcome) = playlist_repo::add_tracks(conn, &id, &track_ids, mode, now)? else {
+        let Some(outcome) = playlist_repo::add_tracks(conn, &id, &track_ids, now)? else {
             return Ok(None);
         };
         let summary = playlist_summary_by_id(conn, &id)
@@ -3864,7 +3819,6 @@ pub fn run() {
             beets_preview,
             beets_apply,
             beets_cancel,
-            beets_sync,
             beets_config_get,
             beets_set_inbox,
             beets_set_target,
@@ -3902,6 +3856,7 @@ pub fn run() {
             playlist_create,
             playlist_rename,
             playlist_set_rule,
+            playlist_refresh,
             playlist_delete,
             playlist_reorder,
             playlist_add_tracks,

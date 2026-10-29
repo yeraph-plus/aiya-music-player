@@ -98,10 +98,9 @@
    * 动态歌单没有手动顺序（它是一条查询），排序交给列头——规则编辑器
    * 已不再暴露排序键。
    */
-  const canSort = $derived(
-    (view.kind === 'library' && ui.libraryTab === 'all') ||
-      (view.kind === 'playlist' && currentPlaylist?.kind === 'smart'),
-  );
+  // 动态歌单物化后（2026-10-30）顺序 = 入库序（首行插入在 0），与手动歌单
+  // 同一套语义——列头排序只服务曲库页。
+  const canSort = $derived(view.kind === 'library' && ui.libraryTab === 'all');
 
   /**
    * 搜索页的聚合段：曲目列表之外再给专辑/艺人两段（docs/24 §3.2 路由表
@@ -202,6 +201,18 @@
           播放全部
         </Button>
         {#if currentPlaylist}
+          {#if currentPlaylist.kind === 'smart'}
+            <!-- 物化模型（2026-10-30）：刷新重跑规则，只追加新命中的曲目 -->
+            <Button
+              onclick={() => {
+                if (currentPlaylist) void playlists.refreshSmart(currentPlaylist);
+              }}
+              disabled={library.scanning}
+            >
+              {#snippet icon()}<Icon name="refresh" size={12} />{/snippet}
+              刷新
+            </Button>
+          {/if}
           <Button
             onclick={() => {
               if (currentPlaylist) overlay.dialog = { kind: 'playlistEdit', playlist: currentPlaylist };
@@ -210,7 +221,6 @@
             {#snippet icon()}<Icon name="edit" size={12} />{/snippet}
             编辑
           </Button>
-          {#if currentPlaylist.kind !== 'smart'}
           <Button
             disabled={currentPlaylist.trackCount === 0}
             onclick={() => {
@@ -219,7 +229,6 @@
           >
             清空
           </Button>
-          {/if}
           <Button
             variant="danger"
             onclick={() => {
@@ -306,9 +315,7 @@
     removeLabel={view.kind === 'playlist' ? '从播放列表移除' : '从曲库中删除'}
     showFilter={ui.page === 'library'}
     dragSort={
-      view.kind === 'playlist' && currentPlaylist?.kind !== 'smart'
-        ? (from, to) => void playlists.moveItem(from, to)
-        : undefined
+      view.kind === 'playlist' ? (from, to) => void playlists.moveItem(from, to) : undefined
     }
   >
     {#snippet empty()}

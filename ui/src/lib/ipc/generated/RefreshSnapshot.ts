@@ -19,12 +19,8 @@ changed: boolean, scanned: number, imported: number,
 /**
  * 重新读标签并写了行的数量（外部改标签就体现在这里）
  */
-updated: number, missing: number, failed: number, 
+updated: number, missing: number, failed: number, elapsedMs: number, 
 /**
- * beets 段：ok / skipped（没装组件或磁盘没变化）/ failed
- */
-sync: string, elapsedMs: number, 
-/**
- * 失败原因（`sync` 为 failed，或整条管线失败时才有）
+ * 失败原因（管线失败时才有；skipped 不算失败）
  */
 error: string | null, };

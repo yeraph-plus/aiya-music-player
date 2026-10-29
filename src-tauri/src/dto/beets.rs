@@ -52,6 +52,16 @@ pub struct BeetsStatus {
     pub config_dir: Option<String>,
     /// 工具的数据根（播放器给的那个目录）。
     pub data_home: Option<String>,
+    /// v2：宿主拿工具自报的 `schemaHash` 与编译期嵌入的镜像哈希比对的结果。
+    ///
+    /// 不是工具的线上字段——是宿主算出来的结论（docs/35 P1-4 闭合）。
+    /// `false` 时 UI 出警告条并禁用整理按钮：契约不一致时执行变更等于
+    /// 让两套对不上口径的代码同时写一个库。
+    pub schema_matched: bool,
+    /// v2：库文件锁三态（`free|held|unknown`，工具自报原样透传）。
+    pub library_lock: Option<String>,
+    /// v2：held 时的持有者（`pid=…,cmd=…`）；free/unknown 为 null。
+    pub library_lock_holder: Option<String>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
 }

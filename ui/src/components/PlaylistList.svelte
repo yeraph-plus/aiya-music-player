@@ -19,7 +19,9 @@
   import { artworkUrl } from '../lib/artwork';
   import { startRowDrag, consumeClickSuppressed } from '../lib/drag';
   import { createVirtualWindow } from '../lib/create-virtual-window.svelte';
-  import { scrollTopForRow } from '../lib/virtual';
+  import { centeredScrollTopForRow, scrollTopForRow } from '../lib/virtual';
+  // 别名导入：组件已有 `selection` prop（选择集 ReadonlySet），同名会遮蔽 store
+  import { selection as selectionStore } from '../stores/selection.svelte';
   import CheckCell from './ui/CheckCell.svelte';
   import ListToolbar from './ListToolbar.svelte';
   import { formatTime, highlight } from '../lib/format';
@@ -41,6 +43,13 @@
     selection: ReadonlySet<number>;
     /** 一次性恢复位置；应用后由父组件置空 */
     restoreScrollTop: number | null;
+    /**
+     * 「定位到正在播放」的目标下标（父组件按当前查询解析）；`null` = 无事。
+     * 一次性语义：滚过去就回报 `onlocated` 复位，**不做持续自动跟随**——
+     * 播放中把用户正在浏览的位置反复拽回播放行是修掉的老 bug。
+     */
+    locateIndex: number | null;
+    onlocated: () => void;
     playing: boolean;
     /**
      * 播放。**只由双击 / 封面悬浮播放键 / 键盘 Enter 触发**（B4-1 交互语义，
@@ -66,6 +75,8 @@
     /* ---------------- 工具条（docs/27 内置，替代悬浮 BatchBar） ---------------- */
     batchMode: boolean;
     onbatchmode: (on: boolean) => void;
+    /** 跳到正在播放的条目（解析下标在父组件，这里只透传给工具条） */
+    onlocate: () => void;
     onplayall: () => void;
     onenqueue: () => void;
     onaddto: () => void;
@@ -109,10 +120,13 @@
     onmenu,
     onscroll,
     onrestored,
+    locateIndex,
+    onlocated,
     onretry,
     onmove,
     batchMode,
     onbatchmode,
+    onlocate,
     onplayall,
     onenqueue,
     onaddto,
@@ -193,11 +207,29 @@
     onrestored();
   });
 
-  // 键盘选中项变化时把它滚进视野
+  // 焦点行（键盘/点选）变化时把它滚进视野。
+  // **必须挡住重跑**：这个 effect 在组件重挂载、视口尺寸变化（抽屉开合/
+  // 窗口缩放）、行高变化时都会重跑，而不只是焦点变化——双击播放后
+  // selectedIndex 一直停在播放行上，重跑一次就把用户正在浏览的位置拽回
+  // 播放行（实测：播放中滚动列表反复跳回正在播放的条目）。
+  // 闸门 `selection.followedIndex` 记录「已经跟随到过的下标」，焦点没变
+  // 就不滚；存 store 而非局部变量是因为重挂载会清零局部变量、闸就失效。
   $effect(() => {
     if (!vw.scroller || selectedIndex < 0) return;
+    if (selectionStore.followedIndex === selectedIndex) return;
+    selectionStore.followedIndex = selectedIndex;
     const target = scrollTopForRow(selectedIndex, ROW_HEIGHT, vw.viewportHeight, vw.scroller.scrollTop, HEAD_HEIGHT);
     if (target !== vw.scroller.scrollTop) vw.scroller.scrollTop = target;
+  });
+
+  // 「定位到正在播放」：父组件解析出下标后滚一次（居中），回报复位。
+  // 与上面的跟随闸门互不干扰：定位是显式动作，点几次滚几次。
+  $effect(() => {
+    if (locateIndex === null || !vw.scroller || total === 0) return;
+    const target = centeredScrollTopForRow(locateIndex, ROW_HEIGHT, vw.viewportHeight, total, HEAD_HEIGHT);
+    vw.scroller.scrollTop = target;
+    vw.scrollTop = target;
+    onlocated();
   });
 
   function handlePointerDown(event: PointerEvent, index: number): void {
@@ -230,6 +262,8 @@
     {batchMode}
     filterCount={filterCount ?? 0}
     canFilter={filterCount !== undefined}
+    canLocate={currentId !== null}
+    onlocate={onlocate}
     {onplayall}
     {onenqueue}
     {onaddto}

@@ -14,14 +14,15 @@ import sys
 import threading
 import traceback
 
-from . import cfg, env, protocol
-from .cmds import dump, importer, maintain
+from . import cfg, env, lockfile, ops, protocol
+from .cmds import dump, importer, maintain, market
 from .runtime import (
     bump_cancel,
     cancel_gen,
     emit,
     force_utf8_stdio,
     open_protocol_stream,
+    set_op_recorder,
     write_line,
 )
 
@@ -33,6 +34,29 @@ def handle(req: dict, gen: int) -> dict | None:
     """
     cmd = req.get("cmd")
     req_id = int(req.get("id") or 0)
+
+    # ---- v2：幂等重放 / 登记（在锁与执行之前）----
+    # 重放不触碰库、不加锁：它只是把上次的账本再念一遍。
+    # 次序必须是 重放 → 锁 → 登记 running：被锁拒绝的请求不该在登记簿里
+    # 留下 running 残留。
+    terminal = ops.TERMINAL_OF.get(cmd)
+    request_id = req.get("requestId")
+    if terminal is not None and request_id:
+        request_id = str(request_id)
+        phash = ops.payload_hash(req)
+        replay = ops.lookup(request_id, cmd, phash)  # 同键不同内容在此抛 E_INVALID_ARG
+        if replay is not None:
+            # session 字段改写成当前会话名：客户端按会话名把事件归到本次请求
+            session = f"{ops.SESSION_PREFIX[cmd]}_{req_id:02d}"
+            for evt in replay:
+                emit({**evt, "session": session})
+            return None
+        if cmd in lockfile.LOCKED_CMDS:
+            lockfile.acquire(cmd)  # 被占 → E_LIBRARY_BUSY（holder 进 extras）
+        set_op_recorder(ops.register(request_id, cmd, phash))  # 不可写时为 None
+    elif cmd in lockfile.LOCKED_CMDS:
+        # 无幂等键的变更命令照旧拿锁——单写者护栏不依赖 requestId
+        lockfile.acquire(cmd)
 
     # ---- 管理 ----
     if cmd == "status":
@@ -59,12 +83,12 @@ def handle(req: dict, gen: int) -> dict | None:
             return protocol.error_response(
                 req_id, protocol.E_INVALID_ARG, "apply", "decisions 为空"
             )
-        importer.apply_import(req_id, decisions, gen)
+        importer.apply_import(req_id, decisions, bool(req.get("resume")), gen)
         return None
 
     # ---- 对账 ----
     if cmd == "dump_items":
-        dump.dump_items(req_id)
+        dump.dump_items(req_id, gen)
         return None
 
     # ---- 曲库维护 ----
@@ -85,6 +109,18 @@ def handle(req: dict, gen: int) -> dict | None:
     if cmd == "move_items":
         maintain.move_items(req_id, str(req.get("directory") or ""),
                             bool(req.get("pretend")), gen)
+        return None
+
+    # ---- 插件市场（docs/40 §3 拍板白名单版；协议纯加法） ----
+    if cmd == "plugin_catalog":
+        return protocol.ok_response(req_id, {"catalog": market.catalog_payload()})
+    if cmd == "plugin_install":
+        name = str(req.get("name") or "")
+        if not name:
+            return protocol.error_response(
+                req_id, protocol.E_INVALID_ARG, "pluginInstall", "name 为空"
+            )
+        market.install_plugin(req_id, name, emit, cancel_gen, gen)
         return None
 
     return protocol.error_response(
@@ -108,6 +144,19 @@ def classify(exc: BaseException) -> str:
     if isinstance(exc, OSError) and exc.errno in _ACCESS_ERRNOS:
         return protocol.E_CONFIG
     return protocol.E_INTERNAL
+
+
+def _op_fail() -> None:
+    """命令异常收尾：把登记簿里的 running 记成 failed（重试才会真执行）。
+
+    正常终态由 ops.Recorder 在事件出口自动落账；异常路径没有终态事件
+    （错误信封走 write_line，不经 emit），所以在这里补。
+    """
+    from .runtime import op_recorder
+
+    rec = op_recorder()
+    if rec is not None:
+        rec.finish_failed()
 
 
 def _not_installed(message: str) -> None:
@@ -204,15 +253,19 @@ def serve() -> int:
                 resp = handle(req, gen)
             except protocol.ProtocolError as e:
                 # 业务判定失败（版本不符、根不一致…）：原样带码回，不当 bug
+                _op_fail()
                 resp = protocol.error_response(
                     req_id, e.code, e.stage, e.message, **e.extra
                 )
             except Exception as e:  # noqa: BLE001 —— 顶层兜底，任何异常都要回信封
+                _op_fail()
                 code = classify(e)
                 resp = protocol.error_response(
                     req_id, code, "handle", f"{type(e).__name__}: {e}",
                     trace=traceback.format_exc(limit=4),
                 )
+            finally:
+                set_op_recorder(None)
         # None = 命令已用事件流自行应答（preview_import 等），不再发 id 响应
         if resp is not None:
             payload = {"id": req_id, **{k: v for k, v in resp.items() if k != "id"}}

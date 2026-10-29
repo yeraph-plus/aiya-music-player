@@ -1,15 +1,15 @@
 """协议常量与信封构造。
 
 **这是本仓库的契约真源**（docs/33 §4）：命令名、事件名、错误码都在这里定义，
-播放器镜像一份 schema（`protocol/aiya-beets-v1.json`）做双侧校验。
+播放器镜像一份 schema（`protocol/aiya-beets-v2.json`）做双侧校验。
 
 协议形态：NDJSON over stdio，一行一条。
-    请求  {"id": 1, "cmd": "status", "clientProtocol": 1}
+    请求  {"id": 1, "cmd": "status", "clientProtocol": 2}
     应答  {"id": 1, "ok": true, "data": {...}} | {"id": 1, "ok": false, "error": {...}}
     事件  {"type": "...", ...}   无 id，靠 type 区分
 
-**冻结规则（v1）**：加可选字段不算破坏、加新命令/新事件不算破坏、改名算。
-改名必须同时改 `protocol/v1.schema.json` 并把 `PROTOCOL_VERSION` +1，
+**冻结规则**：加可选字段不算破坏、加新命令/新事件不算破坏、改名算。
+改名必须同时改 `protocol/v2.schema.json` 并把 `PROTOCOL_VERSION` +1，
 否则契约测试会红（两侧各一条，见 docs/33 §9 M3）。
 """
 
@@ -17,26 +17,32 @@ from __future__ import annotations
 
 # 协议版本。**不兼容变更才 +1**：加可选字段不算、加新命令不算、改名算。
 #
+# v2（2026-10-29，docs/41 §6）：加法为主（requestId/resume/evidence/libraryLock/
+# E_LIBRARY_BUSY/resumedSkipped），拍板升版的理由是新字段在 v2 内定为 required
+# （生产端总是计算），版本协商边界兜住旧端；同时接线 schemaHash 运行时比对
+# （闭合 docs/35 P1-4）。此后回到增量规则。
+#
 # 为什么是 1 而不是沿用分包前的 3：分包之前两侧永远同版本一起发，
 # 那三个数字是同一份代码内部的迭代次数，从未作为对外契约存在过。
-# 冻结成 v1 是给"两个独立发布物"用的**第一版契约**——schema 文件叫
-# `v1.schema.json`、`protocol.version` 是 1，三者同一个 1，不给未来留
-# "schema 叫 v1 但版本号是 3"这种永久解释成本。
-PROTOCOL_VERSION = 1
+# 冻结成 v1 是给"两个独立发布物"用的**第一版契约**——schema 文件名与
+# protocol.version 从此同步演进（现在是 v2），不给未来留"schema 叫 vN
+# 但版本号是 M"这种永久解释成本。
+PROTOCOL_VERSION = 2
 
-# 本服务端能接受的最低客户端版本。只有一版，所以等于自己。
-# 有 v2 之后这里会是 1（v2 服务端仍收 v1 客户端）或 2（不兼容则拒绝）。
+# 本服务端能接受的最低客户端版本。MIN_CLIENT = 2：旧播放器（v1 宿主）会被
+# E_PROTOCOL_MISMATCH 拒绝，message 里写明"请升级播放器"——不做降级协商
+# （docs/33 §4.4：一半功能能用的模糊状态比失败更难排查）。
 MIN_CLIENT = PROTOCOL_VERSION
 
-# schema 文件的字节指纹（`protocol/v1.schema.json`）。
+# schema 文件的字节指纹（`protocol/v2.schema.json`）。
 #
 # 为什么把它写成常量而不是运行时读文件：**工具装到哪、包怎么打，都不该
 # 影响它能不能自报身份**。播放器把镜像里的 sha256 与本值一比，立刻知道
 # 对面是同一版契约还是旧组件——不需要读文件、不需要额外命令。
 # 改了 schema 忘了改这里？`tests/protocol_contract.py` 会红（它手上真有文件）。
-SCHEMA_SHA256 = "630b73816102391444b000b471012c1d78db69647a99ea2c36f2dd9b161e0de6"
+SCHEMA_SHA256 = "a9f9490e2f4b242b8dd70f9e46ab06e7f9ed5a5cfc185009940e21d4a1491c4c"
 
-# ---- 错误码（冻结，docs/33 §4.5）----
+# ---- 错误码（v1 冻结 10 个，v2 加 E_LIBRARY_BUSY）----
 #
 # 宿主按 code 分类给 UX，**不按 beets_message 文本匹配**——文本会随人改动。
 # 这张表是双向的：schema 里的枚举与本模块必须一字不差，
@@ -51,6 +57,7 @@ E_LIBRARY_DIR_MISMATCH = "E_LIBRARY_DIR_MISMATCH"  # 传入根 ≠ 配置根，�
 E_BEETS_ERROR = "E_BEETS_ERROR"                  # beets 自己抛的（展示原文）
 E_CONFIG = "E_CONFIG"                            # 配置读写失败
 E_INTERNAL = "E_INTERNAL"                        # 工具自身 bug（带 trace，请反馈）
+E_LIBRARY_BUSY = "E_LIBRARY_BUSY"                # v2：库文件锁被另一进程持有（双开/外部 beet 写库）
 
 ERROR_CODES = frozenset({
     E_BAD_JSON,
@@ -63,6 +70,7 @@ ERROR_CODES = frozenset({
     E_BEETS_ERROR,
     E_CONFIG,
     E_INTERNAL,
+    E_LIBRARY_BUSY,
 })
 
 # 有意**没有** E_CANCELLED：取消是正常路径，用 `cancelled` 事件表达，

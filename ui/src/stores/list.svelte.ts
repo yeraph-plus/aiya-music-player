@@ -253,6 +253,20 @@ class ListStore {
     }
   }
 
+  /**
+   * 曲目 ID → 当前视图查询里的下标（「定位到正在播放」按钮）。
+   *
+   * 前端没有「曲目 ID 在当前查询中的位置」这个映射（列表是后端查询的
+   * 虚拟窗口），走 `idsForSelection(query, 'all')` 拿全量 ID 顺序表后
+   * `indexOf`：一次 IPC，后端本来就是同一套 collect_track_ids
+   * （播放全部也拉全量）。**不在该视图**返回 null；查询失败抛给调用方。
+   */
+  async indexOfTrack(id: string): Promise<number | null> {
+    const ids = await library.idsForSelection(this.query(), 'all');
+    const index = ids.indexOf(id);
+    return index >= 0 ? index : null;
+  }
+
   /* ---------------- 视图切换（切视图 = 换查询 + 重载 + 存状态） ---------------- */
 
   /**

@@ -150,7 +150,7 @@
           />
           <span class="pl-name">{playlist.name}</span>
           {#if playlist.kind === 'smart'}
-            <span class="pl-badge" title="动态歌单：曲目随规则动态生成">
+            <span class="pl-badge" title="动态歌单：按规则收录曲目，「刷新」追加新命中">
               <Activity size={10} strokeWidth={2.4} aria-hidden="true" />
             </span>
           {/if}

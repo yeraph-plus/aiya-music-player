@@ -8,14 +8,30 @@ use aiya_data::scanner::scan_directory;
 
 /// 生成最小合法 MP3（同 scanner 单测：ID3v2.4 + 真实 MPEG 帧）。
 fn write_mp3(dir: &std::path::Path, name: &str, title: &str, artist: &str, album: &str) {
+    write_mp3_tagged(dir, name, title, artist, album, None);
+}
+
+/// 带 genre（TCON）的变体：动态歌单的规则数据源（docs/40 §1）。
+fn write_mp3_tagged(
+    dir: &std::path::Path,
+    name: &str,
+    title: &str,
+    artist: &str,
+    album: &str,
+    genre: Option<&str>,
+) {
     let path = dir.join(name);
     let mut f = std::fs::File::create(&path).unwrap();
     let mut body: Vec<u8> = Vec::new();
-    for (id, content) in [
+    let mut frames: Vec<(&str, &[u8])> = vec![
         ("TIT2", title.as_bytes()),
         ("TPE1", artist.as_bytes()),
         ("TALB", album.as_bytes()),
-    ] {
+    ];
+    if let Some(g) = genre {
+        frames.push(("TCON", g.as_bytes()));
+    }
+    for (id, content) in frames {
         body.extend_from_slice(id.as_bytes());
         body.extend_from_slice(&((content.len() + 1) as u32).to_be_bytes());
         body.extend_from_slice(&[0, 0]);
@@ -168,90 +184,23 @@ fn vertical_scan_query_playlist() {
     db.close();
 }
 
-/// 动态歌单纵切（docs/40 §1 方案 A）：beets 同步 genre → 规则建单 →
+/// 动态歌单纵切（docs/40 §1 方案 A）：扫描器读 genre 标签 → 规则建单 →
 /// Playlist 来源按 kind 自动路由到规则查询 → 手动歌单守卫仍然生效。
 #[test]
 fn vertical_smart_playlist_rule_query() {
     let dir = tempfile::tempdir().unwrap();
-    write_mp3(dir.path(), "01.mp3", "Track A", "Artist One", "Album X");
-    write_mp3(dir.path(), "02.mp3", "Track B", "Artist Two", "Album X");
-    write_mp3(dir.path(), "03.mp3", "Track C", "Artist One", "Album Y");
+    write_mp3_tagged(dir.path(), "01.mp3", "Track A", "Artist One", "Album X", Some("Rock"));
+    write_mp3_tagged(dir.path(), "02.mp3", "Track B", "Artist Two", "Album X", None);
+    write_mp3_tagged(dir.path(), "03.mp3", "Track C", "Artist One", "Album Y", Some("rock"));
 
     let db_path = dir.path().join("library.sqlite");
     let mut db = aiya_data::open(&db_path).unwrap();
 
-    // 1) 扫描 + beets 同步（给 01/03 打 Rock 标签，02 不打——模拟"beets 是增强不是依赖"）
+    // 1) 扫描：genre 直接来自文件标签（01/03 打 Rock，02 不打）——
+    //    曲库数据 100% 归扫描器（docs/43 §8-E 后不再有 beets 对账注入）
     db.send(move |conn| {
         scan_directory(conn, dir.path(), None, |_| {})
-            .map_err(|e| aiya_data::DbError::Custom(e.to_string()))?;
-        let items = vec![
-            aiya_data::beets_sync::BeetsItem {
-                id: 1,
-                path: dir.path().join("01.mp3").to_string_lossy().into_owned(),
-                title: Some("Track A".into()),
-                artist: Some("Artist One".into()),
-                albumartist: None,
-                album: Some("Album X".into()),
-                genre: Some("Rock".into()),
-                year: Some(2020),
-                track: Some(1),
-                disc: None,
-                length: Some(12.0),
-                bitrate: None,
-                format: Some("MP3".into()),
-                samplerate: None,
-                bitdepth: None,
-                channels: None,
-                mtime: None,
-                rg_track_gain: None,
-            },
-            aiya_data::beets_sync::BeetsItem {
-                id: 2,
-                path: dir.path().join("02.mp3").to_string_lossy().into_owned(),
-                title: Some("Track B".into()),
-                artist: Some("Artist Two".into()),
-                albumartist: None,
-                album: Some("Album X".into()),
-                genre: None,
-                year: None,
-                track: Some(2),
-                disc: None,
-                length: Some(12.0),
-                bitrate: None,
-                format: Some("MP3".into()),
-                samplerate: None,
-                bitdepth: None,
-                channels: None,
-                mtime: None,
-                rg_track_gain: None,
-            },
-            aiya_data::beets_sync::BeetsItem {
-                id: 3,
-                path: dir.path().join("03.mp3").to_string_lossy().into_owned(),
-                title: Some("Track C".into()),
-                artist: Some("Artist One".into()),
-                albumartist: None,
-                album: Some("Album Y".into()),
-                genre: Some("rock".into()),
-                year: Some(2021),
-                track: Some(1),
-                disc: None,
-                length: Some(12.0),
-                bitrate: None,
-                format: Some("MP3".into()),
-                samplerate: None,
-                bitdepth: None,
-                channels: None,
-                mtime: None,
-                rg_track_gain: None,
-            },
-        ];
-        let stats = aiya_data::beets_sync::sync_items(conn, &items, 10)
-            .map_err(|e| aiya_data::DbError::Custom(e.to_string()))?;
-        // 扫描器已按路径建行 → beets 同步走"命中更新"（补 genre），不是新导入
-        assert_eq!(stats.matched, 3, "三首全部按路径对账命中：{:?}", stats);
-        assert_eq!(stats.updated, 3, "genre/beets_item_id 等字段有差异必须更新：{:?}", stats);
-        Ok::<(), aiya_data::DbError>(())
+            .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
     })
     .unwrap();
 
@@ -309,7 +258,6 @@ fn vertical_smart_playlist_rule_query() {
             "smart1",
             &serde_json::json!({
                 "all": [{ "field": "artist", "op": "contains", "value": "two" }],
-                "limit": 5
             }),
             11,
         )
@@ -344,7 +292,8 @@ fn vertical_smart_playlist_rule_query() {
     assert_eq!(page.total, 1);
     assert_eq!(page.items[0].title, "Track B");
 
-    // 5) 手动歌单守卫：set_rule / add_tracks 对手动歌单明确报错
+    // 5) 物化模型（2026-10-30 硬迭代）：动态歌单与普通歌单能力相同——
+    //    add_tracks 直接生效（首行插入）；手动歌单的 set_rule / refresh 明确报错
     db.send(|conn| {
         aiya_data::playlist::create(conn, "p_manual", "手动单", &[], 10)
             .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
@@ -364,11 +313,27 @@ fn vertical_smart_playlist_rule_query() {
     assert!(err.to_string().contains("手动歌单"), "实际错误：{err}");
     let err = db
         .send(|conn| {
-            aiya_data::playlist::add_tracks(conn, "smart1", &[], aiya_data::playlist::AddMode::Append, 12)
+            aiya_data::playlist::refresh_smart(conn, "p_manual", 12)
                 .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
         })
         .unwrap_err();
     assert!(err.to_string().contains("动态歌单"), "实际错误：{err}");
+    // 上一步 set_rule 替换重算后表内只剩 Track B → Track A 不在表内，
+    // 手动加歌应命中 1 首
+    let track_a: String = db
+        .send(|conn| {
+            conn.query_row("SELECT id FROM tracks WHERE title = 'Track A'", [], |r| r.get(0))
+                .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
+        })
+        .unwrap();
+    let out = db
+        .send(|conn| {
+            aiya_data::playlist::add_tracks(conn, "smart1", &[track_a], 12)
+                .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
+        })
+        .unwrap()
+        .expect("smart1 存在");
+    assert_eq!(out.added, 1, "物化后动态歌单接受手动加歌");
 
     db.close();
 }

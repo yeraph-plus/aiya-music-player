@@ -30,7 +30,6 @@ export interface SmartRule {
    */
   sort?: SmartSortKey;
   direction?: 'asc' | 'desc';
-  limit?: number | null;
 }
 
 /** 字段下拉的标签与语义说明（说明给 placeholder/提示行用） */
@@ -165,9 +164,6 @@ export function validateRule(rule: SmartRule): string | null {
     if (!OPS_BY_FIELD[cond.field].some((o) => o.op === cond.op)) {
       return `${FIELD_LABELS[cond.field]}不支持该操作符`;
     }
-  }
-  if (rule.limit != null && (!Number.isInteger(rule.limit) || rule.limit < 0)) {
-    return '上限必须是非负整数';
   }
   return null;
 }

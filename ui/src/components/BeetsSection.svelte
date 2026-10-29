@@ -26,6 +26,17 @@
   const install = $derived(ui.beetsInstall);
   /** 装好且协议对得上才展开导入/维护——否则下面全是灰按钮 */
   const usable = $derived(beets?.found === true);
+  /**
+   * v2：契约指纹比对不过 = 装的组件与本播放器不是同一版协议 schema。
+   * 版本号相同也挡不住这种漂移（装错版本、手改过文件），所以 status 里
+   * 比对哈希。不匹配时整理段整体收起——两套对不上口径的代码不能同时写一个库。
+   */
+  const schemaMismatch = $derived(usable && beets?.schemaMatched === false);
+  /** v2：库锁被别的进程拿着（双开播放器 / 外部 beet 写库）。只提示不阻断：
+   * 真正的单写者由宿主会话槽保证，这里暴露的是它管不到的残余。 */
+  const lockHolder = $derived(
+    usable && beets?.libraryLock === 'held' ? (beets?.libraryLockHolder ?? '另一个进程') : null,
+  );
 
   /**
    * 工具入口是从哪找到的（docs/33 §6.1 四种来源）。
@@ -54,6 +65,31 @@
   }
 </script>
 
+{#snippet installActions()}
+  <div class="beets-tool-actions">
+    <Button
+      variant="primary"
+      size="sm"
+      onclick={() => void ui.installBeets('installer')}
+      title="下载安装器（约 33KB），用系统 Python 建环境"
+    >
+      {#snippet icon()}<Download size={14} />{/snippet}
+      快速安装
+    </Button>
+    <Button
+      size="sm"
+      onclick={() => void ui.installBeets('bundle')}
+      title="下载自带运行时的套件包（约 31MB），不需要系统 Python"
+    >
+      {#snippet icon()}<Package size={14} />{/snippet}
+      免安装包
+    </Button>
+    <span class="dim">
+      快速安装要求机器上有 Python 3.10–3.14；没有就用免安装包（自带解释器，解压即用）。
+    </span>
+  </div>
+{/snippet}
+
 <div class="beets-section">
   <div class="beets-tool-block">
     {#if beets === null}
@@ -76,7 +112,19 @@
           </b>
         </span>
         <span>入口 <b>{entrySourceText(b.entrySource)}</b></span>
+        {#if lockHolder}
+          <span class="lock-badge" title="变更库的命令会被拒绝，等持有者完成">库被占用（{lockHolder}）</span>
+        {/if}
       </div>
+      {#if schemaMismatch}
+        <div class="schema-warning">
+          整理组件与播放器的协议契约不一致（schema 指纹比对失败）。
+          整理功能已停用——请重装整理组件，或升级播放器后重试。
+        </div>
+        <!-- 审查修复：schema 不匹配 ≠ 未安装，安装按钮原来只在"未启用"分支渲染，
+             用户会看到"请重装"却没有可点的入口（死胡同） -->
+        {@render installActions()}
+      {/if}
       {#if b.pluginSummary}
         {@const bad = (b.pluginHealth ?? []).filter((p) => p.missing.length > 0)}
         <div class="beets-plugins">
@@ -115,35 +163,14 @@
           <span class="dim">不影响播放。装上之后才能做标签匹配、批量改标签与文件重排。</span>
         {/if}
       </div>
-      <div class="beets-tool-actions">
-        <Button
-          variant="primary"
-          size="sm"
-          onclick={() => void ui.installBeets('installer')}
-          title="下载安装器（约 33KB），用系统 Python 建环境"
-        >
-          {#snippet icon()}<Download size={14} />{/snippet}
-          快速安装
-        </Button>
-        <Button
-          size="sm"
-          onclick={() => void ui.installBeets('bundle')}
-          title="下载自带运行时的套件包（约 31MB），不需要系统 Python"
-        >
-          {#snippet icon()}<Package size={14} />{/snippet}
-          免安装包
-        </Button>
-        <span class="dim">
-          快速安装要求机器上有 Python 3.10–3.14；没有就用免安装包（自带解释器，解压即用）。
-        </span>
-      </div>
+      {@render installActions()}
       {#if install.error}
         <span class="danger">{install.error}</span>
       {/if}
     {/if}
   </div>
 
-  {#if usable}
+  {#if usable && !schemaMismatch}
     <ImportPanel onsynced={() => void list.reload({ restore: true })} />
 
     <details class="maint-fold">

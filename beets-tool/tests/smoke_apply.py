@@ -38,14 +38,17 @@ ENV = dict(os.environ, BEETSDIR=BEETSDIR, PYTHONIOENCODING="utf-8",
            PYTHONPATH=TOOL_SRC)
 
 
-def run_apply(decisions, timeout=120):
+def run_apply(decisions, timeout=120, resume=False, req_id=7):
     """一次性 sidecar 进程跑 apply_import，返回 (events, returncode)。"""
     proc = subprocess.Popen(
         [PYTHON, "-m", "aiya_beets"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         text=True, encoding="utf-8", env=ENV,
     )
-    req = json.dumps({"id": 7, "cmd": "apply_import", "decisions": decisions}, ensure_ascii=False)
+    req = json.dumps(
+        {"id": req_id, "cmd": "apply_import", "decisions": decisions, "resume": resume},
+        ensure_ascii=False,
+    )
     try:
         out, _ = proc.communicate(req + "\n", timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -214,6 +217,49 @@ assert len(terminal) == 1, f"终止事件必须恰好一个，实际 {terminal}�
 assert terminal[0] == "cancelled", f"取消后不能出现 applyDone（全量照跑=P1-7 回归）: {ev_types}"
 assert proc.returncode == 0, proc.returncode
 print("[5] 取消 OK:", ev_types)
+
+# ---- 场景 6：断点续跑（v2）—— move 中断后重跑不再报"源文件不存在" ----
+# 这是 v2 之前没有任何恢复路径的洞：move 完成的 decision，其源文件已不在
+# decisions 给的路径上，不带 resume 的重跑对它必然逐文件报错。
+src6a = fresh_src("src6a")   # decision A：已完成（模拟在 B 之前被打断）
+src6b = fresh_src("src6b")   # decision B：还没轮到
+decA = decision("apply_move", src6a, "冒烟F甲", title_prefix="F甲曲目")
+decB = decision("apply_move", src6b, "冒烟F乙", title_prefix="F乙曲目")
+
+events, rc = run_apply([decA], req_id=11)
+applied = [e for e in events if e["type"] == "applied"][0]
+assert applied["failed"] == [] and applied["moved"] is True, applied
+assert not os.path.exists(src6a[0]), "move 后源文件应已消失"
+
+# 重跑（不带 resume）：A 的源文件不在 → 三首全失败（洞还在时的行为）
+events, rc = run_apply([decA], req_id=12)
+applied = [e for e in events if e["type"] == "applied"][0]
+assert len(applied["failed"]) == len(src6a), applied
+
+# 续跑（resume:true）：A 被断点跳过（resumedSkipped=1，不发 applied），B 正常执行
+events, rc = run_apply([decA, decB], resume=True, req_id=13)
+done = [e for e in events if e["type"] == "applyDone"][0]
+applieds = [e for e in events if e["type"] == "applied"]
+assert done["resumedSkipped"] == 1, done
+assert len(applieds) == 1 and applieds[0]["failed"] == [], (applieds, done)
+lib, items = beets_items()
+f_items = [it for it in items if "冒烟F" in it.album]
+assert len(f_items) == 6, len(f_items)
+assert all(os.path.exists(it.path.decode("utf-8", "replace")) for it in f_items)
+print("[6] 断点续跑 OK：resumedSkipped=1，剩余决策正常执行，6 首全部在库")
+
+# ---- 场景 7：纯写标签的续跑——已完成的 decision 不重写（mtime 不变）----
+src7 = fresh_src("src7")
+dec7 = decision("apply", src7, "冒烟G", title_prefix="G曲目")
+events, rc = run_apply([dec7], req_id=14)
+assert [e for e in events if e["type"] == "applied"][0]["failed"] == []
+before = {p: os.path.getmtime(p) for p in src7}
+events, rc = run_apply([dec7], resume=True, req_id=15)
+done = [e for e in events if e["type"] == "applyDone"][0]
+assert done["resumedSkipped"] == 1, done
+after = {p: os.path.getmtime(p) for p in src7}
+assert before == after, f"续跑重写了已完成文件：{before} -> {after}"
+print("[7] 续跑不重写 OK（mtime 未变）")
 
 # ---- 清理 ----
 shutil.rmtree(WORK, ignore_errors=True)

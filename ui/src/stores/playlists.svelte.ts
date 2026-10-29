@@ -20,7 +20,7 @@ import { ui } from './ui.svelte';
  *
  *   创建 → 刷新侧栏 → 跳到新歌单           （`create`）
  *   删除 → 刷新侧栏 → 若正在看它则退回曲库   （`remove`）
- *   加歌 → 刷新侧栏 → 若正在看它则按原位置重载（`addTracks`）
+ *   加歌 → 刷新侧栏 → 若正在看它则重载（`addTracks`；首行插入后位置全变）
  *
  * 这些串法留在调用方就是回调汤，且「是否正在看这个歌单」的判断会散在 5 个
  * 地方。放到这里，视图与歌单的关系只在这一处判断。
@@ -69,7 +69,10 @@ class PlaylistsStore {
     return id;
   }
 
-  /** 保存动态歌单规则。若正在看它则重载列表（规则的变更立刻反映到曲目） */
+  /**
+   * 保存动态歌单规则（2026-10-30 物化模型）：后端做**替换重算**——清空现有
+   * 曲目、按新规则重新入库，所见即所得。若正在看它则重载列表。
+   */
   async setRule(playlist: PlaylistSummary, rule: SmartRule): Promise<boolean> {
     try {
       await ipc.playlist.setRule(playlist.id, rule);
@@ -80,8 +83,23 @@ class PlaylistsStore {
     await this.refresh();
     const view = ui.view;
     if (view.kind === 'playlist' && view.id === playlist.id) await list.reload();
-    notify.showToast('规则已保存');
+    notify.showToast('规则已保存，歌单已按新规则重算');
     return true;
+  }
+
+  /** 刷新动态歌单：重跑规则只追加新命中（只加不删，手动混入/排序不动）。 */
+  async refreshSmart(playlist: PlaylistSummary): Promise<void> {
+    try {
+      const result = await ipc.playlist.refresh(playlist.id);
+      await this.refresh();
+      const view = ui.view;
+      if (view.kind === 'playlist' && view.id === playlist.id) await list.reload();
+      notify.showToast(
+        result.added > 0 ? `新增 ${result.added} 首，共 ${result.total} 首` : '没有新增的匹配曲目',
+      );
+    } catch (err) {
+      notify.showError(errorMessage(err));
+    }
   }
 
   async rename(playlist: PlaylistSummary, name: string): Promise<void> {

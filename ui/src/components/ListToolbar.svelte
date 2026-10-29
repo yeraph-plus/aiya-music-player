@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Funnel, FunnelPlus, HeartPlus, ListChecks, ListPlus } from '@lucide/svelte';
+  import { Funnel, FunnelPlus, HeartPlus, ListChecks, ListPlus, LocateFixed } from '@lucide/svelte';
   import Icon from './Icon.svelte';
   import Button from './ui/Button.svelte';
   import IconButton from './ui/IconButton.svelte';
@@ -28,12 +28,16 @@
     filterCount: number;
     /** 筛选器是否可用（歌单等固定顺序视图不提供） */
     canFilter: boolean;
+    /** 是否有正在播放的曲目（「定位到正在播放」的显隐条件；没有就不渲染按钮） */
+    canLocate?: boolean;
     onplayall: () => void;
     onenqueue: () => void;
     onaddto: () => void;
     onremove: () => void;
     onfilteropen: () => void;
     onbatchmode: (on: boolean) => void;
+    /** 跳到正在播放的条目（一次性定位，不做持续自动跟随） */
+    onlocate: () => void;
   }
 
   let {
@@ -43,12 +47,14 @@
     batchMode,
     filterCount,
     canFilter,
+    canLocate = false,
     onplayall,
     onenqueue,
     onaddto,
     onremove,
     onfilteropen,
     onbatchmode,
+    onlocate,
   }: Props = $props();
 </script>
 
@@ -75,6 +81,14 @@
   {/if}
 
   <span class="lt-space"></span>
+
+  {#if canLocate}
+    <!-- 定位到正在播放：纯手动触发（docs/27 右组模式件同款图标键）。
+         不做自动跟随——播放中列表被反复拽回播放行是修掉的老 bug。 -->
+    <IconButton label="定位到正在播放" size="sm" onclick={onlocate}>
+      <LocateFixed size={15} />
+    </IconButton>
+  {/if}
 
   {#if canFilter}
     <span class="lt-filter" class:on={filterCount > 0}>

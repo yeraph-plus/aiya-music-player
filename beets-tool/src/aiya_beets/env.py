@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import platform
 
-from . import cfg
+from . import cfg, lockfile
 from .beetslib import configured_directory
 from .plugins import capability_report, summary
 from .protocol import PROTOCOL_VERSION, SCHEMA_SHA256
@@ -67,6 +67,7 @@ def status_payload() -> dict:
     lib_path = beets_config["library"].as_filename()
     plugins = list(beets_config["plugins"].as_str_seq())
     caps = capability_report(plugins)
+    lock_state, lock_holder = lockfile.probe()
     return {
         "protocolVersion": PROTOCOL_VERSION,
         # 契约指纹（本模块只报不解释）：播放器拿它跟镜像里的 sha256 比，
@@ -86,6 +87,10 @@ def status_payload() -> dict:
         "pluginSummary": summary(caps),
         "configDir": str(beets_config.config_dir()),
         "dataHome": str(cfg.data_home()),
+        # v2：库锁三态（docs/41 §3.3）。宿主只展示不决策——单写者仍由
+        # 宿主的会话槽保证，这里暴露的是它管不到的残余（双实例/外部 beet）。
+        "libraryLock": lock_state,
+        "libraryLockHolder": lock_holder,
     }
 
 

@@ -25,6 +25,13 @@ export interface TrackMeta {
   length?: number;
 }
 
+/**
+ * 候选证据层级（协议 v2，借鉴 beets-web-manager ADR 0002/0007）。
+ * recordingId > metadataSlot > releaseGroup > similarity，自强到弱。
+ * 指纹层（AcoustID）预留未实现——工具侧不虚标，这里也就没有这个值。
+ */
+export type EvidenceTier = 'recordingId' | 'metadataSlot' | 'releaseGroup' | 'similarity';
+
 export interface CandidatePreview {
   id: string;
   /** 0–1，1 - distance；低置信度 UI 不默认勾选 */
@@ -32,6 +39,10 @@ export interface CandidatePreview {
   fromScratch: boolean;
   extraItems: number;
   extraTracks: number;
+  /** v2：证据层级——回答"为什么推荐这个"（机器判定看它，reasons 是人话） */
+  evidence?: EvidenceTier;
+  /** v2：判到该层的依据短句 */
+  reasons?: string[];
   album: {
     id: string | null;
     album: string | null;
@@ -61,19 +72,17 @@ export type BeetsImportEvent =
   | { type: 'albumError'; session: string; stage: string; path: string; beets_message: string }
   | { type: 'done'; session: string; albums: number }
   /* ---- B2：应用阶段 ---- */
-  /** 单张专辑应用完成；failed 是逐曲失败明细（可重试），code=conflict 表示目标路径已存在 */
+  /** 单张专辑应用完成；failed 是逐曲失败明细（可重试），code=conflict 表示目标路径已存在，code=blankIdentity 表示合并后身份标签仍空白被拒绝写入 */
   | { type: 'applied'; session: string; albumId: string; written: number; moved: boolean; failed: Array<{ path: string; message: string; code?: string }> }
-  | { type: 'applyDone'; session: string; applied: number; skipped: number; failed: number; moved: number }
+  /** resumedSkipped（v2）：resume 续跑时因断点已完成而跳过的专辑数 */
+  | { type: 'applyDone'; session: string; applied: number; skipped: number; failed: number; moved: number; resumedSkipped?: number }
   /* ---- B3：取消 ---- */
   /** 用户取消；session 收尾到最近的检查点为止（已完成的部分保留） */
   | { type: 'cancelled'; session: string; stage: string }
   /** sidecar 收到取消命令的回执 */
   | { type: 'cancelAck' }
-  /* ---- 读模型对齐（beets 写权威 → 自有 DB 读模型，docs/08 §5 自闭环） ---- */
-  /** beets 库 → 自有 DB 全量对齐汇总（apply 完成后自动触发，也可手动） */
-  | { type: 'librarySynced'; matched: number; updated: number; imported: number; unchanged: number; orphaned: number }
-  | { type: 'librarySyncFailed'; message: string }
-  /** 正在扫描全库 / beets 会话在跑，本次刷新让位（自动触发时不会发这条） */
+  /* ---- 曲库刷新终态（宿主扫描段；beets 对账已随 docs/43 §8-E 移除） ---- */
+  /** 正在扫描全库（写库互斥被占），本次刷新让位（自动触发时不会发这条） */
   | { type: 'libraryRefreshSkipped'; reason: string }
   /* ---- 自动刷新管线终态（docs/33 §7） ---- */
   /**

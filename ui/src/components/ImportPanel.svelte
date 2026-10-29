@@ -47,13 +47,25 @@
   /** 文件动作：默认只写标签（B3 移动/复制显式选择） */
   let moveMode = $state<MoveMode>('apply');
 
+  /**
+   * 证据层级徽标（协议 v2）：回答"为什么推荐这个"。顺序即强弱；
+   * similarity 是兜底层，不给徽标底色（用户该对它多留个心眼）。
+   */
+  const EVIDENCE_LABELS: Record<string, string> = {
+    recordingId: '指纹级 · Recording ID',
+    metadataSlot: '双源印证',
+    releaseGroup: 'Release Group',
+    similarity: '仅相似度',
+  };
+  const evidenceLabel = (c: CandidatePreview): string | null =>
+    (c.evidence && EVIDENCE_LABELS[c.evidence]) || null;
+
   const moveOptions: Array<{ value: string; label: string }> = Object.entries(MOVE_LABELS).map(
     ([value, label]) => ({ value, label }),
   );
 
   const running = $derived(beets.phase === 'previewing');
   const applying = $derived(beets.phase === 'applying');
-  const syncing = $derived(beets.phase === 'syncing');
   const inbox = $derived(beetsConfig.inbox);
 
   // 配置（inbox/输出根）随面板挂载拉一次；store 幂等
@@ -93,8 +105,8 @@
     }
   }
 
-  // store 的 syncVersion 递增 = 一次新的曲库对齐完成 → 通知主视图重拉。
-  // 以挂载时的版本为基线，避免打开面板时被旧会话的对齐结果误触发。
+  // store 的 syncVersion 递增 = 一次新的曲库刷新完成 → 通知主视图重拉。
+  // 以挂载时的版本为基线，避免打开面板时被旧会话的结果误触发。
   let seenSyncVersion = beets.syncVersion;
   $effect(() => {
     if (beets.syncVersion === seenSyncVersion) return;
@@ -139,7 +151,6 @@
   const cancelSession = (): Promise<void> => beets.cancel();
 
   /** 手动全量对齐：beets 库 → 自有读模型（无需先预览） */
-  const syncNow = (): Promise<void> => beets.syncNow();
 
   function currentMeta(album: AlbumPreview) {
     return album.current;
@@ -237,7 +248,6 @@
           应用所选（{applyableCount} 张）
         </Button>
       {/if}
-      <Button size="sm" onclick={() => void syncNow()} disabled={syncing} title="把整理库里的元数据对齐回曲库（与自动刷新是同一条管线）">从整理库对齐</Button>
     </div>
 
     {#if beets.applySummary}
@@ -245,19 +255,7 @@
         已应用 {beets.applySummary.applied} 张 · 跳过 {beets.applySummary.skipped} 张
         {#if beets.applySummary.moved > 0} · 已{MOVE_LABELS[moveMode].replace('到 beets 库', '')} {beets.applySummary.moved} 首{/if}
         {#if beets.applySummary.failed > 0} · 失败 {beets.applySummary.failed} 首{/if}
-        {#if beets.synced}
-          <div class="dim">
-            曲库已对齐：命中 {beets.synced.matched} · 更新 {beets.synced.updated} · 新增 {beets.synced.imported} · 未变 {beets.synced.unchanged}
-            {#if beets.synced.orphaned > 0} · beets 已删 {beets.synced.orphaned}{/if}
-          </div>
-        {:else if syncing}
-          <div class="dim">正在对齐曲库（beets → 本地）…</div>
-        {/if}
-      </div>
-    {:else if beets.synced}
-      <div class="apply-summary">
-        曲库已对齐：命中 {beets.synced.matched} · 更新 {beets.synced.updated} · 新增 {beets.synced.imported} · 未变 {beets.synced.unchanged}
-        {#if beets.synced.orphaned > 0} · beets 已删 {beets.synced.orphaned}{/if}
+        {#if (beets.applySummary.resumedSkipped ?? 0) > 0} · 续跑跳过（已完成）{beets.applySummary.resumedSkipped} 张{/if}
       </div>
     {/if}
 
@@ -265,6 +263,15 @@
       <div class="import-error">
         {beets.lastError}
         <div class="dim">若提示组件缺失或版本不符，到上方「整理库」区块重装。</div>
+      </div>
+    {/if}
+
+    {#if beets.canResume}
+      <div class="resume-row">
+        <span class="dim">上次应用有中断——已完成的专辑不会重写，只补剩余的。</span>
+        <Button size="sm" onclick={() => void beets.resumeLast()} disabled={running || applying}>
+          续跑上次应用
+        </Button>
       </div>
     {/if}
 
@@ -301,8 +308,8 @@
               · 文件已{moveMode === 'apply_move' ? '移动' : '复制'}到 beets 库
             {/if}
             {#each beets.results[album.id].failed as f (f.path)}
-              <div class="fail-line" class:conflict={f.code === 'conflict'}>
-                {f.code === 'conflict' ? '⚠ 目标冲突' : '✗'}
+              <div class="fail-line" class:conflict={f.code === 'conflict' || f.code === 'blankIdentity'}>
+                {f.code === 'conflict' ? '⚠ 目标冲突' : f.code === 'blankIdentity' ? '⚠ 身份空白' : '✗'}
                 {f.path.split(/[\\/]/).pop()}：{f.message}
               </div>
             {/each}
@@ -330,6 +337,16 @@
           />
 
           {#if candidateMeta(album)}
+            {#if evidenceLabel(candidateMeta(album)!)}
+              <div class="evidence-line">
+                <span class="ev-badge" class:weak={candidateMeta(album)!.evidence === 'similarity'}>
+                  {evidenceLabel(candidateMeta(album)!)}
+                </span>
+                {#each candidateMeta(album)!.reasons ?? [] as r (r)}
+                  <span class="dim">{r}</span>
+                {/each}
+              </div>
+            {/if}
             <table class="diff-table">
               <thead><tr><th>字段</th><th>当前</th><th>候选</th></tr></thead>
               <tbody>
@@ -427,6 +444,33 @@
     border-radius: 6px;
     padding: 8px 10px;
     font-size: 12px;
+  }
+  .resume-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: 12px;
+  }
+  /* 证据徽标（协议 v2）：similarity 层刻意弱化——它是最该被怀疑的推荐 */
+  .evidence-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 11px;
+  }
+  .ev-badge {
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 10.5px;
+    white-space: nowrap;
+  }
+  .ev-badge.weak {
+    border-color: var(--line-strong, var(--line));
+    color: var(--text-2);
   }
   .empty-hint {
     font-size: 12px;

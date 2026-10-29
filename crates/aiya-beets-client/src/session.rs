@@ -438,7 +438,7 @@ pub fn query_plugin_catalog(
 /// `pub` 是为了让 `tests/proto_mirror.rs` 拿它与镜像 schema 里的 `type`
 /// 常量集合比对——改名而忘了改这里，症状是"会话永远不结束"，很难现场定位。
 pub const TERMINAL_EVENTS: &[&str] =
-    &["done", "applyDone", "cancelled", "sessionFailed"];
+    &["done", "applyDone", "cancelled", "sessionFailed", "pluginDone"];
 
 /// 起会话转发线程：把每一行 JSON 转发给 `sink`，见终态事件后收尾。
 ///
@@ -760,7 +760,7 @@ mod tests {
     fn terminal_event_set_is_the_documented_four() {
         assert_eq!(
             TERMINAL_EVENTS,
-            &["done", "applyDone", "cancelled", "sessionFailed"]
+            &["done", "applyDone", "cancelled", "sessionFailed", "pluginDone"]
         );
         // sessionEnd 是收尾后宿主自己补的，绝不能出现在终态集合里
         assert!(!TERMINAL_EVENTS.contains(&"sessionEnd"));

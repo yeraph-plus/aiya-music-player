@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""协议契约测试（docs/33 §9 M3）：工具吐出的**每一行**都必须符合 v1 schema。
+"""协议契约测试（docs/33 §9 M3）：工具吐出的**每一行**都必须符合 v2 schema。
 
 三件事，缺一不可：
 
-1. **自证**：`protocol.SCHEMA_SHA256` 必须等于 `protocol/v1.schema.json` 的
+1. **自证**：`protocol.SCHEMA_SHA256` 必须等于 `protocol/v2.schema.json` 的
    真实 sha256。改了 schema 忘了改常量 → 这里红（而不是等用户装到旧组件）。
 2. **双向**：schema 里的错误码枚举必须等于 `protocol.ERROR_CODES`。少一个码
    → 这里红（宿主拿到未登记的码就分不了类）。
@@ -32,7 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TOOL = os.path.dirname(HERE)                    # beets-tool/
 REPO = os.path.dirname(TOOL)                    # 仓库根
 TOOL_SRC = os.path.join(TOOL, "src")
-SCHEMA_PATH = os.path.join(TOOL, "protocol", "v1.schema.json")
+SCHEMA_PATH = os.path.join(TOOL, "protocol", "v2.schema.json")
 PYTHON = os.environ.get("AIYA_BEETS_PYTHON") or os.path.join(
     TOOL, ".venv", "Scripts", "python.exe")
 sys.path.insert(0, TOOL_SRC)
@@ -83,7 +83,7 @@ def check(name, obj, label=""):
 # ---------------- 1. 自证：schema 指纹 ----------------
 digest = hashlib.sha256(SCHEMA_BYTES).hexdigest()
 assert digest == P.SCHEMA_SHA256, (
-    "protocol.SCHEMA_SHA256 与 protocol/v1.schema.json 不一致——改了 schema 必须同步常量：\n"
+    "protocol.SCHEMA_SHA256 与 protocol/v2.schema.json 不一致——改了 schema 必须同步常量：\n"
     f"  文件实际：{digest}\n"
     f"  代码里写的：{P.SCHEMA_SHA256}"
 )
@@ -298,6 +298,83 @@ multi = {k: v for k, v in terminals.items() if len(v) != 1}
 assert not multi, f"一个请求发了多个终态（事件流会重复收尾）：{multi}"
 cancelled = sum(1 for v in terminals.values() if v[0] == "cancelled")
 print(f"[4] 取消终态 OK：{len(terminals)} 个请求各一个终态，其中 {cancelled} 个被取消")
+
+# ---- 场景 2.5：v2 的幂等/断点/门禁（docs/41 §6）----
+# 同一进程跑五条：重放、重放命中、键冲突、blankIdentity 门、searchIds 非法。
+# 取消代数不变（本批没有 cancel 行），锁由本进程首条变更命令持有直到退出
+# （同进程连续处理是契约测试的形态，lockfile.acquire 对它幂等）。
+adopt2 = fresh_src("adopt2")
+blank = fresh_src("blank")
+
+_ADOPT_A = {
+    "id": 60, "cmd": "adopt_library",
+    "paths": [os.path.join(WORK, "adopt2")],
+    "requestId": "ops-a-0001",
+}
+_BLANK_DEC = json.dumps({
+    "id": 63, "cmd": "apply_import", "decisions": [{
+        "album": "alb_000", "action": "apply", "paths": blank,
+        "candidate": {
+            # 全 null 的候选：合成 wav 本来无标签，合并后仍是空白 → 必须被拒
+            "album": {"album": None, "albumartist": None, "year": None, "genre": None},
+            "mapping": {p: {"title": None, "artist": None, "album": None,
+                            "albumartist": None, "year": None, "track": None,
+                            "disc": None, "genre": None, "length": 1.0}
+                        for p in blank},
+        },
+    }],
+})
+
+reqs25 = [
+    json.dumps(_ADOPT_A),                                        # 真执行 → added=3
+    json.dumps({**_ADOPT_A, "id": 61}),                          # 同键同内容 → 重放（也 added=3）
+    json.dumps({**_ADOPT_A, "id": 62,                            # 同键不同内容 → E_INVALID_ARG
+                "paths": [os.path.join(WORK, "别的地方")]}),
+    _BLANK_DEC,                                                  # blankIdentity 门
+    json.dumps({"id": 64, "cmd": "preview_import", "paths": [os.path.join(WORK, "adopt2")],
+                "options": {"searchIds": ["不是-uuid"]}}),
+]
+
+lines25, err25 = run(reqs25)
+adopt_dones = []
+blank_applied = None
+blank_apply_done = None
+codes25 = []
+for raw in lines25:
+    if not raw.strip():
+        continue
+    kind, obj = classify_line(raw)
+    assert kind is not None, f"stdout 出现非 JSON 行：{obj[:200]}"
+    if kind == "Response":
+        assert obj["ok"] is False, f"场景 2.5 不应有成功应答：{obj}"
+        codes25.append(obj["error"]["code"])
+        continue
+    if obj["type"] == "adoptDone":
+        adopt_dones.append(obj)
+    elif obj["type"] == "applied" and blank_applied is None:
+        blank_applied = obj
+    elif obj["type"] == "applyDone":
+        blank_apply_done = obj
+
+# 重放的判据：第二次 adopt 如果真执行，added=0 / skipped=3（路径已在库）；
+# 重放则原样回放上次的 added=3。两次 added 相等且非零 ⇒ 走的是重放。
+assert len(adopt_dones) == 2, f"adopt 终态应有两次（真执行 + 重放）：{len(adopt_dones)}"
+assert adopt_dones[0]["added"] == len(adopt2) > 0, adopt_dones[0]
+assert adopt_dones[1]["added"] == adopt_dones[0]["added"], (
+    f"第二次 adopt 不是重放（added={adopt_dones[1]['added']}，重放应等于第一次的 "
+    f"{adopt_dones[0]['added']}；真执行会是 added=0/skipped=3）"
+)
+# 同键不同内容必须拒绝，且只拒绝这一处（searchIds 是另一处 E_INVALID_ARG）
+assert sorted(codes25) == sorted([P.E_INVALID_ARG, P.E_INVALID_ARG]), codes25
+# blankIdentity 门：全部文件拒绝写入，code 精确命中
+assert blank_applied is not None and blank_apply_done is not None, "blank 场景没有终态"
+assert blank_applied["written"] == 0, blank_applied
+assert all(f.get("code") == "blankIdentity" for f in blank_applied["failed"]), blank_applied
+assert len(blank_applied["failed"]) == len(blank)
+assert blank_apply_done["failed"] == len(blank)
+assert blank_apply_done["resumedSkipped"] == 0  # v2 必有字段（schema required 已保证，显式断言一次）
+print(f"[4.5] v2 幂等/门禁 OK：重放 added={adopt_dones[1]['added']}、键冲突拒绝、"
+      f"blankIdentity 拒写 {len(blank_applied['failed'])} 首、searchIds 拒绝")
 
 # ---- 场景 3（可选）：联网匹配的三种事件 ----
 if os.environ.get("AIYA_BEETS_ONLINE") == "1":

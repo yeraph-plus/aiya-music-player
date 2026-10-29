@@ -35,7 +35,7 @@ import type {
   LibraryStats,
   Lyrics,
   PlayerState,
-  PlaylistAddResult,
+  PlaylistAddResult, PlaylistRefresh,
   PlaylistDeleted,
   PlaylistExportResult,
   PlaylistImportResult,
@@ -74,7 +74,7 @@ export type TrackQueryInput = {
   addedFromMs?: number | null;
   addedToMs?: number | null;
   /**
-   * 筛选器临时条件（`[{field,op,value}]`）——与智能歌单同一批键
+   * 筛选器临时条件（`[{field,op,value}]`）——与动态歌单同一批键
    * （smart.rs parse_conds 解析），只在本次查询生效、不落库。
    * 旧 lastPlayed* 字段已随「上次播放」筛选档移除（后端字段保留兼容）。
    */
@@ -224,7 +224,7 @@ export const ipc = {
      */
     albums: (search?: string) => call<AlbumPage>('library_albums', { search }),
     artists: (search?: string) => call<ArtistPage>('library_artists', { search }),
-    /** 曲库现有流派（去重，norm 序）；智能歌单"流派"条件的下拉数据源 */
+    /** 曲库现有流派（去重，norm 序）；动态歌单"流派"条件的下拉数据源 */
     genres: () => call<string[]>('library_genres'),
   },
 
@@ -235,13 +235,16 @@ export const ipc = {
     create: (name: string, trackIds?: string[], rule?: SmartRule) =>
       call<PlaylistSummary>('playlist_create', { name, trackIds, rule }),
     rename: (id: string, name: string) => call<PlaylistSummary>('playlist_rename', { id, name }),
-    /** 更新智能歌单规则（手动歌单后端会明确报错） */
+    /** 更新动态歌单规则（手动歌单后端会明确报错） */
     setRule: (id: string, rule: SmartRule) => call<PlaylistSummary>('playlist_set_rule', { id, rule }),
     remove: (id: string) => call<PlaylistDeleted>('playlist_delete', { id }),
     /** 侧栏拖动排序；返回排好序的完整列表（省一次 roundtrip） */
     reorder: (from: number, to: number) => call<PlaylistSummary[]>('playlist_reorder', { from, to }),
-    addTracks: (id: string, trackIds: string[], mode?: 'append' | 'next') =>
-      call<PlaylistAddResult>('playlist_add_tracks', { id, trackIds, mode }),
+    // 2026-10-30 语义：加歌一律首行插入（最后入库的在最前），无 append/next 分档
+    addTracks: (id: string, trackIds: string[]) =>
+      call<PlaylistAddResult>('playlist_add_tracks', { id, trackIds }),
+    /** 刷新动态歌单：重跑规则只追加新命中；返回本次新增数与刷新后总数 */
+    refresh: (id: string) => call<PlaylistRefresh>('playlist_refresh', { id }),
     removeAt: (id: string, position: number) =>
       call<PlaylistSummary>('playlist_remove_at', { id, position }),
     move: (id: string, from: number, to: number) =>
@@ -317,7 +320,9 @@ export const ipc = {
     /** 只读预览：进度走 `beets:import`；没装 beets 得 `beetsMissing`。
      *  已导入排除表（inbox 防重复）由宿主注入 options，UI 不用管 */
     preview: (paths: string[]) => call<JobStarted>('beets_preview', { paths }),
-    apply: (decisions: ApplyDecision[]) => call<JobStarted>('beets_apply', { decisions }),
+    /** resume（v2）：中断后续跑——重发同一批 decisions，sidecar 按断点跳过已完成的 */
+    apply: (decisions: ApplyDecision[], resume?: boolean) =>
+      call<JobStarted>('beets_apply', { decisions, resume: resume ?? false }),
     cancel: () => call<CancelRequested>('beets_cancel'),
     /** beets 配置快照：待整理目录 / 整理输出根 / 已导入记录数（docs/40 十三轮） */
     config: () => call<BeetsConfig>('beets_config_get'),
@@ -336,7 +341,6 @@ export const ipc = {
      * 与自动定时跑的是**同一条管线**：结果走 `libraryRefreshed`
      * （无变化时手动也会发一条，好让界面有回应）。
      */
-    sync: () => call<JobStarted>('beets_sync'),
     /**
      * 装 beets 工具到应用数据目录（docs/33 §6.2 两条轨道）。
      *

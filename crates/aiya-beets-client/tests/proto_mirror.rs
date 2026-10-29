@@ -23,8 +23,8 @@ fn repo_root() -> std::path::PathBuf {
 
 fn mirror() -> (Value, Value) {
     let root = repo_root();
-    let schema_path = root.join("protocol/aiya-beets-v1.json");
-    let meta_path = root.join("protocol/aiya-beets-v1.meta.json");
+    let schema_path = root.join("protocol/aiya-beets-v2.json");
+    let meta_path = root.join("protocol/aiya-beets-v2.meta.json");
     let schema: Value = serde_json::from_str(
         &std::fs::read_to_string(&schema_path).unwrap_or_else(|e| {
             panic!("读不到镜像 schema（{}）：{e}\n——跑 npm run proto:sync", schema_path.display())
@@ -70,6 +70,8 @@ fn full_report() -> StatusReport {
         capability_health: Some(serde_json::json!([])),
         capability_summary: Some(serde_json::json!({})),
         data_home: Some("C:/x".into()),
+        library_lock: Some("free".into()),
+        library_lock_holder: None,
     }
 }
 
@@ -138,8 +140,8 @@ fn terminal_events_exist_in_schema() {
             .unwrap_or_else(|| panic!("每个 Event 变体都要有 type const：{v}"));
         types.insert(name.to_string());
     }
-    // 16 种纯事件（第 17 种终态是带 type 的错误信封，见 Response）
-    assert_eq!(variants.len(), 16, "Event 变体数变了：{}", variants.len());
+    // 18 种纯事件（2026-10-28 +pluginProgress/pluginDone；终态错误信封在 Response）
+    assert_eq!(variants.len(), 18, "Event 变体数变了：{}", variants.len());
 
     for t in TERMINAL_EVENTS {
         // sessionFailed 的形状在 Response 里（它有 ok 字段），不在 Event 里
@@ -157,7 +159,8 @@ fn terminal_events_exist_in_schema() {
 fn every_request_variant_has_cmd_and_is_closed() {
     let (schema, _meta) = mirror();
     let variants = defs(&schema, "Request")["oneOf"].as_array().expect("Request 必须是 oneOf");
-    assert_eq!(variants.len(), 11, "命令数变了（加命令要改 schema 与这里的期望）");
+    // 2026-10-28 加法：plugin_catalog / plugin_install（docs/40 §3 白名单版）
+    assert_eq!(variants.len(), 13, "命令数变了（加命令要改 schema 与这里的期望）");
     for v in variants {
         let cmd = v["properties"]["cmd"]["const"].as_str().expect("每个请求都要有 cmd const");
         assert_eq!(

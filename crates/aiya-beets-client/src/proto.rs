@@ -12,13 +12,14 @@ use serde::{Deserialize, Serialize};
 
 /// 本 crate 支持的协议版本。
 ///
-/// 冻结值 1（docs/33 §9 M3）。分包之前那个 3 是同一份代码内部的迭代次数，
-/// 从未作为对外契约存在过；契约第一次对外发布就是 v1，于是 schema 文件名、
-/// `protocol.version`、这个常量三者同一个 1。
+/// v2（2026-10-29，docs/41 §6）：加法为主（requestId/resume/evidence/
+/// libraryLock/E_LIBRARY_BUSY/resumedSkipped），拍板升版 + 新字段在 v2 内
+/// 定为 required。v1 宿主连 v2 工具会被 `E_PROTOCOL_MISMATCH` 拒绝并在
+/// message 里说明升级方向——不做降级协商。
 ///
 /// 用途：① 请求里带 `clientProtocol`（工具据此拒掉版本不符的一方）；
 /// ② `tests/proto_mirror.rs` 拿它与镜像 meta 里的版本比对。
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// 一次性应答的外层信封。所有命令共用这个形状。
 #[derive(Debug, Clone, Deserialize)]
@@ -29,8 +30,12 @@ pub(crate) struct Envelope {
     pub error: Option<EnvelopeError>,
 }
 
+/// 错误细节。**线上字段是 snake 的 `beets_message`**（schema EnvelopeError
+/// required 一字不差）——此前误挂 `rename_all = "camelCase"`，导致 ok:false
+/// 信封永远解析失败（被上层当成"协议解析失败"而不是工具自己的诊断）。
+/// 正常 status 走 ok:true 所以从未暴露，v2 拒旧组件的路径一跑就现形。
+/// extras（`trace`/`holder`/`clientProtocol`…）按 schema 允许未知字段，忽略。
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct EnvelopeError {
     pub code: String,
     pub stage: String,
@@ -52,9 +57,8 @@ pub struct StatusReport {
     pub protocol_version: Option<u32>,
     /// 契约指纹：工具自报的 schema sha256。
     ///
-    /// 宿主当前不拿它做判断（镜像在构建期就被 `proto:check` 验过了），
-    /// 但它是**唯一的**"对面装的是不是同一版契约"的运行时凭据，
-    /// 未来接"组件与播放器分别升级"时必须用它。所以协议镜像里保留它。
+    /// v2 起宿主拿它与编译期嵌入的镜像哈希比对（`schemaMatched`，docs/35
+    /// P1-4 闭合）——"组件与播放器分别升级"不再只靠版本号兜底。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema_hash: Option<String>,
     /// 工具自身版本（线上字段原名 `beetsVersion`，见模块注释）。
@@ -92,6 +96,17 @@ pub struct StatusReport {
     /// 工具的数据根（宿主给的那个目录，工具回报确认）。
     #[serde(default, rename = "dataHome", skip_serializing_if = "Option::is_none")]
     pub data_home: Option<String>,
+    /// v2：库文件锁状态（`free|held|unknown`）。
+    ///
+    /// 字符串而非枚举：client crate 不解释取值语义（宿主 UI 才翻译），
+    /// 工具侧加新状态值时这里不需要跟着发版。
+    /// 这两个字段在协议里是 required（holder 可 null），所以 None 也序列化
+    /// 成 null，不用 `skip_serializing_if`——否则镜像测试的键集合对不上。
+    #[serde(default, rename = "libraryLock")]
+    pub library_lock: Option<String>,
+    /// v2：held 时锁文件里记录的持有者（`pid=…,cmd=…`）；free/unknown 为 null。
+    #[serde(default, rename = "libraryLockHolder")]
+    pub library_lock_holder: Option<String>,
 }
 
 impl StatusReport {
@@ -116,7 +131,7 @@ mod tests {
         // 值一律用中性占位：本测试验的是**字段名**能不能对上，
         // 不涉及任何具体工具的内容（crate 也不该认识那些名字）。
         let wire = serde_json::json!({
-            "protocolVersion": 1,
+            "protocolVersion": 2,
             "schemaHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "beetsVersion": "1.2.3",
             "pythonVersion": "3.14.7",
@@ -128,7 +143,9 @@ mod tests {
             "pythonSupported": true,
             "pluginHealth": [{"name": "alpha", "state": "ready", "enabled": true, "missing": [], "note": ""}],
             "pluginSummary": {"ready": 1, "missingDeps": 0, "unavailable": 0},
-            "dataHome": "C:/data"
+            "dataHome": "C:/data",
+            "libraryLock": "free",
+            "libraryLockHolder": null
         });
         let r: StatusReport = serde_json::from_value(wire).expect("线上形状必须可解析");
         assert_eq!(r.protocol_version, Some(PROTOCOL_VERSION));
@@ -161,7 +178,7 @@ mod tests {
     fn envelope_parses_error_branch() {
         let wire = serde_json::json!({
             "ok": false,
-            "error": { "code": "E_NO_TOOL", "stage": "probe", "beetsMessage": "not importable" }
+            "error": { "code": "E_NO_TOOL", "stage": "probe", "beets_message": "not importable" }
         });
         let e: Envelope = serde_json::from_value(wire).unwrap();
         assert!(!e.ok);

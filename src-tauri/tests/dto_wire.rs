@@ -496,6 +496,9 @@ fn beets_status_protocol_version_is_number() {
         }),
         config_dir: None,
         data_home: None,
+        schema_matched: true,
+        library_lock: Some("held".into()),
+        library_lock_holder: Some("pid=4321,cmd=apply_import".into()),
         error_code: None,
         error_message: None,
     };
@@ -511,6 +514,10 @@ fn beets_status_protocol_version_is_number() {
     assert_eq!(v["pluginHealth"][0]["state"], "ready");
     assert_eq!(v["pluginSummary"]["missingDeps"], 0);
     assert!(v["pythonSupported"].is_boolean());
+    // v2：schemaHash 比对结论 + 库锁三态（UI 据此出警告条/占用徽标）
+    assert_eq!(v["schemaMatched"], true);
+    assert_eq!(v["libraryLock"], "held");
+    assert_eq!(v["libraryLockHolder"], "pid=4321,cmd=apply_import");
 }
 
 /// 诊断页两张表的 wire 形状。
@@ -630,7 +637,7 @@ fn audio_source_wire_values() {
 #[test]
 fn beets_capability_dto_matches_mirrored_schema() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../protocol/aiya-beets-v1.json");
+        .join("../protocol/aiya-beets-v2.json");
     let schema: Value = serde_json::from_str(
         &std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("读不到协议镜像（{}）：{e}", path.display())),

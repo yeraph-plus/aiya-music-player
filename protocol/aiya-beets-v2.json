@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:aiya-beets:protocol:v1",
-  "title": "aiya-beets 协议 v1",
-  "description": "AIYA Music 播放器 ⇄ aiya-beets 工具的 NDJSON 契约（docs/33 §4）。\n\n这是**真源**：本文件随 beets-tool 发版，播放器仓库镜像一份\n（`protocol/aiya-beets-v1.json`，字节相同，`npm run proto:check` 守着）。\n\n四个入口（本文件根的 oneOf 覆盖前三个，安装器流单列）：\n  · Request        客户端 → 服务端，一行一个 JSON，`cmd` 判别\n  · Response       一次性应答，有 `ok` 字段。`ok:false` 时若带 `type`，它同时是会话终止事件\n  · Event          会话事件，`type` 判别，无 `id`\n  · InstallerEvent A 轨道安装器的 stdout 帧（`type` 判别），与 serve 会话是不同的词汇表\n\n三条硬规则：\n  1. stdout 只允许 JSON 行（beets 首写杂音走 stderr 或被 reader 过滤）\n  2. 请求的 `id` 必须原样回带\n  3. 会话式命令必须先发终态（`*Done` / `cancelled` / 带 `type` 的错误信封），客户端才关 stdin",
+  "$id": "urn:aiya-beets:protocol:v2",
+  "title": "aiya-beets 协议 v2",
+  "description": "AIYA Music 播放器 ⇄ aiya-beets 工具的 NDJSON 契约（docs/33 §4）。\n\n这是**真源**：本文件随 beets-tool 发版，播放器仓库镜像一份\n（`protocol/aiya-beets-v2.json`，字节相同，`npm run proto:check` 守着）。\n\n四个入口（本文件根的 oneOf 覆盖前三个，安装器流单列）：\n  · Request        客户端 → 服务端，一行一个 JSON，`cmd` 判别\n  · Response       一次性应答，有 `ok` 字段。`ok:false` 时若带 `type`，它同时是会话终止事件\n  · Event          会话事件，`type` 判别，无 `id`\n  · InstallerEvent A 轨道安装器的 stdout 帧（`type` 判别），与 serve 会话是不同的词汇表\n\n三条硬规则：\n  1. stdout 只允许 JSON 行（beets 首写杂音走 stderr 或被 reader 过滤）\n  2. 请求的 `id` 必须原样回带\n  3. 会话式命令必须先发终态（`*Done` / `cancelled` / 带 `type` 的错误信封），客户端才关 stdin\n\nv2 变更（2026-10-29，docs/41 §6）：\n  · ErrorCode += E_LIBRARY_BUSY（库文件锁被其他进程持有）\n  · StatusData += libraryLock / libraryLockHolder\n  · Candidate += evidence / reasons（证据分层，借鉴 beets-web-manager ADR 0002/0007）\n  · apply_import += resume（断点续跑）与 options.searchIds（钉死 Release 重刮）\n  · apply_import / adopt_library / update_library / move_items += requestId（幂等键，可选）\n  · applyDone += resumedSkipped\n  · Candidate/AlbumPreview 的 id pattern 放宽到任意位数（999+ 专辑组不再破坏契约）\n  拍板升版（docs/41 §6.1）：新字段在 v2 内定为 required（生产端总是计算），\n  版本协商边界兜住旧端；升版同时接线 schemaHash 运行时比对（闭合 docs/35 P1-4）。",
   "oneOf": [
     { "$ref": "#/$defs/Request" },
     { "$ref": "#/$defs/Response" },
@@ -14,14 +14,20 @@
       "type": "string",
       "description": "文件系统路径（UTF-8，未做规范化）。空的 path 在事件里合法（读不到路径的失败项），在请求里不允许。"
     },
+    "RequestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "v2。幂等键（可选）：同 requestId + 同请求内容重入 → 重放上次的终态事件（不重执行）；同键不同内容 → `E_INVALID_ARG`。**只重放 done**——failed/cancelled 不重放，重试必须真执行。登记簿在 `{dataHome}/ops.jsonl`（兼作操作审计日志）。"
+    },
     "Session": {
       "type": "string",
-      "pattern": "^(imp|app|sync|adopt|update|dup|move)_[0-9]+$",
-      "description": "会话名 = `<前缀>_<请求 id 两位>`，前缀由命令决定：imp/app/sync/adopt/update/dup/move。客户端按它把事件归到同一次请求。"
+      "pattern": "^(imp|app|sync|adopt|update|dup|move|plug)_[0-9]+$",
+      "description": "会话名 = `<前缀>_<请求 id 两位>`，前缀由命令决定：imp/app/sync/adopt/update/dup/move/plug。客户端按它把事件归到同一次请求。"
     },
     "Stage": {
-      "enum": ["scan", "matching", "writing", "adopt", "update", "duplicates", "move"],
-      "description": "会话内阶段。**新增阶段值属于协议变更**（要改本文件并 `proto:sync`），因为它会出现在 UI 文案与进度条逻辑里。"
+      "enum": ["scan", "matching", "writing", "adopt", "update", "duplicates", "move", "pluginInstall", "sync"],
+      "description": "会话内阶段。**新增阶段值属于协议变更**（要改本文件并 `proto:sync`），因为它会出现在 UI 文案与进度条逻辑里。2026-10-28 加法：pluginInstall（插件安装，docs/40 §3 白名单版）。v2 加法：sync（dump_items 的 cancelled 事件需要阶段值——v2 给 dump 补了取消检查）。"
     },
     "ErrorCode": {
       "enum": [
@@ -34,9 +40,10 @@
         "E_LIBRARY_DIR_MISMATCH",
         "E_BEETS_ERROR",
         "E_CONFIG",
-        "E_INTERNAL"
+        "E_INTERNAL",
+        "E_LIBRARY_BUSY"
       ],
-      "description": "冻结的错误码表（docs/33 §4.5）。宿主按 code 分类给 UX，**不按 beets_message 文本匹配**。\n\n有意没有 E_CANCELLED：取消是正常路径，用 `cancelled` 事件表达，不是失败。"
+      "description": "错误码表（docs/33 §4.5 冻结于 v1 的 10 个；v2 加 E_LIBRARY_BUSY）。宿主按 code 分类给 UX，**不按 beets_message 文本匹配**。\n\n有意没有 E_CANCELLED：取消是正常路径，用 `cancelled` 事件表达，不是失败。\n\nE_LIBRARY_BUSY（v2）：库文件锁被另一进程持有（双开播放器、外部 beet 写库），holder 详情在信封 extras。"
     },
     "EnvelopeError": {
       "type": "object",
@@ -58,7 +65,7 @@
 
     "_comment_requests": {
       "type": "object",
-      "description": "以下 11 条请求冻结于 v1。加新命令不算破坏兼容（老客户端不会发它）；改字段名/删字段算，必须 +1 版本。"
+      "description": "以下 13 条请求。加新命令不算破坏兼容（老客户端不会发它）；改字段名/删字段算，必须 +1 版本。2026-10-28 加法：plugin_catalog / plugin_install（插件市场白名单版，docs/40 §3）。2026-10-29 v2：四个库变更命令加可选 requestId（幂等键 + 审计），apply_import 加可选 resume；preview_import 的 options 支持 searchIds。"
     },
     "Request": {
       "oneOf": [
@@ -104,7 +111,7 @@
             "clientProtocol": { "type": "integer", "minimum": 1 },
             "cmd": { "const": "preview_import" },
             "paths": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Path" } },
-            "options": { "type": "object", "description": "预留：目前不解读，原样收下。" }
+            "options": { "type": "object", "description": "可选。`excludePaths`: string[] —— 已导入排除表（normcase 比较路径），preview 时跳过这些文件（docs/40 十三轮：待整理目录 copy 模式防重复入库）。`searchIds`: string[]（v2）—— 小写 MusicBrainz Release ID（带连字符 UUID）；给出时匹配限定在这些 release（用户钉死候选重刮），通常配合单个文件夹使用；格式非法 → `E_INVALID_ARG`。其余键不解读，原样收下。" }
           },
           "description": "只读预览：按目录分组成\"专辑\" → MusicBrainz 匹配 → `album` / `albumError` 事件流 → `done`。**不写任何文件与库**。"
         },
@@ -116,9 +123,38 @@
             "id": { "type": "integer", "minimum": 0 },
             "clientProtocol": { "type": "integer", "minimum": 1 },
             "cmd": { "const": "apply_import" },
-            "decisions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Decision" } }
+            "decisions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Decision" } },
+            "requestId": { "$ref": "#/$defs/RequestId" },
+            "resume": {
+              "type": "boolean",
+              "default": false,
+              "description": "v2。true 时跳过上次已成功完成的 decision（断点在 `{dataHome}/checkpoints/apply.jsonl`，键 = 决策内容哈希）；跳过的计入 `resumedSkipped`，进度心跳照常。中断的 move/copy 重跑靠它不再对已移走的文件报错。"
+            }
           },
           "description": "应用决策：写标签 → 入库（幂等）→ 按 action 移动/复制。候选数据由客户端**原样回传**，不重跑网络匹配（\"所见即所写\"）。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "plugin_catalog" }
+          },
+          "description": "插件市场目录（2026-10-28 加法，白名单版）：一次应答 `{catalog: [MarketItem]}`，每项带三态与来源档位（builtin / pypi:包名）。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd", "name"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "plugin_install" },
+            "name": { "type": "string", "minLength": 1 }
+          },
+          "description": "安装白名单里的一个 pypi 档插件（2026-10-28 加法）：`progress` 逐行透传安装器输出 → `done`（带复检后的完整目录报告）。目标恒为 serve 进程自己的解释器（uv/venv/系统 Python 兼容；无 pip 且无 uv 时 sessionFailed + 指引）。"
         },
         {
           "type": "object",
@@ -139,7 +175,8 @@
             "id": { "type": "integer", "minimum": 0 },
             "clientProtocol": { "type": "integer", "minimum": 1 },
             "cmd": { "const": "adopt_library" },
-            "paths": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Path" } }
+            "paths": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Path" } },
+            "requestId": { "$ref": "#/$defs/RequestId" }
           },
           "description": "as-is 入库（= `beet import -A`）：只读标签，不联网、不改标签、不移动文件。建基线用。"
         },
@@ -151,7 +188,8 @@
             "id": { "type": "integer", "minimum": 0 },
             "clientProtocol": { "type": "integer", "minimum": 1 },
             "cmd": { "const": "update_library" },
-            "pretend": { "type": "boolean" }
+            "pretend": { "type": "boolean" },
+            "requestId": { "$ref": "#/$defs/RequestId" }
           },
           "description": "文件标签 → beets 库（`beet update` 语义，mtime 驱动）。`pretend: true` 只报告不改库。"
         },
@@ -183,7 +221,8 @@
               "type": "string",
               "description": "**校验值**，不是目标：客户端传它当前的库根，与工具配置不一致就报 `E_LIBRARY_DIR_MISMATCH` 拒绝执行（不猜）。目标根唯一来源是工具自己的配置。"
             },
-            "pretend": { "type": "boolean" }
+            "pretend": { "type": "boolean" },
+            "requestId": { "$ref": "#/$defs/RequestId" }
           },
           "description": "按 path_formats 整理文件（`beet move` 语义）→ `moveItem` → `moveDone`。"
         },
@@ -299,23 +338,36 @@
     "Candidate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "confidence", "fromScratch", "extraItems", "extraTracks", "album", "mapping"],
+      "required": ["id", "confidence", "fromScratch", "extraItems", "extraTracks", "album", "mapping", "evidence", "reasons"],
       "properties": {
-        "id": { "type": "string", "pattern": "^cand_[0-9]{3}_[0-9]{2}$" },
+        "id": { "type": "string", "pattern": "^cand_[0-9]+_[0-9]+$", "description": "v2 起 pattern 放宽到任意位数（单次预览超 999 专辑组不再破坏契约）。" },
         "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
         "fromScratch": { "type": "boolean", "description": "没有任何匹配（beets 的 from_scratch）：候选是空壳，等于\"按文件名猜\"。" },
         "extraItems": { "type": "integer", "minimum": 0, "description": "本地多出来的曲目数。" },
         "extraTracks": { "type": "integer", "minimum": 0, "description": "候选里本库没有的曲目数。" },
+        "evidence": {
+          "$ref": "#/$defs/EvidenceTier",
+          "description": "v2。这条候选的证据层级——UI 据此显示\"为什么推荐这个\"。机器判定看本字段，reasons 只是人话。"
+        },
+        "reasons": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "v2。判到该层的依据（面向展示的短句）。"
+        },
         "album": { "$ref": "#/$defs/AlbumMeta" },
         "mapping": { "type": "object", "additionalProperties": { "$ref": "#/$defs/TrackMeta" } }
       }
+    },
+    "EvidenceTier": {
+      "enum": ["recordingId", "metadataSlot", "releaseGroup", "similarity"],
+      "description": "v2。候选证据分层（借鉴 beets-web-manager ADR 0002/0007，自强到弱）：\n  · recordingId —— 全部对齐曲目的**嵌入** MusicBrainz Recording ID（item.mb_trackid）与候选一致；\n  · metadataSlot —— 双源印证（ADR 0007）：原始文件名主干与嵌入标签**两个独立来源**的标题都匹配候选（版本保持归一化，不剥 Live/remaster/feat），且 disc+track 精确对位、双方时长都在场且差 ≤2s，全部对齐曲满足；\n  · releaseGroup —— 候选锚定 MusicBrainz Release Group ID；\n  · similarity —— 仅相似度（fromScratch 也归这层）。\n指纹层（AcoustID/chroma）留待 chroma 插件启用后补充——宁可缺层不虚标。"
     },
     "AlbumPreview": {
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "paths", "recommendation", "current", "candidates"],
       "properties": {
-        "id": { "type": "string", "pattern": "^alb_[0-9]{3}$" },
+        "id": { "type": "string", "pattern": "^alb_[0-9]+$", "description": "v2 起 pattern 放宽到任意位数。" },
         "paths": { "type": "array", "items": { "$ref": "#/$defs/Path" } },
         "recommendation": { "enum": ["none", "low", "medium", "strong"] },
         "current": {
@@ -369,7 +421,7 @@
       "required": [
         "protocolVersion", "schemaHash", "beetsVersion", "pythonVersion", "pythonSupported",
         "libraryPath", "libraryExists", "libraryDirectory", "plugins", "pluginHealth",
-        "pluginSummary", "configDir", "dataHome"
+        "pluginSummary", "configDir", "dataHome", "libraryLock", "libraryLockHolder"
       ],
       "properties": {
         "protocolVersion": { "type": "integer", "minimum": 1 },
@@ -391,7 +443,15 @@
         "pluginHealth": { "type": "array", "items": { "$ref": "#/$defs/PluginHealth" }, "description": "实际能力（三态自检）。" },
         "pluginSummary": { "$ref": "#/$defs/PluginSummary" },
         "configDir": { "type": "string" },
-        "dataHome": { "type": "string", "description": "工具数据根（客户端给的 AIYA_BEETS_HOME 的回报）。" }
+        "dataHome": { "type": "string", "description": "工具数据根（客户端给的 AIYA_BEETS_HOME 的回报）。" },
+        "libraryLock": {
+          "enum": ["free", "held", "unknown"],
+          "description": "v2。库文件锁状态：free = 无写者；held = 有进程在变更库（持有者见 libraryLockHolder）；unknown = 平台无锁 API 或探测失败。锁是**命令级**的：变更命令（apply/adopt/update/move/dump）独占持有，进程退出即释放——短进程模型不需要心跳与过期回收。宿主只展示，不据此决策（单写者仍由宿主自己的会话槽保证）。"
+        },
+        "libraryLockHolder": {
+          "type": ["string", "null"],
+          "description": "v2。held 时锁文件里记录的持有者（`pid=…,cmd=…`）；free/unknown 为 null。"
+        }
       }
     },
     "PluginHealth": {
@@ -445,7 +505,7 @@
 
     "_comment_events": {
       "type": "object",
-      "description": "16 种纯事件。第 17 种终态是带 `type` 的错误信封（见 Response），不放这里——它有 `ok` 字段，属于应答的形状。"
+      "description": "18 种纯事件。终态错误信封（带 `type`）在 Response 里，不放这里——它有 `ok` 字段，属于应答的形状。"
     },
     "Event": {
       "oneOf": [
@@ -517,14 +577,15 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "session", "applied", "skipped", "failed", "moved"],
+          "required": ["type", "session", "applied", "skipped", "failed", "moved", "resumedSkipped"],
           "properties": {
             "type": { "const": "applyDone" },
             "session": { "$ref": "#/$defs/Session" },
             "applied": { "type": "integer", "minimum": 0, "description": "处理了的专辑数（含部分失败的）。" },
             "skipped": { "type": "integer", "minimum": 0 },
             "failed": { "type": "integer", "minimum": 0, "description": "失败**文件**数。" },
-            "moved": { "type": "integer", "minimum": 0 }
+            "moved": { "type": "integer", "minimum": 0 },
+            "resumedSkipped": { "type": "integer", "minimum": 0, "description": "v2。resume 时因断点已完成而跳过的 decision 数（不重写、不发 applied）。未用 resume 时为 0。" }
           },
           "description": "apply_import 的终态。"
         },
@@ -663,6 +724,35 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["type", "session", "stage", "message"],
+          "properties": {
+            "type": { "const": "pluginProgress" },
+            "session": { "$ref": "#/$defs/Session" },
+            "stage": { "$ref": "#/$defs/Stage" },
+            "message": { "type": "string" }
+          },
+          "description": "插件安装进度（安装器逐行输出原样透传，2026-10-28 加法）。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "stage", "name", "report"],
+          "properties": {
+            "type": { "const": "pluginDone" },
+            "session": { "$ref": "#/$defs/Session" },
+            "stage": { "$ref": "#/$defs/Stage" },
+            "name": { "type": "string" },
+            "report": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/PluginHealth" },
+              "description": "装完**复检**后的完整目录三态（pip 退出码 0 ≠ 插件可用）。"
+            }
+          },
+          "description": "插件安装成功并复检就绪（2026-10-28 加法）。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": ["type"],
           "properties": { "type": { "const": "cancelAck" } },
           "description": "收到 cancel 的回执（无 session：它可能发生在任何会话开始之前）。"
@@ -723,7 +813,7 @@
       "required": ["path", "message"],
       "properties": {
         "path": { "type": "string" },
-        "code": { "type": "string", "description": "少数场景细化用（如 apply 的 `conflict`）。" },
+        "code": { "type": "string", "description": "少数场景细化用（如 apply 的 `conflict`、空白身份拒绝的 `blankIdentity`）。自由字符串，不是枚举。" },
         "message": { "type": "string" }
       }
     },

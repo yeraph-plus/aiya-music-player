@@ -97,10 +97,9 @@ export function playlistMenuItems(
       action: actions.moveDown,
       disabled: position.index < 0 || position.index >= position.total - 1,
     },
-    // 清空只对手动歌单有意义：动态歌单的曲目是规则的投影（后端也会拒绝）
-    ...(playlist.kind === 'smart'
-      ? []
-      : [{ label: '清空', action: actions.clear, disabled: playlist.trackCount === 0 }]),
+    // 清空对所有歌单开放：物化模型（2026-10-30）后动态歌单与手动歌单能力
+    // 一致（曲目是真实入库行，不再是规则的投影），清空后点「刷新规则」可重新追加
+    { label: '清空', action: actions.clear, disabled: playlist.trackCount === 0 },
     { label: '删除', action: actions.remove, danger: true },
   ];
 }

@@ -8,7 +8,7 @@
 //!
 //! ```json
 //! { "all": [ { "field": "genre", "op": "contains", "value": "摇滚" } ],
-//!   "sort": "added", "direction": "desc", "limit": 100 }
+//!   "sort": "added", "direction": "desc" }
 //! ```
 //!
 //! ## 演进边界
@@ -149,7 +149,7 @@ impl SortKey {
     }
 }
 
-/// 解析完成的查询计划：WHERE 片段 + 绑定值 + ORDER BY + 上限。
+/// 解析完成的查询计划：WHERE 片段 + 绑定值 + ORDER BY。
 /// 由 `repo::list_tracks` 消费（SmartPlaylist 来源）。
 #[derive(Debug, Clone)]
 pub struct SmartPlan {
@@ -157,7 +157,6 @@ pub struct SmartPlan {
     pub clauses: Vec<(String, Value)>,
     /// ORDER BY 片段（键表达式是常量表，天然 'static）
     pub order_sql: &'static str,
-    pub limit: Option<i64>,
 }
 
 impl SmartPlan {
@@ -172,7 +171,7 @@ impl SmartPlan {
     }
 
     pub fn empty() -> SmartPlan {
-        SmartPlan { clauses: Vec::new(), order_sql: SortKey::Added.expr(true), limit: None }
+        SmartPlan { clauses: Vec::new(), order_sql: SortKey::Added.expr(true) }
     }
 
     pub fn from_value(v: &Value) -> DbResult<SmartPlan> {
@@ -195,20 +194,7 @@ impl SmartPlan {
             (None, _) | (Some(""), _) => SortKey::Added.expr(true),
             (Some(s), dir) => SortKey::parse(s)?.expr(dir == Some("desc")),
         };
-        let limit = match obj.get("limit") {
-            None | Some(Value::Null) => None,
-            Some(Value::Number(n)) => {
-                let i = n
-                    .as_i64()
-                    .ok_or_else(|| DbError::Custom("limit 必须是整数".into()))?;
-                if i < 0 {
-                    return Err(DbError::Custom("limit 不能为负".into()));
-                }
-                Some(i)
-            }
-            Some(_) => return Err(DbError::Custom("limit 必须是整数".into())),
-        };
-        Ok(SmartPlan { clauses, order_sql, limit })
+        Ok(SmartPlan { clauses, order_sql })
     }
 
     /// 供 src-tauri 摘要统计复用（曲目数 / 总时长 / 首个有封面曲目）。
@@ -231,6 +217,21 @@ impl SmartPlan {
     /// 绑定顺序必须与 WHERE 片段拼接顺序一致——每条子句恰好一个 `?`。
     pub fn sql_binds(&self) -> Vec<rusqlite::types::Value> {
         self.clauses.iter().map(|(_, v)| to_sql_value(v)).collect()
+    }
+
+    /// 规则命中的曲目 id（确定性顺序：title_norm、id），不截断。
+    /// 动态歌单物化（建单 / 刷新追加 / 规则替换重算）的取数入口。
+    pub fn matched_ids(&self, conn: &Connection) -> DbResult<Vec<String>> {
+        let sql = format!(
+            "SELECT t.id FROM tracks t {}{} ORDER BY t.title_norm ASC, t.id ASC",
+            JOIN_SMART,
+            self.where_sql()
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let binds = self.sql_binds();
+        let rows =
+            stmt.query_map(rusqlite::params_from_iter(binds.iter()), |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
 
@@ -407,7 +408,6 @@ mod tests {
         let p = plan(json!({}));
         assert!(p.clauses.is_empty());
         assert_eq!(p.order_sql, SortKey::Added.expr(true));
-        assert_eq!(p.limit, None);
     }
 
     #[test]
@@ -488,11 +488,12 @@ mod tests {
     }
 
     #[test]
-    fn sort_and_limit_parse() {
+    fn sort_parse() {
+        // limit 已随"动态查询"退役（2026-10-30 物化，结果不再截断）：旧版本
+        // rule_json 里残留的 limit 键被静默忽略（对象里只读 all/sort/direction），
+        // 旧歌单照常解析；未知 sort 仍拒绝
         let p = plan(json!({ "sort": "title", "direction": "asc", "limit": 50 }));
         assert_eq!(p.order_sql, SortKey::Title.expr(false));
-        assert_eq!(p.limit, Some(50));
-        assert!(SmartPlan::from_value(&json!({ "limit": -1 })).is_err());
         assert!(SmartPlan::from_value(&json!({ "sort": "energy" })).is_err());
     }
 }

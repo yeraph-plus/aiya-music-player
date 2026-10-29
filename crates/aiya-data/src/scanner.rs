@@ -191,6 +191,9 @@ struct ParsedTrack {
     track_no: Option<u32>,
     disc_no: Option<u32>,
     year: Option<u32>,
+    /// genre 标签（动态歌单的规则数据源，docs/40 §1）。此前只有 beets 对账
+    /// 会写这一列；docs/43 §8-E 移除对账后，文件标签是唯一来源。
+    genre: Option<String>,
     duration_ms: Option<i64>,
     size_bytes: u64,
     /// 文件 mtime（unix 秒）。None = modified() 读取失败：跳过 unchanged
@@ -209,6 +212,36 @@ fn tag_str(tag: Option<&Tag>, key: ItemKey) -> Option<String> {
     tag.and_then(|t| t.get_string(key))
         .map(str::to_string)
         .filter(|s| !s.trim().is_empty())
+}
+
+/// 多值标签的规范连接符。与 beets 的 Item 字段语义**一致**：beets 把多值
+/// 字段以 "; " 连接存储，写文件时按分隔符拆回多帧——两侧因此可无损互换
+/// （播放器读到的 = beets 写的；UI 送 beets 写回的候选也按它拆帧）。
+pub(crate) const MULTI_SEP: &str = "; ";
+
+/// 读取一个标签键的**全部**值（ID3v2.4 等格式允许同键多帧）。
+///
+/// 单帧内的 ";" 分隔（部分打标器把多值塞进一帧）同样拆开；全部 trim /
+/// 去空 / 去重（保序、大小写敏感）。没有它，多艺人/多曲风的文件会被截成
+/// 第一个值，其余信息在入库时静默丢失。已知弱点（与 beets 相同）：名字
+/// 本身含 ";" 的艺人会被误拆——接受，作为规范化的代价。
+fn tag_strs(tag: Option<&Tag>, key: ItemKey) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let Some(t) = tag else { return out };
+    for raw in t.get_strings(key) {
+        for part in raw.split(';') {
+            let s = part.trim();
+            if !s.is_empty() && !out.iter().any(|v| v == s) {
+                out.push(s.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// 多值 → 单一登记名（规范连接）。None = 没有任何值。
+fn join_multi(vals: Vec<String>) -> Option<String> {
+    (!vals.is_empty()).then(|| vals.join(MULTI_SEP))
 }
 
 fn tag_u32(tag: Option<&Tag>, key: ItemKey) -> Option<u32> {
@@ -261,12 +294,15 @@ fn parse_file_with_meta(
         .to_string();
 
     let title = tag_str(tag, ItemKey::TrackTitle).unwrap_or(stem);
-    let artist = tag_str(tag, ItemKey::TrackArtist);
+    // 艺人类与 genre 是多值语义字段（ID3v2.4 同键多帧）→ 读全部值后按
+    // 规范分隔符连接（见 MULTI_SEP）；title/album 是单值概念，保持取首值。
+    let artist = join_multi(tag_strs(tag, ItemKey::TrackArtist));
     let album = tag_str(tag, ItemKey::AlbumTitle);
-    let album_artist = tag_str(tag, ItemKey::AlbumArtist);
+    let album_artist = join_multi(tag_strs(tag, ItemKey::AlbumArtist));
     let track_no = tag_u32(tag, ItemKey::TrackNumber);
     let disc_no = tag_u32(tag, ItemKey::DiscNumber);
     let year = tag_u32(tag, ItemKey::Year);
+    let genre = join_multi(tag_strs(tag, ItemKey::Genre));
 
     let picture = tag.and_then(|t| t.pictures().first()).and_then(|pic| {
         let data = pic.data();
@@ -286,6 +322,7 @@ fn parse_file_with_meta(
         track_no,
         disc_no,
         year,
+        genre,
         duration_ms: Some(props.duration().as_millis().min(i64::MAX as u128) as i64),
         size_bytes: meta.len(),
         mtime,
@@ -449,16 +486,17 @@ fn upsert(
     conn.execute(
         "INSERT INTO tracks (
             id, title, title_norm, artist_id, album_id, duration_ms, track_no, disc_no, year,
-            added_at, artwork_id, gain_db,
+            genre, genre_norm, added_at, artwork_id, gain_db,
             codec, container, sample_rate, bits_per_sample, bitrate, channels,
             play_count, last_played_at,
             path, path_lower, size_bytes, mtime, availability
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,NULL,NULL,?12,?13,?14,?15,?16,0,NULL,?17,?18,?19,?20,'online')
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,NULL,?14,?15,?16,?17,?18,NULL,0,NULL,?19,?20,?21,?22,'online')
          ON CONFLICT(path_lower) DO UPDATE SET
            title = excluded.title, title_norm = excluded.title_norm,
            artist_id = excluded.artist_id, album_id = excluded.album_id,
            duration_ms = excluded.duration_ms, track_no = excluded.track_no,
            disc_no = excluded.disc_no, year = excluded.year,
+           genre = excluded.genre, genre_norm = excluded.genre_norm,
            artwork_id = excluded.artwork_id,
            container = excluded.container,
            sample_rate = excluded.sample_rate, bits_per_sample = excluded.bits_per_sample,
@@ -475,6 +513,8 @@ fn upsert(
             t.track_no,
             t.disc_no,
             t.year,
+            t.genre,
+            t.genre.as_deref().map(crate::norm::norm),
             now,
             artwork_id,
             t.container,
@@ -1159,12 +1199,29 @@ mod tests {
     /// 生成最小合法 MP3：ID3v2.4 头（TIT2/TPE1 UTF-8 + 可选 APIC 封面）
     /// + 若干真实 MPEG-1 Layer3 帧（44.1kHz / 128kbps / mono）。
     fn write_test_mp3(dir: &Path, name: &str, title: &str, artist: &str) -> PathBuf {
+        write_test_mp3_frames(dir, name, title, &[artist], None)
+    }
+
+    /// 多帧版：同键多帧 TPE1/TCON（ID3v2.4 多值）+ 可选 genre。
+    fn write_test_mp3_frames(
+        dir: &Path,
+        name: &str,
+        title: &str,
+        artists: &[&str],
+        genre: Option<&str>,
+    ) -> PathBuf {
         let path = dir.join(name);
         let mut f = std::fs::File::create(&path).unwrap();
         let title_b = title.as_bytes();
-        let artist_b = artist.as_bytes();
         let mut body: Vec<u8> = Vec::new();
-        for (id, content) in [("TIT2", title_b), ("TPE1", artist_b)] {
+        let mut frames: Vec<(&str, &[u8])> = vec![("TIT2", title_b)];
+        for a in artists {
+            frames.push(("TPE1", a.as_bytes()));
+        }
+        if let Some(g) = genre {
+            frames.push(("TCON", g.as_bytes()));
+        }
+        for (id, content) in frames {
             body.extend_from_slice(id.as_bytes());
             let sz = (content.len() + 1) as u32; // +1 编码字节
             body.extend_from_slice(&sz.to_be_bytes());
@@ -1457,6 +1514,7 @@ mod tests {
             track_no: None,
             disc_no: None,
             year: None,
+            genre: None,
             duration_ms: Some(1000),
             size_bytes: size,
             mtime: Some(mtime),
@@ -1658,5 +1716,60 @@ mod tests {
         assert_eq!(r.failed, 0, "取消不该把文件记成失败：{:?}", r.errors);
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
         assert_eq!(count, BATCH_SIZE as i64, "已提交批次落库");
+    }
+
+
+    /// 多值标签（docs/43 §10）：**beets/mutagen 的写法**是单帧内 NUL 分隔
+    /// （ID3v2.4 规范的多值形态），lofty 按 NUL 拆成多个 item——
+    /// 扫描器把它们与 "; " 单帧写法一起归一成规范连接串，而不是截成第一个值。
+    /// 已知上游限制：同键**多帧**（Picard 等工具的写法）在 lofty 0.25.4 读侧
+    /// 会塌缩成最后一帧，见 docs/43 §10 欠账。
+    #[test]
+    fn multi_value_artist_and_genre_are_joined() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_test_mp3_frames(
+            dir.path(),
+            "multi.mp3",
+            "协作曲",
+            &["Artist One Artist Two"],
+            Some("Rock"),
+        );
+
+        let parsed = parse_file(&path).unwrap();
+        assert_eq!(
+            parsed.artist.as_deref(),
+            Some("Artist One; Artist Two"),
+            "NUL 分隔的多艺人全部读出并规范连接"
+        );
+        assert_eq!(parsed.genre.as_deref(), Some("Rock"));
+
+        let conn = open_in_memory().unwrap();
+        upsert(&conn, &parsed, 100, None, None).unwrap();
+        let artist_name: String = conn
+            .query_row(
+                "SELECT ar.name FROM tracks t JOIN artists ar ON ar.id = t.artist_id
+                 WHERE t.path LIKE '%multi.mp3'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(artist_name, "Artist One; Artist Two", "实体名 = 规范连接串");
+    }
+
+    /// 单帧内 ";" 分隔（部分打标器的写法）→ 同样拆开归一；重复值去重保序。
+    #[test]
+    fn semicolon_separated_single_frame_is_normalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_test_mp3_frames(
+            dir.path(),
+            "single.mp3",
+            "单曲",
+            &["A; B"],
+            Some("Rock;Pop; Rock"),
+        );
+
+        let parsed = parse_file(&path).unwrap();
+        assert_eq!(parsed.artist.as_deref(), Some("A; B"), "拆分 + 去重保序");
+        assert_eq!(parsed.genre.as_deref(), Some("Rock; Pop"), "';' 无空格也归一");
     }
 }

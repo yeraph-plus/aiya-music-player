@@ -41,8 +41,9 @@
     showFilter: boolean;
     /**
      * 拖放排序回调。**传了就渲染 PlaylistList（可拖表），不传渲染
-     * TrackList（管理表）**——判据由页面给：手动歌单的顺序是用户语义
-     * 可拖；动态歌单是查询结果、曲库/详情页是查询语义，都不可拖。
+     * TrackList（管理表）**——判据由页面给：歌单的顺序是用户语义可拖
+     * （物化模型后手动/动态歌单一视同仁，顺序都是入库序）；
+     * 曲库/详情页是查询语义，不可拖。
      */
     dragSort?: (from: number, to: number) => void;
     /**
@@ -67,6 +68,28 @@
   }: Props = $props();
 
   const playerState = $derived(player.state);
+
+  /**
+   * 「定位到正在播放」的目标下标：工具条按钮 → `locateCurrent()` 解析 →
+   * 列表组件滚一次 → `onlocated` 复位。一次性、显式触发。
+   */
+  let locateIndex = $state<number | null>(null);
+
+  /** 工具条「定位到正在播放」：当前曲目不在当前列表里时给一次性提示 */
+  async function locateCurrent(): Promise<void> {
+    const id = playerState?.current?.id;
+    if (!id) return;
+    try {
+      const index = await list.indexOfTrack(id);
+      if (index === null) {
+        notify.showToast('正在播放的曲目不在当前列表里');
+        return;
+      }
+      locateIndex = index;
+    } catch (error) {
+      notify.showError(errorMessage(error));
+    }
+  }
 
   function handleSelect(index: number, event: MouseEvent | KeyboardEvent): void {
     if (selection.handleSelect(index, event) === 'capped') {
@@ -163,6 +186,9 @@
     },
     onscroll: (top: number) => list.setScroll(top),
     onrestored: () => (list.restoreScrollTop = null),
+    locateIndex,
+    onlocated: () => (locateIndex = null),
+    onlocate: locateCurrent,
     onretry: () => void list.reload(),
     batchMode: ui.batchMode,
     onbatchmode: setBatchMode,

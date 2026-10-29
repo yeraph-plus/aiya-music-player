@@ -18,11 +18,11 @@ import { beetsConfig } from './beets-config.svelte';
  *
  * 事件 type 清单见 contracts/src/domain.ts 的 BeetsImportEvent：
  * album / progress / albumError / applied / applyDone / cancelled /
- * cancelAck / librarySynced / librarySyncFailed / libraryRefreshSkipped /
+ * cancelAck / libraryRefreshed / libraryRefreshSkipped /
  * done / sessionEnd（没有独立的 sessionFailed，失败语义由
- * librarySyncFailed 与命令失败时的 failed phase 承担）。
+ * 命令失败时的 failed phase 承担）。
  */
-export type BeetsPhase = 'idle' | 'previewing' | 'applying' | 'syncing' | 'failed';
+export type BeetsPhase = 'idle' | 'previewing' | 'applying' | 'failed';
 
 /** 专辑 id → 应用结果（单张专辑的应用明细） */
 export type BeetsApplyResult = {
@@ -46,18 +46,20 @@ class BeetsSessionStore {
   applyProgress = $state<{ current: number; total: number } | null>(null);
   /** 专辑 id → 应用结果 */
   results = $state<Record<string, BeetsApplyResult>>({});
-  applySummary = $state<{ applied: number; skipped: number; failed: number; moved: number } | null>(null);
-  /** 最近一次曲库对齐汇总 */
-  synced = $state<{ matched: number; updated: number; imported: number; unchanged: number; orphaned: number } | null>(null);
+  applySummary = $state<{ applied: number; skipped: number; failed: number; moved: number; resumedSkipped?: number } | null>(null);
+  /** v2：上一次应用中断后可续跑（UI 据此显示「续跑」按钮） */
+  canResume = $state(false);
+  /** v2：最近一次 applyDone 的续跑跳过数（断点已完成的专辑数） */
+  resumedSkipped = $state<number | null>(null);
   /** 逐条会话错误（albumError / 对齐失败 / 取消提示） */
   errors = $state<Array<{ path: string; message: string }>>([]);
   /** 预览完成的分组数（null = 本轮还没有 done） */
   doneCount = $state<number | null>(null);
 
-  /** 本次会话下发的应用决策（applyDone 时据此把成功路径记进排除表） */
+  /** 本次会话下发的应用决策（applyDone 时据此把成功路径记进排除表；续跑重发同一批） */
   private lastDecisions: ApplyDecision[] = [];
 
-  /** 每次 librarySynced 递增；消费方据此触发主视图重拉（刷新逻辑不进 store） */
+  /** 每次曲库刷新真的写出变化时递增；消费方据此触发主视图重拉（刷新逻辑不进 store） */
   syncVersion = $state(0);
 
   constructor() {
@@ -116,21 +118,33 @@ class BeetsSessionStore {
     await this.preview([inbox]);
   }
 
-  /** 应用决策（写标签 + 可选移动/复制 + 随后自动对齐读模型） */
-  async apply(decisions: ApplyDecision[]): Promise<void> {
+  /** 应用决策（写标签 + 可选移动/复制 + 随后自动对齐读模型）。
+   *  `resume`（v2）：中断后续跑——保留上一轮的结果展示，sidecar 按断点跳过已完成的 */
+  async apply(decisions: ApplyDecision[], resume = false): Promise<void> {
     this.lastError = null;
     this.lastDecisions = decisions;
-    this.results = {};
-    this.applySummary = null;
-    this.synced = null;
+    if (!resume) {
+      this.results = {};
+      this.applySummary = null;
+      this.resumedSkipped = null;
+    }
+    this.canResume = false;
     try {
-      await ipc.beets.apply(decisions);
+      await ipc.beets.apply(decisions, resume);
     } catch (e) {
       this.lastError = errorMessage(e);
       this.phase = 'failed';
+      // 命令没发出去（如会话槽被占）≠ 中断，不提供续跑
+      this.canResume = false;
       return;
     }
     this.phase = 'applying';
+  }
+
+  /** v2：续跑上一次中断的应用（重发同一批 decisions + resume:true） */
+  async resumeLast(): Promise<void> {
+    if (this.lastDecisions.length === 0) return;
+    await this.apply(this.lastDecisions, true);
   }
 
   /** 取消当前预览/应用：sidecar 收尾到最近检查点，已完成部分保留 */
@@ -143,21 +157,8 @@ class BeetsSessionStore {
     }
   }
 
-  /** 手动全量对齐：beets 库 → 自有读模型（无需先预览） */
-  async syncNow(): Promise<void> {
-    this.lastError = null;
-    this.synced = null;
-    try {
-      await ipc.beets.sync();
-    } catch (e) {
-      this.lastError = errorMessage(e);
-      this.phase = 'failed';
-      return;
-    }
-    this.phase = 'syncing';
-  }
-
-  /** 清空会话数据回到 idle（新一轮预览前调用） */
+  /** 清空会话数据回到 idle（新一轮预览前调用）。
+   *  lastDecisions 一并清：新一轮预览意味着旧批次不再是"上次中断的应用"。 */
   reset(): void {
     this.phase = 'idle';
     this.lastError = null;
@@ -167,9 +168,11 @@ class BeetsSessionStore {
     this.applyProgress = null;
     this.results = {};
     this.applySummary = null;
-    this.synced = null;
     this.errors = [];
     this.doneCount = null;
+    this.canResume = false;
+    this.resumedSkipped = null;
+    this.lastDecisions = [];
   }
 
   private onEvent(evt: BeetsImportEvent): void {
@@ -203,7 +206,8 @@ class BeetsSessionStore {
         };
         break;
       case 'applyDone': {
-        this.applySummary = { applied: evt.applied, skipped: evt.skipped, failed: evt.failed, moved: evt.moved };
+        this.applySummary = { applied: evt.applied, skipped: evt.skipped, failed: evt.failed, moved: evt.moved, resumedSkipped: evt.resumedSkipped };
+        this.resumedSkipped = evt.resumedSkipped ?? null;
         // docs/40 十三轮：把成功应用的源路径记进排除表（inbox copy 模式防重复
         // 导入——原件留在待整理目录，不排除的话下次整理会再导一遍）。排除表
         // 本体在宿主 settings 里，preview 时由宿主注入 options.excludePaths。
@@ -218,36 +222,30 @@ class BeetsSessionStore {
             })
             .catch(() => {}); // 排除表是锦上添花，失败不打断收尾流程
         }
-        // 应用完成后自动触发读模型对齐，等 librarySynced 系列事件收尾
-        if (this.phase === 'applying') this.phase = 'syncing';
+        // 应用完成：宿主的 on_exit 会触发一次扫描刷新（结果走 libraryRefreshed），
+        // 面板收尾不等它——扫描很快，主视图重拉由 syncVersion 驱动
+        this.settle();
         break;
       }
       case 'cancelled':
-        // 取消收尾：已完成的部分保留，归 idle 解锁按钮
+        // 取消收尾：已完成的部分保留，归 idle 解锁按钮。
+        // v2：断点已在（完成的 decision 有 checkpoint），提供续跑——
+        // **只对应用阶段**（stage=writing）：预览阶段的取消不能把上一批
+        // 已完成的 decisions 误报成"可续跑"（checkpoint 会全跳过，白转一圈）。
         this.errors = [...this.errors, { path: 'cancel', message: '已取消（已完成的部分保留）' }];
+        this.canResume = evt.stage === 'writing' && this.lastDecisions.length > 0;
         this.settle();
         break;
       case 'cancelAck':
         // sidecar 回执，无需状态变化
         break;
-      case 'librarySynced':
-        this.synced = {
-          matched: evt.matched,
-          updated: evt.updated,
-          imported: evt.imported,
-          unchanged: evt.unchanged,
-          orphaned: evt.orphaned,
-        };
-        this.syncVersion += 1;
-        this.settle();
-        break;
-      case 'librarySyncFailed':
-        this.errors = [...this.errors, { path: 'sync', message: evt.message }];
-        this.lastError = evt.message;
+      case 'libraryRefreshed':
+        // 曲库刷新真的写出变化 → 通知主视图重拉（与面板是否在场无关）
+        if (evt.changed) this.syncVersion += 1;
         this.settle();
         break;
       case 'libraryRefreshSkipped':
-        this.errors = [...this.errors, { path: 'sync', message: '有扫描正在进行，本次对齐让位；稍后再试' }];
+        this.errors = [...this.errors, { path: 'refresh', message: '有扫描正在进行，本次刷新让位；稍后再试' }];
         this.settle();
         break;
       case 'done':

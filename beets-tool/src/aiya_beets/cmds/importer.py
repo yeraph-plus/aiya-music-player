@@ -6,9 +6,16 @@
 from __future__ import annotations
 
 import os
+import re
 
+from .. import checkpoints, evidence
 from ..beetslib import DIFF_FIELDS, dest_conflict, group_albums, open_library, scan_audio_files
+from ..protocol import E_INVALID_ARG, ProtocolError
 from ..runtime import cancel_gen, emit
+
+# searchIds 的格式门槛（v2）：小写、带连字符的 MusicBrainz UUID。
+# 大写/无连字符一律拒——MB 的 API 认这个形状，宽松放行只会把错误传给上游。
+_MB_RELEASE_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
 def item_meta(item) -> dict:
@@ -50,15 +57,19 @@ def album_meta(info) -> dict:
 
 
 def candidate_payload(cid: str, match) -> dict:
-    """AlbumMatch → UI 候选卡片（置信度 + 推荐 + 逐曲对齐 diff）。"""
+    """AlbumMatch → UI 候选卡片（置信度 + 推荐 + 证据分层 + 逐曲对齐 diff）。"""
     distance = getattr(match.distance, "distance", 1.0)
     pairs = match.item_info_pairs
+    tier, reasons = evidence.compute(match)
     return {
         "id": cid,
         "confidence": round(max(0.0, min(1.0, 1.0 - distance)), 3),
         "fromScratch": bool(getattr(match, "from_scratch", False)),
         "extraItems": len(getattr(match, "extra_items", []) or []),
         "extraTracks": len(getattr(match, "extra_tracks", []) or []),
+        # v2：证据分层 + 人话依据（UI 显示"为什么推荐这个"；机器判定看 tier）
+        "evidence": tier,
+        "reasons": reasons,
         "album": album_meta(match.info),
         # 逐曲对齐：item.path → 候选 TrackInfo（对不上的在 extra 里）
         "mapping": {
@@ -73,10 +84,37 @@ def preview_import(req_id, paths: list[str], options: dict, gen: int) -> None:
     不写任何文件/库（B1 铁律）；匹配是网络操作（MusicBrainz），
     单组失败不中断整批（错误进事件，UI 可见）。
 
+    options.excludePaths：已导入排除表（docs/40 十三轮）。待整理目录固定后，
+    copy 应用会把原件留在 inbox——不排除的话下次整理会把同一批文件再导一遍
+    （beets 库重复条目 → dump 同步 → 曲库出现离线重复行）。宿主记录成功
+    应用的源路径并在这里过滤。大小写不敏感（Windows 路径）。
+
+    options.searchIds（v2）：用户钉死的 MusicBrainz Release ID 列表。给出时
+    匹配限定在这些 release（"手动重刮"：autotag 认不准的专辑让用户直接指认）。
+    beets 的 tag_album 原生支持（`search_ids` 参数）；对预览里的**每个**专辑组
+    都尝试，所以通常配合单个文件夹使用。校验放在任何事件发出之前——非法
+    参数整批拒绝，不出一半结果再炸。
+
     `gen` = 请求入队时的取消代数（见 bump_cancel 注释）。
     """
     session = f"imp_{req_id:02d}"
+    search_ids = [s for s in ((options or {}).get("searchIds") or []) if isinstance(s, str) and s.strip()]
+    bad = [s for s in search_ids if not _MB_RELEASE_ID.match(s.strip())]
+    if bad:
+        raise ProtocolError(
+            E_INVALID_ARG, "preview",
+            f"searchIds 必须是小写 MusicBrainz Release ID（UUID 带连字符）：{bad[:3]}",
+            invalid=bad[:3],
+        )
+    search_ids = [s.strip() for s in search_ids]
     files = scan_audio_files(paths)
+    exclude = {
+        os.path.normcase(os.path.abspath(p))
+        for p in (options or {}).get("excludePaths") or []
+        if isinstance(p, str) and p.strip()
+    }
+    if exclude:
+        files = [f for f in files if os.path.normcase(os.path.abspath(f)) not in exclude]
     groups = group_albums(files)
     total = len(groups)
     emit({"type": "progress", "session": session, "stage": "scan",
@@ -95,7 +133,7 @@ def preview_import(req_id, paths: list[str], options: dict, gen: int) -> None:
             from beets.library import Item
             items = [Item.from_path(f) for f in group_files]
             source = autotag.Source.from_items(items)
-            proposal = autotag.tag_album(source)
+            proposal = autotag.tag_album(source, search_ids=search_ids or None)
             # 2.14 实测 Proposal.candidates 是 list[AlbumMatch]（源码注释称 dict 已过时）
             raw = proposal.candidates
             if hasattr(raw, "values"):
@@ -140,7 +178,7 @@ def load_file_actions():
     })
 
 
-def apply_import(req_id, decisions: list[dict], gen: int) -> None:
+def apply_import(req_id, decisions: list[dict], resume: bool, gen: int) -> None:
     """应用导入决策：写标签到文件 + 入 beets 库（默认不移动文件）。
 
     decisions: [{"album": "alb_01", "action": "apply" | "apply_move" |
@@ -153,6 +191,17 @@ def apply_import(req_id, decisions: list[dict], gen: int) -> None:
     move/copy 语义：写标签 + 入库后，目标路径冲突的曲目**不覆盖不改名**，
     报 conflict 失败（文件留在原地、标签已写，解决冲突后重新应用即可完成移动）。
 
+    resume（v2）：true 时跳过断点里已完成的 decision（``checkpoints``）。它补的
+    真正缺口是 move/copy：中断后已移走的文件不在源路径上，重跑必报
+    "源文件不存在"；跳过已完成的，只补剩余的。跳过数进 `resumedSkipped`，
+    进度心跳照常（跳过的 decision 也发 progress，UI 才不会像卡住）。
+
+    blankIdentity 门（v2）：合并后标题/专辑/歌手**仍全空**的文件拒绝写入
+    （`failed[].code="blankIdentity"`）——落一张连身份都没有的行进库，查重、
+    对账、展示全是噪声；宁可让用户先补标签或换候选（借鉴 beets-web-manager
+    D3：无证据的 as-is 不落库）。**adopt 不加此门**——原样入库按设计吃
+    无标签文件。
+
     进度**按文件**发（不是按专辑）：宿主有 10 分钟无输出就判卡死的看门狗，
     一张几百首的专辑或慢速磁盘上"专辑级"粒度太粗，会被误杀。
     """
@@ -162,6 +211,7 @@ def apply_import(req_id, decisions: list[dict], gen: int) -> None:
 
     load_file_actions()
     lib = open_library()
+    done_keys = checkpoints.load() if resume else set()
 
     active = [d for d in decisions if d.get("action") in ("apply", "apply_move", "apply_copy")]
     apply_total = len(active)
@@ -170,7 +220,7 @@ def apply_import(req_id, decisions: list[dict], gen: int) -> None:
     emit({"type": "progress", "session": session, "stage": "writing",
            "current": 0, "total": apply_total, "path": None})
 
-    applied = skipped = failed_files = moved_files = 0
+    applied = skipped = failed_files = moved_files = resumed_skipped = 0
     for i, dec in enumerate(decisions):
         action = dec.get("action")
         op = FILE_ACTIONS.get(action)
@@ -178,10 +228,15 @@ def apply_import(req_id, decisions: list[dict], gen: int) -> None:
             skipped += 1
             continue
         paths = [str(p) for p in (dec.get("paths") or [])]
+        cand = dec.get("candidate") or {}
         emit({"type": "progress", "session": session, "stage": "writing",
                "current": i + 1, "total": apply_total,
                "path": paths[0] if paths else None})
-        cand = dec.get("candidate") or {}
+        key = checkpoints.decision_key(paths, cand)
+        if resume and key in done_keys:
+            # 断点已完成：不重写、不发 applied，只把进度推走（心跳也在这里）
+            resumed_skipped += 1
+            continue
         album_meta = cand.get("album") or {}
         mapping = cand.get("mapping") or {}
         written, failures = 0, []
@@ -206,6 +261,14 @@ def apply_import(req_id, decisions: list[dict], gen: int) -> None:
                     if val is not None:
                         data[f] = val
                 item.update(data)
+                # blankIdentity 门（v2）：看**合并后**的结果标签——文件原有
+                # 标签可以补候选的缺，反之亦然；合并后仍空白才是真空白。
+                if _identity_blank(item):
+                    failures.append({
+                        "path": p, "code": "blankIdentity",
+                        "message": "合并后标签缺失（标题/专辑/歌手为空），未写入。先补标签或换候选。",
+                    })
+                    continue
                 item.write()  # 写标签进文件（可抛 ReadError/WriteError）
                 # 入库（幂等）：同路径已在 beets 库 → 更新行；否则新增
                 dup = list(lib.items(dbcore_query.PathQuery("path", item.path)))
@@ -235,6 +298,26 @@ def apply_import(req_id, decisions: list[dict], gen: int) -> None:
         applied += 1
         emit({"type": "applied", "session": session, "albumId": dec.get("album"),
                "written": written, "moved": op is not None, "failed": failures})
+        if not failures:
+            # 零失败才记账：有 conflict / blankIdentity 的 decision 重跑还要补
+            checkpoints.record(key, dec.get("album"))
     emit({"type": "applyDone", "session": session,
            "applied": applied, "skipped": skipped, "failed": failed_files,
-           "moved": moved_files})
+           "moved": moved_files, "resumedSkipped": resumed_skipped})
+
+
+def _identity_blank(item) -> bool:
+    """合并后的身份标签是否空白：标题或专辑为空、且歌手侧全空 → 空白。
+
+    判定用 beets Item 的原始取值（None → 空串），不靠 norm——这里只关心
+    "有没有"，不关心"可不可比"。
+    """
+    def s(field) -> str:
+        v = item.get(field)
+        if isinstance(v, bytes):
+            v = v.decode("utf-8", "replace")
+        return str(v or "").strip()
+
+    title, album = s("title"), s("album")
+    artist, albumartist = s("artist"), s("albumartist")
+    return not title or not album or not (artist or albumartist)

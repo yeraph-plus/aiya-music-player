@@ -280,6 +280,8 @@ fn version_mismatch(got: Option<u32>) -> Option<String> {
 /// 转换只在这一处，改协议时只要改这个函数。
 fn status_from(entry: &ToolEntry, source: EntrySource, report: StatusReport) -> BeetsStatus {
     let mismatch = version_mismatch(report.protocol_version);
+    // 先算结论再移字段：schema_matches 只借 report，字面量会把字段 move 走
+    let matched = schema_matches(&report);
     BeetsStatus {
         found: mismatch.is_none(),
         interpreter: Some(entry.program.clone()),
@@ -299,8 +301,38 @@ fn status_from(entry: &ToolEntry, source: EntrySource, report: StatusReport) -> 
         plugin_summary: report.capability_summary.and_then(|v| serde_json::from_value(v).ok()),
         config_dir: report.config_dir,
         data_home: report.data_home,
+        schema_matched: matched,
+        library_lock: report.library_lock,
+        library_lock_holder: report.library_lock_holder,
         error_code: mismatch.as_ref().map(|_| "E_PROTOCOL_MISMATCH".to_string()),
         error_message: mismatch,
+    }
+}
+
+/// 编译期嵌入的镜像契约指纹（`protocol/aiya-beets-v2.meta.json` 的 sha256）。
+///
+/// v2 接线 schemaHash 运行时比对（docs/35 P1-4 闭合）：工具自报的
+/// `schemaHash` 与它一比就知道"装的是不是同一版契约"——版本号相同但
+/// schema 字节不同（装错版本、手改过文件）从此骗不过宿主。meta 是提交
+/// 进仓的合法 JSON，include_str 把"文件不存在"变成编译错误。
+fn expected_schema_sha256() -> &'static str {
+    static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HASH.get_or_init(|| {
+        serde_json::from_str::<serde_json::Value>(include_str!(
+            "../../protocol/aiya-beets-v2.meta.json"
+        ))
+        .ok()
+        .and_then(|m| m.get("sha256").and_then(|v| v.as_str()).map(str::to_string))
+        .unwrap_or_default()
+    })
+}
+
+/// 契约指纹比对：工具没报（老版本）或对不上都算不匹配——严格失败，不猜
+/// （与 E_LIBRARY_DIR_MISMATCH 同一条设计准则）。
+fn schema_matches(report: &StatusReport) -> bool {
+    match &report.schema_hash {
+        Some(h) => h.eq_ignore_ascii_case(expected_schema_sha256()),
+        None => false,
     }
 }
 
@@ -329,6 +361,10 @@ fn absent(
         plugin_summary: None,
         config_dir: None,
         data_home: None,
+        // 没拿到报告就谈不上"契约匹配"；UI 对 found:false 本来就整体禁用
+        schema_matched: false,
+        library_lock: None,
+        library_lock_holder: None,
         error_code: Some(code.into()),
         error_message: message,
     }
@@ -1051,11 +1087,32 @@ pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), St
     )
 }
 
+/// v2 幂等键：每次调用生成新值（`{cmd}-{unix 毫秒}-{进程内序号}`）。
+///
+/// 单实例下宿主不重试，重放是协议层安全网 + 双实例防护（docs/41 §3.2）；
+/// 工具侧的 ops.jsonl 同时是操作审计日志。进程内自增序号保证同一毫秒内
+/// 的两次调用也不撞键。
+fn new_request_id(cmd: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("{cmd}-{ms}-{seq:04}")
+}
+
 /// B2：应用导入决策。decisions 形状由契约定义（ApplyDecision），
 /// 宿主不解释语义，只透传；完成后自动把工具侧结果对齐自有库（自闭环）。
+///
+/// `resume`（v2）：中断后续跑——重发同一批 decisions，sidecar 按内容指纹
+/// 跳过已完成的（move/copy 中断后源文件已移走，不 resume 的重跑必报错）。
 pub fn start_apply(
     app: tauri::AppHandle,
     decisions: Vec<serde_json::Value>,
+    resume: bool,
     refresh: Option<Arc<crate::refresh::RefreshParams>>,
 ) -> Result<(), String> {
     let tool = tool_or_err(&app)?;
@@ -1065,7 +1122,12 @@ pub fn start_apply(
     run_session(
         tool,
         &app,
-        serde_json::json!({ "id": 1, "cmd": "apply_import", "decisions": decisions }),
+        serde_json::json!({
+            "id": 1, "cmd": "apply_import",
+            "decisions": decisions,
+            "requestId": new_request_id("apply_import"),
+            "resume": resume,
+        }),
         "beets:import",
         "已有 beets 导入任务在执行（可先取消）",
         Box::new(move || {
@@ -1122,7 +1184,10 @@ pub fn start_adopt(
 ) -> Result<(), String> {
     start_maintenance(
         app,
-        serde_json::json!({ "id": 1, "cmd": "adopt_library", "paths": paths }),
+        serde_json::json!({
+            "id": 1, "cmd": "adopt_library", "paths": paths,
+            "requestId": new_request_id("adopt_library"),
+        }),
         refresh,
     )
 }
@@ -1131,7 +1196,10 @@ pub fn start_adopt(
 pub fn start_update(app: tauri::AppHandle, pretend: bool) -> Result<(), String> {
     start_maintenance(
         app,
-        serde_json::json!({ "id": 1, "cmd": "update_library", "pretend": pretend }),
+        serde_json::json!({
+            "id": 1, "cmd": "update_library", "pretend": pretend,
+            "requestId": new_request_id("update_library"),
+        }),
         None,
     )
 }
@@ -1192,6 +1260,7 @@ pub fn start_move(
         serde_json::json!({
             "id": 1, "cmd": "move_items",
             "directory": directory, "pretend": pretend,
+            "requestId": new_request_id("move_items"),
         }),
         refresh,
     )
@@ -1202,105 +1271,6 @@ pub fn start_move(
 /// 刷新管线用它决定"要不要跑 beets 段"。刻意不复用 `probe`：探测要起一次
 /// 子进程（约 300 ms），而定时刷新每 30 s 就会问一次 —— 这里只需要回答
 /// "有没有入口"，有入口之后让 dump 自己失败（那时候的错误才值得报告）。
-pub fn available(app: &tauri::AppHandle) -> bool {
-    discover(app).is_some()
-}
-
-const DUMP_TIMEOUT: Duration = Duration::from_secs(180);
-
-/// 从 sidecar 收集 dump_items 全量（一次性进程，调用线程同步读）。
-///
-/// 两条硬要求（此前都没有，导致过静默的数据损坏风险）：
-/// 1. **必须收到 `dumpDone` 才算成功**。只看"进程退出"的话，dump 中途崩/被
-///    kill 会返回半份结果，而 `sync_items` 把"自有有、beets 没有"的行计入
-///    orphaned —— 半份 dump 会让一大批曲目被误判成 orphan，后续清理逻辑
-///    会拿它当依据。
-/// 2. **整体超时要收尸**。卡死的 sidecar 会一直占着 stdout 读取线程，
-///    sync 线程永远等下去（用户侧表现：手动同步按钮按了没反应）。
-pub(crate) fn collect_items(app: &tauri::AppHandle) -> Result<Vec<aiya_data::beets_sync::BeetsItem>, String> {
-    let (entry, _source) = discover(app).ok_or_else(|| "未安装 beets 组件".to_string())?;
-    let launcher = launcher_for(app, &entry);
-    let (child, stdin) = aiya_beets_client::session::spawn_session(
-        &launcher,
-        &serde_json::json!({ "id": 1, "cmd": "dump_items" }),
-    )
-    .map_err(|e| e.to_string())?;
-    // dump 是一次性收集：不留 stdin 挂着，对面处理完 EOF 退出
-    drop(stdin);
-    let child = std::sync::Arc::new(std::sync::Mutex::new(child));
-    let stdout = {
-        let mut c = child.lock().map_err(|_| "child lock poisoned")?;
-        c.stdout.take().expect("stdout piped")
-    };
-
-    // 读线程：逐行带编码检查地送进 channel（超时/收尸在主线程）。
-    // 编码处理与事件链路共用同一份实现，避免两处各自漂移。
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
-    if let Err(e) = aiya_beets_client::session::spawn_line_reader(stdout, tx, "beets-dump-recv") {
-        let mut c = child.lock().map_err(|_| "child lock poisoned")?;
-        let _ = c.kill();
-        let _ = c.wait();
-        return Err(format!("起 dump 读线程: {e}"));
-    }
-
-    let mut items = Vec::new();
-    let mut done = false;
-    loop {
-        match rx.recv_timeout(DUMP_TIMEOUT) {
-            Ok(line) => {
-                let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
-                    continue; // 非 JSON 行（首次初始化时的迁移提示等）
-                };
-                match v.get("type").and_then(|t| t.as_str()) {
-                    Some("item") => {
-                        if let Some(item) = v.get("item") {
-                            match serde_json::from_value(item.clone()) {
-                                Ok(it) => items.push(it),
-                                Err(e) => tracing::warn!(%e, "beets item 解析失败，跳过"),
-                            }
-                        }
-                    }
-                    Some("dumpDone") => {
-                        done = true;
-                        break;
-                    }
-                    Some("sessionFailed") => {
-                        let msg = v
-                            .get("error")
-                            .and_then(|e| e.get("beets_message"))
-                            .and_then(|m| m.as_str())
-                            .unwrap_or("sidecar 报告失败");
-                        let mut c = child.lock().map_err(|_| "child lock poisoned")?;
-                        let _ = c.kill();
-                        let _ = c.wait();
-                        return Err(format!("dump 失败: {msg}"));
-                    }
-                    _ => {}
-                }
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                let mut c = child.lock().map_err(|_| "child lock poisoned")?;
-                let _ = c.kill();
-                let _ = c.wait();
-                return Err(format!("dump 超时（{DUMP_TIMEOUT:.0?} 无输出）"));
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break, // 进程退出
-        }
-    }
-    {
-        let mut c = child.lock().map_err(|_| "child lock poisoned")?;
-        let _ = c.kill();
-        let _ = c.wait();
-    }
-    if !done {
-        return Err(format!(
-            "dump 未收到 dumpDone（已收到 {} 条 item，进程可能中途退出）",
-            items.len()
-        ));
-    }
-    Ok(items)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1449,6 +1419,7 @@ mod tests {
             ],
             "pluginSummary": { "ready": 4, "missingDeps": 2, "unavailable": 0 },
             "configDir": "c", "dataHome": "d",
+            "schemaMatched": true, "libraryLock": "free", "libraryLockHolder": null,
             "errorCode": null, "errorMessage": null
         });
         let st: BeetsStatus = serde_json::from_value(v).expect("camelCase 形状必须可解析");
@@ -1458,6 +1429,10 @@ mod tests {
         assert_eq!(st.entry_source.as_deref(), Some("settings"));
         assert_eq!(st.python_supported, Some(true));
         assert_eq!(st.data_home.as_deref(), Some("d"));
+        // v2：schema 比对结论 + 库锁三态原样透传
+        assert!(st.schema_matched);
+        assert_eq!(st.library_lock.as_deref(), Some("free"));
+        assert!(st.library_lock_holder.is_none());
         // 三态是 docs/31 P0-1 的修法：不能只报"配置里开着"，要报"能不能干活"
         let health = st.plugin_health.expect("pluginHealth 必须解析");
         assert_eq!(health[0].state, "missing_deps");
@@ -1610,12 +1585,12 @@ fn status_via(program: &str, args: &[&str]) -> BeetsStatus {
     }
 
     /// 端到端：真 sidecar dump_items（dev venv + dev 隔离库，B2 冒烟留下的 3 条）
-    /// → Rust 解析 → beets_sync 对齐进临时 DB。
-    /// 不复用 collect_items（那要 AppHandle 落脚本 + set_var 污染并行测试），
-    /// 事件形状按同一契约独立构造。
+    /// → Rust 逐行解析（协议形状锚点）。
+    /// 对账已随 docs/43 §8-E 整体移除；dump_items 保留为协议命令
+    /// （诊断/未来显式流程用），宿主没有常规调用方。
     #[cfg(debug_assertions)]
     #[test]
-    fn dump_parse_and_sync_end_to_end() {
+    fn dump_parse_end_to_end() {
         let venv = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../beets-tool/.venv/Scripts/python.exe");
         let beets_home = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/tests/fixtures/beets-home");
@@ -1638,32 +1613,24 @@ fn status_via(program: &str, args: &[&str]) -> BeetsStatus {
         writeln!(child.stdin.take().expect("stdin"), r#"{{"id":1,"cmd":"dump_items"}}"#).unwrap();
 
         let mut stdout = child.stdout.take().expect("stdout");
-        let mut items: Vec<aiya_data::beets_sync::BeetsItem> = Vec::new();
+        let mut items: Vec<serde_json::Value> = Vec::new();
         {
             use std::io::BufRead;
             for line in std::io::BufReader::new(&mut stdout).lines() {
                 let Ok(line) = line else { break };
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) else { continue };
                 if v.get("type").and_then(|t| t.as_str()) == Some("item") {
-                    items.push(serde_json::from_value(v["item"].clone()).expect("item 形状"));
+                    items.push(v["item"].clone());
                 }
             }
         }
         let _ = child.wait();
         assert!(items.len() >= 3, "dev 库应有 B2 冒烟写入的 3 条，实际 {}", items.len());
-        assert!(items.iter().all(|it| it.id > 0 && !it.path.is_empty()));
-
-        let mut conn = aiya_data::db::open_in_memory().unwrap();
-        let stats = aiya_data::beets_sync::sync_items(&mut conn, &items, 0).unwrap();
-        assert_eq!(stats.imported, items.len());
-        // 再对齐一次 → 全部 unchanged（幂等）
-        let stats2 = aiya_data::beets_sync::sync_items(&mut conn, &items, 1).unwrap();
-        assert_eq!((stats2.matched, stats2.updated, stats2.unchanged), (items.len(), 0, items.len()));
-        // beets_item_id 真的写进去了
-        let with_id: i64 = conn
-            .query_row("SELECT COUNT(*) FROM tracks WHERE beets_item_id IS NOT NULL", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(with_id as usize, items.len());
+        for it in &items {
+            assert!(it["id"].as_i64().unwrap_or(0) > 0, "item id 缺失：{it}");
+            assert!(!it["path"].as_str().unwrap_or_default().is_empty(), "item path 缺失：{it}");
+            assert!(it["title"].is_string(), "item title 形状：{it}");
+        }
     }
 
 }

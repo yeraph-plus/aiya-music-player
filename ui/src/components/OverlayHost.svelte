@@ -148,7 +148,6 @@
         // 只是为了 parse 不丢字段；保存时统一写 title/asc
         sort: v.sort ?? 'title',
         direction: v.direction ?? 'asc',
-        limit: v.limit ?? null,
       };
     } catch {
       return { all: [] };
@@ -157,7 +156,7 @@
 
   let editName = $state('');
   let editKind = $state<'manual' | 'smart'>('manual');
-  let editRule = $state<SmartRule>({ all: [], sort: 'title', direction: 'asc', limit: null });
+  let editRule = $state<SmartRule>({ all: [], sort: 'title', direction: 'asc' });
   let nameInput = $state<HTMLInputElement | null>(null);
 
   /** 曲库流派下拉（library store 带缓存；拉不到就只剩"当前值"一项，不炸） */
@@ -400,7 +399,8 @@
     歌单创建/编辑同一个模态框（2026-10-28 拍板，同日二轮修订）。
     类型开关只在创建时出现（后端不支持手动↔智能转换）；手动歌单编辑 =
     只改名称，动态歌单编辑 = 名称 + 规则。条件行是「模式 select + 动态值
-    控件」两列；排序交给歌单视图列头，编辑器只剩上限。输入框 text 在
+    控件」两列；排序/上限都已退役（2026-10-30 物化：入库按标题排、视图里
+    可拖拽重排，刷新只追加），编辑器只剩条件行。输入框 text 在
     对话框打开时初始化（见 script 里的 effect），否则歌单列表刷新会覆盖
     用户正在输的字。
   -->
@@ -430,7 +430,7 @@
             onchange={(v) => (editKind = v ? 'smart' : 'manual')}
           />
           <span class="edit-kind-label">动态歌单</span>
-          <span class="dim">按条件自动收录曲目，随曲库变化</span>
+          <span class="dim">按条件收录曲目，「刷新」追加新命中，其余与普通歌单一致</span>
         </div>
       {/if}
       {#if editKind === 'smart'}
@@ -480,21 +480,11 @@
               <button class="link rule-del" type="button" aria-label="删除条件" onclick={() => removeCond(i)}>×</button>
             </div>
           {:else}
-            <p class="rule-empty dim">无条件 = 匹配整个曲库（可只设上限）</p>
+            <p class="rule-empty dim">无条件 = 匹配整个曲库</p>
           {/each}
           <div class="rule-row rule-meta">
-            <span class="rule-title">上限</span>
-            <div class="rule-limit-box">
-              <Field
-                label="曲目数上限"
-                hideLabel
-                type="number"
-                placeholder="不限"
-                value={String(editRule.limit ?? '')}
-                oninput={(v) => (editRule.limit = numOrNull(v))}
-              />
-            </div>
-            <span class="dim">排序在列表里点列头即可</span>
+            <span class="rule-title">排序</span>
+            <span class="dim">入库顺序按标题排；在歌单里可拖拽重排，刷新只追加新命中的曲目</span>
           </div>
         </div>
       {/if}
@@ -645,16 +635,16 @@
     onclose={() => overlay.closeDialog()}
   >
     <div class="pick-list">
-      {#each playlists.items.filter((p) => p.kind !== 'smart') as playlist (playlist.id)}
+      <!-- 物化模型（2026-10-30）后动态歌单与手动歌单能力一致，可手动加歌，
+           不再按 kind 过滤 -->
+      {#each playlists.items as playlist (playlist.id)}
         <button class="pick-row" onclick={() => submitAddTo(playlist.id)}>
           <Cover src={playlist.artworkId ? artworkUrl(playlist.artworkId, 96) : null} size="sm" />
           <span class="pick-name">{playlist.name}</span>
           <span class="pick-count">{playlist.trackCount} 首</span>
         </button>
       {:else}
-        <p class="pick-empty">
-          {playlists.items.length > 0 ? '动态歌单按规则自动收录曲目，不能手动添加' : '还没有播放列表'}
-        </p>
+        <p class="pick-empty">还没有播放列表</p>
       {/each}
     </div>
   </Dialog>
@@ -732,10 +722,7 @@
     gap: 12px;
   }
 
-  .rule-limit-box {
-    flex: none;
-    width: 88px;
-  }
+
 
   /* 筛选器模态框：固定字段表单——标签列定宽，值控件占满剩余空间 */
   .filter-body {

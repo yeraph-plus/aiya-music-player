@@ -1,12 +1,11 @@
-//! 曲库刷新管线的诊断视图（docs/33 §7）。
+//! 曲库刷新管线的诊断视图（docs/33 §7；beets 段已随 docs/43 §8-E 移除）。
 //!
 //! 为什么要有这份快照：自动刷新是**静默**的（有变化才 bump）。静默的好处是
 //! 列表不乱抖，代价是"它到底有没有在工作"没法从界面上看出来。诊断区读这份
 //! 快照，就能回答"上次什么时候刷的、为什么没刷、跑了多久"。
 //!
-//! 三个字段刻意分开：`changed`（有没有变化）、`sync`（beets 段跑没跑）、
-//! `error`（哪一段出的错）。合成一个"成功/失败"会让人分不清
-//! "磁盘侧好了但 beets 段失败" 这种真实状态。
+//! 两个维度刻意分开：`changed`（有没有写出变化）与 `error`（管线本身出错）。
+//! 合成一个"成功/失败"会把"扫描正常但解析了几个坏文件"说成失败。
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -34,12 +33,28 @@ pub struct RefreshSnapshot {
     pub missing: usize,
     #[ts(type = "number")]
     pub failed: usize,
-    /// beets 段：ok / skipped（没装组件或磁盘没变化）/ failed
-    pub sync: String,
     #[ts(type = "number")]
     pub elapsed_ms: u64,
-    /// 失败原因（`sync` 为 failed，或整条管线失败时才有）
+    /// 失败原因（管线失败时才有；skipped 不算失败）
     pub error: Option<String>,
+}
+
+impl RefreshSnapshot {
+    /// 没跑成的一次（noRoots / cancelled / 管线失败）：计数全零。
+    pub fn skipped(trigger: &str, elapsed_ms: u64, error: Option<String>) -> Self {
+        Self {
+            trigger: trigger.to_string(),
+            at_ms: 0,
+            changed: false,
+            scanned: 0,
+            imported: 0,
+            updated: 0,
+            missing: 0,
+            failed: 0,
+            elapsed_ms,
+            error,
+        }
+    }
 }
 
 /// 自动刷新的当前配置（设置页/诊断区读）。

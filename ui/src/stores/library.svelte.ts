@@ -197,8 +197,12 @@ class LibraryStore {
     }
   }
 
-  /** 选择集下标 → 曲目 ID（后端按同一查询换算，渲染层不拉整库）。失败抛出 */
-  async idsForSelection(query: TrackQueryInput, indices: number[]): Promise<string[]> {
+  /**
+   * 选择集下标 → 曲目 ID（后端按同一查询换算，渲染层不拉整库）。失败抛出。
+   * `indices: 'all'` = 整个查询结果的全量 ID 顺序表（「定位到正在播放」
+   * 用它求当前曲目在视图里的下标；上限 ID_COLLECT_CAP=5 万）。
+   */
+  async idsForSelection(query: TrackQueryInput, indices: number[] | 'all'): Promise<string[]> {
     return ipc.library.idsForSelection({ query, indices });
   }
 

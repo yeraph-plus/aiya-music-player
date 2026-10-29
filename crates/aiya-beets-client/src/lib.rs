@@ -26,8 +26,8 @@
 //!
 //! ## 协议
 //!
-//! 契约真源在工具侧（`beets-tool/protocol/v1.schema.json`），本仓镜像一份
-//! （`protocol/aiya-beets-v1.json`，`npm run proto:check` 守字节一致）。
+//! 契约真源在工具侧（`beets-tool/protocol/v2.schema.json`），本仓镜像一份
+//! （`protocol/aiya-beets-v2.json`，`npm run proto:check` 守字节一致）。
 //! `tests/proto_mirror.rs` 对着镜像逐字段断言本 crate 的 serde 形状——
 //! 改了 `proto.rs` 的字段名而没改协议，那条测试会红。
 

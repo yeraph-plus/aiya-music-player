@@ -84,6 +84,8 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       );
     case 'playlist_set_rule':
       return mock.playlistSetRule(a.id as string, a.rule as Record<string, unknown>);
+    case 'playlist_refresh':
+      return mock.playlistRefresh(a.id as string);
     case 'playlist_rename':
       return mock.playlistRename(a.id as string, a.name as string);
     case 'playlist_delete':
@@ -91,11 +93,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     case 'playlist_reorder':
       return mock.playlistReorder(a.from as number, a.to as number);
     case 'playlist_add_tracks':
-      return mock.playlistAddTracks(
-        a.id as string,
-        a.trackIds as string[],
-        a.mode as 'append' | 'next' | undefined,
-      );
+      return mock.playlistAddTracks(a.id as string, a.trackIds as string[]);
     case 'playlist_remove_at':
       return mock.playlistRemoveAt(a.id as string, a.position as number);
     case 'playlist_move':
@@ -194,7 +192,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
         interpreter: 'preview',
         scriptPath: null,
         entrySource: 'settings',
-        protocolVersion: 1,
+        protocolVersion: 2,
         beetsVersion: '2.14.1 (preview)',
         pythonVersion: '3.14 (preview)',
         pythonSupported: true,
@@ -211,6 +209,10 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
         pluginSummary: { ready: 2, missingDeps: 1, unavailable: 0 },
         configDir: 'D:/MUSIC_Player/test-music/.beets',
         dataHome: 'D:/MUSIC_Player/test-music/.aiya-beets',
+        // v2：schema 指纹比对结论 + 库锁三态（preview 桩恒"匹配且空闲"）
+        schemaMatched: true,
+        libraryLock: 'free',
+        libraryLockHolder: null,
         errorCode: null,
         errorMessage: null,
       };
@@ -219,9 +221,8 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return mock.beetsPreview();
     case 'beets_apply':
       void (a.decisions as ApplyDecision[] | undefined);
+      void (a.resume as boolean | undefined);
       return { started: true };
-    case 'beets_sync':
-      return mock.beetsSync();
     // 自动刷新管线的诊断查询：预览环境没有真管线，回一份"从没跑过"。
     case 'refresh_state':
       return { intervalSecs: 30, focused: true, last: null };

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiya-beets"
-version = "0.1.0"
+version = "0.2.0"
 description = "AIYA Music 的 beets 侧工具：导入、整理、能力自检。独立于播放器发布。"
 readme = "README.md"
 requires-python = ">=3.10"

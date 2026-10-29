@@ -38,6 +38,7 @@ export * from './PlaylistDeleted';
 export * from './PlaylistExportResult';
 export * from './PlaylistImportResult';
 export * from './PlaylistImportUnmatched';
+export * from './PlaylistRefresh';
 export * from './PlaylistSummary';
 export * from './PowerInfo';
 export * from './QueueSnapshot';

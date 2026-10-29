@@ -1,21 +1,21 @@
-//! 曲库刷新管线（docs/33 §7）：增量扫描 → dump → sync → **单** bump。
+//! 曲库刷新管线：增量扫描 → **单** bump（docs/43 §8-E 终态）。
 //!
 //! 这是"用户在外面改了东西，播放器 30 秒内自己发现"那条线。它不属于 beets
 //! 侧（beets 不知道谁在消费它的数据），也不属于 UI（UI 只知道"该重拉了"）：
 //! 播放器知道自己的 DB 长什么样，所以编排在这里。
 //!
-//! ## 为什么顺序不能颠倒
+//! ## 本管线与 beets 的关系：**零接触**
 //!
-//! ```text
-//! ① 增量扫描（自有 scanner）→ 磁盘现状：路径存在性、mtime、标签
-//! ② dump_items（全量）      → beets 库现状：item id、path、标签
-//! ③ sync_items（分块事务）  → 合并、路径漂移跟随、orphan 判定
-//! ④ 单一 bump               → UI 只收到一次刷新
-//! ```
+//! docs/43 §8-E 拍板：beets 是纯手动增强工具，曲库的成员资格 100% 归播放器
+//! 自己的扫描器。旧设计的"扫描后 dump→sync 对账"整体取消——它的前提
+//! （beets 是写权威、曲库是读模型）已不成立，且在"输出根可不在扫描根内"
+//! （纯整理器模式）下会把 beets 库里扫描根外的文件注进曲库。取代它的：
+//! - beets 写进文件的标签/移动，由扫描器在下一轮扫描时从**文件本身**读到；
+//! - 与 beets 的一切交互都走显式命令（preview/apply/维护四件套/配置），见 beets.rs。
 //!
-//! 反过来先对账 beets 会拿旧标签写库，紧接着扫描又改一遍 —— 两次列表刷新、
-//! 一次视觉回退。顺序对了还有第二层好处：两边冲突时**后者胜出**，
-//! 也就是"beets 是写权威"这条既有定位被自动维持。
+//! 后续已知欠账（扫描器侧，与 beets 无关）：改名/移动跟随的启发式对
+//! "先写标签再移动"（mtime 已变）的文件接不住；replaygain 的 gain_db 尚无
+//! 来源（扫描器不读 RG 标签）。见 docs/43 §10。
 //!
 //! ## 三个触发点（不上 FS watcher）
 //!
@@ -33,12 +33,7 @@
 //!
 //! 定时刷新每 30 s 一次。如果每次都发事件，UI 就会每 30 s 重拉一次当前页 ——
 //! 用户正在滚动时列表跳一下，而实际上什么都没变。判据见 [`Outcome::changed`]：
-//! 只有真的写了行（导入/重写/missing）或 beets 侧真的改了东西才算。
-//!
-//! ## 没有 beets 也照跑
-//!
-//! 扫描段不依赖 beets（它是播放器自己的能力）。所以"没装组件"只是**跳过**
-//! ②③，不是失败 —— 这正是 docs/33 那条"beets 是增强能力不是依赖"的落地。
+//! 只有真的写了行（导入/重写/missing）才算。
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,7 +42,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tauri::{Emitter, Manager};
 
-use crate::beets;
 use crate::dto::refresh::RefreshSnapshot;
 
 /// 定时刷新的默认间隔。设置项 `refreshSeconds` 可覆盖（0 = 关掉定时）。
@@ -56,12 +50,12 @@ pub const DEFAULT_INTERVAL_SECS: u64 = 30;
 /// 刷新管线需要的宿主依赖（`AppState` 里存一份 Arc，线程间共享）。
 ///
 /// 为什么不是一个 `&AppState`：管线跑在独立线程里，而 `State<'_, T>` 的生命期
-/// 绑在命令调用栈上。把需要的四样东西拷出来，线程就不必持有任何借用。
+/// 绑在命令调用栈上。把需要的东西拷出来，线程就不必持有任何借用。
 pub struct RefreshParams {
     pub db_path: PathBuf,
     pub artwork_dir: PathBuf,
-    /// 写库互斥。与 `library_scan` / beets 会话共用**同一个** Arc：
-    /// 同一时刻只该有一个批任务在写 DB，否则 SQLite 的单写者会互相 BUSY。
+    /// 写库互斥。与 `library_scan` 共用**同一个** Arc：同一时刻只该有一个
+    /// 批任务在写 DB，否则 SQLite 的单写者会互相 BUSY。
     pub scanning: Arc<AtomicBool>,
     pub scan_cancel: Arc<AtomicBool>,
 }
@@ -73,9 +67,9 @@ pub enum Trigger {
     Timer,
     /// 窗口重新获得焦点
     Focus,
-    /// 某条 beets 命令刚结束（apply / adopt / move）
+    /// 某条 beets 命令刚结束（apply / adopt / move）：只触发扫描段
     Action,
-    /// 用户手点的"立即同步"
+    /// 用户手点的"立即刷新"
     Manual,
 }
 
@@ -94,20 +88,11 @@ impl Trigger {
     fn is_auto(self) -> bool {
         matches!(self, Trigger::Timer | Trigger::Focus)
     }
-
-    /// 是否**强制**跑 beets 段（哪怕磁盘侧看起来没变化）。
-    ///
-    /// apply / adopt / move 刚写完 beets 库，但磁盘 mtime 可能一个都没变
-    /// （adopt 只登记不写文件）—— 这时"磁盘没变就不 dump"会把刚建好的
-    /// `beets_item_id` 挡在门外。手动同步同理：用户点了就说明他不信缓存。
-    fn forces_beets(self) -> bool {
-        matches!(self, Trigger::Action | Trigger::Manual)
-    }
 }
 
 /// 扫描互斥的 panic 保护。
 ///
-/// 历史上 sync 链路里任一 panic 让 `scanning` 永真，之后所有扫描报 `E_SCAN_BUSY`，
+/// 历史上 scan 链路里任一 panic 让 `scanning` 永真，之后所有扫描报 `E_SCAN_BUSY`，
 /// 用户只能重启应用。Drop 兜底保证退出路径（含 unwind）必复位。
 struct FlagGuard(Arc<AtomicBool>);
 
@@ -117,37 +102,9 @@ impl Drop for FlagGuard {
     }
 }
 
-/* ---------------- 执行体 ---------------- */
-
-/// beets 段连续失败计数（进程内，跨重启不保留）。
-///
-/// beets 段失败最长要等 DUMP_TIMEOUT（180s）才返回，全程占着 scanning
-/// 互斥 —— 30s 一轮的定时刷新若每次都重试，等于"坏组件把整个刷新管线
-/// 拖死"。所以自动触发只在连续失败攒够 [`BEETS_RETRY_AFTER_FAILS`]
-/// （Timer 默认 30s 间隔下 ≈5 分钟）才再试；手动/动作触发本来就该跑。
-static BEETS_FAIL_STREAK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-/// 自动刷新重试 beets 段所需的连续失败次数。
-const BEETS_RETRY_AFTER_FAILS: u32 = 10;
-
-/// beets 段要不要跑。磁盘变了 / 触发方强制 → 跑；否则只有自动触发
-/// （定时/聚焦）攒够连续失败次数才为"上次失败"再试一次。
-/// 抽成纯函数是为了失败退避的三条规则能直接断言。
-fn should_run_beets(trigger: Trigger, disk_changed: bool, fail_streak: u32) -> bool {
-    if trigger.forces_beets() || disk_changed {
-        return true;
-    }
-    trigger.is_auto() && fail_streak >= BEETS_RETRY_AFTER_FAILS
-}
-
 /// 一次刷新的结果。
 struct Outcome {
     scan: aiya_data::scanner::ScanResult,
-    /// beets 段：跑了才有值（没装组件 / 磁盘没变化时是 None）
-    sync: Option<aiya_data::beets_sync::SyncStats>,
-    /// beets 段跑了但失败了。**不影响扫描结果**——磁盘侧的对账已经落库，
-    /// 不该因为组件坏了就把整次刷新判失败。
-    sync_error: Option<String>,
 }
 
 impl Outcome {
@@ -156,13 +113,7 @@ impl Outcome {
     /// `failed` 不算变化：解析失败的文件下次还是失败，每 30 s 让列表重拉一次
     /// 只会让"坏文件"变成"列表一直在动"。它进快照与日志，但不触发重绘。
     fn changed(&self) -> bool {
-        self.scan.imported > 0
-            || self.scan.updated > 0
-            || self.scan.missing > 0
-            || self
-                .sync
-                .as_ref()
-                .is_some_and(|s| s.updated > 0 || s.imported > 0)
+        self.scan.imported > 0 || self.scan.updated > 0 || self.scan.missing > 0
     }
 }
 
@@ -217,34 +168,10 @@ pub fn run(app: &tauri::AppHandle, params: &RefreshParams, trigger: Trigger) {
     // true 会让此后每次自动刷新在扫描第一步就静默 Skipped("cancelled")。
     params.scan_cancel.store(false, Ordering::SeqCst);
 
-    // beets 会话进行中 → 让位。两个 sidecar 同时读同一个 beets 库不只是锁竞争：
-    // 刷新发出去的 `librarySynced` 会被正在应用导入的界面当成"对齐完成"，
-    // 把 applying 状态提前收掉。
-    if aiya_beets_client::session::busy() {
-        if !trigger.is_auto() {
-            emit(
-                app,
-                serde_json::json!({
-                    "type": "libraryRefreshSkipped",
-                    "reason": "beetsBusy",
-                    "trigger": trigger.as_str(),
-                }),
-            );
-        }
-        tracing::debug!(trigger = trigger.as_str(), "刷新让位：beets 会话在跑");
-        return;
-    }
-
-    match execute(app, params, trigger) {
+    match execute(app, params) {
         Ok(outcome) => {
             let changed = outcome.changed();
             let elapsed_ms = started.elapsed().as_millis() as u64;
-            // 顺序：先 librarySynced（老消费者的 syncVersion），再 libraryRefreshed。
-            // 两者是"同一件事的两层"——前者是 beets 侧汇总（ImportPanel 一直在听），
-            // 后者是管线终态（主列表重拉的唯一依据）。
-            if let Some(stats) = &outcome.sync {
-                emit_synced(app, stats);
-            }
             let snapshot = RefreshSnapshot {
                 trigger: trigger.as_str().to_string(),
                 at_ms: now_ms(),
@@ -254,13 +181,8 @@ pub fn run(app: &tauri::AppHandle, params: &RefreshParams, trigger: Trigger) {
                 updated: outcome.scan.updated,
                 missing: outcome.scan.missing,
                 failed: outcome.scan.failed,
-                sync: match (&outcome.sync, &outcome.sync_error) {
-                    (Some(_), _) => "ok".to_string(),
-                    (None, Some(_)) => "failed".to_string(),
-                    (None, None) => "skipped".to_string(),
-                },
                 elapsed_ms,
-                error: outcome.sync_error.clone(),
+                error: None,
             };
             store_last(app, snapshot.clone());
 
@@ -270,7 +192,6 @@ pub fn run(app: &tauri::AppHandle, params: &RefreshParams, trigger: Trigger) {
                 imported = outcome.scan.imported,
                 updated = outcome.scan.updated,
                 missing = outcome.scan.missing,
-                sync = snapshot.sync.as_str(),
                 changed,
                 elapsed_ms,
                 "library refresh"
@@ -290,22 +211,7 @@ pub fn run(app: &tauri::AppHandle, params: &RefreshParams, trigger: Trigger) {
             }
         }
         Err(Fail::Skipped(reason)) => {
-            store_last(
-                app,
-                RefreshSnapshot {
-                    trigger: trigger.as_str().to_string(),
-                    at_ms: now_ms(),
-                    changed: false,
-                    scanned: 0,
-                    imported: 0,
-                    updated: 0,
-                    missing: 0,
-                    failed: 0,
-                    sync: "skipped".to_string(),
-                    elapsed_ms: started.elapsed().as_millis() as u64,
-                    error: None,
-                },
-            );
+            store_last(app, RefreshSnapshot::skipped(trigger.as_str(), started.elapsed().as_millis() as u64, None));
             if !trigger.is_auto() {
                 emit(
                     app,
@@ -320,22 +226,11 @@ pub fn run(app: &tauri::AppHandle, params: &RefreshParams, trigger: Trigger) {
         }
         Err(Fail::Failed(message)) => {
             tracing::warn!(trigger = trigger.as_str(), %message, "刷新失败");
-            store_last(
-                app,
-                RefreshSnapshot {
-                    trigger: trigger.as_str().to_string(),
-                    at_ms: now_ms(),
-                    changed: false,
-                    scanned: 0,
-                    imported: 0,
-                    updated: 0,
-                    missing: 0,
-                    failed: 0,
-                    sync: "skipped".to_string(),
-                    elapsed_ms: started.elapsed().as_millis() as u64,
-                    error: Some(message.clone()),
-                },
-            );
+            store_last(app, RefreshSnapshot::skipped(
+                trigger.as_str(),
+                started.elapsed().as_millis() as u64,
+                Some(message.clone()),
+            ));
             emit(
                 app,
                 serde_json::json!({
@@ -348,14 +243,10 @@ pub fn run(app: &tauri::AppHandle, params: &RefreshParams, trigger: Trigger) {
     }
 }
 
-fn execute(
-    app: &tauri::AppHandle,
-    params: &RefreshParams,
-    trigger: Trigger,
-) -> Result<Outcome, Fail> {
-    /* ① 增量扫描 */
-    let mut conn = aiya_data::open_conn(&params.db_path)
-        .map_err(|e| Fail::Failed(format!("open db: {e}")))?;
+fn execute(app: &tauri::AppHandle, params: &RefreshParams) -> Result<Outcome, Fail> {
+    /* 增量扫描（唯一的一段） */
+    let mut conn =
+        aiya_data::open_conn(&params.db_path).map_err(|e| Fail::Failed(format!("open db: {e}")))?;
 
     let roots: Vec<PathBuf> = roots_from_settings(&conn)
         .into_iter()
@@ -382,52 +273,9 @@ fn execute(
     if scan.cancelled {
         return Err(Fail::Skipped("cancelled"));
     }
+    let _ = app; // app 仅用于事件；execute 本体不再发事件（终态在 run 统一发）
 
-    /* ②③ beets 段：只在需要时跑 */
-    let disk_changed = scan.imported > 0 || scan.updated > 0 || scan.missing > 0;
-    // 上次 beets 段失败过 → 攒够连续失败次数才为它重试（自动触发）。
-    // 一次瞬时失败（工具刚崩、库被锁）不该永久丢同步，但也不能每 30s 就
-    // 撞一次 180s 的 dump 超时 —— 那会把 scanning 互斥整个占死。
-    let streak = BEETS_FAIL_STREAK.load(Ordering::Acquire);
-    // 这轮是"纯重试"（磁盘没变、触发方不强制）就先清零计数：失败要重新
-    // 计满才轮到下一次，否则一旦 >= 阈值，每轮定时刷新都会立刻撞一次超时。
-    if should_run_beets(trigger, false, streak) {
-        BEETS_FAIL_STREAK.store(0, Ordering::Release);
-    }
-    let want_beets = beets::available(app);
-    let sync = if want_beets && should_run_beets(trigger, disk_changed, streak) {
-        match collect_and_sync(app, params) {
-            Ok(stats) => {
-                BEETS_FAIL_STREAK.store(0, Ordering::Release);
-                Some(stats)
-            }
-            Err(e) => {
-                BEETS_FAIL_STREAK.fetch_add(1, Ordering::AcqRel);
-                return Ok(Outcome { scan, sync: None, sync_error: Some(e) });
-            }
-        }
-    } else {
-        None
-    };
-
-    Ok(Outcome { scan, sync, sync_error: None })
-}
-
-/// ② dump 全量 → ③ sync_items。
-///
-/// 两步分开写而不是合成一个函数：dump 走子进程（可能超时/半份），sync 只碰
-/// 自有 DB。它们的失败语义不同，合成一个就说不清"是工具没答还是库写不进"。
-fn collect_and_sync(
-    app: &tauri::AppHandle,
-    params: &RefreshParams,
-) -> Result<aiya_data::beets_sync::SyncStats, String> {
-    let items = beets::collect_items(app)?;
-    let mut conn =
-        aiya_data::open_conn(&params.db_path).map_err(|e| format!("open db: {e}"))?;
-    let stats = aiya_data::beets_sync::sync_items(&mut conn, &items, now_secs())
-        .map_err(|e| format!("sync: {e}"))?;
-    let _ = conn.close();
-    Ok(stats)
+    Ok(Outcome { scan })
 }
 
 /* ---------------- 曲库根 ---------------- */
@@ -611,31 +459,11 @@ fn store_last(app: &tauri::AppHandle, snapshot: RefreshSnapshot) {
 
 fn emit(app: &tauri::AppHandle, v: serde_json::Value) {
     // 通道与 beets 导入链路共用：UI 侧本来就在听 `beets:import`
-    // （librarySynced / 各类进度都从这里来），刷新终态跟着走同一个通道，
-    // 少一个订阅点。
+    // （各类进度从这里来），刷新终态跟着走同一个通道，少一个订阅点。
     let _ = app.emit("beets:import", v);
 }
 
-fn emit_synced(app: &tauri::AppHandle, stats: &aiya_data::beets_sync::SyncStats) {
-    match serde_json::to_value(stats) {
-        Ok(mut v) => {
-            if let Some(obj) = v.as_object_mut() {
-                obj.insert("type".into(), serde_json::json!("librarySynced"));
-            }
-            emit(app, v);
-        }
-        Err(e) => tracing::warn!(%e, "sync 汇总序列化失败"),
-    }
-}
-
 /* ---------------- 时间 ---------------- */
-
-fn now_secs() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -703,16 +531,6 @@ mod tests {
         assert!(roots[0].ends_with("Music"), "{:?}", roots[0]);
     }
 
-    /// `Trigger::forces_beets` 是"adopt 之后 beets_item_id 能不能落地"的开关。
-    /// 它一旦对 Action 返回 false，症状是"操作成功但库里那几首一直没关联"。
-    #[test]
-    fn action_and_manual_force_beets_segment() {
-        assert!(Trigger::Action.forces_beets());
-        assert!(Trigger::Manual.forces_beets());
-        assert!(!Trigger::Timer.forces_beets(), "定时刷新该先看磁盘变没变");
-        assert!(!Trigger::Focus.forces_beets());
-    }
-
     /// 自动触发撞忙要静默（用户没在等），手动触发要报。
     #[test]
     fn only_manual_and_action_report_skips() {
@@ -720,23 +538,6 @@ mod tests {
         assert!(Trigger::Focus.is_auto());
         assert!(!Trigger::Action.is_auto());
         assert!(!Trigger::Manual.is_auto());
-    }
-
-    /// beets 段失败退避（P1）：自动触发不能"上次失败就每 30s 重试一次"——
-    /// 失败路径最长要等 180s 的 dump 超时，全程占着 scanning 互斥。
-    /// 规则：磁盘变了/触发方强制必跑；自动触发攒够连续失败才为失败重试。
-    #[test]
-    fn beets_retry_backs_off_until_streak_reaches_threshold() {
-        // 磁盘没变 + 失败次数不够 → 定时刷新跳过 beets 段（修复点）
-        assert!(!should_run_beets(Trigger::Timer, false, 0));
-        assert!(!should_run_beets(Trigger::Timer, false, BEETS_RETRY_AFTER_FAILS - 1));
-        // 攒够阈值 → 为追回失败跑一次
-        assert!(should_run_beets(Trigger::Timer, false, BEETS_RETRY_AFTER_FAILS));
-        assert!(should_run_beets(Trigger::Focus, false, BEETS_RETRY_AFTER_FAILS));
-        // 磁盘变了 / 手动 / 动作 → 无条件跑，与失败计数无关
-        assert!(should_run_beets(Trigger::Timer, true, 0));
-        assert!(should_run_beets(Trigger::Manual, false, 0));
-        assert!(should_run_beets(Trigger::Action, false, 0));
     }
 
     fn scan(imported: usize, updated: usize, missing: usize) -> aiya_data::scanner::ScanResult {
@@ -758,26 +559,16 @@ mod tests {
     /// 会让列表每 30 s 重拉一次，看起来像在抽风。
     #[test]
     fn change_detection_ignores_failures() {
-        let quiet = Outcome { scan: scan(0, 0, 0), sync: None, sync_error: None };
+        let quiet = Outcome { scan: scan(0, 0, 0) };
         assert!(!quiet.changed());
 
         let failed_only = Outcome {
             scan: aiya_data::scanner::ScanResult { failed: 5, ..scan(0, 0, 0) },
-            sync: None,
-            sync_error: None,
         };
         assert!(!failed_only.changed(), "解析失败不是变化");
 
-        assert!(Outcome { scan: scan(1, 0, 0), sync: None, sync_error: None }.changed(), "新导入");
-        assert!(Outcome { scan: scan(0, 2, 0), sync: None, sync_error: None }.changed(), "重写");
-        assert!(Outcome { scan: scan(0, 0, 1), sync: None, sync_error: None }.changed(), "文件消失");
-    }
-
-    /// beets 侧自己的改动也算（apply 改了标签但 mtime 没变的情形）。
-    #[test]
-    fn beets_side_change_counts() {
-        let stats = aiya_data::beets_sync::SyncStats { updated: 3, ..Default::default() };
-        let outcome = Outcome { scan: scan(0, 0, 0), sync: Some(stats), sync_error: None };
-        assert!(outcome.changed());
+        assert!(Outcome { scan: scan(1, 0, 0) }.changed(), "新导入");
+        assert!(Outcome { scan: scan(0, 2, 0) }.changed(), "重写");
+        assert!(Outcome { scan: scan(0, 0, 1) }.changed(), "文件消失");
     }
 }

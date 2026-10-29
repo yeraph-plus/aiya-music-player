@@ -42,6 +42,7 @@
     "smoke:beets": "beets-tool\\.venv\\Scripts\\python.exe beets-tool\\tests\\smoke_apply.py",
     "smoke:proto": "beets-tool\\.venv\\Scripts\\python.exe beets-tool\\tests\\protocol_contract.py",
     "smoke:maint": "beets-tool\\.venv\\Scripts\\python.exe beets-tool\\tests\\smoke_maint.py",
+    "smoke:lock": "beets-tool\\.venv\\Scripts\\python.exe beets-tool\\tests\\smoke_lock.py",
     "smoke:apply": "npm run smoke:beets",
     "beets:installer": "beets-tool\\.venv\\Scripts\\python.exe beets-tool\\tools\\build_installer.py",
     "beets:bundle": "beets-tool\\.venv\\Scripts\\python.exe beets-tool\\tools\\build_bundle.py",
@@ -50,7 +51,7 @@
     "notices": "node tools/run.mjs tools/gen-notices.mjs",
     "icon:source": "node scripts/gen-icon.mjs",
     "clean": "node tools/run.mjs cargo clean",
-    "verify": "npm run test:all && npm run check:clippy && npm run gen:types:check && npm run smoke:beets && npm run smoke:maint && npm run smoke:proto",
+    "verify": "npm run test:all && npm run check:clippy && npm run gen:types:check && npm run smoke:beets && npm run smoke:maint && npm run smoke:proto && npm run smoke:lock",
     "verify:release": "npm run test:all && npm run bundle && npm run portable"
   }
 }
