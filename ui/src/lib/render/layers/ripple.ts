@@ -8,6 +8,11 @@
  * 套数值规则），每一层取一个横向平移位，于是相邻层的峰谷错开，水面看起来是
  * 斜着淌的；只靠纵向平移的话，22 条线会叠成一排平行条纹。
  *
+ * 每层的高度是**底噪 + 频谱**两项之和：频谱乘能量门控（暂停时归零），底噪是
+ * 一维值噪声、按层号错开相位、**永不归零**。所以静音/暂停时看到的是一片缓缓
+ * 流动的细微波纹，而不是 22 条等高直线——只有频谱那一项的话，安静画面会被
+ * 当成渲染挂掉（2026-10-30 用户实测反馈）。
+ *
  * 为什么放到 WebGL 而不是照抄 2D 版：
  * 1. 背景已经有一个全尺寸 GL 舞台（`context.ts`）。再挂一块全屏 2D canvas
  *    会多一次合成事务，还要单独处理 DPR/尺寸——正是舞台要集中解决的脏活。
@@ -105,8 +110,9 @@ const FRAG = /* glsl */ `
   varying vec2 vUv;
   uniform sampler2D uRamp;   // 256×1：横向高度曲线（0–1），S 方向已环形化
   uniform vec3 uColor;
-  uniform float uTime;       // 秒：层间相位随它漂移（暂停时冻结）
-  uniform float uEnergy;     // 整体能量（0–1）：安静段把浪压平
+  uniform float uTime;       // 秒：**水的时钟**。层间平移 / 包络 / 底噪都随它漂，暂停也不停
+  uniform float uEnergy;     // 频谱能量（0–1）：只压频谱那部分高度，底噪不受它影响
+  uniform float uNoise;      // 底噪幅度（占 uSpan 的比例）
   uniform float uHeightPx;   // 画布高度（CSS px）：uv 距离 → 像素距离
   uniform float uHorizon;    // 地平线的 uv.y
   uniform float uSpan;       // 水面占的 uv 高度
@@ -115,6 +121,23 @@ const FRAG = /* glsl */ `
   uniform float uWidth;      // 线宽系数（>1 更软、<1 更锐）
   uniform float uHalo;       // 近层光晕强度
   uniform float uHaloK;      // 光晕半径（px）：越大收得越快
+
+  // 一维值噪声（hash + 三次插值）。用它而不是几个 sin 叠加：sin 多频相加在
+  // 固定视角下会露出周期，水面读成"来回摆的条纹"；值噪声没有可见周期，
+  // 而且只花两次 hash + 三次 mix，22 层循环里扛得住。
+  float hash11(float p) {
+    p = fract(p * 0.1031);
+    p *= p + 33.33;
+    p *= p + p;
+    return fract(p);
+  }
+
+  float noise1(float x) {
+    float i = floor(x);
+    float f = fract(x);
+    float u = f * f * (3.0 - 2.0 * f);
+    return mix(hash11(i), hash11(i + 1.0), u) * 2.0 - 1.0;
+  }
 
   vec3 lin2srgb(vec3 c) {
     vec3 lo = c * 12.92;
@@ -136,6 +159,11 @@ const FRAG = /* glsl */ `
 
     float acc = 0.0;
 
+    // 底噪的采样坐标在循环外算一次：横向波长由 vUv.x 定（粗 9 周期、细 23 周期
+    // 每屏宽），相位由 uTime 推进。两个不整除的频率叠加，单一波长就看不出来。
+    float nx1 = vUv.x * 9.0 + uTime * 0.26;
+    float nx2 = vUv.x * 23.0 - uTime * 0.44;
+
     // 远（k=0，靠近地平线）→ 近（k=1，屏幕底）：远层窄、淡、密，近层宽、亮、疏。
     // 指数 1.55 是 2D 版实测出来的透视曲线：线性会让远处的层间距同样大，
     // 看着像等距横条而不是纵深。
@@ -148,12 +176,24 @@ const FRAG = /* glsl */ `
       // 处处等高，总有几处隆起的波包。**相位带层号**是关键：相邻层的波包
       // 位置错开，层与层才会交叉、交织，而不是一条曲线平移十七次。
       float envelope = 0.62 + 0.38 * sin(vUv.x * 6.2831 * 1.25 + float(l) * 1.7 + uTime * 0.4);
+      // 频谱部分的高度：**乘 uEnergy**，所以暂停（能量收平到 0）后这部分归零，
+      // 只留下面的底噪。恢复播放时从 0 长起来，不接暂停前那一帧。
       float amp = uSpan * 0.34 * (0.15 + 0.85 * k) * envelope * uEnergy;
+
+      // 底噪：水面自己的一点起伏，**与 uEnergy 无关**——真实频谱叠在它上面。
+      // 没有这一项时暂停画面是 22 条等高直线（频谱振幅为 0），看上去像渲染挂了；
+      // 有了它，静止的只剩"频谱"，水面本身还在慢慢淌。
+      // 层相位用 float(l) 乘不同系数：相位相同的话 22 层会是同一条噪声曲线
+      // 上下平移，读成"格栅在抖"；错开才对得上透视里的斜向波纹。
+      float nAmp = uSpan * uNoise * (0.22 + 0.78 * k);
+      float hNoise =
+        (noise1(nx1 + float(l) * 2.3) * 0.62 + noise1(nx2 + float(l) * 5.1) * 0.38) * nAmp;
 
       // 两个方向的剔除：波形只向上鼓，所以上侧到波峰为止；下侧只留光晕半径。
       // 这一句让"这个像素根本不在这一层附近"的情况不花一次纹理采样。
+      // 上界要把底噪算进去，否则近层被噪声顶起来的线会被提前剔掉、断成虚线。
       float dy = (vUv.y - base) * uHeightPx;
-      if (dy < -26.0 || dy > amp * uHeightPx + 26.0) continue;
+      if (dy < -26.0 || dy > (amp + nAmp) * uHeightPx + 26.0) continue;
 
       // 带单位为 1、纹理方向为 1：平移量先除以 BANDS 再进 uv。
       // 每层 2.6 带、每秒 0.55 带：层间错位要大到"看得出斜淌"，但不能大到
@@ -162,7 +202,7 @@ const FRAG = /* glsl */ `
       float off = (float(l) * 2.6 + uTime * 0.55) / ${BANDS}.0;
       float h = texture2D(uRamp, vec2(vUv.x + off, 0.5)).r;
 
-      float d = (vUv.y - (base + h * amp)) * uHeightPx;
+      float d = (vUv.y - (base + h * amp + hNoise)) * uHeightPx;
       float w = (0.8 + 1.2 * k) * uWidth;    // 线宽 px：近处更粗；档位再乘一次
       float line = exp(-(d * d) / (w * w));  // 高斯截面，天然抗锯齿
       // 光晕只给近层：远层是 1px 细线，光晕在那儿既看不见又白花成本
@@ -214,7 +254,7 @@ export class RippleLayer implements GlLayer {
   private readonly window = new Float32Array(POINTS);
   /** 暂停时喂给曲线的一帧全 0：让曲线自己衰减回静息值，不留残峰 */
   private readonly zero = new Float32Array(BANDS);
-  /** 暂停态：冻结时间 + 收平振幅 */
+  /** 暂停态：频谱收平（喂全 0 + gate），但水时钟照走，底噪仍流动 */
   private paused = false;
   /**
    * 收平/起振的过渡系数（0–1）。
@@ -223,7 +263,10 @@ export class RippleLayer implements GlLayer {
    * 大约四帧收平——是"淡下去"，但仍然是一次性收干净，不停留旧形状。
    */
   private gate = 1;
-  /** 图层自己的时钟：**只在播放时推进**，所以暂停后水面不再漂移 */
+  /**
+   * 水的时钟：推进层间平移、包络相位与底噪演化。
+   * **暂停也走**——它记的是"水面时间"，不是"音乐时间"。
+   */
   private clock = 0;
 
   constructor(
@@ -248,6 +291,10 @@ export class RippleLayer implements GlLayer {
         uColor: { value: new Color('#7c9cff') },
         uTime: { value: 0 },
         uEnergy: { value: 0 },
+        // 底噪幅度（占 uSpan 的比例）。0.04 × 0.40 = 1.6% 屏高，800px 高时约
+        // 13px 起伏——够看清"在动"，又不至于让安静段落看着像还有情绪。
+        // 远层还要再乘 (0.22 + 0.78k)，近大远小跟着透视走。
+        uNoise: { value: 0.04 },
         uHeightPx: { value: 800 },
         // 地平线在屏幕 66% 高度处：上半屏留给标题/列表，水面只铺下面三分之一强。
         // span 略微超出底边（0.34 - 0.36 = -0.02），由 shader 的底部淡出收掉——
@@ -295,10 +342,12 @@ export class RippleLayer implements GlLayer {
   /**
    * 播放/暂停。
    *
-   * 暂停时的期望是"静止 + 收平"，不是"停在上一帧"：
-   * 1. 冻结 `clock` ⇒ 层间平移不再推进，水面不漂；
-   * 2. 喂全 0 + `gate` 淡出 ⇒ 振幅收平，**不保留暂停前的峰谷**。
-   * 只冻时间不收平的话，暂停画面里会留一片凝固的浪；用户明确要的是"拉平"。
+   * 暂停停的是**频谱**，不是水：
+   * 1. 喂全 0 + `gate` 收平 ⇒ 频谱那部分高度归零，不保留暂停前的峰谷；
+   * 2. 时钟**继续走** ⇒ 剩下的底噪涟漪仍在横向流动。
+   *
+   * 两个反面都试过：只冻时间不收平 → 画面留一片凝固的浪；只收平不给底噪
+   * → 22 条等高直线，看着像渲染挂了（这一版就是被用户指出来的那个）。
    */
   setPaused(paused: boolean): void {
     this.paused = paused;
@@ -333,9 +382,9 @@ export class RippleLayer implements GlLayer {
     stage.renderer.render(this.scene, this.camera);
   }
 
-  /** 推进时钟与收平系数（暂停时时钟不动、gate 趋向 0） */
+  /** 推进时钟与收平系数（时钟照走，只有频谱收平到 0） */
   private advance(dt: number): void {
-    if (!this.paused) this.clock += dt;
+    this.clock += dt;
     const target = this.paused ? 0 : 1;
     const k = 1 - Math.exp(-dt / 0.07);
     this.gate += (target - this.gate) * k;
