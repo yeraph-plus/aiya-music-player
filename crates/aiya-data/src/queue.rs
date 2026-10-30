@@ -296,7 +296,10 @@ mod tests {
         let items = vec![
             QueueItem::track("a"),
             QueueItem::transient(QueueKind::File, r#"{"path":"D:/drop/x.flac","title":"x"}"#),
-            QueueItem::transient(QueueKind::Stream, r#"{"path":"https://hls.test/live.m3u8"}"#),
+            QueueItem::transient(
+                QueueKind::Stream,
+                r#"{"path":"https://hls.test/live.m3u8"}"#,
+            ),
         ];
         let p = QueuePersist::default();
         save_queue_full(&mut conn, &p, &items).expect("临时行不该被外键拒掉");
@@ -323,7 +326,8 @@ mod tests {
         ];
         save_queue_full(&mut conn, &QueuePersist::default(), &items).unwrap();
 
-        conn.execute("DELETE FROM tracks WHERE id = 'a'", []).unwrap();
+        conn.execute("DELETE FROM tracks WHERE id = 'a'", [])
+            .unwrap();
         let (_, items2) = load_queue(&conn).unwrap().unwrap();
         assert_eq!(items2.len(), 2, "只剩 cascade 之外的项");
         assert_eq!(items2[0].kind, QueueKind::Stream);

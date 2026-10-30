@@ -819,7 +819,9 @@ mod tests {
             token,
             duration_ms: 0,
         });
-        p.reduce(PlayerCommand::Position { position_ms: 42_000 });
+        p.reduce(PlayerCommand::Position {
+            position_ms: 42_000,
+        });
         assert_eq!(p.state().status, PlaybackStatus::Playing);
 
         p.reduce(PlayerCommand::TogglePause);
@@ -893,7 +895,9 @@ mod tests {
             token,
             duration_ms: 180_000,
         });
-        p.reduce(PlayerCommand::Position { position_ms: 30_000 });
+        p.reduce(PlayerCommand::Position {
+            position_ms: 30_000,
+        });
         p.reduce(PlayerCommand::TogglePause);
         assert_eq!(p.state().status, PlaybackStatus::Paused);
         assert_eq!(p.state().position_ms, 30_000);

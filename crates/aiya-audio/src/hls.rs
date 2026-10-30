@@ -94,7 +94,12 @@ fn file_url_path(url: &str) -> Option<std::path::PathBuf> {
 ///
 /// 错误里必须带**段名/文件名**：`std::fs` 的原文只有"系统找不到指定的文件"，
 /// 用户拿不到"哪一段缺了"（本地 m3u8 里段是相对路径，缺段是最常见的坏法）。
-fn read_local(path: &std::path::Path, url: &str, cap: u64, what: &str) -> Result<Vec<u8>, AudioError> {
+fn read_local(
+    path: &std::path::Path,
+    url: &str,
+    cap: u64,
+    what: &str,
+) -> Result<Vec<u8>, AudioError> {
     let file = std::fs::File::open(path).map_err(|e| {
         AudioError::Io(std::io::Error::new(
             e.kind(),

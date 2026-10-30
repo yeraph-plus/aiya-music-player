@@ -34,8 +34,8 @@ use aiya_data::scanner;
 
 mod app_id;
 mod beets;
-pub mod dto;
 mod drop;
+pub mod dto;
 mod enrichment;
 mod logging;
 mod paths;
@@ -3145,11 +3145,7 @@ fn queue_full_persist_snapshot(
         p: queue_persist_from_actor(actor, state.setting_flag("rememberPosition", true)),
         // 从 refs 而不是 ids 构造：临时项的标题/路径只在 `TrackRef` 上，
         // 拿 ids 回查库对它们永远是空（docs/52 §6.3）
-        items: actor
-            .queue_refs()
-            .iter()
-            .map(queue_item_from_ref)
-            .collect(),
+        items: actor.queue_refs().iter().map(queue_item_from_ref).collect(),
     }
 }
 
@@ -3820,9 +3816,7 @@ fn expand_dropped(paths: &[String], skipped: &mut Vec<String>) -> Vec<DropCandid
                         for entry in entries {
                             let sub = drop::classify(std::path::Path::new(&entry));
                             match sub.kind {
-                                dto::DroppedKind::Audio => {
-                                    out.push(DropCandidate::Audio(sub.path))
-                                }
+                                dto::DroppedKind::Audio => out.push(DropCandidate::Audio(sub.path)),
                                 dto::DroppedKind::HlsPlaylist => {
                                     out.push(DropCandidate::Hls(sub.path))
                                 }
@@ -3837,7 +3831,9 @@ fn expand_dropped(paths: &[String], skipped: &mut Vec<String>) -> Vec<DropCandid
             dto::DroppedKind::Directory => {
                 skipped.push(format!("{}（文件夹不展开，走设置 → 曲库导入）", item.label))
             }
-            dto::DroppedKind::Unsupported => skipped.push(format!("{}（{}）", item.label, item.note)),
+            dto::DroppedKind::Unsupported => {
+                skipped.push(format!("{}（{}）", item.label, item.note))
+            }
         }
     }
     out
@@ -3986,7 +3982,11 @@ fn live_open(
 /// 地址框留空时的标题：URL 末段文件名 → 主机名 → 原样。
 fn default_stream_title(url: &str) -> String {
     let stripped = url.split(['?', '#']).next().unwrap_or(url);
-    let tail = stripped.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    let tail = stripped
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("");
     if !tail.is_empty() && tail.contains('.') && !tail.starts_with("http") {
         // 末段像文件名（`index.m3u8`）：去掉扩展名更像"台名"
         let stem = tail.split('.').next().unwrap_or(tail);

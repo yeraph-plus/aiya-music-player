@@ -124,10 +124,10 @@ pub fn strip(bytes: &[u8], st: &mut TsState) -> Result<(Vec<u8>, TsAudio), Audio
 
         // 载荷起点：0b11 先跳 adaptation field（`data[4]` 是它的长度，不含自身）
         let payload_start = match afc {
-            0b00 => continue,             // 保留值，按规范丢弃
-            0b10 => continue,             // 只有 adaptation field，无载荷
+            0b00 => continue, // 保留值，按规范丢弃
+            0b10 => continue, // 只有 adaptation field，无载荷
             0b11 => 5 + packet[4] as usize,
-            _ => 4,                       // 0b01：纯载荷
+            _ => 4, // 0b01：纯载荷
         };
         if payload_start >= PACKET_LEN {
             continue; // adaptation field 把整个包吃掉了
@@ -146,9 +146,7 @@ pub fn strip(bytes: &[u8], st: &mut TsState) -> Result<(Vec<u8>, TsAudio), Audio
     }
 
     let kind = st.audio_kind.ok_or_else(|| {
-        AudioError::Unsupported(
-            "这段 TS 里没有 PAT/PMT，定位不到音频流（HLS 段应带节目表）".into(),
-        )
+        AudioError::Unsupported("这段 TS 里没有 PAT/PMT，定位不到音频流（HLS 段应带节目表）".into())
     })?;
     if out.is_empty() {
         // 有 PMT 但没收到载荷：段被截断，或音频 PID 在本段才出现
@@ -541,9 +539,9 @@ pub(crate) mod tests {
             p[0] = SYNC;
             p[1] = ((PID_AUDIO >> 8) as u8 & 0x1F) | if first { 0x40 } else { 0 };
             p[2] = (PID_AUDIO & 0xFF) as u8;
-            p[3] = 0x30 | (cc & 0x0F); // afc = 0b11
-            p[4] = 5; // adaptation_field_length
-            // p[5..10] 是 AF 内容（PCR 占位）
+            // afc = 0b11（AF + 载荷）；AF 长度 5 含 PCR 占位，所以载荷从 5+5=10 起
+            p[3] = 0x30 | (cc & 0x0F);
+            p[4] = 5;
             p[10..10 + chunk.len()].copy_from_slice(chunk);
             out.extend_from_slice(&p);
             cc = cc.wrapping_add(1);
