@@ -153,6 +153,11 @@ highlevel 字段，在这个 Windows 构建上**拿不到**，而且配了模型
 
 ## 3. 第三个阻断：插件自己的相对路径 bug
 
+> **订正（2026-10-31，docs/54 §1.2）**：下面这段当时写「`item.path` 是绝对」——**实测不成立**，
+> `item.path` 在 beets 2.14.1 上同样是**相对曲库根**。所以修法不是"换成 `item.path`"，
+> 而是 `os.path.join(lib.directory, item.path)`（全仓已有 `beetslib.item_abs_path`）。
+> §4.1 的 A 方案已按此落地，见 docs/54。
+
 把插件装到隔离目录（`pip install --target`）后，拿一首已有 item 的临时库跑：
 
 ```
@@ -210,6 +215,10 @@ AB 有 756 万条 recording 的 lowlevel + highlevel JSON（还在线，API 实�
 
 Essentia 是 **AGPLv3**。A 方案里我们只调用用户自己下载的 exe（进程边界、不分发二进制），
 和现在 ffmpeg / fpcalc 的处理一致，不构成传染。**不要把 exe 打进安装包**。
+
+> **已作废（2026-10-31）**：用户拍板把提取器打进免配置包（docs/54）。AGPLv3 的分发义务
+> 现在由发布物承担：包内 `THIRD-PARTY.md` + `LICENSES/AGPL-3.0.txt` + manifest 的
+> `binaries`。这不是法律意见，见 docs/54 §1.6。
 
 ---
 

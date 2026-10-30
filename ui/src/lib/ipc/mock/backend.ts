@@ -548,7 +548,7 @@ export class MockBackend {
    *
    * 形状按真后端逐字对齐：`progress`（stage + message）→ `error` 或 `done`
    * → `finished`（带 status）。这里刻意走**失败**分支：浏览器预览既没有系统
-   * Python 也不会去下载 31MB 的套件包，装不成是事实，让 UI 的错误渲染也被
+   * Python 也不会去下载 34MB 的套件包，装不成是事实，让 UI 的错误渲染也被
    * 执行到，比假装成功有用。两条轨道给不同的 stage 文案——真实运行时两者
    * 的步骤本来就不一样（A 建 venv / B 下载解压）。
    */
@@ -1117,14 +1117,15 @@ export class MockBackend {
       },
       {
         name: 'xtractor',
+        // 不再是"自备"：插件（beets-xtractor）与 Essentia 提取器都随免配置包发（docs/54）
         title: '音频特征',
-        note: 'bpm / danceability（需要自备 Essentia 二进制）',
-        builtin: true,
-        packages: [],
+        note: 'bpm / danceability / 响度（插件与 Essentia 提取器都随免配置包预置）',
+        builtin: false,
+        packages: ['beets-xtractor>=0.4.2,<0.5'],
         exe: ['streaming_extractor_music'],
         writes: true,
         network: false,
-        bundle: false,
+        bundle: true,
         default: false,
         indexDefault: true,
       },

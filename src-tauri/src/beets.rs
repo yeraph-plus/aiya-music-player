@@ -1090,6 +1090,14 @@ const INSTALL_OVERALL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 /// 60s 一行都没有 = 子进程卡死，不必等整体超时。
 const INSTALL_LINE_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// 外置工具下载的两级看门狗。
+///
+/// 空闲阈值必须**大于单次下载的最长时间**：`bins` 在传输期间不打进度帧
+/// （只在开始与结束时 say），87MB 的 ffmpeg 实测 54s，慢网下可能几分钟。
+/// 给 10 分钟留足余量，整体 20 分钟兜底。
+const BIN_LINE_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const BIN_OVERALL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+
 fn install_via_installer(
     app: &tauri::AppHandle,
     pyz: &std::path::Path,
@@ -1151,70 +1159,18 @@ fn install_via_installer(
         *slot = Some(child);
     }
 
-    // 读线程：逐行送 channel。安装线程 recv_timeout 做两级超时
-    // （行间空闲 / 整体），超时 kill+wait 收尸并报错 —— 阻塞读永远等不到
-    // "安装器卡死"这一天结束。
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
-    let reader = std::thread::Builder::new()
-        .name("beets-install-recv".into())
-        .spawn(move || {
-            use std::io::BufRead;
-            for line in std::io::BufReader::new(stdout)
-                .lines()
-                .map_while(Result::ok)
-            {
-                if tx.send(line).is_err() {
-                    break; // 主线程已返回/收尸
-                }
-            }
-        })
-        .map_err(|e| {
-            // 读线程没起来：安装器没人读输出会卡死在管道缓冲上，直接收尸
-            let mut slot = state
-                .beets_install_child
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(mut c) = slot.take() {
-                let _ = c.kill();
-                let _ = c.wait();
-            }
-            format!("起安装器读线程失败：{e}")
-        })?;
-
-    let started = std::time::Instant::now();
-    let mut done = false;
-    let mut timed_out = false;
-    loop {
-        if started.elapsed() > INSTALL_OVERALL_TIMEOUT {
-            timed_out = true;
-            break;
-        }
-        match rx.recv_timeout(INSTALL_LINE_IDLE_TIMEOUT) {
-            Ok(line) => {
-                let s = line.trim();
-                if s.is_empty() {
-                    continue;
-                }
-                // 安装器输出 JSON 行；万一有裸行（pip 进度条）也包成 progress，不丢信息
-                let v: serde_json::Value = serde_json::from_str(s).unwrap_or_else(
-                    |_| serde_json::json!({ "type": "progress", "stage": "pip", "message": s }),
-                );
-                if v.get("type").and_then(|t| t.as_str()) == Some("done") {
-                    done = true;
-                }
-                emit(v);
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                timed_out = true;
-                break;
-            }
-            // stdout 关闭 = 进程要退出了（此后 wait 很快）
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    // 收尾统一经槽，**先 kill 再 join**：超时路径上读线程还挂在 stdout 上，
-    // 不先杀进程 join 永远等不到。槽被 Exit 收尾拿走（take 后为 None）
-    // = 应用正在退出，子进程已被 kill+wait，安装就此放弃。
+    // 逐行读 + 两级超时交给 client：同一段骨架 bins 下载器也要用，而且那边
+    // 有单行上限 —— `BufRead::lines()` 没有，pip 打一行超长解析链会整行进内存。
+    let pump = aiya_beets_client::session::pump_frames(
+        stdout,
+        INSTALL_LINE_IDLE_TIMEOUT,
+        INSTALL_OVERALL_TIMEOUT,
+        emit,
+    );
+    // 收尾统一经槽：pump 只读流，wait/kill 在这边。槽被 Exit 收尾拿走
+    // （take 后为 None）= 应用正在退出，子进程已被 kill+wait，安装就此放弃。
+    // pump 是 Err（读线程起不来）时状态未知，保守 kill —— 没人读输出会让
+    // 安装器卡死在管道缓冲上。
     let code = {
         let mut slot = state
             .beets_install_child
@@ -1222,7 +1178,7 @@ fn install_via_installer(
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match slot.as_mut() {
             Some(c) => {
-                if timed_out {
+                if pump.as_ref().map(|p| p.timed_out).unwrap_or(true) {
                     let _ = c.kill();
                 }
                 let code = c.wait().map_err(|e| format!("等待安装器退出失败：{e}"))?;
@@ -1232,14 +1188,13 @@ fn install_via_installer(
             None => Err("安装被应用退出中断".to_string()),
         }
     }?;
-    // 子进程已死，管道关闭，读线程必已退出；join 只为不留悬线程
-    let _ = reader.join();
-    if timed_out {
+    let pump = pump.map_err(|e| format!("读安装器输出失败：{e}"))?;
+    if pump.timed_out {
         return Err(format!(
             "安装器超时未完成（行间空闲 >{INSTALL_LINE_IDLE_TIMEOUT:.0?} 或整体 >{INSTALL_OVERALL_TIMEOUT:.0?}），已终止"
         ));
     }
-    if !code.success() || !done {
+    if !code.success() || !pump.saw_done {
         return Err(format!(
             "安装器未成功完成（退出码 {}）",
             code.code().unwrap_or(-1)
@@ -1276,49 +1231,28 @@ fn install_via_bundle(
     install_bundle_to(&install_root(app).join("bundle"), zip_path, emit)
 }
 
-/// 这批勾选的插件需要哪些外置工具（`plugins.json` 的 `exe` 字段，docs/53）。
-///
-/// 用编译期内嵌的那张表算，不再问 sidecar：安装时 sidecar 可能还不存在。
-fn needed_binaries(plugins: &[String]) -> Vec<String> {
-    let Ok(rows) = plugin_table() else {
-        return Vec::new();
-    };
-    let mut need: Vec<String> = Vec::new();
-    for name in plugins {
-        let Some(row) = rows.iter().find(|r| &r.name == name) else {
-            continue;
-        };
-        for dep in &row.exe {
-            if !need.contains(dep) {
-                need.push(dep.clone());
-            }
-        }
-    }
-    need
-}
-
-/// 下载外置工具：`<入口> bins --only a,b`（docs/53）。
+/// 下载外置工具：`<入口> bins --from-plugins a,b`（docs/53）。
 ///
 /// 为什么放在宿主侧、由安装流程顺带跑：这些东西是"插件能不能用"的前置，
 /// 而缺 ffmpeg 会让 beets 的**任何**子命令都起不来（实测
 /// `UserError: replaygain initialization failed`）——用户没有修复它的入口，
 /// 等于组件坏了。也刻意不给"跳过"选项：不做就没有这个插件。
 ///
-/// 子进程的超时不在这里设：`bins` 自己对每次请求有 120s 超时与总大小上限，
-/// 卡死会自己退出来，比在父进程再叠一层"多久没输出就杀"更准。
+/// 为什么传**插件名**而不是 exe 名：哪个插件要哪个工具是工具侧的 `plugins.json`
+/// 说的（`binaries_for`）。宿主自己算就是第二份派生——两边算法一旦分家，
+/// 症状是"装了插件却没下工具"，而这条正是让 beets 全线起不来的那种故障。
+/// 内嵌表里已经不再有 `binaries` 段，宿主没有能力算，也就不可能算错。
 fn run_bins(
     app: &tauri::AppHandle,
     entry: &ToolEntry,
-    only: &[String],
+    plugins: &[String],
     emit: &dyn Fn(serde_json::Value),
 ) -> Result<(), String> {
-    use std::io::BufRead as _;
-
     let mut cmd = std::process::Command::new(&entry.program);
     cmd.args(&entry.args)
         .arg("bins")
-        .arg("--only")
-        .arg(only.join(","))
+        .arg("--from-plugins")
+        .arg(plugins.join(","))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -1326,7 +1260,7 @@ fn run_bins(
     crate::proc::no_window(&mut cmd);
     emit(serde_json::json!({
         "type": "progress", "stage": "bin",
-        "message": format!("下载外置工具：{}", only.join(" / ")),
+        "message": format!("下载外置工具（{} 需要的）", plugins.join(" / ")),
     }));
     let mut child = cmd
         .spawn()
@@ -1350,30 +1284,12 @@ fn run_bins(
         *slot = Some(child);
     }
 
-    let mut failure: Option<String> = None;
-    for line in std::io::BufReader::new(stdout)
-        .lines()
-        .map_while(Result::ok)
-    {
-        let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-        match obj.get("type").and_then(|t| t.as_str()) {
-            Some("progress") => emit(obj),
-            Some("error") => {
-                failure = obj
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .map(str::to_string);
-            }
-            Some("done") => {
-                emit(serde_json::json!({
-                    "type": "progress", "stage": "bin", "message": "外置工具就绪",
-                }));
-            }
-            _ => {}
-        }
-    }
+    let pump = aiya_beets_client::session::pump_frames(
+        stdout,
+        BIN_LINE_IDLE_TIMEOUT,
+        BIN_OVERALL_TIMEOUT,
+        emit,
+    );
 
     // 从槽里取回来 wait：进程可能已经被退出流程收尸了，那就没有句柄可等
     let code = match guard.as_ref() {
@@ -1387,8 +1303,19 @@ fn run_bins(
         }
         None => None,
     };
-    if let Some(msg) = failure {
+    let pump = pump.map_err(|e| format!("读下载器输出失败：{e}"))?;
+    if pump.timed_out {
+        return Err(format!(
+            "下载外置工具超时（>{BIN_LINE_IDLE_TIMEOUT:.0?} 无输出 / 整体 >{BIN_OVERALL_TIMEOUT:.0?}），已终止"
+        ));
+    }
+    if let Some(msg) = pump.last_error {
         return Err(msg);
+    }
+    if pump.saw_done {
+        emit(serde_json::json!({
+            "type": "progress", "stage": "bin", "message": "外置工具就绪",
+        }));
     }
     if let Some(Some(code)) = code {
         if code != 0 {
@@ -1603,12 +1530,14 @@ pub fn start_install(
                         install_via_bundle(&app, &path, &emit)?
                     }
                 };
-                // 外置工具（docs/53）：**两个轨道都要**。免配置包里刻意不带
-                // ffmpeg/Essentia（GPL/AGPL 与体积），而缺 ffmpeg 时 replaygain
-                // 会让 beets 整个 CLI 起不来 —— 勾了就顺手带上，不留半装状态。
-                let need = needed_binaries(&plugins);
-                if !need.is_empty() {
-                    run_bins(&app, &entry, &need, &emit).map_err(|e| {
+                // 外置工具（docs/53）：两个轨道都跑，但缺的东西不一样 —— B 轨道
+                // 自带 Essentia 提取器（docs/54），`exe_path` 会在包内 `bundle/bin`
+                // 里找到它；A 轨道没有，得现下。清单由**工具侧按插件名**自己算，
+                // 已经就位的会跳过，所以"包里带了"不会变成"再下一次 20MB"。
+                // 为什么非做不可：缺 ffmpeg 时 replaygain 会让 beets 整个 CLI
+                // 起不来（实测 `UserError: replaygain initialization failed`）。
+                if !plugins.is_empty() {
+                    run_bins(&app, &entry, &plugins, &emit).map_err(|e| {
                         format!("组件已装好，但外置工具没下下来：{e}（再点一次安装即可补齐）")
                     })?;
                 }
@@ -1646,6 +1575,9 @@ pub fn start_install(
 /* ---------------- 卸载组件（docs/51 §2.2） ---------------- */
 
 /// 统计目录的文件数与字节数（先算账再删——删完就没法报了）。
+///
+/// 只在**工具侧不可用**时用：正常路径上账目由 `uninstall --all --dry-run`
+/// 给出（见 [`uninstall_plan`]），那份还顺带过了四道闸。
 fn measure_dir(root: &std::path::Path) -> (u64, u64) {
     let mut files = 0u64;
     let mut bytes = 0u64;
@@ -1667,6 +1599,97 @@ fn measure_dir(root: &std::path::Path) -> (u64, u64) {
         }
     }
     (files, bytes)
+}
+
+/// 从工具侧的行帧输出里取最后一条 `type == want` 的 JSON。
+///
+/// 只认 JSON 行：工具侧在协议内容之前可能打过人类可读的提示（迁移日志），
+/// 那些行解析不出来，跳过即可——与 `spawn_reader` 的容错行为一致。
+fn last_frame(text: &str, want: &str) -> Option<serde_json::Value> {
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line.trim()).ok())
+        .rfind(|v| v.get("type").and_then(|t| t.as_str()) == Some(want))
+}
+
+/// 工具侧对"这次卸载删什么"的答复。
+enum UninstallPlan {
+    /// 过完闸，给出账目
+    Ready { files: u64, bytes: u64 },
+    /// 没有可用入口 / 跑不起来：宿主自己算账（这次没有工具侧的闸）
+    Unavailable,
+    /// 工具侧明确拒绝（盘根、系统目录、不像安装目录…）：**不许删**
+    Refused(String),
+}
+
+/// 让工具侧出卸载计划：`uninstall --all --dry-run --target <root>`。
+///
+/// ## 为什么只借 `--dry-run`，不把删除交出去
+///
+/// `aiya-beets uninstall` 的执行体就在被删目录里（venv 的 python.exe），而
+/// Windows 上运行中的 exe 删不掉（实测 `DeleteFileW` 返回 0、错误码 5
+/// access denied；同目录的普通文件返回 1 可删）。让工具侧真删，结果是一半
+/// 删掉、一半留着，比不删更难收拾。所以分工是：**工具侧过闸 + 算账，
+/// 宿主执行删除**——四道闸照旧生效，删除者不在目录树内。
+///
+/// ## 为什么 `Refused` 不回落
+///
+/// 退出码 2 是工具侧的闸门约定。它说"不该删"时宿主若自己删，闸门就成了装饰。
+/// 只有"跑不起来"（没有入口、spawn 失败、输出里没有 done 帧）才回落自算，
+/// 因为那种情况闸门根本没被执行过，不该让它阻断卸载。
+fn uninstall_plan(app: &tauri::AppHandle, root: &std::path::Path) -> UninstallPlan {
+    let Some((entry, _source)) = discover(app) else {
+        return UninstallPlan::Unavailable;
+    };
+    let mut cmd = std::process::Command::new(&entry.program);
+    cmd.args(&entry.args)
+        .args(["uninstall", "--all", "--dry-run"])
+        .arg("--target")
+        .arg(root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .envs(tool_env(app, Profile::Workbench));
+    crate::proc::no_window(&mut cmd);
+    let Ok(out) = cmd.output() else {
+        return UninstallPlan::Unavailable;
+    };
+    plan_from_output(out.status.code(), &String::from_utf8_lossy(&out.stdout))
+}
+
+/// 把工具侧的输出翻成 [`UninstallPlan`]（纯函数，好测）。
+///
+/// 退出码 2 是工具侧的闸门约定。**只有**在退出码 2 且真有 error 帧时才当
+/// "拒绝"——否则一次崩溃（segfault 也是非 0）会被误报成"不许卸载"，
+/// 用户就再也卸不掉了。
+fn plan_from_output(code: Option<i32>, text: &str) -> UninstallPlan {
+    if code != Some(0) {
+        if code == Some(2) {
+            if let Some(msg) = last_frame(text, "error").and_then(|v| extract_message(&v)) {
+                return UninstallPlan::Refused(msg);
+            }
+        }
+        return UninstallPlan::Unavailable;
+    }
+    match last_frame(text, "done") {
+        Some(v) => UninstallPlan::Ready {
+            files: v
+                .get("files")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            bytes: v
+                .get("bytes")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+        },
+        None => UninstallPlan::Unavailable,
+    }
+}
+
+/// 行帧里的 `message`（没有就是 None）。
+fn extract_message(v: &serde_json::Value) -> Option<String> {
+    v.get("message")
+        .and_then(|m| m.as_str())
+        .map(str::to_string)
 }
 
 /// 卸载：删 `{data_root}/beets-tool`（venv / bundle / 下载缓存），清设置里的入口。
@@ -1719,7 +1742,13 @@ fn uninstall_now(app: &tauri::AppHandle, emit: &dyn Fn(serde_json::Value)) -> Re
         return Ok(());
     }
 
-    let (files, bytes) = measure_dir(&root);
+    // 先问工具侧：它过四道闸、算账。明确拒绝就停（闸门的意义就在这儿），
+    // 只有"跑不起来"才回落到宿主自己算——那时闸门根本没被执行过。
+    let (files, bytes) = match uninstall_plan(app, &root) {
+        UninstallPlan::Ready { files, bytes } => (files, bytes),
+        UninstallPlan::Refused(why) => return Err(why),
+        UninstallPlan::Unavailable => measure_dir(&root),
+    };
     emit(serde_json::json!({
         "type": "progress", "stage": "uninstall",
         "message": format!(
@@ -2486,15 +2515,45 @@ mod tests {
             1,
             "索引家默认启用的插件数变了，确认是否有意"
         );
-        // 免配置包预置的插件不应该依赖外部二进制（预置了也还是 missing_deps）
+        // 免配置包预置的插件：带外部命令的，那个命令必须**也随包发**（docs/54）。
+        // 以前这里的断言是"预置插件不许带 exe"（那会儿三个二进制都不进包）；
+        // Essentia 随包发之后规则变成"要带就带全"——否则装完的包里 xtractor
+        // 会被渲染侧剔掉（缺工具），用户看到的是"预置了但用不了"。
+        let bundle_bins = bundle_binary_names();
         for r in rows.iter().filter(|r| r.bundle) {
-            assert!(r.exe.is_empty(), "{} 依赖外部命令却标了 bundle", r.name);
+            for dep in &r.exe {
+                assert!(
+                    bundle_bins.iter().any(|b| b == dep),
+                    "{} 标了 bundle，但要的 {dep} 没随包发布（binaries 里缺 bundle: true）",
+                    r.name
+                );
+            }
         }
-        // 默认启用的插件同样不许依赖外部二进制（docs/53 拍板）：否则"默认安装"
-        // 就等于强迫每个用户多下 87MB 的 ffmpeg，而绝大多数人不需要 gain_db。
+        // 默认启用的插件同样不许依赖"用户机现下"的外部二进制（docs/53 拍板）：
+        // 否则"默认安装"就等于强迫每个用户多下 87MB 的 ffmpeg，而绝大多数人不需要。
         for r in rows.iter().filter(|r| r.default) {
             assert!(r.exe.is_empty(), "{} 默认启用却需要外部命令", r.name);
         }
+    }
+
+    /// 内嵌表里 `binaries[].bundle` 的名字（与 `plugin_table` 读同一份 JSON）。
+    ///
+    /// 走 `Value` 而不是给 `PluginTableFile` 加字段：这一段**只有单测要**。
+    /// 运行时不再需要它——哪个插件要哪个工具由工具侧按插件名自己算
+    /// （`bins --from-plugins`），宿主算就是第二份派生。加字段就得挂
+    /// `#[allow(dead_code)]`，那正是"运行时不用但为测试留着"的味道。
+    fn bundle_binary_names() -> Vec<String> {
+        let doc: serde_json::Value =
+            serde_json::from_str(PLUGIN_TABLE_JSON).expect("内嵌表解析失败");
+        doc.get("binaries")
+            .and_then(|b| b.as_array())
+            .map(|rows| {
+                rows.iter()
+                    .filter(|r| r.get("bundle").and_then(serde_json::Value::as_bool) == Some(true))
+                    .filter_map(|r| r.get("name").and_then(|v| v.as_str()).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Python 探测的形状自洽：找到就必须有路径与版本，找不到就必须有人话。
@@ -3062,5 +3121,64 @@ mod tests {
             );
             assert!(it["title"].is_string(), "item title 形状：{it}");
         }
+    }
+
+    /* ---------------- 卸载：计划解析（docs/55） ---------------- */
+
+    /// `last_frame` 取**最后一条**匹配的帧。
+    ///
+    /// 工具侧可能在协议内容前打人类可读提示（迁移日志），一次输出里也可能
+    /// 有多条 `done`。取错就会拿旧账目去删——那是"删了 A 报了 B"。
+    #[test]
+    fn last_frame_takes_the_last_match_and_skips_noise() {
+        let text = "迁移日志：建表\n\
+                    {\"type\":\"progress\",\"message\":\"a\"}\n\
+                    {\"type\":\"done\",\"files\":7,\"bytes\":99}\n\
+                    {\"type\":\"done\",\"files\":2,\"bytes\":10}\n\
+                    {\"type\":\"error\",\"message\":\"boom\"}\n";
+        let done = last_frame(text, "done").expect("应当找到 done");
+        assert_eq!(done["files"], 2, "必须取最后一条 done");
+        assert_eq!(done["bytes"], 10);
+        let err = last_frame(text, "error").expect("应当找到 error");
+        assert_eq!(extract_message(&err).as_deref(), Some("boom"));
+        assert!(last_frame(text, "warning").is_none());
+        assert!(last_frame("", "done").is_none(), "空输出不该凭空造帧");
+    }
+
+    /// 退出码与帧的组合决定"删不删"：**只有** `2 + error 帧` 才是闸门拒绝。
+    ///
+    /// 两侧都错不得：把崩溃误判成拒绝，用户就永远卸不掉；把拒绝当崩溃回落，
+    /// 闸门就成了装饰（那是唯一会 rmtree 的地方）。
+    #[test]
+    fn uninstall_plan_only_refuses_on_exit_2_with_error_frame() {
+        let ok = "{\"type\":\"done\",\"files\":3,\"bytes\":42}\n";
+        match plan_from_output(Some(0), ok) {
+            UninstallPlan::Ready { files, bytes } => assert_eq!((files, bytes), (3, 42)),
+            _ => panic!("exit 0 + done 应当是 Ready"),
+        }
+        let refused = "{\"type\":\"error\",\"message\":\"拒绝卸载：目标是盘根\"}\n";
+        match plan_from_output(Some(2), refused) {
+            UninstallPlan::Refused(msg) => assert!(msg.contains("盘根"), "{msg}"),
+            _ => panic!("exit 2 + error 应当是 Refused"),
+        }
+        // exit 2 但没有 error 帧 = 工具侧自己崩了，不能当成"不许删"
+        assert!(matches!(
+            plan_from_output(Some(2), "Traceback...\n"),
+            UninstallPlan::Unavailable
+        ));
+        // 非闸门退出码带 error 帧也不拦：那是执行失败，不是拒绝
+        assert!(matches!(
+            plan_from_output(Some(1), refused),
+            UninstallPlan::Unavailable
+        ));
+        assert!(matches!(
+            plan_from_output(None, ""),
+            UninstallPlan::Unavailable
+        ));
+        // exit 0 却没有 done 帧 = 没跑完，账目不可信
+        assert!(matches!(
+            plan_from_output(Some(0), "{\"type\":\"progress\"}\n"),
+            UninstallPlan::Unavailable
+        ));
     }
 }

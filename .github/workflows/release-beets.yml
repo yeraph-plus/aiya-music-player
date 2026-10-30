@@ -98,12 +98,14 @@ jobs:
       - name: 打安装器（.pyz）
         run: beets-tool/.venv/Scripts/python beets-tool/tools/build_installer.py
 
-      # 名字错了宿主就 404，所以在这里硬校验一次
+      # 名字错了宿主就 404，所以在这里硬校验一次。
+      # 套件包的体积下限同时是"外置工具进没进包"的粗门禁：Essentia 提取器
+      # 解出 20MB（压缩后 ~12MB）占了约 1/3，丢了它体积会掉到 22MB 以下（docs/54）。
       - name: 校验产物名与体积
         run: |
           $expected = @{
             "aiya-beets-installer.pyz"        = 20KB
-            "aiya-beets-bundle-win-x64.zip"   = 20MB
+            "aiya-beets-bundle-win-x64.zip"   = 30MB
           }
           foreach ($f in $expected.Keys) {
             $p = "beets-tool/dist/$f"
@@ -113,21 +115,38 @@ jobs:
             Write-Host ("{0}  {1:N0} KB" -f $f, ($len / 1KB))
           }
 
-      # "免配置"是可验证的：解开包，用**包里的**解释器 import 预置插件的模块。
-      # 这一步不过，发布物就是哑的（装得上、插件不工作）。
+      # "免配置"是可验证的：解开包，用**包里的**解释器 import 预置插件的模块，
+      # 再按宿主真实的布局（{data_root}\beets-tool\bundle）让它自己找 bin/ 里的
+      # 外置工具——xtractor 能不能用，取决于这一步（docs/54）。
       - name: 解开套件包自检
         run: |
-          $dst = "$env:RUNNER_TEMP\bundle-check"
+          $root = Join-Path $env:RUNNER_TEMP "aiya-check"
+          Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+          $dst = Join-Path $root "beets-tool\bundle"
           Expand-Archive -Path "beets-tool/dist/aiya-beets-bundle-win-x64.zip" -DestinationPath $dst -Force
           $py = Join-Path $dst "python.exe"
           $m = Get-Content (Join-Path $dst "manifest.json") -Raw | ConvertFrom-Json
-          Write-Host "manifest: version=$($m.version) protocol=$($m.protocolVersion) plugins=$($m.plugins -join ',')"
+          $bins = ($m.binaries | ForEach-Object { $_.target }) -join ","
+          Write-Host "manifest: version=$($m.version) protocol=$($m.protocolVersion) plugins=$($m.plugins -join ',') binaries=$bins"
           & $py -m aiya_beets version
           if ($LASTEXITCODE -ne 0) { throw "包内 aiya_beets 跑不起来" }
           foreach ($mod in @("bs4")) {
             & $py -c "import $mod"
             if ($LASTEXITCODE -ne 0) { throw "预置插件依赖缺失：$mod" }
           }
+          if (-not $m.binaries) { throw "manifest 里没有 binaries：包没带外置工具" }
+          foreach ($b in $m.binaries) {
+            $p = Join-Path $dst ("bin\" + $b.target)
+            if (-not (Test-Path $p)) { throw "包内缺少外置工具：$p" }
+            Write-Host ("  {0}  {1:N0} B" -f $b.target, (Get-Item $p).Length)
+          }
+          # 工具侧从 AIYA_BEETS_HOME 推 bin 目录：{home}\..\beets-tool\{bin,bundle\bin}
+          $env:AIYA_BEETS_HOME = Join-Path $root "beets"
+          $names = ($m.binaries | ForEach-Object { $_.name }) -join ","
+          $text = (& $py -m aiya_beets bins --check --only $names | Out-String)
+          Write-Host $text
+          if ($LASTEXITCODE -ne 0) { throw "bins --check 退出码 $LASTEXITCODE" }
+          if ($text -notmatch '"missing":\s*\[\]') { throw "包内工具不全（bins --check 报了 missing）" }
 
       # 三处版本必须同一个数字：包内 __version__、manifest、tag。
       # 以前 build_bundle 硬编码 0.1.0 而包是 0.2.0，发出去没人发现（docs/51 §0）。

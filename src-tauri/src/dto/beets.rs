@@ -140,7 +140,7 @@ pub struct BeetsPluginItem {
     /// pip 目标（插件包自身 + 依赖），带版本约束
     #[serde(default)]
     pub packages: Vec<String>,
-    /// 外部二进制（ffmpeg / fpcalc …），只提示不代装
+    /// 外部二进制（ffmpeg / fpcalc …）：勾了这个插件就会顺带下载它（docs/53）
     #[serde(default)]
     pub exe: Vec<String>,
     /// 默认会写音频文件或产出文件（索引家结构上不收）
@@ -148,7 +148,7 @@ pub struct BeetsPluginItem {
     pub writes: bool,
     #[serde(default)]
     pub network: bool,
-    /// 免配置包预置
+    /// 免配置包预置（带 `exe` 的插件，其 exe 也必须随包发，见 docs/54）
     #[serde(default)]
     pub bundle: bool,
     /// 首次生成 config 时启用（由 JSON 的 `profiles.workbench` 注入）

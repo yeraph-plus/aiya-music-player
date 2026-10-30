@@ -204,11 +204,13 @@ $ python -m pip index versions imageio-ffmpeg                                   
 ### 3.3 命令面
 
 ```bash
-python aiya-beets-installer.pyz bins [--only ffmpeg,essentia,fpcalc] [--dry-run] [--check]
+python aiya-beets-installer.pyz bins [--only ffmpeg,essentia,fpcalc | --from-plugins NAMES] [--dry-run] [--check]
 ```
 
 - `--check`：只体检（存在 / 版本 / 路径），不下载 —— 状态页用；
 - `--dry-run`：打印将下载什么、多大、落哪；
+- `--from-plugins replaygain,lyrics`：**宿主用这条**（docs/55 §3.3）。传插件名而不是
+  exe 名——"哪个插件要哪个工具"只有 `plugins.json` 一处知道，宿主算就是第二份派生；
 - 复用 `install.py` 已有的事件流（`progress` / `done` / 错误码），UI 不用改协议。
 
 `bins` 也可以被 `install` 串起来跑：`install --plugins replaygain` ⇒ 发现 replaygain 的 `exe`
@@ -251,6 +253,11 @@ python aiya-beets-installer.pyz bins [--only ffmpeg,essentia,fpcalc] [--dry-run]
 
 ## 5. 已拍板（2026-10-30，用户原话）
 
+> **后续变更（2026-10-31，docs/54）**：第 1 条对 **Essentia 提取器**破例了 —— 用户要求
+> 「让 essentia_extractor 进免装包，让 xtractor 插件默认携带」。`ffmpeg` 与 `fpcalc`
+> 仍然不进包，所以本文其余部分（下载/校验/落 PATH）照旧有效，只是多了"包内 `bundle/bin`
+> 也算一个查找来源"。AGPLv3 的分发义务随之回到我们身上，补偿措施见 docs/54 §1.6。
+
 1. **三个二进制都不进免配置包**：`ffmpeg` 不进，`fpcalc` 也不进（原话「ffmpeg 不进入免配包，
    fpcalc 也不进免配包」）。于是免配置包体积不变（28.3MB），全部走用户机下载 + 校验 + 落 `bin/`。
    我们不转发第三方二进制 ⇒ 不承担 GPLv3 / AGPLv3 的分发义务（docs/50 §5 的老纪律继续有效）。
@@ -275,6 +282,9 @@ python aiya-beets-installer.pyz bins [--only ffmpeg,essentia,fpcalc] [--dry-run]
 | C3 | `cli.main` 里 `bins.inject_path()`（import beets 之前）+ `cfg` 过滤与 `xtractor.essentia_extractor` | ✅ 有 `bin/ffmpeg` 时 `beet ls` exit 0；PATH 抽掉 ffmpeg 立刻 `UserError`。`config_contract` 新增 [11] 三向（索引家整条不写 / 用户库只留可用的 / 闸兜底变红） |
 | C4 | 宿主：`start_install` 两个轨道装完都接着跑 `bins`（`plugin_table()` 算需要哪些） | ✅ `cargo test -p aiya --lib beets::` 40 过；`clippy -D warnings` 干净 |
 | C5 | UI：勾选标签「还需 X」→「另下 X」（不再是"自备"） | ✅ mock 与 e2e 文案同步 |
+
+> 后续（docs/54，2026-10-31）：Essentia 提取器改成随免配置包发布，`xtractor` 也随之
+> 默认携带（插件包 `beets-xtractor` + 提取器 + 路径补丁 + 档位四件套）。包从 28.3MB → 33.7MB。
 
 ### 顺带修掉的一个真 bug：pyz 永远退出 0
 

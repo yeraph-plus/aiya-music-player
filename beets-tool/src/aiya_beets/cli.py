@@ -57,6 +57,14 @@ def main(argv: list[str] | None = None) -> int:
     if not args:
         args = ["serve"]
 
+    # `xtractor` 之后的参数**原样透传**（beets 那条命令自己有 `-f/-t/-c/-q/-w/-n`）。
+    # 为什么在这里分而不是用 `nargs=REMAINDER`：REMAINDER 遇到以 `-` 开头的参数
+    # 会被顶层解析器抢走（实测 `aiya-beets xtractor -q` → `unrecognized arguments: -q`）。
+    # 只把这一段摘下来，其余子命令仍然走严格解析（`bins --onl x` 该报错还是报错）。
+    passthrough: list[str] = []
+    if args[0] == "xtractor":
+        passthrough, args = args[1:], ["xtractor"]
+
     ap = argparse.ArgumentParser(
         prog="aiya-beets",
         description="AIYA Music 的 beets 侧工具（无子命令时等同于 serve）",
@@ -77,17 +85,31 @@ def main(argv: list[str] | None = None) -> int:
     p_install.add_argument("--plugins", default=None, help="要启用的插件名，逗号分隔；all = 全部")
     p_install.add_argument("--dry-run", action="store_true", help="只打印安装计划")
 
-    p_uninstall = sub.add_parser("uninstall", help="删除安装器建的环境（数据不动）")
+    p_uninstall = sub.add_parser("uninstall", help="删除安装产物（数据不动）")
     p_uninstall.add_argument("--target", required=True)
+    p_uninstall.add_argument(
+        "--all", action="store_true",
+        help="目标是 beets-tool 整层（含 venv / bundle / bin），不只是 venv",
+    )
     p_uninstall.add_argument("--dry-run", action="store_true")
 
     p_bins = sub.add_parser("bins", help="下载/校验外部二进制到 beets-tool/bin")
     p_bins.add_argument("--only", default=None, help="只处理这些名字，逗号分隔")
+    p_bins.add_argument(
+        "--from-plugins", default=None, metavar="NAMES",
+        help="按插件名单推导要哪些工具（宿主用这条）",
+    )
     p_bins.add_argument("--check", action="store_true", help="只体检，不下载")
     p_bins.add_argument("--dry-run", action="store_true", help="只打印将下载什么")
     p_bins.add_argument(
         "--carrier", action="append", default=[], metavar="NAME=PATH",
         help="用本地包代替下载（可重复）",
+    )
+
+    # 其余参数原样交给 `beet xtractor`：那条命令自己有六个开关，抄一份必然漂
+    p_xt = sub.add_parser(
+        "xtractor",
+        help="算 bpm/danceability（索引家；进程内跑 beet xtractor，见 docs/54）",
     )
 
     ns = ap.parse_args(args)
@@ -114,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
         from . import uninstall
 
         argv = ["--target", ns.target]
+        if ns.all:
+            argv.append("--all")
         if ns.dry_run:
             argv.append("--dry-run")
         return uninstall.main(argv)
@@ -122,6 +146,8 @@ def main(argv: list[str] | None = None) -> int:
         argv = []
         if ns.only:
             argv += ["--only", ns.only]
+        if ns.from_plugins is not None:
+            argv += ["--from-plugins", ns.from_plugins]
         if ns.check:
             argv.append("--check")
         if ns.dry_run:
@@ -166,6 +192,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if ns.cmd == "doctor":
         return _doctor()
+
+    if ns.cmd == "xtractor":
+        from . import xtractor as xt
+
+        return xt.main(passthrough)
 
     return 2
 

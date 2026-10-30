@@ -96,6 +96,17 @@ INDEX_IMPORT_KEYS: tuple[tuple[str, str], ...] = (
     ("duplicate_action", "keep"),  # 默认 ask 会吞掉同标签同长的第二个文件
 )
 
+# xtractor 的提取档位（docs/54 §3）。**必须钉成"不算 highlevel"**：
+# 我们下发的是 AcousticBrainz 那版 **win-i686** 提取器，它没编 Gaia2 ——
+# 配了 svm_models 会 `Identifier 'GaiaTransform' not found in registry`
+# 然后**退出 1 且一个 json 都不产出**（docs/50 §2.5 实测）。插件自己那份
+# `config_default.yml` 默认 `highlevel.compute: 1` + 一个占位模型路径，
+# 所以不钉就永远是"跑完了、字段全空"。
+XTRACTOR_PROFILE: dict[str, object] = {
+    "outputFormat": "json",
+    "highlevel": {"compute": 0},
+}
+
 
 class ConfigError(Exception):
     """配置层的错误基类。"""
@@ -372,6 +383,25 @@ def _sync_plugins(text: str, names: list[str]) -> str:
     return want + "\n" + text
 
 
+def _render_tree(rows: list[tuple[str, object]], indent: int) -> list[str]:
+    """按 4 空格层级渲染 `key: value`（`dict` 值就往下嵌一层）。
+
+    为什么需要层级：xtractor 的 `extractor_profile.highlevel.compute` 是 confuse
+    的**真嵌套**键。写成点号扁键（`extractor_profile.highlevel.compute: 0`）是
+    查不到的——confuse 把 `config['a.b']` 拆成两层去找，而 YAML 里那是一个
+    字面 key（这条在验证脚本里踩过：插件报 `Key 'extractor_profile' is not defined`）。
+    """
+    out: list[str] = []
+    pad = " " * indent
+    for key, value in rows:
+        if isinstance(value, dict):
+            out.append(f"{pad}{key}:")
+            out += _render_tree(list(value.items()), indent + 4)
+        else:
+            out.append(f"{pad}{key}: {value}")
+    return out
+
+
 def _render_index(home: Path, plugins: list[str] | None, root: str | None) -> str:
     names = list(plugins) if plugins is not None else list(INDEX_DEFAULT_PLUGINS)
     # xtractor 要 Essentia 提取器；没有它写进 plugins 就是"假开"——
@@ -392,51 +422,58 @@ def _render_index(home: Path, plugins: list[str] | None, root: str | None) -> st
         spec = find_index_plugin(name)
         if spec is None:
             continue
-        rows = list(spec.forced)
+        rows: list[tuple[str, object]] = list(spec.forced)
         # xtractor 唯一一个"必须给绝对路径"的键：它 spawn 的外部程序没有默认位置
         # （默认值就是占位符 `/your/path/to/streaming_extractor_music`）。
         if name == "xtractor":
             found = exe_path("streaming_extractor_music")
             if found:
                 rows.append(("essentia_extractor", yaml_path(found)))
+            rows.append(("extractor_profile", XTRACTOR_PROFILE))
         if not rows:
             continue
         lines.append(f"{name}:")
-        lines += [f"    {key}: {value}" for key, value in rows]
+        lines += _render_tree(rows, 4)
     return "\n".join(lines) + "\n"
 
 
 def _parse(text: str) -> dict[str, object]:
-    """极简 YAML 子集解析：只认"顶层 `key: value`"与"4 空格缩进的子键"。
+    """极简 YAML 子集解析：`key: value` 按缩进叠层级（每层 4 空格）。
 
     为什么自己解析而不是 `yaml.safe_load`：门禁要在**任何**落盘文本上工作，
     包括被人手改坏的；用完整解析器会因为一处语法错误抛异常，而我们要的是
     "这条键不对"这种可读结论。只解析我们自己渲染的那几种形状就够了，
     解析不出来的形状一律视为不合规（拒绝比宽容安全）。
+
+    缩进必须是 4 的倍数：渲染侧只产出这一种（`_render_tree`），别的形状说明
+    这份文件不是我们写的，或者被人动过——两种都该拦。
     """
-    top: dict[str, object] = {}
-    current: dict[str, str] | None = None
+    root: dict[str, object] = {}
+    stack: list[tuple[int, dict[str, object]]] = [(-1, root)]
     for raw in text.splitlines():
         line = raw.rstrip()
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         stripped = line.lstrip()
         indent = len(line) - len(stripped)
-        if indent == 0:
-            key, _, value = stripped.partition(":")
-            key, value = key.strip(), value.strip()
-            if value:
-                top[key] = value
-                current = None
-            else:
-                current = {}
-                top[key] = current
-        elif current is not None and indent > 0:
-            key, _, value = stripped.partition(":")
-            current[key.strip()] = value.strip()
+        if indent % 4:
+            raise ConfigGateError(f"缩进不是 4 的倍数（无法识别的配置行）：{raw!r}")
+        key, _, value = stripped.partition(":")
+        key, value = key.strip(), value.strip()
+        if not key:
+            raise ConfigGateError(f"无法识别的配置行（缺键名）：{raw!r}")
+        while stack and indent <= stack[-1][0]:
+            stack.pop()
+        if not stack:
+            raise ConfigGateError(f"无法识别的配置行（缩进越界）：{raw!r}")
+        parent = stack[-1][1]
+        if value:
+            parent[key] = value
         else:
-            raise ConfigGateError(f"无法识别的配置行（缩进/位置不对）：{raw!r}")
-    return top
+            child: dict[str, object] = {}
+            parent[key] = child
+            stack.append((indent, child))
+    return root
 
 
 def _plugin_names(value: object) -> list[str]:
@@ -549,6 +586,18 @@ def verify_config(
             raise ConfigGateError(
                 f"xtractor.essentia_extractor 必须指向 {found}，实际是 {got or '（缺失）'}"
                 "（默认值是占位符，插件会拿它去 spawn 一个不存在的程序）"
+            )
+        # 提取档位：highlevel 必须关掉（docs/54 §3）。开着的话 win-i686 那版
+        # 提取器会 `GaiaTransform not found` 退出 1，一个 json 都不产出——
+        # 症状是"跑了，字段全空"，而配置看起来完全正常。
+        profile = section.get("extractor_profile") if isinstance(section, dict) else None
+        high = profile.get("highlevel") if isinstance(profile, dict) else None
+        compute = high.get("compute") if isinstance(high, dict) else None
+        if compute != "0":
+            raise ConfigGateError(
+                "xtractor.extractor_profile.highlevel.compute 必须是 0"
+                f"（实际 {compute or '（缺失）'}）：我们下发的提取器没编 Gaia2，"
+                "算 highlevel 会整体退出 1 且不产出任何结果"
             )
 
 

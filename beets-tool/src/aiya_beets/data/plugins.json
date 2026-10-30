@@ -20,6 +20,7 @@
     {
       "name": "ffmpeg",
       "target": "ffmpeg.exe",
+      "bundle": false,
       "why": "replaygain 归一化、转码副本、封面写进文件都调它；缺了 replaygain 会让 beets 整个 CLI 起不来",
       "carrier": {
         "kind": "zip",
@@ -38,6 +39,7 @@
     {
       "name": "streaming_extractor_music",
       "target": "streaming_extractor_music.exe",
+      "bundle": true,
       "why": "xtractor 调它算 bpm / danceability / 响度（python 绑定在 Windows 上没有发行版）",
       "carrier": {
         "kind": "zip",
@@ -56,6 +58,7 @@
     {
       "name": "fpcalc",
       "target": "fpcalc.exe",
+      "bundle": false,
       "why": "chroma 插件拿它算 acoustid 指纹（PyPI 上没有可用发行版）",
       "carrier": {
         "kind": "zip",
@@ -223,14 +226,14 @@
     {
       "name": "xtractor",
       "title": "音频特征",
-      "note": "bpm / danceability / 响度（需要 Essentia 提取器）",
-      "builtin": true,
-      "packages": [],
-      "imports": [],
+      "note": "bpm / danceability / 响度（插件与 Essentia 提取器都随免配置包预置）",
+      "builtin": false,
+      "packages": ["beets-xtractor>=0.4.2,<0.5"],
+      "imports": ["beetsplug.xtractor"],
       "exe": ["streaming_extractor_music"],
       "writes": true,
       "network": false,
-      "bundle": false,
+      "bundle": true,
       "indexForced": {
         "auto": "no",
         "write": "no"

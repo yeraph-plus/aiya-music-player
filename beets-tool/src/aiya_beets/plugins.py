@@ -95,6 +95,16 @@ class BinarySpec:
     ffmpeg 的载体就是 PyPI 的 `imageio-ffmpeg` 轮子 —— 轮子本身就是 zip，
     所以 `kind` 只有 `zip` 一种，不另设 `pypi-wheel`：多一个分支只多一处
     要维护的走法，换来的是同一件事的两种写法。
+
+    ## `bundle` 是什么意思（docs/54）
+
+    `bundle=True` = **这个 exe 由我们随免配置包一起发**：构建时下载、校验、抽成员，
+    塞进包里的 `bin/`，解压后用户机不用再下一次。它不改变"运行时怎么找"——
+    找的是同一个 `bin/`（见 `bins.bin_dirs()`）。
+
+    为什么它必须是**数据**而不是构建脚本里的一个 if：一张表里有三个二进制，
+    "哪个随包发"是产品与许可决策（AGPLv3 的 Essentia 进包要附 NOTICE 与源码获取
+    方式），写死在脚本里就没人能一眼看出包里的法律义务变了。
     """
 
     name: str
@@ -111,6 +121,7 @@ class BinarySpec:
     license: str = ""
     vendor: str = ""
     why: str = ""
+    bundle: bool = False  # 随免配置包发布（见类注释）
 
 
 @dataclass(frozen=True)
@@ -231,9 +242,16 @@ BINARIES: tuple[BinarySpec, ...] = tuple(
         license=item.get("license", ""),
         vendor=item.get("vendor", ""),
         why=item.get("why", ""),
+        bundle=bool(item.get("bundle", False)),
     )
     for item in (catalog().get("binaries") or ())
 )
+
+# 随免配置包一起发布的二进制（`binaries[].bundle`，docs/54）。
+# 与 `BUNDLE_PLUGINS` 是两件事：一个是"包里有哪个 exe"，一个是"包里预装了哪个插件的
+# Python 依赖"。两者可以不一致，但**带 exe 的 bundle 插件必须落在 BINARIES 里**，
+# 否则包里的插件一启动就被渲染侧剔掉（契约测试盯着这条）。
+BUNDLE_BINARIES: tuple[str, ...] = tuple(spec.name for spec in BINARIES if spec.bundle)
 
 
 def binary(name: str) -> BinarySpec | None:
@@ -265,29 +283,32 @@ def binaries_for(names: list[str]) -> list[str]:
 
 
 def exe_path(dep: str) -> str | None:
-    """这个外部依赖现在能不能找到：`bin/` 优先，其次 PATH。
+    """这个外部依赖现在能不能找到：`bin/`（含包内 `bundle/bin/`）优先，其次 PATH。
 
-    为什么要先看 `bin/`：`bin/` 是我们自己下发的（docs/53），它不需要 PATH
+    为什么要先看本地目录：那些 exe 是我们自己下发的（docs/53），它不需要 PATH
     注入就已经存在；而 `shutil.which` 只在 `cli.main` 注入之后才看得见它。
     两边都认，配置渲染与三态报告才能在建进程之前就得出正确结论。
 
+    查找顺序由 `bins.bin_dirs()` 决定（下载落点在前、免配置包自带的在后）：
+    同一个名字两处都有时，以"用户后来补下载的那个"为准。
+
     beets 侧真正调用时走的是 PATH（replaygain 写死 `"ffmpeg"`），那一步由
-    `bins.inject_path()` 负责 —— 这里只回答"有没有"。
+    `bins.inject_path()` 负责 —— 这里只回答"有没有、在哪"。
     """
     from . import bins  # 延迟导入：bins 顶层就 import 本模块（避免环）
 
-    local = bins.bin_dir()
-    if local is not None:
-        candidates = [dep]
-        target = bin_target(dep)
-        if target:
-            candidates.insert(0, target)
-        if os.name == "nt":
-            candidates.append(dep + ".exe")
-        for name in candidates:
-            found = local / name
-            if found.is_file():
-                return str(found)
+    spec = binary(dep)
+    if spec is not None:
+        found = bins.installed_path(spec)
+        if found is not None:
+            return str(found)
+    else:
+        # 表里没声明的名字（历史配置/别人手写的）：只知道裸名字，挨个目录试一次
+        names = [dep, dep + ".exe"] if os.name == "nt" else [dep]
+        for local in bins.bin_dirs():
+            for name in names:
+                if (local / name).is_file():
+                    return str(local / name)
     return shutil.which(dep)
 
 

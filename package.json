@@ -48,6 +48,7 @@
     "smoke:config": "beets-tool\\.venv\\Scripts\\python.exe beets-tool\\tests\\config_contract.py",
     "smoke:catalog": "beets-tool\\.venv\\Scripts\\python.exe beets-tool\\tests\\catalog_contract.py",
     "smoke:bins": "beets-tool\\.venv\\Scripts\\python.exe beets-tool\\tests\\bins_contract.py",
+    "smoke:uninstall": "beets-tool\\.venv\\Scripts\\python.exe beets-tool\\tests\\uninstall_contract.py",
     "smoke:enrich": "beets-tool\\.venv\\Scripts\\python.exe beets-tool\\tests\\smoke_enrich.py",
     "smoke:apply": "npm run smoke:beets",
     "beets:installer": "beets-tool\\.venv\\Scripts\\python.exe beets-tool\\tools\\build_installer.py",
@@ -57,7 +58,7 @@
     "notices": "node tools/run.mjs tools/gen-notices.mjs",
     "icon:source": "node scripts/gen-icon.mjs",
     "clean": "node tools/run.mjs cargo clean",
-    "verify": "npm run test:all && npm run test:e2e && npm run check:fmt && npm run check:clippy && npm run gen:types:check && npm run smoke:beets && npm run smoke:maint && npm run smoke:proto && npm run smoke:config && npm run smoke:catalog && npm run smoke:bins && npm run smoke:lock && npm run smoke:enrich",
+    "verify": "npm run test:all && npm run test:e2e && npm run check:fmt && npm run check:clippy && npm run gen:types:check && npm run smoke:beets && npm run smoke:maint && npm run smoke:proto && npm run smoke:config && npm run smoke:catalog && npm run smoke:bins && npm run smoke:uninstall && npm run smoke:lock && npm run smoke:enrich",
     "verify:release": "npm run test:all && npm run bundle && npm run portable"
   }
 }

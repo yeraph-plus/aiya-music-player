@@ -293,6 +293,87 @@ pub fn spawn_line_reader<R: Read + Send + 'static>(
         .map_err(|e| ToolError::Io(format!("起读线程失败: {e}")))
 }
 
+/// 流式读取一个子进程的行帧，直到见到 `done` / 超时 / EOF。
+#[derive(Debug, Default)]
+pub struct PumpOutcome {
+    /// 见到了终态 `done` 帧（"跑完了"的唯一可信信号）
+    pub saw_done: bool,
+    /// 是超时被中断的（此时子进程可能还活着，调用方必须 kill）
+    pub timed_out: bool,
+    /// 最后一条 `error` 帧的说明（协议里的错误，不是退出码）
+    pub last_error: Option<String>,
+}
+
+/// 逐行读子进程 stdout 并喂给 `sink`，只管**读**，不管 wait/kill。
+///
+/// ## 为什么需要它（而不是每个调用点自己写一遍）
+///
+/// 安装器与 bins 下载器都要"起进程 → 逐行把进度帧转给 UI → 等终态 → 收尸"。
+/// 这段骨架曾在 `beets.rs` 里被抄了两份，两份都用 `BufRead::lines()` ——
+/// 那个 API **没有单行上限**，上游吐一行超长报错链就会把整行读进
+/// 内存。这里复用 [`spawn_line_reader`]，`MAX_LINE_BYTES` 的上限与非法 UTF-8
+/// 容错一并生效。
+///
+/// ## 为什么不管 wait/kill
+///
+/// 句柄的所有权在调用方（安装路径要把它登记进退出收尸槽，应用退出时由
+/// `RunEvent::Exit` 收尸）。这里只持有 stdout 读端。看起来 `timed_out` 之后
+/// 调用方必须自己 kill —— 这个契约写在返回值里，而不是偷偷替它做。
+///
+/// ## 两级超时
+///
+/// `idle` 是"行间静默"上限（防死锁），`overall` 是总时长上限（防慢速堆积）。
+/// 下载类任务在传输期间**没有进度帧**（`bins` 只在开始与结束时 say），所以
+/// 它的 `idle` 必须大于单次下载的最长时间，否则会把正常下载误杀。
+pub fn pump_frames(
+    stdout: impl Read + Send + 'static,
+    idle: Duration,
+    overall: Duration,
+    sink: &dyn Fn(Value),
+) -> Result<PumpOutcome, ToolError> {
+    let (tx, rx): (std::sync::mpsc::Sender<String>, _) = channel();
+    spawn_line_reader(stdout, tx, "beets-pump")?;
+    let started = Instant::now();
+    let mut out = PumpOutcome::default();
+    loop {
+        if started.elapsed() > overall {
+            out.timed_out = true;
+            break;
+        }
+        match rx.recv_timeout(idle) {
+            Ok(line) => {
+                let s = line.trim();
+                if s.is_empty() {
+                    continue;
+                }
+                // 非 JSON 行（上游的进度条、人类可读提示）不丢：包成 progress 帧，
+                // 用户在安装日志里还能看见——静默丢弃会让"卡住"变成无从判断。
+                let v: Value = serde_json::from_str(s).unwrap_or_else(
+                    |_| serde_json::json!({ "type": "progress", "stage": "raw", "message": s }),
+                );
+                match v.get("type").and_then(|t| t.as_str()) {
+                    Some("done") => out.saw_done = true,
+                    Some("error") => {
+                        out.last_error = v
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .map(str::to_string);
+                    }
+                    _ => {}
+                }
+                sink(v);
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                out.timed_out = true;
+                break;
+            }
+            // stdout 关闭 = 进程要退出了（此后 wait 很快返回）
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    Ok(out)
+}
+
 /// 从行通道里等**第一条可解析的 JSON 行**。`timeout` 是整体截止（不是单行）：
 /// 工具初始化时会先打人类可读的提示（实测：新库首写会打迁移日志），那一行
 /// 不是协议内容，跳过后继续等——对齐 `spawn_reader` 逐行试解析的容错行为。
@@ -916,5 +997,74 @@ mod tests {
         let got = sink.0.lock().unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, "ch");
+    }
+
+    /// `pump_frames` 的三件正事：非 JSON 行不许丢、`done`/`error` 要认出来。
+    ///
+    /// 这条替换的是 `beets.rs` 里两份手写读循环。那份用 `BufRead::lines()`，
+    /// 丢掉了单行上限；这里的裸行还必须转成 progress —— 静默丢弃会让安装
+    /// "卡住"变成无从判断（进度信息全在那几行里）。
+    #[test]
+    fn pump_frames_reads_frames_and_flags_terminal_state() {
+        let body = b"{\"type\":\"progress\",\"message\":\"a\"}\n\
+                     downloading (raw line)...\n\
+                     {\"type\":\"error\",\"message\":\"boom\"}\n\
+                     {\"type\":\"done\"}\n"
+            .to_vec();
+        let got: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+        let out = pump_frames(
+            std::io::Cursor::new(body),
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            &|v| got.lock().unwrap().push(v),
+        )
+        .expect("pump");
+        assert!(out.saw_done, "应当认出 done");
+        assert!(!out.timed_out, "正常收尾不该标超时");
+        assert_eq!(out.last_error.as_deref(), Some("boom"));
+        let seen = got.lock().unwrap();
+        assert_eq!(seen.len(), 4, "四行都要转发，裸行不能丢：{seen:?}");
+        assert_eq!(seen[1]["stage"], "raw", "非 JSON 行要包成 progress/raw");
+        assert_eq!(seen[3]["type"], "done");
+    }
+
+    /// 空闲超时只置标志，**不动进程**：句柄所有权在调用方（要登记进退出收尸槽）。
+    #[test]
+    fn pump_frames_times_out_without_killing_anything() {
+        struct Silent;
+        impl Read for Silent {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                std::thread::sleep(Duration::from_millis(300));
+                Ok(0)
+            }
+        }
+        let out = pump_frames(
+            Silent,
+            Duration::from_millis(20),
+            Duration::from_secs(5),
+            &|_v| {},
+        )
+        .expect("pump");
+        assert!(out.timed_out, "空闲超时必须置位");
+        assert!(!out.saw_done);
+    }
+
+    /// 空输出立刻收尾，不能等满空闲阈值（否则"进程已经死了"要白等一轮）。
+    #[test]
+    fn pump_frames_returns_promptly_on_eof() {
+        let started = Instant::now();
+        let out = pump_frames(
+            std::io::Cursor::new(Vec::new()),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            &|_v| {},
+        )
+        .expect("pump");
+        assert!(!out.saw_done && !out.timed_out);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "EOF 该立刻返回，实际 {:?}",
+            started.elapsed()
+        );
     }
 }

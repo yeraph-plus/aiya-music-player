@@ -196,3 +196,16 @@ jobs:
             Write-Host "::error title=binaries contract 失败::$tail"
             exit 1
           }
+
+      # 卸载（docs/55）：唯一会 rmtree 的入口。重点不是"删得干净"，
+      # 是"不该删的时候一个字节都不动"——闸门全在负向用例里。
+      - name: uninstall contract（卸载闸门）
+        run: |
+          $log = "smoke-uninstall.log"
+          npm run smoke:uninstall 2>&1 | Tee-Object -FilePath $log | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            $lines = Get-Content $log | Select-Object -Last 25
+            $tail = ($lines | ForEach-Object { $_ -replace '%', '%25' }) -join '%0A'
+            Write-Host "::error title=uninstall contract 失败::$tail"
+            exit 1
+          }

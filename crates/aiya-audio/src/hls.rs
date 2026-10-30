@@ -1537,7 +1537,7 @@ mod tests {
         let mut s = HlsStream::new_from_local(&m3u8).expect("本地 m3u8 应能打开");
         assert_eq!(s.sample_rate(), 44100);
         assert_eq!(s.channels(), 2);
-        assert!(s.seekable() == false, "直播/VOD 都不可 seek");
+        assert!(!s.seekable(), "直播/VOD 都不可 seek");
         // 两段都消费完 → EOF（垃圾负载解不出样本，但调度必须走完两段）
         while let Ok(Some(_)) = s.next_packet() {}
         assert_eq!(s.pending.len(), 0, "两段都应被消费");

@@ -13,6 +13,10 @@
   [6] 两家 status（真子进程）：库路径/配置目录/数据目录/分析对象互不串
   [7] 两家锁（真子进程）：索引家持锁不影响用户库，反之亦然
   [8] BEETSDIR 冲突：启动即一条 E_CONFIG 信封，退出码 2
+  [9] workbench directory 外科式同步（应用事实跟着变，别的行不动）
+  [10] workbench plugins 外科式同步（选中 / 缺键 / 空数组三向）
+  [11] 缺外部工具即剔除（索引家整条不写 / 用户库只留可用的 / 闸兜底变红）
+  [12] xtractor 提取档位（highlevel.compute 必须 0，打开或缺失都变红）
 
 只用临时目录，不碰真实数据目录。
 """
@@ -441,6 +445,26 @@ try:
                 os.environ.pop("AIYA_BEETS_BIN_DIR", None)
             else:
                 os.environ["AIYA_BEETS_BIN_DIR"] = prev_bin
+
+        # ---- 12. xtractor 的提取档位（docs/54 §3）----
+        #
+        # 守的是"配好了、跑完了、字段全空"：我们下发的 win-i686 提取器没编 Gaia2，
+        # `highlevel.compute` 一开就 `GaiaTransform not found` + 退出 1，**连 json
+        # 都不产出**——所有字段空着，而配置看起来完全正常（docs/50 §2.5）。
+        full = cfg.render_config(Path(HOME_IDX), SCAN_ROOT, None, cfg.PROFILE_INDEX)
+        assert "extractor_profile:" in full, full
+        assert "        highlevel:\n            compute: 0" in full, (
+            f"档位必须是嵌套的 highlevel.compute: 0（扁点号键 confuse 查不到）：\n{full}"
+        )
+        assert "svm_models" not in full, "不要写我们根本没有的模型路径"
+        # 正向：这份文本要能过闸（顺便证明嵌套解析读得到 compute）
+        cfg.verify_config(full, cfg.PROFILE_INDEX, Path(HOME_IDX), SCAN_ROOT)
+        # 负向两连：打开 highlevel / 整条丢键，都必须变红
+        must_gate(full.replace("compute: 0", "compute: 1"), HOME_IDX,
+                  "highlevel 被打开（提取器会整体退出 1）", SCAN_ROOT)
+        must_gate(full.replace("        highlevel:\n            compute: 0\n", ""),
+                  HOME_IDX, "highlevel.compute 整条缺失", SCAN_ROOT)
+        print("[12] 提取档位 OK（highlevel.compute 钉 0 / 打开或缺失都变红）")
     finally:
         for k, v in saved.items():
             if v is None:

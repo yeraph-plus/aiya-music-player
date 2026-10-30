@@ -17,7 +17,7 @@ builtin: boolean,
  */
 packages: Array<string>, 
 /**
- * 外部二进制（ffmpeg / fpcalc …），只提示不代装
+ * 外部二进制（ffmpeg / fpcalc …）：勾了这个插件就会顺带下载它（docs/53）
  */
 exe: Array<string>, 
 /**
@@ -25,7 +25,7 @@ exe: Array<string>,
  */
 writes: boolean, network: boolean, 
 /**
- * 免配置包预置
+ * 免配置包预置（带 `exe` 的插件，其 exe 也必须随包发，见 docs/54）
  */
 bundle: boolean, 
 /**

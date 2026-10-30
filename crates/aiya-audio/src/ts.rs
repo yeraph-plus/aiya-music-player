@@ -90,7 +90,7 @@ pub fn strip(bytes: &[u8], st: &mut TsState) -> Result<(Vec<u8>, TsAudio), Audio
     if bytes.is_empty() {
         return Err(AudioError::Decode("TS 段是空的".into()));
     }
-    if bytes.len() % PACKET_LEN != 0 {
+    if !bytes.len().is_multiple_of(PACKET_LEN) {
         return Err(AudioError::Decode(format!(
             "TS 段长度 {} 不是 188 的整数倍（段被截断或不是 TS）",
             bytes.len()
@@ -102,7 +102,7 @@ pub fn strip(bytes: &[u8], st: &mut TsState) -> Result<(Vec<u8>, TsAudio), Audio
     let mut saw_audio_packet = false;
     let mut pes = PesAssembler::default();
 
-    for (idx, packet) in bytes.chunks_exact(PACKET_LEN).enumerate() {
+    for (idx, packet) in bytes.as_chunks::<PACKET_LEN>().0.iter().enumerate() {
         if packet[0] != SYNC {
             return Err(AudioError::Decode(format!(
                 "TS 第 {} 个包失去同步（首字节 0x{:02X} 不是 0x47）",
@@ -171,7 +171,7 @@ fn parse_pat(payload: &[u8], st: &mut TsState) {
     };
     // 表头 8 字节：table_id(1) + section_length(2) + tsid(2) + version(1)
     //             + section_number(1) + last_section_number(1)
-    for entry in sec.get(8..).unwrap_or_default().chunks_exact(4) {
+    for entry in sec.get(8..).unwrap_or_default().as_chunks::<4>().0.iter() {
         let program = u16::from_be_bytes([entry[0], entry[1]]);
         if program == 0 {
             continue; // 0 = network PID（NIT），不是节目
@@ -230,7 +230,7 @@ fn parse_pmt(payload: &[u8], st: &mut TsState) -> Result<(), AudioError> {
 
 /// 取 section 切片：先跳 `pointer_field`，再校 `table_id` 与 `section_length`
 /// 的边界（避免越界读）。
-fn section<'a>(payload: &'a [u8], want_table_id: u8) -> Option<&'a [u8]> {
+fn section(payload: &[u8], want_table_id: u8) -> Option<&[u8]> {
     let ptr = *payload.first()? as usize;
     let sec = payload.get(1 + ptr..)?;
     if sec.len() < 3 || sec[0] != want_table_id {

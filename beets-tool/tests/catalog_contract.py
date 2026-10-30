@@ -8,8 +8,8 @@
   [2] 派生视图与 JSON 一致：MARKET / DEFAULT / INDEX / BUNDLE 四路都不许自己发挥
   [3] 索引白名单的结构拒绝：「默认会写盘」的插件必须由 indexForced 压住 write:no
   [4] packages_for：未知名字必须抛错（静默跳过 = 勾了 A 装了 B）
-  [5] bundle 插件不许带外部二进制依赖（否则"免配置"名不副实）
-  [6] 负向九连：把表改坏（含 binaries 载体与引用），校验必须逐个变红
+  [5] bundle 与外部二进制的关系：包里带着的插件，它的 exe 必须也随包发
+  [6] 负向十三连：把表改坏（含 binaries 载体与引用），校验必须逐个变红
 
 只读表，不写盘，不碰 beets 运行时。
 """
@@ -36,9 +36,10 @@ ENTRY_KEYS = {
 OPTIONAL_KEYS = {"indexForced"}
 
 BINARY_KEYS = {
-    "name", "target", "why", "carrier", "size", "sha256", "license", "vendor",
+    "name", "target", "bundle", "why", "carrier", "size", "sha256", "license", "vendor",
 }
 BINARY_OPTIONAL = {"probe", "probeAllowFail"}
+BINARY_BOOLS = ("bundle",)
 CARRIER_KEYS = {"kind", "url", "size", "sha256", "member"}
 
 HEX = set("0123456789abcdef")
@@ -133,14 +134,6 @@ def validate(doc: dict) -> list[str]:
                 f"（实测 xtractor 的 write 默认 yes，会静默改音频）"
             )
 
-    # 免配置包的承诺是"解压即用"：带外部二进制的插件不该被预置
-    for item in items:
-        if isinstance(item, dict) and item.get("bundle") and item.get("exe"):
-            errs.append(
-                f"{item.get('name')}: 标了 bundle 却依赖外部命令 {item['exe']}"
-                "（预置了也还是 missing_deps）"
-            )
-
     # ---- binaries 段（docs/53）：外部二进制的载体与校验值 ----
     bins = doc.get("binaries")
     if not isinstance(bins, list) or not bins:
@@ -173,6 +166,9 @@ def validate(doc: dict) -> list[str]:
         for key in ("why", "license", "vendor"):
             if not isinstance(item.get(key), str) or not item.get(key):
                 errs.append(f"{name}: {key} 必须是非空字符串")
+        for key in BINARY_BOOLS:
+            if not isinstance(item.get(key), bool):
+                errs.append(f"{name}: {key} 必须是布尔")
 
         carrier = item.get("carrier")
         if not isinstance(carrier, dict):
@@ -211,6 +207,35 @@ def validate(doc: dict) -> list[str]:
             isinstance(i, dict) and name in (i.get("exe") or ()) for i in items
         ):
             errs.append(f"{name}: 没有任何插件用到它（要么补插件，要么从表里删掉）")
+
+    # ---- bundle 与外部二进制的关系（docs/54）----
+    # "免配置包里预置了 xtractor" 只有在它那个 20MB 的提取器也随包发时才算数：
+    # 否则渲染配置时 `usable_plugins` 会把它剔掉，包看着有、用起来没有。
+    bundle_bins = {
+        i.get("name") for i in bins if isinstance(i, dict) and i.get("bundle") is True
+    }
+    for item in items:
+        if not isinstance(item, dict) or not item.get("bundle"):
+            continue
+        for dep in item.get("exe") or ():
+            if dep not in bundle_bins:
+                errs.append(
+                    f"{item.get('name')}: 标了 bundle，但要的 {dep} 没随包发布"
+                    "（binaries 里那条缺 bundle: true —— 打出来的包会带着一个用不了的插件）"
+                )
+    # 反向：随包发的 exe 得有 bundle 插件在用，否则白扛体积与许可义务
+    for item in bins:
+        if not isinstance(item, dict) or item.get("bundle") is not True:
+            continue
+        used = any(
+            isinstance(p, dict) and p.get("bundle") and item["name"] in (p.get("exe") or ())
+            for p in items
+        )
+        if not used:
+            errs.append(
+                f"{item.get('name')}: 标了 bundle 却没有 bundle 插件用它"
+                "（包里会带一个没人用的工具，还要替它承担分发许可）"
+            )
     return errs
 
 
@@ -240,7 +265,10 @@ def main() -> int:
     assert [b.name for b in plugins.BINARIES] == [
         i["name"] for i in DOC["binaries"]
     ], "BINARIES 必须与 JSON 同序同名"
-    print("[2] 派生视图与 JSON 一致 OK（MARKET/DEFAULT/INDEX/BUNDLE 四路 + BINARIES）")
+    assert list(plugins.BUNDLE_BINARIES) == [
+        i["name"] for i in DOC["binaries"] if i["bundle"]
+    ], "BUNDLE_BINARIES 必须取自 binaries[].bundle"
+    print("[2] 派生视图与 JSON 一致 OK（MARKET/DEFAULT/INDEX/BUNDLE 四路 + BINARIES/BUNDLE_BINARIES）")
 
     # [3] 索引白名单里没有"结构性写盘"的插件
     for spec in plugins.INDEX_PLUGINS:
@@ -263,11 +291,24 @@ def main() -> int:
         raise AssertionError("未知插件名必须抛 KeyError，不能静默跳过")
     print("[4] packages_for OK（去重 / 空清单 / 未知名字抛错）")
 
-    # [5] bundle 插件不许依赖外部二进制（validate 里已查，这里对真实清单再确认一次）
+    # [5] bundle 与外部二进制：带着的插件，它的工具也得随包发（docs/54）
+    #
+    # 这一条以前写的是"bundle 插件不许带 exe"（那会儿三个二进制都不进包）。
+    # 现在 Essentia 随包发，规则反过来：**要带就带全**，不许出现"插件在包里、
+    # 工具靠用户机现下"的组合——那种包在断网机器上等于没预置。
+    from_exe = {
+        dep
+        for name in plugins.BUNDLE_PLUGINS
+        for dep in ((plugins.entry(name) or {}).get("exe") or ())
+    }
+    assert from_exe, "bundle 插件里一个带 exe 的都没有，这条规则就没在防任何东西（改注释）"
+    missing = sorted(from_exe - set(plugins.BUNDLE_BINARIES))
+    assert not missing, f"bundle 插件要 {missing}，但它们没随包发布"
     for name in plugins.BUNDLE_PLUGINS:
-        item = plugins.entry(name)
-        assert not item.get("exe"), f"{name} 依赖外部命令，不该进免配置包"
-    print(f"[5] bundle 预置清单 OK：{', '.join(plugins.BUNDLE_PLUGINS)}")
+        item = plugins.entry(name) or {}
+        print(f"    · {name}：exe={item.get('exe') or '无'}")
+    print(f"[5] bundle 组合 OK：插件 {'/'.join(plugins.BUNDLE_PLUGINS)}；"
+          f"随包 exe {'/'.join(plugins.BUNDLE_BINARIES)}")
 
     # [5b] 外部二进制的解析：谁要什么、缺了算谁头上（docs/53）
     assert plugins.binaries_for(["replaygain"]) == ["ffmpeg"], "replaygain 只要 ffmpeg"
@@ -305,7 +346,7 @@ def main() -> int:
                 os.environ["AIYA_BEETS_BIN_DIR"] = saved
     print("[5b] binaries_for / exe_path / usable_plugins OK")
 
-    # [6] 负向九连：把表改坏，校验必须变红（否则门禁是装饰）
+    # [6] 负向十三连：把表改坏，校验必须变红（否则门禁是装饰）
     def broken(mutate) -> list[str]:
         doc = copy.deepcopy(DOC)
         mutate(doc)
@@ -329,11 +370,18 @@ def main() -> int:
         "sha256 写短了": lambda d: d["binaries"][0].update({"sha256": "abc123"}),
         "载体成员留空": lambda d: d["binaries"][0]["carrier"].update({"member": ""}),
         "声明了却没人用的二进制": lambda d: d["binaries"].append(
-            {"name": "ghost", "target": "ghost.exe", "why": "x",
+            {"name": "ghost", "target": "ghost.exe", "bundle": False, "why": "x",
              "carrier": {"kind": "zip", "url": "https://e/x.zip", "size": 1,
                          "sha256": "0" * 64, "member": "ghost.exe"},
              "size": 1, "sha256": "0" * 64, "license": "MIT", "vendor": "x"}
         ),
+        # docs/54：bundle 的两头都要对得上
+        "bundle 插件的工具没随包发": lambda d: d["binaries"][
+            next(i for i, x in enumerate(d["binaries"])
+                 if x["name"] == "streaming_extractor_music")
+        ].update({"bundle": False}),
+        "bundle 二进制没人用": lambda d: d["binaries"][0].update({"bundle": True}),
+        "bundle 标志写成了字符串": lambda d: d["binaries"][1].update({"bundle": "true"}),
     }
     for label, mutate in cases.items():
         got = broken(mutate)
