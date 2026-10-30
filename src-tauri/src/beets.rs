@@ -1066,6 +1066,21 @@ fn run_session(
     on_exit: Box<dyn FnOnce() + Send + 'static>,
 ) -> Result<(), String> {
     let sink: Arc<dyn EventSink> = Arc::new(TauriSink(app.clone()));
+    run_session_with(tool, request, channel, busy, sink, on_exit)
+}
+
+/// [`run_session`] 的通用形态：事件出口由调用方给。
+///
+/// 索引增强需要自定义出口（边转发边把 `enrichItem` 攒起来落库），
+/// 其余链路直接用 [`TauriSink`] 转发。
+fn run_session_with(
+    tool: StdioTool,
+    request: serde_json::Value,
+    channel: &'static str,
+    busy: &str,
+    sink: Arc<dyn EventSink>,
+    on_exit: Box<dyn FnOnce() + Send + 'static>,
+) -> Result<(), String> {
     tool.start_session(request, channel, sink, on_exit)
         .map_err(|e| match e {
             ToolError::Busy => busy.to_string(),
@@ -1242,6 +1257,43 @@ pub fn start_duplicates(app: tauri::AppHandle, keys: Vec<String>) -> Result<(), 
     )
 }
 
+/* ---------------- 索引增强（docs/45 §5.4） ---------------- */
+
+/// 起一次索引增强会话：事件走 `beets:enrich`，`enrichItem` 由宿主边收边落库。
+///
+/// 与其它会话的三处不同，都不是风格选择：
+/// 1. **路径清单由调用方给**：哪些文件"缺结论/结论过期"只有宿主的 DB 知道
+///    （`enrichment::work_paths`），sidecar 不自己挑。
+/// 2. **事件出口不是纯转发**：`enrichment::Sink` 一边转发给 UI，一边把
+///    `enrichItem` 攒起来写关联表（sidecar 不碰应用库，docs/44 §9.1）。
+/// 3. **这里不持 `scanning`**：写锁的粒度在落库函数里（每批一次），提前持有
+///    等于整场挡住 30 s 定时刷新和手动扫描。
+///
+/// 不触发读模型对账：增强只往关联表写，`tracks` 一个字节不变。
+pub fn start_enrich(
+    app: tauri::AppHandle,
+    source: String,
+    force: bool,
+    paths: Vec<String>,
+) -> Result<(), String> {
+    let tool = tool_or_err(&app)?;
+    let sink = Arc::new(crate::enrichment::Sink::start(app.clone())?);
+    let exit_sink = Arc::clone(&sink);
+    run_session_with(
+        tool,
+        serde_json::json!({
+            "id": 1, "cmd": "enrich",
+            "paths": paths,
+            "want": [source],
+            "force": force,
+        }),
+        crate::enrichment::CHANNEL,
+        "已有 beets 任务在执行（可先取消）",
+        sink,
+        Box::new(move || exit_sink.finish()),
+    )
+}
+
 /* ---------------- 插件市场（docs/40 §3 白名单版） ---------------- */
 
 /// 插件市场目录：一次性短进程查询（与 status 探测同款开销，~1s）。
@@ -1300,6 +1352,12 @@ pub fn start_move(
 /// 刷新管线用它决定"要不要跑 beets 段"。刻意不复用 `probe`：探测要起一次
 /// 子进程（约 300 ms），而定时刷新每 30 s 就会问一次 —— 这里只需要回答
 /// "有没有入口"，有入口之后让 dump 自己失败（那时候的错误才值得报告）。
+///
+/// 索引增强卡片也用它：`available=false` 时按钮直接禁用，不必等一次探测。
+pub fn available(app: &tauri::AppHandle) -> bool {
+    discover(app).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

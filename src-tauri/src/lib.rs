@@ -35,6 +35,7 @@ use aiya_data::scanner;
 mod app_id;
 mod beets;
 pub mod dto;
+mod enrichment;
 mod logging;
 mod paths;
 mod proc;
@@ -1282,12 +1283,15 @@ fn beets_reveal(path: String) -> Result<dto::library::RevealResult, dto::ApiErro
 
 /// 维护任务启动失败的错误分类。
 ///
-/// 只有"没有可用的 beets 解释器"该映射成 `beetsMissing`（UI 弹安装指引，
+/// 只有"没有可用的 beets 解释器/组件"该映射成 `beetsMissing`（UI 弹安装指引，
 /// 与 preview/apply 一致）；"已有任务在执行"、"脚本落盘失败"这些是普通失败，
 /// 塞进 `beetsMissing` 会让用户以为自己没装 beets 而反复重装。
 /// 靠消息串判断是因为这条边界本身就是 String（sidecar 是外部进程）。
+///
+/// 两个关键词都要认：`tool_or_err` 的文案是"未安装 beets 组件…"（不是
+/// "interpreter"），只匹配后者会让"没装"落到 `invalidArg`，UI 就不给安装指引了。
 fn map_beets_start(e: String) -> dto::ApiError {
-    if e.contains("interpreter") {
+    if e.contains("interpreter") || e.contains("未安装") {
         dto::ApiError::beets_missing(e)
     } else {
         dto::ApiError::invalid_arg(e)
@@ -1401,6 +1405,114 @@ async fn beets_plugin_install(
         .map_err(dto::ApiError::internal)?
         .map_err(map_beets_start)?;
     Ok(dto::beets::JobStarted { started: true })
+}
+
+/* ---------------- 索引增强（docs/45 §5.4） ---------------- */
+
+/// 曲库索引卡的数据源：一次聚合计数 + 清单前若干条。
+///
+/// `include_empty` = "连上次跑空的也重算"。默认 false：`empty` 的语义是
+/// "这个源对这类文件没结论"，每次分析都重试等于让那批文件永久占着清单。
+#[tauri::command]
+async fn enrichment_worklist(
+    app: AppHandle,
+    source: Option<String>,
+    include_empty: Option<bool>,
+) -> Result<dto::enrichment::EnrichmentWorklist, dto::ApiError> {
+    let source = enrichment::normalize_source(source).map_err(dto::ApiError::invalid_arg)?;
+    let include_empty = include_empty.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || enrichment::worklist(&app, &source, include_empty))
+        .await
+        .map_err(dto::ApiError::internal)?
+        .map_err(dto::ApiError::internal)
+}
+
+/// 起一次分析：清单在命令层算好再交给 sidecar（清单为空就不起进程）。
+///
+/// `force` 同时表达两件事，缺一不可：
+/// - 宿主侧：把 `status='empty'` 的也捞进清单（否则"强制重算"对上次跑空的
+///   文件毫无作用，用户会以为按钮坏了）；
+/// - sidecar 侧：先清旧再补登（`item.remove()` + 重导），否则 beets 会把
+///   "已在库"的文件直接跳过，插件根本不跑（docs/45 §3.4 实测）。
+#[tauri::command]
+async fn beets_enrich_start(
+    app: AppHandle,
+    source: Option<String>,
+    force: Option<bool>,
+) -> Result<dto::beets::JobStarted, dto::ApiError> {
+    let source = enrichment::normalize_source(source).map_err(dto::ApiError::invalid_arg)?;
+    let force = force.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = enrichment::work_paths(&app, &source, force)?;
+        if paths.is_empty() {
+            return Err("工作清单为空：没有需要分析的曲目".to_string());
+        }
+        beets::start_enrich(app.clone(), source, force, paths)
+    })
+    .await
+    .map_err(dto::ApiError::internal)?
+    .map_err(map_beets_start)?;
+    Ok(dto::beets::JobStarted { started: true })
+}
+
+/// [`enrichment_query`] 的参数。放这里而不是 `dto`：它是**入参**，
+/// 参数形状出错要映射成 `invalidArg`，不能靠 Tauri 自己的反序列化文案。
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct EnrichmentQueryArgs {
+    source: Option<String>,
+    mood: Option<String>,
+    dance_min: Option<f64>,
+    dance_max: Option<f64>,
+    bpm_min: Option<f64>,
+    bpm_max: Option<f64>,
+    limit: Option<usize>,
+}
+
+/// 按维度查（曲库页/智能歌单）。未装 beets 时返回空数组而不是报错：
+/// 关联表里的历史结论与被分析的对象是否可用无关。
+#[tauri::command]
+async fn enrichment_query(
+    app: AppHandle,
+    query: Option<Json>,
+) -> Result<Vec<dto::enrichment::EnrichmentMatch>, dto::ApiError> {
+    let args: EnrichmentQueryArgs = match query {
+        None => EnrichmentQueryArgs::default(),
+        Some(v) => serde_json::from_value(v).map_err(|e| {
+            dto::ApiError::invalid_arg(format!("查询参数不合法：{e}"))
+        })?,
+    };
+    let filter = aiya_data::enrichment::Filter {
+        source: args.source,
+        mood: args.mood,
+        dance_min: args.dance_min,
+        dance_max: args.dance_max,
+        bpm_min: args.bpm_min,
+        bpm_max: args.bpm_max,
+        limit: args.limit,
+    };
+    tauri::async_runtime::spawn_blocking(move || enrichment::find(&app, filter))
+        .await
+        .map_err(dto::ApiError::internal)?
+        .map_err(dto::ApiError::internal)
+}
+
+/// 清理残留行：曲库已经没有对应曲目、且 `keepDays` 天内没更新过。
+///
+/// 为什么要有宽限期：换曲库根的那一分钟里所有旧路径都"找不到曲目"，
+/// 立刻删等于把用户几小时的分析成果一键清零（docs/45 §7②）。
+#[tauri::command]
+async fn enrichment_gc(
+    app: AppHandle,
+    source: Option<String>,
+    keep_days: Option<u32>,
+) -> Result<dto::enrichment::EnrichmentGc, dto::ApiError> {
+    let source = enrichment::normalize_source(source).map_err(dto::ApiError::invalid_arg)?;
+    let keep_days = keep_days.unwrap_or(30).clamp(1, 3650);
+    tauri::async_runtime::spawn_blocking(move || enrichment::gc(&app, &source, keep_days))
+        .await
+        .map_err(dto::ApiError::internal)?
+        .map_err(dto::ApiError::internal)
 }
 
 #[tauri::command]
@@ -3830,6 +3942,10 @@ pub fn run() {
             beets_move,
             beets_plugin_catalog,
             beets_plugin_install,
+            enrichment_worklist,
+            beets_enrich_start,
+            enrichment_query,
+            enrichment_gc,
             library_genres,
             beets_reveal,
             library_list,

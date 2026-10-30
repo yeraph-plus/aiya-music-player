@@ -34,6 +34,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0005_facet_norm_indexes.sql"),
     include_str!("../migrations/0006_entity_artwork.sql"),
     include_str!("../migrations/0007_dynamic_materialized.sql"),
+    include_str!("../migrations/0008_track_enrichment.sql"),
 ];
 
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
@@ -336,6 +337,16 @@ mod tests {
                 .unwrap();
             assert_eq!(idx, 1, "{table} 的 {col} 缺失");
         }
+        // 0008：索引增强关联表（PK 必须是 (path_lower, source)——单列主键会让
+        // 后一个源整行覆盖前一个源，docs/45 §5.1）
+        let en: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('track_enrichment') WHERE pk > 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(en, 2, "track_enrichment 主键列数应为 2");
     }
 
     #[test]

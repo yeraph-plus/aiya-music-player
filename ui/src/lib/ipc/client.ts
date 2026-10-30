@@ -27,6 +27,9 @@ import type {
   CancelRequested,
   ChosenRoot,
   Diagnostics,
+  EnrichmentGc,
+  EnrichmentMatch,
+  EnrichmentWorklist,
   EqSettings,
   HistoryCleared,
   HistoryStats,
@@ -391,6 +394,53 @@ export const ipc = {
      * 与维护四件套共用会话槽——装插件时其他维护任务会被拒。
      */
     pluginInstall: (name: string) => call<JobStarted>('beets_plugin_install', { name }),
+  },
+
+  /**
+   * 索引增强（docs/45）：beets 侧分析出的数值特征（bpm / 舞曲性 / 情绪）
+   * 落在宿主自己的关联表里，这里只读它，**不触发任何分析**。
+   *
+   * 没装组件时 `available=false`：历史结论照样能查，但没有新的可算——
+   * UI 按这一个布尔禁用「开始分析」，不必判断 `note`。
+   */
+  enrichment: {
+    /** 曲库索引卡数据源：计数 + 清单前 20 条。`includeEmpty` = 连上次跑空的也重算 */
+    worklist: (source?: string, includeEmpty?: boolean) =>
+      call<EnrichmentWorklist>('enrichment_worklist', {
+        source: source ?? null,
+        includeEmpty: includeEmpty ?? false,
+      }),
+    /**
+     * 起一次分析（异步）：立刻返回「已启动」，进度/结果走 `beets:enrich`。
+     *
+     * `force` 同时表达"连 empty 也重算"和 sidecar 侧的"清旧再补登"——
+     * 少了后半段，beets 会把已在库的文件直接跳过，插件根本不跑。
+     */
+    start: (source?: string, force?: boolean) =>
+      call<JobStarted>('beets_enrich_start', {
+        source: source ?? null,
+        force: force ?? false,
+      }),
+    /**
+     * 按维度查（曲库页/智能歌单）。全部参数可省 = 不限制。
+     *
+     * 返回的 `trackId` 可直接喂给 `player.playTrack` / 歌单接口。
+     */
+    query: (filter: {
+      source?: string;
+      mood?: string;
+      danceMin?: number;
+      danceMax?: number;
+      bpmMin?: number;
+      bpmMax?: number;
+      limit?: number;
+    } = {}) => call<EnrichmentMatch[]>('enrichment_query', { query: filter }),
+    /** 清理残留行（曲库里没有对应曲目且 N 天没更新过）。`keepDays` 缺省 30 */
+    gc: (source?: string, keepDays?: number) =>
+      call<EnrichmentGc>('enrichment_gc', {
+        source: source ?? null,
+        keepDays: keepDays ?? 30,
+      }),
   },
 };
 

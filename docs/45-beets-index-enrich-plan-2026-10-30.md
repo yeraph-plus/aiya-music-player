@@ -337,16 +337,27 @@ WHERE e.path_lower IS NULL
   `refresh` 同一把）**只在批量写事务期间持有**，按批（≤200 行）或每次
   emit flush 取放；**不整场持有**，否则 30s 定时刷新全被静默跳过、手动扫描
   一律 `E_SCAN_BUSY`；
-- 顺手补 `db.rs` 的 `busy_timeout`（现在只有 WAL，没有 busy 等待）：
-  第二个写者一旦漏拿锁就是立刻 BUSY，而不是等 100ms。
+- `db.rs` 的 `busy_timeout`：**本方案最初以为缺，实际从 P1-1 就有**
+  （`db.rs::configure`，5000ms；`git log -S busy_timeout` → `afa65fa`）。
+  批 3 只做复核、没改代码——记在这里是因为"文档说缺、代码其实有"这类偏差
+  会让下一批的人白改一遍。
 
-### 5.4 Tauri 命令（3 条）
+### 5.4 Tauri 命令（4 条）
 
 `enrichment_worklist`（算清单 + 计数）、`beets_enrich_start`（起会话、推事件）、
-`enrichment_query`（按维度过滤，给曲库页/智能歌单用）。`beets_enrich_cancel`
-复用现有 cancel 通道。
+`enrichment_query`（按维度过滤，给曲库页/智能歌单用）、
+`enrichment_gc`（清理残留行，§7② 的欠账落在本批）。
+取消复用现有 `beets_cancel` 通道（会话槽是同一个）。
 
 ### 5.5 动态歌单与查询（拍板 E 的落地）
+
+> **批次日修订（2026-10-30，批 3 复盘）：本节整体挪到批 4。** 原因不是工作量，
+> 而是风险面比看上去宽：`conds_from_value` 的产物同时被 `repo::list_tracks` 与
+> `SmartPlan` 消费，加一个 `en.` 前缀的条件意味着 `repo.rs` 的四个 FROM 变体
+> （library / playlist / recent / mostPlayed）和 `count_from` 都要按需补
+> `LEFT JOIN track_enrichment en`，而"要不要补"还得按条件动态判断。
+> 在没有 UI 筛选入口的批次里改这条**最热的查询路径**，等于用最贵的查询去背
+> 一次无法验证的改动。批 4 有筛选器可以真点，届时一并改、一并量。
 
 - `smart.rs` 的 `Field` 枚举加 `Mood`(text) / `Danceability`(real 范围) /
   `Bpm`(int 范围)，`allows()` 与 `build_clause()` 各加一支；`plan()` 编译出的
@@ -422,8 +433,8 @@ beets 写 A 库、锁建在 B 家**，双家隔离静默失效。两条一起做
 | **0** | Essentia 探针（Windows 静态二进制 + beta5 模型 + 单曲耗时/体积/许可） | **延后**：发布不携带 beets/Essentia，改由用户在应用内点装；探针并入批 5 |
 | **1** | 双家隔离（`cfg.py` profile 化 + 模板自检 + 白名单三元组 + `BEETSDIR` 加固 + 契约测试） | ✅ 完成 |
 | **2** | `enrich` / `query` / `fields`：三段式 + 协议加法 + 假源打通全链路 | ✅ 完成 |
-| **3** | 宿主：migration 0008 + `enrichment.rs` + 工作清单 + 批量 upsert（锁粒度）+ 3 条命令 + `busy_timeout` | 待开工 |
-| **4** | UI：曲库索引卡（状态/重建/分析/进度/字段列表/强制重算）+ 工作台卡收编 docs/43 | 待开工 |
+| **3** | 宿主：migration 0008 + `enrichment.rs` + 工作清单 + 批量 upsert（锁粒度）+ 4 条命令（含 GC）+ `busy_timeout` 复核 | ✅ 完成 |
+| **4** | UI：曲库索引卡（状态/重建/分析/进度/字段列表/强制重算）+ 工作台卡收编 docs/43 + **§5.5 智能歌单字段**（从批 3 挪来） | 待开工 |
 | **5** | `xtractor` 真接入：安装轨道（A 轨 pip / B 轨预置）+ `status` 报三态 + 数值字段实测 | 待开工（合并原批 0） |
 
 **2026-10-30 拍板：beets 与 Essentia 都不进发布包**，全部改为"用户在应用内点一下
@@ -570,6 +581,71 @@ mood 列是否成立，那是批 3 的事。
 **没验到的（写在这里，别当成已验证）**：`_run_import` 的 `stdout=DEVNULL`。
 父进程先开库，迁移日志由父进程打出（走 stderr），子进程通常无话可说，所以
 "不掐会不会污染协议"在这条路径上测不出来。它仍然是必需的防线（见代码注释）。
+
+### 11.5 批 3（宿主关联表 + 4 条命令）已落地
+
+| 落点 | 文件 | 做法 |
+|---|---|---|
+| 迁移 | `migrations/0008_track_enrichment.sql` | `PRIMARY KEY (path_lower, source)`；提升列 `bpm/danceability/loudness/mood_mirex/mood_label/mood_score`；其余进 `data` JSON；失效判定用 `size_bytes/mtime`；`status CHECK IN ('ok','empty')`；不挂 `tracks` 外键 |
+| 数据层 | `crates/aiya-data/src/enrichment.rs` | `path_key`（与 scanner 同口径）/ `argmax_mood`（7 类概率，严格大于、并列取先出现的）/ `stats` / `worklist` / `save` / `find` / `gc`。**10 条单测** |
+| 宿主编排 | `src-tauri/src/enrichment.rs` | 清单/统计/查询/GC 的 `db.send` 包装 + `Sink`（`EventSink` 实现，`enrichItem` → 行）+ 独立落库线程（`take_batch` / `write_batch` / 10s 抢锁上限）+ `enrichPersisted` 终态事件 |
+| 会话 | `beets.rs::start_enrich` | 新开 `run_session_with`（出口可替换）；`beets:enrich` 通道；`scanning` **不**提前持有 |
+| 命令 | `lib.rs` | `enrichment_worklist` / `beets_enrich_start` / `enrichment_query` / `enrichment_gc`（+ `map_beets_start` 认"未安装"） |
+| 契约 | `dto/enrichment.rs` | `EnrichmentWorklist` / `EnrichmentMatch` / `EnrichmentGc`（计数用 `u32`，避免 ts-rs 把它们映射成 `bigint`） |
+| UI 接线 | `client.ts` + `mock/` | `enrichment` 命名空间 4 个 typed 入口；预览 mock 给确定性假数与演练事件流（`enrichItem → enrichDone → enrichPersisted`） |
+| 测试 | 见下 | 数据层 10 条 + 宿主 4 条，其中 1 条是**真 sidecar 端到端**；3 条负向验证 |
+
+**真 sidecar 端到端**（`enrichment::tests::real_sidecar_events_land_in_the_table`）：
+起真进程（`AIYA_BEETS_ENRICH_PROBE=1` + 索引家模板）→ 读 stdout 的 `enrichItem`
+→ 走生产的 `item_from_event` → `data::save` → 断言 `written=2`、`not_in_library=0`、
+`mood_label` 落在 7 类之内。缺 venv 或测试音源时跳过（clean checkout/CI 常态）。
+它存在的理由是批 2 已经付过学费的那条：**对着自己手写的事件形状写单测，永远绿**。
+
+**与文档的偏差**：
+
+1. **`busy_timeout` 本来就有**（P1-1，5000ms）。复核而非实现，见 §5.3 的修订。
+2. **多了第 4 条命令 `enrichment_gc`**：§7② 明确把 GC 挂在批 3，§5.4 只列了
+   3 条，按"欠账优先"取 4 条。
+3. **§5.5 智能歌单字段整体推迟到批 4**，理由写在 §5.5 的修订块里（会牵动
+   `repo.rs` 四个 FROM 变体与 `count_from`，本批无 UI 可验证）。`enrichment_query`
+   已经把数据通道打通，批 4 加规则字段时不用再动数据层。
+4. **落库线程独立于事件线程**（文档只要求"按批持锁"）。事件线程里同步落库会让
+   sidecar 的 stdout 被磁盘 IO 反压（管道 64 KB），进而触发对面
+   `SESSION_IDLE_TIMEOUT`——症状是"工具卡死"，而真因是宿主写库慢。
+5. **`failed`/`skipped` 不落行**（文档只定义 `ok|empty`）。`empty` 的语义是
+   "这个源对这类文件没结论"且**默认不重试**；把过程故障记成 `empty` 等于永久
+   放弃那些文件，用户看到的是"进度条一次比一次短"。它们留在清单里下次重算，
+   计数走 `enrichPersisted` 的 `skipped` / `notInLibrary` / `deferred`。
+6. **`tool_version` 本批恒 NULL**：`enrichItem` 不带版本，而 `status` 探测与
+   enrich 共用会话槽（会话中探测会被 `Busy` 拒）。批 5 接真源时随字段一起上报。
+7. **probe 假源补发 7 个 `mood_*` 概率**（批 2 只发 `mood_mirex`）。不发的话
+   宿主的 argmax、`mood_label` 列、批 4 的情绪筛选在没有 Essentia 的机器上
+   永远为空——那不是"没数据"，是"假源没喂到该喂的地方"。冒烟新增 `[2b]` 断言。
+8. **工作清单只取 `availability='online'`**：`missing` 行没有文件可分析，放进去
+   只会让清单虚高（sidecar 还会 `os.path.isfile` 再剔一遍），症状是"说要算
+   500 首、实际算了 480 首"。
+9. **`map_beets_start` 增加"未安装"关键词**：`tool_or_err` 的文案不含
+   `interpreter`，"没装组件"会被归成 `invalidArg`，UI 就不弹安装指引了。
+
+**负向验证（改坏 → 红 → 撤销 → 绿）**：
+
+| 破坏 | 期望 | 结果 |
+|---|---|---|
+| 摘掉 `write_batch` 的 `compare_exchange` 门禁 | 写锁测试红 | ✅ `write_batch_refuses_when_gate_is_taken` 失败（"应为 Busy，实际 Ok"） |
+| `save` 放开状态过滤（只挡空串） | 状态测试红 | ✅ `save_skips_failures_and_unknown_paths…` 失败（`written` 由 0 变 2） |
+| `item_from_event` 把 `source` 读成 `src` | 端到端红 | ✅ 真 sidecar 测试与单测同时失败——这正是"手写形状单测永远绿"的反证 |
+
+第三条是本批最值得留的一条：它证明端到端测试**能抓住协议漂移**，而不只是
+"再跑一遍成功路径"。
+
+**没验到的（别当成已验证）**：
+
+- 落库线程与扫描/刷新**真并发**时的退让行为（`WriteFail::Busy` → 重试 → 10s
+  后计 `deferred`）。单测只覆盖了"门禁被占时立刻回 Busy"，"重试到超时"这条
+  路径没有测试，只有代码阅读。批 4 的 UI 会把 `deferred` 显示出来，届时用
+  真界面制造并发再验。
+- 十万首级别下 `stats` 那条聚合查询的耗时（1472 首是毫秒级；`perf_50k` 尚未
+  把 `track_enrichment` 纳入）。
 
 ---
 

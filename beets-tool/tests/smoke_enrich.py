@@ -195,6 +195,18 @@ assert all(i["fields"] for i in items), "ok 却没有任何字段"
 bpm_by_path = {p: i["fields"]["bpm"] for p, i in first.items()}
 print(f"[2] enrich OK：{done['total']} 条 ok，bpm 样本 {list(bpm_by_path.values())[:3]}")
 
+# 7 个 mood_* 概率：宿主拿它们 argmax 出单列 mood_label（docs/45 §5.1）。
+# 假源少喂这一类，宿主那半边（提升列/按情绪筛）就永远测不到。
+MOODS = ("mood_happy", "mood_sad", "mood_relaxed", "mood_aggressive",
+         "mood_party", "mood_acoustic", "mood_electronic")
+for p, it in first.items():
+    missing = [m for m in MOODS if m not in it["fields"]]
+    assert not missing, f"{p} 缺情绪概率 {missing}（宿主 argmax 会拿不到结论）"
+    top = max(it["fields"][m] for m in MOODS)
+    assert 0.0 <= top <= 1.0, f"{p} 情绪概率越界：{top}"
+    assert top > 1.0 / len(MOODS), f"{p} 的分布太平，argmax 无意义：{top}"
+print(f"[2b] 情绪概率 OK：{len(MOODS)} 类齐备，argmax 必胜出")
+
 # ---------------- 场景 3：query（结构化规则 / raw / 边界） ----------------
 lo = min(bpm_by_path.values())
 L3 = [

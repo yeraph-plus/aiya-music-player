@@ -21,6 +21,7 @@
 //! - [`lyrics`]：歌词
 //! - [`history`]：播放历史
 //! - [`beets`]：beets 环境与导入回执
+//! - [`enrichment`]：索引增强（工作清单/维度查询/清理回执）
 //! - [`refresh`]：自动刷新管线的诊断快照
 //!
 //! **参数为什么不在这里**：命令参数出错必须映射成 `invalidArg`，而 Tauri 的
@@ -36,6 +37,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 pub mod app;
 pub mod beets;
+pub mod enrichment;
 pub mod history;
 pub mod library;
 pub mod lyrics;

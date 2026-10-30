@@ -260,6 +260,17 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     case 'beets_plugin_install':
       return mock.beetsPluginInstall(String(a.name ?? ''));
 
+    /* ---------------- 索引增强（docs/45）：只读预览 ---------------- */
+    case 'enrichment_worklist':
+      return mock.enrichmentWorklist(a.source as string | undefined, a.includeEmpty === true);
+    case 'enrichment_query':
+      return mock.enrichmentQuery((a.query ?? {}) as { mood?: string; limit?: number });
+    case 'enrichment_gc':
+      // 预览库里没有关联表，所以永远是 0 行可清——但回执形状要真
+      return { removed: 0, keepDays: Number(a.keepDays ?? 30) };
+    case 'beets_enrich_start':
+      return mock.beetsEnrichStart();
+
     default:
       throw mockError(cmd);
   }

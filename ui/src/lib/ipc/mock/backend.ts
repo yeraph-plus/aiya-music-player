@@ -26,6 +26,8 @@ import type {
   BeetsConfig,
   BeetsMarketItem,
   Diagnostics,
+  EnrichmentMatch,
+  EnrichmentWorklist,
   EqSettings,
   HistoryStats,
   LibraryRoots,
@@ -653,6 +655,109 @@ export class MockBackend {
     { name: 'lyrics', note: '歌词抓取（LRC 字段可直供）', source: 'pypi:beautifulsoup4', state: 'ready', enabled: false, missing: [] },
     { name: 'fetchart', note: '封面抓取（本地缺图时补）', source: 'pypi:requests', state: 'missing_deps', enabled: false, missing: ['requests'] },
   ];
+
+  /**
+   * 索引增强（docs/45）：预览环境按曲目数派生出"算过一部分"的状态。
+   *
+   * 为什么不做成随机：卡片要显示的是"还剩多少要算"，随机数会让每次刷新
+   * 数字都变，e2e 无法断言。假数据必须确定性——这是预览后端的硬要求。
+   */
+  async enrichmentWorklist(source?: string, includeEmpty = false): Promise<EnrichmentWorklist> {
+    const total = this.tracks.length;
+    const analyzed = Math.round(total * 0.6);
+    const empty = Math.round(total * 0.1);
+    const stale = Math.round(analyzed * 0.1);
+    const missing = Math.max(0, total - analyzed - empty);
+    return {
+      source: source ?? 'xtractor',
+      available: this.beetsFound,
+      note: this.beetsFound
+        ? null
+        : '未找到 aiya-beets 组件：先安装组件，或检查设置里的组件路径',
+      totalTracks: total,
+      analyzed,
+      empty,
+      missing,
+      stale,
+      orphan: 0,
+      work: missing + stale + (includeEmpty ? empty : 0),
+      includeEmpty,
+      // 真后端给的是绝对路径（卡片上显示"接下来要算哪几首"）；预览库里
+      // TrackRow 不暴露 path，所以造一批同形状的假路径。
+      preview: this.tracks.slice(0, 20).map((t) => `D:/MUSIC_Player/preview/${t.id}.flac`),
+    };
+  }
+
+  async enrichmentQuery(
+    filter: { mood?: string; bpmMin?: number; bpmMax?: number; limit?: number } = {},
+  ): Promise<EnrichmentMatch[]> {
+    const moods = [
+      'mood_happy',
+      'mood_electronic',
+      'mood_relaxed',
+      'mood_party',
+      'mood_sad',
+      'mood_acoustic',
+      'mood_aggressive',
+    ];
+    const limit = filter.limit ?? 50;
+    return this.tracks.slice(0, limit).map((t, i) => ({
+      trackId: t.id,
+      moodLabel: filter.mood ?? moods[i % moods.length],
+      moodScore: Number((0.9 - (i % 5) * 0.1).toFixed(2)),
+      bpm: 90 + ((i * 7) % 80),
+      danceability: Number((0.3 + ((i * 0.13) % 0.7)).toFixed(3)),
+      loudness: 0.62,
+      analyzedAtMs: Date.now() - i * 60_000,
+    }));
+  }
+
+  /**
+   * 索引增强的演练事件流（`beets:enrich`）：逐条 enrichItem → enrichDone →
+   * enrichPersisted。
+   *
+   * 三条终态事件的顺序是契约的一部分：`enrichDone` 说"工具跑了什么"，
+   * `enrichPersisted` 说"库里真落了什么"。预览里也照这个顺序发，
+   * 免得 UI 只在真后端上才处理正确。
+   */
+  async beetsEnrichStart(): Promise<{ started: boolean }> {
+    const total = Math.min(5, this.tracks.length);
+    const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:enrich', e);
+    void (async () => {
+      emit({ type: 'progress', session: 'enr_01', stage: 'enrich', current: 0, total, path: null });
+      for (let i = 0; i < total; i += 1) {
+        await new Promise((r) => setTimeout(r, 200));
+        emit({
+          type: 'enrichItem',
+          session: 'enr_01',
+          path: `D:/MUSIC_Player/preview/${this.tracks[i].id}.flac`,
+          source: 'probe',
+          status: 'ok',
+          fields: { bpm: 100 + i, danceability: 0.5 + i / 100 },
+          message: null,
+        });
+      }
+      emit({
+        type: 'enrichDone',
+        session: 'enr_01',
+        total,
+        succeeded: total,
+        empty: 0,
+        failed: 0,
+        skipped: 0,
+        sources: ['probe'],
+      });
+      emit({
+        type: 'enrichPersisted',
+        written: total,
+        skipped: 0,
+        notInLibrary: 0,
+        deferred: 0,
+        batches: 1,
+      });
+    })();
+    return { started: true };
+  }
 
   async beetsPluginCatalog(): Promise<BeetsMarketItem[]> {
     return this.market.map((m) => ({ ...m }));

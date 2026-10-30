@@ -84,7 +84,17 @@ SOURCES: tuple[SourceSpec, ...] = (
 
 # probe 声明的字段：与 xtractor 真实字段同名同形（docs/45 §3.2），
 # 这样宿主那一侧的映射代码可以在假源上先把链路跑通。
-PROBE_FIELDS = ("bpm", "danceability", "average_loudness", "mood_mirex")
+#
+# **7 个 mood_* 概率必须一起给**：宿主拿它们做 argmax 得到单列 `mood_label`
+# （docs/45 §5.1）。只给 `mood_mirex` 的话，宿主那半边（提升列、按情绪筛选）
+# 在假源上永远是空的——不是"没数据"，是"假源没喂到该喂的地方"，批 4 的
+# 情绪筛选就没法在没有 Essentia 的机器上验。
+_MOOD_CLASSES = (
+    "mood_happy", "mood_sad", "mood_relaxed", "mood_aggressive",
+    "mood_party", "mood_acoustic", "mood_electronic",
+)
+
+PROBE_FIELDS = ("bpm", "danceability", "average_loudness", "mood_mirex", *_MOOD_CLASSES)
 
 _MOODS = (
     "mood_happy", "mood_sad", "mood_relaxed", "mood_aggressive",
@@ -155,14 +165,23 @@ def _norm(path: str) -> str:
 
 
 def _probe_fields(path: str) -> dict:
-    """确定性假字段：同一路径永远同样的值（便于断言幂等与续跑）。"""
+    """确定性假字段：同一路径永远同样的值（便于断言幂等与续跑）。
+
+    7 个情绪概率归一化成"和≈1 的分布"，形状与 essentia 的输出一致
+    （各分类独立概率、量级 0.x），宿主的 argmax 才有可判的东西。
+    """
     h = hashlib.sha256(_norm(path).encode("utf-8")).digest()
-    return {
+    raw = [h[4 + i] for i in range(len(_MOOD_CLASSES))]
+    total = float(sum(raw)) or 1.0
+    moods = {name: round(v / total, 4) for name, v in zip(_MOOD_CLASSES, raw)}
+    out = {
         "bpm": float(60 + h[0] % 120),
         "danceability": round(h[1] / 255.0, 4),
         "average_loudness": round(h[2] / 255.0, 4),
         "mood_mirex": _MOODS[h[3] % len(_MOODS)],
     }
+    out.update(moods)
+    return out
 
 
 def _import_paths(paths: list[str]) -> None:
