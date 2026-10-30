@@ -31,7 +31,12 @@ from .protocol import E_LIBRARY_BUSY, ProtocolError
 
 # 拿独占锁的命令（库变更 + 全量导出——导出撞上别人的写事务会 SQLITE_BUSY，
 # 不如直接排队/拒绝）。
-LOCKED_CMDS = frozenset({"apply_import", "adopt_library", "update_library", "move_items", "dump_items"})
+LOCKED_CMDS = frozenset({
+    "apply_import", "adopt_library", "update_library", "move_items", "dump_items",
+    # enrich 会 remove + import，是索引家库的写者（音频文件不动）：不拿锁就会
+    # 和同进程外的 beet 命令行撞单写者（docs/45 §7 风险 1）。
+    "enrich",
+})
 
 _LOCK_NAME = "library.lock"
 _HOLDER_NAME = "library.lock.holder"

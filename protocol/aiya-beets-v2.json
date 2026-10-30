@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:aiya-beets:protocol:v2",
   "title": "aiya-beets 协议 v2",
-  "description": "AIYA Music 播放器 ⇄ aiya-beets 工具的 NDJSON 契约（docs/33 §4）。\n\n这是**真源**：本文件随 beets-tool 发版，播放器仓库镜像一份\n（`protocol/aiya-beets-v2.json`，字节相同，`npm run proto:check` 守着）。\n\n四个入口（本文件根的 oneOf 覆盖前三个，安装器流单列）：\n  · Request        客户端 → 服务端，一行一个 JSON，`cmd` 判别\n  · Response       一次性应答，有 `ok` 字段。`ok:false` 时若带 `type`，它同时是会话终止事件\n  · Event          会话事件，`type` 判别，无 `id`\n  · InstallerEvent A 轨道安装器的 stdout 帧（`type` 判别），与 serve 会话是不同的词汇表\n\n三条硬规则：\n  1. stdout 只允许 JSON 行（beets 首写杂音走 stderr 或被 reader 过滤）\n  2. 请求的 `id` 必须原样回带\n  3. 会话式命令必须先发终态（`*Done` / `cancelled` / 带 `type` 的错误信封），客户端才关 stdin\n\nv2 变更（2026-10-29，docs/41 §6）：\n  · ErrorCode += E_LIBRARY_BUSY（库文件锁被其他进程持有）\n  · StatusData += libraryLock / libraryLockHolder\n  · Candidate += evidence / reasons（证据分层，借鉴 beets-web-manager ADR 0002/0007）\n  · apply_import += resume（断点续跑）与 options.searchIds（钉死 Release 重刮）\n  · apply_import / adopt_library / update_library / move_items += requestId（幂等键，可选）\n  · applyDone += resumedSkipped\n  · Candidate/AlbumPreview 的 id pattern 放宽到任意位数（999+ 专辑组不再破坏契约）\n  拍板升版（docs/41 §6.1）：新字段在 v2 内定为 required（生产端总是计算），\n  版本协商边界兜住旧端；升版同时接线 schemaHash 运行时比对（闭合 docs/35 P1-4）。",
+  "description": "AIYA Music 播放器 ⇄ aiya-beets 工具的 NDJSON 契约（docs/33 §4）。\n\n这是**真源**：本文件随 beets-tool 发版，播放器仓库镜像一份\n（`protocol/aiya-beets-v2.json`，字节相同，`npm run proto:check` 守着）。\n\n四个入口（本文件根的 oneOf 覆盖前三个，安装器流单列）：\n  · Request        客户端 → 服务端，一行一个 JSON，`cmd` 判别\n  · Response       一次性应答，有 `ok` 字段。`ok:false` 时若带 `type`，它同时是会话终止事件\n  · Event          会话事件，`type` 判别，无 `id`\n  · InstallerEvent A 轨道安装器的 stdout 帧（`type` 判别），与 serve 会话是不同的词汇表\n\n三条硬规则：\n  1. stdout 只允许 JSON 行（beets 首写杂音走 stderr 或被 reader 过滤）\n  2. 请求的 `id` 必须原样回带\n  3. 会话式命令必须先发终态（`*Done` / `cancelled` / 带 `type` 的错误信封），客户端才关 stdin\n\nv2 变更（2026-10-29，docs/41 §6）：\n  · ErrorCode += E_LIBRARY_BUSY（库文件锁被其他进程持有）\n  · StatusData += libraryLock / libraryLockHolder\n  · Candidate += evidence / reasons（证据分层，借鉴 beets-web-manager ADR 0002/0007）\n  · apply_import += resume（断点续跑）与 options.searchIds（钉死 Release 重刮）\n  · apply_import / adopt_library / update_library / move_items += requestId（幂等键，可选）\n  · applyDone += resumedSkipped\n  · Candidate/AlbumPreview 的 id pattern 放宽到任意位数（999+ 专辑组不再破坏契约）\n  拍板升版（docs/41 §6.1）：新字段在 v2 内定为 required（生产端总是计算），\n  版本协商边界兜住旧端；升版同时接线 schemaHash 运行时比对（闭合 docs/35 P1-4）。\n\n2026-10-30 加法（docs/45 §4.2，**不升版**：全是新命令/新事件，既有形状一字未改）：\n  · Request += enrich / query / fields；$defs += QueryRule\n  · Event += enrichItem / enrichDone\n  · Stage += enrich；Session 前缀 += enr\n  边界不变：enrich 只在**索引家**里产出结构化数据，写库的是宿主。",
   "oneOf": [
     { "$ref": "#/$defs/Request" },
     { "$ref": "#/$defs/Response" },
@@ -22,12 +22,12 @@
     },
     "Session": {
       "type": "string",
-      "pattern": "^(imp|app|sync|adopt|update|dup|move|plug)_[0-9]+$",
-      "description": "会话名 = `<前缀>_<请求 id 两位>`，前缀由命令决定：imp/app/sync/adopt/update/dup/move/plug。客户端按它把事件归到同一次请求。"
+      "pattern": "^(imp|app|sync|adopt|update|dup|move|plug|enr)_[0-9]+$",
+      "description": "会话名 = `<前缀>_<请求 id 两位>`，前缀由命令决定：imp/app/sync/adopt/update/dup/move/plug/enr。客户端按它把事件归到同一次请求。"
     },
     "Stage": {
-      "enum": ["scan", "matching", "writing", "adopt", "update", "duplicates", "move", "pluginInstall", "sync"],
-      "description": "会话内阶段。**新增阶段值属于协议变更**（要改本文件并 `proto:sync`），因为它会出现在 UI 文案与进度条逻辑里。2026-10-28 加法：pluginInstall（插件安装，docs/40 §3 白名单版）。v2 加法：sync（dump_items 的 cancelled 事件需要阶段值——v2 给 dump 补了取消检查）。"
+      "enum": ["scan", "matching", "writing", "adopt", "update", "duplicates", "move", "pluginInstall", "sync", "enrich"],
+      "description": "会话内阶段。**新增阶段值属于协议变更**（要改本文件并 `proto:sync`），因为它会出现在 UI 文案与进度条逻辑里。2026-10-28 加法：pluginInstall（插件安装，docs/40 §3 白名单版）。v2 加法：sync（dump_items 的 cancelled 事件需要阶段值——v2 给 dump 补了取消检查）。2026-10-30 加法：enrich（索引增强会话，docs/45 §4.2）。"
     },
     "ErrorCode": {
       "enum": [
@@ -229,6 +229,75 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["cmd", "paths"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "enrich" },
+            "paths": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/Path" },
+              "description": "要分析的**绝对路径**清单，由宿主算好（曲库行 LEFT JOIN 关联表得出的缺失/过期项）。工具不自己挑文件：工作清单是宿主的判断，工具只负责把清单上的东西算出来。"
+            },
+            "want": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "description": "要跑的源（工具侧词汇，如 `xtractor` / `lastgenre`）。缺省 = 该家允许的全部源，顺序即执行顺序。未知源 → `E_INVALID_ARG`，**不静默忽略**（吞掉笔误等于让宿主以为跑过了）。"
+            },
+            "force": {
+              "type": "boolean",
+              "description": "true = 先把清单里的项从库里摘掉再重登，逼插件重新产出。为什么必须这么绕：增量导入对已在库的文件直接跳过、插件根本不跑，`beet update` 也不跑 import_stage（实测 docs/45 §3.4）。"
+            }
+          },
+          "description": "索引增强（docs/45 §4.2）：清旧 → 补登 → 分析，逐文件 `enrichItem`，最后一次 `enrichDone`。**只写索引家的库文件，永不碰音频文件**（写入方恒为宿主，本命令只产数据）。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "query" },
+            "rules": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/QueryRule" },
+              "description": "结构化规则，**AND 组合**。与 `raw` 互斥（同时给 → `E_INVALID_ARG`，不猜优先级）；两者都不给 = 全库。规则在工具侧求值、不下推成 beets 查询语法——理由见 QueryRule 的 description。"
+            },
+            "raw": {
+              "type": "string",
+              "minLength": 1,
+              "description": "原生 beets 查询串的高级逃逸口（`mood::^hap`、fuzzy `~`）。语法解析归工具侧：beets 查询语法是 beets 知识，宿主不构造语法字符串。"
+            },
+            "fields": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "description": "要回带的字段（内置 + flexible 皆可）。缺省 = 只回 `title/artist/album` 三个展示用字段；`path` 恒回带（它是宿主连接曲库行的键）。"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000,
+              "description": "最多回带多少条（默认 500）。超出时 `truncated: true`，`total` 仍是真实命中数。"
+            }
+          },
+          "description": "在**该进程对应的家**里查询 → 一次应答 `{items, total, truncated}`。两库靠进程的 `AIYA_BEETS_PROFILE` 区分，请求里不带 target：同一件事只有一个真源。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd"],
+          "properties": {
+            "id": { "type": "integer", "minimum": 0 },
+            "clientProtocol": { "type": "integer", "minimum": 1 },
+            "cmd": { "const": "fields" }
+          },
+          "description": "可用字段清单（内置类型 + 库里真实出现过的 flexible 键）+ 各增强源的三态。UI 的查询构造器据此渲染可选字段，不硬编码字段名。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": ["cmd"],
           "properties": {
             "id": { "type": "integer", "minimum": 0 },
@@ -384,6 +453,29 @@
       }
     },
 
+    "QueryRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "op", "value"],
+      "properties": {
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "description": "字段名（内置或 flexible，大小写敏感）。**不过白名单**：unknown 字段在求值时恒不命中，而不是报错——因为 flexible 键集合随插件装没装而变化，拿它做门禁会让\"昨天能用的规则今天报错\"。"
+        },
+        "op": {
+          "enum": ["eq", "ne", "lt", "lte", "gt", "gte", "contains", "prefix", "regex", "in", "range"],
+          "description": "比较算子。**结构性枚举**：新增算子要升协议，因为宿主 UI 的运算符下拉与工具求值必须同步。"
+        },
+        "value": {
+          "type": ["string", "number", "boolean", "null", "array"],
+          "items": { "type": ["string", "number", "boolean", "null"] },
+          "description": "比较值。`in` / `range` 收两元素以上数组（range 恰两元素：[lo, hi]，闭区间）。"
+        }
+      },
+      "description": "一条结构化查询规则。**求值在工具侧、不下推 beets 查询语法**：beets 的 `a..b` 范围比较只对在 `item_types` 里注册过类型的字段成立，未注册的 flexible 字段是字符串，同样的范围查询会**静默 0 命中**（实测：自己声明 types.Float 的字段 3 命中，未声明的同值 0 命中，docs/45 §3.3）。把正确性押在对面插件的类型声明上，等于让\"有没有数据\"取决于第三方有没有记得 register。"
+    },
+
     "_comment_responses": {
       "type": "object",
       "description": "一次性应答。`data` 的形状取决于 cmd——它不能在消息内部被判别，所以这里不约束 `data`；契约测试按命令取对应的 `*Data` 子 schema 单独验。"
@@ -505,7 +597,7 @@
 
     "_comment_events": {
       "type": "object",
-      "description": "18 种纯事件。终态错误信封（带 `type`）在 Response 里，不放这里——它有 `ok` 字段，属于应答的形状。"
+      "description": "20 种纯事件。终态错误信封（带 `type`）在 Response 里，不放这里——它有 `ok` 字段，属于应答的形状。"
     },
     "Event": {
       "oneOf": [
@@ -749,6 +841,59 @@
             }
           },
           "description": "插件安装成功并复检就绪（2026-10-28 加法）。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "path", "source", "status", "fields"],
+          "properties": {
+            "type": { "const": "enrichItem" },
+            "session": { "$ref": "#/$defs/Session" },
+            "path": { "$ref": "#/$defs/Path" },
+            "source": {
+              "type": "string",
+              "minLength": 1,
+              "description": "产出这批字段的源（工具侧词汇）。宿主按 `(path, source)` 落库——一个文件会被多个源产出，单键会让它们互相覆盖。"
+            },
+            "status": {
+              "enum": ["ok", "empty", "failed", "skipped"],
+              "description": "`ok` = 至少一个期望字段非空；`empty` = 流程跑完但字段没出现（缺模型 / 该格式不支持，**不是错误**，宿主缓存下来别每轮重试）；`failed` = 该文件报错；`skipped` = 上游步骤（清旧/补登）就没成。判定只认字段，不认退出码——实测缺 Essentia 时 `Finished: [1/1]` + 退出码 0 + 字段全空（docs/45 §3.7）。"
+            },
+            "fields": {
+              "type": "object",
+              "additionalProperties": { "type": ["number", "string", "boolean", "null"] },
+              "description": "字段名 → 标量值。**动态键**：源产出什么就报什么（xtractor 有 25 个），宿主只认自己建模的那几列，其余原样进 JSON blob。`status != ok` 时是空对象。"
+            },
+            "message": {
+              "type": ["string", "null"],
+              "description": "failed / skipped 的原因（展示用原文）。"
+            }
+          },
+          "description": "enrich 的一个 (文件, 源) 结果。**逐条发**：客户端空闲看门狗 600 s 到点强杀，批级汇总在慢机上会被误杀。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "session", "total", "succeeded", "empty", "failed", "skipped", "sources"],
+          "properties": {
+            "type": { "const": "enrichDone" },
+            "session": { "$ref": "#/$defs/Session" },
+            "total": { "type": "integer", "minimum": 0 },
+            "succeeded": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "成功条数。**事件里绝不能出现叫 `ok` 的键**：契约规定\"有 `ok` 就是应答信封\"，两侧的判别（客户端 `Envelope`、测试的 `classify_line`）都按这条走，事件带 `ok` 会被拿去解析 `data`。这里叫 `succeeded` 就是被这个坑逼的。"
+            },
+            "empty": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 },
+            "skipped": { "type": "integer", "minimum": 0 },
+            "sources": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "实际跑过的源（顺序即执行顺序）。宿主据此知道\"这次的结果来自谁\"，也能发现某个源整场没跑起来。"
+            }
+          },
+          "description": "enrich 的终态。四个计数按 **enrichItem 条数**统计（一个文件 × N 个源 = N 条），不是按文件数——`total` 与宿主发来的 `paths` 长度不等是正常的。"
         },
         {
           "type": "object",

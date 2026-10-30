@@ -40,7 +40,7 @@ MIN_CLIENT = PROTOCOL_VERSION
 # 影响它能不能自报身份**。播放器把镜像里的 sha256 与本值一比，立刻知道
 # 对面是同一版契约还是旧组件——不需要读文件、不需要额外命令。
 # 改了 schema 忘了改这里？`tests/protocol_contract.py` 会红（它手上真有文件）。
-SCHEMA_SHA256 = "a9f9490e2f4b242b8dd70f9e46ab06e7f9ed5a5cfc185009940e21d4a1491c4c"
+SCHEMA_SHA256 = "72e689f73989a0cd2af6c847bf7a94bb12034d0c466dc4adcbc3b00d4ddae67e"
 
 # ---- 错误码（v1 冻结 10 个，v2 加 E_LIBRARY_BUSY）----
 #

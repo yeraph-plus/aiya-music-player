@@ -3,6 +3,6 @@
   "protocolVersion": 2,
   "toolVersion": "0.2.0",
   "tag": "beets-v0.2.0",
-  "sha256": "a9f9490e2f4b242b8dd70f9e46ab06e7f9ed5a5cfc185009940e21d4a1491c4c",
+  "sha256": "72e689f73989a0cd2af6c847bf7a94bb12034d0c466dc4adcbc3b00d4ddae67e",
   "note": "字节副本；改协议请改真源后跑 npm run proto:sync，并在 diff 里看变化"
 }

@@ -218,19 +218,28 @@ beets 必填），**不指向任何扫描根**。
 
 | 命令 | 形态 | 说明 |
 |---|---|---|
-| `enrich {target:"index", want:[...], paths:[...], force:bool}` | 流式（事件） | 三段式主体，逐文件回吐 |
-| `query {target, rules\|raw, fields}` | 信封 | 已在 docs/44 §5.1 定义 |
-| `fields {target}` | 信封 | 同上 |
+| `enrich {want:[...], paths:[...], force:bool}` | 流式（事件） | 三段式主体，逐文件回吐 |
+| `query {rules\|raw, fields, limit}` | 信封 | 结构化规则 **或** 原生语法，二选一 |
+| `fields {}` | 信封 | 可用字段（内置带类型 + 库里真出现过的 flexible）+ 各源三态 |
+
+**`target` 不进协议（对 docs/44 §5.1 的修正）**：查哪个库由**进程**的
+`AIYA_BEETS_PROFILE` 决定（批 1 的双家隔离）。协议里再放一个 `target` 就是
+第二个真源——宿主传 `index` 而进程跑在 `workbench` 上时，会**静默**查出另一个
+库的全部内容，不抛异常，只让用户看见"索引里有几万首我没导过的歌"。
 
 事件增量（`Event` 的 oneOf 加一条，`additionalProperties:false` 保持）：
 
 ```json
-{ "type": "enrichItem", "session": "enrich_01",
+{ "type": "enrichItem", "session": "enr_02",
   "path": "D:\\Music\\a.flac", "source": "xtractor",
   "status": "ok",              // ok | empty | failed | skipped
   "fields": { "bpm": 122.0, "danceability": 0.61, "mood_mirex": "mood_happy", "...": "..." },
   "message": null }
 ```
+
+终态是 `enrichDone {total, succeeded, empty, failed, skipped, sources}`。
+**成功条数必须叫 `succeeded` 不能叫 `ok`**：契约规定"有 `ok` 就是应答信封"，
+事件里出现 `ok` 会被客户端当信封去解析 `data`（批 2 踩过一次，schema 里已写明）。
 
 - `status: empty` = 命令跑完但字段没出现（§3.7 的静默失败）——宿主记
   `analyzed_at` 但**不写字段**，并把它当"该源对该文件不支持"缓存下来，
@@ -245,18 +254,26 @@ beets 必填），**不指向任何扫描根**。
 | `$defs/Stage` 枚举 | 加 `"enrich"`（会出现在 UI 文案与进度条） |
 | `$defs/Session` 正则 | 加前缀 `enr`（`^(imp\|app\|…\|enr)_[0-9]+$`） |
 | `$defs/Event` oneOf | 加 `enrichItem`、`enrichDone` |
+| `$defs/Request` oneOf | 加 `enrich` / `query` / `fields`；新增 `$defs/QueryRule` |
 | 客户端 `TERMINAL_EVENTS` | 加 `enrichDone`（现有五个：done/applyDone/cancelled/sessionFailed/pluginDone） |
+
+`enrich` 同时进 `lockfile.LOCKED_CMDS`：它要 remove + import，是索引家库的写者。
+**不进 `ops.TERMINAL_OF`**（幂等重放）：enrich 的语义是"要什么算什么"，
+把上次的结果重放给一个新请求，会掩盖"这批应该重算"的事实。
 
 ### 4.3 sidecar 内部三段式（`cmds/enrich.py`）
 
 ```
-① 补登  import -A -q -s -I -R <分批路径>      # 幂等；已在库的会重跑 import_stage
-② 清旧  仅对 force/stale：remove -f 'path::<绝对路径正则>'  # 字段清空 → 插件重新挑中
-③ 分析  逐个源跑命令：
-        xtractor   → beet xtractor -f <query>   （-f 才能覆盖已有值；绝不带 -w）
-        lastgenre  → beet lastgenre -f <query>  （写 item.genre，不入文件）
-        之后按 path 读库，emit enrichItem
+① 清旧  仅 force：把清单里的项从库里摘掉（字段随之消失 → 插件下次才会重产出）
+② 补登  import -A -q -s -I -R <分批路径>
+        -I 让"已在库"的项也重走流程（否则增量直接跳过，插件根本不跑）
+        -R 是 incremental_skip_later：**不把跳过项记进 state.pickle**，
+           否则该路径之后再也导不进来（表现为"索引恒空且零报错"）
+③ 分析  逐个源产出字段，再按 (path, source) 读库回吐 enrichItem
 ```
+
+**顺序是 清旧 → 补登 → 分析**。本文档早先写成"补登 → 清旧"，因果错了：
+先 remove 就什么都不剩，之后必须重新 import 才回得来。
 
 批次粒度：`paths` 由宿主按目录聚类后分批（例如 ≤200/批），批间检查 cancel；
 每批结束即 emit，宿主落库后即使进程被杀也不会重算已完成部分（工作清单是
@@ -400,16 +417,24 @@ beets 写 A 库、锁建在 B 家**，双家隔离静默失效。两条一起做
 
 ## 8. 批次（取代 docs/44 §9.4）
 
-| 批 | 内容 | 出口条件 |
+| 批 | 内容 | 状态 |
 |---|---|---|
-| **0** | Essentia 探针：拿到 Windows 静态二进制 + beta5 模型，3 个文件跑出 `bpm/danceability/mood_mirex`；实测单曲耗时、体积、许可声明 | 出数 + 耗时表；拿不到 → 批 5 降级为"只接 lastgenre" |
-| **1** | 双家隔离：`cfg.py` profile 化 + DB1 模板自检 + 白名单三元组 + `BEETSDIR` 加固 + 契约测试（两个 home 各自的 status/锁） | `npm run smoke:proto` + 新增双家契约用例全绿 |
-| **2** | `enrich` / `query` / `fields`：三段式实现 + 事件 + 契约测试；**先用内置假插件**（写死字段，等价 probeplug）打通通路 | 假插件下 400 文件全链路可跑，取消/续跑可用 |
-| **3** | 宿主：migration 0008 + `enrichment.rs` + 工作清单 + 批量 upsert（锁粒度）+ 3 条命令 + `busy_timeout` | 单测 + 50k 基准不退化；kill -9 后重跑不重复分析 |
-| **4** | UI：曲库索引卡（状态/重建/分析/进度/字段列表/强制重算）+ 工作台卡收编 docs/43 的目录卡与操作清单 | e2e 更新 + 三主题截图 |
-| **5** | `xtractor` 真接入：安装轨道（A 轨 pip / B 轨预置）+ `status` 报三态 + 数值字段实测 | 干净机装完能出数；缺二进制时 UI 报"未就绪"而非"已完成" |
+| **0** | Essentia 探针（Windows 静态二进制 + beta5 模型 + 单曲耗时/体积/许可） | **延后**：发布不携带 beets/Essentia，改由用户在应用内点装；探针并入批 5 |
+| **1** | 双家隔离（`cfg.py` profile 化 + 模板自检 + 白名单三元组 + `BEETSDIR` 加固 + 契约测试） | ✅ 完成 |
+| **2** | `enrich` / `query` / `fields`：三段式 + 协议加法 + 假源打通全链路 | ✅ 完成 |
+| **3** | 宿主：migration 0008 + `enrichment.rs` + 工作清单 + 批量 upsert（锁粒度）+ 3 条命令 + `busy_timeout` | 待开工 |
+| **4** | UI：曲库索引卡（状态/重建/分析/进度/字段列表/强制重算）+ 工作台卡收编 docs/43 | 待开工 |
+| **5** | `xtractor` 真接入：安装轨道（A 轨 pip / B 轨预置）+ `status` 报三态 + 数值字段实测 | 待开工（合并原批 0） |
 
-批 0 必须在批 1 之前跑（它决定 §6.3 的字段契约要不要保留 mood 列）。
+**2026-10-30 拍板：beets 与 Essentia 都不进发布包**，全部改为"用户在应用内点一下
+安装"。所以批 0 不再是前置阻塞——探针的价值（决定 field 契约要不要留 mood 列）
+移交批 5 现场验证；批 2 用**内置假源**（`probe`，环境变量开启）先把协议与
+三段式跑到尾，真插件只在批 5 接入。
+
+这个决定还有一个副作用值得记住：**装不装 beets 完全不影响其余功能**。
+所以 `enrich`/`query`/`fields` 在未装 beets 的机器上必须整体不存在（`serve`
+启动时就回 `E_NOT_INSTALLED`），宿主拿这条错误当"索引能力不可用"，不能当故障弹窗。
+
 批 4 与批 5 可并行。
 
 ---
@@ -490,6 +515,61 @@ mood 列是否成立，那是批 3 的事。
   真 xtractor 只在批 5 接入；
 - `status` 现已有 `dataHome` / `libraryLock`，批 2 加"这个家是谁"时注意别破坏
   `config_contract.py` 对四路路径的断言。
+
+### 11.4 批 2（`enrich` / `query` / `fields`）已落地
+
+| 落点 | 文件 | 做法 |
+|---|---|---|
+| 三段式 | `cmds/enrich.py` | 清旧（`item.remove()`）→ 补登（子进程 `beet import -A -q -s -I -R`，分块到 6000 字符）→ 分析 → 逐 (path, source) 回吐 |
+| 源注册表 | `cmds/enrich.py::SOURCES` | 名字 + `implemented` 标志；未接线的源在 `want` 里被 **拒**（`E_INVALID_ARG`），不返回空——否则宿主会把 `empty` 缓存成"不支持"，批 5 接完线还得清缓存 |
+| 自测源 | `cmds/enrich.py::_apply_probe` | 按路径 sha256 造确定性字段（bpm/danceability/average_loudness/mood_mirex）；**需 `AIYA_BEETS_ENRICH_PROBE=1`**，默认关（假数据进真库最难排查） |
+| 查询 | `cmds/query.py::query` | 结构化规则**在工具侧求值**；`raw` 走 beets 解析器；两者互斥；`total` 是 limit 前的真实命中数 |
+| 字段 | `cmds/query.py::fields` | 内置字段带类型 + `item_attributes` 里真出现过的 flexible 键（只读 SQL）+ 各源三态 |
+| 协议 | `protocol/v2.schema.json` | `Stage+=enrich`、`Session` 前缀 `enr`、`Request+=enrich/query/fields`、`Event+=enrichItem/enrichDone`、新增 `$defs/QueryRule`；**不升版**（全是加法） |
+| 锁 | `lockfile.py` | `enrich` 进 `LOCKED_CMDS`（remove+import 是库写者）；**不进** `ops.TERMINAL_OF`（重放旧结果会掩盖"该重算"） |
+| 客户端 | `session.rs` | `TERMINAL_EVENTS += enrichDone`；`proto_mirror.rs` 的命令/事件计数改 16/20（那两条断言是"协议变了，来看一眼"的闹钟） |
+| 冒烟 | `tests/smoke_enrich.py` | 7 组：fields / enrich 首跑 / query 四态 / force 幂等 / 拒绝路径 / 文件指纹不变 / 空库首跑。`npm run smoke:enrich`，已进 `verify` |
+
+**与文档的偏差（都是实现期才暴露的）**：
+
+1. **`enrichDone.ok` 改名 `succeeded`。** 契约规定"有 `ok` 就是应答信封"，
+   事件里带一个叫 `ok` 的计数会被客户端拿去当信封解析——冒烟第一条就炸。
+   这是本批唯一的"设计错误"，不是实现 bug。
+2. **三段顺序改为 清旧 → 补登 → 分析。** 原文的"补登 → 清旧"先 remove 就空了。
+3. **`-R` 不是 `--noresume`，是 `--incremental-skip-later`。** 语义恰好更有用：
+   不把跳过项记进 state.pickle（那正是"索引恒空且零报错"的根因）。
+4. **未接线的源直接拒绝**，而不是跑一遍返回空（理由见上表）。
+5. `fields` 返回 **97 个内置字段**（beets `Item._fields` 全量）。够用但很吵，
+   哪些进 UI 选择器属批 4 的决定，工具侧不做裁剪。
+6. **`Library.remove` 在 beets 2.x 已不存在**（方法挂在模型上：`item.remove()`）。
+   写错不报错、只是被 `except` 吞掉，`force` 看起来跑了其实没摘——本批实测踩到。
+7. **`beet import` 只要 argv 里有一个不存在的路径，整批一条都不导**
+   （实测：6 个真文件 + 1 个幽灵 → 库里 0 条）。宿主的清单来自数据库，
+   文件在扫描与分析之间被删是正常事件，所以 `_import_paths` 先 `os.path.isfile`
+   剔一遍，否则"一个文件没了，整批白跑"。
+8. **不删行直接重导会保留旧 flexible 属性**（只换 rowid）。这一条把 §3.4 的
+   `remove + 重导` 从"可选优化"提升为"必须"：不清旧的话，插件上一轮写下的
+   字段会原地留着，`status` 判定就永远看不出这轮其实没产出。
+   顺带解释了为什么用 rowid 变化判断"清旧生效"是错的——两种路径都会换 id。
+
+**负向验证（改坏 → 红 → 撤销 → 绿）**：
+
+| 破坏 | 期望 | 结果 |
+|---|---|---|
+| 模板删掉 `duplicate_action: keep` | `[2]` 红 | ✅ `succeeded: 1, skipped: 5`——同标签同长的文件只有第一条进库 |
+| `enrichItem` 多加一个协议外字段 | schema 校验红 | ✅ `additionalProperties: false` 直接拒 |
+| `TERMINAL_EVENTS` 漏掉 `enrichDone` | Rust 单测红 | ✅ `terminal_event_set_is_the_documented_five` 失败 |
+| 清旧改用不存在的 `lib.remove` | `[4]` 红 | ✅ 打进去的 `aiya_probe_mark` 原样留着，逐条打印出来 |
+| `_import_paths` 不剔幽灵路径 | `[4]` 红 | ✅ `succeeded: 0, skipped: 7`——一个坏路径毁掉整批 |
+
+第 4 行那次负向验证本身返工了三轮才成立，值得记下教训：**断言必须能被破坏**
+。最初用"rowid 变了"、再改"总行数变了"，两种在坏代码下都是绿的（beets 重导
+会换 id、且不产生重复行）；只有"打一个 flexible 标记、看它消没消"能分辨
+"摘掉重登"与"原地更新"。断言写对之前，负向验证一直在骗人。
+
+**没验到的（写在这里，别当成已验证）**：`_run_import` 的 `stdout=DEVNULL`。
+父进程先开库，迁移日志由父进程打出（走 stderr），子进程通常无话可说，所以
+"不掐会不会污染协议"在这条路径上测不出来。它仍然是必需的防线（见代码注释）。
 
 ---
 

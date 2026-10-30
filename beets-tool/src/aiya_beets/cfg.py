@@ -345,6 +345,10 @@ def ensure_config(home: Path | None = None, prof: str | None = None) -> Path:
     path = base / "config.yaml"
 
     if prof == PROFILE_INDEX:
+        # 占位根要真的存在：它代表"整理目标是这个空文件夹"，不存在的话
+        # 任何走 destination() 的路径（move / copy 的预演）都会现造一个，
+        # 那时"空目录"这个前提就已经被破坏了。
+        scratch_dir(base).mkdir(parents=True, exist_ok=True)
         text = render_config(base, None, None, PROFILE_INDEX)
         if not path.is_file() or path.read_text(encoding="utf-8") != text:
             path.write_text(text, encoding="utf-8", newline="\n")

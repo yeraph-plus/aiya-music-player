@@ -15,7 +15,7 @@ import threading
 import traceback
 
 from . import env, lockfile, ops, protocol
-from .cmds import dump, importer, maintain, market
+from .cmds import dump, enrich, importer, maintain, market, query
 from .runtime import (
     bump_cancel,
     cancel_gen,
@@ -90,6 +90,24 @@ def handle(req: dict, gen: int) -> dict | None:
     if cmd == "dump_items":
         dump.dump_items(req_id, gen)
         return None
+
+    # ---- 索引增强与查询（docs/45 §4.2；写入方恒为宿主，这里只产数据） ----
+    if cmd == "enrich":
+        paths = req.get("paths") or []
+        if not paths:
+            return protocol.error_response(
+                req_id, protocol.E_INVALID_ARG, "enrich", "paths 为空"
+            )
+        enrich.enrich(req_id, [str(p) for p in paths],
+                      req.get("want") or [], bool(req.get("force")), gen)
+        return None
+    if cmd == "query":
+        rules = req.get("rules")
+        raw = req.get("raw")
+        data = query.query(rules, raw, req.get("fields"), req.get("limit"))
+        return protocol.ok_response(req_id, data)
+    if cmd == "fields":
+        return protocol.ok_response(req_id, query.fields())
 
     # ---- 曲库维护 ----
     if cmd == "adopt_library":
