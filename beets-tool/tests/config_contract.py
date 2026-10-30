@@ -45,6 +45,16 @@ SCAN_ROOT = os.path.join(WORK, "music")
 for d in (HOME_WB, HOME_IDX, SCAN_ROOT):
     os.makedirs(d)
 
+# 外部二进制目录（docs/53）：`{data_root}/beets-tool/bin`，两个家共用一份。
+# 这里放一个**占位文件**就够——渲染/闸只问"在不在"，不跑 probe（那是 bins 的事）。
+BIN_DIR = os.path.join(WORK, "beets-tool", "bin")
+os.makedirs(BIN_DIR)
+ESSENTIA_STUB = os.path.join(BIN_DIR, "streaming_extractor_music.exe")
+Path(ESSENTIA_STUB).write_bytes(b"stub")
+# 子进程与进程内都从这里找 bin/：`AIYA_BEETS_HOME` 的上一级推出来的位置
+# 恰好就是 WORK/beets-tool/bin，但进程内测试没有设 HOME，所以显式指一次。
+os.environ.setdefault("AIYA_BEETS_BIN_DIR", BIN_DIR)
+
 
 def norm(p: str) -> str:
     """路径比较口径：与 cfg 内部一致（绝对化 + Windows 大小写归一）。"""
@@ -104,6 +114,9 @@ try:
     # xtractor 段的 write 必须是 no（默认值恰好是 yes，不写就等于破前提）
     xtr = text.split("xtractor:", 1)[1]
     assert "write: no" in xtr, text
+    # 外部工具给了绝对路径（它的默认值是占位符 /your/path/to/…）
+    assert "essentia_extractor:" in xtr, text
+    assert norm(ESSENTIA_STUB) in norm(xtr), text
     # 没给曲库根 → 退回占位目录（唯一合法的退化形态）
     assert norm(cfg.scratch_dir(Path(HOME_IDX))) in norm(text), text
     cfg.verify_config(text, cfg.PROFILE_INDEX, Path(HOME_IDX))
@@ -392,6 +405,42 @@ try:
             cfg._sync_plugins("library: x\nplugins: a b\n", []) == "library: x\nplugins: []\n"
         ), "空清单必须渲染成 plugins: []"
         print("[10] workbench plugins 外科式同步 OK（三向：选中 / 缺键 / 空数组）")
+
+        # ---- 11. 缺外部工具 → 不写进 plugins（docs/53 §1.1）----
+        #
+        # 守的是一个比"少个功能"严重得多的事实：`plugins: replaygain` 而 PATH 上
+        # 没有 ffmpeg 时，beets 的**任何**子命令都起不来（实测
+        # `UserError: replaygain initialization failed: could not find ffmpeg`）。
+        # 所以"写了但缺 exe"必须在渲染侧就被剔掉，否则一次手滑配置就锁死整个组件。
+        empty_bin = Path(WORK) / "no-bin"
+        empty_bin.mkdir(exist_ok=True)
+        prev_bin = os.environ.get("AIYA_BEETS_BIN_DIR")
+        os.environ["AIYA_BEETS_BIN_DIR"] = str(empty_bin)
+        try:
+            # 索引家：xtractor 缺 Essentia → 名字与强制参数段一并不写
+            starved = cfg.render_config(Path(HOME_IDX), SCAN_ROOT, None, cfg.PROFILE_INDEX)
+            assert "xtractor" not in starved, starved
+            assert "essentia_extractor" not in starved, starved
+            cfg.verify_config(starved, cfg.PROFILE_INDEX, Path(HOME_IDX), SCAN_ROOT)
+
+            # 用户库：勾了 replaygain 但没 ffmpeg → 只留不需要 exe 的
+            (wb_home / "settings.json").write_text(
+                json.dumps({"plugins": ["replaygain", "lyrics"]}),
+                encoding="utf-8", newline="\n",
+            )
+            cfg.ensure_config(wb_home, "workbench")
+            got = wb_cfg.read_text(encoding="utf-8")
+            assert "plugins: lyrics" in got, got
+            assert "replaygain" not in got, got
+
+            # 闸是兜底：手改把 xtractor 加回来（此时工具仍缺）必须变红
+            must_gate(text, HOME_IDX, "xtractor 缺外部工具却仍写在 plugins 里")
+            print("[11] 缺外部工具即剔除 OK（索引家整条不写 / 用户库只留可用的 / 闸兜底变红）")
+        finally:
+            if prev_bin is None:
+                os.environ.pop("AIYA_BEETS_BIN_DIR", None)
+            else:
+                os.environ["AIYA_BEETS_BIN_DIR"] = prev_bin
     finally:
         for k, v in saved.items():
             if v is None:

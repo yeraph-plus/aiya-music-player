@@ -110,7 +110,8 @@
               <span class="pick-tag">{p.packages.join(' ')}</span>
             {/if}
             {#if p.exe.length > 0}
-              <span class="pick-tag warn">还需 {p.exe.join(' / ')}</span>
+              <!-- 不再是"自备"：安装时按 docs/53 自动下载（ffmpeg 约 30MB 下载） -->
+              <span class="pick-tag warn">另下 {p.exe.join(' / ')}</span>
             {/if}
           </label>
           <span class="pick-note">{p.note}</span>

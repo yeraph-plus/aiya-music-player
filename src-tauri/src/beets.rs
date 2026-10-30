@@ -1276,6 +1276,128 @@ fn install_via_bundle(
     install_bundle_to(&install_root(app).join("bundle"), zip_path, emit)
 }
 
+/// 这批勾选的插件需要哪些外置工具（`plugins.json` 的 `exe` 字段，docs/53）。
+///
+/// 用编译期内嵌的那张表算，不再问 sidecar：安装时 sidecar 可能还不存在。
+fn needed_binaries(plugins: &[String]) -> Vec<String> {
+    let Ok(rows) = plugin_table() else {
+        return Vec::new();
+    };
+    let mut need: Vec<String> = Vec::new();
+    for name in plugins {
+        let Some(row) = rows.iter().find(|r| &r.name == name) else {
+            continue;
+        };
+        for dep in &row.exe {
+            if !need.contains(dep) {
+                need.push(dep.clone());
+            }
+        }
+    }
+    need
+}
+
+/// 下载外置工具：`<入口> bins --only a,b`（docs/53）。
+///
+/// 为什么放在宿主侧、由安装流程顺带跑：这些东西是"插件能不能用"的前置，
+/// 而缺 ffmpeg 会让 beets 的**任何**子命令都起不来（实测
+/// `UserError: replaygain initialization failed`）——用户没有修复它的入口，
+/// 等于组件坏了。也刻意不给"跳过"选项：不做就没有这个插件。
+///
+/// 子进程的超时不在这里设：`bins` 自己对每次请求有 120s 超时与总大小上限，
+/// 卡死会自己退出来，比在父进程再叠一层"多久没输出就杀"更准。
+fn run_bins(
+    app: &tauri::AppHandle,
+    entry: &ToolEntry,
+    only: &[String],
+    emit: &dyn Fn(serde_json::Value),
+) -> Result<(), String> {
+    use std::io::BufRead as _;
+
+    let mut cmd = std::process::Command::new(&entry.program);
+    cmd.args(&entry.args)
+        .arg("bins")
+        .arg("--only")
+        .arg(only.join(","))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .envs(tool_env(app, Profile::Workbench));
+    crate::proc::no_window(&mut cmd);
+    emit(serde_json::json!({
+        "type": "progress", "stage": "bin",
+        "message": format!("下载外置工具：{}", only.join(" / ")),
+    }));
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("启动外置工具下载失败：{e}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "外置工具下载的输出没捕获到".to_string())?;
+
+    // 句柄进共享槽：应用退出时统一收尸，别留下一个还在下 87MB 的孤儿进程
+    let guard = app.try_state::<crate::AppState>();
+    if let Some(state) = guard.as_ref() {
+        let mut slot = state
+            .beets_install_child
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // 槽里可能是上一次安装的僵尸：先清掉，避免把它一直挂着
+        if let Some(mut old) = slot.take() {
+            let _ = old.wait();
+        }
+        *slot = Some(child);
+    }
+
+    let mut failure: Option<String> = None;
+    for line in std::io::BufReader::new(stdout)
+        .lines()
+        .map_while(Result::ok)
+    {
+        let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        match obj.get("type").and_then(|t| t.as_str()) {
+            Some("progress") => emit(obj),
+            Some("error") => {
+                failure = obj
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_string);
+            }
+            Some("done") => {
+                emit(serde_json::json!({
+                    "type": "progress", "stage": "bin", "message": "外置工具就绪",
+                }));
+            }
+            _ => {}
+        }
+    }
+
+    // 从槽里取回来 wait：进程可能已经被退出流程收尸了，那就没有句柄可等
+    let code = match guard.as_ref() {
+        Some(state) => {
+            let mut slot = state
+                .beets_install_child
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            slot.take()
+                .map(|mut c| c.wait().ok().and_then(|s| s.code()))
+        }
+        None => None,
+    };
+    if let Some(msg) = failure {
+        return Err(msg);
+    }
+    if let Some(Some(code)) = code {
+        if code != 0 {
+            return Err(format!("下载器退出码 {code}"));
+        }
+    }
+    Ok(())
+}
+
 /// 展开 + 校验入口（目标目录由调用方给，便于用假套件包测这一段）。
 ///
 /// 套件包里带 `manifest.json`（`{"entry": "python.exe", "args": ["-m","aiya_beets"]}`），
@@ -1469,8 +1591,8 @@ pub fn start_install(
                     InstallTrack::Bundle => ("AIYA_BEETS_BUNDLE", BUNDLE_ASSET, AssetKind::Bundle),
                 };
                 let path = fetch_asset(env_key, asset, kind, &emit)?;
-                match track {
-                    InstallTrack::Installer => install_via_installer(&app, &path, &plugins, &emit),
+                let entry = match track {
+                    InstallTrack::Installer => install_via_installer(&app, &path, &plugins, &emit)?,
                     InstallTrack::Bundle => {
                         if !plugins.is_empty() {
                             emit(serde_json::json!({
@@ -1478,9 +1600,19 @@ pub fn start_install(
                                 "message": "免配置包已预置插件，这次的勾选不生效",
                             }));
                         }
-                        install_via_bundle(&app, &path, &emit)
+                        install_via_bundle(&app, &path, &emit)?
                     }
+                };
+                // 外置工具（docs/53）：**两个轨道都要**。免配置包里刻意不带
+                // ffmpeg/Essentia（GPL/AGPL 与体积），而缺 ffmpeg 时 replaygain
+                // 会让 beets 整个 CLI 起不来 —— 勾了就顺手带上，不留半装状态。
+                let need = needed_binaries(&plugins);
+                if !need.is_empty() {
+                    run_bins(&app, &entry, &need, &emit).map_err(|e| {
+                        format!("组件已装好，但外置工具没下下来：{e}（再点一次安装即可补齐）")
+                    })?;
                 }
+                Ok(entry)
             })();
             match result {
                 Ok(entry) => {
@@ -2074,9 +2206,9 @@ struct PluginProfiles {
 pub fn plugin_table() -> Result<Vec<crate::dto::beets::BeetsPluginItem>, String> {
     let mut doc: PluginTableFile = serde_json::from_str(PLUGIN_TABLE_JSON)
         .map_err(|e| format!("内嵌插件表解析失败（构建产物坏了？）：{e}"))?;
-    if doc.schema != 1 {
+    if doc.schema != 2 {
         return Err(format!(
-            "内嵌插件表 schema={} 不认识（本二进制只懂 1）",
+            "内嵌插件表 schema={} 不认识（本二进制只懂 2：docs/53 加了 binaries 段）",
             doc.schema
         ));
     }
@@ -2357,6 +2489,11 @@ mod tests {
         // 免配置包预置的插件不应该依赖外部二进制（预置了也还是 missing_deps）
         for r in rows.iter().filter(|r| r.bundle) {
             assert!(r.exe.is_empty(), "{} 依赖外部命令却标了 bundle", r.name);
+        }
+        // 默认启用的插件同样不许依赖外部二进制（docs/53 拍板）：否则"默认安装"
+        // 就等于强迫每个用户多下 87MB 的 ffmpeg，而绝大多数人不需要 gain_db。
+        for r in rows.iter().filter(|r| r.default) {
+            assert!(r.exe.is_empty(), "{} 默认启用却需要外部命令", r.name);
         }
     }
 

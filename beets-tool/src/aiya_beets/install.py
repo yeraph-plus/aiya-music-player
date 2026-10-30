@@ -47,7 +47,7 @@ import venv
 from importlib.resources import files
 from pathlib import Path
 
-from . import env, plugins
+from . import bins, env, plugins
 
 # Windows 上 pip / 解释器都是控制台程序，而调用它们的本进程是从播放器
 # （GUI 子系统）经 CREATE_NO_WINDOW 拉起的 —— 自己**没有**控制台。
@@ -145,6 +145,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         extra = plugins.packages_for(names)
         need_mods = plugins.imports_for(names)
+        # 勾了 replaygain / convert / chroma / xtractor，就得把它们要的外部
+        # 二进制一起带上（docs/53）：缺 ffmpeg 不是"少个功能"，是 beets 整个
+        # CLI 起不来。谁需要谁带，不给用户第二次点击。
+        need_bins = plugins.binaries_for(names)
     except KeyError as e:
         known = ", ".join(s.name for s in plugins.MARKET_CATALOG)
         emit({
@@ -159,11 +163,12 @@ def main(argv: list[str] | None = None) -> int:
         "plugins": names,
         "packages": extra,
         "checkModules": need_mods,
+        "binaries": need_bins,
     }
     if args.dry_run:
         emit({"type": "dryRun", "stage": "prepare", **plan})
         emit({"type": "done", "stage": "done", "dryRun": True,
-              "installedPlugins": names, "packages": extra})
+              "installedPlugins": names, "packages": extra, "binaries": need_bins})
         return 0
 
     supported = env.runtime_supported()
@@ -280,6 +285,24 @@ def main(argv: list[str] | None = None) -> int:
         })
         return 6
 
+    # 5) 外部二进制：勾了需要它们的插件才下载。beets 本体此时已经可用，
+    # 所以这一步失败不回滚，只报"工具没下下来"（可重试 bins）。
+    bin_rows: list[dict] = []
+    if need_bins:
+        emit({"type": "progress", "stage": "bin",
+              "message": f"外置工具：{', '.join(need_bins)}"})
+        try:
+            bin_rows = bins.ensure(
+                need_bins,
+                lambda m: emit({"type": "progress", "stage": "bin", "message": m}),
+            )
+        except (bins.BinError, OSError) as e:
+            emit({
+                "type": "error", "stage": "bin",
+                "message": f"beets 已装好，但外置工具没下下来：{e}",
+            })
+            return 7
+
     emit({
         "type": "done", "stage": "done",
         "python": str(py),
@@ -287,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
         "installedPlugins": names,
         "packages": extra,
         "checkModules": need_mods,
+        "binaries": bin_rows,
     })
     return 0
 

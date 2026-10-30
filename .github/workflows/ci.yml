@@ -183,3 +183,16 @@ jobs:
             Write-Host "::error title=plugin catalog contract 失败::$tail"
             exit 1
           }
+
+      # 外置二进制（docs/53）：抽成员命中数、双哈希、probe、PATH 注入。
+      # 这一层出错的形态是"文件看着在、其实跑不起来"，只能在落盘前后验。
+      - name: binaries contract（外置工具落盘）
+        run: |
+          $log = "smoke-bins.log"
+          npm run smoke:bins 2>&1 | Tee-Object -FilePath $log | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            $lines = Get-Content $log | Select-Object -Last 25
+            $tail = ($lines | ForEach-Object { $_ -replace '%', '%25' }) -join '%0A'
+            Write-Host "::error title=binaries contract 失败::$tail"
+            exit 1
+          }

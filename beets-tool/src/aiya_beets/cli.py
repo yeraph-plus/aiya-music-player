@@ -45,6 +45,13 @@ def main(argv: list[str] | None = None) -> int:
     except cfg.ConfigConflict as e:
         return _config_refusal(e)
 
+    # 外部二进制（ffmpeg / Essentia 提取器 / fpcalc）先进 PATH（docs/53）。
+    # 必须在任何 import beets 之前：replaygain / convert 用裸名字 "ffmpeg" 去
+    # spawn，只有 PATH 一条路；晚一步就是"装了却找不到"。
+    from . import bins
+
+    bins.inject_path()
+
     args = list(sys.argv[1:] if argv is None else argv)
     # 无参数 = serve（播放器固定一条命令）；有参数时不猜，交给 argparse
     if not args:
@@ -74,6 +81,15 @@ def main(argv: list[str] | None = None) -> int:
     p_uninstall.add_argument("--target", required=True)
     p_uninstall.add_argument("--dry-run", action="store_true")
 
+    p_bins = sub.add_parser("bins", help="下载/校验外部二进制到 beets-tool/bin")
+    p_bins.add_argument("--only", default=None, help="只处理这些名字，逗号分隔")
+    p_bins.add_argument("--check", action="store_true", help="只体检，不下载")
+    p_bins.add_argument("--dry-run", action="store_true", help="只打印将下载什么")
+    p_bins.add_argument(
+        "--carrier", action="append", default=[], metavar="NAME=PATH",
+        help="用本地包代替下载（可重复）",
+    )
+
     ns = ap.parse_args(args)
 
     if ns.cmd == "version":
@@ -101,6 +117,18 @@ def main(argv: list[str] | None = None) -> int:
         if ns.dry_run:
             argv.append("--dry-run")
         return uninstall.main(argv)
+
+    if ns.cmd == "bins":
+        argv = []
+        if ns.only:
+            argv += ["--only", ns.only]
+        if ns.check:
+            argv.append("--check")
+        if ns.dry_run:
+            argv.append("--dry-run")
+        for item in ns.carrier:
+            argv += ["--carrier", item]
+        return bins.main(argv)
 
     # 读配置的命令必须在 import beets **之前**把 config.yaml 备好：beets 一导入
     # 就把配置读进内存，之后写的文件对它不生效。以前这一步藏在 serve() 里，

@@ -65,7 +65,7 @@ def status_payload() -> dict:
     from beets import config as beets_config
 
     lib_path = beets_config["library"].as_filename()
-    plugins = list(beets_config["plugins"].as_str_seq())
+    plugins = _tracked_plugins(list(beets_config["plugins"].as_str_seq()))
     caps = capability_report(plugins)
     lock_state, lock_holder = lockfile.probe()
     return {
@@ -102,7 +102,7 @@ def capabilities_payload() -> dict:
     """
     from beets import config as beets_config
 
-    enabled = list(beets_config["plugins"].as_str_seq())
+    enabled = _tracked_plugins(list(beets_config["plugins"].as_str_seq()))
     caps = capability_report(enabled)
     return {
         "protocolVersion": PROTOCOL_VERSION,
@@ -112,6 +112,26 @@ def capabilities_payload() -> dict:
         "runtimeSupported": runtime_supported(),
         "extras": REQUIRED_EXTRAS,
     }
+
+
+def _tracked_plugins(enabled: list[str]) -> list[str]:
+    """要上报的插件 = config 里启用的 ∪ `settings.json` 里勾过的。
+
+    为什么必须并上后者：**缺外部工具的插件会被 `cfg` 从 `plugins:` 里剔掉**
+    （写了 beets 就整个起不来，docs/53 §1.1）。只看 config 的话，它会在状态里
+    凭空消失——用户刚勾的 replaygain 不见了，而真正的原因（缺 ffmpeg）一个字
+    都看不到。并上之后它照旧出现在 `pluginHealth` 里，带 `enabled: false` 与
+    `missing: ["ffmpeg"]`，那才是能指导用户下一步的信息。
+    """
+    out = list(enabled)
+    try:
+        wanted = cfg.settings_plugins()
+    except Exception:  # noqa: BLE001 —— 设置坏了不该让体检整体失败
+        wanted = None
+    for name in wanted or []:
+        if name not in out:
+            out.append(name)
+    return out
 
 
 def _exists(path: str) -> bool:

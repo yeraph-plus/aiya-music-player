@@ -88,7 +88,10 @@ def main() -> int:
             stage,
             target=out,
             interpreter="/usr/bin/env python3",
-            main="aiya_beets.cli:main",
+            # 不能直接指 cli:main：zipapp 生成的 __main__.py 会丢掉返回值，
+            # 于是 pyz **永远退出 0**（实测：`bins --only nope` 报错但 exit=0）。
+            # entry.main 只做 sys.exit(cli_main())。
+            main="aiya_beets.entry:main",
             compressed=True,
         )
     size = out.stat().st_size
@@ -107,7 +110,26 @@ def main() -> int:
         print(f"打包自检失败：{probe.stdout} {probe.stderr}", file=sys.stderr)
         return 1
 
-    print(f"OK  {out}  {size / 1024:.0f} KB  自检版本 {probe.stdout.strip()}")
+    # 退出码自检：错误路径必须**非零**退。以前 zipapp 的 `main=` 会丢掉返回值，
+    # 于是 pyz 永远 exit 0 —— 上层看退出码就以为装好了（"静默成功"这类事故
+    # 一旦进到发布物里，用户侧没有任何线索）。
+    bad = subprocess.run(
+        [sys.executable, str(out), "bins", "--only", "nope"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
+    )
+    if bad.returncode == 0:
+        print(
+            "打包自检失败：错误路径退出码是 0（pyz 入口丢了返回值？）",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"OK  {out}  {size / 1024:.0f} KB  自检版本 {probe.stdout.strip()}"
+          f"  错误路径退出码 {bad.returncode}")
     return 0
 
 

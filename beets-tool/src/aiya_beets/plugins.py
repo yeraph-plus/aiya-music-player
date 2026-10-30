@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from importlib.resources import files
@@ -75,6 +76,41 @@ class MarketSpec:
     def pypi(self) -> str | None:
         """第一个 pip 包名（老调用方的兼容视图；新代码用 `packages`）。"""
         return self.packages[0] if self.packages else None
+
+
+@dataclass(frozen=True)
+class BinarySpec:
+    """一个外部二进制：从哪拿、多大、什么哈希、落到 bin/ 的什么名字（docs/53）。
+
+    ## 为什么"载体"和"落盘物"是两个东西
+
+    我们要的不是"装个包"，而是 **`bin/` 下有个固定名字的 exe**：PATH 注入、
+    状态显示、卸载清理都靠这个路径。而载体（wheel / zip）内部的文件名带版本、
+    还带别的文件。所以声明里两套尺寸/哈希都要有：
+
+        carrier.size / carrier.sha256  →  下载完立刻验（不等解压）
+        member                         →  从里面按 glob 抽哪一个
+        size / sha256                  →  抽出来的 exe 再验一次
+
+    ffmpeg 的载体就是 PyPI 的 `imageio-ffmpeg` 轮子 —— 轮子本身就是 zip，
+    所以 `kind` 只有 `zip` 一种，不另设 `pypi-wheel`：多一个分支只多一处
+    要维护的走法，换来的是同一件事的两种写法。
+    """
+
+    name: str
+    target: str          # 落到 bin/ 下的文件名（固定，不跟载体内部名字走）
+    url: str
+    carrier_size: int
+    carrier_sha256: str
+    member: str          # 载体内的成员，允许 glob（必须恰好命中 1 个）
+    size: int
+    sha256: str
+    probe: tuple[str, ...] = ()
+    # essentia 那个 exe 无参调用退出码非 0，但 stderr 打 Usage —— 那也算"能跑"
+    probe_allow_fail: bool = False
+    license: str = ""
+    vendor: str = ""
+    why: str = ""
 
 
 @dataclass(frozen=True)
@@ -180,6 +216,118 @@ WORKBENCH_DEFAULT_PLUGINS: tuple[str, ...] = tuple(catalog()["profiles"]["workbe
 # 免配置包预置的插件（`bundle: true`）。集合本身是产品决策，改 JSON 不改代码。
 BUNDLE_PLUGINS: tuple[str, ...] = tuple(item["name"] for item in entries() if item.get("bundle"))
 
+BINARIES: tuple[BinarySpec, ...] = tuple(
+    BinarySpec(
+        name=item["name"],
+        target=item["target"],
+        url=item["carrier"]["url"],
+        carrier_size=int(item["carrier"]["size"]),
+        carrier_sha256=item["carrier"]["sha256"],
+        member=item["carrier"]["member"],
+        size=int(item["size"]),
+        sha256=item["sha256"],
+        probe=tuple(item.get("probe", ())),
+        probe_allow_fail=bool(item.get("probeAllowFail", False)),
+        license=item.get("license", ""),
+        vendor=item.get("vendor", ""),
+        why=item.get("why", ""),
+    )
+    for item in (catalog().get("binaries") or ())
+)
+
+
+def binary(name: str) -> BinarySpec | None:
+    """按名字查外部二进制声明。"""
+    for spec in BINARIES:
+        if spec.name == name:
+            return spec
+    return None
+
+
+def binaries_for(names: list[str]) -> list[str]:
+    """这些插件要哪些外部二进制（去重保序）。
+
+    未知插件名抛 `KeyError`，与 `packages_for` 同一约定：静默跳过等于
+    "勾了 A 装了 B"。名字不在 `binaries` 表里同样抛 `KeyError` —— 那是表自己
+    写错了，必须当场发现，而不是等到安装时"少下一个文件"。
+    """
+    out: list[str] = []
+    for name in names:
+        item = entry(name)
+        if item is None:
+            raise KeyError(name)
+        for dep in item.get("exe", ()):
+            if dep not in out:
+                if binary(dep) is None:
+                    raise KeyError(dep)
+                out.append(dep)
+    return out
+
+
+def exe_path(dep: str) -> str | None:
+    """这个外部依赖现在能不能找到：`bin/` 优先，其次 PATH。
+
+    为什么要先看 `bin/`：`bin/` 是我们自己下发的（docs/53），它不需要 PATH
+    注入就已经存在；而 `shutil.which` 只在 `cli.main` 注入之后才看得见它。
+    两边都认，配置渲染与三态报告才能在建进程之前就得出正确结论。
+
+    beets 侧真正调用时走的是 PATH（replaygain 写死 `"ffmpeg"`），那一步由
+    `bins.inject_path()` 负责 —— 这里只回答"有没有"。
+    """
+    from . import bins  # 延迟导入：bins 顶层就 import 本模块（避免环）
+
+    local = bins.bin_dir()
+    if local is not None:
+        candidates = [dep]
+        target = bin_target(dep)
+        if target:
+            candidates.insert(0, target)
+        if os.name == "nt":
+            candidates.append(dep + ".exe")
+        for name in candidates:
+            found = local / name
+            if found.is_file():
+                return str(found)
+    return shutil.which(dep)
+
+
+def bin_target(dep: str) -> str | None:
+    """依赖名 → `bin/` 下的文件名（`ffmpeg` → `ffmpeg.exe`）。"""
+    spec = binary(dep)
+    return spec.target if spec else None
+
+
+def missing_binaries(deps: list[str]) -> list[str]:
+    """这些外部依赖里，现在还缺哪几个。"""
+    return [dep for dep in deps if exe_path(dep) is None]
+
+
+def usable_plugins(names: list[str]) -> list[str]:
+    """把"外部依赖还缺"的插件从清单里剔掉，保留原顺序。
+
+    ## 为什么必须剔（docs/53 §1.1 实测）
+
+    `plugins: replaygain` 而 PATH 上没有 ffmpeg 时，beets **任何子命令**都
+    起不来：插件在启动时初始化，`FatalReplayGainError` 被包成 `UserError`
+    直接抛。所以"写了但缺 exe"不是"该功能降级"，是"整个组件不可用"。
+
+    剔除发生在渲染配置的这一侧，而不是让人去记得别勾 —— 老配置、用户手删
+    `bin/`、从别的机器拷来的 `settings.json` 都会走到这里。被剔掉的插件在
+    三态报告里仍然是 `missing_deps`（缺 `ffmpeg`），UI 上不会凭空消失。
+    """
+    out: list[str] = []
+    for name in names:
+        item = entry(name)
+        if item is None:
+            # 不认识的名字原样保留：workbench 是用户的家，他写什么就是什么
+            out.append(name)
+            continue
+        if missing_binaries(list(item.get("exe", ()))):
+            continue
+        out.append(name)
+    return out
+
+
 
 def find_market_spec(name: str) -> MarketSpec | None:
     """目录查找。"""
@@ -246,9 +394,13 @@ def _has_module(name: str) -> bool:
 
 
 def _state_of(py: tuple[str, ...], exe: tuple[str, ...], plugin: str) -> tuple[str, list[str]]:
-    """三态 + 缺什么。`capability_report` 与 `market_report` 共用，避免各算一套。"""
+    """三态 + 缺什么。`capability_report` 与 `market_report` 共用，避免各算一套。
+
+    外部依赖走 [`exe_path`] 而不是 `shutil.which`：`bin/` 里的东西在 PATH 注入
+    之前也该算"有"（配置渲染就发生在注入之前）。
+    """
     missing_py = [d for d in py if not _has_module(d)]
-    missing_exe = [d for d in exe if shutil.which(d) is None]
+    missing_exe = [d for d in exe if exe_path(d) is None]
     missing = missing_py + missing_exe
     if not _has_module(f"beetsplug.{plugin}"):
         return UNAVAILABLE, missing
@@ -261,12 +413,24 @@ def capability_report(enabled: list[str] | None = None) -> list[dict]:
     """逐个声明插件给三态。
 
     `enabled` = config.yaml 里实际写着的插件名（None = 全部声明都算）。
-    未在 enabled 里的插件仍然上报（状态里带 `enabled: false`）——
-    用户需要知道"有这个东西，但我没开"，而不是从列表里消失。
+
+    覆盖面是 **默认清单 ∪ 已启用清单**（按目录顺序）：既有"有这个东西但我没开"
+    的可发现性，也不让"用户勾过的非默认插件"（replaygain / chroma / convert）
+    从状态里消失 —— 而恰恰是它们要外部二进制，最需要被看见缺什么。
     """
     enabled_set = set(enabled or [])
+    tracked = set(WORKBENCH_DEFAULT_PLUGINS) | enabled_set
     report = []
-    for spec in DEFAULT_PLUGINS:
+    for item in entries():
+        if item["name"] not in tracked:
+            continue
+        spec = MarketSpec(
+            name=item["name"],
+            note=item.get("note", ""),
+            packages=tuple(item.get("packages", ())),
+            py_deps=tuple(item.get("imports", ())),
+            exe_deps=tuple(item.get("exe", ())),
+        )
         state, missing = _state_of(spec.py_deps, spec.exe_deps, spec.name)
         report.append(
             {

@@ -9,7 +9,7 @@
   [3] 索引白名单的结构拒绝：「默认会写盘」的插件必须由 indexForced 压住 write:no
   [4] packages_for：未知名字必须抛错（静默跳过 = 勾了 A 装了 B）
   [5] bundle 插件不许带外部二进制依赖（否则"免配置"名不副实）
-  [6] 负向四连：把表改坏，校验必须逐个变红
+  [6] 负向九连：把表改坏（含 binaries 载体与引用），校验必须逐个变红
 
 只读表，不写盘，不碰 beets 运行时。
 """
@@ -17,6 +17,8 @@ import copy
 import json
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOL = os.path.dirname(HERE)
@@ -26,12 +28,24 @@ from aiya_beets import plugins  # noqa: E402
 
 DOC = json.loads(plugins.catalog_text())
 
-TOP_KEYS = {"schema", "beets", "profiles", "plugins"}
+TOP_KEYS = {"schema", "beets", "profiles", "binaries", "plugins"}
 ENTRY_KEYS = {
     "name", "title", "note", "builtin", "packages", "imports",
     "exe", "writes", "network", "bundle",
 }
 OPTIONAL_KEYS = {"indexForced"}
+
+BINARY_KEYS = {
+    "name", "target", "why", "carrier", "size", "sha256", "license", "vendor",
+}
+BINARY_OPTIONAL = {"probe", "probeAllowFail"}
+CARRIER_KEYS = {"kind", "url", "size", "sha256", "member"}
+
+HEX = set("0123456789abcdef")
+
+
+def _is_sha256(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and set(value) <= HEX
 
 
 def validate(doc: dict) -> list[str]:
@@ -45,8 +59,8 @@ def validate(doc: dict) -> list[str]:
     missing = TOP_KEYS - set(doc)
     if missing:
         return [f"顶层缺键：{sorted(missing)}"]
-    if doc.get("schema") != 1:
-        errs.append(f"schema 必须是 1，实际 {doc.get('schema')!r}")
+    if doc.get("schema") != 2:
+        errs.append(f"schema 必须是 2，实际 {doc.get('schema')!r}")
 
     beets = doc.get("beets") or {}
     for k in ("min", "max"):
@@ -126,6 +140,77 @@ def validate(doc: dict) -> list[str]:
                 f"{item.get('name')}: 标了 bundle 却依赖外部命令 {item['exe']}"
                 "（预置了也还是 missing_deps）"
             )
+
+    # ---- binaries 段（docs/53）：外部二进制的载体与校验值 ----
+    bins = doc.get("binaries")
+    if not isinstance(bins, list) or not bins:
+        errs.append("binaries 必须是非空数组（三个外部工具都在这儿声明）")
+        return errs
+    bin_names: list[str] = []
+    for i, item in enumerate(bins):
+        if not isinstance(item, dict):
+            errs.append(f"binaries[{i}] 不是对象")
+            continue
+        unknown = set(item) - BINARY_KEYS - BINARY_OPTIONAL
+        if unknown:
+            errs.append(f"binaries[{i}] 有多余键：{sorted(unknown)}（打错字就会静默失效）")
+        absent = BINARY_KEYS - set(item)
+        if absent:
+            errs.append(f"binaries[{i}] 缺键：{sorted(absent)}")
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            errs.append(f"binaries[{i}].name 必须是非空字符串")
+            continue
+        if name in bin_names:
+            errs.append(f"{name}: 二进制名重复")
+        bin_names.append(name)
+        if not str(item.get("target", "")).endswith(".exe"):
+            errs.append(f"{name}: target 必须是 bin/ 下的 .exe 文件名，实际 {item.get('target')!r}")
+        if not _is_sha256(item.get("sha256")):
+            errs.append(f"{name}: sha256 必须是 64 位十六进制")
+        if not isinstance(item.get("size"), int) or item["size"] <= 0:
+            errs.append(f"{name}: size 必须是正整数")
+        for key in ("why", "license", "vendor"):
+            if not isinstance(item.get(key), str) or not item.get(key):
+                errs.append(f"{name}: {key} 必须是非空字符串")
+
+        carrier = item.get("carrier")
+        if not isinstance(carrier, dict):
+            errs.append(f"{name}: carrier 必须是对象")
+            continue
+        unknown = set(carrier) - CARRIER_KEYS
+        if unknown:
+            errs.append(f"{name}: carrier 有多余键：{sorted(unknown)}")
+        absent = CARRIER_KEYS - set(carrier)
+        if absent:
+            errs.append(f"{name}: carrier 缺键：{sorted(absent)}")
+        if carrier.get("kind") != "zip":
+            errs.append(f"{name}: carrier.kind 只支持 zip（轮子本身也是 zip）")
+        url = carrier.get("url")
+        if not isinstance(url, str) or not url.startswith("https://"):
+            errs.append(f"{name}: carrier.url 必须是 https 直链，实际 {url!r}")
+        if not _is_sha256(carrier.get("sha256")):
+            errs.append(f"{name}: carrier.sha256 必须是 64 位十六进制")
+        if not isinstance(carrier.get("size"), int) or carrier["size"] <= 0:
+            errs.append(f"{name}: carrier.size 必须是正整数")
+        member = carrier.get("member")
+        if not isinstance(member, str) or not member:
+            errs.append(f"{name}: carrier.member 必须是非空字符串（载体内的路径/glob）")
+
+    # 插件声明的 exe 必须能在 binaries 里找到：写错一个字母的后果是"安装器
+    # 不知道要去下什么"，而插件照旧出现在目录里，用户点了也装不出来。
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for dep in item.get("exe") or ():
+            if dep not in bin_names:
+                errs.append(f"{item.get('name')}: exe 引用了未声明的二进制 {dep}")
+
+    for name in bin_names:
+        if not any(
+            isinstance(i, dict) and name in (i.get("exe") or ()) for i in items
+        ):
+            errs.append(f"{name}: 没有任何插件用到它（要么补插件，要么从表里删掉）")
     return errs
 
 
@@ -152,7 +237,10 @@ def main() -> int:
     assert list(plugins.BUNDLE_PLUGINS) == [
         i["name"] for i in DOC["plugins"] if i["bundle"]
     ], "BUNDLE_PLUGINS 必须取自 bundle:true"
-    print("[2] 派生视图与 JSON 一致 OK（MARKET/DEFAULT/INDEX/BUNDLE 四路）")
+    assert [b.name for b in plugins.BINARIES] == [
+        i["name"] for i in DOC["binaries"]
+    ], "BINARIES 必须与 JSON 同序同名"
+    print("[2] 派生视图与 JSON 一致 OK（MARKET/DEFAULT/INDEX/BUNDLE 四路 + BINARIES）")
 
     # [3] 索引白名单里没有"结构性写盘"的插件
     for spec in plugins.INDEX_PLUGINS:
@@ -181,7 +269,43 @@ def main() -> int:
         assert not item.get("exe"), f"{name} 依赖外部命令，不该进免配置包"
     print(f"[5] bundle 预置清单 OK：{', '.join(plugins.BUNDLE_PLUGINS)}")
 
-    # [6] 负向四连：把表改坏，校验必须变红（否则门禁是装饰）
+    # [5b] 外部二进制的解析：谁要什么、缺了算谁头上（docs/53）
+    assert plugins.binaries_for(["replaygain"]) == ["ffmpeg"], "replaygain 只要 ffmpeg"
+    assert plugins.binaries_for(["replaygain", "convert"]) == ["ffmpeg"], "必须去重"
+    assert plugins.binaries_for(["lyrics"]) == [], "纯 Python 插件不涉及外部工具"
+    assert plugins.binaries_for(["xtractor"]) == ["streaming_extractor_music"]
+    try:
+        plugins.binaries_for(["nope"])
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("未知插件名必须抛 KeyError")
+    # bin/ 里没有、PATH 上也没有 → 算缺；造一个占位文件 → 立刻算有
+    with tempfile.TemporaryDirectory() as tmp:
+        saved = os.environ.get("AIYA_BEETS_BIN_DIR")
+        os.environ["AIYA_BEETS_BIN_DIR"] = tmp
+        try:
+            assert plugins.missing_binaries(["streaming_extractor_music"]), "空目录应该算缺"
+            # 缺工具时：需要它的被剔掉，纯 Python 的照留（beets 会因此整体起不来）
+            assert plugins.usable_plugins(["xtractor", "lyrics"]) == ["lyrics"], (
+                "缺外部工具的插件必须被剔除，纯 Python 的照留"
+            )
+            Path(tmp, "streaming_extractor_music.exe").write_bytes(b"x")
+            assert plugins.exe_path("streaming_extractor_music") is not None, "bin/ 里有了就要认"
+            assert plugins.missing_binaries(["streaming_extractor_music"]) == []
+            assert plugins.usable_plugins(["xtractor", "lyrics"]) == ["xtractor", "lyrics"], (
+                "补齐之后必须自动恢复，顺序不变"
+            )
+            Path(tmp, "streaming_extractor_music.exe").unlink()
+            assert plugins.usable_plugins(["xtractor"]) == [], "缺工具时不该留下 xtractor"
+        finally:
+            if saved is None:
+                os.environ.pop("AIYA_BEETS_BIN_DIR", None)
+            else:
+                os.environ["AIYA_BEETS_BIN_DIR"] = saved
+    print("[5b] binaries_for / exe_path / usable_plugins OK")
+
+    # [6] 负向九连：把表改坏，校验必须变红（否则门禁是装饰）
     def broken(mutate) -> list[str]:
         doc = copy.deepcopy(DOC)
         mutate(doc)
@@ -197,6 +321,19 @@ def main() -> int:
             next(i for i, x in enumerate(d["plugins"]) if x["name"] == "lyrics")
         ].update({"exe": ["fpcalc"]}),
         "打错一个键": lambda d: d["plugins"][0].update({"nmae": "x"}),
+        # docs/53：exe 引用与载体声明两边都得钉住
+        "exe 引用不存在的二进制": lambda d: d["plugins"][0].update({"exe": ["nofmpeg"]}),
+        "载体地址不是 https": lambda d: d["binaries"][0]["carrier"].update(
+            {"url": "http://example.com/x.zip"}
+        ),
+        "sha256 写短了": lambda d: d["binaries"][0].update({"sha256": "abc123"}),
+        "载体成员留空": lambda d: d["binaries"][0]["carrier"].update({"member": ""}),
+        "声明了却没人用的二进制": lambda d: d["binaries"].append(
+            {"name": "ghost", "target": "ghost.exe", "why": "x",
+             "carrier": {"kind": "zip", "url": "https://e/x.zip", "size": 1,
+                         "sha256": "0" * 64, "member": "ghost.exe"},
+             "size": 1, "sha256": "0" * 64, "license": "MIT", "vendor": "x"}
+        ),
     }
     for label, mutate in cases.items():
         got = broken(mutate)

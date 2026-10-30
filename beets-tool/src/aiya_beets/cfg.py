@@ -74,7 +74,9 @@ from .plugins import (
     DEFAULT_PLUGINS,
     INDEX_DEFAULT_PLUGINS,
     INDEX_PLUGINS,
+    exe_path,
     find_index_plugin,
+    usable_plugins,
 )
 
 PROFILE_WORKBENCH = "workbench"
@@ -258,14 +260,38 @@ def _render_workbench(home: Path, root: str | None, plugins: list[str] | None) -
         # 用户在安装页勾过的清单优先（装了不启用等于白装）；
         # 没勾过才用表里的默认清单
         names = settings_plugins(home) or [p.name for p in DEFAULT_PLUGINS]
+    names = _drop_unusable(names, "workbench")
     lines = [
         "# AIYA Music 生成；改过之后不会再被覆盖（要恢复默认就删掉本文件）",
         f"library: {yaml_path(home / 'library.db')}",
     ]
     if root:
         lines.append(f"directory: {yaml_path(root)}")
-    lines.append("plugins: " + " ".join(names))
+    lines.append("plugins: " + " ".join(names) if names else "plugins: []")
     return "\n".join(lines) + "\n"
+
+
+
+def _drop_unusable(names: list[str], where: str) -> list[str]:
+    """剔掉"外部依赖还缺"的插件，并在 stderr 说明剔了谁（docs/53 §1.1）。
+
+    为什么必须剔：`plugins: replaygain` 而 PATH 上没有 ffmpeg 时，beets 的**任何**
+    子命令都起不来（插件在启动时初始化，`UserError` 直接抛）。写了却缺 exe，
+    不是"该功能降级"，是"组件不可用"。
+
+    为什么只在这里剔、不改 `settings.json`：用户的选择要留着。等他补上工具
+    （`aiya-beets bins`）之后，下一次渲染自动恢复启用——不需要重新勾一遍。
+    """
+    kept = usable_plugins(names)
+    dropped = [n for n in names if n not in kept]
+    if dropped:
+        # stderr 而不是 stdout：协议帧只走 stdout，这条是给人排查用的
+        print(
+            f"[aiya-beets] {where}：{', '.join(dropped)} 缺外部工具，本次未启用"
+            "（aiya-beets bins 可补齐）",
+            file=sys.stderr,
+        )
+    return kept
 
 
 SETTINGS_FILE = "settings.json"
@@ -348,22 +374,35 @@ def _sync_plugins(text: str, names: list[str]) -> str:
 
 def _render_index(home: Path, plugins: list[str] | None, root: str | None) -> str:
     names = list(plugins) if plugins is not None else list(INDEX_DEFAULT_PLUGINS)
+    # xtractor 要 Essentia 提取器；没有它写进 plugins 就是"假开"——
+    # 每次 import 都吐一段 `PluginImportError: Could not import plugin xtractor`
+    # 然后照常跑（退出码 0，docs/50 §1.1 实测）。按环境过滤掉才是诚实的做法。
+    names = _drop_unusable(names, "index")
     lines = [
         "# AIYA Music 索引库（DB1）：这是生成物，不要手改——改模板（cfg.render_config）。",
         "# 可随时重建：删掉 library.db* 与 state.pickle **成对删**（state 才是增量记忆）。",
         f"library: {yaml_path(home / 'library.db')}",
         f"directory: {yaml_path(index_dir(home, root))}",
-        "plugins: " + " ".join(names),
+        "plugins: " + " ".join(names) if names else "plugins: []",
         "import:",
     ]
     lines += [f"    {key}: {value}" for key, value in INDEX_IMPORT_KEYS]
     # 每个启用插件的强制参数（xtractor 的 write: yes 会把 bpm 写回音频文件）
     for name in names:
         spec = find_index_plugin(name)
-        if spec is None or not spec.forced:
+        if spec is None:
+            continue
+        rows = list(spec.forced)
+        # xtractor 唯一一个"必须给绝对路径"的键：它 spawn 的外部程序没有默认位置
+        # （默认值就是占位符 `/your/path/to/streaming_extractor_music`）。
+        if name == "xtractor":
+            found = exe_path("streaming_extractor_music")
+            if found:
+                rows.append(("essentia_extractor", yaml_path(found)))
+        if not rows:
             continue
         lines.append(f"{name}:")
-        lines += [f"    {key}: {value}" for key, value in spec.forced]
+        lines += [f"    {key}: {value}" for key, value in rows]
     return "\n".join(lines) + "\n"
 
 
@@ -491,6 +530,27 @@ def verify_config(
             if got != want:
                 raise ConfigGateError(f"{name}.{key} = {got}，索引家要求 {want}")
 
+    # 外部依赖 (docs/53 §1.1)：写了却缺 exe 的插件会让 beets 任何命令都起不来。
+    # 渲染侧已经剔过 —— 这条是"模板与过滤漂了"的兜底，不是主要防线。
+    usable = usable_plugins(names)
+    stuck = [n for n in names if n not in usable]
+    if stuck:
+        raise ConfigGateError(
+            f"插件 {', '.join(stuck)} 缺外部工具，写进 plugins 会让 beets 起不来"
+            "（应先用 aiya-beets bins 补齐，或从模板里剔掉）"
+        )
+
+    # xtractor 唯一一个必须给绝对路径的键：spawn 的外部程序没有默认位置
+    if "xtractor" in names:
+        found = exe_path("streaming_extractor_music")
+        section = doc.get("xtractor")
+        got = str(section.get("essentia_extractor", "")).strip("'\"") if isinstance(section, dict) else ""
+        if found and _norm(got) != _norm(found):
+            raise ConfigGateError(
+                f"xtractor.essentia_extractor 必须指向 {found}，实际是 {got or '（缺失）'}"
+                "（默认值是占位符，插件会拿它去 spawn 一个不存在的程序）"
+            )
+
 
 def _index_names() -> str:
     return " / ".join(spec.name for spec in INDEX_PLUGINS)
@@ -602,7 +662,9 @@ def ensure_config(home: Path | None = None, prof: str | None = None) -> Path:
             want = _sync_directory(want, root)
         chosen = settings_plugins(base)
         if chosen:
-            want = _sync_plugins(want, chosen)
+            # 勾了但外部工具还没下载的，这一版先不启用（否则 beets 起不来，docs/53）。
+            # settings.json 不改：等 bins 补齐后下一次启动自动恢复。
+            want = _sync_plugins(want, _drop_unusable(chosen, "workbench"))
         if want != text:
             path.write_text(want, encoding="utf-8", newline="\n")
     return path

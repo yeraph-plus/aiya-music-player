@@ -376,7 +376,7 @@ test('docs/51：安装页给出插件勾选与卸载入口（卸载只删组件�
   // 所以勾选清单现在就应该在——否则用户没法在安装前决定要什么
   await expect(main.locator('.pick input[type="checkbox"]')).toHaveCount(4);
   await expect(main).toContainText('beautifulsoup4>=4.12,<5');
-  await expect(main).toContainText('还需 fpcalc');
+  await expect(main).toContainText('另下 fpcalc');
 
   // 卸载是两段式：先「卸载组件」，点了才出「确认卸载」。
   // 破坏性操作不该一次点击就执行

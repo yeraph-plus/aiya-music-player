@@ -1047,7 +1047,7 @@ export class MockBackend {
    *
    * 真宿主读的是编译期 `include_str!` 的 `plugins.json`；这里手写四条，
    * 刻意覆盖四种形态（要额外包 / 不需要包 / 需外部二进制 / 免配置包预置），
-   * 好让安装页的勾选清单、包名标签、"还需 ffmpeg"提示都被渲染到。
+   * 好让安装页的勾选清单、包名标签、"另下 ffmpeg"标签都被渲染到。
    */
   async beetsPluginTable(): Promise<BeetsPluginItem[]> {
     return [
@@ -1080,7 +1080,7 @@ export class MockBackend {
       {
         name: 'chroma',
         title: '音频指纹',
-        note: 'acoustid 指纹识别（还需自备 fpcalc）',
+        note: 'acoustid 指纹识别（需要 fpcalc，安装时自动下载）',
         builtin: true,
         packages: ['pyacoustid>=1.3,<2'],
         exe: ['fpcalc'],
