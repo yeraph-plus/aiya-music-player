@@ -223,6 +223,15 @@ export const ipc = {
     /** 从曲库移除（只删索引，不动磁盘文件） */
     removeTracks: (trackIds: string[]) => call<RemoveTracks>('library_remove_tracks', { trackIds }),
     /**
+     * 一批文件路径 → 曲目 id（`null` = 曲库里没有这个文件）。
+     *
+     * 谁在用：beets 查询页。它读的是**另一个库**，那边只有路径、没有本应用的
+     * id（刻意不该有）。返回**同序等长**，好让界面按行标注"这首不在曲库"。
+     * 未命中不会造行——另一个库可能收录了还没扫描进曲库的文件。
+     */
+    resolvePaths: (paths: string[]) =>
+      call<(string | null)[]>('tracks_resolve_paths', { paths }),
+    /**
      * 专辑/艺人聚合浏览（docs/24 §3.2 决策 2）。只含**实际有曲目**的条目，
      * 一次性返回前 500（后端 `FACET_LIMIT`），无游标；按名称排序。
      * 空白/缺省 `search` = 不过滤。

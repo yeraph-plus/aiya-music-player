@@ -64,6 +64,8 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return mock.idsForSelection(a.request as SelectionIdsQuery);
     case 'library_remove_tracks':
       return mock.removeTracks(a.trackIds as string[]);
+    case 'tracks_resolve_paths':
+      return mock.resolvePaths(a.paths as string[]);
     case 'library_albums':
       return mock.libraryAlbums(a.search as string | undefined);
     case 'library_artists':
@@ -260,7 +262,10 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     case 'beets_plugin_install':
       return mock.beetsPluginInstall(String(a.name ?? ''));
     case 'beets_query':
-      return mock.beetsQuery({ limit: a.limit as number | undefined });
+      return mock.beetsQuery({
+        limit: a.limit as number | undefined,
+        fields: a.fields as string[] | undefined,
+      });
     case 'beets_fields':
       return mock.beetsFields();
 

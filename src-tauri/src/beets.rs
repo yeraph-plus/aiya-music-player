@@ -1743,6 +1743,31 @@ mod tests {
         );
     }
 
+    /// 两个 crate 各自有一份"路径 → path_lower 键"的实现：`aiya-beets-store`
+    /// 用它写结论库的行键，`aiya-data::repo` 用它回曲库换 `track_id`。
+    ///
+    /// 它们**不能互相依赖**（那正是这次解耦要断的东西），所以只能靠断言锁在
+    /// 一起：一旦一边改了归一规则，症状不是报错，而是"增强结果一条都对不上
+    /// 曲目"——那种 bug 只有对着真库才会显形。这条测试把两边拉到同一批样本上。
+    #[test]
+    fn path_key_agrees_across_crates() {
+        let samples = [
+            r"D:\Music\A\01 - Song.flac",
+            "d:/music/a/01 - song.flac",
+            r"E:\库\周杰伦\叶惠美\03.mp3",
+            "E:/库/周杰伦/叶惠美/03.mp3",
+            r"\\nas\share\Album\Track.flac",
+            "/posix/style/path.flac",
+        ];
+        for s in samples {
+            assert_eq!(
+                aiya_beets_store::path_key(s),
+                aiya_data::repo::path_key(s),
+                "同一路径在两处归一结果不同：{s}"
+            );
+        }
+    }
+
     /* ---------------- 模块自有配置（docs/47） ---------------- */
 
     fn tmp_settings_dir(tag: &str) -> std::path::PathBuf {

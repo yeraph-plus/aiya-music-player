@@ -208,10 +208,19 @@ test('正在播放页：起播后两栏沉浸布局 + 背景四层接住真实�
   // 频谱环境光不被压暗
   await expect(page.locator('.ambient-art')).toBeVisible();
   await expect(page.locator('.ambient-veil')).toHaveCount(0);
-  await expect(page.locator('.ambient-spectrum')).toHaveCount(0); // mock 下频谱默认关
+  // 2026-10-30 修：这条断言原先盯 `.ambient-spectrum`，而 docs/46 之后那个
+  // canvas 只在 **WebGL 不可用的 2D 兜底**路径上才存在，正常机器上恒为空——
+  // 断言"为 0"是真的，只是它什么都没验。正在播放页的频谱现在是页内
+  // `<canvas class="np-spectrum">`，由「正在播放页频谱」开关派生。
+  await expect(page.locator('.np-spectrum')).toHaveCount(0); // mock 默认关
 
+  // 侧栏在这一页整体退出（docs/46 §5.2），所以要去设置得先退出去；
+  // Esc 就是那一页的退路（keyboard.ts 里显式给的语义）。
+  // 2026-10-30 修：这条用例以前直接点侧栏「设置」，从 docs/46 之后稳定超时。
+  await page.keyboard.press('Escape');
   await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
-  await page.getByRole('switch', { name: '频谱可视化' }).click();
+  // 开关名也是 docs/46 改的：原来一个「频谱可视化」，现在拆成背景/正在播放页两个
+  await page.getByRole('switch', { name: '正在播放页频谱' }).click();
   await page.locator('footer .now').click();
-  await expect(page.locator('.ambient-spectrum')).toHaveCount(1);
+  await expect(page.locator('.np-spectrum')).toHaveCount(1);
 });

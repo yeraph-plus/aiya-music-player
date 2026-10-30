@@ -58,17 +58,39 @@ pub fn online_paths(conn: &Connection) -> DbResult<Vec<String>> {
     Ok(online_files(conn)?.into_iter().map(|f| f.path).collect())
 }
 
+/// 路径 → `tracks.path_lower` 这一列的键。
+///
+/// Windows 上先把 `/` 统一成 `\` 再全小写。两条都不能省：
+/// - 不统一分隔符：`D:/m/a.flac` 与 `D:\m\a.flac` 是同一个文件，字符串不等。
+/// - 不小写：Windows 文件系统大小写不敏感，曲库写入时已经按小写归一。
+///
+/// **与外部工具自己的归一化必须同口径**：`aiya-beets-store` 有一份
+/// `path_key`，它写结论库的行键，这边拿行键回曲库换 `track_id`。两份实现
+/// 漂移的症状不是报错，而是"增强结果一条都对不上曲目"——所以 `beets.rs`
+/// 里有一条测试拿同一批样本比对两边（不靠代码依赖，靠断言锁）。
+pub fn path_key(raw: &str) -> String {
+    if cfg!(windows) {
+        raw.replace('/', "\\").to_lowercase()
+    } else {
+        raw.to_lowercase()
+    }
+}
+
 /// `path_lower → track_id` 批量反查。
 ///
-/// 给"外部工具拿着自己那套键回来要 id"用（结论库只存 path_lower）。分批
-/// 900：SQLite 的变量上限在 3.32 之后是 32766，但没必要求极限——500 条
+/// 给"外部工具拿着自己那套键回来要 id"用（结论库只存 path_lower）。也接受
+/// 未归一的原始路径：入口处会走一遍 [`path_key`]，重复归一幂等。这样调用方
+/// 不必知道"要不要先小写"——那把知识只该有一处。
+///
+/// 分批 900：SQLite 的变量上限在 3.32 之后是 32766，但没必要求极限——500 条
 /// 一页的查询本来就分不出几批。
 pub fn track_ids_by_paths(
     conn: &Connection,
     keys: &[String],
 ) -> DbResult<std::collections::HashMap<String, String>> {
     let mut out = std::collections::HashMap::new();
-    for chunk in keys.chunks(900) {
+    let normalized: Vec<String> = keys.iter().map(|k| path_key(k)).collect();
+    for chunk in normalized.chunks(900) {
         if chunk.is_empty() {
             continue;
         }
@@ -84,6 +106,22 @@ pub fn track_ids_by_paths(
         }
     }
     Ok(out)
+}
+
+/// 把一批**文件路径**逐条解析成曲目 id（`None` = 曲库里没有这个文件）。
+///
+/// 返回结果与输入**同序等长**——调用方要的是"这一行对应哪首曲目"，不是
+/// 一份集合。外部工具（beets 查询页）手里只有路径：它读的是另一个库，那边
+/// 没有本应用的 `track_id`，而且刻意不该有（两个库的身份不该互相泄漏）。
+/// 翻译放在这里一次做完，调用方不必各自实现大小写/分隔符归一。
+///
+/// 没命中的路径**绝不造行**：另一个库可能收录了还没扫描进曲库的文件，
+/// 为它们编一条假曲目，歌单点开就是"文件缺失"。调用方拿到 `None` 就知道
+/// 该怎么如实显示（标灰、不计入）。
+pub fn resolve_paths_aligned(conn: &Connection, paths: &[String]) -> DbResult<Vec<Option<String>>> {
+    let keys: Vec<String> = paths.iter().map(|p| path_key(p)).collect();
+    let found = track_ids_by_paths(conn, &keys)?;
+    Ok(keys.iter().map(|k| found.get(k).cloned()).collect())
 }
 
 /* ---------------- DTO ---------------- */
@@ -1206,5 +1244,89 @@ mod tests {
         let got = collect_track_ids(&conn, &q, 2).unwrap();
         assert_eq!(got.ids.len(), 2);
         assert!(got.truncated, "被 max 截断必须显式告知调用方");
+    }
+
+    /// 归一：分隔符两种写法要落到同一个键；重复归一等价（幂等）。
+    #[test]
+    fn path_key_folds_separators_and_case() {
+        let a = path_key(r"D:\Music\A\01 - Song.flac");
+        let b = path_key("d:/music/a/01 - song.flac");
+        assert_eq!(a, b, "分隔符与大小写不同的同一路径必须是同一个键");
+        assert_eq!(path_key(&a), a, "对已归一的键再归一次不能变");
+        assert!(a.is_ascii() && !a.contains('/'), "键里不该留正斜杠");
+    }
+
+    /// 反查：调用方递**原始路径**（正斜杠、大小写随意）也要能换到 id。
+    ///
+    /// fixture 里的路径是 `/m/1.flac` 这种 POSIX 写法，只适合查列表逻辑；
+    /// 命中测试要另插一行**Windows 原生路径**——真实曲库是扫描器走 PathBuf
+    /// 写进去的，形状就该是 `D:\Music\...`。
+    #[test]
+    fn track_ids_by_paths_matches_after_normalizing() {
+        let conn = open_in_memory().unwrap();
+        insert_fixtures(&conn);
+        let stored = path_key(r"D:\Music\A\01.flac");
+        conn.execute(
+            "INSERT INTO tracks (id,title,title_norm,added_at,path,path_lower,size_bytes,mtime)
+             VALUES ('tw','x','x',1,?1,?2,1,1)",
+            rusqlite::params![r"D:\Music\A\01.flac", stored],
+        )
+        .unwrap();
+
+        let raw = vec!["d:/music/a/01.flac".to_string()];
+        let got = track_ids_by_paths(&conn, &raw).unwrap();
+        assert_eq!(
+            got.get(&stored).map(String::as_str),
+            Some("tw"),
+            "分隔符与大小写不同的同一路径必须换到 id"
+        );
+
+        let miss = track_ids_by_paths(&conn, &[r"D:\Music\A\02.flac".to_string()]).unwrap();
+        assert!(miss.is_empty(), "查不到就返回空表，不是报错也不是造行");
+    }
+
+    /// 「存为歌单」的前置判断：每条路径是否在曲库里，答案要**同序等长**。
+    ///
+    /// 这条测试守的是两件容易被"顺手优化"掉的事：
+    /// 1. 没命中的路径返回 `None`，**不造行**（另一个库可能有还没扫描进来的文件）；
+    /// 2. 结果顺序 = 输入顺序（界面按行标灰，错位就等于标错了歌）。
+    #[test]
+    fn resolve_paths_aligned_keeps_order_and_marks_misses() {
+        let conn = open_in_memory().unwrap();
+        insert_fixtures(&conn);
+        conn.execute(
+            "INSERT INTO tracks (id,title,title_norm,added_at,path,path_lower,size_bytes,mtime)
+             VALUES ('ta','a','a',1,?1,?2,1,1), ('tb','b','b',1,?3,?4,1,1)",
+            rusqlite::params![
+                r"D:\Music\A\01.flac",
+                path_key(r"D:\Music\A\01.flac"),
+                r"D:\Music\A\02.flac",
+                path_key(r"D:\Music\A\02.flac"),
+            ],
+        )
+        .unwrap();
+
+        let paths = vec![
+            r"D:\Music\Z\99.flac".to_string(), // 未入库
+            r"D:\Music\A\01.flac".to_string(),
+            r"d:/music/a/02.flac".to_string(), // 大小写与分隔符都不同，仍要命中
+            r"D:\Music\A\01.flac".to_string(), // 重复路径：逐条给答案，不去重
+        ];
+        let got = resolve_paths_aligned(&conn, &paths).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                None,
+                Some("ta".to_string()),
+                Some("tb".to_string()),
+                Some("ta".to_string()),
+            ],
+            "同序等长；未命中是 None 而不是造一条"
+        );
+
+        assert!(
+            resolve_paths_aligned(&conn, &[]).unwrap().is_empty(),
+            "空输入是空结果，不是错误"
+        );
     }
 }

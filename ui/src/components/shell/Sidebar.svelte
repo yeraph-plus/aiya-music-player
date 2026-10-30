@@ -9,6 +9,7 @@
     Plus,
     Radio,
     Settings,
+    Tags,
   } from '@lucide/svelte';
   import { artworkUrl } from '../../lib/artwork';
   import { nav } from '../../stores/nav.svelte';
@@ -70,6 +71,12 @@
 
   /** 底部工具组：与内容导航分开渲染，但高亮/路由行为完全一致。 */
   const FOOTER_PAGES = [
+    {
+      key: 'beets',
+      label: '整理库',
+      icon: Tags,
+      go: () => nav.go({ kind: 'page', page: 'beets' }),
+    },
     {
       key: 'tools',
       label: '扫描入库',

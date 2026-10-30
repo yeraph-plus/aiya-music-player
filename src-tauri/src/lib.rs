@@ -2237,6 +2237,32 @@ fn library_remove_tracks(
         .map_err(dto::ApiError::from)
 }
 
+/* ---------------- 路径解析：另一个库的路径 → 本库曲目 id ---------------- */
+
+/// 一批文件路径逐条解析成曲目 id（`null` = 曲库里没有这个文件）。
+///
+/// 谁在用：beets 查询页。它读的是**另一个库**（beets 的 `library.db`），那边
+/// 只有文件路径，也没有本应用的 `track_id`——而且刻意不该有，两个库的身份
+/// 不该互相泄漏。所以"这个命中对应曲库里哪首歌"必须由宿主回答。
+///
+/// 返回同序等长：调用方要按行标注（"这行不在曲库，存歌单时会跳过"），
+/// 错位就等于标错了歌。空数组进 → 空数组出，不报错。
+///
+/// 未命中的路径**不造行**：另一个库可能收录了还没扫描进曲库的文件。
+#[tauri::command]
+fn tracks_resolve_paths(
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<Vec<Option<String>>, dto::ApiError> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    state
+        .db()
+        .send(move |conn| aiya_data::repo::resolve_paths_aligned(conn, &paths))
+        .map_err(dto::ApiError::from)
+}
+
 /* ---------------- playlist 命令 ---------------- */
 
 /// 摘要查询：行字段 + 3 个聚合子查询（曲目数 / 总时长 / 首个有封面的曲目）。
@@ -4237,6 +4263,7 @@ pub fn run() {
             library_reveal_track,
             library_ids_for_selection,
             library_remove_tracks,
+            tracks_resolve_paths,
             playlist_list,
             playlist_detail,
             playlist_create,

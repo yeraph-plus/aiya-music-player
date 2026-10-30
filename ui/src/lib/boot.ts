@@ -49,8 +49,9 @@ export function boot(options: { onState: (state: PlayerState) => void }): () => 
   // beets 运行时安装进度（docs/29 批 C）：低频事件，但只该订阅一次
   cleanups.push(ui.watchBeetsInstall());
 
-  // 曲库维护事件（docs/29 批 D）：同样是"组件不直接 listen"，只订阅一次
-  cleanups.push(ui.watchBeetsMaint());
+  // 2026-10-30（docs/48）：`beets:maintenance` 的订阅随整理库维护四件套一起
+  // 下线了——那四条命令没有 UI 入口了，没有人触发就没有事件。哪天真要恢复
+  // （比如做"按整理库重排文件"），订阅要跟着一起回来，否则界面上会永远转圈。
 
   /**
    * 启动守卫：引导链挂起（某条 IPC 永不 resolve）时 8s 放行主界面。

@@ -110,15 +110,20 @@ test('一级路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => 
     { via: 'nav', text: '艺人', title: '艺人' },
     // docs/29 批 A：扫描入库升侧栏一级项（自设置页拆出）
     { via: 'nav', text: '扫描入库', title: '扫描入库' },
+    // docs/48：beets 整理库独立成页
+    { via: 'nav', text: '整理库', title: '整理库' },
     // docs/25 §3：FM 电台回归一级导航（占位页）
     { via: 'nav', text: 'FM 电台', title: 'FM 电台' },
     { via: 'playlist', text: '', title: '' }, // 标题动态取歌单名
+    { via: 'nav', text: '设置', title: '设置' }, // 2026-10-28 三次修订：单页平铺，标题固定
+    // **正在播放页放最后**：那一页侧栏整体退出（docs/46 §5.2），留在它上面时
+    // 后面任何一次 `.sidebar .nav-item` 点击都会"element is not visible"。
+    // 这条顺序不是随意的——它曾经排在中间，于是这个用例稳定超时 30s。
     // docs/25 §6：正在播放页从播放条歌曲区域进（侧栏席位已撤）
     { via: 'player', text: '', title: '未在播放', sidebarActive: 0 },
-    { via: 'nav', text: '设置', title: '设置' }, // 2026-10-28 三次修订：单页平铺，标题固定
   ];
 
-  for (const [i, c] of cases.entries()) {
+  for (const c of cases) {
     if (c.via === 'nav') {
       await page.locator('.sidebar .nav-item', { hasText: c.text }).click();
     } else if (c.via === 'playlist') {
@@ -139,8 +144,9 @@ test('一级路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => 
     }
     // 每一步侧栏高亮数符合预期（多高亮=判断写重了，该零的时候非零=残留）
     await expect(page.locator('.sidebar .active')).toHaveCount(c.sidebarActive ?? 1);
-    // radio 路由之后落到非列表页，再回列表要能恢复（防 playlistId 残留）
-    if (i === cases.length - 1) {
+    // 整页之后回列表要能恢复（防 playlistId 残留）。挂在「设置」这一步：
+    // 它现在是最后一个**有侧栏**的页面（正在播放页侧栏退出，回不去列表）
+    if (c.via === 'nav' && c.text === '设置') {
       await page.locator('.sidebar .nav-item', { hasText: '曲库' }).click();
       await expect(page.locator('.main h1')).toHaveText('全部曲目');
     }
@@ -198,23 +204,19 @@ test('docs/29 批 A 八轮：立即索引跑完 → 执行状态留下上次记�
   await expect(card).not.toContainText('自动刷新');
 });
 
-test('docs/40 十三轮：整理输出根 radio（回退首根）+ 待整理目录未设置引导', async ({ page }) => {
+test('docs/48：曲库目录行不再带 beets 的「整理输出」单选', async ({ page }) => {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '扫描入库' }).click();
   await page.locator('.root-list .root-row').first().waitFor();
 
-  // 输出根 radio：mock 只有 1 个根，"没勾选回退首根"让它显示为选中
-  const radio = page.locator('.root-row .root-target input[type="radio"]');
-  await expect(radio).toBeVisible();
-  await expect(radio).toBeChecked();
+  // 2026-10-30 解耦：这个 radio 以前直接写 beets 的 config.yaml——曲库页是
+  // **本应用**的设置面，不该出现另一个库的配置项。搬走之后若有人"顺手加回来"，
+  // 症状是曲库页又开始改一个它不拥有的文件。
+  await expect(page.locator('.root-list .root-target')).toHaveCount(0);
+  await expect(page.locator('input[name="beets-target-root"]')).toHaveCount(0);
 
-  // 整理库段：待整理目录未设置 → 引导文案 + 选择按钮。
-  // 点它 = 系统对话框被浏览器取消（mock chooseRoot 回 null）→ 状态不动、无报错
-  const inboxRow = page.locator('#tools-beets .inbox-row');
-  await expect(inboxRow).toContainText('还没设置');
-  await inboxRow.getByRole('button', { name: '选择待整理目录' }).click();
-  await expect(inboxRow).toContainText('还没设置');
-  await expect(page.locator('.import-error')).toHaveCount(0);
+  // 目录行本身还在（路由与移除按钮不受影响）
+  await expect(page.locator('.root-list .root-path').first()).not.toBeEmpty();
 });
 
 test('docs/29 批 A 八轮：取消任务停在 cancelled 终态（预览 mock 实现真取消）', async ({ page }) => {
@@ -250,13 +252,14 @@ test('docs/29 批 A 八轮：曲库页扫描条只做指示，不再有第二个
   await expect(bar).toBeHidden({ timeout: 15_000 });
 });
 
-test('扫描入库页只剩两组卡片；识别信息与最近错误在设置页「关于」', async ({ page }) => {
+test('扫描入库页只剩「曲库」一组；beets 那一段搬去独立的一页', async ({ page }) => {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '扫描入库' }).click();
 
-  // 两组：曲库（必有）与整理库（beets，可选）。以前是七个并列段落。
+  // 一组：曲库。整理库（beets）在 2026-10-30 搬成侧栏独立一页（docs/48）
   await expect(page.locator('#tools-library .section-heading h2')).toHaveText('曲库');
-  await expect(page.locator('#tools-beets .section-heading h2')).toHaveText('整理库');
+  await expect(page.locator('#tools-beets')).toHaveCount(0);
+  await expect(page.locator('.beets-section')).toHaveCount(0);
 
   // 高级诊断折叠区已整体迁去设置页「关于」（2026-10-28 用户拍板）：
   // 扫描入库页不再有 details 折叠、也不再能找到版本/错误区
@@ -286,99 +289,66 @@ test('扫描入库页只剩两组卡片；识别信息与最近错误在设置�
   await expect(page.getByRole('button', { name: '清空播放历史' })).toBeVisible();
 });
 
-test('beets 未装时整理库段收成一行，且不拖累曲库段（docs/35 P2-11）', async ({ page }) => {
-  // `?beets=absent` 让 mock 的 beets_status 报 found:false。这条路径以前只有肉眼验过：
-  // mock 里 found 恒 true，所以"未装"这一屏从来没有测试断言过。
+test('docs/48：整理库是侧栏独立的一页（可达 + 高亮恰好一个）', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('.sidebar .nav-item', { hasText: '整理库' }).click();
+  await expect(page.locator('.main h1')).toHaveText('整理库');
+  expect(await activeSidebar(page)).toEqual(['整理库']);
+  // 装了组件就有查询区——这一页的主体就是查询
+  await expect(page.getByRole('button', { name: '查询' })).toBeVisible();
+});
+
+test('docs/48：未装 beets 时整理库页只给安装引导，不出查询区', async ({ page }) => {
+  // `?beets=absent` 让 mock 的 beets_status 报 found:false。
+  // 这条路径以前只有肉眼验过（mock 里 found 恒 true）。
   await page.goto('/?beets=absent');
-  await page.locator('.sidebar .nav-item', { hasText: '扫描入库' }).click();
+  await page.locator('.sidebar .nav-item', { hasText: '整理库' }).click();
 
-  const beets = page.locator('#tools-beets');
-  // 收拢形态：一行说明 + 两个安装按钮，其余什么都没有
-  await expect(beets).toContainText('整理库未启用');
-  await expect(beets.getByRole('button', { name: /快速安装/ })).toBeVisible();
-  await expect(beets.getByRole('button', { name: /免安装包/ })).toBeVisible();
+  const main = page.locator('.main');
+  await expect(main).toContainText('整理库未启用');
+  await expect(main.getByRole('button', { name: /快速安装/ })).toBeVisible();
+  await expect(main.getByRole('button', { name: /免安装包/ })).toBeVisible();
 
-  // 导入面板与维护四件套必须整块不存在（docs/33 的原则：不是"禁用"，是不该出现）
-  await expect(beets.getByRole('heading', { name: '导入新文件夹' })).toHaveCount(0);
-  await expect(beets.locator('.maint-fold')).toHaveCount(0);
-  await expect(beets.getByRole('button', { name: '登记到整理库' })).toHaveCount(0);
-
-  // 曲库段不受影响：页面上要能看出"没装 beets 也不影响播放"
-  await expect(page.locator('#tools-library .section-heading h2')).toHaveText('曲库');
-  await expect(page.locator('#tools-library')).toContainText('曲目');
+  // 没装就没有查询入口。导入面板 / 维护四件套 / 插件市场都没搬过来
+  // （docs/33 的原则：不该出现的整块不要出现，不是"禁用"）
+  await expect(main.getByRole('button', { name: '查询' })).toHaveCount(0);
+  await expect(main.getByRole('heading', { name: '导入新文件夹' })).toHaveCount(0);
+  await expect(main.locator('.maint-fold')).toHaveCount(0);
+  await expect(main.locator('.market-fold')).toHaveCount(0);
 });
 
-test('docs/29 批 D：整理库四件套（登记/重写标签/查重/重排文件）', async ({ page }) => {
+test('docs/48：查询 → 未入库行不可选 → 全选存为歌单', async ({ page }) => {
   await page.goto('/');
-  await page.locator('.sidebar .nav-item', { hasText: '扫描入库' }).click();
+  await page.locator('.sidebar .nav-item', { hasText: '整理库' }).click();
 
-  // 四件套收在折叠区里（默认收起）：它们是对已有曲目做批量操作，
-  // 不是每天要做的事。要用先展开。
-  // （市场折叠区也用 maint-fold 样式，所以这里按 summary 文案锚定）
-  await page.locator('.maint-fold > summary', { hasText: '整理已有曲目' }).click();
+  // 不加条件 = 全库。mock 在末尾挂了一条"只在整理库里有"的条目，
+  // 用来演"未入库"这一行——那条分支否则只有真机能看见
+  await page.getByRole('button', { name: '查询' }).click();
+  const rows = page.locator('.result-panel .row');
+  await expect(rows.first()).toBeVisible();
 
-  const card = page.locator('.maint');
-  await expect(card).toBeVisible();
-  // 目标根来自 beets 状态（config.yaml 显式配置的那个），不是猜的 ~/Music
-  await expect(card.locator('.task-status-head .dim')).toContainText('目标根 D:/MUSIC_Player/test-music');
+  const missing = page.locator('.result-panel .row.missing');
+  await expect(missing).toHaveCount(1);
+  await expect(missing).toContainText('未入库');
+  // 未入库的行勾不了：勾了也进不去歌单，那种"能点但无效"是最差的形态
+  await expect(missing.getByRole('checkbox')).toBeDisabled();
 
-  // 登记到整理库：事件流走到 adoptDone，汇总行显示登记数
-  await card.getByRole('button', { name: '登记到整理库' }).click();
-  await expect(card.locator('.maint-line')).toContainText('登记 3 首', { timeout: 10_000 });
+  // 全选只覆盖已入库的行
+  await page.getByRole('checkbox', { name: '全选本页已入库的曲目' }).click();
+  const total = await rows.count();
+  await expect(page.locator('.result-bar')).toContainText(`已选 ${total - 1} 首`);
 
-  // 重写文件标签：先预览出 diff（预览态才出现「应用这些修改」）
-  await card.getByRole('button', { name: '重写文件标签' }).click();
-  await expect(card.locator('.maint-line')).toContainText('待更新 3 首', { timeout: 10_000 });
-  await expect(card.locator('.maint-diff .chip').first()).toContainText('title');
-  const apply = card.getByRole('button', { name: '应用这些修改' });
-  await expect(apply).toBeVisible();
-  await apply.click();
-  await expect(card.locator('.maint-line')).toContainText('已更新 3 首', { timeout: 10_000 });
-  // 应用完成后预览按钮消失（不留一个会重复写库的入口）
-  await expect(card.getByRole('button', { name: '应用这些修改' })).toHaveCount(0);
+  // 存为歌单：同名合并（后端按名字派生 id），所以不会建出第二份
+  await page.getByRole('button', { name: '存为歌单' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await dialog.locator('input[type="text"]').fill('整理库精选');
+  await dialog.getByRole('button', { name: '保存' }).click();
 
-  // 查找重复：只读分组 + 每首带「定位」
-  await card.getByRole('button', { name: '查找重复' }).click();
-  await expect(card.locator('.maint-line')).toContainText('1 组重复', { timeout: 10_000 });
-  await expect(card.locator('.maint-group-head .chip')).toHaveText(/\S/);
-  await expect(card.locator('.maint-sublist .link').first()).toHaveText('定位');
-  // 应用内不提供删除入口（危险操作留给 beets CLI / 资源管理器）
-  await expect(card.getByRole('button', { name: /删除/ })).toHaveCount(0);
-
-  // 重排文件位置：预览出「从哪到哪」清单，确认后才真搬
-  await card.getByRole('button', { name: '重排文件位置' }).click();
-  await expect(card.locator('.maint-line')).toContainText('将移动 3 首', { timeout: 10_000 });
-  const rows = card.locator('.maint-list > li');
-  await expect(rows).toHaveCount(3);
-  await expect(rows.first()).toContainText('→');
-  await card.getByRole('button', { name: '确认移动' }).click();
-  await expect(card.locator('.maint-line')).toContainText('已移动 3 首', { timeout: 10_000 });
-});
-
-test('docs/40：插件市场（展开懒加载 → 白名单三态 → 安装事件流翻绿）', async ({ page }) => {
-  await page.goto('/');
-  await page.locator('.sidebar .nav-item', { hasText: '扫描入库' }).click();
-
-  // 市场折叠区（默认收起）：目录是一次性短进程查询，展开才拉——
-  // 这不是缓存优化，是"别让每次进页都白起一个进程"。
-  const market = page.locator('.market-fold');
-  await market.locator('summary').click();
-
-  // 白名单目录：mock 给 3 项覆盖三种状态；builtin 档没有安装按钮
-  await expect(market.locator('.market-list > li')).toHaveCount(3);
-  const fetchart = market.locator('.market-list > li', { hasText: 'fetchart' });
-  await expect(fetchart.locator('.badge')).toHaveText('缺依赖');
-  await expect(fetchart.getByRole('button', { name: '安装' })).toBeVisible();
-  await expect(
-    market.locator('.market-list > li', { hasText: 'replaygain' }).getByRole('button', { name: '安装' }),
-  ).toHaveCount(0);
-
-  // 安装：pluginProgress 逐行走 → pluginDone 带复检报告 → 徽标翻「可用」
-  await fetchart.getByRole('button', { name: '安装' }).click();
-  await expect(market.locator('.market-progress')).toContainText('安装完成', { timeout: 10_000 });
-  await expect(fetchart.locator('.badge')).toHaveText('可用');
-  // 装完安装按钮消失（复检已就绪，不再给重复安装入口）
-  await expect(fetchart.getByRole('button', { name: '安装' })).toHaveCount(0);
+  await expect(page.locator('.k-toast')).toContainText('已存为歌单');
+  await expect(page.locator('.sidebar .playlist-item', { hasText: '整理库精选' })).toHaveCount(1);
+  // 存完清空选择、按钮回到禁用（防重复点出一份一样的）
+  await expect(page.getByRole('button', { name: '存为歌单' })).toBeDisabled();
 });
 
 test('docs/40 二轮：动态歌单模态框（Switch → 条件模式行 → 创建动态歌单）', async ({ page }) => {

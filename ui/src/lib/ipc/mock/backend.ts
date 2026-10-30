@@ -18,6 +18,14 @@ import type { TrackQuery, TrackQueryParsed } from '../../query';
 import { parseTrackQuery } from '../../query';
 import type { SelectionIdsQuery, QueueInsertMode } from '../client';
 import type { UiState } from '../schema';
+
+/**
+ * 预览环境里"整理库文件"的假目录。
+ *
+ * 单独一个常量是因为它被两处共用：`beetsQuery` 造路径、`resolvePaths` 反解
+ * 路径。两处各写一遍字符串时，改一处就静默变成"整页都未入库"。
+ */
+const MOCK_BEETS_DIR = 'D:/MUSIC_Player/preview';
 import type {
   AlbumFacet,
   AlbumPage,
@@ -761,24 +769,71 @@ export class MockBackend {
   }
 
   /**
-   * beets 查询页（docs/47）的预览数据。
+   * beets 查询页（docs/47/48）的预览数据。
    *
-   * 参数被刻意简化成"只认 limit"：预览库里没有 beets 的 SQL，也就没有真正
-   * 能做范围查询的东西。假装支持 rules/raw 会让前端在预览环境下点出"有结果"
-   * 而真机上 0 命中——那种假绿比不实现更贵。
+   * 查询条件被刻意**不实现**：预览库里没有 beets 的 SQL，假装支持 rules/raw
+   * 会让前端在预览环境点出"有结果"而真机上 0 命中——那种假绿比不实现更贵。
+   * （要验条件求值，去 `smoke:enrich`，那边跑的是真 sidecar。）
+   *
+   * 但两件事必须模拟得像：
+   * 1. `path` 能反解出曲目 id —— 页面要拿它换 `trackId`，换不到就整页标灰；
+   * 2. 末尾挂两条**只在 beets 库里存在**的条目（曲库没有对应文件），
+   *    否则"未入库"那一行永远没有画面，只有真机能看见。
    */
-  async beetsQuery(filter: { limit?: number } = {}): Promise<BeetsQueryPage> {
+  async beetsQuery(
+    filter: { limit?: number; fields?: string[] } = {},
+  ): Promise<BeetsQueryPage> {
     const limit = filter.limit ?? 50;
-    const page = this.tracks.slice(0, limit);
-    return {
-      items: page.map((t, i) => ({
-        id: i + 1,
-        path: `D:/MUSIC_Player/preview/${t.id}.flac`,
-        fields: { title: t.title, artist: t.artist, album: t.album },
-      })),
-      total: this.tracks.length,
-      truncated: this.tracks.length > page.length,
+    const wanted = filter.fields ?? ['title', 'artist', 'album'];
+    const detail: Record<string, (t: (typeof this.tracks)[number]) => unknown> = {
+      title: (t) => t.title,
+      artist: (t) => t.artist,
+      album: (t) => t.album,
+      genre: () => 'Jazz',
+      year: () => 2004,
+      bpm: (t) => 90 + (Number.parseInt(t.id.replace(/\D+/g, ''), 10) % 40),
     };
+    const fieldsOf = (t: (typeof this.tracks)[number]) => {
+      const out: Record<string, unknown> = {};
+      for (const name of wanted) {
+        const read = detail[name];
+        if (read) out[name] = read(t);
+      }
+      return out;
+    };
+
+    const orphans = [
+      { id: 9001, path: `${MOCK_BEETS_DIR}/beets-only-1.flac`, fields: { title: '只在整理库里的单曲', artist: '某艺人', album: '某专辑' } },
+    ];
+    // 曲目数可能已经吃满 limit：那样 orphans 会被 slice 掉，"未入库"那条分支
+    // 在预览里就永远不出现（e2e 也就断言不到）。所以先给它们留出名额。
+    const items = [
+      ...this.tracks.slice(0, Math.max(0, limit - orphans.length)).map((t, i) => ({
+        id: i + 1,
+        path: `${MOCK_BEETS_DIR}/${t.id}.flac`,
+        fields: fieldsOf(t),
+      })),
+      ...orphans,
+    ].slice(0, Math.max(limit, 1));
+    return {
+      items,
+      total: this.tracks.length + orphans.length,
+      truncated: this.tracks.length + orphans.length > items.length,
+    };
+  }
+
+  /**
+   * 路径 → 曲目 id。预览库里的路径形状是 `…/preview/<trackId>.flac`，
+   * 靠这个反解；反解不出（或曲目不存在）就是 `null` = 未入库。
+   */
+  async resolvePaths(paths: string[]): Promise<(string | null)[]> {
+    const known = new Set(this.tracks.map((t) => t.id));
+    return paths.map((p) => {
+      const match = /([^/\\]+)\.flac$/.exec(p);
+      const id = match?.[1];
+      if (!id || !known.has(id) || !p.includes('/preview/')) return null;
+      return id;
+    });
   }
 
   async beetsFields(): Promise<BeetsFieldCatalog> {

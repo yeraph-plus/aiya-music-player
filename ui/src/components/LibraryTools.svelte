@@ -6,7 +6,6 @@
   import Icon from './Icon.svelte';
   import { errorMessage } from '../lib/errors';
   import { history } from '../stores/history.svelte';
-  import { beetsConfig } from '../stores/beets-config.svelte';
   import { library } from '../stores/library.svelte';
   import { notify } from '../stores/notify.svelte';
   import { scan } from '../stores/scan.svelte';
@@ -66,27 +65,7 @@
 
   onMount(() => {
     void library.loadRoots();
-    void beetsConfig.load();
   });
-
-  /* ---------------- 整理输出根（beets 配置） ---------------- */
-
-  /** 单选切换中的状态（radio 短暂禁用，防连点） */
-  let targetSaving = $state(false);
-
-  /** 勾选某目录为整理输出根（单选）。失败内置报错（radio 由后端回填归位） */
-  async function setTarget(root: string): Promise<void> {
-    targetSaving = true;
-    rootsError = null;
-    try {
-      await beetsConfig.setTarget(root);
-      notify.showToast(`beets 整理输出已指向 ${root}`);
-    } catch (err) {
-      rootsError = errorMessage(err);
-    } finally {
-      targetSaving = false;
-    }
-  }
 
   /* ---------------- 目录条目操作 ---------------- */
 
@@ -287,18 +266,9 @@
         {#each library.roots as root (root)}
           <li class="root-row">
             <span class="root-path" title={root}>{root}</span>
-            <!-- 整理输出根（docs/40 十三轮，单选）：beets 整理/移动的落点。
-                 勾选框出现前的行为=第一个根，所以没勾时第一个根显示为选中 -->
-            <label class="root-target" title="勾选后，beets 整理好的歌曲会归档到这个目录">
-              <input
-                type="radio"
-                name="beets-target-root"
-                checked={beetsConfig.effectiveTarget === root}
-                disabled={targetSaving}
-                onchange={() => void setTarget(root)}
-              />
-              整理输出
-            </label>
+            <!-- 2026-10-30：这里原来有一个「整理输出」单选（写 beets 的
+                 config.yaml）。它已经搬走——曲库页不提供 beets 的设置项，
+                 两个库的配置各归各的（docs/48）。 -->
             <IconButton
               label={`移除目录 ${root}`}
               size="sm"

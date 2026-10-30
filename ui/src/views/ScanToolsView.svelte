@@ -1,6 +1,5 @@
 <script lang="ts">
   import { Clock3, Database, Disc3, ListMusic, Mic2, TriangleAlert } from '@lucide/svelte';
-  import BeetsSection from '../components/BeetsSection.svelte';
   import LibraryTools from '../components/LibraryTools.svelte';
   import Header from '../components/content/Header.svelte';
   import { formatBytes, formatDurationLong } from '../lib/format';
@@ -16,11 +15,13 @@
    * 「导入目录」看起来是同一件事的两个按钮，实际一个写 `tracks` 表、
    * 一个写 beets 的 `library.db`；两个都叫"库"，但只有前者是播放依赖。
    *
-   * 现在只剩两组：**曲库**（必有）与**整理库**（可选，未装时收成一行）。
-   * 版本/数据目录/最近错误等识别与排障信息在设置页「关于」tab
-   * （2026-10-28 用户拍板迁出——它描述的是整个应用，不是"入库"这件事）。
+   * **2026-10-30（docs/48）：beets 那一段整体搬走了**，成了侧栏里独立的一页
+   * 「整理库」。这一页现在只有一件事：本应用的曲库怎么进来（根目录、
+   * 扫描、执行状态）。两个库不在一页里出现，也就不会再有"这两个按钮到底
+   * 动的哪个库"的问题。
    *
    * 下放出去的东西（不要去这里找）：
+   * - beets 整理库（查询 / 存为歌单 / 组件安装）→ 侧栏「整理库」
    * - 版本 / 平台 / Schema / 数据目录 / 最近错误 → 设置 → 关于
    * - 快捷键冲突 → 设置 → 快捷键（那边本来就有，这里是重复的第二份）
    * - 媒体控制 / 防休眠 / 托盘 → 设置 → 系统（各自开关旁边一行状态）
@@ -73,13 +74,6 @@
       </div>
     {/if}
     <LibraryTools />
-  </section>
-
-  <section class="tools-section" id="tools-beets">
-    <div class="section-heading">
-      <h2>整理库</h2>
-    </div>
-    <BeetsSection />
   </section>
 </div>
 

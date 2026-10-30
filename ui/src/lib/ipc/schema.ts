@@ -88,6 +88,7 @@ export const uiStateSchema = z
         'nowPlaying',
         'settings',
         'tools',
+        'beets',
         'radio',
       ])
       .optional(),

@@ -22,6 +22,7 @@
   import AlbumView from './views/AlbumView.svelte';
   import ArtistView from './views/ArtistView.svelte';
   import BrowseView from './views/BrowseView.svelte';
+  import BeetsView from './views/BeetsView.svelte';
   import LibraryView from './views/LibraryView.svelte';
   import HomeView from './views/HomeView.svelte';
   import NowPlayingView from './views/NowPlayingView.svelte';
@@ -144,6 +145,8 @@
       <RadioView />
     {:else if ui.page === 'tools'}
       <ScanToolsView />
+    {:else if ui.page === 'beets'}
+      <BeetsView />
     {:else}
       <SettingsView />
     {/if}
