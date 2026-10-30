@@ -400,6 +400,15 @@ export class MockBackend {
     return out;
   }
 
+  /**
+   * 预览里 `library_stats` 报多少个"位置缺失"。
+   *
+   * 默认 0（假库的文件都在）。要给首页那条"位置缺失"告警留一条能走的路——
+   * 它是全应用唯一还指向曲库维护的入口，2026-10-30 扫描入库页并入设置页之后
+   * 这条路变成"设置 → 曲库"的一次性跳转，没有它就只能手验。`?missing=2` 打开。
+   */
+  missingLocations = 0;
+
   libraryStats(): LibraryStats {
     const albums = new Set(this.tracks.map((t) => t.albumId));
     const artists = new Set(this.tracks.map((t) => t.artistId));
@@ -408,7 +417,7 @@ export class MockBackend {
       albums: albums.size,
       artists: artists.size,
       locations: this.tracks.length,
-      missingLocations: 0,
+      missingLocations: this.missingLocations,
       totalDurationMs: this.tracks.reduce((s, t) => s + (t.durationMs ?? 0), 0),
       dbBytes: 0,
       schemaVersion: 2,

@@ -15,14 +15,19 @@ import { applyLook, readLook } from './lib/look';
  * `?failCmd=library_list` 可注入一条命令失败，用来手验错误条渲染。
  * `?beets=absent` 让 `beets_status` 报"未安装"，用来演练整理库段的收拢形态
  * （docs/35 P2-11：这条路径以前只有肉眼验过）。
+ * `?missing=2` 让 `library_stats` 报出位置缺失，用来演练首页那条告警 →
+ * 「设置 → 曲库」的跳转（2026-10-30 扫描入库页并入设置页之后，这条路上
+ * 唯一还能证明"跳过去确实落在了曲库组"的方式）。
  */
 if (!('__TAURI_INTERNALS__' in window)) {
   const { installMock } = await import('./lib/ipc/mock');
   const params = new URLSearchParams(window.location.search);
   const failCmd = params.get('failCmd');
+  const missing = Number(params.get('missing'));
   installMock({
     ...(failCmd ? { failCommands: [failCmd] } : {}),
     ...(params.get('beets') === 'absent' ? { beetsFound: false } : {}),
+    ...(Number.isFinite(missing) && missing > 0 ? { missingLocations: missing } : {}),
   });
 }
 

@@ -1,6 +1,6 @@
 import type { TrackSort } from '../lib/query';
 import { list } from './list.svelte';
-import { isListPage, ui, type AppPage } from './ui.svelte';
+import { isListPage, ui, type AppPage, type SettingsSection } from './ui.svelte';
 
 /**
  * 导航 store：**路由动作的唯一入口** + 返回栈。
@@ -95,11 +95,27 @@ class NavStore {
     this.apply(target);
   }
 
-  /** 返回上一页。栈空时无操作（按钮该是 disabled 的） */
+  /**
+   * 返回上一页。栈空时无操作（按钮该是 disabled 的）
+   */
   back(): void {
     const snapshot = this.history.pop();
     if (!snapshot) return;
     this.restore(snapshot);
+  }
+
+  /**
+   * 去设置页的某一组。
+   *
+   * 「位置缺失」告警原来指向扫描入库页（那一页 2026-10-30 并入设置页的
+   * 「曲库」组）。只切路由的话人会落在「外观」组顶部——告警说"去曲库看"，
+   * 落地却在别处，等于没送到。所以先挂一个一次性请求，由 `SettingsPanel`
+   * 消费（滚过去 + 高亮那一组的 tab），再走正常的 `go`（压栈语义与
+   * 其他一级页完全一致，不进第二套路由）。
+   */
+  settingsAt(section: SettingsSection): void {
+    ui.settingsSection = section;
+    this.go({ kind: 'page', page: 'settings' });
   }
 
   /**
@@ -224,8 +240,9 @@ class NavStore {
     // 只有落在列表页才重拉列表：正在播放/设置页看不到列表，
     // 白跑一次查询还会把错误条带出来
     if (isListPage(s.page)) void list.reload({ restore: true });
-    // 设置页与扫描入库页都展示诊断/beets 状态（docs/29 批 A 拆页共用一份数据）
-    if (s.page === 'settings' || s.page === 'tools') void ui.refreshDiagnostics();
+    // 设置页展示诊断/beets 状态（docs/29 批 A 起共用一份数据；那页的「曲库」
+    // 组 2026-10-30 由「扫描入库」页并入，触发点只剩 settings 一个）
+    if (s.page === 'settings') void ui.refreshDiagnostics();
     ui.scheduleUiSave();
   }
 }

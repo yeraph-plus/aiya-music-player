@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
+  import { Clock3, Database, Disc3, ListMusic, Mic2, TriangleAlert } from '@lucide/svelte';
   import type {
     AppSettings,
     AmbientScheme,
@@ -19,15 +20,17 @@
   } from '../lib/shortcuts';
   import { bindingFromEvent } from '../lib/keys';
   import { detectCapability } from '../lib/render/capability';
-  import { formatDateTime } from '../lib/format';
+  import { formatBytes, formatDateTime, formatDurationLong } from '../lib/format';
   import afdianQr from '../assets/afdian-qr.png';
   import Icon from './Icon.svelte';
+  import LibraryTools from './LibraryTools.svelte';
   import Button from './ui/Button.svelte';
   import SegmentedControl from './ui/SegmentedControl.svelte';
   import Switch from './ui/Switch.svelte';
   import Header from './content/Header.svelte';
   import { capture } from '../stores/capture.svelte';
-  import { ui } from '../stores/ui.svelte';
+  import { library } from '../stores/library.svelte';
+  import { ui, type SettingsSection } from '../stores/ui.svelte';
 
   interface Props {
     settings: AppSettings;
@@ -46,22 +49,35 @@
   const recentErrors = $derived(sys?.recentErrors ?? []);
 
   /**
+   * 曲库统计（曲目 / 专辑 / 艺人 / 总时长 / 索引大小 / 位置缺失）。
+   *
+   * 只读：真正的拉取在 `boot.ts` 与每次扫描收尾（`library.loadStats`），
+   * 这个区块不自己发请求——设置页打开一次就查一遍库，属于"看页码就查数据库"。
+   */
+  const stats = $derived(library.stats);
+
+  /**
    * 单页平铺 + tab 跳转（2026-10-28 用户拍板改回）。
    *
    * 演进史：旧版「全区块平铺 + scroll-spy」的病根是点击分组靠
    * scrollIntoView 平滑滚动、滚动中 spy 又不断写回高亮——两边互相拉扯，
    * 切一次组高亮抖好几下。上一版改成 tab 条件渲染，抖动消失了，但用户
-   * 不喜欢"设置被切成五页"。现在是折中：**五个区块全部平铺渲染，顶部
+   * 不喜欢"设置被切成五页"。现在是折中：**六个区块全部平铺渲染，顶部
    * tab 只做跳转定位**——点击 scrollIntoView，没有 spy；高亮只跟点击走
    * （tab 的语义是"跳过去"，不是"你在这"），滚动永不写回高亮，拉扯
    * 从根上不存在。
+   *
+   * 2026-10-30：`library` 是新加的一组（原「扫描入库」页整体并入，见下方
+   * 该 section 的注释）。排序按"内容 → 应用"：外观/播放/曲库是你在听什么
+   * 怎么看，系统/快捷键/关于是这台机器与应用本身。
    */
-  type Section = 'appearance' | 'playback' | 'system' | 'shortcuts' | 'about';
+  type Section = SettingsSection;
   let active = $state<Section>('appearance');
 
   const SECTIONS: Array<{ id: Section; label: string }> = [
     { id: 'appearance', label: '外观' },
     { id: 'playback', label: '播放' },
+    { id: 'library', label: '曲库' },
     { id: 'system', label: '系统' },
     { id: 'shortcuts', label: '快捷键' },
     { id: 'about', label: '关于' },
@@ -71,6 +87,7 @@
   const sectionEls: Record<Section, HTMLElement | null> = {
     appearance: null,
     playback: null,
+    library: null,
     system: null,
     shortcuts: null,
     about: null,
@@ -80,6 +97,23 @@
     active = section;
     sectionEls[section]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
+
+  /**
+   * 消费 `nav.settingsAt()` 挂上的一次性跳转请求（曲库页「位置缺失」告警用）。
+   *
+   * 为什么 `await tick()`：请求是在**路由切换之前**写进去的，本组件可能是
+   * 这一帧才第一次挂载——那时 `sectionEls` 还是空对象，直接 `scrollIntoView`
+   * 会静默什么都不做（`.?.` 吃掉）。tick 之后 bind:this 已填好。
+   *
+   * 读后立刻清空：这是一次性请求，不是"当前分组"状态（后者会让滚动与 tab
+   * 高亮重新互相拉扯，正是这页上一版回退掉的设计）。
+   */
+  $effect(() => {
+    const want = ui.settingsSection;
+    if (!want) return;
+    ui.settingsSection = null;
+    void tick().then(() => jumpTo(want));
+  });
 
   /**
    * 录制态**不放在组件里**：全局快捷键的 listener 也挂在 window 上，
@@ -491,6 +525,56 @@
         </div>
       </section>
 
+    <!--
+      曲库（2026-10-30）：原「扫描入库」独立页整体并入。
+
+      为什么拆掉那一页：beets 拆成独立「整理库」页之后（docs/48），那一页
+      只剩"本应用的曲库怎么进来"一件事——一个侧栏一级席位换一条卡片，代价
+      太大。曲库目录本身是**配置**（跟"最近播放保留多久"同性质），归设置页。
+
+      与原来那一页的差别只有排版：不再有页面大标题与「曲库」小结，改用设置页
+      统一的 group-title；统计卡与卡片原样搬过来（`components/LibraryTools`
+      本组件一行引用即可，它自己不依赖页面壳）。
+    -->
+    <section class="settings-section" id="settings-library" bind:this={sectionEls.library}>
+      <h3 class="group-title">曲库</h3>
+
+      <!-- 统计卡：图标 + 大数字 + 标签。数字 tabular 不抖；图标用中性描边件，
+           不抢数字的戏。索引大小不是"音乐文件多大"，是 SQLite 文件自己的体积 -->
+      {#if stats}
+        <div class="lib-stats">
+          <div class="stat-card">
+            <span class="stat-icon"><ListMusic size={17} /></span>
+            <div class="stat-text"><b>{stats.tracks}</b><span>曲目</span></div>
+          </div>
+          <div class="stat-card">
+            <span class="stat-icon"><Disc3 size={17} /></span>
+            <div class="stat-text"><b>{stats.albums}</b><span>专辑</span></div>
+          </div>
+          <div class="stat-card">
+            <span class="stat-icon"><Mic2 size={17} /></span>
+            <div class="stat-text"><b>{stats.artists}</b><span>艺人</span></div>
+          </div>
+          <div class="stat-card">
+            <span class="stat-icon"><Clock3 size={17} /></span>
+            <div class="stat-text"><b>{formatDurationLong(stats.totalDurationMs)}</b><span>总时长</span></div>
+          </div>
+          <div class="stat-card">
+            <span class="stat-icon"><Database size={17} /></span>
+            <div class="stat-text"><b>{formatBytes(stats.dbBytes)}</b><span>索引大小</span></div>
+          </div>
+          {#if stats.missingLocations > 0}
+            <div class="stat-card warn">
+              <span class="stat-icon"><TriangleAlert size={17} /></span>
+              <div class="stat-text"><b>{stats.missingLocations}</b><span>位置缺失</span></div>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      <LibraryTools />
+    </section>
+
     <section class="settings-section" bind:this={sectionEls.system}>
       <h3 class="group-title">系统</h3>
       <div class="setting-row">
@@ -695,6 +779,69 @@
 
   .settings-section:first-child .group-title {
     margin-top: 4px;
+  }
+
+  /* 统计卡（2026-10-28 七轮拍板：放大字号 + 图标 + 卡片感，随「扫描入库」
+     页并入设置页时原样搬来）：左侧图标座（accent 弱底色圆角方块），右侧
+     大数字 + 小标签竖排。
+
+     为什么用 grid 而不是原来那条 flex-wrap：设置列只有 720 宽，五张卡按
+     内容宽度排会折成"4 + 1"——"索引大小"孤零零占一行，像布局塌了。等宽
+     网格下是 3 + 2，每张卡同宽、左缘成列，看着是有意的两行。minmax(180px)
+     让窄窗口自动降到两列，不用再写断点。 */
+  .lib-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin: 12px 0 14px;
+  }
+
+  .stat-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 18px 12px 14px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    min-width: 118px;
+  }
+
+  .stat-icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent-text);
+  }
+
+  .stat-card.warn .stat-icon {
+    background: color-mix(in srgb, var(--warn) 16%, transparent);
+    color: var(--warn);
+  }
+
+  .stat-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .stat-text b {
+    font-size: 21px;
+    font-weight: 400; /* 用户拍板：数字不加粗，靠字号本身立住 */
+    line-height: 1.15;
+    color: var(--text-1);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .stat-text span {
+    font-size: 11.5px;
+    color: var(--text-2);
   }
 
   /* 数据目录路径：等宽 + 超长省略（悬停 title 给全路径） */

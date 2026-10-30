@@ -135,10 +135,12 @@
   </section>
 
   <!-- 缺失警告（2026-10-28：三项统计入口撤销后唯一保留的统计位——
-       它不是导航是告警，点了去扫描入库页处理） -->
+       它不是导航是告警，点了去处理。2026-10-30：处理的地方从「扫描入库」页
+       变成设置页的「曲库」组，所以走 `nav.settingsAt` 而不是普通 `go`——
+       落地要直接滚到那一组，别让人在设置页顶部自己找） -->
   {#if library.stats && library.stats.missingLocations > 0}
-    <button class="stat-warn" onclick={() => nav.go({ kind: 'page', page: 'tools' })}>
-      {library.stats.missingLocations} 个位置缺失，去「扫描入库」查看
+    <button class="stat-warn" onclick={() => nav.settingsAt('library')}>
+      {library.stats.missingLocations} 个位置缺失，去「设置 → 曲库」查看
     </button>
   {/if}
 

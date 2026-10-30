@@ -16,7 +16,7 @@ import { readLook } from '../lib/look';
 import { notify } from './notify.svelte';
 
 /**
- * 一级路由。**12 值**，每个值对应 `App.svelte` 里的一个分支（docs/24 §3.2）。
+ * 一级路由。**11 值**，每个值对应 `App.svelte` 里的一个分支（docs/24 §3.2）。
  *
  * 2026-10-26 B4-1 拆页：此前是 `home | nowPlaying | radio | settings` 四个值，
  * 六个列表视图全都寄居在 `home` 上，靠 `libraryDetail: boolean` + `view` 两个
@@ -46,6 +46,11 @@ import { notify } from './notify.svelte';
  * 2026-10-26 docs/29 批 A 加 `tools`：侧栏第七项「扫描入库」（扫描/beets
  * 任务 + 日志诊断从设置页拆出，成为独立路由页——任务是长时跑的，
  * 值得一个可以停留、可以刷新、可以分享位置的一级入口）。
+ *
+ * 2026-10-30 `tools` 退役：beets 搬成独立「整理库」页（docs/48）之后，那一页
+ * 只剩"本应用的曲库怎么进来"——一条目录卡片撑不起一个一级席位，于是整体
+ * 并入设置页的「曲库」组（`SettingsPanel`）。旧 UiState 落着 `tools` 的由
+ * `restore()` 换算成 `settings`，不留空路由。
  */
 export type AppPage =
   | 'home'
@@ -58,9 +63,23 @@ export type AppPage =
   | 'search'
   | 'nowPlaying'
   | 'settings'
-  | 'tools'
   | 'beets'
   | 'radio';
+
+/**
+ * 设置页的分组 id。
+ *
+ * 定义在 store 而不是 `SettingsPanel` 里：`nav.settingsAt()` 要能指定"滚到
+ * 哪一组"（曲库告警 → 曲库组），而导航层不该 import 一个组件。`SettingsPanel`
+ * 直接拿这个类型当自己的 `Section`。
+ */
+export type SettingsSection =
+  | 'appearance'
+  | 'playback'
+  | 'library'
+  | 'system'
+  | 'shortcuts'
+  | 'about';
 
 /** 哪些路由是"列表页"（共用 `ListStore` 的查询与虚拟列表） */
 export function isListPage(page: AppPage): boolean {
@@ -101,6 +120,19 @@ class UiStore {
    * 关闭时由调用方清空选择集。
    */
   batchMode = $state(false);
+
+  /**
+   * 一次性跳转请求：设置页的哪个分组该滚到视野里（`nav.settingsAt()` 写入，
+   * `SettingsPanel` 消费后立刻清空）。
+   *
+   * 存在的理由：设置页是**单页平铺 + tab 跳转**，分组不是路由。曲库页的
+   * 「位置缺失」告警要能把人送到「曲库」组（扫描入库页退役后那组在设置页里），
+   * 只切路由的话人会落在「外观」组顶部，还得自己找 —— 那等于没送到。
+   *
+   * 用一次性请求而不是"当前分组"状态：分组高亮只跟点击走（见 SettingsPanel
+   * 的说明），把它变成持久状态会让滚动与高亮重新开始互相拉扯。
+   */
+  settingsSection = $state<SettingsSection | null>(null);
 
   /**
    * 当前列表视图（`list.query()` 用它算 `source`）。
@@ -241,10 +273,19 @@ class UiStore {
     this.artistId = data.artistId ?? null;
     this.albumId = data.albumId ?? null;
 
-    // docs/28：recent/mostPlayed 单页退役，旧文件落在这两个值上时换算成曲库
-    //（恢复成"最近播放"没有意义——那个页面已经不存在了）
-    const RETIRED_PAGES: ReadonlySet<string> = new Set(['recent', 'mostPlayed']);
-    const rawPage = data.page && RETIRED_PAGES.has(data.page) ? 'library' : data.page;
+    // 退役的一级路由换算：
+    // - docs/28：recent/mostPlayed 单页退役，旧文件落在这两个值上时换算成曲库
+    //   （恢复成"最近播放"没有意义——那个页面已经不存在了）
+    // - 2026-10-30：`tools`（扫描入库页）并入设置页「曲库」组，落在 settings。
+    //   不换算的话 `AppPage` 已经不收这个值，`restore()` 的强制转型会把
+    //   一个不存在的路由写进 `ui.page`，症状是侧栏零高亮 + 整页落到 `{:else}`
+    //   （正好还是设置页，所以看起来"没错"，实际路由是脏的、还会被写回磁盘）。
+    const RETIRED_PAGES: ReadonlyMap<string, AppPage> = new Map([
+      ['recent', 'library'],
+      ['mostPlayed', 'library'],
+      ['tools', 'settings'],
+    ]);
+    const rawPage = data.page ? (RETIRED_PAGES.get(data.page) ?? data.page) : data.page;
 
     if (rawPage && rawPage !== ('home' as string)) {
       // 新形状（或旧形状的一级页）
@@ -260,9 +301,10 @@ class UiStore {
       this.playlistId = null;
     }
 
-    // 启动就落在设置页/扫描入库页时**不会**经过 openPage，诊断块会一直空着
+    // 启动就落在设置页时**不会**经过 openPage，诊断块会一直空着
     // （显示"正在读取…"直到用户手动点刷新）。这里补一次。
-    if (this.page === 'settings' || this.page === 'tools') void this.refreshDiagnostics();
+    // 2026-10-30：曲库组并入设置页后，"读诊断的两页"只剩设置一页。
+    if (this.page === 'settings') void this.refreshDiagnostics();
   }
 
   /* ---------------- 一级页面与队列抽屉 ---------------- */
@@ -273,14 +315,14 @@ class UiStore {
     this.queueOpen = false;
     this.eqOpen = false;
     this.scheduleUiSave();
-    // 设置页与扫描入库页共用同一份诊断/beets 数据（docs/29 批 A 拆页）。
+    // 进设置页要重拉诊断/beets 状态：设置页的「关于」与「整理库」相关提示都读它。
     //
-    // **此前这里只写了 settings**：从侧栏点进「扫描入库」时诊断区永远停在
-    // "正在读取…"、beets 块永远停在"正在检测…"，只有手动点一下刷新才出来
-    // ——批 A 的 e2e 只断言了目录 textarea 与设置页分区，没看这两块内容，
-    // 所以漏掉了。批 D 的「曲库维护」直接依赖 beets 状态（库根/是否可用），
-    // 这个洞必须一起补上。
-    if (page === 'settings' || page === 'tools') {
+    // 历史坑（docs/29 批 A）：这里原先只写了 settings，从侧栏点进「扫描入库」时
+    // 诊断区永远停在"正在读取…"，只有手动点一下刷新才出来——当时的 e2e 只断言了
+    // 目录结构，没看这两块内容，所以漏掉了。那条路由 2026-10-30 已退役并入设置页，
+    // 判断随之收成一条；但**这个赋值语义要留着**（进页面先清空再拉，别让上一份
+    // 陈旧诊断顶着"已加载"的样子）。
+    if (page === 'settings') {
       this.diagnostics = null;
       void this.refreshDiagnostics();
     }

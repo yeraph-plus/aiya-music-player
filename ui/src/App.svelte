@@ -28,7 +28,6 @@
   import NowPlayingView from './views/NowPlayingView.svelte';
   import RadioView from './views/RadioView.svelte';
   import SettingsView from './views/SettingsView.svelte';
-  import ScanToolsView from './views/ScanToolsView.svelte';
   import { boot } from './lib/boot';
   import { onKeydown } from './lib/keyboard';
   import { createMediaSession, type MediaSessionBridge } from './lib/media-session';
@@ -143,8 +142,6 @@
       <NowPlayingView />
     {:else if ui.page === 'radio'}
       <RadioView />
-    {:else if ui.page === 'tools'}
-      <ScanToolsView />
     {:else if ui.page === 'beets'}
       <BeetsView />
     {:else}

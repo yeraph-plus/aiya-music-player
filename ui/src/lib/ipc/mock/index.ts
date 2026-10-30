@@ -294,10 +294,11 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
  * `listen` 的异步语义一致，`events.ts` 的 sub 不用改。
  */
 export function installMock(
-  options: { failCommands?: string[]; beetsFound?: boolean } = {},
+  options: { failCommands?: string[]; beetsFound?: boolean; missingLocations?: number } = {},
 ): () => void {
   const mock = new MockBackend();
   if (options.beetsFound !== undefined) mock.beetsFound = options.beetsFound;
+  if (options.missingLocations !== undefined) mock.missingLocations = options.missingLocations;
   const failing = new Set(options.failCommands ?? []);
 
   const transport: Transport = {

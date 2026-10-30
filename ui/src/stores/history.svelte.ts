@@ -30,8 +30,8 @@ class HistoryStore {
     }
     notify.showToast('播放历史已清空');
     await library.loadStats();
-    // 设置页/扫描入库页开着：诊断块里的历史相关数字要跟着变（docs/29 批 A）
-    if (ui.page === 'settings' || ui.page === 'tools') await ui.refreshDiagnostics();
+    // 设置页的「关于」诊断块里也展示历史相关数字，开着就一起刷（docs/29 批 A）
+    if (ui.page === 'settings') await ui.refreshDiagnostics();
   }
 }
 
