@@ -179,8 +179,18 @@ svelte-check + 6 个 Rust/Python smoke），所以 docs/46 那轮改了侧栏与
 第 4 条值得单独记：**一条恒真的断言比没有断言更贵**——它让"这个功能没被验证"  
 看起来像"这个功能被验证过了"。
 
-> 建议（本次未做）：把 `npm --prefix ui run test:e2e` 加进 `verify`。代价是  
-> +1~2 分钟和一封 Edge，换来的是 UI 行为回归不再靠人想起来跑。
+> **已做（2026-10-30 晚）**：`npm --prefix ui run test:e2e` 进 `verify` 了。做法是
+> 先在根 `package.json` 补一个 `test:e2e`（`npm --prefix ui run test:e2e` 的转发，
+> README 早就按根命令写了，之前一直是文档对不上），再把 `npm run test:e2e` 插在
+> `test:all` 之后——`test:all` 末尾的 `build:ui` 刚出完 dist，e2e 紧跟其后，
+> UI 的三件事（类型检查 → 构建 → 行为）连着走。
+>
+> 代价比预估的小：e2e 自己那句 `vite build` 会再构建一次（约 10s），
+> 换的是"永远对着最新 dist 测"，不依赖前一步是否成功。整条 verify 因此 +1 分钟出头。
+>
+> 顺带修正了 `ci.yml` 顶部那句"与 verify 差异只有一处"——它其实少了
+> `check:fmt` 与 `smoke:lock / smoke:config / smoke:enrich`，只是从没写准过；
+> 现在照实列出来，补步骤另说。
 
 ### 6.3 新增的 Rust 单测
 

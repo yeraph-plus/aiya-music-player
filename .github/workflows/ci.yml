@@ -1,7 +1,11 @@
 # 常规校验（PR 与 push 到 main 都跑）
 #
-# 内容与本地 `npm run verify` **刻意不完全相同**，差异只有一处：
-# 这里不跑 smoke:beets / smoke:maint（它们要真实 beets 环境，见 beets job）。
+# 与本地 `npm run verify` 在"UI 行为也要被门禁看着"这一层已对齐（e2e 本来就在
+# 这里，2026-10-30 起本地 verify 也纳入了），但**不是逐条相同**：
+#   · 两个 job 合起来 = verify 的 test:all + clippy + gen:types:check + e2e
+#     + smoke:beets / smoke:maint / smoke:proto
+#   · 本地 verify 还有 `check:fmt` 与 `smoke:lock / smoke:config / smoke:enrich`，
+#     这里没有对应步骤 —— 已知缺口，补步骤是另一件事（2026-10-30 记下）。
 #
 # 为什么是 windows-latest 而不是 ubuntu：
 #   · 本体只在 Windows 上发布（WASAPI / NSIS），跨平台绿灯没有意义
