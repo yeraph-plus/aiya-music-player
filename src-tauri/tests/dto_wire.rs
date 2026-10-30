@@ -45,6 +45,8 @@ fn library_stats_sends_numbers_not_strings() {
         locations: 50_000,
         missing_locations: 0,
         total_duration_ms: 9_000_000,
+        // 曲目文件字节总和（不是索引体积）：9000 秒 × 320kbps ≈ 360MB
+        total_bytes: 377_487_360,
         db_bytes: 42,
         schema_version: 1,
     };
@@ -58,6 +60,7 @@ fn library_stats_sends_numbers_not_strings() {
             "locations",
             "missingLocations",
             "totalDurationMs",
+            "totalBytes",
             "dbBytes",
             "schemaVersion",
         ])
@@ -65,6 +68,7 @@ fn library_stats_sends_numbers_not_strings() {
     // JSON number（不是字符串、不是 bigint 的字符串化）
     assert!(v["totalDurationMs"].is_number(), "时间必须是 number");
     assert!(v["missingLocations"].is_number());
+    assert!(v["totalBytes"].is_number(), "文件容量必须是 number");
 }
 
 #[test]

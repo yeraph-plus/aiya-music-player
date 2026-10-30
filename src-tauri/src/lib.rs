@@ -1732,6 +1732,10 @@ fn library_stats(state: State<'_, AppState>) -> Result<dto::LibraryStats, dto::A
                     "SELECT COUNT(*) FROM tracks WHERE availability <> 'online'",
                 ),
                 total_duration_ms: count("SELECT COALESCE(SUM(duration_ms),0) FROM tracks"),
+                // 文件容量：曲目文件字节之和（DB 存 unix 秒、size 是扫描时的
+                // meta.len()）。离线曲目仍按入库时的大小计入——它回答的是
+                // "这个库装了多少音乐"，不是"现在盘上还剩多少"。
+                total_bytes: count("SELECT COALESCE(SUM(size_bytes),0) FROM tracks"),
                 db_bytes,
                 schema_version: conn
                     .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))

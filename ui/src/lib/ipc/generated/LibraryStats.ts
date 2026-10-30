@@ -11,4 +11,13 @@ locations: number,
 /**
  * 位置缺失数（availability ≠ online）
  */
-missingLocations: number, totalDurationMs: number, dbBytes: number, schemaVersion: number, };
+missingLocations: number, totalDurationMs: number, 
+/**
+ * 曲目文件的字节总和（`tracks.size_bytes` 之和）。
+ *
+ * 与 `db_bytes` 是两回事：那是索引（SQLite 文件）自己的体积，这是
+ * 磁盘上音乐加起来多大。扫描时顺手拿到的 `meta.len()`，不需要额外
+ * stat 文件——但**离线/缺失的曲目仍计入**（记的是上次入库时的大小），
+ * 所以它是"库里有多少音乐"而不是"现在还能放多少"。
+ */
+totalBytes: number, dbBytes: number, schemaVersion: number, };

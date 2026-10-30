@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte';
-  import { Clock3, Database, Disc3, ListMusic, Mic2, TriangleAlert } from '@lucide/svelte';
+  import { Clock3, Database, Disc3, HardDrive, ListMusic, Mic2, TriangleAlert } from '@lucide/svelte';
   import type {
     AppSettings,
     AmbientScheme,
@@ -68,16 +68,18 @@
    * 从根上不存在。
    *
    * 2026-10-30：`library` 是新加的一组（原「扫描入库」页整体并入，见下方
-   * 该 section 的注释）。排序按"内容 → 应用"：外观/播放/曲库是你在听什么
-   * 怎么看，系统/快捷键/关于是这台机器与应用本身。
+   * 该 section 的注释）。排序按"数据 → 内容 → 应用"：曲库在最前（它是这一页
+   * 里唯一有**实际内容**的组——目录、扫描、统计都在这里，用户进设置十次有
+   * 八次是为了看它）；之后才是外观/播放这类偏好，系统/快捷键/关于收尾。
+   * 用户当天拍板："曲库这一级提到设置页面最前"。
    */
   type Section = SettingsSection;
-  let active = $state<Section>('appearance');
+  let active = $state<Section>('library');
 
   const SECTIONS: Array<{ id: Section; label: string }> = [
+    { id: 'library', label: '曲库' },
     { id: 'appearance', label: '外观' },
     { id: 'playback', label: '播放' },
-    { id: 'library', label: '曲库' },
     { id: 'system', label: '系统' },
     { id: 'shortcuts', label: '快捷键' },
     { id: 'about', label: '关于' },
@@ -85,9 +87,9 @@
 
   /** 各区块根元素（bind:this 填充），tab 跳转的目标 */
   const sectionEls: Record<Section, HTMLElement | null> = {
+    library: null,
     appearance: null,
     playback: null,
-    library: null,
     system: null,
     shortcuts: null,
     about: null,
@@ -272,9 +274,71 @@
     </div>
   </div>
 
-  <!-- 内容容器自己滚：头部（标题+tab）固定。五个区块全部平铺渲染，
-       tab 点击只 scrollIntoView 跳转（2026-10-28 用户拍板改回单页） -->
+  <!-- 内容容器自己滚：头部（标题+tab）固定。六个区块全部平铺渲染，
+       tab 点击只 scrollIntoView 跳转（2026-10-28 用户拍板改回单页）。
+       顺序：曲库在最前（2026-10-30 用户拍板），其余按"内容 → 应用"。 -->
   <div class="settings-scroll">
+    <!--
+      曲库（2026-10-30）：原「扫描入库」独立页整体并入，**并提到六组的第一位**。
+
+      为什么拆掉那一页：beets 拆成独立「整理库」页之后（docs/48），那一页
+      只剩"本应用的曲库怎么进来"一件事——一个侧栏一级席位换一条卡片，代价
+      太大。曲库目录本身是**配置**（跟"最近播放保留多久"同性质），归设置页。
+
+      为什么排第一：六组里只有这一组是"有内容"的（目录列表、扫描、执行状态、
+      统计），其余五组都是偏好开关。用户进设置，绝大多数时候是来管曲库的。
+
+      与原来那一页的差别只有排版：不再有页面大标题与「曲库」小结，改用设置页
+      统一的 group-title；统计卡与卡片原样搬过来（`components/LibraryTools`
+      本组件一行引用即可，它自己不依赖页面壳）。
+    -->
+    <section class="settings-section" id="settings-library" bind:this={sectionEls.library}>
+      <h3 class="group-title">曲库</h3>
+
+      <!-- 统计卡：图标 + 大数字 + 标签。数字 tabular 不抖；图标用中性描边件，
+           不抢数字的戏。六项正好铺满 3×2（五项时第二行只有两个，右边空一块，
+           看着像布局没做完）。索引大小与文件容量是两件事：前者是 SQLite 索引
+           自己的体积，后者是音乐文件加起来多大 -->
+      {#if stats}
+        <div class="lib-stats">
+          <div class="stat-card">
+            <span class="stat-icon"><ListMusic size={17} /></span>
+            <div class="stat-text"><b>{stats.tracks}</b><span>曲目</span></div>
+          </div>
+          <div class="stat-card">
+            <span class="stat-icon"><Disc3 size={17} /></span>
+            <div class="stat-text"><b>{stats.albums}</b><span>专辑</span></div>
+          </div>
+          <div class="stat-card">
+            <span class="stat-icon"><Mic2 size={17} /></span>
+            <div class="stat-text"><b>{stats.artists}</b><span>艺人</span></div>
+          </div>
+          <div class="stat-card">
+            <span class="stat-icon"><Clock3 size={17} /></span>
+            <div class="stat-text"><b>{formatDurationLong(stats.totalDurationMs)}</b><span>总时长</span></div>
+          </div>
+          <div class="stat-card">
+            <span class="stat-icon"><HardDrive size={17} /></span>
+            <div class="stat-text"><b>{formatBytes(stats.totalBytes)}</b><span>文件容量</span></div>
+          </div>
+          <div class="stat-card">
+            <span class="stat-icon"><Database size={17} /></span>
+            <div class="stat-text"><b>{formatBytes(stats.dbBytes)}</b><span>索引大小</span></div>
+          </div>
+          {#if stats.missingLocations > 0}
+            <div class="stat-card warn">
+              <span class="stat-icon"><TriangleAlert size={17} /></span>
+              <div class="stat-text"><b>{stats.missingLocations}</b><span>位置缺失</span></div>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      <!-- 卡片出血 16px：统计卡与目录卡自带 16px 水平内边距，与设置页内容列
+           （720 居中）叠加后，卡内文字比下方设置行左缘缩进 16px —— 整块看着
+           比页面窄一圈。用负 margin 抵消，卡内文字回到与设置行同一条左缘。 -->
+      <div class="lib-bleed"><LibraryTools /></div>
+    </section>
     <section class="settings-section" bind:this={sectionEls.appearance}>
       <h3 class="group-title">外观</h3>
       <div class="setting-row">
@@ -525,56 +589,6 @@
         </div>
       </section>
 
-    <!--
-      曲库（2026-10-30）：原「扫描入库」独立页整体并入。
-
-      为什么拆掉那一页：beets 拆成独立「整理库」页之后（docs/48），那一页
-      只剩"本应用的曲库怎么进来"一件事——一个侧栏一级席位换一条卡片，代价
-      太大。曲库目录本身是**配置**（跟"最近播放保留多久"同性质），归设置页。
-
-      与原来那一页的差别只有排版：不再有页面大标题与「曲库」小结，改用设置页
-      统一的 group-title；统计卡与卡片原样搬过来（`components/LibraryTools`
-      本组件一行引用即可，它自己不依赖页面壳）。
-    -->
-    <section class="settings-section" id="settings-library" bind:this={sectionEls.library}>
-      <h3 class="group-title">曲库</h3>
-
-      <!-- 统计卡：图标 + 大数字 + 标签。数字 tabular 不抖；图标用中性描边件，
-           不抢数字的戏。索引大小不是"音乐文件多大"，是 SQLite 文件自己的体积 -->
-      {#if stats}
-        <div class="lib-stats">
-          <div class="stat-card">
-            <span class="stat-icon"><ListMusic size={17} /></span>
-            <div class="stat-text"><b>{stats.tracks}</b><span>曲目</span></div>
-          </div>
-          <div class="stat-card">
-            <span class="stat-icon"><Disc3 size={17} /></span>
-            <div class="stat-text"><b>{stats.albums}</b><span>专辑</span></div>
-          </div>
-          <div class="stat-card">
-            <span class="stat-icon"><Mic2 size={17} /></span>
-            <div class="stat-text"><b>{stats.artists}</b><span>艺人</span></div>
-          </div>
-          <div class="stat-card">
-            <span class="stat-icon"><Clock3 size={17} /></span>
-            <div class="stat-text"><b>{formatDurationLong(stats.totalDurationMs)}</b><span>总时长</span></div>
-          </div>
-          <div class="stat-card">
-            <span class="stat-icon"><Database size={17} /></span>
-            <div class="stat-text"><b>{formatBytes(stats.dbBytes)}</b><span>索引大小</span></div>
-          </div>
-          {#if stats.missingLocations > 0}
-            <div class="stat-card warn">
-              <span class="stat-icon"><TriangleAlert size={17} /></span>
-              <div class="stat-text"><b>{stats.missingLocations}</b><span>位置缺失</span></div>
-            </div>
-          {/if}
-        </div>
-      {/if}
-
-      <LibraryTools />
-    </section>
-
     <section class="settings-section" bind:this={sectionEls.system}>
       <h3 class="group-title">系统</h3>
       <div class="setting-row">
@@ -788,12 +802,23 @@
      为什么用 grid 而不是原来那条 flex-wrap：设置列只有 720 宽，五张卡按
      内容宽度排会折成"4 + 1"——"索引大小"孤零零占一行，像布局塌了。等宽
      网格下是 3 + 2，每张卡同宽、左缘成列，看着是有意的两行。minmax(180px)
-     让窄窗口自动降到两列，不用再写断点。 */
+     让窄窗口自动降到两列，不用再写断点。
+
+     2026-10-30 补第六项（文件容量）后正好 3 × 2 铺满，第二行不再右侧空一块。
+     左右 -17px 是"出血"：卡片自带 1px 边框 + 16px 内边距，与内容列叠加后
+     卡内文字比下方设置行缩进 17px，整块看着比页面窄一圈；负 margin 把卡片
+     外缘推出去，卡内文字回到与设置行同一条左缘（实测 388 = 388）。 */
   .lib-stats {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 12px;
-    margin: 12px 0 14px;
+    margin: 12px -17px 14px;
+  }
+
+  /* 目录卡片同款出血（`LibraryTools` 根元素 `.library-tools` 在全局样式表里，
+     这里包一层才能给 scoped 规则） */
+  .lib-bleed {
+    margin: 0 -17px;
   }
 
   .stat-card {

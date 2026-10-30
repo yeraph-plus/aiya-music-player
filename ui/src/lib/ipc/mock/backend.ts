@@ -412,14 +412,21 @@ export class MockBackend {
   libraryStats(): LibraryStats {
     const albums = new Set(this.tracks.map((t) => t.albumId));
     const artists = new Set(this.tracks.map((t) => t.artistId));
+    const durationMs = this.tracks.reduce((s, t) => s + (t.durationMs ?? 0), 0);
     return {
       tracks: this.tracks.length,
       albums: albums.size,
       artists: artists.size,
       locations: this.tracks.length,
       missingLocations: this.missingLocations,
-      totalDurationMs: this.tracks.reduce((s, t) => s + (t.durationMs ?? 0), 0),
-      dbBytes: 0,
+      totalDurationMs: durationMs,
+      // 假库不记文件大小（TrackDetail 也不带 sizeBytes）：按 320kbps 折算了
+      // 一下——40 byte/ms。数值随曲库变化，截图里不会是一串 0，也不再需要
+      // 为这一个字段编一个固定常量。
+      totalBytes: Math.round(durationMs * 40),
+      // 索引体积原本固定 0：预览里"索引大小 0 B"看着像库里没东西（真实库
+      // 绝不可能是 0）。按每首约 1.6KB 估一个随曲库增长的数。
+      dbBytes: Math.round(this.tracks.length * 1.6 * 1024),
       schemaVersion: 2,
     };
   }

@@ -167,14 +167,16 @@ test('设置页：单页平铺 + tab 跳转定位 + 主题切换生效', async (
   await expect(page.locator('.main h1')).toHaveText('设置');
   await expect(page.locator('.main .ch-kicker')).toHaveCount(0);
 
-  // 六个 tab（2026-10-30：曲库组由「扫描入库」页并入），初始高亮第一组；
-  // 六个区块全部渲染（含小标题）。
+  // 六个 tab（2026-10-30：曲库组由「扫描入库」页并入，并提到第一位），
+  // 初始高亮第一组；六个区块全部渲染（含小标题）。
   // 语义是"滚动到某个区块"而不是"切换面板"→ nav + aria-current（同 content/Toolbar）
   const tabs = page.locator('.settings-tabs .settings-tab');
   await expect(tabs).toHaveCount(6);
+  await expect(tabs.first()).toHaveText('曲库');
   await expect(tabs.first()).toHaveAttribute('aria-current', 'true');
   await expect(page.locator('.group-title')).toHaveCount(6);
-  await expect(page.locator('.group-title').first()).toHaveText('外观');
+  // 顺序是拍板项：曲库（唯一有实际内容的组）排在全部偏好开关之前
+  await expect(page.locator('.group-title').first()).toHaveText('曲库');
 
   // 点「快捷键」→ 平滑滚动跳转，内容本就全渲染（无条件切换）
   const shortcutTab = tabs.filter({ hasText: '快捷键' });
