@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>spectrum bench</title>
+    <style>
+      :root {
+        --sidebar-w: 240px;
+        --dock-h: 88px;
+        --ambient-bg:
+          radial-gradient(1100px 720px at 12% -12%, rgba(43, 84, 176, 0.55), transparent 60%),
+          radial-gradient(950px 640px at 88% 6%, rgba(14, 116, 110, 0.4), transparent 55%),
+          radial-gradient(1000px 820px at 55% 115%, rgba(84, 48, 190, 0.42), transparent 62%),
+          linear-gradient(168deg, #0c111e 0%, #0e1626 55%, #0a0e19 100%);
+        --accent: #7c9cff;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: #06080c; overflow: hidden; }
+      .app {
+        position: relative;
+        height: 100vh;
+        display: grid;
+        grid-template-columns: var(--sidebar-w) 1fr;
+        grid-template-rows: 1fr var(--dock-h);
+      }
+      .bg { position: absolute; inset: 0; background: var(--ambient-bg); z-index: 0; }
+      #gl, #cv {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 1;
+        pointer-events: none;
+      }
+      .sidebar, .dock {
+        position: relative;
+        z-index: 2;
+      }
+      .sidebar {
+        grid-column: 1;
+        grid-row: 1;
+        background: rgba(12, 14, 18, 0.72);
+      }
+      .main { grid-column: 2; grid-row: 1; position: relative; z-index: 2; }
+      .dock {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        background: rgba(11, 13, 17, 0.9);
+      }
+      /* 整页覆盖层（正在播放页"盖住侧栏"的形态）：面积最大的那块玻璃 */
+      .overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 5;
+        display: none;
+        background: rgba(8, 10, 16, 0.42);
+        backdrop-filter: blur(30px) saturate(170%);
+        -webkit-backdrop-filter: blur(30px) saturate(170%);
+      }
+      .overlay .big {
+        position: absolute;
+        left: 72px;
+        top: 96px;
+        width: 320px;
+        height: 320px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .show-overlay .overlay { display: block; }
+      /* 真毛玻璃：backdrop-filter 在**面**上，模糊的是它身后的所有内容（含动着的频谱） */
+      .glass .sidebar {
+        background: rgba(12, 14, 18, 0.42);
+        backdrop-filter: blur(24px) saturate(180%);
+        -webkit-backdrop-filter: blur(24px) saturate(180%);
+      }
+      .glass .dock {
+        background: rgba(11, 13, 17, 0.5);
+        backdrop-filter: blur(28px) saturate(170%);
+        -webkit-backdrop-filter: blur(28px) saturate(170%);
+      }
+      #hud {
+        position: absolute;
+        left: 250px;
+        top: 8px;
+        z-index: 9;
+        font: 12px/1.5 ui-monospace, Consolas, monospace;
+        color: #cfe0ff;
+        background: rgba(0, 0, 0, 0.5);
+        padding: 6px 10px;
+        border-radius: 6px;
+        white-space: pre;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app" id="app">
+      <div class="bg"></div>
+      <canvas id="cv" hidden></canvas>
+      <canvas id="gl" hidden></canvas>
+      <aside class="sidebar"></aside>
+      <div class="main"></div>
+      <div class="dock"></div>
+      <div class="overlay"><div class="big"></div></div>
+      <div id="hud">booting…</div>
+    </div>
+
+    <script type="importmap">
+      { "imports": { "three": "/ui/node_modules/three/build/three.module.js" } }
+    </script>
+    <script type="module">
+      import * as THREE from 'three';
+
+      const params = new URLSearchParams(location.search);
+      const scene = params.get('s') || 'off';
+      const DPR = Number(params.get('dpr') || 1);
+      const BANDS = 48;
+      const app = document.getElementById('app');
+      const hud = document.getElementById('hud');
+      if (scene.includes('glass')) app.classList.add('glass');
+      if (scene.includes('overlay')) app.classList.add('show-overlay');
+
+      /* ---------------- 假数据：48 带，随音乐起伏（与引擎无关，只求逐帧变化） ---------------- */
+      const bands = new Float32Array(BANDS);
+      const display = new Float32Array(BANDS);
+      function stepBands(nowMs) {
+        const t = nowMs / 1000;
+        for (let i = 0; i < BANDS; i += 1) {
+          // 低频强、高频弱，但整体落在 0.25–0.95，山脊能进入画面中部（贴近真实引擎分带）
+          const env = 1 - (i / BANDS) * 0.55;
+          const v =
+            0.55 +
+            0.26 * Math.sin(t * 1.9 + i * 0.31) +
+            0.13 * Math.sin(t * 5.3 + i * 1.7) +
+            0.06 * Math.sin(t * 11 + i);
+          bands[i] = Math.min(1, Math.max(0, v * env + 0.05));
+          display[i] += (bands[i] - display[i]) * 0.25;
+        }
+      }
+
+      /* ---------------- 场景 1：现状管线（canvas 2D，160×90 buffer + blur 14 放大） ---------------- */
+      const cv = document.getElementById('cv');
+      let off = null;
+      let octx = null;
+      function drawCanvasScene(ctx, w, h) {
+        const BW = 160;
+        const BH = 90;
+        if (!off) { off = document.createElement('canvas'); off.width = BW; off.height = BH; octx = off.getContext('2d'); }
+        octx.clearRect(0, 0, BW, BH);
+        const grad = octx.createLinearGradient(0, 0, 0, BH);
+        grad.addColorStop(0, '#7c9cff');
+        grad.addColorStop(1, 'transparent');
+        octx.fillStyle = grad;
+        const ridge = (ys, alpha) => {
+          const n = ys.length;
+          const px = (i) => (i / (n - 1)) * BW;
+          octx.globalAlpha = alpha;
+          octx.beginPath();
+          octx.moveTo(0, BH);
+          octx.lineTo(px(0), ys[0]);
+          for (let i = 1; i < n - 1; i += 1) {
+            octx.quadraticCurveTo(px(i), ys[i], (px(i) + px(i + 1)) / 2, (ys[i] + ys[i + 1]) / 2);
+          }
+          octx.quadraticCurveTo(px(n - 1), ys[n - 1], px(n - 1), ys[n - 1]);
+          octx.lineTo(BW, BH);
+          octx.closePath();
+          octx.fill();
+        };
+        const yOf = (v, amp) => BH - Math.max(1, Math.pow(v, 1.2) * amp * BH);
+        const near = Array.from(display, (v) => yOf(v, 0.82));
+        const far = Array.from(display, (_, i) => yOf(display[BANDS - 1 - i], 0.5));
+        ridge(far, 0.35);
+        ridge(near, 0.7);
+        octx.globalAlpha = 1;
+        ctx.filter = 'blur(14px)';
+        ctx.globalAlpha = 0.75;
+        ctx.drawImage(off, -w * 0.04, -h * 0.12, w * 1.08, h * 1.12);
+        ctx.filter = 'none';
+        ctx.globalAlpha = 1;
+      }
+
+      /* ---------------- 场景 2/3：three.js —— 流动渐变 + 山形 shader 光晕 ---------------- */
+      const VERT = /* glsl */ `
+        varying vec2 vUv;
+        void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+      `;
+
+      /* 山形：把 48 带当 heightfield，逐像素算到脊线的垂直距离 →
+         填充 / 描边 / 两层指数光晕都在同一个 fragment 里出，无离屏、无 blur pass。
+         带值走 48×1 的 float 纹理（不是 uniform 数组）：GLSL ES 1.00 不允许
+         对 uniform 数组做动态索引，纹理采样没有这个限制，且每帧上传成本可忽略。 */
+      const FRAG_RIDGE = /* glsl */ `
+        precision highp float;
+        uniform sampler2D uBands;
+        uniform vec3 uColor;
+        uniform float uTime;
+        varying vec2 vUv;
+
+        float sample4(float x) {
+          // 48 带存在 48×1 纹理里（NearestFilter，手动线性插值）
+          float xi = clamp(x, 0.0, ${BANDS - 1}.0);
+          float i0 = floor(xi);
+          float i1 = min(i0 + 1.0, ${BANDS - 1}.0);
+          float f = xi - i0;
+          float a = texture2D(uBands, vec2((i0 + 0.5) / ${BANDS}.0, 0.5)).r;
+          float b = texture2D(uBands, vec2((i1 + 0.5) / ${BANDS}.0, 0.5)).r;
+          return mix(a, b, f);
+        }
+
+        float band(float u, bool mirror) {
+          float x = clamp(u, 0.0, 1.0) * ${BANDS - 1}.0;
+          if (mirror) x = ${BANDS - 1}.0 - x;
+          return sample4(x);
+        }
+
+        void main() {
+          vec2 uv = vUv;
+          float near = pow(band(uv.x, false), 1.2) * 0.82;
+          float far  = pow(band(uv.x, true), 1.2) * 0.50 * 0.92;
+
+          // 远山 + 近山：各自填充 + 边缘光。系数压到合计 <1.2，避免 additive 过曝成白块
+          float acc = 0.0;
+          vec3 col = vec3(0.0);
+          for (int k = 0; k < 2; k++) {
+            float h = (k == 0) ? far : near;
+            float a = (k == 0) ? 0.35 : 0.70;
+            float d = uv.y - h;                              // >0 = 山体内部
+            float body = smoothstep(0.0, 0.06, d) * 0.32;    // 山体本身很淡（山是"光"不是实心块）
+            float rim  = exp(-abs(d) * 110.0) * 0.42;        // 脊线亮边
+            float glow = exp(-abs(d) * 22.0) * 0.26;         // 内层光晕
+            float halo = exp(-abs(d) * 6.0) * 0.12;          // 外层弥散（对应现状 blur 14px 的柔）
+            float g = body + rim + glow + halo;
+            acc = max(acc, g * a);
+          }
+          // 纵向渐变：峰顶浓、底边淡（山是"光"不是实心块）
+          float vfall = smoothstep(0.0, 1.0, uv.y);
+          col = uColor * acc * (0.35 + 0.65 * vfall);
+          gl_FragColor = vec4(col, acc);
+        }
+      `;
+
+      /* 慢速流动渐变：低频 fbm 噪声驱动的软光斑，叠在 CSS 渐变之上（additive） */
+      const FRAG_FLOW = /* glsl */ `
+        precision highp float;
+        uniform vec3 uA;
+        uniform vec3 uB;
+        uniform vec3 uC;
+        uniform float uTime;
+        varying vec2 vUv;
+
+        float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float noise(vec2 p) {
+          vec2 i = floor(p), f = fract(p);
+          vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x),
+                     mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+        }
+        float fbm(vec2 p) {
+          float s = 0.0, a = 0.5;
+          for (int i = 0; i < 3; i++) { s += a * noise(p); p *= 2.0; a *= 0.5; }
+          return s;
+        }
+
+        void main() {
+          vec2 uv = vUv;
+          float t = uTime * 0.06;              // 慢速：一分钟才走一个来回量级
+          float n1 = fbm(uv * 2.4 + vec2(t, -t * 0.7));
+          float n2 = fbm(uv * 1.7 - vec2(t * 0.8, t * 0.5) + 11.3);
+          vec3 col = uA * smoothstep(0.35, 0.95, n1) * 0.55
+                   + uB * smoothstep(0.40, 1.00, n2) * 0.40
+                   + uC * fbm(uv * 3.2 + t * 1.4) * 0.12;
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `;
+
+      const glCanvas = document.getElementById('gl');
+      let renderer = null;
+      let ridgeScene = null;
+      let flowScene = null;
+      let ridgeMat = null;
+      let flowMat = null;
+      let cam = null;
+      let bandData = null;
+      let bandTex = null;
+
+      function initGL() {
+        renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: false, alpha: true, powerPreference: 'high-performance' });
+        // 低分辨率 buffer：与现状同策略（166×90 → 放大靠合成器双线性）
+        renderer.setPixelRatio(1);
+        cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        const geo = new THREE.PlaneGeometry(2, 2);
+
+        bandData = new Float32Array(BANDS * 4);
+        bandTex = new THREE.DataTexture(bandData, BANDS, 1, THREE.RGBAFormat, THREE.FloatType);
+        bandTex.minFilter = THREE.NearestFilter;
+        bandTex.magFilter = THREE.NearestFilter;
+        bandTex.needsUpdate = true;
+
+        ridgeMat = new THREE.ShaderMaterial({
+          vertexShader: VERT,
+          fragmentShader: FRAG_RIDGE,
+          uniforms: { uBands: { value: bandTex }, uColor: { value: new THREE.Color(0x7c9cff) }, uTime: { value: 0 } },
+          transparent: true,
+          depthTest: false,
+          blending: THREE.AdditiveBlending,
+        });
+        flowMat = new THREE.ShaderMaterial({
+          vertexShader: VERT,
+          fragmentShader: FRAG_FLOW,
+          uniforms: {
+            uA: { value: new THREE.Color(0x2b54b0) },
+            uB: { value: new THREE.Color(0x0e746e) },
+            uC: { value: new THREE.Color(0x5430be) },
+            uTime: { value: 0 },
+          },
+          transparent: true,
+          depthTest: false,
+          blending: THREE.AdditiveBlending,
+        });
+
+        ridgeScene = new THREE.Scene();
+        ridgeScene.add(new THREE.Mesh(geo, ridgeMat));
+        flowScene = new THREE.Scene();
+        flowScene.add(new THREE.Mesh(geo, flowMat));
+        glCanvas.hidden = false;
+      }
+
+      /* ---------------- 渲染循环 ---------------- */
+      const SCALE = 0.5; // 低分辨率渲染系数（现状 160×90 ≈ 0.12；这里给 shader 多一点精度）
+      let ctx2d = null;
+
+      function resize() {
+        const w = innerWidth;
+        const h = innerHeight;
+        if (scene.startsWith('webgl')) {
+          renderer.setSize(Math.round(w * SCALE), Math.round(h * SCALE), false);
+        } else if (scene.startsWith('canvas')) {
+          if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+          cv.hidden = false;
+          ctx2d = cv.getContext('2d');
+        }
+      }
+
+      let lastT = performance.now();
+      function loop(now) {
+        stepBands(now);
+        const w = innerWidth;
+        const h = innerHeight;
+        if (scene.startsWith('webgl')) {
+          ridgeMat.uniforms.uTime.value = now / 1000;
+          flowMat.uniforms.uTime.value = now / 1000;
+          for (let i = 0; i < BANDS; i += 1) bandData[i * 4] = display[i];
+          bandTex.needsUpdate = true;
+          renderer.autoClear = false;
+          renderer.clear();
+          renderer.render(flowScene, cam);
+          renderer.render(ridgeScene, cam);
+        } else if (scene.startsWith('canvas')) {
+          ctx2d.setTransform(1, 0, 0, 1, 0, 0);
+          ctx2d.clearRect(0, 0, w, h);
+          drawCanvasScene(ctx2d, w, h);
+        }
+        lastT = now;
+        requestAnimationFrame(loop);
+      }
+
+      /* ---------------- 测量 ---------------- */
+      function gpu() {
+        try {
+          const c = document.createElement('canvas').getContext('webgl2') || document.createElement('canvas').getContext('webgl');
+          if (!c) return 'no-webgl';
+          const ext = c.getExtension('WEBGL_debug_renderer_info');
+          const r = ext ? c.getParameter(ext.UNMASKED_RENDERER_WEBGL) : c.getParameter(c.RENDERER);
+          return String(r);
+        } catch (e) {
+          return 'err:' + e.message;
+        }
+      }
+
+      function measure(ms) {
+        return new Promise((resolve) => {
+          const deltas = [];
+          let longTasks = 0;
+          let ltMs = 0;
+          let po = null;
+          try {
+            po = new PerformanceObserver((list) => {
+              for (const e of list.getEntries()) { longTasks += 1; ltMs += e.duration; }
+            });
+            po.observe({ entryTypes: ['longtask'] });
+          } catch {}
+          let last = performance.now();
+          const t0 = last;
+          const tick = (t) => {
+            deltas.push(t - last);
+            last = t;
+            if (t - t0 < ms) requestAnimationFrame(tick);
+            else {
+              po?.disconnect();
+              deltas.shift();
+              const s = [...deltas].sort((a, b) => a - b);
+              const q = (p) => s[Math.min(s.length - 1, Math.floor(p * s.length))];
+              resolve({
+                frames: s.length,
+                fps: +(1000 / (s.reduce((a, b) => a + b, 0) / s.length)).toFixed(1),
+                p50: +q(0.5).toFixed(2),
+                p95: +q(0.95).toFixed(2),
+                p99: +q(0.99).toFixed(2),
+                max: +s[s.length - 1].toFixed(2),
+                over25: s.filter((d) => d > 25).length,
+                over50: s.filter((d) => d > 50).length,
+                longTasks,
+                longMs: +ltMs.toFixed(0),
+              });
+            }
+          };
+          requestAnimationFrame(tick);
+        });
+      }
+
+      async function main() {
+        if (scene.startsWith('webgl')) initGL();
+        resize();
+        addEventListener('resize', resize);
+        requestAnimationFrame(loop);
+        await new Promise((r) => setTimeout(r, 1800)); // warmup：让 JIT / GPU 管线稳定
+        const r = await measure(Number(params.get("ms") || 5000));
+        const out = { scene, dpr: DPR, viewport: `${innerWidth}x${innerHeight}`, gpu: gpu(), ...r };
+        hud.textContent = JSON.stringify(out, null, 1);
+        window.__BENCH__ = out;
+      }
+
+      main();
+    </script>
+  </body>
+</html>

@@ -80,3 +80,7 @@ beets-tool/.runtime/
 # 是生成物不是源码——beets 三个 smoke 找不到真音源时会自己合成（见
 # beets-tool/tests/_testmusic.py），所以这目录不需要入库。
 /test-music/
+
+# 基准/验收截图：`tools/bench/*.mjs` 的产物，本机 84MB，只服务当场比对，
+# 结论已经写进 docs/46，不必入库。
+tools/bench/shots/
