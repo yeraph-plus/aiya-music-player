@@ -70,15 +70,24 @@
     userScrolledAt = Date.now();
   }
 
+  /** 把激活行滚到容器中线（offsetTop 相对滚动容器，不含 padding 之外的东西） */
+  function centerActive(behavior: ScrollBehavior): void {
+    if (!scroller) return;
+    const active = scroller.querySelector<HTMLElement>('.lyric-line.active');
+    if (!active) return;
+    const target = active.offsetTop - scroller.clientHeight / 2 + active.clientHeight / 2;
+    scroller.scrollTo({ top: Math.max(0, target), behavior });
+  }
+
   $effect(() => {
     const index = activeIndex;
     if (!scroller || index < 0) return;
     if (Date.now() - userScrolledAt < 2000) return;
-    const active = scroller.querySelector<HTMLElement>('.lyric-line.active');
-    if (!active) return;
-    const target =
-      active.offsetTop - scroller.clientHeight / 2 + active.clientHeight / 2;
-    scroller.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+    centerActive('smooth');
+    // 激活行字号是过渡出来的（15 → 30px，220ms）：第一次落点按旧高度算，
+    // 长高后中轴会偏上小半行。过渡结束再对一次中，才不会"滚过去了又歪着"。
+    const settle = setTimeout(() => centerActive('smooth'), 260);
+    return () => clearTimeout(settle);
   });
 </script>
 
@@ -134,6 +143,13 @@
               }}
               title="跳到这一句"
             >
+              <!-- 当前句的衬底（正在播放页：压在频谱上的一团渐隐暗雾）。
+                   做成**这一行自己的子元素**而不是容器中心的伪元素：切句、
+                   用户滚动、smooth 滚动中它都跟着这一行走，永远对得准。
+                   样式在 pages.css（`--np-scrim` 定义在 tokens.css）。 -->
+              {#if index === activeIndex}
+                <span class="lyric-halo" aria-hidden="true"></span>
+              {/if}
               {line.text || '·'}
             </button>
           {/each}

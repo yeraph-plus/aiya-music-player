@@ -13,6 +13,40 @@
   grid-template-columns: var(--sidebar-w) 1fr;
   grid-template-rows: var(--titlebar-h) 1fr var(--player-h);
   height: 100%;
+  /* 正在播放页的侧栏退出靠列宽塌缩实现（见文件尾 .np-open）：
+     grid-template-columns 在现代 Chromium 里可插值，180ms 够顺 */
+  transition: grid-template-columns 180ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app {
+    transition: none;
+  }
+}
+
+/* 正在播放页：**侧栏整体退出，主区铺满**（docs/46 §5.2 用户拍板）。
+ *
+ * 为什么不是"叠一层覆盖层"：背景是 .app 的全窗口绝对定位层，挡住它的只有
+ * 侧栏那块 82% 不透明的面板。侧栏一退，背景连续地铺满整个窗口——这一页零
+ * 额外背景绘制，也不用为它再开一块全屏玻璃。
+ *
+ * 三个属性缺一不可：
+ * - grid-template-columns: 0 —— 第一列塌掉，.main 自然吃满剩余宽度；
+ * - visibility: hidden —— 列宽 0 时子元素仍会溢出绘制，必须同时收掉；
+ * - opacity + pointer-events —— 让过渡期间不可见不可点（visibility 是离散
+ *   属性，会在过渡结束时才跳变，配合透明度才不会出现"半透明侧栏"）。
+ *
+ * 不用 display:none：那会打断 180ms 的列宽过渡（display 不可动画），
+ * 侧栏会"啪"一下消失。 */
+.app.np-open {
+  grid-template-columns: 0 1fr;
+}
+
+.app.np-open > .sidebar {
+  visibility: hidden;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* 背景四层（docs/25 §5 T4c app 化）：AmbientBackdrop 是 .app 的绝对定位

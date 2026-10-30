@@ -18,15 +18,13 @@ import type { DesiredOutput } from './ipc/generated/DesiredOutput';
 import type { ShortcutAction } from './shortcuts';
 
 export type ThemeMode = 'dark' | 'light';
-export type ListDensity = 'comfortable' | 'compact';
 
 /**
- * 背景方案（docs/25 §5 T4d）：固定 CSS 渐变 + 配套强调色，成套切换。
+ * 主题颜色：固定 CSS 渐变 + 配套强调色，成套切换。
  *
- * 取代「封面预模糊背景 + 封面主色提取」（用户拍板移除）：
- * 背景不再跟随曲目，而是用户选定的固定视觉身份。`aurora` 就是原默认
- * （主题自带蓝色强调 + 蓝青渐变），其余方案在 tokens.css 按
- * `html[data-ambient]` 定义各自的 `--ambient-bg` 与强调色三件套。
+ * 每个方案在 tokens.css 按 `html[data-ambient]` 定义各自的 `--ambient-bg`
+ * 与强调色三件套；`aurora` 是默认（主题自带蓝色 + 蓝青渐变）。
+ * 不跟随封面 —— 早期"封面预模糊 + 主色提取"的实现已移除，代码里不再有分支。
  */
 export type AmbientScheme = 'aurora' | 'ember' | 'meadow' | 'dusk' | 'mono';
 
@@ -40,39 +38,101 @@ export const AMBIENT_SCHEMES: Array<{ value: AmbientScheme; label: string }> = [
 ];
 
 /**
- * 频谱风格（2026-10-26 起）：**正在播放页**居中可视化的形态（docs/26 §3）。
+ * 频谱风格（2026-10-26 起）：**正在播放页**可视化的形态（docs/26 §3）。
  *
  * 取代旧 `spectrumEngine`（compact/pro）——它的唯一消费方（SpectrumPanel
  * 五形态）已随 T4a 页面改版移除，且 pro 需要渲染层 AudioNode、原生引擎
- * 架构（ADR-0006）下本就无法成立。背景环境光固定为山形，不受此项影响；
- * `off` = 正在播放页不画居中可视化（只剩背景环境光）。
+ * 架构（ADR-0006）下本就无法成立。
+ *
+ * 2026-10-30（docs/46 §6）：`'off'` 退役——它和 `npSpectrum=false` 是同一个
+ * 语义的第二个入口（历史叠加），现在由开关独占。旧配置里的 `'off'` 在
+ * `mergeSettings` 落回默认形态，不写回。
+ *
+ * 同日：`'wave'`（心电图）退役。它的"每带一个 R 波 + S 波"折线在低频段
+ * 会挤成一片尖刺、在高频段又拉成锯齿，看上去像算错了幅度；席位由
+ * `'ripple'` 接管。旧值 `'wave'` 在迁移里映射到 `'ripple'`。
+ *
+ * 同日定版：`'ripple'` 在页内只画**一条居中曲线**。它中途试过地形版
+ * （22 层等深线铺满下半屏），但那套和背景层 `bgSpectrumStyle='ripple'`
+ * 重复，页内又只覆盖内容区、水面会在画布边缘断掉，所以地形只留给背景，
+ * 页内降为单线主视觉。
  */
-export type SpectrumStyle = 'mirror' | 'radial' | 'wave' | 'off';
+export type SpectrumStyle = 'mirror' | 'radial' | 'ripple';
 
 /** 设置页与 NowPlayingSpectrum 共用的形态清单（id 顺序即展示顺序） */
 export const SPECTRUM_STYLES: Array<{ value: SpectrumStyle; label: string }> = [
   { value: 'mirror', label: '镜像曲线' },
   { value: 'radial', label: '径向环形' },
-  { value: 'wave', label: '心电图' },
-  { value: 'off', label: '关闭' },
+  { value: 'ripple', label: '中轴波纹' },
+];
+
+/**
+ * 背景山形的光晕档位（docs/46 §3.2）。
+ *
+ * 这是**审美**开关，不是性能开关：三档只改 shader 里描边/光晕的衰减系数，
+ * 成本差异可忽略。放出来是因为"柔雾（山脊不可辨）"与"光晕（脊线清晰）"
+ * 是互斥的观感，一次性拍板风险大，让用户自己定调更稳。
+ */
+export type RidgeGlow = 'soft' | 'balanced' | 'neon';
+
+export const RIDGE_GLOWS: Array<{ value: RidgeGlow; label: string }> = [
+  { value: 'soft', label: '柔雾' },
+  { value: 'balanced', label: '平衡' },
+  { value: 'neon', label: '锐光' },
+];
+
+/**
+ * 背景频谱的形态（2026-10-30，docs/46 P5 之二）。
+ *
+ * 与正在播放页的 `spectrumStyle` **刻意分开**：背景是常驻氛围，页内是
+ * 一次性聚焦的视觉，两者最优形态不同（背景要淡、要大、要能一直看；页内
+ * 可以更亮更密）。共用一个键会让用户为了页内试形态而改掉背景。
+ *
+ * - `ridge` 山形：闭合填充的环境光，边界柔和，最不抢内容（默认，保持
+ *   用户当前看到的样子）
+ * - `ripple` 波纹：一层层等深线铺向下半屏，结构感强，适合当"水面"看
+ */
+export type BgSpectrumStyle = 'ridge' | 'ripple';
+
+export const BG_SPECTRUM_STYLES: Array<{ value: BgSpectrumStyle; label: string }> = [
+  { value: 'ridge', label: '山形' },
+  { value: 'ripple', label: '波纹' },
 ];
 
 export interface AppSettings {
   theme: ThemeMode;
-  density: ListDensity;
-  /** 背景与强调色方案（固定渐变，不跟随封面） */
+  /** 主题颜色：固定渐变背景 + 配套强调色，成套切换（切换即换视觉身份） */
   ambient: AmbientScheme;
   /** 按 ReplayGain 调整音量（近似实现：换算到音量系数） */
   normalizeVolume: boolean;
   /**
-   * 频谱可视化。
+   * 全局 3D / WebGL 效果总闸（2026-10-30，docs/46 §6.2）。
    *
-   * 开启时渲染层会订阅引擎 tap（`spectrum_set(true)`）；关闭时
-   * 面板按钮整个不出现，引擎侧零开销。
+   * **能力闸门，不是收藏夹**：关掉时所有 WebGL 图层不渲染、不创建上下文，
+   * 背景退回静态 CSS 渐变；`bgSpectrum` / `npSpectrum` 的值保留但一律无效。
+   * 毛玻璃（`backdrop-filter`）是 CSS 合成，不归这个闸门管。
+   *
+   * 为什么需要它：WebGL 在软件光栅（远程桌面 / 禁用硬件加速 / 老核显）下
+   * 不可用，而这类机器没法在编译期识别。给用户一个能自己关的总闸，比
+   * 只靠自动探测更可靠（探测也会错）。
    */
-  spectrum: boolean;
-  /** 频谱风格：正在播放页居中可视化的形态（背景环境光固定山形，不受影响） */
+  glEffects: boolean;
+  /**
+   * 背景动态频谱（山形环境光）。
+   *
+   * 开启时背景层订阅引擎 tap（`spectrum_set(true)`）；关闭时只剩第 1 层
+   * 静态渐变，引擎侧零开销。它同时也是毛玻璃的成本开关：背景一静止，
+   * `backdrop-filter` 的结果就被合成器缓存，玻璃变一次性开销。
+   */
+  bgSpectrum: boolean;
+  /** 正在播放页频谱。与 `bgSpectrum` 各自独立（docs/46 §5：两个页面分开控制） */
+  npSpectrum: boolean;
+  /** 频谱形态：正在播放页可视化的形态（背景形态见 `bgSpectrumStyle`） */
   spectrumStyle: SpectrumStyle;
+  /** 背景频谱形态（山形 / 波纹）；与页内的 `spectrumStyle` 各自独立 */
+  bgSpectrumStyle: BgSpectrumStyle;
+  /** 背景山形光晕档位（审美开关，见 `RidgeGlow`；只对山形形态有效） */
+  ridgeGlow: RidgeGlow;
   /**
    * 系统媒体控制（Windows SMTC / 锁屏 / 蓝牙耳机）。
    *
@@ -117,13 +177,20 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
-  density: 'comfortable',
   ambient: 'aurora',
   normalizeVolume: false,
-  // 频谱默认关：不订阅 tap，保持最简出口路径
-  spectrum: false,
+  // 总闸默认开：关掉等于把这次重做的效果全废掉，不是"更省"的同义词。
+  // 真不支持的机器由 capability 探测兜底（探测失败照样能正常用）
+  glEffects: true,
+  // 背景/页面频谱默认关：不订阅 tap，保持最简出口路径
+  bgSpectrum: false,
+  npSpectrum: false,
   // 默认镜像曲线：T4h 用户拍板的首发形态
   spectrumStyle: 'mirror',
+  // 背景默认仍是山形：它是长期存在的那一层，不因为新增形态就替用户换掉
+  bgSpectrumStyle: 'ridge',
+  // 平衡档：柔雾（无光）与锐光之间的中点，有一点光效但不刺眼
+  ridgeGlow: 'balanced',
   mediaKeys: true,
   // 启动就出声容易吓到人，默认关闭；想开的人在设置里开
   autoplayOnStart: false,

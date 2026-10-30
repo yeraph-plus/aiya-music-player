@@ -14,7 +14,7 @@
   } from '../../lib/audio-format';
   import { formatTime, repeatLabel } from '../../lib/format';
   import { overlay } from '../../stores/overlay.svelte';
-  import { SlidersHorizontal } from '@lucide/svelte';
+  import { ChevronUp, SlidersHorizontal } from '@lucide/svelte';
   import Icon from '../Icon.svelte';
   import Cover from '../ui/Cover.svelte';
   import IconButton from '../ui/IconButton.svelte';
@@ -62,8 +62,10 @@
     onqueueopen: (open: boolean) => void;
     /** EQ 抽屉开合（与队列互斥，ui store 负责清理） */
     oneqopen: (open: boolean) => void;
-    /** 跳正在播放页（左侧歌曲区域的点击目标） */
+    /** 跳正在播放页 / 从正在播放页退回（左侧歌曲区域的点击目标，是个开关） */
     onshownowplaying: () => void;
+    /** 正在播放页是否开着：决定封面角标折线箭头的朝向 */
+    npOpen: boolean;
   }
 
   let {
@@ -83,6 +85,7 @@
     onqueueopen,
     oneqopen,
     onshownowplaying,
+    npOpen,
   }: Props = $props();
 
   /**
@@ -149,15 +152,35 @@
 
 <footer class="player">
   <!--
-    歌曲区域 = 正在播放页入口（docs/25 §6：侧栏席位撤了，入口搬到这里——
+    歌曲区域 = 正在播放页**开关**（docs/25 §6：侧栏席位撤了，入口搬到这里——
     "正在听什么"的信息本身就在这，点它是最近的路）。无曲目也允许点进
     空态页（页面自己会说明"未在播放"），不做 disabled。
+
+    封面上的折线箭头 2026-10-30 改成 **hover 提示**：原来是压在封面右下角的
+    16px 小徽章，静止时也在，等于把封面裁掉一个角、又小到看不清；现在整块
+    封面盖一层暗色蒙版 + 居中折线箭头，只在悬停/键盘聚焦时出现——朝上 =
+    可以展开，朝下 = 已经展开、再点收起。页内不再放返回键，退出走这里或顶栏返回。
   -->
-  <button class="now" onclick={onshownowplaying} title="正在播放" aria-label="正在播放详情">
-    <Cover
-      src={player?.current?.artworkId ? artworkUrl(player.current.artworkId, 96) : null}
-      size="md"
-    />
+  <button
+    class="now"
+    class:open={npOpen}
+    onclick={onshownowplaying}
+    title={npOpen ? '收起正在播放' : '打开正在播放'}
+    aria-label={npOpen ? '收起正在播放页' : '打开正在播放页'}
+    aria-expanded={npOpen}
+  >
+    <span class="now-cover">
+      <Cover
+        src={player?.current?.artworkId ? artworkUrl(player.current.artworkId, 96) : null}
+        size="md"
+      />
+      <span class="now-cue" aria-hidden="true">
+        <span class="now-cue-icon">
+          <ChevronUp size={20} strokeWidth={2.4} />
+        </span>
+      </span>
+    </span>
+
     <div class="meta">
       <div class="title" title={player?.current?.title ?? ''}>
         {player?.current?.title ?? '未在播放'}
@@ -375,6 +398,69 @@
 
   .now:hover {
     background: var(--surface-hover);
+  }
+
+  /* 封面外面只多一层定位盒，供 hover 提示蒙版精确铺满封面 */
+  .now-cover {
+    position: relative;
+    flex: none;
+    display: block;
+    border-radius: var(--radius-md);
+  }
+
+  /*
+   * 折线箭头 = 「还有一页」的提示，同时是开合状态的读数：
+   * 朝上（未展开，可以上去）/ 朝下（已展开，再点收起）。
+   *
+   * 形态是**盖住整块封面的暗色蒙版 + 居中箭头**（2026-10-30 用户拍板）：
+   * 原来是压角的 16px 小徽章，静止时也在，等于从封面裁掉一个角还看不清。
+   * 蒙版只在 hover / 键盘聚焦时淡入——48px 的封面经不起常驻装饰，
+   * 而"这块能不能点"本来就是要伸手的时候才需要回答的问题。
+   * 黑色蒙版 + 白箭头：落在任何封面上都是同一对比度，不跟主题走。
+   */
+  .now-cue {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    border-radius: var(--radius-md);
+    background: rgba(0, 0, 0, 0.5);
+    color: #fff;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--dur-fast) var(--ease);
+  }
+
+  .now:hover .now-cue,
+  .now:focus-visible .now-cue {
+    opacity: 1;
+  }
+
+  /* 箭头朝"将要去的那一侧"偏 1.5px：朝上 = 这页在上面。
+     图标包一层自己的 span，而不是选 `.now-cue svg`——svg 是 ChevronUp
+     组件渲染的，Svelte 的作用域规则选不到它（check 会报未使用选择器）。 */
+  .now-cue-icon {
+    display: grid;
+    place-items: center;
+    /* 箭头压在亮封面上也要立得住：极轻的一圈投影就够了，多了显脏 */
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
+    transition: transform var(--dur-fast) var(--ease);
+  }
+
+  .now:hover .now-cue-icon,
+  .now:focus-visible .now-cue-icon {
+    transform: translateY(-1.5px);
+  }
+
+  /* 已展开 = 箭头朝下（"按下去收起"）。旋转在前、位移在后，
+     位移跟着进旋转后的坐标系 → 展开时箭头向下偏，和朝向一致 */
+  .now.open .now-cue-icon {
+    transform: rotate(180deg);
+  }
+
+  .now.open:hover .now-cue-icon,
+  .now.open:focus-visible .now-cue-icon {
+    transform: rotate(180deg) translateY(-1.5px);
   }
 
   .now:focus-visible {

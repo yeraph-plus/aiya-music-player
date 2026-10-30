@@ -77,12 +77,11 @@
     );
   }
 
-  // 主题/密度/背景方案：写在 <html> 的 data 属性上，CSS 变量随之切换，无需重建组件。
+  // 主题/主题颜色：写在 <html> 的 data 属性上，CSS 变量随之切换，无需重建组件。
   // 同时写一份 localStorage 镜像，供下次启动首帧使用（否则浅色主题会先闪一帧深色）。
   $effect(() => {
     const look = {
       theme: ui.settings.theme,
-      density: ui.settings.density,
       ambient: ui.settings.ambient,
     };
     applyLook(look);

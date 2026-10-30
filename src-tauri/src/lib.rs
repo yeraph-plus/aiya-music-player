@@ -610,11 +610,13 @@ const ID_COLLECT_CAP: usize = 50_000;
 
 const DEFAULT_SETTINGS: &str = r#"{
   "theme": "dark",
-  "density": "comfortable",
   "ambient": "aurora",
   "normalizeVolume": false,
-  "spectrum": false,
+  "glEffects": true,
+  "bgSpectrum": false,
+  "npSpectrum": false,
   "spectrumStyle": "mirror",
+  "ridgeGlow": "balanced",
   "mediaKeys": true,
   "output": { "mode": "shared", "bufferMs": 0, "clock": "auto", "releaseOnPause": true },
   "autoplayOnStart": false,

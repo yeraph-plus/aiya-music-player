@@ -12,7 +12,7 @@
  *   `logDir` / `audioMode`）—— 少一个字段 TS 就红，这正是"生成类型当唯一来源"
  *   的好处。
  */
-import type { AppSettings, ListDensity, ThemeMode } from '../../settings';
+import type { AppSettings, ThemeMode } from '../../settings';
 import { DEFAULT_SETTINGS } from '../../settings';
 import type { TrackQuery, TrackQueryParsed } from '../../query';
 import { parseTrackQuery } from '../../query';
@@ -277,9 +277,8 @@ export class MockBackend {
   private playlistItems: Map<string, string[]> = new Map(this.playlistSeed.items);
   private settings: AppSettings = loadJson('aiya.settings', DEFAULT_SETTINGS);
   private uiState: UiState = loadJson('aiya.uiState', {} as UiState);
-  private look: { theme: ThemeMode; density: ListDensity } = loadJson('aiya.look', {
+  private look: { theme: ThemeMode } = loadJson('aiya.look', {
     theme: 'dark' as ThemeMode,
-    density: 'comfortable' as ListDensity,
   });
 
   private playerState: PlayerState = {
@@ -1408,7 +1407,7 @@ export class MockBackend {
 
   /* ---------------- app ---------------- */
 
-  get initialLook(): { theme: ThemeMode; density: ListDensity } {
+  get initialLook(): { theme: ThemeMode } {
     return this.look;
   }
 
@@ -1439,7 +1438,7 @@ export class MockBackend {
   setSettings(settings: AppSettings): AppSettings {
     this.settings = settings;
     saveJson('aiya.settings', settings);
-    const look = { theme: settings.theme, density: settings.density };
+    const look = { theme: settings.theme };
     this.look = look;
     saveJson('aiya.look', look);
     return this.settings;

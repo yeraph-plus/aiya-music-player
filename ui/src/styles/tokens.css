@@ -5,7 +5,7 @@
  *   尺寸  --space-* / --radius-* / --control-h / --row-h / 四区尺寸
  *   字体  --font-ui / --font-mono / --fs-*
  *
- * 两套主题只切 `html[data-theme]`，密度只切 `html[data-density]`，组件里零分支。
+ * 两套主题只切 `html[data-theme]`，主题颜色只切 `html[data-ambient]`，组件里零分支。
  * reset 不在这里（在 base.css），布局席位不在里（在 layout.css）—— 按注释找变量的人
  * 不该撞见 `*{box-sizing}`。
  */
@@ -51,6 +51,12 @@
   --thumb-hover: rgba(255, 255, 255, 0.24);
   --shadow: rgba(0, 0, 0, 0.45);
   --backdrop: rgba(4, 6, 10, 0.55);
+  /* 正在播放页当前句的衬底色（渐隐椭圆的中心值，压住频谱让 30px 的当前句
+   * 始终读得清）。刻意不跟 accent：这是"降亮度"，不是"加颜色"。
+   * 2026-10-30 试过翻成白光（提亮托底），最终定版回到黑色：白色那版在
+   * 深色背景上更像一条发光的横带，黑衬底才是"退到后面"。形状与模糊
+   * 沿用白光那版调出来的参数（见 pages.css .lyric-halo）。 */
+  --np-scrim: rgba(0, 0, 0, 0.92);
   --glow-1: rgba(90, 120, 255, 0.16);
   --glow-2: rgba(255, 110, 180, 0.09);
   /* Windows 关闭键的悬停红：系统语义，不随主题（亮色下也是这个红） */
@@ -136,6 +142,8 @@ html[data-theme='light'] {
   --thumb-hover: rgba(18, 24, 44, 0.3);
   --shadow: rgba(20, 30, 60, 0.16);
   --backdrop: rgba(20, 26, 40, 0.32);
+  /* 浅色下同样的黑只会变成一块脏灰：降不透明度，读成"文字底下的一点阴影" */
+  --np-scrim: rgba(20, 30, 60, 0.24);
   --glow-1: rgba(90, 120, 255, 0.12);
   --glow-2: rgba(255, 110, 180, 0.07);
 
@@ -236,18 +244,6 @@ html[data-theme='light'][data-ambient='mono'] {
     linear-gradient(168deg, #f0f2f6 0%, #eef1f5 55%, #f4f5f8 100%);
 }
 
-/* 密度：只改这三个尺寸，组件不认识"密度"这个概念。
- * `html[data-density]` 比 `:root` 多一个属性选择器，能盖住默认值。 */
-html[data-density='compact'] {
-  --row-h: 42px;
-  --control-h: 28px;
-  --space-5: 12px;
-  --space-6: 16px;
-}
-
-html[data-density='spacious'] {
-  --row-h: 60px;
-  --control-h: 34px;
-  --space-5: 20px;
-  --space-6: 26px;
-}
+/* 尺寸只有一套（2026-10-30 移除列表密度设置）。
+ * 之前按 `html[data-density]` 分三档，用户反馈"紧凑/宽松"没有实际价值：
+ * 行高本身就是设计决策，不该让用户去猜哪档更好看。 */

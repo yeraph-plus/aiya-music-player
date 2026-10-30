@@ -206,7 +206,17 @@
   grid-template-columns: minmax(260px, 4fr) minmax(0, 6fr);
   gap: 44px;
   padding: 28px 32px 24px;
+  /* 正在播放页的侧栏已退出（layout.css `.app.np-open`），本页铺满整个窗口。
+   * 居中限宽是**止血**：不限的话大屏上左列封面还是 240px 的小方块，右列歌词
+   * 一行能拉出一米宽（docs/46 §5.1）。完整重排（封面 clamp、信息回流、
+   * 歌词 26em）是 P4 的事，这里先保证"铺满之后不难看"。 */
+  width: 100%;
+  max-width: 1180px;
+  margin-inline: auto;
 }
+
+/* 页内没有返回键（2026-10-30 用户拍板）：顶栏自带一级返回，播放条歌曲区
+ * 是同一个开关，Esc 走同一条历史栈。三个入口语义一致，页内不再重复。 */
 
 /* 内容层（第 4 层）压在背景（1-3 层）之上 */
 .now-playing-page > .np-info,
@@ -321,6 +331,79 @@
   min-width: 0;
   min-height: 0;
   display: flex;
+  /* 收窄高度并**上下居中**（2026-10-30 用户拍板）：整列铺满窗口时，歌词
+   * 首尾要滚到中线，视线要扫过一整屏才找到当前句。限到 640px 后一屏只
+   * 剩 6–8 行，当前句永远在视野中央。64vh 而不是写死，是因为窗口高度
+   * 从 600 到 2160 都有人用；max-height 兜住矮窗。 */
+  align-self: center;
+  height: min(64vh, 640px);
+  max-height: 100%;
+}
+
+/*
+ * 当前句的衬底：一团**渐隐的暗雾**，压在频谱之上、歌词文字之下。
+ *
+ * 为什么不是给频谱加 mask（更早的做法）：横向渐隐会把右半边的频谱条
+ * 整条削没，频谱看着就是残缺的。矛盾其实只在"当前句这一小块"——
+ * 那里垫一层暗色，对比度就回来了，频谱还能全宽画完。
+ *
+ * 形状上的两个教训（2026-10-30 定版前的实测）：
+ * - 硬椭圆会被读成一块"膏体"，深色背景上尤其像脏斑。所以衰减要拉长到
+ *   88% 才收干，再加 14px 模糊，边缘没有可辨认的包络。
+ * - 中途试过翻成白光（提亮托底），视觉上变成一条发光横带，且白字压在白
+ *   光上对比度掉得厉害（实测 2.1–2.3:1）。定版回到黑色。注意黑色不能照搬
+ *   白光那版的参数（95% 收干 + blur 22）：减法被摊薄后压暗量只剩 3–4 个
+ *   灰阶，等于没画。
+ *
+ * 为什么是这一行自己的子元素（`.lyric-halo`，由 LyricsPanel 渲染）而不是
+ * 容器正中的伪元素：伪元素只能钉在 `.np-lyrics` 的中心，靠"激活行总被滚到
+ * 中线"这条约定间接对上；一旦 smooth 滚动未落定、用户手动滚走，衬底就悬在
+ * 空处。真元素跟着这一行走，切句、滚动、高度变化全部自洽。
+ *
+ * 层序靠 `z-index: -1`：激活行本身不是层叠上下文（opacity 1、无 transform），
+ * 所以衬底会冒泡到 `.np-lyrics`（它自己有 `position:relative; z-index:1`，
+ * 是独立层叠上下文）里、排在**所有文字之下**。这一点很关键——如果给这一行
+ * 加 `isolation: isolate` 把衬底关在行内，整行就成了 z-index:0 的层叠上下文，
+ * 会连衬底一起抬到上下相邻的歌词行**之上**，把邻句文字压暗。
+ */
+.np-lyrics .lyric-line.active {
+  /* 衬底的定位参照物；不给 isolation，见上 */
+  position: relative;
+}
+
+.np-lyrics .lyric-halo {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  /* 宽扁形：横向跟列宽同宽（100% — 比 118% 收窄，衬底不再左右各探出一截
+     变成横带），纵向 124px（激活行高 60px，上下各溢 32px）——原 200px
+     纵向铺太开，上半截糊到上一句上，读起来像一片雾。 */
+  width: 100%;
+  height: 124px;
+  transform: translate(-50%, -50%);
+  z-index: -1;
+  pointer-events: none;
+  /*
+   * 两处配套（都是对着截图实测调出来的）：
+   * - 衰减要长且连续：早先版本 40% 处还有 68%，中心一大片实色，边界就露出来，
+   *   整团读成一块"膏体"。现在 88% 才收干、中间 100→65→32→11→0，水平亮度
+   *   剖面单调递减无拐点，边缘没有可辨认的包络。
+   * - blur 兜底：渐变的椭圆弧是"数学曲线"，肉眼对弧线极敏感（截图里能看见
+   *   左右各一道弧）。14px 模糊把最后那点弧度抹平，才像"一层雾压在这儿"。
+   *   filter 会建层叠上下文，但元素自己就是 z-index:-1，整体仍排在所有
+   *   文字之下，不影响上面那条层序结论。
+   * 注意别照搬白光那版的参数（衰减到 95% + blur 22）：黑色是减法，被摊薄
+   * 后压暗量只剩 3–4 个灰阶，等于没画。黑色要更实的核心、更短的模糊。
+   */
+  background: radial-gradient(
+    ellipse 50% 50% at 50% 50%,
+    var(--np-scrim) 0%,
+    color-mix(in srgb, var(--np-scrim) 65%, transparent) 24%,
+    color-mix(in srgb, var(--np-scrim) 32%, transparent) 46%,
+    color-mix(in srgb, var(--np-scrim) 11%, transparent) 68%,
+    transparent 88%
+  );
+  filter: blur(14px);
 }
 
 .np-lyrics .lyrics-panel {
@@ -328,6 +411,87 @@
   min-height: 0;
   background: transparent;
   border-left-color: transparent;
+}
+
+/* 上下边缘淡出：限高之后第一行/最后一行会被容器硬切一刀，渐隐让"还有
+ * 更多歌词"看得出来，也不至于像被裁掉。mask 只作用于绘制，不影响滚动。 */
+.np-lyrics .lyrics-body {
+  padding: 0 24px;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 10%,
+    #000 90%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, transparent 0, #000 10%, #000 90%, transparent 100%);
+}
+
+/*
+ * 歌词排版（用户拍板）：**全部左右居中**，当前句字号翻倍（15 → 30px）。
+ *
+ * 居中之后原来的左侧对齐排版会散架：非激活行短、激活行长的横向差异
+ * 变成"参差的右边"，只有居中才能让长短行共用同一条中轴。
+ *
+ * 激活行去掉底色药丸（原来是一整条 accent-weak）：30px 的字本身就是
+ * 最强的视觉锚点，再垫一层色块会把它变成"一条横幅"。
+ */
+.np-lyrics .lyric-line {
+  padding: 10px 14px;
+  text-align: center;
+  font-size: 15px;
+  line-height: 1.5;
+  /* 字号要过渡，否则切句时整块歌词会"跳"一下；只过渡字形不涉及布局重排
+     之外的东西，代价可接受（每句最多一次） */
+  transition:
+    color 200ms var(--ease),
+    font-size 220ms var(--ease),
+    opacity 200ms var(--ease),
+    background 140ms var(--ease);
+}
+
+.np-lyrics .lyric-line.past {
+  opacity: 0.55;
+}
+
+.np-lyrics .lyric-line.active {
+  background: transparent;
+  font-size: 30px;
+  line-height: 1.35;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  opacity: 1;
+}
+
+/* hover 只提亮文字，不铺横条：居中排版里一整行底色会读成"一条横幅"，
+ * 和 30px 的激活行抢重心 */
+.np-lyrics .lyric-line:hover {
+  background: transparent;
+  color: var(--text-1);
+}
+
+/* 滚动条只在 hover 时出现（用户拍板）：歌词区是阅读区，常驻的滚动条
+ * 会在居中排版旁边多出一条竖线。透明 thumb 仍然占位，所以 hover 不会
+ * 引起内容横向跳动。 */
+.np-lyrics .lyrics-body {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.np-lyrics .lyrics-body:hover {
+  scrollbar-color: var(--thumb) transparent;
+}
+
+.np-lyrics .lyrics-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.np-lyrics .lyrics-body::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+.np-lyrics .lyrics-body:hover::-webkit-scrollbar-thumb {
+  background: var(--thumb);
 }
 
 .spectrum-disabled > div {

@@ -4,7 +4,9 @@ import type { AppSettings } from '../lib/settings';
 import { DEFAULT_SETTINGS } from '../lib/settings';
 import { ipc, events, type BeetsInstallTrack, type DynamicJson } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
-import { devValidate, settingsSchema, uiStateSchema, type UiState } from '../lib/ipc/schema';
+import { devValidate, uiStateSchema, type UiState } from '../lib/ipc/schema';
+// 合并/迁移逻辑是纯函数（可单独验证），store 只负责在引导与写回时调它
+import { mergeSettings } from '../lib/settings-migrate';
 import {
   LIBRARY_VIEW,
   parseViewKey,
@@ -807,19 +809,6 @@ class UiStore {
     this.restore(restored);
     return typeof restored.scrollTop === 'number' ? restored.scrollTop : 0;
   }
-}
-
-/**
- * 动态 JSON → `AppSettings`：以默认值为底合并。
- *
- * 为什么不直接当 `AppSettings` 用：老配置文件里没有 `output`（2026-10 才加），
- * 直接断言会让 `settings.output.mode` 在运行期是 undefined —— 类型说有、
- * 实际没有，是这类 bug 最难查的形态。
- */
-function mergeSettings(raw: unknown): AppSettings {
-  devValidate(settingsSchema, raw, 'app.settings');
-  const partial = (typeof raw === 'object' && raw !== null ? raw : {}) as Partial<AppSettings>;
-  return { ...DEFAULT_SETTINGS, ...partial } as AppSettings;
 }
 
 /**

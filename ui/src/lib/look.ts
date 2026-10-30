@@ -1,5 +1,5 @@
 /**
- * 首帧外观（主题 + 密度）。
+ * 首帧外观（主题 + 主题颜色）。
  *
  * 为什么要有这一层：主题的**真值在 SQLite**（`app_settings` 表），要等
  * `ui.bootstrap()` 走一次 IPC 才拿得到 —— 那时组件已经挂载完了。而
@@ -15,28 +15,23 @@
  * 所以 Tauri 下这条分支目前不生效；保留是为了将来若真的在 `index.html`
  * 里预置时这里零改动。预览模式下 mock 会写它。
  */
-import type { AmbientScheme, ListDensity, ThemeMode } from './settings';
+import type { AmbientScheme, ThemeMode } from './settings';
 
 export interface Look {
   theme: ThemeMode;
-  density: ListDensity;
-  /** 背景方案（T4d）：切 `html[data-ambient]`，CSS 渐变与强调色成套换 */
+  /** 主题颜色：切 `html[data-ambient]`，CSS 渐变与强调色成套换 */
   ambient: AmbientScheme;
 }
 
 const KEY = 'aiya.look';
 
 /** 兜底值必须与 `DEFAULT_SETTINGS` 一致：镜像缺失时首帧就是默认外观 */
-const FALLBACK: Look = { theme: 'dark', density: 'comfortable', ambient: 'aurora' };
+const FALLBACK: Look = { theme: 'dark', ambient: 'aurora' };
 
 const AMBIENTS: ReadonlySet<string> = new Set(['aurora', 'ember', 'meadow', 'dusk', 'mono']);
 
 function isTheme(value: unknown): value is ThemeMode {
   return value === 'dark' || value === 'light';
-}
-
-function isDensity(value: unknown): value is ListDensity {
-  return value === 'comfortable' || value === 'compact';
 }
 
 function isAmbient(value: unknown): value is AmbientScheme {
@@ -54,11 +49,10 @@ export function readLook(): Look {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<Look>;
-      if (isTheme(parsed.theme) && isDensity(parsed.density)) {
+      if (isTheme(parsed.theme)) {
         // ambient 是后加字段：镜像里没有就落默认（不为此判镜像无效）
         return {
           theme: parsed.theme,
-          density: parsed.density,
           ambient: isAmbient(parsed.ambient) ? parsed.ambient : FALLBACK.ambient,
         };
       }
@@ -68,10 +62,9 @@ export function readLook(): Look {
   }
 
   const injected = window.__AIYA_LOOK__;
-  if (injected && isTheme(injected.theme) && isDensity(injected.density)) {
+  if (injected && isTheme(injected.theme)) {
     return {
       theme: injected.theme,
-      density: injected.density,
       ambient: isAmbient(injected.ambient) ? injected.ambient : FALLBACK.ambient,
     };
   }
@@ -86,7 +79,7 @@ export function writeLook(look: Look): void {
   try {
     localStorage.setItem(
       KEY,
-      JSON.stringify({ theme: look.theme, density: look.density, ambient: look.ambient }),
+      JSON.stringify({ theme: look.theme, ambient: look.ambient }),
     );
   } catch {
     /* 配额满/存储禁用：只影响下次首帧 */
@@ -96,13 +89,11 @@ export function writeLook(look: Look): void {
 /**
  * 读当前列表行高（px）。
  *
- * **CSS 是唯一出处**：`--row-h` 在 tokens.css 按 `html[data-density]` 分档，
- * 虚拟列表要一个数字（算可见区间、拖拽落点），于是这里读一次。
- * 之前的写法是组件里 `density === 'compact' ? 42 : 52` —— 加第三档密度时
- * CSS 改了、JS 忘了，列表就会滚错位（症状是越滚越偏，不是报错）。
+ * **CSS 是唯一出处**：`--row-h` 定义在 tokens.css，虚拟列表要一个数字
+ * （算可见区间、拖拽落点），于是这里读一次。不要在组件里写死 52 ——
+ * 改了 CSS 忘改 JS 的症状是列表越滚越偏，不报错。
  *
- * 必须在 `applyLook()` 之后调用：`data-density` 写进 DOM 后 `getComputedStyle`
- * 才会返回新档位的值（写属性会强制同步样式计算）。
+ * 密度设置已移除（2026-10-30）：只有一套行高，`--row-h` 不再按属性分档。
  */
 export function readRowHeight(): number {
   const raw = getComputedStyle(document.documentElement).getPropertyValue('--row-h').trim();
@@ -110,9 +101,8 @@ export function readRowHeight(): number {
   return Number.isFinite(px) ? px : 52;
 }
 
-/** 把外观写到 `<html>`（CSS 变量按 `[data-theme]` / `[data-density]` / `[data-ambient]` 切换） */
+/** 把外观写到 `<html>`（CSS 变量按 `[data-theme]` / `[data-ambient]` 切换） */
 export function applyLook(look: Look): void {
   document.documentElement.dataset.theme = look.theme;
-  document.documentElement.dataset.density = look.density;
   document.documentElement.dataset.ambient = look.ambient;
 }

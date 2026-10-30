@@ -133,7 +133,33 @@ export function onKeydown(event: KeyboardEvent): void {
     // 原样留给控件自己（Space 激活、方向步进），这里不碰焦点
     if (event.key === 'Escape' && isTextEntry(event.target)) {
       (event.target as HTMLElement).blur();
+      return;
     }
+    // **Esc 例外**：焦点停在按钮上时（典型：点播放条歌曲区进正在播放页，
+    // 焦点还留在那个按钮上），Esc 没有"控件语义"，必须继续往下走让页面级
+    // 处理拿到——否则用户在正在播放页按 Esc 毫无反应（2026-10-30 实测）。
+    if (event.key !== 'Escape') return;
+  }
+
+  /**
+   * 正在播放页：Esc = 返回上一页（docs/46 §5.2）。
+   *
+   * 侧栏在这一页整体退出，页面没有别的退路；给 Esc 一个明确的"退出这一页"
+   * 语义，和抽屉/弹窗的 Esc 保持一致的心智。
+   *
+   * 三个前置条件都不能省：抽屉开着时 Esc 归抽屉（它自己关）、有模态时归模态、
+   * 栈空时 `back()` 本来就是无操作（这里提前 return 只是别白吃事件）。
+   */
+  if (
+    event.key === 'Escape' &&
+    ui.page === 'nowPlaying' &&
+    !ui.queueOpen &&
+    !ui.eqOpen &&
+    !overlay.hasModal
+  ) {
+    event.preventDefault();
+    // 栈空也要能出去（冷启动落在这一页时栈是空的，见 nav.exitNowPlaying）
+    nav.exitNowPlaying();
     return;
   }
 

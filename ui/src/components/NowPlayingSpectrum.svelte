@@ -18,19 +18,28 @@
    * 与背景层（AmbientBackdrop 山形）分工：背景是"氛围"，这里是**主视觉**——
    * 居中悬浮（舞台语义），不从底部伸出（那是仪表语义）。
    *
-   * 三形态（设置「频谱风格」切换，背景环境光固定山形不受影响）：
+   * 三形态（设置「频谱形态」切换；背景的形态由 `bgSpectrumStyle` 单独控制，
+   * 两者互不影响）：
    * - `mirror` 镜像曲线：水平中线上一条平滑贝塞尔曲线随频谱呼吸，上下
    *   对称，描边发光 + 半透明透镜填充（T4h 用户拍板的首发形态）；
    * - `radial` 径向环形：频谱绕圆一周向外呼吸，慢速旋转，圆环结构感强；
-   * - `wave` 心电图：基线上一串锐利折线波群（上冲+下折）随频带起落，
-   *   安静段落塌回基线像心跳间歇（用户反馈：示波线只有上波，改成
-   *   心电图式上下折线）。
+   * - `ripple` 中轴波纹：**一条**居中曲线随频谱起伏、缓缓横移（画法见
+   *   `drawRipple` 上方的注释）。上一版 `wave` 心电图已退役；同月地形版
+   *   （22 层等深线铺满下半屏）也已从页内撤掉——那一套现在只做背景层，
+   *   见 `lib/render/layers/ripple.ts`。
    *
    * 共同画法：48 带时间平滑（起音跟手、衰减绵长）→ 中点二次贝塞尔平滑 →
    * accent 色 shadowBlur 发光描边 + 低透明度填充（不抢歌词可读性）。
    * 全页 behind 内容（z-index 0，内容席位 z-index 1）。
    *
    * 数据源为 null（频谱设置关闭/引擎失败）时不渲染；reduced-motion 不渲染。
+   *
+   * 尺寸跟随（2026-10-30 修）：backing store 的宽/高**必须各自**跟 CSS 尺寸
+   * × DPR 比较。旧代码只比了 `width`，于是窗口只在纵向变大（或分屏、最大化
+   * 只改高度）时 canvas 的 `height` 属性留在旧值，浏览器把旧位图纵向拉伸 ——
+   * 观感就是"图表不跟尺寸重排，糊了/错位了"，而背景层走的是 WebGL 渲染器
+   * （有自己的 resize 回调），所以看起来正常。现在每帧按当前 DPR 重算两个
+   * 维度，DPR 变化（拖到不同缩放比的显示器）也一并跟上。
    */
   let canvas = $state<HTMLCanvasElement | null>(null);
   let frameId = 0;
@@ -180,58 +189,99 @@
   }
 
   /**
-   * 心电图式折线（wave，用户反馈改版）：不再是单条平滑曲线，而是沿基线
-   * 排布的一串"心电波群"——每带一个：上冲尖峰（R 波，随频带能量起落）→
-   * 下折（S 波，幅度取上冲的 ~45%）→ 回基线。直 lineTo 折线（不走贝塞尔），
-   * 尖峰保持锐利才是心电图的味道；频带安静的段落自然塌回基线，像心跳间歇。
+   * 中轴波纹（ripple）。
    *
-   * 连续性（用户反馈二改）：**波与波之间不画硬编码的静息平段**——平段
-   * 恒在零幅度基线上，与数据无关，两个响度都高的相邻频带之间也会横着
-   * 一小段"零幅度横线"（观感即"幅度算错了"）。现在每带占满整个 slot：
-   * 回基线的落点就是下一带的起点，波间只有频带边界上的一个尖点；
-   * 只有数据本身安静（v≈0）时线才贴着基线走。
+   * 2026-10-30 定版：页内**只画一条居中曲线**。上一版这里是"地形"——48 带当
+   * 水面截面、沿透视深度叠 22 层等深线（画法见 `lib/render/layers/ripple.ts`）。
+   * 那套搬进背景层之后，页内再画一遍就变成"同一屏两片水"：内容层被夹在中间，
+   * 而且页内那块 canvas 只覆盖内容区（限宽 1180），水面到画布边缘就断，和背景
+   * 那片铺满窗口的地形还不同源。所以页内降为一条线：背景负责场面，页内只留
+   * 主视觉。
+   *
+   * 一条线要读得懂，靠三件事：
+   * - **横向连续**：48 带按"带"为单位浮点采样（循环 + 线性插值）。直接按
+   *   数组下标取会让线在带边界处折角，48 个点在 1180px 上就是 48 个硬拐点。
+   * - **缓慢横移**：0.35 带/秒。线像水面一样缓缓淌；再快就成了"左右抖动的
+   *   心电图"，那正是 `wave` 退役的原因。
+   * - **振幅吃能量**：整体能量进 0.45–1.0 区间缩放振幅。安静段几乎是一条
+   *   静水线，副歌才抬起浪——但最低留 0.45，否则静音时线彻底塌成直线，
+   *   看着像画错了。
+   *
+   * 为什么不像镜像那样填"透镜"：镜像有上下两条曲线，靠间距读出音量；单线
+   * 只有高度一个自由度，填充只会把中间那句歌词压成灰底。发声由 `shadowBlur`
+   * 的发光描边承担，透明度与镜像的描边对齐，两种形态切换时亮度不跳。
    */
-  function drawWave(
+  function drawRipple(
     ctx: CanvasRenderingContext2D,
     vals: number[],
     width: number,
     height: number,
     accent: string,
+    timeMs: number,
   ): void {
-    const cy = height / 2;
-    const amp = height * 0.24;
     const n = vals.length;
-    const slot = width / n;
+    const cols = 72;
+    const cy = height / 2;
+    const t = timeMs / 1000;
 
-    // 极淡基线：给波群一个"静息参照"，间歇段不显空洞
-    ctx.globalAlpha = 0.14;
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = accent;
-    ctx.beginPath();
-    ctx.moveTo(0, cy);
-    ctx.lineTo(width, cy);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
+    // 整体能量（0–1）：与背景层同一口径（均值 0.32 视为满浪）
+    let sum = 0;
+    for (let i = 0; i < n; i += 1) sum += vals[i] as number;
+    const energy = Math.min(1, sum / n / 0.32);
 
-    // 波群折线：每带三段（上冲 R 波 / 下折 S 波 / 回基线），直角转折，
-    // 首尾在频带边界相接——整条线连续，没有与数据无关的平段
-    ctx.beginPath();
-    ctx.moveTo(0, cy);
-    for (let i = 0; i < n; i += 1) {
-      const x = i * slot;
-      const v = Math.min(1, Math.max(0, vals[i] as number));
-      ctx.lineTo(x + slot * 0.38, cy - v * amp); // 上冲（R 波）
-      ctx.lineTo(x + slot * 0.58, cy + v * amp * 0.45); // 下折（S 波）
-      ctx.lineTo(x + slot, cy); // 回基线 = 下一带起点
+    /** 按"带"为单位的浮点位置采样（循环 + 线性插值），横移后仍连续 */
+    const sample = (pos: number): number => {
+      const p = ((pos % n) + n) % n;
+      const i0 = Math.floor(p);
+      const f = p - i0;
+      const a = vals[i0] as number;
+      const b = vals[(i0 + 1) % n] as number;
+      return a + (b - a) * f;
+    };
+
+    // 振幅以**画布高度**为基准：宽度只影响采样密度，不该让线变陡。
+    const amp = height * 0.115 * (0.45 + 0.55 * energy);
+    const offset = t * 0.35;
+
+    const pts: Array<[number, number]> = [];
+    for (let c = 0; c <= cols; c += 1) {
+      const xr = c / cols;
+      pts.push([xr * width, cy - sample(xr * n + offset) * amp]);
     }
 
+    // 左右各 7% 淡出：canvas 是整页宽（inset:0），线直接顶到边缘像被裁断，
+    // 渐隐后读成"延伸到画面之外"
+    const stroke = ctx.createLinearGradient(0, 0, width, 0);
+    stroke.addColorStop(0, 'transparent');
+    stroke.addColorStop(0.07, accent);
+    stroke.addColorStop(0.93, accent);
+    stroke.addColorStop(1, 'transparent');
+
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 1.8;
+    ctx.strokeStyle = stroke;
     ctx.shadowColor = accent;
-    ctx.shadowBlur = 12;
-    ctx.lineWidth = 1.6;
-    ctx.lineJoin = 'miter';
-    ctx.strokeStyle = accent;
+    ctx.shadowBlur = 16;
+    ctx.beginPath();
+    smoothPath(ctx, pts);
     ctx.stroke();
     ctx.shadowBlur = 0;
+  }
+
+  /**
+   * CSS 尺寸的缓存值。由 ResizeObserver 维护，绘制循环只读。
+   *
+   * 为什么不每帧读 `clientWidth`：那是布局查询，在 rAF 里逐帧读会把绘制
+   * 循环和样式/布局绑在一起（页面别处一改样式就多一次强制布局）。RO 只在
+   * 尺寸真的变了时回调一次，正好是我们要的时机。
+   */
+  let cssW = 0;
+  let cssH = 0;
+
+  function measure(target: HTMLCanvasElement): void {
+    cssW = target.clientWidth;
+    cssH = target.clientHeight;
   }
 
   function draw(): void {
@@ -240,19 +290,26 @@
     const ctx = target.getContext('2d');
     if (!ctx) return;
 
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const width = target.clientWidth;
-    const height = target.clientHeight;
-    if (width === 0 || height === 0) {
-      frameId = requestAnimationFrame(draw);
-      return;
+    // 尺寸没量到（首帧 / 页面切换中）时继续排队，别在这一帧把 canvas 清零
+    if (cssW === 0 || cssH === 0) {
+      measure(target);
+      if (cssW === 0 || cssH === 0) {
+        frameId = requestAnimationFrame(draw);
+        return;
+      }
     }
-    if (target.width !== Math.round(width * dpr)) {
-      target.width = Math.round(width * dpr);
-      target.height = Math.round(height * dpr);
+
+    // 两个维度**各自**比：旧代码只比 width，窗口只在纵向变大时 height 属性
+    // 不更新，浏览器把旧位图纵向拉伸（详见组件头部注释）
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const bw = Math.round(cssW * dpr);
+    const bh = Math.round(cssH * dpr);
+    if (target.width !== bw || target.height !== bh) {
+      target.width = bw;
+      target.height = bh;
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
+    ctx.clearRect(0, 0, cssW, cssH);
 
     const bands = source.frame();
     const n = bands.length;
@@ -263,18 +320,21 @@
 
     // 主题色取缓存值：每帧 getComputedStyle 会强制一次样式解析（见 accent.ts）
     const accent = themeColor('--accent');
+    const vals = Array.from(display, (v) => Math.max(0, v));
+    const now = performance.now();
 
     if (style === 'radial') {
       // 环形直接用 48 带（绕圆一周，首尾相接天然对称，无需镜像）
-      drawRadial(ctx, Array.from(display, (v) => Math.max(0, v)), width, height, accent, performance.now());
-    } else if (style === 'wave') {
-      drawWave(ctx, Array.from(display, (v) => Math.max(0, v)), width, height, accent);
+      drawRadial(ctx, vals, cssW, cssH, accent, now);
+    } else if (style === 'ripple') {
+      // 中轴波纹：一条横贯页面中线的曲线（见 drawRipple）
+      drawRipple(ctx, vals, cssW, cssH, accent, now);
     } else {
       // 镜像带序列：左半倒序 + 右半正序（中心带不重复）→ 水平居中对称
-      const vals: number[] = [];
-      for (let i = n - 1; i >= 0; i -= 1) vals.push(Math.max(0, display[i] as number));
-      for (let i = 1; i < n; i += 1) vals.push(Math.max(0, display[i] as number));
-      drawMirror(ctx, vals, width, height, accent);
+      const mirrored: number[] = [];
+      for (let i = n - 1; i >= 0; i -= 1) mirrored.push(vals[i] as number);
+      for (let i = 1; i < n; i += 1) mirrored.push(vals[i] as number);
+      drawMirror(ctx, mirrored, cssW, cssH, accent);
     }
 
     frameId = requestAnimationFrame(draw);
@@ -284,9 +344,18 @@
   // style 故意不进依赖：形态切换只换画笔，不重启订阅（tap 是引用计数的全局开关）。
   $effect(() => {
     if (!source || reducedMotion) return;
+    // canvas 是 $state（bind:this），首帧可能还没绑定——赋值后 effect 会重跑
+    const target = canvas;
+    if (!target) return;
+    measure(target);
+    // 尺寸跟随：侧栏塌陷、窗口缩放、最大化都走这里。RO 只改缓存值，
+    // 真正的位图重分配在下一帧的 draw 里做（避免在回调里读改布局）
+    const ro = new ResizeObserver(() => measure(target));
+    ro.observe(target);
     source.start();
     frameId = requestAnimationFrame(draw);
     return () => {
+      ro.disconnect();
       cancelAnimationFrame(frameId);
       source.stop();
     };
@@ -306,5 +375,12 @@
     width: 100%;
     height: 100%;
     pointer-events: none;
+    /*
+     * 这里**不加 mask**（2026-10-30 用户拍板撤掉横向渐隐）。
+     * 上一版为了让波形别横穿 30px 的歌词，在 34%–56% 处渐隐到透明——
+     * 结果是右半边的频谱条整体被削没了，看着像"画了一半"。
+     * 现在的做法是把对比度交给内容层：当前句底下垫一块渐隐黑椭圆
+     * （见 pages.css 的 .np-lyrics），频谱保持全宽，谁也不切谁。
+     */
   }
 </style>

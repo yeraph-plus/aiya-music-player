@@ -1,7 +1,14 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import type { AppSettings, AmbientScheme, ListDensity, SpectrumStyle, ThemeMode } from '../lib/settings';
-  import { AMBIENT_SCHEMES, SPECTRUM_STYLES } from '../lib/settings';
+  import type {
+    AppSettings,
+    AmbientScheme,
+    BgSpectrumStyle,
+    RidgeGlow,
+    SpectrumStyle,
+    ThemeMode,
+  } from '../lib/settings';
+  import { AMBIENT_SCHEMES, BG_SPECTRUM_STYLES, RIDGE_GLOWS, SPECTRUM_STYLES } from '../lib/settings';
   import {
     SHORTCUT_ACTIONS,
     SHORTCUT_LABELS,
@@ -11,6 +18,7 @@
     type ShortcutAction,
   } from '../lib/shortcuts';
   import { bindingFromEvent } from '../lib/keys';
+  import { detectCapability } from '../lib/render/capability';
   import { formatDateTime } from '../lib/format';
   import afdianQr from '../assets/afdian-qr.png';
   import Icon from './Icon.svelte';
@@ -89,6 +97,29 @@
   function apply(patch: Partial<AppSettings>): void {
     onsave({ ...settings, ...patch });
   }
+
+  /**
+   * 全局 3D 闸门（docs/46 §6.2）：关掉后虽然 `bgSpectrum` / `npSpectrum` 的**值**
+   * 还在设置里，但一律不生效。UI 上必须把下面几项置灰而不是隐藏——用户要能看见
+   * "我关掉的是哪些东西"，隐藏会让人以为功能消失了。
+   */
+  const gl = $derived(settings.glEffects);
+
+  /**
+   * 光晕档位只对**山形**有效（波纹是线阵，没有"脊线"可发光）。
+   * 换成波纹时把这一项置灰而不是藏起来：它是背景观感的一部分，
+   * 用户切回山形就要能立刻找到、恢复原状。
+   */
+  const ridgeShape = $derived(settings.bgSpectrumStyle === 'ridge');
+
+  /**
+   * 本机 3D 能力（探测结果有缓存，打开设置页只探一次）。
+   *
+   * 放在这里的理由：`glEffects` 是个用户看不懂后果的开关——"我的机器到底行不行"
+   * 应该由应用直接说出来，而不是让用户自己试。软件渲染（远程桌面 / 关了硬件加速）
+   * 下开着它只会更卡，所以 hint 要明确劝关。
+   */
+  const cap = detectCapability();
 
   function setShortcut(action: ShortcutAction, binding: string): void {
     const shortcuts = { ...settings.shortcuts };
@@ -182,11 +213,6 @@
     { value: 'dark', label: '深色' },
     { value: 'light', label: '浅色' },
   ];
-
-  const DENSITY_OPTIONS: Array<{ value: string; label: string }> = [
-    { value: 'comfortable', label: '标准' },
-    { value: 'compact', label: '紧凑' },
-  ];
 </script>
 
 <svelte:window onkeydown={onWindowKey} />
@@ -243,24 +269,11 @@
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">列表密度</div>
-            <div class="setting-hint">紧凑模式一屏多显示约 20%，适合大曲库浏览</div>
+            <div class="setting-title">主题颜色</div>
+            <div class="setting-hint">渐变背景与强调色成套切换，决定整个应用的视觉基调</div>
           </div>
           <SegmentedControl
-            label="列表密度"
-            value={settings.density}
-            options={DENSITY_OPTIONS}
-            onchange={(value) => apply({ density: value as ListDensity })}
-          />
-        </div>
-
-        <div class="setting-row">
-          <div>
-            <div class="setting-title">背景方案</div>
-            <div class="setting-hint">固定渐变背景与强调色成套切换，不跟随封面</div>
-          </div>
-          <SegmentedControl
-            label="背景方案"
+            label="主题颜色"
             value={settings.ambient}
             options={AMBIENT_SCHEMES}
             onchange={(value) => apply({ ambient: value as AmbientScheme })}
@@ -269,29 +282,107 @@
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">频谱可视化</div>
+            <div class="setting-title">全局 3D 效果</div>
             <div class="setting-hint">
-              背景环境频谱总开关：开启后整个应用背景有随音乐起伏的环境光；关闭时引擎 tap 停止、零开销
+              总开关：关闭后所有三维频谱与流动背景停用，只留静态渐变；下面的频谱项随之失效
+              {#if !cap.hardware}
+                <strong class="hint-warn">本机只检测到软件渲染，建议保持关闭</strong>
+              {/if}
             </div>
           </div>
           <Switch
-            label="频谱可视化"
-            checked={settings.spectrum}
-            onchange={(checked) => apply({ spectrum: checked })}
+            label="全局 3D 效果"
+            checked={settings.glEffects}
+            onchange={(checked) => apply({ glEffects: checked })}
           />
         </div>
 
-        <div class="setting-row">
+        <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
           <div>
-            <div class="setting-title">频谱风格</div>
+            <div class="setting-title">背景动态频谱</div>
             <div class="setting-hint">
-              「正在播放」页居中可视化的形态，切换即时生效；关闭 = 本页不画、只剩背景环境光
+              {gl
+                ? '整个应用的背景有随音乐起伏的山形环境光；关闭后只剩静态渐变，引擎 tap 停止、零开销'
+                : '已随「全局 3D 效果」关闭'}
+            </div>
+          </div>
+          <Switch
+            label="背景动态频谱"
+            checked={settings.bgSpectrum}
+            disabled={!gl}
+            onchange={(checked) => apply({ bgSpectrum: checked })}
+          />
+        </div>
+
+        <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
+          <div>
+            <div class="setting-title">背景频谱形态</div>
+            <div class="setting-hint">
+              {gl
+                ? '山形：底部一团起伏的环境光；波纹：一层层等深线铺满下半屏。两者用的都是同一份频谱，与「正在播放」页的形态各自独立'
+                : '已随「全局 3D 效果」关闭'}
             </div>
           </div>
           <SegmentedControl
-            label="频谱风格"
+            label="背景频谱形态"
+            value={settings.bgSpectrumStyle}
+            options={BG_SPECTRUM_STYLES}
+            disabled={!gl}
+            onchange={(value) => apply({ bgSpectrumStyle: value as BgSpectrumStyle })}
+          />
+        </div>
+
+        <div class="setting-row" style:opacity={gl && ridgeShape ? 1 : 0.5}>
+          <div>
+            <div class="setting-title">背景频谱光效</div>
+            <div class="setting-hint">
+              {#if !gl}
+                已随「全局 3D 效果」关闭
+              {:else if !ridgeShape}
+                只有「山形」形态有脊线可发光，波纹形态不使用这一档
+              {:else}
+                背景山脊的发光强度：柔雾只看得到起伏，锐光有清晰的脊线与边缘光
+              {/if}
+            </div>
+          </div>
+          <SegmentedControl
+            label="背景频谱光效"
+            value={settings.ridgeGlow}
+            options={RIDGE_GLOWS}
+            disabled={!gl || !ridgeShape}
+            onchange={(value) => apply({ ridgeGlow: value as RidgeGlow })}
+          />
+        </div>
+
+        <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
+          <div>
+            <div class="setting-title">正在播放页频谱</div>
+            <div class="setting-hint">
+              {gl
+                ? '只在「正在播放」页显示的可视化，与背景环境光各自独立；关掉不影响背景'
+                : '已随「全局 3D 效果」关闭'}
+            </div>
+          </div>
+          <Switch
+            label="正在播放页频谱"
+            checked={settings.npSpectrum}
+            disabled={!gl}
+            onchange={(checked) => apply({ npSpectrum: checked })}
+          />
+        </div>
+
+        <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
+          <div>
+            <div class="setting-title">频谱形态</div>
+            <div class="setting-hint">
+              「正在播放」页可视化的形态：镜像曲线（中线上下对称）、径向环形（绕圆一周）、中轴波纹（一条居中曲线），切换即时生效
+            </div>
+          </div>
+          <SegmentedControl
+            label="频谱形态"
             value={settings.spectrumStyle}
             options={SPECTRUM_STYLES}
+            disabled={!gl}
             onchange={(value) => apply({ spectrumStyle: value as SpectrumStyle })}
           />
         </div>
@@ -727,5 +818,19 @@
     color: var(--text-1);
     font-weight: 600;
     border-bottom-color: var(--accent);
+  }
+
+  /* 被「全局 3D 效果」闸门关掉的行：整行压暗，与"这一项自己关着"区分开。
+   * 只给控件加 disabled 不够——关闭态的开关本来也是灰的，两者会混成一片。
+   * 用内联 style:opacity 而不是 `.setting-row.muted` 规则：Svelte 5 的未使用
+   * 选择器裁剪会把"只由 class: 指令产生"的类名判成没用过，规则整条被删
+   * （实测：class 加上了、样式表里查不到这条规则、computed opacity 仍是 1）。 */
+
+  /* "本机只检测到软件渲染"这类环境警告：跟着 hint 走，但要能一眼看见 */
+  .hint-warn {
+    display: block;
+    margin-top: 3px;
+    font-weight: 600;
+    color: var(--warn);
   }
 </style>

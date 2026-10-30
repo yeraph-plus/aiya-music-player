@@ -27,11 +27,18 @@
    * 全应用背景的频谱源（docs/25 §5 T4c app 化）：设置开着才建
    * （tap 按需订阅，关着引擎零开销）。原先在 NowPlayingView——背景
    * 升为全应用层后跟着搬进来。
+   *
+   * 2026-10-30（docs/46 §6.2）：`spectrum` 拆成两个开关，这一层只认
+   * `bgSpectrum`；正在播放页的开关由 NowPlayingView 自己派生。二者任一为真
+   * 时 tap 都开着（`RemoteSpectrumSource` 的引用计数负责叠放）。
+   * `glEffects` 是**能力闸门**：关掉时连源都不建，引擎侧也不订阅。
    */
   let spectrumSource = $state<SpectrumSource | null>(null);
 
+  const bgSpectrumOn = $derived(ui.settings.glEffects && ui.settings.bgSpectrum);
+
   $effect(() => {
-    if (!ui.settings.spectrum) {
+    if (!bgSpectrumOn) {
       spectrumSource = null;
       return;
     }
@@ -43,6 +50,15 @@
     }
   });
 
+  /**
+   * 正在播放页：侧栏**整体退出**、主区铺满（docs/46 §5.2 用户拍板）。
+   *
+   * 为什么不叠覆盖层：背景是 `.app` 的全窗口绝对定位层，挡住它的只是侧栏
+   * 那块 82% 不透明的面板。侧栏一退，背景连续地铺满整个窗口——正在播放页
+   * **零额外背景绘制**，也就省掉了最贵的那块全屏合成。
+   */
+  const npOpen = $derived(ui.page === 'nowPlaying');
+
   async function playQueueAt(index: number): Promise<void> {
     try {
       await player.playTracks(player.queueIds, index);
@@ -52,10 +68,16 @@
   }
 </script>
 
-<div class="app">
+<div class="app" class:np-open={npOpen}>
   <!-- 背景四层（1-3 层，T4c 起 app 化；T4d 起第 1 层是固定渐变，不跟随封面）：
-       绝对定位在 .app 根部、四区席位之下；沉浸档只在正在播放页 -->
-  <AmbientBackdrop source={spectrumSource} spectrumOn={ui.settings.spectrum} />
+       绝对定位在 .app 根部、四区席位之下。全应用只有这一套背景——
+       正在播放页靠"侧栏退出 + 主区铺满"露出它，而不是再叠一层。 -->
+  <AmbientBackdrop
+    source={spectrumSource}
+    enabled={bgSpectrumOn}
+    shape={ui.settings.bgSpectrumStyle}
+    glow={ui.settings.ridgeGlow}
+  />
 
   <TitleBar />
   <Sidebar />
@@ -95,7 +117,13 @@
       onmode={() => player.cyclePlayMode()}
       onqueueopen={(open) => ui.setQueue(open)}
       oneqopen={(open) => ui.setEqDrawer(open)}
-      onshownowplaying={() => nav.go({ kind: 'page', page: 'nowPlaying' })}
+      onshownowplaying={() => {
+        // 播放条这块是**开关**：已经在这一页就退回上一页（与顶栏返回、Esc
+        // 走同一条历史栈），不要在栈里塞第二个自己
+        if (npOpen) nav.exitNowPlaying();
+        else nav.go({ kind: 'page', page: 'nowPlaying' });
+      }}
+      {npOpen}
     />
   </div>
 

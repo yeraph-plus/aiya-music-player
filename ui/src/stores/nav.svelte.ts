@@ -103,6 +103,25 @@ class NavStore {
   }
 
   /**
+   * 退出正在播放页（播放条歌曲区 / Esc 共用）。
+   *
+   * 不能直接用 `back()`：路由状态是**持久化**的（`app.uiState`），而返回栈
+   * 不持久化。冷启动时若停在正在播放页，栈是空的、顶栏返回也是灰的，
+   * 那一页又藏起了侧栏 —— `back()` 无操作，用户就**出不去了**（2026-10-30
+   * 实测一条死路）。所以栈空时落到首页兜底。
+   *
+   * **不压栈**：退出不是一个"可以再返回回去"的目的地。
+   */
+  exitNowPlaying(): void {
+    const snapshot = this.history.pop();
+    if (snapshot) {
+      this.restore(snapshot);
+      return;
+    }
+    this.apply({ kind: 'dashboard' });
+  }
+
+  /**
    * 搜索框输入。
    *
    * 搜索**是**一次路由跳转（B4-3c 起落独立搜索结果页，不再寄居曲库列表），

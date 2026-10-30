@@ -17,13 +17,25 @@ import { z } from 'zod';
 export const settingsSchema = z
   .object({
     theme: z.enum(['dark', 'light']).optional(),
-    density: z.enum(['compact', 'comfortable', 'spacious']).optional(),
-    /** 背景方案（2026-10-26 起取代 accentFromArtwork；旧字段不再写） */
+    /** 主题颜色（2026-10-26 起取代 accentFromArtwork；旧字段不再写） */
     ambient: z.enum(['aurora', 'ember', 'meadow', 'dusk', 'mono']).optional(),
     normalizeVolume: z.boolean().optional(),
+    /** 2026-10-30 前的单开关：**只读不写**，`mergeSettings` 用它派生两个新键后丢弃 */
     spectrum: z.boolean().optional(),
-    /** 频谱风格（2026-10-26 起取代 spectrumEngine；旧字段不再写） */
-    spectrumStyle: z.enum(['mirror', 'radial', 'wave', 'off']).optional(),
+    /** 全局 3D 效果总闸（docs/46 §6.2）；缺省时按默认开兜底 */
+    glEffects: z.boolean().optional(),
+    /** 背景动态频谱 / 正在播放页频谱：2026-10-30 拆开（docs/46 §5） */
+    bgSpectrum: z.boolean().optional(),
+    npSpectrum: z.boolean().optional(),
+    /** 山形光晕档位（docs/46 §3.2） */
+    ridgeGlow: z.enum(['soft', 'balanced', 'neon']).optional(),
+    /**
+     * 频谱形态。`off` / `wave` 在这里保留：它们是**旧配置里的存量值**，读进来
+     * 要能过校验（再由 mergeSettings 迁移）。新代码不再写这两个值。
+     */
+    spectrumStyle: z.enum(['mirror', 'radial', 'wave', 'ripple', 'off']).optional(),
+    /** 背景频谱形态（2026-10-30 新增；缺省按山形兜底） */
+    bgSpectrumStyle: z.enum(['ridge', 'ripple']).optional(),
     mediaKeys: z.boolean().optional(),
     autoplayOnStart: z.boolean().optional(),
     rememberPosition: z.boolean().optional(),
