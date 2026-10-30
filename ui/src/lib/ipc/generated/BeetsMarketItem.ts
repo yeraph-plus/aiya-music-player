@@ -14,6 +14,11 @@ export type BeetsMarketItem = { name: string, note: string,
  */
 source: string, 
 /**
+ * 这个插件要装的 pip 包（空 = 不需要额外包）。新版工具才有，
+ * 旧工具缺这个键时要能解析（`default`），否则整条目录静默变 None。
+ */
+packages: Array<string>, 
+/**
  * `ready` | `missing_deps` | `unavailable`
  */
 state: string, enabled: boolean, 

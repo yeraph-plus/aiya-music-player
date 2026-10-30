@@ -1,6 +1,6 @@
-"""插件能力自检：声明清单 + 三态上报。
+"""插件能力：一份 JSON 表 + 三态自检 + 市场目录。
 
-## 为什么需要这个模块（docs/31 P0-1）
+## 为什么需要三态（docs/31 P0-1）
 
 `config['plugins']` 是**愿望清单**：写着 `lyrics` 不等于 lyrics 能用。
 实测（beets 2.14.1）：`plugins.load_plugins()` 对插件导入异常**只写日志、
@@ -15,13 +15,35 @@
 检测方式刻意**不 import 插件模块**：`beetsplug.lyrics` 导入失败时
 sys.modules 会留下半成品，重试行为不可预测；而且导入有注册钩子副作用。
 用 `importlib.util.find_spec` 只看"包在不在"，零副作用。
+
+## 为什么表在 JSON 里（docs/51 §1）
+
+这张表原本有三份硬编码：`MARKET_CATALOG`（市场目录 12 条）、
+`DEFAULT_PLUGINS`（首发 6 条）、`INDEX_PLUGINS`（索引家白名单 3 条），
+外加 `env.REQUIRED_EXTRAS` 一处人工说明。同一件事写四遍，必然漂——
+而且 `install.py` 与 `build_bundle.py` 各自不知道对方装了哪些包。
+
+现在唯一事实源是 `data/plugins.json`，五个消费方读同一份字节：
+
+    plugins.py         → 三个派生视图（本模块）
+    install.py         → --plugins a,b 拼 pip 命令
+    build_bundle.py    → bundle:true 的包预置进免配置包
+    src-tauri/build.rs → include_str! 进二进制，UI 未装组件也能勾选
+    cfg.py             → 索引家白名单的强制参数与结构拒绝
+
+读取用 `importlib.resources` 而不是 `Path(__file__)`：`.pyz` 是 zip，
+`Path(__file__).parent/'data'` 在 zip 里 `is_file()` 恒 False
+（这就是 A 轨道以前"缺少依赖清单"的真因，docs/51 §0）。
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from importlib.resources import files
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -38,54 +60,22 @@ class PluginSpec:
 class MarketSpec:
     """市场目录项（docs/40 §3 拍板：白名单，不做全量）。
 
-    `pypi` = None 表示随 beets 内置（免安装，UI 只给开关）；
-    否则是 pip 包名（`cmds/market.py` 负责装进当前运行环境）。
+    `packages` 为空 = 不需要额外 pip 包（要么随 beets 内置，要么依赖已在
+    `requirements.lock` 里，比如 fetchart 要的 requests）。UI 的「安装」按钮
+    只对 `packages` 非空且非 ready 的项出现。
     """
 
     name: str
     note: str
-    pypi: str | None = None
+    packages: tuple[str, ...] = ()
     py_deps: tuple[str, ...] = ()
     exe_deps: tuple[str, ...] = ()
 
+    @property
+    def pypi(self) -> str | None:
+        """第一个 pip 包名（老调用方的兼容视图；新代码用 `packages`）。"""
+        return self.packages[0] if self.packages else None
 
-# 市场目录：只收录**本地实测过**的有用插件（docs/40 §3.3 风险备注——
-# 第三方插件可能拖慢 serve 启动或往 stderr 写杂音，没实测的不收）。
-# builtin 档 = beets 自带；pypi 档 = 装进当前运行环境（uv/venv 兼容见 market.py）。
-MARKET_CATALOG: tuple[MarketSpec, ...] = (
-    MarketSpec("replaygain", "播放音量自动拉齐（引擎直接消费 gain_db）", exe_deps=("ffmpeg",)),
-    MarketSpec("lyrics", "歌词抓取（LRC 字段可直供）", pypi="beautifulsoup4", py_deps=("bs4",)),
-    MarketSpec("fetchart", "封面抓取（本地缺图时补）", pypi="requests", py_deps=("requests",)),
-    MarketSpec("embedart", "封面写进音频文件", exe_deps=("ffmpeg",)),
-    MarketSpec("convert", "转码副本（便携设备用）", exe_deps=("ffmpeg",)),
-    MarketSpec("scrub", "导入时清掉脏标签"),
-    MarketSpec("fromfilename", "无标签文件按文件名兜底猜"),
-    MarketSpec("duplicates", "库内查重（维护四件套之一）"),
-    MarketSpec("smartplaylist", "beets 查询导出 m3u（给别的设备用）"),
-    MarketSpec("edit", "终端外编辑标签（写回库）"),
-    MarketSpec("mbsync", "从 MusicBrainz 同步元数据", pypi="requests", py_deps=("requests",)),
-    MarketSpec("chroma", "音频指纹识别（acoustid）", pypi="pyacoustid", py_deps=("acoustid",), exe_deps=("fpcalc",)),
-)
-
-
-def find_market_spec(name: str) -> MarketSpec | None:
-    """目录查找（大小写敏感：插件名本身全小写）。"""
-    for spec in MARKET_CATALOG:
-        if spec.name == name:
-            return spec
-    return None
-
-
-# 首发档插件（原先是播放器 Rust 里的 FIRST_WAVE_PLUGINS，docs/33 §3.1 搬到这边）。
-# 现在每个都带"为什么开它"和"它还需要什么"——这才是能维护的形态。
-DEFAULT_PLUGINS: tuple[PluginSpec, ...] = (
-    PluginSpec("replaygain", exe_deps=("ffmpeg",), note="提供 gain_db，引擎链路直接消费"),
-    PluginSpec("lyrics", py_deps=("bs4",), note="歌词抓取，LRC 字段可直供"),
-    PluginSpec("fromfilename", note="无标签文件按文件名兜底猜"),
-    PluginSpec("duplicates", note="库内查重（维护四件套之一）"),
-    PluginSpec("scrub", note="导入时清掉脏标签"),
-    PluginSpec("smartplaylist", note="beets 查询导出 m3u，与推荐页衔接"),
-)
 
 @dataclass(frozen=True)
 class IndexPluginSpec:
@@ -102,8 +92,9 @@ class IndexPluginSpec:
     永远不许出现在索引家（`embedart` / `convert` / `scrub` 属这一类），
     由白名单结构本身拒绝，而不是靠调用方记得别加。
 
-    `needs_network` / `needs_exe` 只用于 UI 提示（开了就得联网 / 得有二进制），
-    不参与门禁——批 1 里索引家的默认清单只有 `xtractor`（拍板 C）。
+    在 JSON 里这一条表达为「有 `indexForced` 才可能进 `profiles.index`」，
+    并由契约测试守着两条不变量：白名单里的人必须有 `indexForced`，
+    且「默认会写盘」的插件其 `indexForced` 必须把 `write` 压成 `no`。
     """
 
     name: str
@@ -114,43 +105,132 @@ class IndexPluginSpec:
     note: str = ""
 
 
-# 索引家白名单。刻意**只收"只算不写"的插件**：
-#   xtractor  音频特征（本地算，需要 Essentia 二进制）
-#   lastgenre 流派推断（联网查 MusicBrainz；auto 关掉，分析由 enrich 显式触发）
-#   chroma    指纹识别（联网 + 必须有 fpcalc）
-# scrub 看着像"清理"其实写标签；embedart/convert 直接产出文件——都不在这里。
-INDEX_PLUGINS: tuple[IndexPluginSpec, ...] = (
-    IndexPluginSpec(
-        "xtractor",
-        forced=(("auto", "no"), ("write", "no")),
-        note="音频特征（bpm/danceability/mood/intervals）；需要 Essentia 二进制",
-    ),
-    IndexPluginSpec(
-        "lastgenre",
-        forced=(("auto", "no"),),
-        needs_network=True,
-        note="流派推断（联网查询）；索引步骤不应因此变慢",
-    ),
-    IndexPluginSpec(
-        "chroma",
-        forced=(("auto", "no"),),
-        needs_network=True,
-        needs_exe=("fpcalc",),
-        note="音频指纹识别（需要 fpcalc + 联网）",
-    ),
+# ---------------------------------------------------------------- 表加载
+
+_CATALOG: dict[str, Any] | None = None
+
+
+def catalog() -> dict[str, Any]:
+    """解析后的 `plugins.json`（进程内缓存）。"""
+    global _CATALOG
+    if _CATALOG is None:
+        _CATALOG = json.loads(catalog_text())
+    return _CATALOG
+
+
+def catalog_text() -> str:
+    """原始 JSON 文本（宿主/Rust 侧校验用，不做二次序列化）。"""
+    return files("aiya_beets").joinpath("data/plugins.json").read_text(encoding="utf-8")
+
+
+def entries() -> list[dict[str, Any]]:
+    """目录条目（顺序 = JSON 里的顺序 = UI 展示顺序）。"""
+    return list(catalog()["plugins"])
+
+
+def entry(name: str) -> dict[str, Any] | None:
+    """按名字查一条（大小写敏感：插件名本身全小写）。"""
+    for item in entries():
+        if item["name"] == name:
+            return item
+    return None
+
+
+# ---------------------------------------------------------------- 派生视图
+
+MARKET_CATALOG: tuple[MarketSpec, ...] = tuple(
+    MarketSpec(
+        name=item["name"],
+        note=item.get("note", ""),
+        packages=tuple(item.get("packages", ())),
+        py_deps=tuple(item.get("imports", ())),
+        exe_deps=tuple(item.get("exe", ())),
+    )
+    for item in entries()
 )
 
-# 首批默认只开 xtractor（拍板 C）：另外两个会把"索引"这一步拖上网络/外部二进制。
-INDEX_DEFAULT_PLUGINS: tuple[str, ...] = ("xtractor",)
+DEFAULT_PLUGINS: tuple[PluginSpec, ...] = tuple(
+    PluginSpec(
+        name=name,
+        py_deps=tuple((entry(name) or {}).get("imports", ())),
+        exe_deps=tuple((entry(name) or {}).get("exe", ())),
+        note=(entry(name) or {}).get("note", ""),
+    )
+    for name in (catalog()["profiles"]["workbench"])
+)
+
+INDEX_PLUGINS: tuple[IndexPluginSpec, ...] = tuple(
+    IndexPluginSpec(
+        name=item["name"],
+        forced=tuple(item.get("indexForced", {}).items()),
+        # 有 indexForced 才可能在白名单里；只要带了写盘能力，就必须由
+        # indexForced 显式压住（契约测试守着，这里再兜一次运行期）
+        writes_files=bool(item.get("writes")) and "write" not in item.get("indexForced", {}),
+        needs_network=bool(item.get("network")),
+        needs_exe=tuple(item.get("exe", ())),
+        note=item.get("note", ""),
+    )
+    for item in entries()
+    if item.get("indexForced") is not None
+)
+
+INDEX_DEFAULT_PLUGINS: tuple[str, ...] = tuple(catalog()["profiles"]["index"])
+WORKBENCH_DEFAULT_PLUGINS: tuple[str, ...] = tuple(catalog()["profiles"]["workbench"])
+
+# 免配置包预置的插件（`bundle: true`）。集合本身是产品决策，改 JSON 不改代码。
+BUNDLE_PLUGINS: tuple[str, ...] = tuple(item["name"] for item in entries() if item.get("bundle"))
+
+
+def find_market_spec(name: str) -> MarketSpec | None:
+    """目录查找。"""
+    for spec in MARKET_CATALOG:
+        if spec.name == name:
+            return spec
+    return None
 
 
 def find_index_plugin(name: str) -> IndexPluginSpec | None:
-    """按名字查索引家白名单（大小写敏感，插件名本身全小写）。"""
+    """按名字查索引家白名单。"""
     for spec in INDEX_PLUGINS:
         if spec.name == name:
             return spec
     return None
 
+
+def packages_for(names: list[str]) -> list[str]:
+    """把插件名解析成 pip 包清单（去重保序）。
+
+    这是 `install.py --plugins` 的唯一实现：脚本不自己拼依赖，
+    所以"这个插件要装什么"只有 JSON 一处。
+
+    未知名字抛 `KeyError`——调用方必须把它转成可读错误。
+    静默跳过会让用户"勾了 A 装了 B"，比报错难查十倍。
+    """
+    seen: list[str] = []
+    for name in names:
+        item = entry(name)
+        if item is None:
+            raise KeyError(name)
+        for pkg in item.get("packages", ()):
+            if pkg not in seen:
+                seen.append(pkg)
+    return seen
+
+
+def imports_for(names: list[str]) -> list[str]:
+    """这些插件各自的 Python 模块名（自检用，去重）。"""
+    out: list[str] = []
+    for name in names:
+        item = entry(name)
+        if item is None:
+            raise KeyError(name)
+        for mod in item.get("imports", ()):
+            if mod not in out:
+                out.append(mod)
+    return out
+
+
+# ---------------------------------------------------------------- 三态
 
 READY = "ready"
 MISSING_DEPS = "missing_deps"
@@ -165,6 +245,18 @@ def _has_module(name: str) -> bool:
         return False
 
 
+def _state_of(py: tuple[str, ...], exe: tuple[str, ...], plugin: str) -> tuple[str, list[str]]:
+    """三态 + 缺什么。`capability_report` 与 `market_report` 共用，避免各算一套。"""
+    missing_py = [d for d in py if not _has_module(d)]
+    missing_exe = [d for d in exe if shutil.which(d) is None]
+    missing = missing_py + missing_exe
+    if not _has_module(f"beetsplug.{plugin}"):
+        return UNAVAILABLE, missing
+    if missing:
+        return MISSING_DEPS, missing
+    return READY, missing
+
+
 def capability_report(enabled: list[str] | None = None) -> list[dict]:
     """逐个声明插件给三态。
 
@@ -175,15 +267,7 @@ def capability_report(enabled: list[str] | None = None) -> list[dict]:
     enabled_set = set(enabled or [])
     report = []
     for spec in DEFAULT_PLUGINS:
-        missing_py = [d for d in spec.py_deps if not _has_module(d)]
-        missing_exe = [d for d in spec.exe_deps if shutil.which(d) is None]
-        missing = missing_py + missing_exe
-        if not _has_module(f"beetsplug.{spec.name}"):
-            state = UNAVAILABLE
-        elif missing:
-            state = MISSING_DEPS
-        else:
-            state = READY
+        state, missing = _state_of(spec.py_deps, spec.exe_deps, spec.name)
         report.append(
             {
                 "name": spec.name,
@@ -220,28 +304,48 @@ def market_report() -> list[dict]:
     """市场目录的三态报告（`plugin_catalog` 命令的载荷）。
 
     与 `capability_report` 同一套检测，但覆盖**目录**而非默认清单，
-    且多带来源档位（`source: builtin | pypi:<包名>`）——UI 的"安装"按钮
-    只对 pypi 档且非 ready 的项出现。
+    且多带来源档位（`source: builtin | pypi:<包名>`）与 `packages`
+    （UI 显示"要装什么"、安装脚本拼命令都用它）。
     """
     report = []
     for spec in MARKET_CATALOG:
-        missing_py = [d for d in spec.py_deps if not _has_module(d)]
-        missing_exe = [d for d in spec.exe_deps if shutil.which(d) is None]
-        missing = missing_py + missing_exe
-        if not _has_module(f"beetsplug.{spec.name}"):
-            state = UNAVAILABLE
-        elif missing:
-            state = MISSING_DEPS
-        else:
-            state = READY
+        state, missing = _state_of(spec.py_deps, spec.exe_deps, spec.name)
         report.append(
             {
                 "name": spec.name,
                 "note": spec.note,
-                "source": "builtin" if spec.pypi is None else f"pypi:{spec.pypi}",
+                "source": "builtin" if not spec.packages else "pypi:" + ",".join(spec.packages),
+                "packages": list(spec.packages),
                 "state": state,
                 "enabled": False,  # 启停归 config（cfg.render_config），目录报告不带
                 "missing": missing,
             }
         )
     return report
+
+
+def ui_catalog() -> list[dict]:
+    """给宿主/UI 的静态目录：不依赖 beets 运行时，也不探测三态。
+
+    宿主用的是编译期 `include_str!` 的那份 JSON（`beets_plugin_catalog`），
+    这里保留同形状的入口是为了两条路径（未装组件 / 已装组件）说话一致。
+    """
+    rows = []
+    workbench = set(WORKBENCH_DEFAULT_PLUGINS)
+    for item in entries():
+        rows.append(
+            {
+                "name": item["name"],
+                "title": item.get("title", item["name"]),
+                "note": item.get("note", ""),
+                "builtin": bool(item.get("builtin", True)),
+                "packages": list(item.get("packages", ())),
+                "exe": list(item.get("exe", ())),
+                "writes": bool(item.get("writes", False)),
+                "network": bool(item.get("network", False)),
+                "bundle": bool(item.get("bundle", False)),
+                "default": item["name"] in workbench,
+                "schema": catalog()["schema"],
+            }
+        )
+    return rows

@@ -31,4 +31,6 @@ aiya-beets = "aiya_beets.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-aiya_beets = ["data/*.txt"]
+# plugins.json 是插件表的唯一事实源（docs/51 §1）：漏了它，装到用户机的
+# 每一处 `plugins.catalog()` 都会在 import 期抛 FileNotFoundError。
+aiya_beets = ["data/*.txt", "data/*.json"]

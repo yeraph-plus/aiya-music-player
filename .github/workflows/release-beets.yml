@@ -1,0 +1,192 @@
+# beets 侧独立发布：只发 Windows 的免配置套件包 + 安装器
+#
+# ## 为什么从 release.yml 拆出来（docs/51 §3.3）
+#
+# 原先 beets 的两个产物跟在播放器 release 里一起打，带来两个问题：
+#   1. beets 的改动（插件表、依赖、打包脚本）必须等一次播放器发版才能上线；
+#   2. 宿主原先写死 `releases/latest/download`，两个发布节奏互相踩——单独发
+#      beets 会让 `latest` 指过去，而播放器 release 不带 beets 资产时又 404。
+#
+# 拆开之后：本工作流只产出 `aiya-beets-*`，并且除了版本 tag 之外，还会把同样的
+# 两个文件 `--clobber` 到**浮动 tag `beets-latest`** 的 prerelease 上。宿主常量
+# 指向 `releases/download/beets-latest/...`，从此与播放器发布完全解耦。
+#
+# `beets-latest` 必须标 `--prerelease`：GitHub 的 `releases/latest` 会跳过
+# prerelease，否则这个浮动通道会污染"最新正式版"的语义。
+#
+# ## 触发方式
+#
+#   · 手动（workflow_dispatch）：默认**只构建不发布**，产物落在 Actions artifacts。
+#     勾 `publish` 且填 `version` 才建 tag 并上传——发布是不可撤销的，不能手滑。
+#   · 打 tag `beets-v*`：构建后直接发布（tag 已存在，不需要再填 version）。
+#
+# ## 只发 Windows
+#
+# 应用当前只规划 Windows（2026-10-27 拍板）。脚本里留了 `--runtime` 口子，
+# 但这里不矩阵化——发一个没验证过的平台发布物，比不发更糟。
+#
+# ## 签名：不做（2026-10-27 拍板）
+# 与播放器一致：未签名，用户首次运行由 SmartScreen 提示"未知发布者"。
+
+name: Release beets
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "beets 版本号（发布时必填，如 0.2.0；建 tag beets-v<version>）"
+        required: false
+        default: ""
+      publish:
+        description: "勾选后发布到 Release（并更新浮动通道 beets-latest）"
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "beets-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  # 同一分支上并发构建会抢 uv 缓存与 dist/ 目录；发布本身也不需要并行
+  group: release-beets-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: 打 beets 发布物（win-x64）
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      # Windows runner 的**管道** stdout 按 locale 编码（英文镜像是 cp1252），
+      # 中文 print 会 UnicodeEncodeError。两个 build 脚本各自 reconfigure 兜底，
+      # 这里再设一次是为了 pip / uv 之类的**子进程**（它们继承 env、不继承我们的
+      # reconfigure）。两处都要，缺一处就会在别的路径上复发。
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # uv 是**打包工具**不是运行时：它按 embeddable 解释器解析 wheel
+      # （实测 numpy 拿到 cp314 tag），比 pip 快一个量级。
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: 建开发环境（跑构建脚本与契约测试）
+        run: |
+          python -m venv beets-tool/.venv
+          beets-tool/.venv/Scripts/python -m pip install --upgrade pip
+          beets-tool/.venv/Scripts/pip install -r beets-tool/requirements.lock
+          beets-tool/.venv/Scripts/pip install -e "beets-tool[dev]"
+
+      # 表错一个键不会报错，只会让发布物里少一个插件、或者让索引家收进写盘
+      # 插件。所以打包前先过一遍表契约（负向用例也在里面）。
+      - name: 插件表契约
+        run: beets-tool/.venv/Scripts/python beets-tool/tests/catalog_contract.py
+
+      - name: 打免配置套件包
+        run: beets-tool/.venv/Scripts/python beets-tool/tools/build_bundle.py --uv uv
+
+      - name: 打安装器（.pyz）
+        run: beets-tool/.venv/Scripts/python beets-tool/tools/build_installer.py
+
+      # 名字错了宿主就 404，所以在这里硬校验一次
+      - name: 校验产物名与体积
+        run: |
+          $expected = @{
+            "aiya-beets-installer.pyz"        = 20KB
+            "aiya-beets-bundle-win-x64.zip"   = 20MB
+          }
+          foreach ($f in $expected.Keys) {
+            $p = "beets-tool/dist/$f"
+            if (-not (Test-Path $p)) { throw "缺少发布物：$p" }
+            $len = (Get-Item $p).Length
+            if ($len -lt $expected[$f]) { throw "$f 只有 $len 字节，太小了" }
+            Write-Host ("{0}  {1:N0} KB" -f $f, ($len / 1KB))
+          }
+
+      # "免配置"是可验证的：解开包，用**包里的**解释器 import 预置插件的模块。
+      # 这一步不过，发布物就是哑的（装得上、插件不工作）。
+      - name: 解开套件包自检
+        run: |
+          $dst = "$env:RUNNER_TEMP\bundle-check"
+          Expand-Archive -Path "beets-tool/dist/aiya-beets-bundle-win-x64.zip" -DestinationPath $dst -Force
+          $py = Join-Path $dst "python.exe"
+          $m = Get-Content (Join-Path $dst "manifest.json") -Raw | ConvertFrom-Json
+          Write-Host "manifest: version=$($m.version) protocol=$($m.protocolVersion) plugins=$($m.plugins -join ',')"
+          & $py -m aiya_beets version
+          if ($LASTEXITCODE -ne 0) { throw "包内 aiya_beets 跑不起来" }
+          foreach ($mod in @("bs4")) {
+            & $py -c "import $mod"
+            if ($LASTEXITCODE -ne 0) { throw "预置插件依赖缺失：$mod" }
+          }
+
+      # 三处版本必须同一个数字：包内 __version__、manifest、tag。
+      # 以前 build_bundle 硬编码 0.1.0 而包是 0.2.0，发出去没人发现（docs/51 §0）。
+      - name: 版本一致性
+        run: |
+          $pkg = (beets-tool/.venv/Scripts/python -c "import sys; sys.path.insert(0,'beets-tool/src'); from aiya_beets import __version__; print(__version__)").Trim()
+          $man = (Get-Content "beets-tool/dist/bundle/manifest.json" -Raw | ConvertFrom-Json).version
+          Write-Host "包内=$pkg manifest=$man"
+          if ($pkg -ne $man) { throw "manifest 版本 $man 与包内 $pkg 不一致" }
+          $tagVersion = "${{ github.event_name == 'push' && github.ref_name || inputs.version }}"
+          $tagVersion = $tagVersion -replace '^beets-v', ''
+          if ($tagVersion -and ($tagVersion -ne $pkg)) {
+            throw "tag/输入版本 $tagVersion 与包内 $pkg 不一致（先改 pyproject 与 __init__）"
+          }
+
+      # 手动触发的默认产物：不发布也能拿到文件去真机试
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aiya-beets-win-x64
+          path: |
+            beets-tool/dist/aiya-beets-installer.pyz
+            beets-tool/dist/aiya-beets-bundle-win-x64.zip
+          retention-days: 14
+
+      # ---------------------------------------------------------------
+      # 发布：手动勾了 publish，或者打了 beets-v* tag
+      # ---------------------------------------------------------------
+      - name: 发布到 Release
+        if: startsWith(github.ref, 'refs/tags/beets-v') || inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $files = @(
+            "beets-tool/dist/aiya-beets-installer.pyz",
+            "beets-tool/dist/aiya-beets-bundle-win-x64.zip"
+          )
+          $version = "${{ inputs.version }}"
+          if (-not $version) { $version = ("${{ github.ref_name }}" -replace '^beets-v', '') }
+          if (-not $version) { throw "发布必须给 version（或打 beets-v* tag）" }
+          $tag = "beets-v$version"
+
+          Write-Host "→ $tag"
+          gh release create $tag --title "beets $version" --generate-notes $files
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "release 已存在，改为追加上传（--clobber）"
+            gh release upload $tag $files --clobber
+            if ($LASTEXITCODE -ne 0) { throw "上传到 $tag 失败" }
+          }
+
+          # 浮动通道：宿主写死 `releases/download/beets-latest/<asset>`。
+          # 必须有，否则播放器就要知道具体版本号才能下载。
+          $floating = "beets-latest"
+          gh release view $floating 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            # --prerelease：不能污染 `releases/latest` 的语义（它会跳过 prerelease）
+            gh release create $floating --prerelease --title "beets latest（浮动通道）" `
+              --notes "指向最近一次 beets 发布，供播放器按固定 URL 下载。不要手动改这个 release。"
+            if ($LASTEXITCODE -ne 0) { throw "创建浮动通道 $floating 失败" }
+          }
+          gh release upload $floating $files --clobber
+          if ($LASTEXITCODE -ne 0) { throw "更新浮动通道 $floating 失败" }
+          Write-Host "OK $tag + $floating"

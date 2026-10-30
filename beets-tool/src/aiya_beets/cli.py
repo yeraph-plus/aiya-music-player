@@ -67,6 +67,12 @@ def main(argv: list[str] | None = None) -> int:
     p_install.add_argument("--target", required=True)
     p_install.add_argument("--from-wheels", default=None)
     p_install.add_argument("--requirements", default=None)
+    p_install.add_argument("--plugins", default=None, help="要启用的插件名，逗号分隔；all = 全部")
+    p_install.add_argument("--dry-run", action="store_true", help="只打印安装计划")
+
+    p_uninstall = sub.add_parser("uninstall", help="删除安装器建的环境（数据不动）")
+    p_uninstall.add_argument("--target", required=True)
+    p_uninstall.add_argument("--dry-run", action="store_true")
 
     ns = ap.parse_args(args)
 
@@ -77,11 +83,24 @@ def main(argv: list[str] | None = None) -> int:
     if ns.cmd == "install":
         from . import install
 
-        return install.main([
-            "--target", ns.target,
-            *(["--from-wheels", ns.from_wheels] if ns.from_wheels else []),
-            *(["--requirements", ns.requirements] if ns.requirements else []),
-        ])
+        argv = ["--target", ns.target]
+        if ns.from_wheels:
+            argv += ["--from-wheels", ns.from_wheels]
+        if ns.requirements:
+            argv += ["--requirements", ns.requirements]
+        if ns.plugins:
+            argv += ["--plugins", ns.plugins]
+        if ns.dry_run:
+            argv.append("--dry-run")
+        return install.main(argv)
+
+    if ns.cmd == "uninstall":
+        from . import uninstall
+
+        argv = ["--target", ns.target]
+        if ns.dry_run:
+            argv.append("--dry-run")
+        return uninstall.main(argv)
 
     # 读配置的命令必须在 import beets **之前**把 config.yaml 备好：beets 一导入
     # 就把配置读进内存，之后写的文件对它不生效。以前这一步藏在 serve() 里，

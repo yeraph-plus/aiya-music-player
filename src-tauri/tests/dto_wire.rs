@@ -473,6 +473,7 @@ fn small_result_dtos_keep_their_exact_keys() {
         name: "lyrics".into(),
         note: "歌词抓取".into(),
         source: "pypi:beautifulsoup4".into(),
+        packages: vec!["beautifulsoup4>=4.12,<5".into()],
         state: "missing_deps".into(),
         enabled: false,
         missing: vec!["bs4".into()],
@@ -480,7 +481,56 @@ fn small_result_dtos_keep_their_exact_keys() {
     .unwrap();
     assert_eq!(
         keys(&item),
-        sorted(&["name", "note", "source", "state", "enabled", "missing"])
+        sorted(&["name", "note", "source", "packages", "state", "enabled", "missing"])
+    );
+
+    // 插件表条目：键名必须与 `beets-tool/.../data/plugins.json` 逐字对齐。
+    // 这份 JSON 被 Rust（include_str!）、Python（三方）、打包脚本共读，
+    // 改一个键名就会让前端拿到 undefined —— 而 undefined 不会报错。
+    let plugin = serde_json::to_value(aiya_lib::dto::beets::BeetsPluginItem {
+        name: "lyrics".into(),
+        title: "歌词抓取".into(),
+        note: "…".into(),
+        builtin: true,
+        packages: vec!["beautifulsoup4>=4.12,<5".into()],
+        exe: vec![],
+        writes: false,
+        network: true,
+        bundle: true,
+        default: true,
+        index_default: false,
+    })
+    .unwrap();
+    assert_eq!(
+        keys(&plugin),
+        sorted(&[
+            "name",
+            "title",
+            "note",
+            "builtin",
+            "packages",
+            "exe",
+            "writes",
+            "network",
+            "bundle",
+            "default",
+            "indexDefault"
+        ])
+    );
+
+    // Python 探测结果：UI 直接用这份渲染"找到/没找到"
+    let probe = serde_json::to_value(aiya_lib::dto::beets::BeetsPythonProbe {
+        found: false,
+        path: None,
+        version: None,
+        supported: false,
+        source: None,
+        reason: Some("没有找到".into()),
+    })
+    .unwrap();
+    assert_eq!(
+        keys(&probe),
+        sorted(&["found", "path", "version", "supported", "source", "reason"])
     );
 
     // beets 配置快照（docs/40 十三轮）：inbox / 输出根 / 排除表计数。

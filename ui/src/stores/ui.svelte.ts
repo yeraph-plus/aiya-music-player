@@ -2,7 +2,7 @@ import type { BeetsStatus, Diagnostics } from '../lib/ipc';
 import type { TrackSort } from '../lib/query';
 import type { AppSettings } from '../lib/settings';
 import { DEFAULT_SETTINGS } from '../lib/settings';
-import { ipc, events, type BeetsInstallTrack, type DynamicJson } from '../lib/ipc';
+import { ipc, events, type BeetsInstallTrack, type BeetsPluginItem, type BeetsPythonProbe, type DynamicJson } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
 import { devValidate, uiStateSchema, type UiState } from '../lib/ipc/schema';
 // 合并/迁移逻辑是纯函数（可单独验证），store 只负责在引导与写回时调它
@@ -532,6 +532,26 @@ class UiStore {
     error: null,
   });
 
+  /**
+   * 内嵌插件表（docs/51 §1）：`[]` = 还没加载过。
+   *
+   * 为什么不是从 `ui.beets.pluginCatalog` 拿：那份要起 sidecar，而安装页
+   * 恰恰是"还没装"的时候要给用户看清单。内嵌表在二进制里，离线也可用。
+   */
+  beetsPlugins = $state<BeetsPluginItem[]>([]);
+  /** 本机 Python 探测结果（`null` = 还没探测过） */
+  beetsPython = $state<BeetsPythonProbe | null>(null);
+  /**
+   * 卸载进度。与安装分开一个状态：两者终态事件不同
+   * （install 以 `finished` 收尾，uninstall 以 `done` 收尾），混在一起会让
+   * 「安装中」和「卸载中」互相覆盖。
+   */
+  beetsUninstall = $state<{ running: boolean; message: string; error: string | null }>({
+    running: false,
+    message: '',
+    error: null,
+  });
+
   /** 订阅安装进度。只在 App 启动时调一次。 */
   watchBeetsInstall(): () => void {
     return events.beetsInstall((e) => {
@@ -541,8 +561,23 @@ class UiStore {
       if (type === 'finished') {
         // 终态带 status：装没装成以 probe 为准，不以退出码为准
         this.beetsInstall = { running: false, track: this.beetsInstall.track, stage: 'done', message: '', error: null };
+        this.beetsUninstall = { ...this.beetsUninstall, running: false };
         const status = readBeetsStatus(e.status);
         if (status) this.beets = status;
+        return;
+      }
+      if (stage === 'uninstall') {
+        // 卸载与安装共用同一条事件流，只靠 stage 区分（docs/51 §2.2）。
+        // `done` 是卸载的终态：带 removed / files / bytes / message。
+        if (type === 'error') {
+          this.beetsUninstall = { running: false, message: '', error: message || '卸载失败' };
+          return;
+        }
+        if (type === 'done') {
+          this.beetsUninstall = { running: false, message, error: null };
+          return;
+        }
+        this.beetsUninstall = { running: true, message, error: null };
         return;
       }
       if (type === 'error') {
@@ -560,13 +595,16 @@ class UiStore {
   }
 
   /**
-   * 触发安装（docs/33 §6.2）。
+   * 触发安装（docs/33 §6.2 / docs/51 §4）。
    *
-   * 两条轨道都只是「下载 → 展开 → 记入口 → 跑一次 status」；选哪条由用户的
-   * 机器决定（没 Python 只能走 bundle），所以这里不做任何预判，把失败原样
-   * 抛给按钮旁的文字。
+   * 两条路径的差别是**要不要本机 Python**：
+   * - `bundle`：免配置包，自带解释器 + 预置插件，解压即用；
+   * - `installer`：下载 `.pyz`，用本机 Python 建 venv，装用户勾选的插件。
+   *
+   * `plugins` 只对 installer 有意义（bundle 已预置）。传了也不做预判，
+   * 失败原样抛给按钮旁的文字——用户机器状况是我们猜不到的。
    */
-  async installBeets(track: BeetsInstallTrack = 'installer'): Promise<void> {
+  async installBeets(track: BeetsInstallTrack = 'installer', plugins: string[] = []): Promise<void> {
     this.beetsInstall = {
       running: true,
       track,
@@ -575,9 +613,48 @@ class UiStore {
       error: null,
     };
     try {
-      await ipc.beets.install(track);
+      await ipc.beets.install(track, plugins);
     } catch (e) {
       this.beetsInstall = { running: false, track, stage: '', message: '', error: errorMessage(e) };
+    }
+  }
+
+  /**
+   * 加载内嵌插件表（幂等：已经拿到就不重复取）。
+   *
+   * 只在安装页进入时调；失败不弹错——最坏是勾选清单空着，用户仍能装基础组件。
+   */
+  async loadBeetsPlugins(): Promise<void> {
+    if (this.beetsPlugins.length > 0) return;
+    try {
+      this.beetsPlugins = await ipc.beets.pluginTable();
+    } catch (e) {
+      console.warn('beets.pluginTable failed:', errorMessage(e));
+    }
+  }
+
+  /** 探测本机 Python（路径 B 的前置）。失败置 null，由界面说"探测不了"。 */
+  async probeBeetsPython(): Promise<void> {
+    try {
+      this.beetsPython = await ipc.beets.pythonProbe();
+    } catch (e) {
+      console.warn('beets.pythonProbe failed:', errorMessage(e));
+      this.beetsPython = null;
+    }
+  }
+
+  /**
+   * 卸载组件（docs/51 §2.2）：只删安装目录，整理库与分析库不动。
+   *
+   * 进度走同一条 `beets:install` 事件流（`stage: uninstall`），终态后宿主会
+   * 补一条 `finished` 带新 status，所以这里不需要再手动刷一次。
+   */
+  async uninstallBeets(): Promise<void> {
+    this.beetsUninstall = { running: true, message: '正在卸载…', error: null };
+    try {
+      await ipc.beets.uninstall();
+    } catch (e) {
+      this.beetsUninstall = { running: false, message: '', error: errorMessage(e) };
     }
   }
 

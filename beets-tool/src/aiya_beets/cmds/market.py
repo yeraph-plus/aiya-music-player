@@ -91,19 +91,23 @@ def install_plugin(req_id: int, name: str, emit, cancel_gen, gen: int) -> None:
         raise protocol.ProtocolError(
             protocol.E_INVALID_ARG, "pluginInstall", f"不在插件目录里: {name!r}"
         )
-    if spec.pypi is None:
-        # builtin 档：随 beets 内置，"安装"没有意义，UI 对它只给开关
+    if not spec.packages:
+        # 无需额外包：要么随 beets 内置，要么依赖已在 lock 里（fetchart 的
+        # requests）。"安装"没有意义，UI 对它只给开关。
         raise protocol.ProtocolError(
-            protocol.E_INVALID_ARG, "pluginInstall", f"{name} 随 beets 内置，无需安装"
+            protocol.E_INVALID_ARG, "pluginInstall",
+            f"{name} 不需要额外 Python 包，直接启用即可",
         )
 
     installer, why = resolve_installer()
     if installer is None:
         raise protocol.ProtocolError(protocol.E_CONFIG, "pluginInstall", why)
 
-    cmd = [*installer, "install", "--disable-pip-version-check", spec.pypi]
+    # 一个插件可能需要多个包（插件包本身 + 依赖），一次装完：分开装会让
+    # pip 做两次依赖解析，第二次可能把第一次的结果降级。
+    cmd = [*installer, "install", "--disable-pip-version-check", *spec.packages]
     emit({"type": "pluginProgress", "session": session, "stage": "pluginInstall",
-          "message": f"安装 {spec.pypi}"})
+          "message": f"安装 {' '.join(spec.packages)}"})
     try:
         proc = subprocess.Popen(
             cmd,

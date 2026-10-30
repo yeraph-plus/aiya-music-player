@@ -1341,17 +1341,58 @@ fn refresh_state(state: State<'_, AppState>) -> Result<dto::RefreshState, dto::A
     })
 }
 
-/// 安装 beets 侧组件（docs/33 §6.2 两条轨道）。
+/// 安装 beets 侧组件（docs/33 §6.2 两条轨道 / docs/51 §4）。
 ///
-/// `track` = `installer`（A：本机 Python 建 venv）/ `bundle`（B：免安装套件包）。
-/// 播放器只做「下载 → 展开 → 记下入口 → 跑一次 status」，不碰 Python 工具链。
+/// `track` = `installer`（路径 B：本机 Python 建 venv，可勾选插件）/
+/// `bundle`（路径 A：免配置套件包，预置插件，不需要本机 Python）。
+/// 播放器只做「下载 → 展开/装依赖 → 记下入口 → 跑一次 status」，不碰 Python 工具链。
 /// 进度走 `beets:install` 事件，结束时推一条 `finished` 带新 status。
+///
+/// `plugins` 是勾选的**启用**清单（只有 installer 轨道有意义）：安装器据此装
+/// 额外依赖，宿主把它写进 `settings.plugins`，工具侧渲染 config 时照它启用。
 #[tauri::command]
 async fn beets_install(
     app: AppHandle,
     track: Option<String>,
+    plugins: Option<Vec<String>>,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    beets::start_install(app, track.unwrap_or_default())
+    beets::start_install(app, track.unwrap_or_default(), plugins.unwrap_or_default())
+        .map(|_| dto::beets::JobStarted { started: true })
+        .map_err(dto::ApiError::internal)
+}
+
+/// 本机 Python 探测（路径 B 的前置条件）。
+///
+/// 探测顺序：Windows 的 `py -0p` → PATH 上的 `python` / `python3`。
+/// 只试后两个会把"装了 Python 但没写 PATH"的机器判成没装（python.org 的
+/// 安装包默认就是这样）。找不到时 `reason` 里带一句人话，UI 直接用。
+#[tauri::command]
+async fn beets_python_probe() -> Result<dto::beets::BeetsPythonProbe, dto::ApiError> {
+    tauri::async_runtime::spawn_blocking(beets::python_probe_payload)
+        .await
+        .map_err(dto::ApiError::internal)
+}
+
+/// 内嵌插件表：不依赖已安装组件就能拿到的静态目录（docs/51 §1）。
+///
+/// 与 `beets_plugin_catalog` 的分工：这条回答"有哪些插件、各自要装什么"
+/// （编译期内嵌 JSON，永远可用）；那条回答"装了之后哪些真的 ready"
+/// （要起 sidecar，未安装时不可用）。
+#[tauri::command]
+async fn beets_plugin_table() -> Result<Vec<dto::beets::BeetsPluginItem>, dto::ApiError> {
+    tauri::async_runtime::spawn_blocking(beets::plugin_table)
+        .await
+        .map_err(dto::ApiError::internal)?
+        .map_err(dto::ApiError::internal)
+}
+
+/// 卸载组件：只删安装目录（venv / bundle / 缓存），**不动**整理库与分析库。
+///
+/// 数据由应用自己的清理入口管（2026-10-30 拍板：卸载 = 安装的反向操作）。
+/// 进度复用 `beets:install` 事件流，结束时补 `finished` 带新 status。
+#[tauri::command]
+async fn beets_uninstall(app: AppHandle) -> Result<dto::beets::JobStarted, dto::ApiError> {
+    beets::start_uninstall(app)
         .map(|_| dto::beets::JobStarted { started: true })
         .map_err(dto::ApiError::internal)
 }
@@ -3992,6 +4033,9 @@ pub fn run() {
                         inbox_imported: setting_get(conn, "beets.inboxImported")
                             .and_then(|v| serde_json::from_value(v).ok())
                             .unwrap_or_default(),
+                        // 旧表里没有这个键：迁移过来就是"没选过"，
+                        // 工具侧会回落到 plugins.json 的 profiles.workbench
+                        plugins: None,
                     })
                 });
                 if let Ok(legacy) = legacy {
@@ -4352,6 +4396,9 @@ pub fn run() {
             beets_query,
             beets_fields,
             beets_plugin_catalog,
+            beets_plugin_table,
+            beets_python_probe,
+            beets_uninstall,
             beets_plugin_install,
             enrichment_worklist,
             beets_enrich_start,

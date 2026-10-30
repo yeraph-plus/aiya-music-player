@@ -77,6 +77,12 @@ def main() -> int:
         if lock.is_file():
             shutil.copyfile(lock, data / "requirements.txt")
         shutil.copyfile(lic, data / "LICENSE")
+        # 插件表由 copytree 带进来了，但它现在是**必需**的：`plugins.py` 在
+        # import 期就读它（派生 MARKET/DEFAULT/INDEX 三个视图）。缺了的话
+        # 安装器一启动就 FileNotFoundError，所以宁可在这里硬红一次。
+        if not (data / "plugins.json").is_file():
+            print("缺少 data/plugins.json：插件表必须随包分发", file=sys.stderr)
+            return 1
 
         zipapp.create_archive(
             stage,

@@ -1,4 +1,9 @@
 fn main() {
+    // 插件表是 `include_str!` 进二进制的（`beets.rs::PLUGIN_TABLE_JSON`）。
+    // 不说一声的话，改了 JSON 只重编 beets.rs 才会生效 —— 而 JSON 是数据文件，
+    // 改了它 cargo 不会认为源文件变了，于是二进制里还是旧表、UI 显示旧插件。
+    println!("cargo:rerun-if-changed=../beets-tool/src/aiya_beets/data/plugins.json");
+
     // 先自己看一眼 sidecar 在不在，再交给 tauri_build。
     //
     // 为什么值得多这几行：`bundle.resources` 里那句

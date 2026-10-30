@@ -109,11 +109,72 @@ pub struct BeetsMarketItem {
     pub note: String,
     /// `builtin` | `pypi:<包名>`
     pub source: String,
+    /// 这个插件要装的 pip 包（空 = 不需要额外包）。新版工具才有，
+    /// 旧工具缺这个键时要能解析（`default`），否则整条目录静默变 None。
+    #[serde(default)]
+    pub packages: Vec<String>,
     /// `ready` | `missing_deps` | `unavailable`
     pub state: String,
     pub enabled: bool,
     /// 缺什么（Python 包名或外部命令名）；`ready` 时为空。
     pub missing: Vec<String>,
+}
+
+/// 插件表里的一条（**编译期内嵌**，不需要装过组件就能拿到）。
+///
+/// 来源是 `beets-tool/src/aiya_beets/data/plugins.json`，与工具侧、打包脚本、
+/// 安装器读的是同一份字节（docs/51 §1）。装了组件之后 UI 仍可以用
+/// `beets_plugin_catalog` 拿三态；这条命令只回答"有哪些插件、各自要装什么"。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct BeetsPluginItem {
+    pub name: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub note: String,
+    /// 插件随 beets 提供（false = 由 `packages` 里的包提供）
+    #[serde(default)]
+    pub builtin: bool,
+    /// pip 目标（插件包自身 + 依赖），带版本约束
+    #[serde(default)]
+    pub packages: Vec<String>,
+    /// 外部二进制（ffmpeg / fpcalc …），只提示不代装
+    #[serde(default)]
+    pub exe: Vec<String>,
+    /// 默认会写音频文件或产出文件（索引家结构上不收）
+    #[serde(default)]
+    pub writes: bool,
+    #[serde(default)]
+    pub network: bool,
+    /// 免配置包预置
+    #[serde(default)]
+    pub bundle: bool,
+    /// 首次生成 config 时启用（由 JSON 的 `profiles.workbench` 注入）
+    #[serde(default)]
+    pub default: bool,
+    /// 索引家默认启用（由 `profiles.index` 注入）
+    #[serde(default)]
+    pub index_default: bool,
+}
+
+/// 本机 Python 探测结果（路径 B 的前置条件）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct BeetsPythonProbe {
+    pub found: bool,
+    /// 绝对路径（`py -0p` 给的就是绝对路径）
+    pub path: Option<String>,
+    /// `3.12.4` 这样的版本号
+    pub version: Option<String>,
+    /// 是否在工具侧的支持窗口内（>=3.10 <3.15）
+    pub supported: bool,
+    /// 探测来源：`py-launcher` | `python` | `python3`
+    pub source: Option<String>,
+    /// 找不到时的说明（给 UI 直接显示，不要让它自己编文案）
+    pub reason: Option<String>,
 }
 
 /// "任务已启动"（preview / apply / sync 三个命令共用）。

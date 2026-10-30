@@ -252,7 +252,12 @@ def render_config(
 
 
 def _render_workbench(home: Path, root: str | None, plugins: list[str] | None) -> str:
-    names = plugins if plugins is not None else [p.name for p in DEFAULT_PLUGINS]
+    if plugins is not None:
+        names = list(plugins)
+    else:
+        # 用户在安装页勾过的清单优先（装了不启用等于白装）；
+        # 没勾过才用表里的默认清单
+        names = settings_plugins(home) or [p.name for p in DEFAULT_PLUGINS]
     lines = [
         "# AIYA Music 生成；改过之后不会再被覆盖（要恢复默认就删掉本文件）",
         f"library: {yaml_path(home / 'library.db')}",
@@ -261,6 +266,29 @@ def _render_workbench(home: Path, root: str | None, plugins: list[str] | None) -
         lines.append(f"directory: {yaml_path(root)}")
     lines.append("plugins: " + " ".join(names))
     return "\n".join(lines) + "\n"
+
+
+SETTINGS_FILE = "settings.json"
+
+
+def settings_plugins(home: Path | None = None) -> list[str] | None:
+    """宿主记在 `settings.json` 里的启用清单（`None` = 用户没选过）。
+
+    为什么读这里而不是再发一个环境变量：`settings.json` 本来就在同一个 home
+    下（宿主拥有、工具侧只读）。给同一个事实开第二条通路，两条一旦不一致，
+    症状就是"安装页勾了、config 里没启用"——这类静默不一致最难查。
+    坏 JSON / 缺键 / 空数组都按"没选过"处理：配置坏了不该让组件整体不可用。
+    """
+    base = home or data_home()
+    try:
+        doc = json.loads((base / SETTINGS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    raw = doc.get("plugins") if isinstance(doc, dict) else None
+    if not isinstance(raw, list):
+        return None
+    names = [str(x).strip() for x in raw if isinstance(x, str) and x.strip()]
+    return names or None
 
 
 # `directory:` 行（含行尾），用来做外科式替换。故意只认行首：被注释掉的
@@ -288,6 +316,33 @@ def _sync_directory(text: str, root: str) -> str:
         if line.startswith("library:"):
             lines.insert(i + 1, want + "\n")
             return "".join(lines)
+    return want + "\n" + text
+
+
+# `plugins:` 行（含行尾）。同样只认行首：注释掉的 `# plugins:` 不算。
+_PLUGINS_LINE = re.compile(r"^plugins:[^\n]*$", re.MULTILINE)
+
+
+def _sync_plugins(text: str, names: list[str]) -> str:
+    """把 `plugins:` 行改成 `names`，**其余行逐字节保留**。
+
+    为什么这是应用事实而不是用户偏好：用户在安装页勾了哪些插件、安装器就把
+    哪些依赖装进了 venv。config 里不启用，等于装了个摆设。所以它要跟着
+    `settings.json` 走，与 `directory` 同一类处理（外科式替换一行）。
+
+    空清单写成 `plugins: []` 而不是留空：空值是 YAML 的 None，
+    beets 的 `as_str_seq` 对它怎么处理不值得赌。
+    """
+    want = "plugins: " + (" ".join(names) if names else "[]")
+    if _PLUGINS_LINE.search(text):
+        return _PLUGINS_LINE.sub(lambda _m: want, text, count=1)
+    lines = text.splitlines(keepends=True)
+    # 插在 library/directory 之后：beets 的键顺序无所谓，人读起来挨着最自然
+    for anchor in ("directory:", "library:"):
+        for i, line in enumerate(lines):
+            if line.startswith(anchor):
+                lines.insert(i + 1, want + "\n")
+                return "".join(lines)
     return want + "\n" + text
 
 
@@ -534,13 +589,20 @@ def ensure_config(home: Path | None = None, prof: str | None = None) -> Path:
             render_config(base, dest_root() or scan_root()), encoding="utf-8", newline="\n"
         )
     else:
-        # 已存在 → 只同步 `directory` 一行，其余逐字节保留。
-        # 为什么要同步：第一次生成时可能还没有曲库目录（那行被省略），
+        # 已存在 → 只同步两行应用事实，其余逐字节保留。
+        # 为什么要同步 `directory`：第一次生成时可能还没有曲库目录（那行被省略），
         # 此后用户配上了落点，若永不补，move/copy 会落进 beets 默认的 ~/Music。
+        # 为什么要同步 `plugins`：安装页勾选的插件装了依赖却没启用，等于白装。
+        # 但**只在用户选过时才同步**（settings.json 里没有这个键就不碰），
+        # 否则会每次启动把用户手改的 plugins 行回滚掉。
+        text = path.read_text(encoding="utf-8")
+        want = text
         root = dest_root() or scan_root()
         if root:
-            text = path.read_text(encoding="utf-8")
-            want = _sync_directory(text, root)
-            if want != text:
-                path.write_text(want, encoding="utf-8", newline="\n")
+            want = _sync_directory(want, root)
+        chosen = settings_plugins(base)
+        if chosen:
+            want = _sync_plugins(want, chosen)
+        if want != text:
+            path.write_text(want, encoding="utf-8", newline="\n")
     return path

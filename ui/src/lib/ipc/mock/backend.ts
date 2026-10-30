@@ -33,6 +33,8 @@ import type {
   ArtistPage,
   BeetsConfig,
   BeetsMarketItem,
+  BeetsPluginItem,
+  BeetsPythonProbe,
   BeetsFieldCatalog,
   BeetsQueryPage,
   Diagnostics,
@@ -525,7 +527,10 @@ export class MockBackend {
    * 执行到，比假装成功有用。两条轨道给不同的 stage 文案——真实运行时两者
    * 的步骤本来就不一样（A 建 venv / B 下载解压）。
    */
-  async beetsInstall(track: 'installer' | 'bundle' = 'installer'): Promise<{ started: boolean }> {
+  async beetsInstall(
+    track: 'installer' | 'bundle' = 'installer',
+    plugins: string[] = [],
+  ): Promise<{ started: boolean }> {
     const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:install', e);
     if (track === 'bundle') {
       emit({ type: 'progress', stage: 'download', message: '下载套件包（预览模式模拟）' });
@@ -534,7 +539,11 @@ export class MockBackend {
       await new Promise((r) => setTimeout(r, 250));
       emit({ type: 'error', stage: 'download', message: '浏览器预览不会真的下载套件包，这里是模拟失败' });
     } else {
-      emit({ type: 'progress', stage: 'download', message: '下载安装器（预览模式模拟）' });
+      emit({
+        type: 'progress',
+        stage: 'download',
+        message: `下载安装器（预览模式模拟；勾选 ${plugins.length} 个插件）`,
+      });
       await new Promise((r) => setTimeout(r, 250));
       emit({ type: 'progress', stage: 'venv', message: '创建虚拟环境（预览模式模拟）' });
       await new Promise((r) => setTimeout(r, 250));
@@ -800,9 +809,11 @@ export class MockBackend {
    * 内存态：装完翻绿，和真后端的复检语义一致。
    */
   private market: BeetsMarketItem[] = [
-    { name: 'replaygain', note: '播放音量自动拉齐', source: 'builtin', state: 'ready', enabled: false, missing: [] },
-    { name: 'lyrics', note: '歌词抓取（LRC 字段可直供）', source: 'pypi:beautifulsoup4', state: 'ready', enabled: false, missing: [] },
-    { name: 'fetchart', note: '封面抓取（本地缺图时补）', source: 'pypi:requests', state: 'missing_deps', enabled: false, missing: ['requests'] },
+    { name: 'replaygain', note: '播放音量自动拉齐', source: 'builtin', packages: [], state: 'ready', enabled: false, missing: [] },
+    { name: 'lyrics', note: '歌词抓取（LRC 字段可直供）', source: 'pypi:beautifulsoup4', packages: ['beautifulsoup4>=4.12,<5'], state: 'ready', enabled: false, missing: [] },
+    // fetchart 只要 requests，而 requests 随 beets 装 —— packages 为空，
+    // 所以 source 是 builtin 而不是 pypi（docs/51 §1 的口径）
+    { name: 'fetchart', note: '封面抓取（本地缺图时补）', source: 'builtin', packages: [], state: 'missing_deps', enabled: false, missing: ['requests'] },
   ];
 
   /**
@@ -1029,6 +1040,126 @@ export class MockBackend {
 
   async beetsPluginCatalog(): Promise<BeetsMarketItem[]> {
     return this.market.map((m) => ({ ...m }));
+  }
+
+  /**
+   * 内嵌插件表（docs/51 §1）：预览环境给一份精简版。
+   *
+   * 真宿主读的是编译期 `include_str!` 的 `plugins.json`；这里手写四条，
+   * 刻意覆盖四种形态（要额外包 / 不需要包 / 需外部二进制 / 免配置包预置），
+   * 好让安装页的勾选清单、包名标签、"还需 ffmpeg"提示都被渲染到。
+   */
+  async beetsPluginTable(): Promise<BeetsPluginItem[]> {
+    return [
+      {
+        name: 'replaygain',
+        title: '音量拉齐',
+        note: '提供 gain_db，引擎链路直接消费',
+        builtin: true,
+        packages: [],
+        exe: ['ffmpeg'],
+        writes: true,
+        network: false,
+        bundle: false,
+        default: true,
+        indexDefault: false,
+      },
+      {
+        name: 'lyrics',
+        title: '歌词抓取',
+        note: '抓取歌词，LRC 字段可直供',
+        builtin: true,
+        packages: ['beautifulsoup4>=4.12,<5'],
+        exe: [],
+        writes: false,
+        network: true,
+        bundle: true,
+        default: true,
+        indexDefault: false,
+      },
+      {
+        name: 'chroma',
+        title: '音频指纹',
+        note: 'acoustid 指纹识别（还需自备 fpcalc）',
+        builtin: true,
+        packages: ['pyacoustid>=1.3,<2'],
+        exe: ['fpcalc'],
+        writes: false,
+        network: true,
+        bundle: false,
+        default: false,
+        indexDefault: false,
+      },
+      {
+        name: 'xtractor',
+        title: '音频特征',
+        note: 'bpm / danceability（需要自备 Essentia 二进制）',
+        builtin: true,
+        packages: [],
+        exe: ['streaming_extractor_music'],
+        writes: true,
+        network: false,
+        bundle: false,
+        default: false,
+        indexDefault: true,
+      },
+    ];
+  }
+
+  /**
+   * 本机 Python 探测：浏览器里没有这个概念，如实报"找不到"。
+   *
+   * 不做成假成功：安装页要根据这个结果决定按钮可不可点，
+   * mock 说找得到而真机找不到，是最难查的那种"预览里好好的"。
+   */
+  async beetsPythonProbe(): Promise<BeetsPythonProbe> {
+    return {
+      found: false,
+      path: null,
+      version: null,
+      supported: false,
+      source: null,
+      reason: '浏览器预览拿不到本机 Python；真应用会先试 py 启动器，再试 PATH 上的 python',
+    };
+  }
+
+  /** 卸载组件：事件流形状与真后端一致（progress → done → finished）。 */
+  async beetsUninstall(): Promise<{ started: boolean }> {
+    const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:install', e);
+    emit({ type: 'progress', stage: 'uninstall', message: '将删除安装目录（预览模式模拟）' });
+    await new Promise((r) => setTimeout(r, 300));
+    emit({
+      type: 'done',
+      stage: 'uninstall',
+      removed: true,
+      files: 3765,
+      bytes: 83518898,
+      message: '组件已卸载（预览模式模拟）；整理库与分析库未改动',
+    });
+    emit({
+      type: 'finished',
+      status: {
+        found: false,
+        interpreter: null,
+        scriptPath: null,
+        entrySource: null,
+        protocolVersion: null,
+        beetsVersion: null,
+        pythonVersion: null,
+        pythonSupported: null,
+        libraryPath: null,
+        libraryExists: null,
+        libraryDirectory: null,
+        plugins: null,
+        pluginHealth: null,
+        pluginSummary: null,
+        configDir: null,
+        dataHome: null,
+        errorCode: 'E_TOOL_NOT_FOUND',
+        errorMessage: '浏览器预览不含 beets 工具',
+      },
+    });
+    return { started: true };
   }
 
   async beetsPluginInstall(name: string): Promise<{ started: boolean }> {

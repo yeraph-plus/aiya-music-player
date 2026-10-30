@@ -350,8 +350,13 @@ test('docs/48：未装 beets 时整理库页只给安装引导，不出查询区
 
   const main = page.locator('.main');
   await expect(main).toContainText('整理库未启用');
-  await expect(main.getByRole('button', { name: /快速安装/ })).toBeVisible();
-  await expect(main.getByRole('button', { name: /免安装包/ })).toBeVisible();
+  // 两条路径并排（docs/51 §4）：差别的全部就是"有没有本机 Python"
+  await expect(main.getByRole('button', { name: /下载并安装/ })).toBeVisible();
+  await expect(main).toContainText('本机 Python');
+  // mock 的 Python 探测报"找不到" → 那条只给"重新检测"，不给安装按钮
+  // （免得用户点了才发现没有 Python）
+  await expect(main.getByRole('button', { name: /重新检测/ })).toBeVisible();
+  await expect(main.getByRole('button', { name: /安装（\d+ 个插件）/ })).toHaveCount(0);
 
   // 没装就没有查询入口。导入面板 / 维护四件套 / 插件市场都没搬过来
   // （docs/33 的原则：不该出现的整块不要出现，不是"禁用"）
@@ -359,6 +364,27 @@ test('docs/48：未装 beets 时整理库页只给安装引导，不出查询区
   await expect(main.getByRole('heading', { name: '导入新文件夹' })).toHaveCount(0);
   await expect(main.locator('.maint-fold')).toHaveCount(0);
   await expect(main.locator('.market-fold')).toHaveCount(0);
+});
+
+test('docs/51：安装页给出插件勾选与卸载入口（卸载只删组件）', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('.sidebar .nav-item', { hasText: '整理库' }).click();
+  await page.locator('.main .pt-tab', { hasText: '安装' }).click();
+
+  const main = page.locator('.main');
+  // 内嵌插件表不依赖已装组件（`beets_plugin_table` 读的是编译期 JSON），
+  // 所以勾选清单现在就应该在——否则用户没法在安装前决定要什么
+  await expect(main.locator('.pick input[type="checkbox"]')).toHaveCount(4);
+  await expect(main).toContainText('beautifulsoup4>=4.12,<5');
+  await expect(main).toContainText('还需 fpcalc');
+
+  // 卸载是两段式：先「卸载组件」，点了才出「确认卸载」。
+  // 破坏性操作不该一次点击就执行
+  await expect(main.getByRole('button', { name: '确认卸载' })).toHaveCount(0);
+  await main.getByRole('button', { name: '卸载组件' }).click();
+  await expect(main.getByRole('button', { name: '确认卸载' })).toBeVisible();
+  // 文案必须写明数据不动——这是卸载唯一容易误解的地方
+  await expect(main).toContainText('整理库与分析库不动');
 });
 
 test('docs/48：查询 → 未入库行不可选 → 全选存为歌单', async ({ page }) => {

@@ -23,6 +23,8 @@ import type {
   ArtistPage,
   BeetsFieldCatalog,
   BeetsMarketItem,
+  BeetsPluginItem,
+  BeetsPythonProbe,
   BeetsQueryPage,
   BeetsConfig,
   BeetsStatus,
@@ -374,7 +376,27 @@ export const ipc = {
      * `track` 缺省 = `installer`（体积小、优先试；机器没 Python 会明确报错，
      * 再由用户改选 `bundle`）。
      */
-    install: (track: BeetsInstallTrack = 'installer') => call<JobStarted>('beets_install', { track }),
+    install: (
+      track: BeetsInstallTrack = 'installer',
+      plugins: string[] = [],
+    ) => call<JobStarted>('beets_install', { track, plugins }),
+
+    /**
+     * 内嵌插件表：**不需要装过组件**就能拿到的静态目录（docs/51 §4.2）。
+     *
+     * 与 `pluginCatalog()` 的分工：这条回答"有哪些插件、各自要装什么"；
+     * 那条（要起 sidecar）回答"装上之后哪些真的 ready"。
+     */
+    pluginTable: () => call<BeetsPluginItem[]>('beets_plugin_table'),
+
+    /** 探测本机 Python：`py -0p` 优先，再 PATH。找不到时 `reason` 带人话。 */
+    pythonProbe: () => call<BeetsPythonProbe>('beets_python_probe'),
+
+    /**
+     * 卸载组件：只删安装目录（venv/套件/下载缓存），**不动**整理库与分析库。
+     * 进度与 `install` 共用 `beets:install` 事件流（最后一条是 `finished`）。
+     */
+    uninstall: () => call<JobStarted>('beets_uninstall'),
 
     /*
      * ---- 批 D：曲库维护四件套 ----

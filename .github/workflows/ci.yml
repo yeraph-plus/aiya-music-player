@@ -169,3 +169,17 @@ jobs:
             Write-Host "::error title=protocol contract 失败::$tail"
             exit 1
           }
+
+      # 插件表是五个消费方的唯一事实源（tools 打包、install 拼依赖、Rust 的
+      # include_str!、UI 勾选、cfg 白名单），改坏一个键不会报错、只会静默
+      # 少一项，所以它必须自己有一道门禁
+      - name: plugin catalog contract（插件表）
+        run: |
+          $log = "smoke-catalog.log"
+          npm run smoke:catalog 2>&1 | Tee-Object -FilePath $log | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            $lines = Get-Content $log | Select-Object -Last 25
+            $tail = ($lines | ForEach-Object { $_ -replace '%', '%25' }) -join '%0A'
+            Write-Host "::error title=plugin catalog contract 失败::$tail"
+            exit 1
+          }

@@ -1,24 +1,20 @@
-# 发布工作流：构建安装包与 beets 发布物，挂到 GitHub Release 上
+# 发布工作流：构建播放器安装包与便携版，挂到 GitHub Release 上
 #
-# ## 三类触发
-#   · `v0.1.0`       播放器版本：NSIS 安装包 + 便携版 zip + beets 两个发布物一起挂上去
-#   · `beets-v0.1.0` 只发 beets 工具：只产出两个 beets 文件
-#   · 手动触发         **只构建不发布**（dry run）：把安装包、便携包与两个 beets 产物
-#                     都真造一遍，验证构建链路，但最后一步跳过 `gh release create`。
-#                     为什么需要它：release 工作流最容易坏的地方是"到打 tag 才发现"，
-#                     而打 tag 会立刻产生一个公开 release，不能拿来试。
-#                     手动触发时 `github.ref_name` 是分支名，所以构建条件写成
-#                     "v* tag 或 dispatch"，上传条件写成"只在 tag 上"。
+# ## 两类触发
+#   · `v0.2.0`  播放器版本：NSIS 安装包 + 便携版 zip
+#   · 手动触发   **只构建不发布**（dry run）：把安装包与便携包都真造一遍，
+#                验证构建链路，但最后一步跳过 `gh release create`。
+#                为什么需要它：release 工作流最容易坏的地方是"到打 tag 才发现"，
+#                而打 tag 会立刻产生一个公开 release，不能拿来试。
+#                手动触发时 `github.ref_name` 是分支名，所以构建条件写成
+#                "v* tag 或 dispatch"，上传条件写成"只在 tag 上"。
 #
-# **为什么播放器 release 也要带 beets 的两个文件**：
-# `src-tauri/src/beets.rs` 的下载地址是
-# `https://…/releases/latest/download/<asset>`，而 `latest` 指的是"最近创建的
-# release"。如果 beets 单独发过一版，latest 就指向那个 release，播放器去下
-# 安装包之外的东西会 404。把两个文件同时挂到播放器 release 上，
-# `latest/download` 就永远能找到它们。
-# 资产名必须是 `aiya-beets-installer.pyz` 与 `aiya-beets-bundle-win-x64.zip`
-# ——它们是 `beets.rs` 里的 `INSTALLER_ASSET` / `BUNDLE_ASSET` 常量，
-# 改名前先改常量，否则用户点安装就是 404。
+# ## beets 侧已经拆走（2026-10-30，docs/51 §3.3）
+# 原先这里也打 `aiya-beets-installer.pyz` 与 `aiya-beets-bundle-win-x64.zip`，
+# 现在归 `.github/workflows/release-beets.yml`：手动触发、独立 tag（`beets-v*`），
+# 发布时同时写到浮动通道 `beets-latest`。宿主常量已指向
+# `releases/download/beets-latest/<asset>`，两个发布节奏不再互相踩。
+# 所以**本文件不再产出任何 beets 文件**，assets 名也不在这里维护。
 #
 # ## 签名：**决定不做**（2026-10-27）
 # 不买代码签名证书：两个 exe 与安装包保持未签名，首次运行由 Windows SmartScreen
@@ -41,7 +37,6 @@ on:
   push:
     tags:
       - "v*"
-      - "beets-v*"
   workflow_dispatch:
 
 permissions:
@@ -55,12 +50,6 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
-      # Windows runner 的**管道** stdout 按 locale 编码（英文镜像是 cp1252），
-      # 中文 print 会 UnicodeEncodeError。两个 build 脚本里已各自 reconfigure
-      # 兜底，这里再设一次是为了 pip / beets 之类的**子进程**（它们继承 env、
-      # 不继承我们的 reconfigure）。两处都要，缺一处就会在别的路径上复发。
-      PYTHONUTF8: "1"
-      PYTHONIOENCODING: utf-8
 
     steps:
       - uses: actions/checkout@v4
@@ -71,41 +60,11 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-
-      # ---------------------------------------------------------------
-      # beets 侧发布物（两条安装轨道的产物）
-      # ---------------------------------------------------------------
-      - name: 建 beets 环境
-        run: |
-          python -m venv beets-tool/.venv
-          beets-tool/.venv/Scripts/python -m pip install --upgrade pip
-          beets-tool/.venv/Scripts/pip install -r beets-tool/requirements.lock
-          beets-tool/.venv/Scripts/pip install -e "beets-tool[dev]"
-
-      - name: 打 beets 发布物（.pyz + 套件包）
-        run: |
-          beets-tool/.venv/Scripts/python beets-tool/tools/build_installer.py
-          beets-tool/.venv/Scripts/python beets-tool/tools/build_bundle.py
-
-      # 名字错了播放器就 404，所以在这里硬校验一次
-      - name: 校验 beets 产物名
-        run: |
-          $expected = @("aiya-beets-installer.pyz", "aiya-beets-bundle-win-x64.zip")
-          foreach ($f in $expected) {
-            $p = "beets-tool/dist/$f"
-            if (-not (Test-Path $p)) { throw "缺少发布物：$p" }
-            $kb = [math]::Round((Get-Item $p).Length / 1KB)
-            Write-Host "$f  ${kb} KB"
-          }
 
       # ---------------------------------------------------------------
       # 播放器安装包（只在 v* tag 上构建）
@@ -145,16 +104,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = "${{ github.ref_name }}"
-          $files = @(
-            "beets-tool/dist/aiya-beets-installer.pyz",
-            "beets-tool/dist/aiya-beets-bundle-win-x64.zip"
-          )
+          $files = @()
           if (Test-Path "target/release/bundle/nsis") {
             $files += (Get-ChildItem target/release/bundle/nsis/*-setup.exe).FullName
           }
           if (Test-Path "target/release/bundle/portable") {
             $files += (Get-ChildItem target/release/bundle/portable/*-portable.zip).FullName
           }
+          if (-not $files) { throw "没有可上传的产物" }
           gh release create $tag --title $tag --generate-notes $files 2>$null
           if ($LASTEXITCODE -ne 0) {
             Write-Host "release 已存在，改为追加上传（--clobber）"

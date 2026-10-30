@@ -348,6 +348,50 @@ try:
         )
         assert rest2 == USER_WB, "换落点不该动别的行"
         print("[9] workbench directory 外科式同步 OK")
+
+        # [10] settings.json 的插件清单驱动 config 的 plugins 行（docs/51 §4.2）
+        #
+        # 装了不启用等于白装：安装页勾 lyrics、安装器装了 bs4，而 config 里
+        # 没有 lyrics，插件永远不会加载。所以这一行必须跟着 settings 走。
+        # 同时它也必须和 directory 一样是**外科式**同步：用户自己写的注释、
+        # path_formats、myplugin 之外的行一个字都不能动。
+        before10 = wb_cfg.read_text(encoding="utf-8")
+        (wb_home / "settings.json").write_text(
+            json.dumps({"plugins": ["lyrics", "fetchart"]}), encoding="utf-8", newline="\n"
+        )
+        cfg.ensure_config(wb_home, "workbench")
+        after10 = wb_cfg.read_text(encoding="utf-8")
+        assert "plugins: lyrics fetchart" in after10, after10
+        assert "myplugin" not in after10, "用户手改的旧清单必须被应用事实替换，不能两行并存"
+        rest_after = "".join(
+            ln for ln in after10.splitlines(keepends=True) if not ln.startswith("plugins:")
+        )
+        rest_before = "".join(
+            ln for ln in before10.splitlines(keepends=True) if not ln.startswith("plugins:")
+        )
+        assert rest_after == rest_before, "同步 plugins 不该动别的行"
+
+        # 反方向一：没有这个键 = 用户没选过 → 不许回滚他手改的那行
+        (wb_home / "settings.json").write_text("{}", encoding="utf-8", newline="\n")
+        cfg.ensure_config(wb_home, "workbench")
+        assert "plugins: lyrics fetchart" in wb_cfg.read_text(encoding="utf-8"), (
+            "settings 里少了 plugins 键时不该动 config"
+        )
+
+        # 反方向二：空数组同样算"没选过"（不能被读成"清空所有插件"）
+        (wb_home / "settings.json").write_text(
+            json.dumps({"plugins": []}), encoding="utf-8", newline="\n"
+        )
+        cfg.ensure_config(wb_home, "workbench")
+        assert "plugins: lyrics fetchart" in wb_cfg.read_text(encoding="utf-8"), (
+            "空数组 = 没选过，不该清空"
+        )
+
+        # 空清单的渲染形状：写 `[]` 而不是留空（留空是 YAML 的 None）
+        assert (
+            cfg._sync_plugins("library: x\nplugins: a b\n", []) == "library: x\nplugins: []\n"
+        ), "空清单必须渲染成 plugins: []"
+        print("[10] workbench plugins 外科式同步 OK（三向：选中 / 缺键 / 空数组）")
     finally:
         for k, v in saved.items():
             if v is None:

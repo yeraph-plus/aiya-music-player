@@ -244,9 +244,20 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     case 'beets_inbox_imported_add':
       return mock.beetsInboxImportedAdd(a.paths as string[]);
     // 安装工具同理：预览环境不装东西，但要把事件流的形状演一遍，
-    // 好让 UI 的进度/终态渲染在浏览器里也能验证。两条轨道都演练到。
+    // 好让 UI 的进度/终态渲染在浏览器里也能验证。两条路径都演练到。
     case 'beets_install':
-      return mock.beetsInstall(a.track === 'bundle' ? 'bundle' : 'installer');
+      return mock.beetsInstall(
+        a.track === 'bundle' ? 'bundle' : 'installer',
+        Array.isArray(a.plugins) ? (a.plugins as string[]) : [],
+      );
+    // 内嵌插件表与 Python 探测都不依赖已装组件，mock 里也要答得出
+    // （否则安装页的勾选清单在预览里永远是空的）
+    case 'beets_plugin_table':
+      return mock.beetsPluginTable();
+    case 'beets_python_probe':
+      return mock.beetsPythonProbe();
+    case 'beets_uninstall':
+      return mock.beetsUninstall();
     // ---- 批 D：曲库维护四件套（事件流演练，见 MockBackend.beetsMaintenance）----
     case 'beets_adopt':
       return mock.beetsMaintenance('adopt', false);
