@@ -78,6 +78,16 @@ export const events = {
    */
   beetsEnrich: (cb: (e: DynamicJson) => void) => sub<DynamicJson>('beets:enrich', cb),
 
+  /**
+   * 只读入库（`beetsIndexImport`）：`progress`（stage=import，按**批**推进）
+   * → `indexDone`（`files` = 扫到几个文件，`items` = 库里现在有几条）。
+   *
+   * 与 `beets:enrich` 分通道：那条是逐文件的分析结论，这条是"镜像建到哪了"。
+   * 混在一起时进度条会在两种粒度之间跳，而且"分析失败"与"入库失败"共用一条
+   * 终态——它们的处置完全不同。
+   */
+  beetsIndex: (cb: (e: DynamicJson) => void) => sub<DynamicJson>('beets:index', cb),
+
   /** 音频实际输出状态（模式/时钟/缓冲/格式）。偶发，不可丢。 */
   audioMode: (cb: (e: AudioModeEvent) => void) => sub<AudioModeEvent>('audio:mode', cb),
 };

@@ -288,34 +288,35 @@ pub fn adopt_legacy_settings(app: &tauri::AppHandle, legacy: Settings) -> bool {
     write_settings(app, &legacy).is_ok()
 }
 
-/// 整理输出根 → 工具的 `directory:`。
+/// 一次取两个事实：**曲库根**（索引家的分析对象）与**整理落点**（整理家的
+/// `directory`，copy/move 的目标）。
 ///
-/// 这是**用户事实**，不是 beets 知识：播放器本来就知道用户的曲库在哪。
-/// 工具拿它写进自己的配置，播放器不碰配置格式。
+/// 为什么必须分开（docs/49 §3.2）：落点常常只是曲库里一个子目录（`曲库/整理`）。
+/// 两者合成一个变量时，用户改落点会把索引范围一起缩成那一小块——症状是
+/// "索引跑完了，可查询里只有几条"，而配置看起来完全合规。
 ///
-/// 优先级（docs/40 十三轮）：用户在曲库目录里**勾选**的整理输出根（单选，
-/// `beets.targetRoot`）；没勾或勾选的目录已被移除时回退第一个扫描根——
-/// 与"勾选框出现之前"的行为一致，老配置零迁移。
-fn scan_root(app: &tauri::AppHandle) -> Option<String> {
+/// 优先级：
+/// * 曲库根 = **第一个扫描根**，永远不取勾选的落点；
+/// * 落点 = 勾选值（若它仍是某个扫描根）否则退回第一个扫描根——与"勾选框出现
+///   之前"的行为一致（docs/40 十三轮），老配置零迁移。
+fn roots_for_tools(app: &tauri::AppHandle) -> (Option<String>, Option<String>) {
     // 勾选值来自**本模块自己的配置**，扫描根来自**应用**（用户事实）。
     // 两者分开取：配置和应用库各有各的写者，混在一次读里会让"谁的目录算数"
     // 这个问题有两个答案。
     let target = trimmed(load_settings(app).target_root);
-    app.try_state::<crate::AppState>().and_then(|st| {
-        st.db()
-            .send(|conn| {
-                let roots = crate::read_roots(conn);
-                Ok(target
-                    .filter(|t| {
-                        roots
-                            .iter()
-                            .any(|r| crate::canon_path(r) == crate::canon_path(t))
-                    })
-                    .or_else(|| roots.first().cloned()))
-            })
-            .ok()
-            .flatten()
-    })
+    app.try_state::<crate::AppState>()
+        .and_then(|st| st.db().send(|conn| Ok(crate::read_roots(conn))).ok())
+        .map(|roots| {
+            let dest = target
+                .filter(|t| {
+                    roots
+                        .iter()
+                        .any(|r| crate::canon_path(r) == crate::canon_path(t))
+                })
+                .or_else(|| roots.first().cloned());
+            (roots.first().cloned(), dest)
+        })
+        .unwrap_or((None, None))
 }
 
 /// 去空白 + 空串归一成 `None`（配置里空串和没填是同一件事）。
@@ -433,7 +434,8 @@ pub fn discover(app: &tauri::AppHandle) -> Option<(ToolEntry, EntrySource)> {
 ///
 /// * `AIYA_BEETS_HOME`：数据根（播放器给）
 /// * `BEETSDIR`：**必须显式下发且与上面一致**（docs/45 §6.3）
-/// * `AIYA_BEETS_SCAN_ROOT`：用户第一个扫描根（播放器给，工具拿去写整理目标根）
+/// * `AIYA_BEETS_SCAN_ROOT`：**曲库根**（索引家的分析对象，永不取落点）
+/// * `AIYA_BEETS_DEST`：**整理落点**（整理家写进 `directory`，copy/move 的目标）
 /// * `PYTHONIOENCODING` / `PYTHONUTF8`：管道编码钉 UTF-8。工具内部也 reconfigure
 ///   了一次，这里是双保险（工具被替换/被单独调用时仍正确）。这两个是 Python
 ///   通用变量，不是 beets 知识，留着不亏。
@@ -460,7 +462,8 @@ fn tool_env(app: &tauri::AppHandle, profile: Profile) -> Vec<(String, String)> {
     #[cfg(not(debug_assertions))]
     let dev_src: Option<PathBuf> = None;
 
-    env_pairs(&profile.home(app), scan_root(app), dev_src, profile)
+    let (root, dest) = roots_for_tools(app);
+    env_pairs(&profile.home(app), root, dest, dev_src, profile)
 }
 
 /// `tool_env` 的纯函数部分：给定事实 → 环境键值对（可单测，不需要 AppHandle）。
@@ -471,6 +474,7 @@ fn tool_env(app: &tauri::AppHandle, profile: Profile) -> Vec<(String, String)> {
 fn env_pairs(
     home: &std::path::Path,
     root: Option<String>,
+    dest: Option<String>,
     dev_src: Option<PathBuf>,
     profile: Profile,
 ) -> Vec<(String, String)> {
@@ -486,6 +490,9 @@ fn env_pairs(
     ];
     if let Some(root) = root {
         env.push(("AIYA_BEETS_SCAN_ROOT".to_string(), root));
+    }
+    if let Some(dest) = dest {
+        env.push(("AIYA_BEETS_DEST".to_string(), dest));
     }
     if let Some(src) = dev_src {
         env.push(("PYTHONPATH".to_string(), src.to_string_lossy().into_owned()));
@@ -1549,6 +1556,44 @@ pub fn enrich_profile() -> Profile {
     Profile::Index
 }
 
+/// 查询页固定跑**索引家**（docs/49 §3.7）。
+///
+/// 与 `enrich_profile` 同理抽成函数：这条"改回工作台家"的改动不会有任何东西
+/// 变红，而症状是"整理库页永远查不到东西"——因为工作台家是用户自己的 beets 库，
+/// 应用从不往里导，空是常态。索引家的 `directory` 已指向曲库根，它才是那个
+/// "曲库的只读镜像"。
+pub fn query_profile() -> Profile {
+    Profile::Index
+}
+
+/// 只读入库的事件通道。
+///
+/// 与 `beets:enrich` 分开：那条流的语义是"逐文件分析结论"（`enrichItem` /
+/// `enrichPersisted`，宿主还要落结论库），这条只有"导到哪了"与"库里现在几条"。
+/// 混一条通道会让查询页的进度条在两种粒度之间跳。
+pub const INDEX_CHANNEL: &str = "beets:index";
+
+/// 只读入库：把**曲库根**整批登记进索引家，不做分析（docs/49 §3.8）。
+///
+/// 与 `start_enrich` 的分工很硬：
+/// * 这条 → "索引库里有行"，查询页的前提；
+/// * 那条 → "每个文件有分析结论"，`xtractor` 未接线时**整批**被拒。
+///
+/// 曾经以为入库是分析的副产品，实测发现分析器没接好时连库都不建（`enrich`
+/// 直接 E_INVALID_ARG），于是筛选页永远 0 命中。所以两条路必须分开。
+pub fn start_index_import(app: tauri::AppHandle) -> Result<(), String> {
+    let (entry, _src) = discover(&app).ok_or_else(|| NOT_INSTALLED.to_string())?;
+    let tool = StdioTool::new(launcher_for(&app, &entry, Profile::Index));
+    run_session(
+        tool,
+        &app,
+        serde_json::json!({ "id": 1, "cmd": "index_import" }),
+        INDEX_CHANNEL,
+        "已有 beets 任务在执行（可先取消）",
+        Box::new(|| {}),
+    )
+}
+
 /* ---------------- 查询页（docs/47）：读 beets 库，转成歌单 ---------------- */
 
 /// 「组件没装」的统一文案。放在一处：三个调用点各写一句时，改一次要改三处，
@@ -1560,11 +1605,17 @@ pub const NOT_INSTALLED: &str = "未安装 beets 组件：请先在设置里安�
 /// 30 s 是给"库刚被整理过、SQLite 在补索引"留的余量。
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 读 beets 库（**工作台家**，用户自己的库）。
+/// 读 beets 库（**索引家**，docs/49 §3.7 改了归属）。
 ///
-/// 为什么查工作台家而不是索引家：查询页的产物是"存为歌单"，而歌单条目靠
-/// `tracks.path_lower` 关联——索引家是一份应用独占的只读副本，从那里存歌单
-/// 等于让用户对着一个他看不见的库点"添加"，路径大概率不在曲库里。
+/// 为什么现在查索引家：索引家的 `directory` 已经指向**曲库根**（docs/49 §3.1），
+/// 它就是"用户曲库的只读镜像"——库里的每一条 path 都必然在曲库里，分析字段
+/// （bpm / 情绪 / 流派）也只在这里有。反过来说，工作台家是用户自己的 beets 库，
+/// 应用从不往里面导，为空是常态（查到 0 条不是 bug，是"没配"）。
+///
+/// 旧立论是"索引家是应用独占的只读副本、路径大概率不在曲库"，那是 `directory`
+/// 还是占位 `scratch` 时的情况，已经不成立。**兜底**：工具侧查询出口把 path
+/// 拼成绝对（`normpath(join(directory, path))`），宿主这边照旧只按 path 关联，
+/// 不假设路径形态。
 ///
 /// `rules` 与 `raw` 互斥（工具侧会拒）：不猜优先级，两个都给等于让调用方
 /// 把"我到底想要什么"外包给一个 if。
@@ -1576,7 +1627,7 @@ pub fn query_page(
     limit: Option<usize>,
 ) -> Result<crate::dto::beets::BeetsQueryPage, String> {
     let (entry, _source) = discover(app).ok_or_else(|| NOT_INSTALLED.to_string())?;
-    let launcher = launcher_for(app, &entry, Profile::Workbench);
+    let launcher = launcher_for(app, &entry, query_profile());
     let data = aiya_beets_client::session::request_data(
         &launcher,
         &serde_json::json!({
@@ -1594,12 +1645,15 @@ pub fn query_page(
 
 /// 可查字段清单（含插件写入的 flexible 键）+ 识别源三态。
 ///
-/// 字段清单归工具侧回答（它才知道用户装了哪些插件）；宿主把它原样转给 UI。
+/// 字段清单归工具侧回答（它才知道装了哪些插件）；宿主把它原样转给 UI。
+/// **必须和 `query_page` 跑同一个家**：字段清单来自哪个库，查询就得查哪个库，
+/// 否则 UI 会拿索引库的字段去查用户库（或反过来），症状是"能选 bpm 但一查就报
+/// 未知字段"。
 pub fn field_catalog(
     app: &tauri::AppHandle,
 ) -> Result<crate::dto::beets::BeetsFieldCatalog, String> {
     let (entry, _source) = discover(app).ok_or_else(|| NOT_INSTALLED.to_string())?;
-    let launcher = launcher_for(app, &entry, Profile::Workbench);
+    let launcher = launcher_for(app, &entry, query_profile());
     let data = aiya_beets_client::session::request_data(
         &launcher,
         &serde_json::json!({ "id": 1, "cmd": "fields" }),
@@ -1683,7 +1737,7 @@ mod tests {
     #[test]
     fn env_pins_beetsdir_to_home() {
         let home = std::path::Path::new(r"D:\data\beets-index");
-        let env = env_pairs(home, None, None, Profile::Index);
+        let env = env_pairs(home, None, None, None, Profile::Index);
         let get = |k: &str| {
             env.iter()
                 .find(|(key, _)| key == k)
@@ -1696,12 +1750,37 @@ mod tests {
         assert!(env.iter().all(|(k, _)| k != "AIYA_BEETS_SCAN_ROOT"));
     }
 
+    /// 曲库根与落点是**两个事实**，必须各走各的键（docs/49 §3.2）。
+    ///
+    /// 合成一个变量时，用户把落点改成 `曲库/整理` 会把索引范围一起缩成那一块
+    /// ——索引跑完却查不出东西，而配置看上去完全合规。这条测试盯的就是那个键。
+    #[test]
+    fn env_separates_library_root_from_destination() {
+        let home = std::path::Path::new("/tmp/beets");
+        let env = env_pairs(
+            home,
+            Some("/music".to_string()),
+            Some("/music/整理".to_string()),
+            None,
+            Profile::Index,
+        );
+        let get = |k: &str| {
+            env.iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.as_str())
+                .unwrap_or("")
+        };
+        assert_eq!(get("AIYA_BEETS_SCAN_ROOT"), "/music");
+        assert_eq!(get("AIYA_BEETS_DEST"), "/music/整理");
+    }
+
     #[test]
     fn env_passes_scan_root_and_dev_src() {
         let home = std::path::Path::new("/tmp/beets");
         let env = env_pairs(
             home,
             Some("/music".to_string()),
+            None,
             Some(PathBuf::from("/repo/beets-tool/src")),
             Profile::Workbench,
         );
@@ -1724,7 +1803,7 @@ mod tests {
     #[test]
     fn env_always_states_profile() {
         for (profile, want) in [(Profile::Workbench, "workbench"), (Profile::Index, "index")] {
-            let env = env_pairs(std::path::Path::new("/tmp/x"), None, None, profile);
+            let env = env_pairs(std::path::Path::new("/tmp/x"), None, None, None, profile);
             let got = env
                 .iter()
                 .find(|(k, _)| k == "AIYA_BEETS_PROFILE")
@@ -1741,6 +1820,16 @@ mod tests {
             Profile::Index,
             "分析改回工作台家 = 改用户的歌"
         );
+    }
+
+    /// 查询/字段清单必须与分析同家（docs/49 §3.7）。
+    ///
+    /// 分开看只是"少几行"，连起来看才是账单：字段清单来自索引库、查询打到工作台
+    /// 库时，UI 会列出 bpm 这个字段而工作台库里根本没有它，用户看到的是
+    /// "字段能选、一查就报未知字段"。
+    #[test]
+    fn query_runs_in_same_home_as_enrich() {
+        assert_eq!(query_profile(), enrich_profile(), "查询与分析必须同家");
     }
 
     /// 两个 crate 各自有一份"路径 → path_lower 键"的实现：`aiya-beets-store`

@@ -101,6 +101,9 @@ def handle(req: dict, gen: int) -> dict | None:
         enrich.enrich(req_id, [str(p) for p in paths],
                       req.get("want") or [], bool(req.get("force")), gen)
         return None
+    if cmd == "index_import":
+        enrich.index_import(req_id, (str(req["root"]) if req.get("root") else None), gen)
+        return None
     if cmd == "query":
         rules = req.get("rules")
         raw = req.get("raw")

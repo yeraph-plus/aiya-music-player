@@ -55,6 +55,10 @@ _IMPORT_FLAGS = ("-A", "-q", "-s", "-I", "-R")
 # 命令行长度上限（Windows 32767）。留一半余量：路径可能很长。
 _ARG_CHUNK_CHARS = 6000
 
+# 索引入库的批大小。比上面那个小一个量级，理由见 `index_import`：批内没有
+# 可观测的中间态，批越大"静默窗口"越长，超过宿主的 10 分钟看门狗就判卡死。
+_INDEX_CHUNK_CHARS = 1500
+
 # 假源的开关。**默认关**：假数据混进真库是最难排查的一类污染，
 # 所以它必须是显式开、且只在自测/契约测试里开。
 PROBE_ENV = "AIYA_BEETS_ENRICH_PROBE"
@@ -185,6 +189,86 @@ def _probe_fields(path: str) -> dict:
     }
     out.update(moods)
     return out
+
+
+def index_import(req_id: int, root: str | None, gen: int) -> None:
+    """**只读入库**：把曲库根整批登记进索引家，不做任何分析（docs/49 §3.8）。
+
+    为什么单独一条命令，而不是"让 `enrich` 的 want 为空"：`enrich` 里
+    `want` 缺省的含义是"用这个家**当前能跑的源**"，与"我只要入库"是两件事。
+    合成一个之后，"分析器没装"和"import 失败"会共用一个错误码——而它们的
+    处置完全不同（前者等批 5，后者查文件权限）。实测：xtractor 未接线时整条
+    `enrich` 被拒，索引库因此永远是空的，筛选页 0 命中。
+
+    安全前提是配置里那三条 `import.write/copy/move: no`（cfg 硬钉 + 落盘后过闸）：
+    这一步只让 beets 读文件、往**它自己的库**写行，不碰音频文件本身。
+    """
+    from ..beetslib import item_abs_path, open_library, scan_audio_files
+
+    session = f"idx_{req_id:02d}"
+    target = root or default_root()
+    if not target:
+        raise ProtocolError(
+            E_INVALID_ARG, _STAGE,
+            "没有曲库根：先在设置里选一个扫描目录（索引家对着它做只读分析）",
+        )
+    files = scan_audio_files([target])
+    total = len(files)
+    if total == 0:
+        raise ProtocolError(E_INVALID_ARG, _STAGE, f"曲库根下没有音频文件：{target}")
+
+    emit({"type": "progress", "session": session, "stage": "import",
+          "current": 0, "total": total, "path": None})
+
+    # 分批 import：单次命令行有长度上限（Windows 32767），而路径可以很长。
+    #
+    # 批大小刻意比 `_ARG_CHUNK_CHARS` 小得多：宿主有一条"10 分钟无输出就判卡死"
+    # 的看门狗，而 `beet import` 是一次子进程调用、批内没有任何可观测的中间态。
+    # 攒一大批的后果实测过——整库 1846 首被打进几十个大批，界面十分钟没动静，
+    # 会话被宿主杀掉（日志：会话空闲超时），用户看到的是"入库到一半停了"。
+    # 小批 + **每批开始前先报进度**，静默窗口就被压到单批耗时以内。
+    chunk: list[str] = []
+    size = 0
+    done = 0
+    for p in files:
+        if cancel_gen() != gen:
+            emit({"type": "cancelled", "session": session, "stage": "import"})
+            return
+        if chunk and size + len(p) + 3 > _INDEX_CHUNK_CHARS:
+            emit({"type": "progress", "session": session, "stage": "import",
+                  "current": done, "total": total, "path": chunk[0]})
+            _run_import(chunk)
+            done += len(chunk)
+            chunk, size = [], 0
+        chunk.append(p)
+        size += len(p) + 3
+    if chunk:
+        emit({"type": "progress", "session": session, "stage": "import",
+              "current": done, "total": total, "path": chunk[0]})
+        _run_import(chunk)
+        done += len(chunk)
+
+    # 报"库里现在有多少条"而不是"我导了多少个文件"：import 会跳过已在库的、
+    # 也可能失败，只有库里的行数才是用户接下来能查到的。
+    lib = open_library()
+    rows = list(lib.items())
+    emit({"type": "progress", "session": session, "stage": "import",
+          "current": total, "total": total, "path": None})
+    emit({"type": "indexDone", "session": session, "stage": "import",
+          "files": total, "items": len(rows),
+          "roots": [os.path.normpath(item_abs_path(lib, it)) for it in rows[:3]]})
+
+
+def default_root() -> str | None:
+    """分析对象：宿主给的**曲库根**优先，否则 config 里的 `directory`。
+
+    顺序不能反：没给曲库根时 config 的 directory 是占位 `scratch`（空目录），
+    拿它当曲库根会得到"根下没有音频文件"这种看着像用户错了的报错。
+    """
+    from .. import cfg
+    from ..beetslib import configured_directory
+
+    return cfg.scan_root() or configured_directory()
 
 
 def _import_paths(paths: list[str]) -> None:

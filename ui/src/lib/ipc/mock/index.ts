@@ -279,6 +279,8 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return { removed: 0, keepDays: Number(a.keepDays ?? 30) };
     case 'beets_enrich_start':
       return mock.beetsEnrichStart();
+    case 'beets_index_import':
+      return mock.beetsIndexImport();
 
     default:
       throw mockError(cmd);

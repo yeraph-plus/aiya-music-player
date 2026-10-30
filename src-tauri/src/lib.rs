@@ -1525,6 +1525,20 @@ async fn beets_enrich_start(
     Ok(dto::beets::JobStarted { started: true })
 }
 
+/// 只读入库（索引库建索引）：把**曲库根**整批登记进索引家，不做分析。
+///
+/// 为什么单独一条命令：查询页读的是索引库，它空着的时候任何筛选都是 0 命中。
+/// 而 `enrich` 在分析器（xtractor）未接线时整批被拒——入库不该被分析器的
+/// 进度绑架（docs/49 §3.8）。进度走 `beets:index`，终态 `indexDone`。
+#[tauri::command]
+async fn beets_index_import(app: AppHandle) -> Result<dto::beets::JobStarted, dto::ApiError> {
+    tauri::async_runtime::spawn_blocking(move || beets::start_index_import(app))
+        .await
+        .map_err(dto::ApiError::internal)?
+        .map_err(map_beets_start)?;
+    Ok(dto::beets::JobStarted { started: true })
+}
+
 /// [`enrichment_query`] 的参数。放这里而不是 `dto`：它是**入参**，
 /// 参数形状出错要映射成 `invalidArg`，不能靠 Tauri 自己的反序列化文案。
 #[derive(Debug, Default, serde::Deserialize)]
@@ -4242,6 +4256,7 @@ pub fn run() {
             beets_plugin_install,
             enrichment_worklist,
             beets_enrich_start,
+            beets_index_import,
             enrichment_query,
             enrichment_gc,
             library_genres,

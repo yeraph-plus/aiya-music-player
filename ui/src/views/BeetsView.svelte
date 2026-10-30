@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { Download, ListFilter, Package, Search, Tag } from '@lucide/svelte';
   import Header from '../components/content/Header.svelte';
   import Button from '../components/ui/Button.svelte';
@@ -12,6 +12,7 @@
   import { OP_LABELS, opsFor, beetsQuery as q } from '../stores/beets-query.svelte';
   import { ui } from '../stores/ui.svelte';
   import { shortenPath } from '../lib/format';
+  import { events, ipc } from '../lib/ipc';
   import type { BeetsInstallTrack } from '../lib/ipc';
 
   /**
@@ -60,19 +61,96 @@
   /** 协议指纹对不上 = 装的组件与播放器不是同一版 schema，查询会读出无意义的形状 */
   const schemaMismatch = $derived(found && ui.beets?.schemaMatched === false);
 
+  /* ---------------- 曲库索引（分析侧的唯一入口） ----------------
+
+   * 索引家是**曲库的只读镜像**（`directory` = 曲库根，`import.write/copy/move: no`
+   * 全钉死）。查询页查的就是这个库——它空着的时候，任何筛选都是 0 命中，那不是
+   * 条件写错了，是索引还没建。所以这块不是"可选的高级功能"，是查询的前置条件。
+   *
+   * 这里做的是**只入库**：把曲库根整批登记进索引库。数值分析（bpm / 情绪）是
+   * 另一条命令（`enrichment.start`），要等 xtractor 接线——把它和入库绑在一起
+   * 的代价是"分析器没装好时连库都不建"，实测过一次，筛选页整片灰。
+   */
+  let indexItems = $state<number | null>(null);
+  let tracksTotal = $state<number | null>(null);
+  let indexRun = $state(false);
+  let indexNote = $state<string | null>(null);
+  let indexError = $state<string | null>(null);
+  let stopIndex: (() => void) | null = null;
+
+  /** 索引库现在几条：`total` 是应用 limit 之前的真实命中数，拿它当条目数。 */
+  async function loadIndexCount() {
+    try {
+      indexItems = (await ipc.beets.query({ limit: 1 })).total;
+    } catch {
+      indexItems = null;
+    }
+    try {
+      tracksTotal = (await ipc.enrichment.worklist('xtractor', false)).totalTracks;
+    } catch {
+      tracksTotal = null;
+    }
+  }
+
+  async function startIndex() {
+    if (indexRun) return;
+    indexRun = true;
+    indexError = null;
+    indexNote = '正在入库…';
+    stopIndex?.();
+    stopIndex = events.beetsIndex((raw) => {
+      const e = raw as {
+        type?: string;
+        current?: number;
+        total?: number;
+        items?: number;
+        message?: string;
+      };
+      if (e.type === 'progress') {
+        indexNote = `入库 ${e.current ?? 0}/${e.total ?? 0}`;
+      } else if (e.type === 'indexDone') {
+        endIndex();
+        indexNote = null;
+        void loadIndexCount();
+        void q.loadCatalog();
+      } else if (e.type === 'cancelled' || e.type === 'error' || e.type === 'sessionFailed') {
+        endIndex();
+        indexError = e.message ?? '入库被中断';
+      }
+    });
+    try {
+      await ipc.beets.indexImport();
+    } catch (e) {
+      endIndex();
+      indexError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  function endIndex() {
+    indexRun = false;
+    stopIndex?.();
+    stopIndex = null;
+  }
+
+  onDestroy(() => stopIndex?.());
+
   const headerMeta = $derived.by(() => {
     if (ui.beets === null) return '正在检测整理组件…';
     if (!found) return '未启用（不影响播放）';
     if (schemaMismatch) return '组件版本不匹配';
-    const parts = [`beets ${ui.beets.beetsVersion ?? '未知版本'}`];
-    if (ui.beets.libraryDirectory) parts.push(`库根 ${shortenPath(ui.beets.libraryDirectory)}`);
-    return parts.join(' · ');
+    // 不再报"库根"：查询读的是**索引库**（曲库只读镜像），而 status 探的是
+    // 用户自己的 beets 库——两者不是一个目录，把后者标成"库根"就是在骗人。
+    return [`beets ${ui.beets.beetsVersion ?? '未知版本'}`, '曲库只读分析'].join(' · ');
   });
 
   onMount(() => {
     void (async () => {
-      if (!ui.beets) await ui.refreshBeets();
-      if (ui.beets?.found) await q.loadCatalog();
+      // 进页面就重探一次，而不是"只有 null 才探"：`ui.beets` 是**启动时**那个
+      // 快照，而启动那几秒里组件可能还没装好、或上一个会话正占着库。按 found=false
+      // 认命的话，用户装完组件还得重启应用才能用——实测踩过（重装后页面一直
+      // 显示"未启用"，而同时手动调 beets_status 是 found=true）。
+      if (!ui.beets || ui.beets.found !== true) await ui.refreshBeets();
+      if (ui.beets?.found) await Promise.all([q.loadCatalog(), loadIndexCount()]);
     })();
   });
 
@@ -151,14 +229,9 @@
       {@render installActions()}
     </section>
   {:else}
-    <!-- 库状态：一行。要的是"我在查哪个库"，不是一份完整诊断（那在设置→关于） -->
+    <!-- 库状态：一行。刻意**不报"库文件"**——status 探的是用户自己的 beets 库，
+         而查询读的是索引库（曲库只读镜像），两个不是一个目录，标错比不标更坏 -->
     <div class="lib-line">
-      <span>
-        库文件
-        <b class="path" title={ui.beets.libraryPath ?? ''}>
-          {ui.beets.libraryPath ? shortenPath(ui.beets.libraryPath) : '未知'}
-        </b>
-      </span>
       <span>入口 <b>{entrySourceText(ui.beets.entrySource)}</b></span>
       {#if ui.beets.pluginSummary}
         <span class="dim">
@@ -172,6 +245,48 @@
         </span>
       {/if}
     </div>
+
+    <!-- ---------------- 曲库索引（查询的前置条件） ---------------- -->
+    <section class="panel index-panel">
+      <div class="panel-head">
+        <strong>曲库索引</strong>
+        <span class="dim">
+          beets 对着曲库根做**只读**分析（不写标签、不搬文件），索引库是曲库的镜像。
+          查询读的就是它——索引空着的时候筛选一定 0 命中。
+        </span>
+      </div>
+      <div class="index-row">
+        {#if tracksTotal !== null}
+          <span>曲库 <b>{tracksTotal}</b> 首</span>
+        {/if}
+        {#if indexItems !== null}
+          <span>索引库 <b>{indexItems}</b> 条</span>
+        {:else}
+          <span class="dim">索引库状态未知</span>
+        {/if}
+        <Button
+          size="sm"
+          variant="primary"
+          loading={indexRun}
+          disabled={indexRun}
+          onclick={() => void startIndex()}
+        >
+          {#snippet icon()}<ListFilter size={14} />{/snippet}
+          {indexItems === 0 ? '建立索引' : '重建索引'}
+        </Button>
+        {#if indexNote}<span class="dim">{indexNote}</span>{/if}
+        {#if indexError}<span class="danger">{indexError}</span>{/if}
+      </div>
+      {#if indexItems === 0 && !indexRun}
+        <p class="dim">
+          索引库还是空的，下面的查询不会有结果。第一次要把曲库通读一遍，几万首需要一段时间。
+        </p>
+      {:else if indexItems !== null && tracksTotal !== null && indexItems < tracksTotal}
+        <p class="dim">
+          索引库比曲库少 {tracksTotal - indexItems} 首：曲库新增的文件还没登记，重建一次就好。
+        </p>
+      {/if}
+    </section>
 
     <!-- ---------------- 查询条件 ---------------- -->
     <section class="panel query-panel">
@@ -451,8 +566,21 @@
     font-weight: 500;
   }
 
-  .path {
-    font-family: var(--font-mono, ui-monospace, monospace);
+  /* 索引块：数字一排、按钮跟在同一行，说明文字单独一行。
+     比查询面板矮一档——它是前置条件，不是主要工作区。 */
+  .index-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text-2);
+  }
+
+  .index-row b {
+    color: var(--text-1);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
   }
 
   .lock-badge {

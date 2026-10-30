@@ -25,11 +25,23 @@ YAML 键名（`library` / `directory` / `plugins`）、单引号转义规则、�
 而这几条全靠 beets 的默认值恰好不对——xtractor 的 `write` 默认就是 `yes`。
 所以这一侧：
 
-* `directory` 恒指向 `{home}/scratch` 这个**占位空目录**（实测：指向扫描根时根内
-  文件在库里存相对路径，`path::` 定位失效，清旧步骤就做不准）；
+* `directory` 指向**曲库根**（docs/49）——索引家是"用户曲库的只读镜像"，分析对象
+  就是曲库本身，不再另造一个占位目录。没给曲库根时退回 `{home}/scratch` 占位，
+  因为"空目录"是它唯一需要满足的条件；
 * 每次启动都按模板重渲染（内容相同则不动盘），**渲染后自检**——断言关键键存在
   且为期望值，不依赖"默认值恰好对"；
 * 用户在 UI 里没有编辑入口（拍板 D），要改就改模板。
+
+### 一条被推翻的旧结论（docs/49 §1.2）
+
+这里原先写着"`directory` 指向扫描根会让库里存相对路径、`path::` 定位失效"，因此
+恒用占位目录。beets 2.14.1 实测：**磁盘上确实存相对**（`Album/x.flac`），但
+`Item.path` 这个 API 读出来是绝对（beets 用 `config.directory` 拼回去了），
+`PathQuery` 相对/绝对两种口径都能命中。所以只要走 Python API（本工具全部走 API），
+指向曲库根是安全的。兜底仍然留着：查询出口把绝对路径再 `join` 一次（幂等）。
+
+代价是"口径变了"：老索引库的记录是绝对路径、新记录是相对。用户拍板**干净重建**，
+所以 `ensure_config` 用 `layout.json` 记下当前口径，变了就成对删库与增量状态。
 
 自检的意义不在"模板写对了没有"（那是同义反复），而在于**任意一份落盘的文本**
 都必须过闸：老版本写的、手改的、被别的工具动过的，过不去就重写。测试里的负向
@@ -38,7 +50,9 @@ YAML 键名（`library` / `directory` / `plugins`）、单引号转义规则、�
 
 from __future__ import annotations
 
+import json
 import os
+import sys
 from pathlib import Path
 
 from .plugins import (
@@ -154,8 +168,22 @@ def apply_env() -> None:
 
 
 def scan_root() -> str | None:
-    """用户第一个扫描根（播放器传的事实）；空串/空白视为没给。"""
+    """**曲库根**（播放器传的事实）：索引家拿它当分析对象，与落点无关。
+
+    索引家曾经与整理家共用这个变量，结果"改落点"会把索引范围一起改掉
+    （落点常常只是曲库里一个子目录）。docs/49 §3.2 把两者拆开：这个键永远
+    只表示曲库根，落点走 `dest_root()`。
+    """
     val = (os.environ.get("AIYA_BEETS_SCAN_ROOT") or "").strip()
+    return os.path.expanduser(val) if val else None
+
+
+def dest_root() -> str | None:
+    """**整理落点**：copy/move 的目标根（整理家写进 `directory`）。
+
+    没给就回退曲库根——那是"整理输出"这个功能出现之前的行为，老配置零迁移。
+    """
+    val = (os.environ.get("AIYA_BEETS_DEST") or "").strip()
     return os.path.expanduser(val) if val else None
 
 
@@ -168,8 +196,22 @@ def yaml_path(p: str | Path) -> str:
 
 
 def scratch_dir(home: Path) -> Path:
-    """索引家的占位整理根（空目录，永不承载文件）。"""
+    """索引家的占位整理根（空目录，永不承载文件）。
+
+    只在"没给曲库根"时用作 `directory`：beets 需要一个存在的目录，而索引家
+    永不做 move/copy，所以这个值只要存在、且不是曲库根就够。
+    """
     return home / SCRATCH_DIR
+
+
+def index_dir(home: Path, root: str | None) -> Path:
+    """索引家的 `directory`：曲库根（只读分析对象），没给根时退回占位目录。
+
+    为什么不再恒用占位目录（docs/49 §1.2 的实测）：索引家是"曲库的只读镜像"，
+    指到曲库根之后 beets 的 `path` 语义与用户的真实目录一致，查询结果拿去
+    `tracks.path_lower` 关联才对得上，不用先翻译一次。
+    """
+    return Path(root).expanduser() if root else scratch_dir(home)
 
 
 def render_config(
@@ -184,12 +226,13 @@ def render_config(
     配置保持它自己的默认（用户的家，用户做主）。
 
     `index`：除了上面三行，还钉死 `import` 段的写盘开关与每个插件的强制参数
-    （docs/45 §6.1）。`root` 在这一侧**被忽略**——整理根恒为占位目录。
+    （docs/45 §6.1）。`root` 在这一侧是**曲库根**（只读分析对象，docs/49）；
+    没给时退回占位目录。
     """
     if profile not in PROFILES:
         raise ConfigConflict(f"未知 profile: {profile!r}")
     if profile == PROFILE_INDEX:
-        return _render_index(home, plugins)
+        return _render_index(home, plugins, root)
     return _render_workbench(home, root, plugins)
 
 
@@ -205,13 +248,13 @@ def _render_workbench(home: Path, root: str | None, plugins: list[str] | None) -
     return "\n".join(lines) + "\n"
 
 
-def _render_index(home: Path, plugins: list[str] | None) -> str:
+def _render_index(home: Path, plugins: list[str] | None, root: str | None) -> str:
     names = list(plugins) if plugins is not None else list(INDEX_DEFAULT_PLUGINS)
     lines = [
         "# AIYA Music 索引库（DB1）：这是生成物，不要手改——改模板（cfg.render_config）。",
         "# 可随时重建：删掉 library.db* 与 state.pickle **成对删**（state 才是增量记忆）。",
         f"library: {yaml_path(home / 'library.db')}",
-        f"directory: {yaml_path(scratch_dir(home))}",
+        f"directory: {yaml_path(index_dir(home, root))}",
         "plugins: " + " ".join(names),
         "import:",
     ]
@@ -267,10 +310,19 @@ def _plugin_names(value: object) -> list[str]:
     return [part for part in text.replace(",", " ").split() if part]
 
 
-def verify_config(text: str, profile: str = PROFILE_INDEX, home: Path | None = None) -> None:
+def verify_config(
+    text: str,
+    profile: str = PROFILE_INDEX,
+    home: Path | None = None,
+    root: str | None = None,
+) -> None:
     """索引家配置的自检闸。不合规抛 `ConfigGateError`，消息说清哪一条不对。
 
     `workbench` 家不设闸：那是用户的家，任何写法都合法。
+
+    `root` 是**期望的曲库根**（索引家的 `directory`）。传 None 表示"这一侧应该
+    是占位目录"——即宿主没给曲库根的那种形态。闸必须能分辨两者，否则"目录被
+    改回 scratch"这种退化会静默通过（docs/49 §7.4 的负向验证正是这一条）。
     """
     if profile != PROFILE_INDEX:
         return
@@ -293,16 +345,18 @@ def verify_config(text: str, profile: str = PROFILE_INDEX, home: Path | None = N
     elif not got_lib.endswith("library.db"):
         raise ConfigGateError(f"library 必须是一个 .db 文件路径，实际是 {got_lib}")
 
-    # 占位整理根：必须是 home/scratch，且不能是扫描根（相对路径会让 path 定位失效）
-    want_dir = _norm(scratch_dir(home)) if home is not None else None
+    # 分析对象：必须是**曲库根**（docs/49）；没给根时才是占位目录。
+    # 两种形态都要能分辨：指错时症状是"索引范围悄悄缩成某个子目录"，零报错。
     if not doc.get("directory"):
-        raise ConfigGateError("缺少 directory（索引家必须是占位空目录，不能省）")
+        raise ConfigGateError("缺少 directory（索引家必须写死分析对象，不能省）")
     got_dir = _norm(str(doc["directory"]).strip("'\""))
-    if want_dir is not None and got_dir != want_dir:
-        raise ConfigGateError(
-            f"directory 必须是占位目录 {scratch_dir(home)}，实际是 {doc['directory']}"
-            "（指向扫描根会让库内存相对路径，path 定位失效）"
-        )
+    if home is not None:
+        want_dir = _norm(index_dir(home, root))
+        if got_dir != want_dir:
+            raise ConfigGateError(
+                f"directory 必须是 {index_dir(home, root)}，实际是 {doc['directory']}"
+                "（索引家对着曲库根做只读分析；指到别处等于分析了一批用户没让你看的文件）"
+            )
 
     # 插件白名单三元组：名字在白名单内、不写盘、强制参数齐全
     names = _plugin_names(doc.get("plugins"))
@@ -344,12 +398,56 @@ def _index_names() -> str:
     return " / ".join(spec.name for spec in INDEX_PLUGINS)
 
 
+LAYOUT_FILE = "layout.json"
+
+#: 索引家的库 + 增量状态。**成对删**：只删库会让 `-R` 的记忆仍在，
+#: 下次导入"全都导过了"直接跳过，症状是"索引恒空且零报错"（docs/45 实测）。
+INDEX_STATE_FILES = ("library.db", "library.db-wal", "library.db-shm", "state.pickle")
+
+
+def index_layout(home: Path, root: str | None) -> dict[str, str]:
+    """索引库的"口径指纹"：只记决定路径语义的那一个值。
+
+    为什么要记：`directory` 换了，库里 `items.path` 的相对基准就换了——旧行是
+    绝对、新行是相对，混存的后果不是报错，是"清旧步骤认不出自己写过什么"。
+    用户已拍板口径变化就干净重建（docs/49 §3.3），这里负责认出"变了"。
+    """
+    return {"directory": _norm(index_dir(home, root))}
+
+
+def _read_layout(path: Path) -> dict[str, str] | None:
+    """读口径指纹。不存在/坏文件一律当"没有"——那会被判成变化，触发重建。"""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def reset_index_state(home: Path) -> list[str]:
+    """删索引库与增量状态，返回实际删掉的文件名（调用方可据此报告重建）。"""
+    removed: list[str] = []
+    for name in INDEX_STATE_FILES:
+        target = home / name
+        if not target.exists():
+            continue
+        try:
+            target.unlink()
+            removed.append(name)
+        except OSError:
+            # 被别的进程占着（比如同时跑着索引）：留着让下一次启动再试，
+            # 而不是把整个配置准备变成致命错误。
+            continue
+    return removed
+
+
 def ensure_config(home: Path | None = None, prof: str | None = None) -> Path:
     """确保 config.yaml 存在且合规，返回它的路径。
 
     * `workbench`：不存在才写（用户的家，写一次就不再碰）；
     * `index`：每次按模板重渲染（内容相同则不落盘），落盘后过自检。用户没有
       编辑入口（拍板 D），这一侧"手改"只可能是外部污染，重写才是正确反应。
+      口径（`directory`）变化时**先成对删库**再写——旧记录的路径语义已经对不上。
 
     写入失败抛 OSError（调用方决定是警告还是致命）。
     """
@@ -359,17 +457,35 @@ def ensure_config(home: Path | None = None, prof: str | None = None) -> Path:
     path = base / "config.yaml"
 
     if prof == PROFILE_INDEX:
-        # 占位根要真的存在：它代表"整理目标是这个空文件夹"，不存在的话
-        # 任何走 destination() 的路径（move / copy 的预演）都会现造一个，
-        # 那时"空目录"这个前提就已经被破坏了。
-        scratch_dir(base).mkdir(parents=True, exist_ok=True)
-        text = render_config(base, None, None, PROFILE_INDEX)
+        root = scan_root()
+        if root is None:
+            # 只有退回占位目录时才需要造它：它代表"整理目标是这个空文件夹"，
+            # 不存在的话任何走 destination() 的路径（move/copy 的预演）都会现造。
+            # 曲库根则相反——绝不能替用户建目录（那是用户的音乐文件夹）。
+            scratch_dir(base).mkdir(parents=True, exist_ok=True)
+        want = index_layout(base, root)
+        layout_path = base / LAYOUT_FILE
+        if _read_layout(layout_path) != want:
+            removed = reset_index_state(base)
+            layout_path.write_text(
+                json.dumps(want, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            if removed:
+                # stderr 而不是 stdout：协议帧只走 stdout，这条是给人排查用的。
+                print(
+                    "索引库按新口径重建：directory=%s，已删 %s"
+                    % (want["directory"], ", ".join(removed)),
+                    file=sys.stderr,
+                )
+        text = render_config(base, root, None, PROFILE_INDEX)
         if not path.is_file() or path.read_text(encoding="utf-8") != text:
             path.write_text(text, encoding="utf-8", newline="\n")
         # 闸对**落盘结果**做，不对内存里的字符串做：盘上的才是 beets 要读的
-        verify_config(path.read_text(encoding="utf-8"), PROFILE_INDEX, base)
+        verify_config(path.read_text(encoding="utf-8"), PROFILE_INDEX, base, root)
         return path
 
     if not path.is_file():
-        path.write_text(render_config(base, scan_root()), encoding="utf-8", newline="\n")
+        path.write_text(render_config(base, dest_root() or scan_root()), encoding="utf-8", newline="\n")
     return path

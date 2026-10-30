@@ -435,6 +435,14 @@ export const ipc = {
       }),
     /** 字段清单（含插件写入的 flexible 键）+ 识别源三态。查询页的选择器数据源。 */
     fields: () => call<BeetsFieldCatalog>('beets_fields'),
+
+    /**
+     * 只读入库：把**曲库根**整批登记进索引家（不做分析）。
+     *
+     * 异步：进度走 `beets:index`（`progress` → `indexDone`）。
+     * 这是查询页的前置条件——索引库空着时任何筛选都是 0 命中。
+     */
+    indexImport: () => call<JobStarted>('beets_index_import'),
   },
 
   /**

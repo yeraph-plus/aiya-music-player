@@ -25,7 +25,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from ..beetslib import open_library
+from ..beetslib import item_abs_path, open_library
 from ..protocol import E_INVALID_ARG, ProtocolError
 from .enrich import source_table
 
@@ -167,8 +167,10 @@ def _check_rules(rules) -> list[dict]:
     return out
 
 
-def _payload(item, fields: list[str]) -> dict:
-    path = item.path.decode("utf-8", "replace")
+def _payload(lib, item, fields: list[str]) -> dict:
+    # 出口统一拼绝对（幂等）：`item.path` 在磁盘上是相对 library.directory 的，
+    # 这个路径要拿去和应用库 `tracks.path_lower` 关联，形态必须稳定。
+    path = item_abs_path(lib, item)
     got = {}
     for f in fields:
         v = item.get(f)
@@ -222,7 +224,7 @@ def query(rules, raw, fields, limit) -> dict:
         page = list(itertools.islice(results, limit))
 
     return {
-        "items": [_payload(it, want_fields) for it in page],
+        "items": [_payload(lib, it, want_fields) for it in page],
         "total": total,
         "truncated": total > len(page),
     }

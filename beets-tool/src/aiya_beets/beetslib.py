@@ -37,6 +37,25 @@ def open_library(directory: str | None = None):
     )
 
 
+def item_abs_path(lib, item) -> str:
+    """item 的**绝对**路径。幂等：已经是绝对就原样返回（只做 normpath 归一）。
+
+    beets 把 `items.path` 存成**相对 `library.directory`**（文件在该目录内时），
+    API 通常已经拼回绝对——但那是实现细节，不是契约（docs/49 §1.2 的实测就
+    踩在这个细节上）。所有出口（查询 / 导入预览）都过这一道，理由不是"现在会坏"，
+    而是"哪天它变了，症状是全部曲目集体变未入库，且零报错"。
+    """
+    raw = item.path
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    if os.path.isabs(raw):
+        return os.path.normpath(raw)
+    base = lib.directory
+    if isinstance(base, bytes):
+        base = base.decode("utf-8", "replace")
+    return os.path.normpath(os.path.join(base, raw))
+
+
 def scan_audio_files(paths: list[str]) -> list[str]:
     """展开目录为音频文件列表（递归）；直接给文件则原样收下。"""
     out: list[str] = []

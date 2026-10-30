@@ -3,13 +3,14 @@
 
 这一批没有任何"功能"，全部是**安全前提**，所以测试也照着门禁写：
 
-  [1] 索引家模板：写盘开关、占位整理根、插件强制参数齐全，且过自检闸
-  [2] 负向四连：改 write: yes / 删 duplicate_action / 插件越界 / 整理根指错
+  [1] 索引家模板：写盘开关、分析对象（曲库根 / 占位目录两形态）、插件强制参数齐全，且过自检闸
+  [2] 负向六连：改 write: yes / 删 duplicate_action / 插件越界 / 目录口径退化
       —— 闸必须逐个变红（否则闸是装饰）
   [3] 白名单三元组：写盘插件被结构拒绝，而不是靠"记得别加"
   [4] 环境两态：BEETSDIR 与 AIYA_BEETS_HOME 分家必须拒绝启动；profile 不猜
   [5] 自愈：索引家配置被外部改坏 → 下次启动重渲染回合规
-  [6] 两家 status（真子进程）：库路径/配置目录/数据目录/整理根互不串
+  [5b] 口径变化：成对删库与 state.pickle；口径没变则一个字节都不动
+  [6] 两家 status（真子进程）：库路径/配置目录/数据目录/分析对象互不串
   [7] 两家锁（真子进程）：索引家持锁不影响用户库，反之亦然
   [8] BEETSDIR 冲突：启动即一条 E_CONFIG 信封，退出码 2
 
@@ -82,10 +83,10 @@ def run_status(home: str, profile: str | None = None, **extra):
     return proc.returncode, payload, proc.stdout
 
 
-def must_gate(text: str, home: str, why: str) -> None:
-    """断言这份文本过不了闸。"""
+def must_gate(text: str, home: str, why: str, root: str | None = None) -> None:
+    """断言这份文本过不了闸。`root` = 期望的曲库根（docs/49）。"""
     try:
-        cfg.verify_config(text, cfg.PROFILE_INDEX, Path(home))
+        cfg.verify_config(text, cfg.PROFILE_INDEX, Path(home), root)
     except cfg.ConfigGateError:
         return
     raise AssertionError(f"闸没红：{why}")
@@ -103,12 +104,15 @@ try:
     # xtractor 段的 write 必须是 no（默认值恰好是 yes，不写就等于破前提）
     xtr = text.split("xtractor:", 1)[1]
     assert "write: no" in xtr, text
-    # 整理根恒为占位目录，且**不**采用传入的扫描根
-    with_root = cfg.render_config(Path(HOME_IDX), SCAN_ROOT, None, cfg.PROFILE_INDEX)
-    assert norm(SCAN_ROOT) not in norm(with_root), "索引家不该把扫描根写进 directory"
+    # 没给曲库根 → 退回占位目录（唯一合法的退化形态）
     assert norm(cfg.scratch_dir(Path(HOME_IDX))) in norm(text), text
     cfg.verify_config(text, cfg.PROFILE_INDEX, Path(HOME_IDX))
-    print("[1] 索引家模板 + 自检通过")
+    # 给了曲库根 → directory 就是它（docs/49：索引家 = 曲库的只读镜像）
+    with_root = cfg.render_config(Path(HOME_IDX), SCAN_ROOT, None, cfg.PROFILE_INDEX)
+    assert norm(SCAN_ROOT) in norm(with_root), "索引家必须对着曲库根分析"
+    assert norm(cfg.scratch_dir(Path(HOME_IDX))) not in norm(with_root), with_root
+    cfg.verify_config(with_root, cfg.PROFILE_INDEX, Path(HOME_IDX), SCAN_ROOT)
+    print("[1] 索引家模板 + 自检通过（曲库根 / 占位目录两种形态都认）")
 
     # ---- 2. 负向五连：每条都必须让闸变红 ----
     idx_home = Path(HOME_IDX)
@@ -118,9 +122,12 @@ try:
               "duplicate_action 被删（默认 ask 会吞文件）")
     must_gate(text.replace("plugins: xtractor", "plugins: xtractor embedart"), HOME_IDX,
               "白名单外的插件（embedart 写文件）")
+    # 口径退化：给了曲库根，directory 却仍停在占位目录 → 索引会对着一个空目录
+    # 跑，症状是"跑完了，一条都没有"，而配置看起来完全合规。
     must_gate(
-        text.replace(f"directory: '{cfg.scratch_dir(idx_home)}'", f"directory: '{SCAN_ROOT}'"),
-        HOME_IDX, "整理根指向扫描根（库里会存相对路径）",
+        with_root.replace(f"directory: {cfg.yaml_path(Path(SCAN_ROOT))}",
+                          f"directory: {cfg.yaml_path(cfg.scratch_dir(idx_home))}"),
+        HOME_IDX, "给了曲库根却仍指占位目录（索引范围变成空目录）", root=SCAN_ROOT,
     )
     must_gate(text.replace("xtractor:\n    auto: no\n    write: no\n", "xtractor:\n    auto: no\n"),
               HOME_IDX, "xtractor.write 缺失（默认 yes 会写回音频文件）")
@@ -195,10 +202,37 @@ try:
     assert "    write: yes" not in healed, "坏配置没有被重写"
     print("[5] 索引家配置自愈 OK")
 
+    # ---- 5b. 口径变化 → 成对删库与增量状态（docs/49 §3.3）----
+    # 索引家的 directory 从占位目录改成曲库根时，旧记录（绝对路径）与新记录
+    # （相对）的语义基准不同。用户拍板"干净重建"，所以这里盯两件事：
+    # 变了必须删干净（含 state.pickle，只删库会让 -R 记忆仍在 → 全跳过）；没变
+    # 必须一个字节都不动（否则每次启动都重建，索引永远跑不完）。
+    (idx_home / "library.db").write_bytes(b"fake-db")
+    (idx_home / "state.pickle").write_bytes(b"fake-state")
+
+    def with_root_env(fn):
+        os.environ["AIYA_BEETS_SCAN_ROOT"] = SCAN_ROOT
+        try:
+            return fn()
+        finally:
+            os.environ.pop("AIYA_BEETS_SCAN_ROOT", None)
+
+    with_root_env(lambda: cfg.ensure_config(idx_home, cfg.PROFILE_INDEX))
+    assert not (idx_home / "library.db").exists(), "口径变了必须重建：旧库要删"
+    assert not (idx_home / "state.pickle").exists(), "state 是增量记忆，必须成对删"
+    rebuilt = path.read_text(encoding="utf-8")
+    cfg.verify_config(rebuilt, cfg.PROFILE_INDEX, idx_home, SCAN_ROOT)
+    assert norm(SCAN_ROOT) in norm(rebuilt), rebuilt
+
+    (idx_home / "state.pickle").write_bytes(b"keep-me")
+    with_root_env(lambda: cfg.ensure_config(idx_home, cfg.PROFILE_INDEX))
+    assert (idx_home / "state.pickle").read_bytes() == b"keep-me", "同口径不该重建"
+    print("[5b] 索引库按口径重建 OK（变了成对删 / 没变一个字节都不动）")
+
     # ---- 6. 两家 status：字段互不串 ----
     code_wb, wb, raw_wb = run_status(HOME_WB, "workbench", AIYA_BEETS_SCAN_ROOT=SCAN_ROOT)
     assert code_wb == 0 and wb, f"workbench status 失败：{raw_wb[:300]}"
-    code_idx, idx, raw_idx = run_status(HOME_IDX, "index")
+    code_idx, idx, raw_idx = run_status(HOME_IDX, "index", AIYA_BEETS_SCAN_ROOT=SCAN_ROOT)
     assert code_idx == 0 and idx, f"index status 失败：{raw_idx[:300]}"
 
     assert norm(wb["libraryPath"]) == norm(os.path.join(HOME_WB, "library.db")), wb["libraryPath"]
@@ -207,9 +241,9 @@ try:
     assert norm(idx["configDir"]) == norm(HOME_IDX), idx["configDir"]
     assert norm(wb["dataHome"]) == norm(HOME_WB), wb["dataHome"]
     assert norm(idx["dataHome"]) == norm(HOME_IDX), idx["dataHome"]
-    # 整理根：用户库 = 扫描根；索引家 = 占位空目录
+    # 整理根：用户库 = 落点（这里是扫描根）；索引家 = **曲库根**（docs/49）
     assert norm(wb["libraryDirectory"]) == norm(SCAN_ROOT), wb["libraryDirectory"]
-    assert norm(idx["libraryDirectory"]) == norm(cfg.scratch_dir(idx_home)), idx["libraryDirectory"]
+    assert norm(idx["libraryDirectory"]) == norm(SCAN_ROOT), idx["libraryDirectory"]
     # 索引家只开 xtractor；用户库不带 import 段（三行老形状，用户做主）
     assert idx["plugins"] == ["xtractor"], idx["plugins"]
     wb_cfg = open(os.path.join(HOME_WB, "config.yaml"), encoding="utf-8").read()

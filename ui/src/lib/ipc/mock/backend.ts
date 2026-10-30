@@ -769,6 +769,42 @@ export class MockBackend {
   }
 
   /**
+   * 只读入库（`beets_index_import`）的演练事件流（`beets:index`）：
+   * `progress`（按批）→ `indexDone`。
+   *
+   * 预览库里没有第二个数据库，所以"入库"只是把进度演一遍，不改变
+   * `beetsQuery` 的返回（它本来就当索引库非空）。
+   */
+  async beetsIndexImport(): Promise<{ started: boolean }> {
+    const total = this.tracks.length;
+    const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:index', e);
+    void (async () => {
+      const batches = 3;
+      emit({ type: 'progress', session: 'idx_01', stage: 'import', current: 0, total, path: null });
+      for (let b = 1; b <= batches; b += 1) {
+        await new Promise((r) => setTimeout(r, 180));
+        emit({
+          type: 'progress',
+          session: 'idx_01',
+          stage: 'import',
+          current: Math.round((total * b) / batches),
+          total,
+          path: null,
+        });
+      }
+      emit({
+        type: 'indexDone',
+        session: 'idx_01',
+        stage: 'import',
+        files: total,
+        items: total,
+        roots: this.tracks.slice(0, 3).map((t) => `D:/MUSIC_Player/preview/${t.id}.flac`),
+      });
+    })();
+    return { started: true };
+  }
+
+  /**
    * beets 查询页（docs/47/48）的预览数据。
    *
    * 查询条件被刻意**不实现**：预览库里没有 beets 的 SQL，假装支持 rules/raw
