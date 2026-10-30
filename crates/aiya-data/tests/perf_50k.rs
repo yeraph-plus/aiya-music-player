@@ -30,7 +30,11 @@ fn seed(conn: &Connection, n: usize) -> std::time::Duration {
         // 父表先行（FK ON）
         conn.execute(
             "INSERT OR IGNORE INTO artists (id,name,name_norm) VALUES (?1,?2,?3)",
-            rusqlite::params![aiya_data::ids::artist_id(&artist), artist, aiya_data::norm::norm(&artist)],
+            rusqlite::params![
+                aiya_data::ids::artist_id(&artist),
+                artist,
+                aiya_data::norm::norm(&artist)
+            ],
         )
         .unwrap();
         conn.execute(
@@ -77,7 +81,7 @@ fn q_page(conn: &Connection, offset: usize) -> std::time::Duration {
         last_played_from_ms: None,
         last_played_to_ms: None,
         last_played_never: None,
-    conds: None,
+        conds: None,
         source: aiya_data::repo::TrackSource::Library,
         limit: 200,
         // 深分页必须用 Offset 模式：Cursor 模式**根本不读 offset**，
@@ -103,7 +107,10 @@ fn perf_50k_baseline() {
 
     // 冷连接（内存库无法重开；用"新查询句柄"近似冷查询——含语句准备）
     let t1 = q_page(&conn, 0);
-    println!("首屏 200 首:      {:>8.1?}  （基线口径：全链路 366-403ms，本测仅查询层）", t1);
+    println!(
+        "首屏 200 首:      {:>8.1?}  （基线口径：全链路 366-403ms，本测仅查询层）",
+        t1
+    );
 
     // 深分页：offset 49000（对照旧基线深分页 2.3ms）
     let mut worst = std::time::Duration::ZERO;
@@ -136,7 +143,7 @@ fn perf_50k_baseline() {
         last_played_from_ms: None,
         last_played_to_ms: None,
         last_played_never: None,
-    conds: None,
+        conds: None,
         source: aiya_data::repo::TrackSource::Library,
         limit: 200,
         mode: aiya_data::repo::Mode::Cursor,
@@ -148,7 +155,11 @@ fn perf_50k_baseline() {
     let cursor_t = t_cursor.elapsed();
     // 空页不能算通过：命中真实中位游标时必须是满页
     assert_eq!(page.items.len(), 200, "游标续页必须返回满页（空页=假绿）");
-    println!("游标续页(中位):   {:>8.1?}  （{} 行）", cursor_t, page.items.len());
+    println!(
+        "游标续页(中位):   {:>8.1?}  （{} 行）",
+        cursor_t,
+        page.items.len()
+    );
 
     // 搜索（LIKE '%晴天%'，title_norm 索引前缀 + 全表 LIKE 回退）
     let t_search = Instant::now();
@@ -163,7 +174,7 @@ fn perf_50k_baseline() {
         last_played_from_ms: None,
         last_played_to_ms: None,
         last_played_never: None,
-    conds: None,
+        conds: None,
         source: aiya_data::repo::TrackSource::Library,
         limit: 50,
         mode: aiya_data::repo::Mode::Cursor,
@@ -172,15 +183,34 @@ fn perf_50k_baseline() {
     };
     let spage = aiya_data::repo::list_tracks(&conn, &qs).unwrap();
     let search_t = t_search.elapsed();
-    println!("搜索\"晴天\":       {:>8.1?}  （命中 {} 行）", search_t, spage.total);
-    assert!(spage.total >= 7_000, "expect ~7143 hits, got {}", spage.total);
+    println!(
+        "搜索\"晴天\":       {:>8.1?}  （命中 {} 行）",
+        search_t, spage.total
+    );
+    assert!(
+        spage.total >= 7_000,
+        "expect ~7143 hits, got {}",
+        spage.total
+    );
 
     // 验收门槛（对照旧基线 cargo 侧口径）：
     // * 首屏 / 游标续页走索引 seek，必须与旧基线同量级（旧基线深分页 2.3ms）；
     // * offset 深分页天然 O(offset)（SQLite 要跳 49800 条索引项），只作为
     //   "兜底路径"设宽门槛；UI 的曲库列表必须用 cursor 模式。
     assert!(t1.as_millis() < 60, "首屏 {}ms 过慢", t1.as_millis());
-    assert!(worst.as_millis() < 100, "深分页(offset) worst {}ms 过慢", worst.as_millis());
-    assert!(cursor_t.as_millis() < 10, "游标续页 {}ms 过慢", cursor_t.as_millis());
-    assert!(search_t.as_millis() < 100, "搜索 {}ms 过慢", search_t.as_millis());
+    assert!(
+        worst.as_millis() < 100,
+        "深分页(offset) worst {}ms 过慢",
+        worst.as_millis()
+    );
+    assert!(
+        cursor_t.as_millis() < 10,
+        "游标续页 {}ms 过慢",
+        cursor_t.as_millis()
+    );
+    assert!(
+        search_t.as_millis() < 100,
+        "搜索 {}ms 过慢",
+        search_t.as_millis()
+    );
 }

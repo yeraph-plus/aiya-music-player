@@ -10,7 +10,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::state::{
-    AudioError, AudioSource, PlaybackStatus, PlayerCommand, PlayerState, PlayHistory, QueueOp,
+    AudioError, AudioSource, PlayHistory, PlaybackStatus, PlayerCommand, PlayerState, QueueOp,
     QueueSnapshot, RepeatMode, TrackRef,
 };
 
@@ -122,7 +122,11 @@ impl PlayerActor {
 
     pub fn queue_snapshot(&self) -> QueueSnapshot {
         QueueSnapshot {
-            ids: self.order.iter().map(|&i| self.queue[i].id.clone()).collect(),
+            ids: self
+                .order
+                .iter()
+                .map(|&i| self.queue[i].id.clone())
+                .collect(),
             index: self.cursor,
             cursor: self.cursor,
             version: self.queue_version,
@@ -227,9 +231,7 @@ impl PlayerActor {
     /* ---------------- 内部工具 ---------------- */
 
     fn current_track(&self) -> Option<&TrackRef> {
-        self.order
-            .get(self.cursor)
-            .and_then(|&i| self.queue.get(i))
+        self.order.get(self.cursor).and_then(|&i| self.queue.get(i))
     }
 
     fn bump_queue_version(&mut self) {
@@ -251,7 +253,11 @@ impl PlayerActor {
         if len == 0 {
             return false;
         }
-        let leaving = if self.shuffle { self.order.get(self.cursor).copied() } else { None };
+        let leaving = if self.shuffle {
+            self.order.get(self.cursor).copied()
+        } else {
+            None
+        };
         let moved = if self.cursor + 1 < len {
             self.cursor += 1;
             true
@@ -306,7 +312,11 @@ impl PlayerActor {
             } else {
                 AudioSource::File
             };
-            self.status = if autoplay { PlaybackStatus::Loading } else { PlaybackStatus::Paused };
+            self.status = if autoplay {
+                PlaybackStatus::Loading
+            } else {
+                PlaybackStatus::Paused
+            };
             self.position_ms = start_ms;
             self.last_reported_ms = start_ms; // 换曲必须重置，否则快照带上上一曲的残留进度
             self.pending_stop = false; // 新的装载取代旧的停止意图
@@ -450,11 +460,7 @@ impl PlayerActor {
                     self.rebuild_order(None);
                     // start 是"队列原序"下标，必须换算成 order 里的位置 ——
                     // 洗牌后 cursor 直接用 start 会播到另一首
-                    self.cursor = self
-                        .order
-                        .iter()
-                        .position(|&i| i == start)
-                        .unwrap_or(0);
+                    self.cursor = self.order.iter().position(|&i| i == start).unwrap_or(0);
                     self.bump_queue_version();
                     self.instruct_load(true, 0);
                 }
@@ -473,11 +479,7 @@ impl PlayerActor {
                     self.bump_queue_version();
                     // 空队列追加后自动开始播放
                     if self.status == PlaybackStatus::Idle && !self.order.is_empty() {
-                        self.cursor = self
-                            .order
-                            .iter()
-                            .position(|&i| i == first_new)
-                            .unwrap_or(0);
+                        self.cursor = self.order.iter().position(|&i| i == first_new).unwrap_or(0);
                         self.instruct_load(true, 0);
                     }
                 }
@@ -507,8 +509,7 @@ impl PlayerActor {
                     }
                     let cur_pos = self.cursor;
                     let cur_queue_idx = self.order.get(cur_pos).copied();
-                    let removed_before_cursor =
-                        positions.iter().filter(|&&p| p < cur_pos).count();
+                    let removed_before_cursor = positions.iter().filter(|&&p| p < cur_pos).count();
                     let current_removed = cur_queue_idx
                         .map(|c| positions.iter().any(|&p| self.order[p] == c))
                         .unwrap_or(false);
@@ -575,7 +576,11 @@ impl PlayerActor {
                 if token == self.token {
                     // 0 = 直播流没有总时长（docs/22 G3）：对 UI 呈现 None
                     // 而不是 Some(0)——进度条按 source=stream 显示"直播中"
-                    self.duration_ms = if duration_ms == 0 { None } else { Some(duration_ms) };
+                    self.duration_ms = if duration_ms == 0 {
+                        None
+                    } else {
+                        Some(duration_ms)
+                    };
                     if self.status == PlaybackStatus::Loading {
                         // Loading 期间用户按过暂停 → 落 Paused（此前被静默吞掉）
                         let want_pause = std::mem::take(&mut self.pending_pause);
@@ -750,11 +755,17 @@ mod tests {
         fm.path = "http://fm.test/live/stream.m3u8".into();
         fm.duration_ms = None;
         let mut p = PlayerActor::new();
-        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll { tracks: vec![fm], start: 0 }));
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![fm],
+            start: 0,
+        }));
         assert_eq!(p.state().source, AudioSource::Stream, "http 路径必须判成流");
 
         // 清空队列 → 不能继续声称自己是 stream（否则 UI 一直"直播中"）
-        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll { tracks: vec![], start: 0 }));
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![],
+            start: 0,
+        }));
         let s = p.state();
         assert_eq!(s.status, PlaybackStatus::Idle);
         assert_eq!(s.source, AudioSource::File, "队列空了，source 必须复位");
@@ -783,7 +794,10 @@ mod tests {
         assert_eq!(s.status, PlaybackStatus::Loading);
         assert_eq!(s.token, token);
 
-        p.reduce(PlayerCommand::Loaded { token, duration_ms: 180_000 });
+        p.reduce(PlayerCommand::Loaded {
+            token,
+            duration_ms: 180_000,
+        });
         assert_eq!(p.state().status, PlaybackStatus::Playing);
     }
 
@@ -795,9 +809,15 @@ mod tests {
         fm.path = "http://fm.test/live/stream.m3u8".into();
         fm.duration_ms = None;
         let mut p = PlayerActor::new();
-        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll { tracks: vec![fm], start: 0 }));
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![fm],
+            start: 0,
+        }));
         let (token, _, _, _) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token, duration_ms: 0 });
+        p.reduce(PlayerCommand::Loaded {
+            token,
+            duration_ms: 0,
+        });
         let s = p.state();
         assert_eq!(s.duration_ms, None, "直播无总时长 → null");
         assert_eq!(s.source, AudioSource::Stream);
@@ -811,7 +831,10 @@ mod tests {
             start: 0,
         }));
         let (t1, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: t1, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: t1,
+            duration_ms: 1,
+        });
 
         p.reduce(PlayerCommand::Ended { token: t1 });
         let (_, path, ..) = p.take_pending_load().unwrap();
@@ -821,7 +844,11 @@ mod tests {
         assert!(t2.is_none());
         let token_now = p.state().token;
         p.reduce(PlayerCommand::Ended { token: token_now });
-        assert_eq!(p.state().status, PlaybackStatus::Idle, "repeat=off 队尾停住");
+        assert_eq!(
+            p.state().status,
+            PlaybackStatus::Idle,
+            "repeat=off 队尾停住"
+        );
         assert!(p.take_pending_load().is_none());
     }
 
@@ -833,7 +860,10 @@ mod tests {
             start: 0,
         }));
         let (t1, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: t1, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: t1,
+            duration_ms: 1,
+        });
         p.reduce(PlayerCommand::SetRepeat(RepeatMode::One));
 
         p.reduce(PlayerCommand::Ended { token: t1 });
@@ -852,14 +882,19 @@ mod tests {
             start: 0,
         }));
         let (t1, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: t1, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: t1,
+            duration_ms: 1,
+        });
         p.reduce(PlayerCommand::SetRepeat(RepeatMode::All));
 
         p.reduce(PlayerCommand::Ended { token: t1 });
         let (_, path, ..) = p.take_pending_load().unwrap();
         assert_eq!(path, "D:/m/b.flac");
 
-        p.reduce(PlayerCommand::Ended { token: p.state().token });
+        p.reduce(PlayerCommand::Ended {
+            token: p.state().token,
+        });
         let (_, path, ..) = p.take_pending_load().unwrap();
         assert_eq!(path, "D:/m/a.flac", "repeat=all 环绕回第一首");
     }
@@ -872,7 +907,10 @@ mod tests {
             start: 0,
         }));
         let (t1, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: t1, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: t1,
+            duration_ms: 1,
+        });
         p.reduce(PlayerCommand::Position { position_ms: 5_000 });
 
         p.reduce(PlayerCommand::Prev);
@@ -917,12 +955,16 @@ mod tests {
             start: 0,
         }));
         let _ = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Queue(QueueOp::PlayNext { tracks: vec![track("x")] }));
+        p.reduce(PlayerCommand::Queue(QueueOp::PlayNext {
+            tracks: vec![track("x")],
+        }));
 
         let snap = p.queue_snapshot();
         assert_eq!(snap.ids, vec!["a", "x", "b"], "PlayNext 插到当前之后");
 
-        p.reduce(PlayerCommand::Ended { token: p.state().token });
+        p.reduce(PlayerCommand::Ended {
+            token: p.state().token,
+        });
         let (_, path, ..) = p.take_pending_load().unwrap();
         assert_eq!(path, "D:/m/x.flac", "播完当前播插入曲");
     }
@@ -950,7 +992,10 @@ mod tests {
             start: 0,
         }));
         let (t1, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: t1, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: t1,
+            duration_ms: 1,
+        });
 
         // 用旧 token 报 Ended 应被丢弃
         p.reduce(PlayerCommand::Ended { token: t1 - 1 });
@@ -961,7 +1006,9 @@ mod tests {
     #[test]
     fn append_to_empty_autoplays() {
         let mut p = PlayerActor::new();
-        p.reduce(PlayerCommand::Queue(QueueOp::Append { tracks: vec![track("a")] }));
+        p.reduce(PlayerCommand::Queue(QueueOp::Append {
+            tracks: vec![track("a")],
+        }));
         let (_, path, _, autoplay) = p.take_pending_load().unwrap();
         assert_eq!(path, "D:/m/a.flac");
         assert!(autoplay);
@@ -991,8 +1038,11 @@ mod tests {
         assert_eq!(after.len(), 10);
 
         // 旧曲相对顺序不变：过滤掉新曲后应与追加前完全一致
-        let old: Vec<&str> =
-            after.iter().map(|s| s.as_str()).filter(|id| *id != "x" && *id != "y").collect();
+        let old: Vec<&str> = after
+            .iter()
+            .map(|s| s.as_str())
+            .filter(|id| *id != "x" && *id != "y")
+            .collect();
         let old_before: Vec<&str> = before.iter().map(|s| s.as_str()).collect();
         assert_eq!(old, old_before, "Append 不得打乱既有顺序");
 
@@ -1000,7 +1050,10 @@ mod tests {
         let cursor = p.state().cursor.unwrap();
         for (pos, id) in after.iter().enumerate() {
             if id == "x" || id == "y" {
-                assert!(pos > cursor, "新曲 {id} 出现在已播区段（pos={pos}，cursor={cursor}）");
+                assert!(
+                    pos > cursor,
+                    "新曲 {id} 出现在已播区段（pos={pos}，cursor={cursor}）"
+                );
             }
         }
         // 当前曲不受影响
@@ -1024,7 +1077,11 @@ mod tests {
         assert_eq!(s.queue_length, 2);
         let snap = p.queue_snapshot();
         assert_eq!(snap.ids.len(), 2);
-        assert_eq!(path, format!("D:/m/{}.flac", snap.ids[0]), "装载的是 cursor 指向的曲");
+        assert_eq!(
+            path,
+            format!("D:/m/{}.flac", snap.ids[0]),
+            "装载的是 cursor 指向的曲"
+        );
     }
 
     /* ---------------- 随机模式的播放历史 ---------------- */
@@ -1038,19 +1095,36 @@ mod tests {
             start: 0,
         }));
         let (tok, p0, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: tok, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: tok,
+            duration_ms: 1,
+        });
         p.reduce(PlayerCommand::ToggleShuffle);
         let order = p.queue_snapshot().ids;
-        assert_eq!(p.state().current.unwrap().id, order[0], "当前曲不被洗牌打断");
+        assert_eq!(
+            p.state().current.unwrap().id,
+            order[0],
+            "当前曲不被洗牌打断"
+        );
 
         // 自动连播到第三首
         p.reduce(PlayerCommand::Ended { token: tok });
         let (tok2, p1, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: tok2, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: tok2,
+            duration_ms: 1,
+        });
         p.reduce(PlayerCommand::Ended { token: tok2 });
         let (tok3, p2, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: tok3, duration_ms: 1 });
-        assert_eq!(p2, format!("D:/m/{}.flac", order[2]), "自动连播沿 order 前进");
+        p.reduce(PlayerCommand::Loaded {
+            token: tok3,
+            duration_ms: 1,
+        });
+        assert_eq!(
+            p2,
+            format!("D:/m/{}.flac", order[2]),
+            "自动连播沿 order 前进"
+        );
 
         p.reduce(PlayerCommand::Prev);
         let (_, back1, ..) = p.take_pending_load().unwrap();
@@ -1074,13 +1148,22 @@ mod tests {
             start: 0,
         }));
         let (tok, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: tok, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: tok,
+            duration_ms: 1,
+        });
         p.reduce(PlayerCommand::Ended { token: tok }); // → b
         let (tok2, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: tok2, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: tok2,
+            duration_ms: 1,
+        });
         p.reduce(PlayerCommand::Ended { token: tok2 }); // → c
         let (tok3, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: tok3, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: tok3,
+            duration_ms: 1,
+        });
         assert!(p.history.is_empty(), "非随机模式不入栈");
 
         p.reduce(PlayerCommand::Prev);
@@ -1097,14 +1180,23 @@ mod tests {
             start: 0,
         }));
         let (tok, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: tok, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: tok,
+            duration_ms: 1,
+        });
         p.reduce(PlayerCommand::ToggleShuffle);
         p.reduce(PlayerCommand::Ended { token: tok });
         let (tok2, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: tok2, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: tok2,
+            duration_ms: 1,
+        });
         p.reduce(PlayerCommand::Ended { token: tok2 });
         let (tok3, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: tok3, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: tok3,
+            duration_ms: 1,
+        });
         assert_eq!(p.history.len(), 2, "两次前进应压栈两条");
 
         // 关闭洗牌 → 清栈
@@ -1115,10 +1207,16 @@ mod tests {
         p.reduce(PlayerCommand::ToggleShuffle);
         p.reduce(PlayerCommand::Ended { token: tok3 });
         let (tok4, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: tok4, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: tok4,
+            duration_ms: 1,
+        });
         p.reduce(PlayerCommand::Ended { token: tok4 });
         let (tok5, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: tok5, duration_ms: 1 });
+        p.reduce(PlayerCommand::Loaded {
+            token: tok5,
+            duration_ms: 1,
+        });
         assert_eq!(p.history.len(), 2);
         p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
             tracks: (0..3).map(|i| track(&format!("n{i}"))).collect(),
@@ -1128,7 +1226,10 @@ mod tests {
         let _ = p.take_pending_load();
 
         // 清空队列 → 清栈
-        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll { tracks: vec![], start: 0 }));
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![],
+            start: 0,
+        }));
         assert!(p.history.is_empty());
     }
 
@@ -1144,8 +1245,15 @@ mod tests {
         let (tok, ..) = p.take_pending_load().unwrap();
         assert_eq!(p.state().status, PlaybackStatus::Loading);
         p.reduce(PlayerCommand::TogglePause); // Loading 中按暂停
-        p.reduce(PlayerCommand::Loaded { token: tok, duration_ms: 1 });
-        assert_eq!(p.state().status, PlaybackStatus::Paused, "Loading 期间的暂停必须生效");
+        p.reduce(PlayerCommand::Loaded {
+            token: tok,
+            duration_ms: 1,
+        });
+        assert_eq!(
+            p.state().status,
+            PlaybackStatus::Paused,
+            "Loading 期间的暂停必须生效"
+        );
 
         p.reduce(PlayerCommand::TogglePause);
         assert_eq!(p.state().status, PlaybackStatus::Playing);
@@ -1153,8 +1261,15 @@ mod tests {
         // 新 Load 到达清掉标志：Next 装载后 Loaded → Playing（不是 Paused）
         p.reduce(PlayerCommand::Next);
         let (tok2, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: tok2, duration_ms: 1 });
-        assert_eq!(p.state().status, PlaybackStatus::Playing, "新 Load 必须清掉暂停意图");
+        p.reduce(PlayerCommand::Loaded {
+            token: tok2,
+            duration_ms: 1,
+        });
+        assert_eq!(
+            p.state().status,
+            PlaybackStatus::Playing,
+            "新 Load 必须清掉暂停意图"
+        );
     }
 
     /// 暂停意图不跨 ReplaceAll / 队尾停止存活。
@@ -1167,15 +1282,22 @@ mod tests {
         }));
         let (tok, ..) = p.take_pending_load().unwrap();
         p.reduce(PlayerCommand::TogglePause); // 记下暂停意图
-        // 整队替换 → 新装载，暂停意图作废
+                                              // 整队替换 → 新装载，暂停意图作废
         p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
             tracks: vec![track("c")],
             start: 0,
         }));
         let (tok2, ..) = p.take_pending_load().unwrap();
         assert_ne!(tok2, tok);
-        p.reduce(PlayerCommand::Loaded { token: tok2, duration_ms: 1 });
-        assert_eq!(p.state().status, PlaybackStatus::Playing, "ReplaceAll 必须清暂停意图");
+        p.reduce(PlayerCommand::Loaded {
+            token: tok2,
+            duration_ms: 1,
+        });
+        assert_eq!(
+            p.state().status,
+            PlaybackStatus::Playing,
+            "ReplaceAll 必须清暂停意图"
+        );
 
         // Loading 中按暂停 → 队尾停止（go_idle）→ 重新播放：意图不应复活
         p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
@@ -1191,8 +1313,15 @@ mod tests {
             start: 0,
         }));
         let (tok4, ..) = p.take_pending_load().unwrap();
-        p.reduce(PlayerCommand::Loaded { token: tok4, duration_ms: 1 });
-        assert_eq!(p.state().status, PlaybackStatus::Playing, "停止后暂停意图不得复活");
+        p.reduce(PlayerCommand::Loaded {
+            token: tok4,
+            duration_ms: 1,
+        });
+        assert_eq!(
+            p.state().status,
+            PlaybackStatus::Playing,
+            "停止后暂停意图不得复活"
+        );
     }
 
     /* ---------------- 洗牌种子熵 ---------------- */
@@ -1243,7 +1372,11 @@ mod tests {
             Some("t5"),
         );
         let _ = p.take_pending_load().unwrap();
-        assert_eq!(p.state().cursor, Some(0), "hydrate 洗牌应把当前曲钉到 order 位 0");
+        assert_eq!(
+            p.state().cursor,
+            Some(0),
+            "hydrate 洗牌应把当前曲钉到 order 位 0"
+        );
         assert_eq!(p.queue_snapshot().ids[0], "t5");
         assert_eq!(p.state().current.unwrap().id, "t5");
     }
@@ -1333,7 +1466,10 @@ mod tests {
         let mut p = PlayerActor::new();
         let mut t = track("g");
         t.gain_db = gain_db;
-        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll { tracks: vec![t], start: 0 }));
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![t],
+            start: 0,
+        }));
         p.take_pending_load();
         p
     }
@@ -1351,7 +1487,11 @@ mod tests {
         let mut p = actor_with_gain(Some(-6.0));
         p.set_normalize(true);
         // -6 dB ≈ 0.501
-        assert!((p.norm_factor() - 0.5011872).abs() < 1e-4, "{}", p.norm_factor());
+        assert!(
+            (p.norm_factor() - 0.5011872).abs() < 1e-4,
+            "{}",
+            p.norm_factor()
+        );
     }
 
     #[test]
@@ -1366,16 +1506,26 @@ mod tests {
         // 坏标签 -60 dB 不能把声音搞没；限幅到 -12 dB
         let mut p = actor_with_gain(Some(-60.0));
         p.set_normalize(true);
-        assert!((p.norm_factor() - 0.25118864).abs() < 1e-4, "{}", p.norm_factor());
+        assert!(
+            (p.norm_factor() - 0.25118864).abs() < 1e-4,
+            "{}",
+            p.norm_factor()
+        );
     }
 
     #[test]
     fn engine_volume_clamps_to_unity_and_mutes() {
         let mut p = actor_with_gain(Some(9.0));
         p.set_normalize(true);
-        p.reduce(PlayerCommand::SetVolume { volume: 1.0, muted: false });
+        p.reduce(PlayerCommand::SetVolume {
+            volume: 1.0,
+            muted: false,
+        });
         assert_eq!(p.engine_volume(), 1.0, "增益不能把音量推过 1.0");
-        p.reduce(PlayerCommand::SetVolume { volume: 1.0, muted: true });
+        p.reduce(PlayerCommand::SetVolume {
+            volume: 1.0,
+            muted: true,
+        });
         assert_eq!(p.engine_volume(), 0.0, "静音恒为 0");
     }
 }

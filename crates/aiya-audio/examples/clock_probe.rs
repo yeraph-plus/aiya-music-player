@@ -42,7 +42,9 @@ fn run(events: bool) -> (u64, u64, usize) {
         .is_supported_exclusive_with_quirks(&want)
         .expect("设备不接受 i24 独占");
     let mode = if events {
-        StreamMode::EventsExclusive { period_hns: buffer_ms() * 10_000 }
+        StreamMode::EventsExclusive {
+            period_hns: buffer_ms() * 10_000,
+        }
     } else {
         StreamMode::PollingExclusive {
             buffer_duration_hns: buffer_ms() * 10_000,
@@ -79,7 +81,10 @@ fn run(events: bool) -> (u64, u64, usize) {
         },
         buffer_frames as f64 * 1000.0 / RATE as f64
     );
-    println!("{:>8} {:>8} {:>8} {:>8} {:>8}", "t(ms)", "pad", "clk", "writ", "fly");
+    println!(
+        "{:>8} {:>8} {:>8} {:>8} {:>8}",
+        "t(ms)", "pad", "clk", "writ", "fly"
+    );
 
     let mut next_report = Duration::ZERO;
     let mut pads = std::collections::BTreeSet::new();
@@ -95,7 +100,11 @@ fn run(events: bool) -> (u64, u64, usize) {
         let played = (pos.saturating_sub(base)).saturating_mul(RATE as u64) / freq.max(1);
         let in_flight = written.saturating_sub(played);
         let avail = (buffer_frames as u64).saturating_sub(in_flight) as usize;
-        if avail > 0 && render.write_to_device(avail, &buf[..avail * block], None).is_ok() {
+        if avail > 0
+            && render
+                .write_to_device(avail, &buf[..avail * block], None)
+                .is_ok()
+        {
             written += avail as u64;
         }
         if event.is_none() {
@@ -123,7 +132,9 @@ fn run(events: bool) -> (u64, u64, usize) {
 }
 
 fn main() {
-    { let _ = wasapi::initialize_mta(); }
+    {
+        let _ = wasapi::initialize_mta();
+    }
     let only = std::env::var("AIYA_MODE").unwrap_or_default();
     if only != "polling" {
         let (w, c, pads) = run(true);
@@ -133,5 +144,7 @@ fn main() {
         let (w, c, pads) = run(false);
         println!("轮询：写入 {w} 帧 / {RUN_MS}ms，时钟 {c} 帧，padding 出现 {pads} 种取值");
     }
-    { wasapi::deinitialize(); }
+    {
+        wasapi::deinitialize();
+    }
 }

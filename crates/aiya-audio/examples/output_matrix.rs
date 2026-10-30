@@ -27,7 +27,10 @@ use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 static RATE_V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 fn rate() -> usize {
     *RATE_V.get_or_init(|| {
-        std::env::var("AIYA_RATE").ok().and_then(|s| s.parse().ok()).unwrap_or(44_100)
+        std::env::var("AIYA_RATE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(44_100)
     })
 }
 const CH: usize = 2;
@@ -68,7 +71,12 @@ fn new_client() -> Result<wasapi::AudioClient, String> {
     dev.get_iaudioclient().map_err(|e| e.to_string())
 }
 
-fn open(share: Share, clock: Clock, period_hns: Option<i64>, buf_hns: i64) -> Result<Opened, String> {
+fn open(
+    share: Share,
+    clock: Clock,
+    period_hns: Option<i64>,
+    buf_hns: i64,
+) -> Result<Opened, String> {
     if share == Share::Shared {
         let mut client = new_client()?;
         let fmt = WaveFormat::new(32, 32, &SampleType::Float, rate(), CH, None);
@@ -111,7 +119,10 @@ fn open(share: Share, clock: Clock, period_hns: Option<i64>, buf_hns: i64) -> Re
                 continue;
             }
         };
-        let label = match (negotiated.get_bitspersample(), negotiated.get_subformat().ok()) {
+        let label = match (
+            negotiated.get_bitspersample(),
+            negotiated.get_subformat().ok(),
+        ) {
             (32, Some(SampleType::Float)) => "f32",
             (32, Some(SampleType::Int)) => "i24-in-32",
             (16, _) => "i16",
@@ -216,9 +227,9 @@ fn run(op: &Opened, clock: Clock, strategy: Strategy, period: Duration) -> Stats
             && render
                 .write_to_device(writable, &zeros[..writable * ba], None)
                 .is_ok()
-            {
-                written += writable as u64;
-            }
+        {
+            written += writable as u64;
+        }
 
         let elapsed = t0.elapsed().as_secs_f64();
         let lag = written as i64 - (elapsed * rate() as f64) as i64;
@@ -234,7 +245,11 @@ fn run(op: &Opened, clock: Clock, strategy: Strategy, period: Duration) -> Stats
         elapsed,
         lag_start,
         lag_end: written as i64 - (elapsed * rate() as f64) as i64,
-        padding_min: if padding_min == u32::MAX { 0 } else { padding_min },
+        padding_min: if padding_min == u32::MAX {
+            0
+        } else {
+            padding_min
+        },
         padding_max,
         intervals,
     }
@@ -261,7 +276,10 @@ fn main() {
     let default_period = {
         let en = DeviceEnumerator::new().expect("enumerator");
         let dev = en.get_default_device(&Direction::Render).expect("device");
-        println!("默认输出设备：{}", dev.get_friendlyname().unwrap_or_default());
+        println!(
+            "默认输出设备：{}",
+            dev.get_friendlyname().unwrap_or_default()
+        );
         let c = new_client().expect("client");
         if let Ok(mix) = c.get_mixformat() {
             println!(
@@ -280,10 +298,7 @@ fn main() {
         Duration::from_nanos(d as u64 * 100)
     };
 
-    println!(
-        "\n{} Hz / {} ch，每栏 {} ms，静音\n",
-        rate(), CH, RUN_MS
-    );
+    println!("\n{} Hz / {} ch，每栏 {} ms，静音\n", rate(), CH, RUN_MS);
     println!(
         "{:<38} {:>10} {:>6} {:>9} {:>15} {:>7} {:>6}",
         "组合 / 策略", "格式", "buf", "pad范围", "lag 首→末", "事件p99", "结论"
@@ -292,16 +307,79 @@ fn main() {
 
     let mut cases: Vec<Case> = vec![];
     if !only_exclusive {
-        cases.push(("shared+events / padding", Share::Shared, Clock::Events, None, 2_000_000, Strategy::Padding));
-        cases.push(("shared+events / accounted", Share::Shared, Clock::Events, None, 2_000_000, Strategy::Accounted));
-        cases.push(("shared+polling / accounted", Share::Shared, Clock::Polling, None, 2_000_000, Strategy::Accounted));
+        cases.push((
+            "shared+events / padding",
+            Share::Shared,
+            Clock::Events,
+            None,
+            2_000_000,
+            Strategy::Padding,
+        ));
+        cases.push((
+            "shared+events / accounted",
+            Share::Shared,
+            Clock::Events,
+            None,
+            2_000_000,
+            Strategy::Accounted,
+        ));
+        cases.push((
+            "shared+polling / accounted",
+            Share::Shared,
+            Clock::Polling,
+            None,
+            2_000_000,
+            Strategy::Accounted,
+        ));
     }
-    cases.push(("excl+events(默认周期) / padding", Share::Exclusive, Clock::Events, None, 0, Strategy::Padding));
-    cases.push(("excl+events(20ms) / padding", Share::Exclusive, Clock::Events, Some(200_000), 0, Strategy::Padding));
-    cases.push(("excl+events(20ms) / accounted", Share::Exclusive, Clock::Events, Some(200_000), 0, Strategy::Accounted));
-    cases.push(("excl+events(20ms) / exact", Share::Exclusive, Clock::Events, Some(200_000), 0, Strategy::Exact));
-    cases.push(("excl+polling(200ms) / accounted", Share::Exclusive, Clock::Polling, None, 2_000_000, Strategy::Accounted));
-    cases.push(("excl+polling(200ms) / padding", Share::Exclusive, Clock::Polling, None, 2_000_000, Strategy::Padding));
+    cases.push((
+        "excl+events(默认周期) / padding",
+        Share::Exclusive,
+        Clock::Events,
+        None,
+        0,
+        Strategy::Padding,
+    ));
+    cases.push((
+        "excl+events(20ms) / padding",
+        Share::Exclusive,
+        Clock::Events,
+        Some(200_000),
+        0,
+        Strategy::Padding,
+    ));
+    cases.push((
+        "excl+events(20ms) / accounted",
+        Share::Exclusive,
+        Clock::Events,
+        Some(200_000),
+        0,
+        Strategy::Accounted,
+    ));
+    cases.push((
+        "excl+events(20ms) / exact",
+        Share::Exclusive,
+        Clock::Events,
+        Some(200_000),
+        0,
+        Strategy::Exact,
+    ));
+    cases.push((
+        "excl+polling(200ms) / accounted",
+        Share::Exclusive,
+        Clock::Polling,
+        None,
+        2_000_000,
+        Strategy::Accounted,
+    ));
+    cases.push((
+        "excl+polling(200ms) / padding",
+        Share::Exclusive,
+        Clock::Polling,
+        None,
+        2_000_000,
+        Strategy::Padding,
+    ));
 
     for (name, share, clock, period_override, buf_hns, strategy) in cases {
         match open(share, clock, period_override, buf_hns) {

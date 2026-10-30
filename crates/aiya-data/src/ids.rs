@@ -29,7 +29,11 @@ pub fn artist_id(name: &str) -> String {
 
 /// 专辑 ID。标题与分组艺人（albumartist，缺省回落 track artist）都先 norm。
 pub fn album_id(title: &str, artist_name: &str) -> String {
-    Uuid::new_v5(&NS_ALBUM, format!("{}||{}", norm(artist_name), norm(title)).as_bytes()).to_string()
+    Uuid::new_v5(
+        &NS_ALBUM,
+        format!("{}||{}", norm(artist_name), norm(title)).as_bytes(),
+    )
+    .to_string()
 }
 
 pub fn playlist_id(name: &str) -> String {
@@ -52,7 +56,11 @@ pub fn playlist_item_id() -> String {
         .unwrap_or_default()
         .as_nanos();
     // 同一纳秒内最多 65536 次插入仍不撞；跨进程重启靠 nanos 天然错开
-    Uuid::new_v5(&NS_PLAYLIST_ITEM, format!("{nanos}:{}", n & 0xffff).as_bytes()).to_string()
+    Uuid::new_v5(
+        &NS_PLAYLIST_ITEM,
+        format!("{nanos}:{}", n & 0xffff).as_bytes(),
+    )
+    .to_string()
 }
 
 pub fn artwork_id(content_hash: &str) -> String {

@@ -4,7 +4,10 @@
 //! 中文场景收益为零，还会把「ａｂｃ」之外的全角数字变掉引起困惑。
 
 pub fn norm(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// LIKE 通配符按字面转义（配合 `ESCAPE '\'`）：`%`、`_`、`\` 三个字符前加反斜杠。

@@ -1,13 +1,19 @@
 //! 索引增强的宿主侧：算清单、收事件、边收边落库（docs/45 §5.2–§5.4）。
 //!
-//! ## 三条不可让渡的分工
+//! ## 与批 3 的关键差别：结论库不再在应用库里
 //!
-//! 1. **算清单归宿主**：只有它知道扫描根、`size_bytes`/`mtime`、上次分析时间。
-//!    sidecar 收到的是一份明确的路径清单，不自己挑文件。
-//! 2. **落库归宿主**：sidecar 只发 `enrichItem` 事件（见 `cmds/enrich.py` 头注
-//!    的三条理由：边界门禁、`scanning` 是进程内状态、外部写行会变成隐形迁移）。
-//! 3. **`scanning` 只在写事务期间持有**：整场持有会让 30 s 定时刷新全部静默
-//!    跳过、手动扫描报 `E_SCAN_BUSY`——用户看到的是"点扫描没反应"。
+//! 批 3 把结论写进应用库的 `track_enrichment`，代价是三条耦合：
+//! 写它要抢 `scanning`（挡住用户的扫描）、应用库 schema 里多一张与它无关的
+//! 表、结论跟着应用库的备份/迁移/卸载一起走。现在结论落在
+//! `{beets-index}/enrich.db`（见 `aiya_beets_store`），**本模块不碰 `scanning`、
+//! 不碰刷新管线**。
+//!
+//! ## 仍然读应用库，但只读一处
+//!
+//! 工作清单要知道"曲库里有哪些文件、`size/mtime` 是多少"。这条信息只有应用
+//! 知道，所以 [`arena_of`] 读一次 `tracks`（`repo::online_files`，只读、单条
+//! SQL、一次会话一次）。反方向没有：应用主体不 import 本模块，也不 import
+//! `aiya_beets_store`。
 //!
 //! ## 为什么要有独立的落库线程
 //!
@@ -18,11 +24,10 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aiya_beets_client::EventSink;
-use aiya_data::enrichment as data;
-use aiya_data::DbHandle;
+use aiya_beets_store::{Arena, Item, Store};
 use tauri::{Emitter, Manager};
 
 use crate::dto::enrichment::{EnrichmentGc, EnrichmentMatch, EnrichmentWorklist};
@@ -33,7 +38,7 @@ pub const CHANNEL: &str = "beets:enrich";
 
 /// 默认源。宿主只知道"数值特征来自这个源"，不知道它怎么装、开没开
 /// ——那是工具侧 `fields` 命令的回答。
-pub const DEFAULT_SOURCE: &str = "xtractor";
+pub const DEFAULT_SOURCE: &str = aiya_beets_store::SOURCE_XTRACTOR;
 
 /// 攒够这么多行落一次库。200 行的单事务在实测规模（1472 首）下是毫秒级，
 /// 同时保证"进程被杀最多丢 200 条结论"。
@@ -41,10 +46,6 @@ const FLUSH_ROWS: usize = 200;
 
 /// 攒不满也要落：进度数字要跟着动，否则用户看着一条不动的进度条会以为卡死。
 const FLUSH_INTERVAL: Duration = Duration::from_millis(400);
-
-/// 抢 `scanning` 的最长等待。刷新/扫描可能跑几十秒，不能干等——拿不到就
-/// 把这几行退回缓冲，下一轮再试（工作清单不会因此变"已算过"）。
-const LOCK_WAIT: Duration = Duration::from_secs(10);
 
 /// 清单预览条数上限。
 const PREVIEW: usize = 20;
@@ -64,19 +65,44 @@ pub fn normalize_source(raw: Option<String>) -> Result<String, String> {
     if s.is_empty() {
         return Ok(DEFAULT_SOURCE.to_string());
     }
-    if s.len() > 64 || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if s.len() > 64
+        || !s
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         return Err(format!("增强源名字不合法：{s}"));
     }
     Ok(s.to_string())
 }
 
-/* ---------------- 读：清单与统计 ---------------- */
+/* ---------------- 存储与快照 ---------------- */
 
-fn db_of(app: &tauri::AppHandle) -> Result<DbHandle, String> {
+fn store_of(app: &tauri::AppHandle) -> Result<Arc<Store>, String> {
     app.try_state::<crate::AppState>()
-        .ok_or_else(|| "AppState 未就绪".to_string())
-        .map(|st| st.db().clone())
+        .ok_or_else(|| "AppState 未就绪".to_string())?
+        .enrich_store(app)
 }
+
+/// 曲库当前在线文件的快照（`path_lower → path/size/mtime`）。
+///
+/// 一次会话只取一次：会话中途曲库变了，宁可这一轮少算几首（下一轮自然补），
+/// 也不要让同一批里的行忽快忽慢地失效。
+fn arena_of(app: &tauri::AppHandle) -> Result<Arena, String> {
+    let state = app
+        .try_state::<crate::AppState>()
+        .ok_or_else(|| "AppState 未就绪".to_string())?;
+    let files = state
+        .db()
+        .send(|conn| aiya_data::repo::online_files(conn))
+        .map_err(|e| e.to_string())?;
+    Ok(Arena::from_rows(
+        files
+            .into_iter()
+            .map(|f| (f.path, f.path_lower, f.size_bytes, f.mtime)),
+    ))
+}
+
+/* ---------------- 读：清单与统计 ---------------- */
 
 /// 一张卡需要的全部数字 + 清单预览。
 pub fn worklist(
@@ -84,20 +110,19 @@ pub fn worklist(
     source: &str,
     include_empty: bool,
 ) -> Result<EnrichmentWorklist, String> {
-    let db = db_of(app)?;
-    let src = source.to_string();
-    let (stats, preview) = db
-        .send(move |conn| {
-            let stats = data::stats(conn, &src)?;
-            let rows = data::worklist(conn, &src, include_empty, PREVIEW)?;
-            Ok((stats, rows.into_iter().map(|w| w.path).collect::<Vec<_>>()))
-        })
-        .map_err(|e| e.to_string())?;
+    let (stats, preview) = {
+        let store = store_of(app)?;
+        let arena = arena_of(app)?;
+        let stats = store.stats(source, &arena).map_err(|e| e.to_string())?;
+        let preview = store
+            .worklist(source, &arena, include_empty, PREVIEW)
+            .map_err(|e| e.to_string())?;
+        (stats, preview)
+    };
 
     let available = crate::beets::available(app);
-    let note = (!available).then(|| {
-        "未找到 aiya-beets 组件：先安装组件，或检查设置里的组件路径".to_string()
-    });
+    let note = (!available)
+        .then(|| "未找到 aiya-beets 组件：先安装组件，或检查设置里的组件路径".to_string());
     Ok(EnrichmentWorklist {
         source: source.to_string(),
         available,
@@ -115,53 +140,70 @@ pub fn worklist(
 }
 
 /// 起会话要用的完整路径清单（不做预览截断）。
+///
+/// `limit` 传 `i64::MAX` 而不是 `usize::MAX`：后者 `as i64` 会变成 `-1`，
+/// 而 SQLite 恰好把 `LIMIT -1` 当"不限"——那是个会让"清单只剩一条"的巧合。
 pub fn work_paths(
     app: &tauri::AppHandle,
     source: &str,
     include_empty: bool,
 ) -> Result<Vec<String>, String> {
-    let db = db_of(app)?;
-    let src = source.to_string();
-    db.send(move |conn| {
-        Ok(data::worklist(conn, &src, include_empty, usize::MAX)?
-            .into_iter()
-            .map(|w| w.path)
-            .collect::<Vec<_>>())
-    })
-    .map_err(|e| e.to_string())
+    let store = store_of(app)?;
+    let arena = arena_of(app)?;
+    store
+        .worklist(source, &arena, include_empty, i64::MAX as usize)
+        .map_err(|e| e.to_string())
 }
 
 /// 按维度查询（曲库页/智能歌单）。
+///
+/// 结论库不认识 `track_id`，所以这里要回曲库换一次。没换到的行**直接丢**：
+/// 结论还在（等 GC 收），但"点开已经没有的曲目"出现在结果里只是噪音。
 pub fn find(
     app: &tauri::AppHandle,
-    filter: data::Filter,
+    filter: aiya_beets_store::Filter,
 ) -> Result<Vec<EnrichmentMatch>, String> {
-    let db = db_of(app)?;
-    db.send(move |conn| {
-        Ok(data::find(conn, &filter)?
-            .into_iter()
-            .map(|m| EnrichmentMatch {
-                track_id: m.track_id,
-                mood_label: m.mood_label,
-                mood_score: m.mood_score,
-                bpm: m.bpm,
-                danceability: m.danceability,
-                loudness: m.loudness,
-                analyzed_at_ms: m.analyzed_at * 1000,
+    let store = store_of(app)?;
+    let rows = store.find(&filter).map_err(|e| e.to_string())?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let keys: Vec<String> = rows.iter().map(|r| r.path_lower.clone()).collect();
+    let state = app
+        .try_state::<crate::AppState>()
+        .ok_or_else(|| "AppState 未就绪".to_string())?;
+    let ids = state
+        .db()
+        .send(move |conn| aiya_data::repo::track_ids_by_paths(conn, &keys))
+        .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let track_id = ids.get(&r.path_lower)?.clone();
+            Some(EnrichmentMatch {
+                track_id,
+                mood_label: r.mood_label,
+                mood_score: r.mood_score,
+                bpm: r.bpm,
+                danceability: r.danceability,
+                loudness: r.loudness,
+                analyzed_at_ms: r.analyzed_at * 1000,
             })
-            .collect::<Vec<_>>())
-    })
-    .map_err(|e| e.to_string())
+        })
+        .collect())
 }
 
 /// 清理残留行（曲库里已经没有对应曲目且 N 天没更新过）。
 pub fn gc(app: &tauri::AppHandle, source: &str, keep_days: u32) -> Result<EnrichmentGc, String> {
-    let db = db_of(app)?;
-    let src = source.to_string();
-    let removed = db
-        .send(move |conn| data::gc(conn, &src, now_secs(), keep_days))
+    let store = store_of(app)?;
+    let arena = arena_of(app)?;
+    let removed = store
+        .gc(source, now_secs(), keep_days, &arena)
         .map_err(|e| e.to_string())?;
-    Ok(EnrichmentGc { removed: removed as u32, keep_days })
+    Ok(EnrichmentGc {
+        removed: removed as u32,
+        keep_days,
+    })
 }
 
 /* ---------------- 写：会话期间的行缓冲与落库 ---------------- */
@@ -172,74 +214,43 @@ struct Tally {
     written: AtomicUsize,
     /// 状态是 failed/skipped，宿主不许写行（写了等于永久放弃这个文件）
     skipped: AtomicUsize,
-    /// 曲库里没有这个路径（扫描器还没收录 / 路径已漂移）
+    /// 曲库快照里没有这个路径（扫描器还没收录 / 路径已漂移）
     not_in_library: AtomicUsize,
-    /// 没能落库（抢不到写锁超时 / DB 出错）。下一次分析会重算它们。
+    /// 没能落库（DB 出错）。下一次分析会重算它们。
     deferred: AtomicUsize,
     batches: AtomicUsize,
 }
 
 struct Shared {
-    pending: Mutex<Vec<data::Item>>,
+    pending: Mutex<Vec<Item>>,
     closed: AtomicBool,
     tally: Tally,
 }
 
-/// `scanning` 的释放保护：panic 也不能把标志留成 true（否则此后所有扫描/刷新
-/// 都报忙，用户只能重启）。与 `refresh::FlagGuard` 同一个思路，各自持有
-/// 自己的 Arc。
-struct Gate(Arc<AtomicBool>);
-
-impl Drop for Gate {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
-    }
-}
-
-#[derive(Debug)]
-enum WriteFail {
-    /// 有人正持着 `scanning`（扫描/刷新），等一会儿再来
-    Busy,
-    Db(String),
-}
-
-/// 把一批行写进关联表，**只在这里持 `scanning`**。
-///
-/// 失败时行还留在调用方手里（这里只借不改），调用方自己决定重试还是计入
-/// `deferred` —— 那条决定描述的是"这批结论要不要现在放弃"，属于会话策略，
-/// 不该藏进写函数里。
-fn write_batch(
-    db: &DbHandle,
-    scanning: &Arc<AtomicBool>,
-    rows: &[data::Item],
-) -> Result<data::Saved, WriteFail> {
-    if scanning
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return Err(WriteFail::Busy);
-    }
-    let _gate = Gate(Arc::clone(scanning));
-    let owned = rows.to_vec();
-    db.send(move |conn| data::save(conn, now_secs(), &owned))
-        .map_err(|e| WriteFail::Db(e.to_string()))
-}
-
 /// 会话内的落库器：既是 `EventSink`（转事件），也是行的接收端。
+///
+/// ## 为什么必须有 `Drop`
+///
+/// `beets::start_enrich` 先 `Sink::start`（起落库线程），再 `run_session_with`。
+/// 后者会失败（已有任务在执行 → `Busy`、进程起不来 → `Spawn`），而在那条
+/// 路径上 `on_exit` **不会执行**。没有 `Drop` 的话，每点一次失败的分析就漏
+/// 一个线程，它带着 `Arc<Store>` 永久 sleep——用户看不到任何症状，直到点了几
+/// 十次之后才发现"内存一直涨"。
+///
+/// `finish()` 幂等（`finished` 标志）：正常路径调一次、`Drop` 再兜一次，
+/// `enrichPersisted` 只会发一条。
 pub struct Sink {
     app: tauri::AppHandle,
     shared: Arc<Shared>,
     flusher: Mutex<Option<std::thread::JoinHandle<()>>>,
+    finished: AtomicBool,
 }
 
 impl Sink {
     /// 起一个落库线程，返回可以直接交给会话的 sink。
     pub fn start(app: tauri::AppHandle) -> Result<Self, String> {
-        let state = app
-            .try_state::<crate::AppState>()
-            .ok_or_else(|| "AppState 未就绪".to_string())?;
-        let db = state.db().clone();
-        let scanning = Arc::clone(&state.refresh.scanning);
+        let store = store_of(&app)?;
+        let alive = Arc::new(arena_of(&app)?);
 
         let shared = Arc::new(Shared {
             pending: Mutex::new(Vec::new()),
@@ -247,20 +258,30 @@ impl Sink {
             tally: Tally::default(),
         });
         let worker = Arc::clone(&shared);
+        let store_ref = Arc::clone(&store);
+        let alive_ref = Arc::clone(&alive);
         let emit_app = app.clone();
         let flusher = std::thread::Builder::new()
             .name("aiya-enrich-writer".into())
-            .spawn(move || flush_loop(&worker, &db, &scanning, &emit_app))
+            .spawn(move || flush_loop(&worker, &store_ref, &alive_ref, &emit_app))
             .map_err(|e| format!("起落库线程失败：{e}"))?;
-        Ok(Sink { app, shared, flusher: Mutex::new(Some(flusher)) })
+        Ok(Sink {
+            app,
+            shared,
+            flusher: Mutex::new(Some(flusher)),
+            finished: AtomicBool::new(false),
+        })
     }
 
     /// 会话结束：等落库线程把余量写完，报一条带计数的终态事件。
     ///
     /// 为什么由这里报而不是 sidecar 报：`enrichDone` 说的是"工具跑了什么"，
-    /// 这条说的是"库里真落了什么"。两者不同（跳过/库外/写锁超时都会让它们
+    /// 这条说的是"库里真落了什么"。两者不同（跳过/库外/写失败都会让它们
     /// 不等），排障时必须能分开看。
     pub fn finish(&self) {
+        if self.finished.swap(true, Ordering::SeqCst) {
+            return;
+        }
         self.shared.closed.store(true, Ordering::SeqCst);
         if let Some(handle) = self
             .flusher
@@ -285,6 +306,14 @@ impl Sink {
     }
 }
 
+impl Drop for Sink {
+    fn drop(&mut self) {
+        // 会话正常结束时 `finish()` 已经跑过，这里是那条路径的兜底：
+        // 线程不能因为"启动失败了"就永远挂着。
+        self.finish();
+    }
+}
+
 impl EventSink for Sink {
     fn emit(&self, channel: &'static str, payload: serde_json::Value) {
         // 先转发：UI 的进度不能等落库（落库是批量的，转发是逐条的）
@@ -304,13 +333,13 @@ impl EventSink for Sink {
 
 /// `enrichItem` 事件 → 落库行。缺 `path`/`source` 的直接丢弃（记 warn）：
 /// 宁可少一条，也不许把空路径写成一行 `''`。
-fn item_from_event(v: &serde_json::Value) -> Option<data::Item> {
+fn item_from_event(v: &serde_json::Value) -> Option<Item> {
     let path = v.get("path").and_then(|x| x.as_str())?.trim().to_string();
     let source = v.get("source").and_then(|x| x.as_str())?.trim().to_string();
     if path.is_empty() || source.is_empty() {
         return None;
     }
-    Some(data::Item {
+    Some(Item {
         path,
         source,
         status: v
@@ -318,14 +347,17 @@ fn item_from_event(v: &serde_json::Value) -> Option<data::Item> {
             .and_then(|x| x.as_str())
             .unwrap_or("failed")
             .to_string(),
-        fields: v.get("fields").cloned().unwrap_or_else(|| serde_json::json!({})),
+        fields: v
+            .get("fields")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
     })
 }
 
 fn flush_loop(
     shared: &Arc<Shared>,
-    db: &DbHandle,
-    scanning: &Arc<AtomicBool>,
+    store: &Arc<Store>,
+    alive: &Arc<Arena>,
     app: &tauri::AppHandle,
 ) {
     loop {
@@ -337,57 +369,38 @@ fn flush_loop(
             std::thread::sleep(FLUSH_INTERVAL);
             continue;
         }
-        let rows = batch;
-        let deadline = Instant::now() + LOCK_WAIT;
-        loop {
-            match write_batch(db, scanning, &rows) {
-                Ok(saved) => {
-                    let t = &shared.tally;
-                    t.written.fetch_add(saved.written, Ordering::SeqCst);
-                    t.skipped.fetch_add(saved.skipped, Ordering::SeqCst);
-                    t.not_in_library
-                        .fetch_add(saved.not_in_library, Ordering::SeqCst);
-                    t.batches.fetch_add(1, Ordering::SeqCst);
-                    let _ = app.emit(
-                        CHANNEL,
-                        serde_json::json!({
-                            "type": "enrichPersist",
-                            "written": t.written.load(Ordering::SeqCst),
-                            "skipped": saved.skipped,
-                            "notInLibrary": saved.not_in_library,
-                        }),
-                    );
-                    break;
-                }
-                // 抢不到写锁：扫描/刷新在跑。等一会儿再来——不能直接丢，
-                // 丢了这些文件的结论就白算了（工作清单还会再点它们一次）。
-                Err(WriteFail::Busy) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(120));
-                }
-                Err(WriteFail::Busy) => {
-                    tracing::warn!(rows = rows.len(), "写库互斥一直被占用，这批结论留待下次重算");
-                    shared
-                        .tally
-                        .deferred
-                        .fetch_add(rows.len(), Ordering::SeqCst);
-                    break;
-                }
-                Err(WriteFail::Db(e)) => {
-                    // DB 出错（含应用正在退出）不重试：写不进去的那些同上，
-                    // 下次分析自然重算。
-                    tracing::warn!(error = %e, "索引增强落库失败，这批行留待下次重算");
-                    shared
-                        .tally
-                        .deferred
-                        .fetch_add(rows.len(), Ordering::SeqCst);
-                    break;
-                }
+        match store.save(now_secs(), &batch, alive) {
+            Ok(saved) => {
+                let t = &shared.tally;
+                t.written.fetch_add(saved.written, Ordering::SeqCst);
+                t.skipped.fetch_add(saved.skipped, Ordering::SeqCst);
+                t.not_in_library
+                    .fetch_add(saved.not_in_library, Ordering::SeqCst);
+                t.batches.fetch_add(1, Ordering::SeqCst);
+                let _ = app.emit(
+                    CHANNEL,
+                    serde_json::json!({
+                        "type": "enrichPersist",
+                        "written": t.written.load(Ordering::SeqCst),
+                        "skipped": saved.skipped,
+                        "notInLibrary": saved.not_in_library,
+                    }),
+                );
+            }
+            Err(e) => {
+                // 自己的库里写失败没有"等一会儿再来"这一说（没有第二个写者），
+                // 只能是磁盘/权限问题。这批行留待下次重算。
+                tracing::warn!(error = %e, rows = batch.len(), "索引增强落库失败，这批行留待下次重算");
+                shared
+                    .tally
+                    .deferred
+                    .fetch_add(batch.len(), Ordering::SeqCst);
             }
         }
     }
 }
 
-fn take_batch(pending: &Mutex<Vec<data::Item>>, max: usize) -> Vec<data::Item> {
+fn take_batch(pending: &Mutex<Vec<Item>>, max: usize) -> Vec<Item> {
     let Ok(mut q) = pending.lock() else {
         return Vec::new();
     };
@@ -404,7 +417,10 @@ mod tests {
         assert_eq!(normalize_source(None).unwrap(), DEFAULT_SOURCE);
         assert_eq!(normalize_source(Some("  ".into())).unwrap(), DEFAULT_SOURCE);
         assert_eq!(normalize_source(Some(" probe ".into())).unwrap(), "probe");
-        assert!(normalize_source(Some("a/b".into())).is_err(), "路径分隔符会毁掉事件识别");
+        assert!(
+            normalize_source(Some("a/b".into())).is_err(),
+            "路径分隔符会毁掉事件识别"
+        );
         assert!(normalize_source(Some("x y".into())).is_err());
     }
 
@@ -431,80 +447,37 @@ mod tests {
 
     #[test]
     fn take_batch_drains_in_order_and_caps() {
-        let q = Mutex::new(vec![
-            data::Item { path: "a".into(), source: "s".into(), status: "ok".into(), fields: serde_json::json!({}) },
-            data::Item { path: "b".into(), source: "s".into(), status: "ok".into(), fields: serde_json::json!({}) },
-            data::Item { path: "c".into(), source: "s".into(), status: "ok".into(), fields: serde_json::json!({}) },
+        let pending = Mutex::new(vec![
+            Item {
+                path: "a".into(),
+                source: "s".into(),
+                status: "ok".into(),
+                fields: serde_json::json!({}),
+            },
+            Item {
+                path: "b".into(),
+                source: "s".into(),
+                status: "ok".into(),
+                fields: serde_json::json!({}),
+            },
+            Item {
+                path: "c".into(),
+                source: "s".into(),
+                status: "ok".into(),
+                fields: serde_json::json!({}),
+            },
         ]);
-        let first = take_batch(&q, 2);
-        assert_eq!(first.iter().map(|i| i.path.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
-        let second = take_batch(&q, 2);
-        assert_eq!(second.len(), 1, "剩下的要被下一批取走");
-        assert!(take_batch(&q, 2).is_empty());
+        let first = take_batch(&pending, 2);
+        assert_eq!(
+            first.iter().map(|i| i.path.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        let rest = take_batch(&pending, 2);
+        assert_eq!(rest.len(), 1, "余量留给下一批，不能丢");
+        assert!(take_batch(&pending, 2).is_empty());
     }
 
-    /// 写锁被占时不许抢写：`write_batch` 必须立刻回 Busy 而不是等。
-    ///
-    /// 这条守的是 docs/45 §5.3 的"锁粒度"：落库线程一旦在这里阻塞，
-    /// 事件线程就不会阻塞（两线程分离），但整个落库会停摆——所以要让
-    /// 调用方看到 Busy 并自己决定重试节奏。
-    #[test]
-    fn write_batch_refuses_when_gate_is_taken() {
-        let path = std::env::temp_dir().join(format!("aiya-enrich-gate-{}.db", std::process::id()));
-        let mut db = aiya_data::open(&path).unwrap();
-        let scanning = Arc::new(AtomicBool::new(true)); // 假装扫描在跑
-        let rows = vec![data::Item {
-            path: "/m/a.mp3".into(),
-            source: "xtractor".into(),
-            status: "ok".into(),
-            fields: serde_json::json!({}),
-        }];
-        match write_batch(&db, &scanning, &rows) {
-            Err(WriteFail::Busy) => {}
-            other => panic!("应为 Busy，实际 {:?}", other.map(|s| s.written)),
-        }
-        assert!(scanning.load(Ordering::SeqCst), "别人的锁不许被我们放开");
-        db.close();
-        let _ = std::fs::remove_file(&path);
-    }
-
-    /// 正常路径：拿到锁 → 落库 → 锁必须放开（否则下一次刷新永远被跳过）。
-    #[test]
-    fn write_batch_writes_and_releases_gate() {
-        let path = std::env::temp_dir().join(format!("aiya-enrich-ok-{}.db", std::process::id()));
-        let mut db = aiya_data::open(&path).unwrap();
-        // 曲目行的 path_lower 必须与落库侧同一个口径（path_key），否则
-        // 这条测试会因为"找不到曲目"而被跳过——那是测试自己造错了数据
-        let raw = r"D:\m\a.mp3";
-        let key = data::path_key(raw);
-        db.send(move |conn| {
-            conn.execute(
-                "INSERT INTO tracks (id, title, title_norm, added_at, path, path_lower, size_bytes, mtime)
-                 VALUES ('t1','t1','t1',0,?1,?2,10,20)",
-                rusqlite::params![raw, key],
-            )?;
-            Ok(())
-        })
-        .unwrap();
-        let scanning = Arc::new(AtomicBool::new(false));
-        let rows = vec![data::Item {
-            path: raw.to_string(),
-            source: "xtractor".into(),
-            status: "ok".into(),
-            fields: serde_json::json!({"bpm": 99.0}),
-        }];
-        let saved = write_batch(&db, &scanning, &rows).expect("应能写");
-        assert_eq!(saved.written, 1);
-        assert!(!scanning.load(Ordering::SeqCst), "写完必须放开锁");
-        let bpm: f64 = db
-            .send(|conn| Ok(conn.query_row("SELECT bpm FROM track_enrichment", [], |r| r.get(0))?))
-            .unwrap();
-        assert_eq!(bpm, 99.0);
-        db.close();
-        let _ = std::fs::remove_file(&path);
-    }
-
-    /// 端到端：**真 sidecar** 发的 `enrichItem` → 宿主解析 → 落关联表。
+    /// 端到端：**真 sidecar** 发的 `enrichItem` → 宿主解析 → 落 beets 自己的结论库。
     ///
     /// 为什么非要有这条（而不是只测 `item_from_event`）：字段名/形状的漂移
     /// 只有对着对面真发的东西才暴露。手写 `json!({"path": ...})` 的单测永远
@@ -515,7 +488,7 @@ mod tests {
     /// venv / 测试音源缺一个就跳过（clean checkout、CI 上的常态）。
     #[cfg(debug_assertions)]
     #[test]
-    fn real_sidecar_events_land_in_the_table() {
+    fn real_sidecar_events_land_in_the_store() {
         use std::io::{BufRead, Write};
 
         let repo = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
@@ -542,7 +515,7 @@ mod tests {
 
         let root = std::env::temp_dir().join(format!("aiya-enrich-e2e-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let home = root.join("home");
+        let home = root.join("beets-index");
         let mus = root.join("music");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&mus).unwrap();
@@ -561,7 +534,7 @@ mod tests {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
-            // 与生产同一套环境（生产由 beets::tool_env 下发）
+            // 与生产同一套环境（生产由 `beets::env_pairs` 下发）
             .env("PYTHONIOENCODING", "utf-8")
             .env("PYTHONUTF8", "1")
             .env("PYTHONPATH", &src)
@@ -582,7 +555,7 @@ mod tests {
         }
 
         // 事件 → 行（与生产同一个解析入口）
-        let mut rows: Vec<data::Item> = Vec::new();
+        let mut rows: Vec<Item> = Vec::new();
         let mut saw_done = false;
         let stdout = child.stdout.take().expect("stdout");
         for line in std::io::BufReader::new(stdout).lines() {
@@ -604,66 +577,44 @@ mod tests {
         assert!(saw_done, "没有 enrichDone：会话没走到终态");
         assert_eq!(rows.len(), paths.len(), "每个文件都该有一条结论：{rows:?}");
 
-        // 落库：文件事实由宿主从 tracks 现查（这里按真实文件造行）
-        let db_path = root.join("t.db");
-        let mut db = aiya_data::open(&db_path).unwrap();
-        db.send(move |conn| {
-            for (i, p) in paths.iter().enumerate() {                let meta = std::fs::metadata(p).unwrap();
-                let mtime = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                conn.execute(
-                    "INSERT INTO tracks (id, title, title_norm, added_at, path, path_lower,
-                                         size_bytes, mtime)
-                     VALUES (?1, ?1, ?1, 0, ?2, ?3, ?4, ?5)",
-                    rusqlite::params![
-                        format!("t{i}"),
-                        p.to_string_lossy(),
-                        p.to_string_lossy().to_lowercase(),
-                        meta.len() as i64,
-                        mtime,
-                    ],
-                )?;
-            }
-            Ok(())
-        })
-        .unwrap();
+        // 快照：按真实文件造 Arena（生产里这份数据来自 `repo::online_files`）
+        let arena = Arena::from_rows(paths.iter().map(|p| {
+            let meta = std::fs::metadata(p).unwrap();
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            (
+                p.to_string_lossy().into_owned(),
+                p.to_string_lossy().to_lowercase(),
+                meta.len() as i64,
+                mtime,
+            )
+        }));
 
-        let saved = db
-            .send({
-                let rows = rows.clone();
-                move |conn| data::save(conn, 1, &rows)
-            })
-            .unwrap();
+        let store = Store::open(&home.join("enrich.db")).unwrap();
+        let saved = store.save(1_000, &rows, &arena).unwrap();
         assert_eq!(saved.written, 2, "{saved:?}");
-        assert_eq!(saved.not_in_library, 0, "path_lower 口径必须与 scanner 一致");
+        assert_eq!(saved.not_in_library, 0, "path_key 口径必须与曲库一致");
 
-        let (n, with_mood, with_bpm): (i64, i64, i64) = db
-            .send(|conn| {
-                Ok(conn.query_row(
-                    "SELECT COUNT(*),
-                            SUM(CASE WHEN mood_label IS NOT NULL THEN 1 ELSE 0 END),
-                            SUM(CASE WHEN bpm IS NOT NULL THEN 1 ELSE 0 END)
-                     FROM track_enrichment",
-                    [],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-                )?)
+        let hit = store
+            .find(&aiya_beets_store::Filter {
+                source: Some("probe".into()),
+                ..Default::default()
             })
             .unwrap();
-        assert_eq!((n, with_mood, with_bpm), (2, 2, 2), "提升列没填上");
-        // 情绪标签必须是 7 类之一（不是空串、不是原始 JSON 片段）
-        let label: String = db
-            .send(|conn| Ok(conn.query_row("SELECT mood_label FROM track_enrichment", [], |r| r.get(0))?))
-            .unwrap();
-        assert!(
-            data::MOOD_CLASSES.contains(&label.as_str()),
-            "mood_label 不是已知情绪类：{label}"
-        );
+        assert_eq!(hit.len(), 2, "提升列没填上：{hit:?}");
+        for row in &hit {
+            let label = row.mood_label.as_deref().unwrap_or("");
+            assert!(
+                aiya_beets_store::MOOD_CLASSES.contains(&label),
+                "mood_label 不是已知情绪类：{label}"
+            );
+            assert!(row.bpm.is_some(), "bpm 没提升成列");
+        }
 
-        db.close();
         let _ = std::fs::remove_dir_all(&root);
     }
 }

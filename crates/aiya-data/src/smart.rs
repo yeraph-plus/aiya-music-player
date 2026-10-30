@@ -171,7 +171,10 @@ impl SmartPlan {
     }
 
     pub fn empty() -> SmartPlan {
-        SmartPlan { clauses: Vec::new(), order_sql: SortKey::Added.expr(true) }
+        SmartPlan {
+            clauses: Vec::new(),
+            order_sql: SortKey::Added.expr(true),
+        }
     }
 
     pub fn from_value(v: &Value) -> DbResult<SmartPlan> {
@@ -229,8 +232,9 @@ impl SmartPlan {
         );
         let mut stmt = conn.prepare(&sql)?;
         let binds = self.sql_binds();
-        let rows =
-            stmt.query_map(rusqlite::params_from_iter(binds.iter()), |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(binds.iter()), |r| {
+            r.get::<_, String>(0)
+        })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
@@ -273,9 +277,7 @@ fn parse_conds(arr: &[Value]) -> DbResult<Vec<(String, Value)>> {
         let c = c
             .as_object()
             .ok_or_else(|| DbError::Custom("条件必须是对象".into()))?;
-        let field = Field::parse(
-            c.get("field").and_then(Value::as_str).unwrap_or_default(),
-        )?;
+        let field = Field::parse(c.get("field").and_then(Value::as_str).unwrap_or_default())?;
         let op = Op::parse(c.get("op").and_then(Value::as_str).unwrap_or_default())?;
         if !field.allows(&op) {
             return Err(DbError::Custom(format!("字段 {field:?} 不支持该操作符")));
@@ -412,26 +414,35 @@ mod tests {
 
     #[test]
     fn genre_contains_binds_normed_value() {
-        let p = plan(json!({ "all": [ { "field": "genre", "op": "contains", "value": " Rock " } ] }));
+        let p =
+            plan(json!({ "all": [ { "field": "genre", "op": "contains", "value": " Rock " } ] }));
         assert_eq!(p.clauses.len(), 1);
         assert_eq!(p.clauses[0].0, "t.genre_norm LIKE ? ESCAPE '\\'");
-        assert_eq!(p.clauses[0].1, json!("%rock%"), "绑定值必须 norm 过且含通配包裹");
+        assert_eq!(
+            p.clauses[0].1,
+            json!("%rock%"),
+            "绑定值必须 norm 过且含通配包裹"
+        );
     }
 
     /// contains 的 LIKE 值按字面处理：`%`/`_` 必须转义（repo/facets 同规则）。
     #[test]
     fn contains_escapes_like_wildcards() {
-        let p = plan(json!({ "all": [ { "field": "genre", "op": "contains", "value": "ro%k_" } ] }));
+        let p =
+            plan(json!({ "all": [ { "field": "genre", "op": "contains", "value": "ro%k_" } ] }));
         assert_eq!(p.clauses[0].1, json!("%ro\\%k\\_%"));
-        let p = plan(json!({ "all": [ { "field": "artist", "op": "contains", "value": "a\\b" } ] }));
+        let p =
+            plan(json!({ "all": [ { "field": "artist", "op": "contains", "value": "a\\b" } ] }));
         assert_eq!(p.clauses[0].1, json!("%a\\\\b%"));
         assert!(p.clauses[0].0.contains("ESCAPE '\\'"));
     }
 
     #[test]
     fn unknown_field_is_rejected_not_ignored() {
-        let err = SmartPlan::from_value(&json!({ "all": [ { "field": "energy", "op": "gte", "value": 7 } ] }))
-            .unwrap_err();
+        let err = SmartPlan::from_value(
+            &json!({ "all": [ { "field": "energy", "op": "gte", "value": 7 } ] }),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("energy"));
     }
 

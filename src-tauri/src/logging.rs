@@ -57,10 +57,7 @@ pub fn today() -> String {
 struct LocalTime;
 
 impl tracing_subscriber::fmt::time::FormatTime for LocalTime {
-    fn format_time(
-        &self,
-        w: &mut tracing_subscriber::fmt::format::Writer<'_>,
-    ) -> std::fmt::Result {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
         let t = local_now();
         write!(
             w,
@@ -102,7 +99,10 @@ impl LogFile {
     /// 整行一次写入：多线程（事件泵 / 命令 / beets reader）并发时不会交错。
     fn write_bytes(&self, buf: &[u8]) {
         let today = date_of(local_now());
-        let mut g = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut g = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if g.date != today || g.file.is_none() {
             // 跨日（或首次打开失败后重试）
             if let Some(f) = open_append(&self.dir, &today) {
@@ -110,7 +110,10 @@ impl LogFile {
                 g.file = Some(f);
                 drop(g);
                 self.prune();
-                g = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                g = self
+                    .inner
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
         }
         if let Some(f) = g.file.as_mut() {
@@ -121,7 +124,9 @@ impl LogFile {
     }
 
     fn prune(&self) {
-        let Ok(entries) = fs::read_dir(&self.dir) else { return };
+        let Ok(entries) = fs::read_dir(&self.dir) else {
+            return;
+        };
         let mut ours: Vec<(String, PathBuf)> = entries
             .filter_map(Result::ok)
             .filter_map(|e| {
@@ -130,9 +135,8 @@ impl LogFile {
                     .strip_prefix("aiya-")
                     .and_then(|s| s.strip_suffix(".log"))?;
                 // 只认 aiya-YYYY-MM-DD.log，sidecar.log 之类不参与
-                let ok = stem.len() == 10
-                    && stem.as_bytes()[4] == b'-'
-                    && stem.as_bytes()[7] == b'-';
+                let ok =
+                    stem.len() == 10 && stem.as_bytes()[4] == b'-' && stem.as_bytes()[7] == b'-';
                 ok.then_some((stem.to_string(), e.path()))
             })
             .collect();

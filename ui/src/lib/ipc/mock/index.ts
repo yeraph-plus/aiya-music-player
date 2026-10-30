@@ -259,6 +259,10 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return mock.beetsPluginCatalog();
     case 'beets_plugin_install':
       return mock.beetsPluginInstall(String(a.name ?? ''));
+    case 'beets_query':
+      return mock.beetsQuery({ limit: a.limit as number | undefined });
+    case 'beets_fields':
+      return mock.beetsFields();
 
     /* ---------------- 索引增强（docs/45）：只读预览 ---------------- */
     case 'enrichment_worklist':

@@ -70,17 +70,32 @@ pub fn parse_lrc(bytes: &[u8]) -> ParsedLyrics {
     let synced = !timed.is_empty();
     if synced {
         timed.sort_by_key(|l| l.time_ms); // 稳定排序：同时间保持文件序
-        ParsedLyrics { found: true, lines: timed, offset_ms, synced: true, encoding }
+        ParsedLyrics {
+            found: true,
+            lines: timed,
+            offset_ms,
+            synced: true,
+            encoding,
+        }
     } else {
         plain.retain(|l| !l.text.trim().is_empty());
-        ParsedLyrics { found: true, lines: plain, offset_ms, synced: false, encoding }
+        ParsedLyrics {
+            found: true,
+            lines: plain,
+            offset_ms,
+            synced: false,
+            encoding,
+        }
     }
 }
 
 /// BOM → 严格 UTF-8 → GBK。
 fn decode(bytes: &[u8]) -> (String, String) {
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        return (String::from_utf8_lossy(&bytes[3..]).into_owned(), "UTF-8".into());
+        return (
+            String::from_utf8_lossy(&bytes[3..]).into_owned(),
+            "UTF-8".into(),
+        );
     }
     if bytes.starts_with(&[0xFF, 0xFE]) {
         return (decode_utf16(&bytes[2..], true), "UTF-16LE".into());
@@ -99,7 +114,9 @@ fn decode(bytes: &[u8]) -> (String, String) {
 
 fn decode_utf16(bytes: &[u8], little: bool) -> String {
     let units: Vec<u16> = bytes
-        .as_chunks::<2>().0.iter()
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| {
             if little {
                 u16::from_le_bytes([c[0], c[1]])
@@ -147,11 +164,17 @@ fn parse_lines(text: &str) -> (Vec<LyricLine>, Vec<LyricLine>, i64) {
             // 元数据标签 [ti:...] 等与整行方括号单标签（如 [Intro]/[副歌]）
             // 不进纯文本；纯文本歌词才有意义
             if !is_meta_tag(line) && !is_bracket_tag_line(content) {
-                plain.push(LyricLine { time_ms: 0, text: content.to_string() });
+                plain.push(LyricLine {
+                    time_ms: 0,
+                    text: content.to_string(),
+                });
             }
         } else {
             for ms in stamps {
-                timed.push(LyricLine { time_ms: ms, text: content.to_string() });
+                timed.push(LyricLine {
+                    time_ms: ms,
+                    text: content.to_string(),
+                });
             }
         }
     }
@@ -204,7 +227,10 @@ fn is_meta_tag(line: &str) -> bool {
         },
         None => return false,
     };
-    matches!(inner.split(':').next(), Some("ti" | "ar" | "al" | "by" | "length" | "re" | "ve" | "tool"))
+    matches!(
+        inner.split(':').next(),
+        Some("ti" | "ar" | "al" | "by" | "length" | "re" | "ve" | "tool")
+    )
 }
 
 /// 整行就是一个方括号单标签（如 `[Intro]`、`[副歌]`）→ 视为结构标记，
@@ -235,7 +261,10 @@ mod shape_tests {
         assert_eq!(v["lines"][0]["timeMs"], 1500, "LyricLine 必须是 timeMs");
         assert_eq!(v["lines"][1]["timeMs"], 3000);
         assert_eq!(v["lines"][0]["text"], "hello");
-        assert!(v["lines"][0].get("time_ms").is_none(), "不得下发 snake_case");
+        assert!(
+            v["lines"][0].get("time_ms").is_none(),
+            "不得下发 snake_case"
+        );
     }
 }
 
@@ -344,7 +373,15 @@ mod tests {
             !texts.iter().any(|t| *t == "[Intro]" || *t == "[副歌]"),
             "整行方括号单标签要被过滤：{texts:?}"
         );
-        assert_eq!(texts, vec!["第一句", "第二句", "[a][b]连体保留", "中括号在中间[不算]保留"]);
+        assert_eq!(
+            texts,
+            vec![
+                "第一句",
+                "第二句",
+                "[a][b]连体保留",
+                "中括号在中间[不算]保留"
+            ]
+        );
     }
 
     #[test]
@@ -356,8 +393,12 @@ mod tests {
             use std::os::windows::ffi::OsStringExt as _;
             // 非配对代理项 0xD800 → 非 UTF-8（WTF-8）文件名
             let name = std::ffi::OsString::from_wide(&[0x73, 0x6F, 0x6E, 0x67, 0xD800]);
-            let audio = std::path::Path::new("D:/m").join(&name).with_extension("flac");
-            let expected = std::path::Path::new("D:/m").join(&name).with_extension("lrc");
+            let audio = std::path::Path::new("D:/m")
+                .join(&name)
+                .with_extension("flac");
+            let expected = std::path::Path::new("D:/m")
+                .join(&name)
+                .with_extension("lrc");
             assert_eq!(lrc_path_for(&audio).unwrap(), expected);
         }
         #[cfg(unix)]

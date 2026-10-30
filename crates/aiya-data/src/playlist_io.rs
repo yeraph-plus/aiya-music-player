@@ -97,11 +97,20 @@ fn parse_extinf(rest: &str) -> (Option<i64>, Option<String>, Option<String>) {
         Some((d, t)) => (Some(d), t.trim()),
         None => (None, ""),
     };
-    let duration_sec = dur_part.and_then(|d| d.trim().parse::<f64>().ok()).map(|f| f as i64);
+    let duration_sec = dur_part
+        .and_then(|d| d.trim().parse::<f64>().ok())
+        .map(|f| f as i64);
     // "Artist - Title" 约定：按第一个 " - " 切；不是这个形状就整段是标题
     let (artist, title) = match title_part.split_once(" - ") {
         Some((a, t)) => (Some(a.trim().to_string()), Some(t.trim().to_string())),
-        None => (None, if title_part.is_empty() { None } else { Some(title_part.to_string()) }),
+        None => (
+            None,
+            if title_part.is_empty() {
+                None
+            } else {
+                Some(title_part.to_string())
+            },
+        ),
     };
     (duration_sec, artist, title)
 }
@@ -119,7 +128,11 @@ fn entry_target(raw: &str, base_dir: &Path) -> PathBuf {
     let decoded = percent_decode(raw.trim());
     if let Some(rest) = decoded.strip_prefix("file://") {
         // file:///C:/m/x.flac → /C:/m/x.flac（Windows 的驱动器斜杠要去掉）
-        let p = if cfg!(windows) && rest.len() >= 3 && rest.as_bytes()[0] == b'/' && rest.as_bytes()[2] == b':' {
+        let p = if cfg!(windows)
+            && rest.len() >= 3
+            && rest.as_bytes()[0] == b'/'
+            && rest.as_bytes()[2] == b':'
+        {
             &rest[1..]
         } else {
             rest
@@ -160,7 +173,9 @@ fn percent_decode(s: &str) -> String {
     while i < bytes.len() {
         if bytes[i] == b'%' {
             let hex = bytes.get(i + 1..i + 3).and_then(|h| {
-                std::str::from_utf8(h).ok().and_then(|h| u8::from_str_radix(h, 16).ok())
+                std::str::from_utf8(h)
+                    .ok()
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
             });
             if let Some(b) = hex {
                 out.push(b);
@@ -200,7 +215,11 @@ pub fn render_playlist(items: &[ExportItem], base_dir: &Path, relative: bool) ->
             _ => item.title.clone(),
         };
         out.push_str(&format!("#EXTINF:{sec},{label}\n"));
-        let path = if relative { relative_to(&item.path, base_dir) } else { item.path.clone() };
+        let path = if relative {
+            relative_to(&item.path, base_dir)
+        } else {
+            item.path.clone()
+        };
         out.push_str(&path);
         out.push('\n');
     }
@@ -252,7 +271,11 @@ mod tests {
         assert_eq!(es[0].duration_sec, Some(180));
         assert_eq!(es[0].artist.as_deref(), Some("周杰伦"));
         assert_eq!(es[0].title.as_deref(), Some("晴天"));
-        assert_eq!(es[0].target, p("/m/songs/qing.mp3"), "相对路径锚定 base_dir");
+        assert_eq!(
+            es[0].target,
+            p("/m/songs/qing.mp3"),
+            "相对路径锚定 base_dir"
+        );
         assert_eq!(es[1].title, None, "裸路径没有 EXTINF 就没有标题");
         assert_eq!(es[1].target, p("/m/bare.flac"));
     }
@@ -299,7 +322,9 @@ mod tests {
             parse_playlist("../../x.flac\n", Path::new("m")).unwrap()[0].target,
             Path::new("..").join("x.flac")
         );
-        let t = parse_playlist("D:/../x.flac\n", Path::new("m")).unwrap()[0].target.clone();
+        let t = parse_playlist("D:/../x.flac\n", Path::new("m")).unwrap()[0]
+            .target
+            .clone();
         assert!(t.is_absolute(), "盘符根不可被 .. 吃掉：{t:?}");
         assert!(
             t.to_string_lossy().contains(".."),
@@ -325,7 +350,10 @@ mod tests {
 
     #[test]
     fn empty_or_comment_only_is_empty_error() {
-        assert_eq!(parse_playlist("", Path::new("/m")), Err(ParseFailure::Empty));
+        assert_eq!(
+            parse_playlist("", Path::new("/m")),
+            Err(ParseFailure::Empty)
+        );
         assert_eq!(
             parse_playlist("#EXTM3U\n# 全是注释\n\n", Path::new("/m")),
             Err(ParseFailure::Empty)
@@ -345,17 +373,28 @@ mod tests {
     /* ---------------- 渲染 ---------------- */
 
     fn item(path: &str, artist: Option<&str>, title: &str, ms: i64) -> ExportItem {
-        ExportItem { path: path.into(), artist: artist.map(Into::into), title: title.into(), duration_ms: ms }
+        ExportItem {
+            path: path.into(),
+            artist: artist.map(Into::into),
+            title: title.into(),
+            duration_ms: ms,
+        }
     }
 
     #[test]
     fn render_absolute_with_extinf() {
         let s = render_playlist(
-            &[item("D:/m/a.flac", Some("A"), "T", 185_400), item("D:/m/b.mp3", None, "裸", 0)],
+            &[
+                item("D:/m/a.flac", Some("A"), "T", 185_400),
+                item("D:/m/b.mp3", None, "裸", 0),
+            ],
             Path::new("D:/out"),
             false,
         );
-        assert_eq!(s, "#EXTM3U\n#EXTINF:185,A - T\nD:/m/a.flac\n#EXTINF:0,裸\nD:/m/b.mp3\n");
+        assert_eq!(
+            s,
+            "#EXTM3U\n#EXTINF:185,A - T\nD:/m/a.flac\n#EXTINF:0,裸\nD:/m/b.mp3\n"
+        );
     }
 
     #[test]

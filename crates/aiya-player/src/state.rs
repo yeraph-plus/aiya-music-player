@@ -67,21 +67,11 @@ pub struct TrackAudio {
 /// 但 AAC 有损、MPEG Layer 3 也有损，结论一致，故此处不敏感）；
 /// 真正敏感的是 `mp4`（ALAC 无损 / AAC 有损都可能），所以它**不在**这两张表里。
 const LOSSLESS_HINTS: &[&str] = &[
-    "flac",
-    "alac",
-    "pcm",
-    "linear",
-    "aiff",
-    "aif",
-    "wav",   // 同时覆盖 lofty 的 `Wav` 与标签里的 `WAVE`
-    "dsd",
-    "dsf",
-    "dff",
-    "wavpack",
-    "monkey", // Monkey's Audio
+    "flac", "alac", "pcm", "linear", "aiff", "aif",
+    "wav", // 同时覆盖 lofty 的 `Wav` 与标签里的 `WAVE`
+    "dsd", "dsf", "dff", "wavpack", "monkey", // Monkey's Audio
     "ape",    // 同上：lofty 的 FileType::Ape 就写作 `Ape`，无其它 codec 名含此串
-    "tta",
-    "shorten",
+    "tta", "shorten",
 ];
 
 const LOSSY_HINTS: &[&str] = &[
@@ -234,7 +224,10 @@ pub struct AudioError {
 
 impl AudioError {
     pub fn new(code: AudioErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into() }
+        Self {
+            code,
+            message: message.into(),
+        }
     }
 }
 
@@ -382,19 +375,31 @@ pub enum PlayerCommand {
     Next,
     Prev,
     Seek(u64),
-    SetVolume { volume: f64, muted: bool },
+    SetVolume {
+        volume: f64,
+        muted: bool,
+    },
     SetRepeat(RepeatMode),
     SetRate(f64),
     ToggleShuffle,
     Queue(QueueOp),
     /// 引擎回报：装载完成（含总时长）
-    Loaded { token: u64, duration_ms: u64 },
+    Loaded {
+        token: u64,
+        duration_ms: u64,
+    },
     /// 引擎回报：位置推进
-    Position { position_ms: u64 },
+    Position {
+        position_ms: u64,
+    },
     /// 引擎回报：曲目自然播完
-    Ended { token: u64 },
+    Ended {
+        token: u64,
+    },
     /// 引擎回报：错误
-    Failed { error: AudioError },
+    Failed {
+        error: AudioError,
+    },
 }
 
 #[cfg(test)]
@@ -475,7 +480,10 @@ mod tests {
             lossless: TrackAudio::infer_lossless(Some("flac"), Some("Flac")),
         };
         let v = serde_json::to_value(&audio).unwrap();
-        assert_eq!(v["lossless"], true, "lossless 必须下发，否则 UI 只能显示「未知」");
+        assert_eq!(
+            v["lossless"], true,
+            "lossless 必须下发，否则 UI 只能显示「未知」"
+        );
         assert_eq!(v["bitsPerSample"], 16);
     }
 
@@ -497,16 +505,28 @@ mod tests {
         assert_eq!(f(None, Some("WavPack")), Some(true), "WavPack 文件");
         assert_eq!(f(None, Some("Mpeg")), Some(false), "lofty 对 MP3 报 Mpeg");
         assert_eq!(f(None, Some("Aac")), Some(false), "裸 AAC 文件");
-        assert_eq!(f(None, Some("Opus")), Some(false), "lofty 已把 Opus 从 Ogg 里分出");
+        assert_eq!(
+            f(None, Some("Opus")),
+            Some(false),
+            "lofty 已把 Opus 从 Ogg 里分出"
+        );
         assert_eq!(f(None, Some("Vorbis")), Some(false));
         assert_eq!(f(None, Some("Mpc")), Some(false), "Musepack 是有损");
 
         // --- Mp4 必须拒答：ALAC 无损 / AAC 有损共用这个容器 ---
-        assert_eq!(f(None, Some("Mp4")), None, "Mp4 里可能是 ALAC 也可能是 AAC，不猜");
+        assert_eq!(
+            f(None, Some("Mp4")),
+            None,
+            "Mp4 里可能是 ALAC 也可能是 AAC，不猜"
+        );
 
         // --- 跑过 beets（codec=beets format）---
         assert_eq!(f(Some("FLAC"), None), Some(true));
-        assert_eq!(f(Some("ALAC"), None), Some(true), "ALAC 靠 codec 才能判，容器只说 Mp4");
+        assert_eq!(
+            f(Some("ALAC"), None),
+            Some(true),
+            "ALAC 靠 codec 才能判，容器只说 Mp4"
+        );
         assert_eq!(f(Some("MP3"), None), Some(false));
         assert_eq!(f(Some("AAC"), None), Some(false));
         assert_eq!(f(Some("MPEG 1 Layer 3"), None), Some(false), "标签里的长名");
@@ -523,10 +543,16 @@ mod tests {
     #[test]
     fn codec_unsupported_roundtrips() {
         // 引擎侧 as_str 与 parse 互逆（两端分别定义，必须显式锁）
-        assert_eq!(AudioErrorCode::parse("codecUnsupported"), AudioErrorCode::CodecUnsupported);
+        assert_eq!(
+            AudioErrorCode::parse("codecUnsupported"),
+            AudioErrorCode::CodecUnsupported
+        );
         let v = serde_json::to_value(AudioErrorCode::CodecUnsupported).unwrap();
         assert_eq!(v, "codecUnsupported");
         // 旧宿主收到不认识的分类必须落 Unknown，不许崩（加值向后兼容的前提）
-        assert_eq!(AudioErrorCode::parse("someFutureKind"), AudioErrorCode::Unknown);
+        assert_eq!(
+            AudioErrorCode::parse("someFutureKind"),
+            AudioErrorCode::Unknown
+        );
     }
 }

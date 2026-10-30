@@ -24,7 +24,11 @@ pub enum ToolError {
     /// 工具明确回了 `ok: false`。`code` / `stage` 由工具定义，宿主不解释，
     /// 原样透传给上层——这正是"宿主不认识工具内部语义"的体现。
     #[error("[{stage}] {code}: {message}")]
-    Rejected { code: String, stage: String, message: String },
+    Rejected {
+        code: String,
+        stage: String,
+        message: String,
+    },
 
     /// 已有会话在跑（会话槽被占）。并发保护的一部分，不算异常。
     #[error("已有任务在执行（可先取消）")]
@@ -57,11 +61,26 @@ mod tests {
     #[test]
     fn codes_are_distinct_and_stable() {
         let cases = [
-            (ToolError::Spawn { program: "x".into(), message: "y".into() }, "E_SPAWN"),
-            (ToolError::Timeout { timeout: Duration::from_secs(1) }, "E_TIMEOUT"),
+            (
+                ToolError::Spawn {
+                    program: "x".into(),
+                    message: "y".into(),
+                },
+                "E_SPAWN",
+            ),
+            (
+                ToolError::Timeout {
+                    timeout: Duration::from_secs(1),
+                },
+                "E_TIMEOUT",
+            ),
             (ToolError::Protocol("bad".into()), "E_PROTOCOL"),
             (
-                ToolError::Rejected { code: "E_X".into(), stage: "s".into(), message: "m".into() },
+                ToolError::Rejected {
+                    code: "E_X".into(),
+                    stage: "s".into(),
+                    message: "m".into(),
+                },
                 "E_TOOL_REJECTED",
             ),
             (ToolError::Busy, "E_BUSY"),

@@ -40,7 +40,12 @@ fn main() {
     write_wav(&wav, 48_000, 2.0);
 
     let mut engine = Engine::spawn().expect("engine spawn");
-    engine.send(EngineCommand::Load { path: wav.to_string_lossy().into(), start_ms: 0, token: 1, paused: false });
+    engine.send(EngineCommand::Load {
+        path: wav.to_string_lossy().into(),
+        start_ms: 0,
+        token: 1,
+        paused: false,
+    });
 
     let mut loaded = false;
     let mut max_pos = 0u64;
@@ -54,13 +59,22 @@ fn main() {
                 println!("Loaded: {duration_ms}ms");
             }
             Some(aiya_audio::EngineEvent::Position { position_ms, .. }) => {
-                max_pos = max_pos.max(position_ms); println!("Pos {position_ms}");
+                max_pos = max_pos.max(position_ms);
+                println!("Pos {position_ms}");
             }
             Some(aiya_audio::EngineEvent::Eof { .. }) => {
                 got_eof = true;
                 break;
             }
-            Some(aiya_audio::EngineEvent::AudioMode { requested, mode, clock, buffer_ms, format, reason, .. }) => {
+            Some(aiya_audio::EngineEvent::AudioMode {
+                requested,
+                mode,
+                clock,
+                buffer_ms,
+                format,
+                reason,
+                ..
+            }) => {
                 println!("AudioMode requested={requested} actual={mode}/{clock}/{buffer_ms}ms/{format} reason={reason:?}");
             }
             Some(aiya_audio::EngineEvent::Error { message, .. }) => {

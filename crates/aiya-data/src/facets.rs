@@ -336,11 +336,20 @@ mod tests {
         // genre_norm 是普通列（不是生成列），UPDATE 必须两个一起写——
         // beets_sync 写入时也是成对填的。
         conn.execute(
-            "UPDATE tracks SET genre='Pop', genre_norm='pop' WHERE id='t1'", []).unwrap();
+            "UPDATE tracks SET genre='Pop', genre_norm='pop' WHERE id='t1'",
+            [],
+        )
+        .unwrap();
         conn.execute(
-            "UPDATE tracks SET genre='pop', genre_norm='pop' WHERE id='t2'", []).unwrap();
+            "UPDATE tracks SET genre='pop', genre_norm='pop' WHERE id='t2'",
+            [],
+        )
+        .unwrap();
         conn.execute(
-            "UPDATE tracks SET genre='Rock', genre_norm='rock' WHERE id='t3'", []).unwrap();
+            "UPDATE tracks SET genre='Rock', genre_norm='rock' WHERE id='t3'",
+            [],
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO tracks (id,title,title_norm,artist_id,album_id,duration_ms,added_at,path,path_lower,size_bytes,mtime,genre) \
              VALUES ('t4','x','x','a1','al1',1,1,'/m/4.flac','/m/4.flac',1,1,'')",

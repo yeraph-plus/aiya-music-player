@@ -94,7 +94,9 @@ mod tests {
             paused: false,
         };
         for m in [
-            HostToSidecar::Hello { protocol: PROTOCOL_VERSION },
+            HostToSidecar::Hello {
+                protocol: PROTOCOL_VERSION,
+            },
             HostToSidecar::Ping,
             HostToSidecar::Cmd(load),
             HostToSidecar::Cmd(EngineCommand::SetVolume(0.42)),
@@ -108,13 +110,24 @@ mod tests {
             assert_eq!(format!("{:?}", roundtrip_in(m.clone())), format!("{:?}", m));
         }
         for m in [
-            SidecarToHost::Welcome { protocol: PROTOCOL_VERSION },
+            SidecarToHost::Welcome {
+                protocol: PROTOCOL_VERSION,
+            },
             SidecarToHost::Pong,
             SidecarToHost::Hb,
-            SidecarToHost::Evt(EngineEvent::Loaded { token: 1, duration_ms: 5000 }),
-            SidecarToHost::Evt(EngineEvent::Position { token: 1, position_ms: 1234 }),
+            SidecarToHost::Evt(EngineEvent::Loaded {
+                token: 1,
+                duration_ms: 5000,
+            }),
+            SidecarToHost::Evt(EngineEvent::Position {
+                token: 1,
+                position_ms: 1234,
+            }),
             SidecarToHost::Evt(EngineEvent::Eof { token: 1 }),
-            SidecarToHost::Evt(EngineEvent::StateChanged { token: 1, playing: true }),
+            SidecarToHost::Evt(EngineEvent::StateChanged {
+                token: 1,
+                playing: true,
+            }),
             SidecarToHost::Evt(EngineEvent::Error {
                 token: 1,
                 kind: "decode".into(),
@@ -134,7 +147,10 @@ mod tests {
                 reason: Some("设备不支持".into()),
             }),
         ] {
-            assert_eq!(format!("{:?}", roundtrip_out(m.clone())), format!("{:?}", m));
+            assert_eq!(
+                format!("{:?}", roundtrip_out(m.clone())),
+                format!("{:?}", m)
+            );
         }
     }
 
@@ -142,7 +158,10 @@ mod tests {
     fn wire_shapes_are_stable() {
         // 形状锚点：协议字段改名会让旧 sidecar/host 互相对不上，必须显式发现
         let hello = encode_line(&HostToSidecar::Hello { protocol: 4 }).unwrap();
-        assert_eq!(std::str::from_utf8(&hello).unwrap(), "{\"k\":\"hello\",\"m\":{\"protocol\":4}}\n");
+        assert_eq!(
+            std::str::from_utf8(&hello).unwrap(),
+            "{\"k\":\"hello\",\"m\":{\"protocol\":4}}\n"
+        );
 
         let load = encode_line(&HostToSidecar::Cmd(EngineCommand::Load {
             path: "p".into(),
@@ -211,12 +230,14 @@ mod tests {
 
         // v6 形状：EQ 整体下发 + 生效值回报（camelCase 字段，bands 是数组）。
         // docs/39：加 bassDb/trebleDb（serde default，旧持久化行可解析）
-        let eq = encode_line(&HostToSidecar::Cmd(EngineCommand::SetEq(crate::eq::EqParams {
-            bands: [6.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 3.0],
-            pregain: -3.0,
-            enabled: true,
-            ..Default::default()
-        })))
+        let eq = encode_line(&HostToSidecar::Cmd(EngineCommand::SetEq(
+            crate::eq::EqParams {
+                bands: [6.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 3.0],
+                pregain: -3.0,
+                enabled: true,
+                ..Default::default()
+            },
+        )))
         .unwrap();
         assert_eq!(
             std::str::from_utf8(&eq).unwrap(),
@@ -224,7 +245,13 @@ mod tests {
         );
         let applied = encode_line(&SidecarToHost::Evt(EngineEvent::EqApplied {
             token: 7,
-            params: crate::eq::EqParams { bands: [6.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 3.0], bass_db: 2.0, treble_db: -1.0, pregain: -3.0, enabled: true },
+            params: crate::eq::EqParams {
+                bands: [6.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 3.0],
+                bass_db: 2.0,
+                treble_db: -1.0,
+                pregain: -3.0,
+                enabled: true,
+            },
         }))
         .unwrap();
         assert_eq!(

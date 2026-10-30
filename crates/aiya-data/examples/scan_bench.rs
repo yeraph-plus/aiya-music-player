@@ -47,7 +47,13 @@ fn parse_args() -> Result<Args, String> {
         match a.as_str() {
             "--root" => roots.push(PathBuf::from(it.next().ok_or("--root 缺值")?)),
             "--db" => db = Some(PathBuf::from(it.next().ok_or("--db 缺值")?)),
-            "--runs" => runs = it.next().ok_or("--runs 缺值")?.parse().map_err(|e| format!("--runs: {e}"))?,
+            "--runs" => {
+                runs = it
+                    .next()
+                    .ok_or("--runs 缺值")?
+                    .parse()
+                    .map_err(|e| format!("--runs: {e}"))?
+            }
             "--artwork" => {
                 // 封面缓存目录跟 DB 放一起，方便删库重来
                 artwork = Some(PathBuf::from(it.next().ok_or("--artwork 缺值")?));
@@ -60,7 +66,13 @@ fn parse_args() -> Result<Args, String> {
         return Err("至少要一个 --root".into());
     }
     let db = db.ok_or("必须给 --db（用文件库才能量增量重扫）")?;
-    Ok(Args { roots, db, runs, artwork, quiet })
+    Ok(Args {
+        roots,
+        db,
+        runs,
+        artwork,
+        quiet,
+    })
 }
 
 fn main() {
@@ -76,10 +88,13 @@ fn main() {
     println!("根目录: {:?}", args.roots);
     println!("数据库: {}", args.db.display());
     println!("轮次  : {}", args.runs);
-    println!("封面  : {}", match &args.artwork {
-        Some(p) => format!("启用 → {}", p.display()),
-        None => "关闭".to_string(),
-    });
+    println!(
+        "封面  : {}",
+        match &args.artwork {
+            Some(p) => format!("启用 → {}", p.display()),
+            None => "关闭".to_string(),
+        }
+    );
     println!();
 
     let mut conn = match open_conn(&args.db) {
@@ -108,14 +123,7 @@ fn main() {
                     // 只在批次边界打一行，别让 I/O 成为计时噪音源
                     eprintln!(
                         "  [{}] {} scanned={}/{:?} parsed={} imported={} skip={} fail={}",
-                        run,
-                        p.phase,
-                        p.scanned,
-                        p.total,
-                        p.parsed,
-                        p.imported,
-                        p.skipped,
-                        p.failed
+                        run, p.phase, p.scanned, p.total, p.parsed, p.imported, p.skipped, p.failed
                     );
                 }
             },

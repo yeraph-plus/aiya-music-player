@@ -15,7 +15,10 @@ fn main() {
     let dev = en
         .get_default_device(&Direction::Render)
         .expect("默认输出设备");
-    println!("默认输出设备：{}", dev.get_friendlyname().unwrap_or_default());
+    println!(
+        "默认输出设备：{}",
+        dev.get_friendlyname().unwrap_or_default()
+    );
 
     let client = dev.get_iaudioclient().expect("IAudioClient");
     if let Ok(mix) = client.get_mixformat() {
@@ -46,7 +49,8 @@ fn main() {
     for (name, bits, valid, st) in depths {
         for rate in rates {
             for ch in channels {
-                let fmt = WaveFormat::new(bits as usize, valid as usize, &st, rate as usize, ch, None);
+                let fmt =
+                    WaveFormat::new(bits as usize, valid as usize, &st, rate as usize, ch, None);
                 // is_supported：Ok(None) = 精确支持；Ok(Some(f)) = 只支持最接近的 f（需改格式）
                 let mark = match client.is_supported(&fmt, &ShareMode::Exclusive) {
                     Ok(None) => "✓ 精确",
@@ -76,6 +80,8 @@ fn main() {
         }
     }
     if !any {
-        println!("\n结论：设备拒绝全部候选 → 独占模式只能回落共享（功能仍可用，音质仍由共享混音决定）");
+        println!(
+            "\n结论：设备拒绝全部候选 → 独占模式只能回落共享（功能仍可用，音质仍由共享混音决定）"
+        );
     }
 }

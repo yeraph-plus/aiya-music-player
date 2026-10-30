@@ -279,6 +279,20 @@ def verify_config(text: str, profile: str = PROFILE_INDEX, home: Path | None = N
     if not doc.get("library"):
         raise ConfigGateError("缺少 library（索引家必须有独立的库文件）")
 
+    # library 不能只判"非空"：写错路径时 beets 会**静默新建一个空库**，
+    # 症状是"索引跑完了，统计一直是 0"——而配置看起来完全合规。
+    # 期望值是 `{home}/library.db`；home 未知（自检时没传）就只校验目录部分。
+    got_lib = _norm(str(doc["library"]).strip("'\""))
+    if home is not None:
+        want_lib = _norm(str(Path(home) / "library.db"))
+        if got_lib != want_lib:
+            raise ConfigGateError(
+                f"library 必须指向索引家自己的库 {want_lib}，实际是 {got_lib}"
+                "（指向别处会让索引写进另一个库，工作清单与查询会各看一个库）"
+            )
+    elif not got_lib.endswith("library.db"):
+        raise ConfigGateError(f"library 必须是一个 .db 文件路径，实际是 {got_lib}")
+
     # 占位整理根：必须是 home/scratch，且不能是扫描根（相对路径会让 path 定位失效）
     want_dir = _norm(scratch_dir(home)) if home is not None else None
     if not doc.get("directory"):

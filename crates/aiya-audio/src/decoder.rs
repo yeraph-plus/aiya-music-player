@@ -36,7 +36,7 @@ use std::path::Path;
 
 use symphonia::core::audio::{Channels, SampleBuffer, SignalSpec};
 use symphonia::core::codecs::{
-    Decoder as SymphoniaDecoder, DecoderOptions, CodecType, CODEC_TYPE_NULL,
+    CodecType, Decoder as SymphoniaDecoder, DecoderOptions, CODEC_TYPE_NULL,
 };
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
@@ -125,7 +125,9 @@ impl DecodedStream {
         // "WMA 不支持"。只有 Opus 这类"容器认、编码不认"的才走得到
         // `make()` 失败那条分类路径。扩展名表是这两类格式的统一出口。
         if let Some(name) = known_unsupported_ext(path) {
-            return Err(AudioError::CodecUnsupported { codec: name.to_string() });
+            return Err(AudioError::CodecUnsupported {
+                codec: name.to_string(),
+            });
         }
         let src = File::open(path).map_err(AudioError::Io)?;
         let mut hint = Hint::new();
@@ -138,7 +140,9 @@ impl DecodedStream {
     /// HLS (m3u8) 流（docs/22 G3）：ADTS AAC 路线，live 轮询 / VOD 顺序
     /// 拉段都在 `HlsStream` 内部完成。直播流 duration=0、不可 seek。
     pub fn open_hls(url: &str) -> Result<Self, AudioError> {
-        Ok(Self { inner: Inner::Hls(HlsStream::new(url)?) })
+        Ok(Self {
+            inner: Inner::Hls(HlsStream::new(url)?),
+        })
     }
 
     /// **唯一构造入口**（docs/22 §2 D4）：engine 与未来调用方都从这里进，
@@ -150,9 +154,9 @@ impl DecodedStream {
         backend: DecodeBackend,
     ) -> Result<Self, AudioError> {
         match backend {
-            DecodeBackend::Symphonia => {
-                Ok(Self { inner: Inner::Symphonia(SymphoniaStream::open(src, hint)?) })
-            }
+            DecodeBackend::Symphonia => Ok(Self {
+                inner: Inner::Symphonia(SymphoniaStream::open(src, hint)?),
+            }),
         }
     }
 
@@ -220,7 +224,10 @@ impl SymphoniaStream {
         // 被算进去了），MP3 开头还有 576 样本静音——进度条总长和首尾听感都能
         // 被抓到。trim 由解码器消费（0.5.5 里 mp3 与 vorbis 自己裁，ALAC/PCM
         // 收到的 trim 是 0），所以这里只负责把开关打开、不自作聪明再裁一遍。
-        let opts = FormatOptions { enable_gapless: true, ..Default::default() };
+        let opts = FormatOptions {
+            enable_gapless: true,
+            ..Default::default()
+        };
         let probed = symphonia::default::get_probe()
             .format(hint, mss, &opts, &MetadataOptions::default())
             // probe 失败 = 容器不认识 / 文件损坏 → decodeFailed（docs/22 D3）
@@ -260,14 +267,20 @@ impl SymphoniaStream {
             // → 单独分类：用户该做的是换文件/转码，不是重试（docs/22 D3）
             .map_err(|e| match codec {
                 CODEC_TYPE_NULL => AudioError::Decode(e.to_string()),
-                _ => AudioError::CodecUnsupported { codec: codec_display_name(codec) },
+                _ => AudioError::CodecUnsupported {
+                    codec: codec_display_name(codec),
+                },
             })?;
 
         // 复用缓冲容量：P1——此前按 100ms 固定分配，但 FLAC 允许单包最大
         // 65535 帧，容量不足时 copy_interleaved_ref 的 assert 直接 panic
         // （引擎线程死亡、音频静默中断）。统一给到 65535 帧下限
         // （2ch f32 ≈ 512KB，一次性分配可忽略），并尊重轨道声明的更大值。
-        let max_frames = track.codec_params.max_frames_per_packet.unwrap_or(0).max(65_535) as u64;
+        let max_frames = track
+            .codec_params
+            .max_frames_per_packet
+            .unwrap_or(0)
+            .max(65_535) as u64;
 
         let mut stream = Self {
             format,
@@ -278,7 +291,10 @@ impl SymphoniaStream {
             duration_ms,
             codec_n_frames,
             position_ms: 0,
-            sample_buf: SampleBuffer::<f32>::new(max_frames, SignalSpec::new(sample_rate, ch_layout)),
+            sample_buf: SampleBuffer::<f32>::new(
+                max_frames,
+                SignalSpec::new(sample_rate, ch_layout),
+            ),
             max_frames,
             first_packet: None,
             first_served: false,
@@ -347,8 +363,7 @@ impl SymphoniaStream {
                                 if let Some(f) = self.codec_n_frames {
                                     self.duration_ms = (f * 1000) / spec.rate as u64;
                                 }
-                                self.sample_buf =
-                                    SampleBuffer::<f32>::new(self.max_frames, spec);
+                                self.sample_buf = SampleBuffer::<f32>::new(self.max_frames, spec);
                             }
                             let rate = (self.sample_rate as u64).max(1);
                             let ts_ms = packet.ts().saturating_mul(1000) / rate;
@@ -395,7 +410,13 @@ impl SymphoniaStream {
         // Vorbis 会把上一段的 MDCT 重叠窗带进新位置，前一两包是旧内容。
         self.decoder.reset();
         self.format
-            .seek(SeekMode::Accurate, SeekTo::Time { time: target, track_id: Some(self.track_id) })
+            .seek(
+                SeekMode::Accurate,
+                SeekTo::Time {
+                    time: target,
+                    track_id: Some(self.track_id),
+                },
+            )
             .map_err(|e| AudioError::Decode(e.to_string()))?;
         self.position_ms = ms;
         // 落点由 seek 的粗细决定（Ogg 按页、MP4 按 chunk）：接下来的包可能
@@ -478,14 +499,20 @@ mod tests {
         // 名字必须说人话——UI 横幅直接展示这条消息。
         assert_eq!(codec_display_name(CODEC_TYPE_OPUS), "Opus");
         assert_eq!(codec_display_name(CODEC_TYPE_WMA), "WMA");
-        assert_eq!(codec_display_name(CODEC_TYPE_MONKEYS_AUDIO), "Monkey's Audio (APE)");
+        assert_eq!(
+            codec_display_name(CODEC_TYPE_MONKEYS_AUDIO),
+            "Monkey's Audio (APE)"
+        );
         assert_eq!(codec_display_name(CODEC_TYPE_WAVPACK), "WavPack");
         assert_eq!(codec_display_name(CODEC_TYPE_ADPCM_MS), "ADPCM");
         // 兜底：没收录的编码不许 panic，且要留一个能和 symphonia 常量对上的
         // 十六进制数（Debug 会印成 `CodecType(4096)`，对不上源码）
         let unknown = codec_display_name(CODEC_TYPE_MP3);
         assert!(unknown.contains("0x"), "兜底要带十六进制常量：{unknown}");
-        assert!(!unknown.contains("CodecType"), "兜底不许漏 Debug 形状：{unknown}");
+        assert!(
+            !unknown.contains("CodecType"),
+            "兜底不许漏 Debug 形状：{unknown}"
+        );
     }
 
     /// 扩展名预分类（docs/22 D3 的另一半）：WMA/APE/WavPack/DSD 在
@@ -504,11 +531,19 @@ mod tests {
         ] {
             let path = dir.path().join(name);
             let err = DecodedStream::open_file(&path).unwrap_err();
-            assert_eq!(err.kind(), AudioErrorKind::CodecUnsupported, "{name}: {err}");
+            assert_eq!(
+                err.kind(),
+                AudioErrorKind::CodecUnsupported,
+                "{name}: {err}"
+            );
             assert!(err.to_string().contains(expect), "{name} 的名不对：{err}");
         }
         // 名单外的不许误拦：master 格式必须真进 probe（这里必然因缺文件报 Io）
         let err = DecodedStream::open_file(&dir.path().join("f.flac")).unwrap_err();
-        assert_eq!(err.kind(), AudioErrorKind::FileMissing, "flac 不该被预拦截：{err}");
+        assert_eq!(
+            err.kind(),
+            AudioErrorKind::FileMissing,
+            "flac 不该被预拦截：{err}"
+        );
     }
 }

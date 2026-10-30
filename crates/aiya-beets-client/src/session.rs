@@ -18,7 +18,7 @@
 use std::io::{BufRead, Read, Write};
 use std::process::{Child, ChildStdin};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{RecvTimeoutError, channel};
+use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -99,7 +99,9 @@ pub fn busy() -> bool {
 /// 都必须带这个号，[`release`] 只在世代匹配时生效。
 pub fn acquire(stdin: SessionStdin) -> Result<u64, ToolError> {
     let gen = gen_counter().fetch_add(1, Ordering::SeqCst);
-    let mut guard = slot().lock().map_err(|_| ToolError::Io("会话槽已中毒".into()))?;
+    let mut guard = slot()
+        .lock()
+        .map_err(|_| ToolError::Io("会话槽已中毒".into()))?;
     if guard.is_some() {
         return Err(ToolError::Busy);
     }
@@ -205,10 +207,10 @@ pub fn spawn_session(
             .or_insert_with(|| Value::from(crate::proto::PROTOCOL_VERSION));
     }
     let request = &request;
-    let mut child = launcher
-        .command()
-        .spawn()
-        .map_err(|e| ToolError::Spawn { program: launcher.program.clone(), message: e.to_string() })?;
+    let mut child = launcher.command().spawn().map_err(|e| ToolError::Spawn {
+        program: launcher.program.clone(),
+        message: e.to_string(),
+    })?;
 
     // 写失败必须收尸：只 return 的话子进程挂着管道变成孤儿（超时收尸是
     // 读侧的规矩，写侧同样适用）。
@@ -259,7 +261,11 @@ pub fn spawn_line_reader<R: Read + Send + 'static>(
                         break;
                     }
                 }
-                let content_len = if buf.ends_with(b"\n") { buf.len() - 1 } else { buf.len() };
+                let content_len = if buf.ends_with(b"\n") {
+                    buf.len() - 1
+                } else {
+                    buf.len()
+                };
                 if content_len > MAX_LINE_BYTES {
                     tracing::error!(
                         len = content_len,
@@ -290,7 +296,10 @@ pub fn spawn_line_reader<R: Read + Send + 'static>(
 /// 从行通道里等**第一条可解析的 JSON 行**。`timeout` 是整体截止（不是单行）：
 /// 工具初始化时会先打人类可读的提示（实测：新库首写会打迁移日志），那一行
 /// 不是协议内容，跳过后继续等——对齐 `spawn_reader` 逐行试解析的容错行为。
-fn recv_first_json(rx: &std::sync::mpsc::Receiver<String>, timeout: Duration) -> Result<Value, ToolError> {
+fn recv_first_json(
+    rx: &std::sync::mpsc::Receiver<String>,
+    timeout: Duration,
+) -> Result<Value, ToolError> {
     let deadline = Instant::now() + timeout;
     loop {
         let now = Instant::now();
@@ -316,7 +325,11 @@ fn recv_first_json(rx: &std::sync::mpsc::Receiver<String>, timeout: Duration) ->
 }
 
 /// 发一条一次性请求并读第一条可解析的应答行（内部 API 的同步形态）。
-fn request_once(launcher: &Launcher, request: &Value, timeout: Duration) -> Result<Value, ToolError> {
+fn request_once(
+    launcher: &Launcher,
+    request: &Value,
+    timeout: Duration,
+) -> Result<Value, ToolError> {
     let (mut child, stdin) = spawn_session(launcher, request)?;
     // 一次性查询：写完整即关，让对面读到 EOF 后自己收尾
     drop(stdin);
@@ -431,14 +444,62 @@ pub fn query_plugin_catalog(
     result
 }
 
+/// 一次性请求：发一条命令、读一条应答、返回 `data`（不解析形状）。
+///
+/// 与 `query_plugin_catalog` 的区别只在于"谁解析"：那边把 `catalog` 解析成
+/// 类型化的行，这里把整块 `data` 原样交给调用方——查询结果与字段清单的形状
+/// 归宿主侧的 DTO 管，client 只负责协议正确性（`.ok` 信封、错误码、超时）。
+///
+/// 走 `reserve()`：查询会开对方的库，与"正在整理库"的会话抢同一个文件锁，
+/// 不能并行（对面有锁，这里也不该制造争用）。
+pub fn request_data(
+    launcher: &Launcher,
+    request: &Value,
+    timeout: Duration,
+) -> Result<Value, ToolError> {
+    if !reserve() {
+        return Err(ToolError::Busy);
+    }
+    let mut req = request.clone();
+    if let Some(obj) = req.as_object_mut() {
+        obj.entry("clientProtocol")
+            .or_insert_with(|| serde_json::json!(crate::proto::PROTOCOL_VERSION));
+    }
+    let result = request_once(launcher, &req, timeout).and_then(|raw| {
+        let env: Envelope = serde_json::from_value(raw)
+            .map_err(|e| ToolError::Protocol(format!("应答信封形状不对: {e}")))?;
+        if !env.ok {
+            let err = env.error.unwrap_or_else(|| crate::proto::EnvelopeError {
+                code: "E_UNKNOWN".into(),
+                stage: "unknown".into(),
+                beets_message: "no error detail".into(),
+            });
+            return Err(ToolError::Rejected {
+                code: err.code,
+                stage: err.stage,
+                message: err.beets_message,
+            });
+        }
+        Ok(env.data.unwrap_or(Value::Null))
+    });
+    release_unacquired();
+    result
+}
+
 /// 会话式召回的终态事件名。见到任意一个就收尾——**不能靠进程退出判断**
 /// （正常收尾和崩溃退出长得一样，混为一谈会漏掉"半份结果"）。
 /// 会话终态事件名。读到其中之一就收尾（关进程、放槽位、调 `on_exit`）。
 ///
 /// `pub` 是为了让 `tests/proto_mirror.rs` 拿它与镜像 schema 里的 `type`
 /// 常量集合比对——改名而忘了改这里，症状是"会话永远不结束"，很难现场定位。
-pub const TERMINAL_EVENTS: &[&str] =
-    &["done", "applyDone", "enrichDone", "cancelled", "sessionFailed", "pluginDone"];
+pub const TERMINAL_EVENTS: &[&str] = &[
+    "done",
+    "applyDone",
+    "enrichDone",
+    "cancelled",
+    "sessionFailed",
+    "pluginDone",
+];
 
 /// 起会话转发线程：把每一行 JSON 转发给 `sink`，见终态事件后收尾。
 ///
@@ -701,7 +762,10 @@ mod tests {
         let gen_b = acquire(kids[1].stdin.take().unwrap()).unwrap();
 
         // 旧 reader 迟到收尾：release(旧世代) 必须是 no-op
-        assert!(release(gen_a).is_none(), "旧世代的 release 不得偷走新会话的 stdin");
+        assert!(
+            release(gen_a).is_none(),
+            "旧世代的 release 不得偷走新会话的 stdin"
+        );
         assert!(busy(), "新会话的 busy 位必须还在");
         assert!(cancel(), "新会话必须仍可取消");
 
@@ -760,7 +824,14 @@ mod tests {
     fn terminal_event_set_is_the_documented_five() {
         assert_eq!(
             TERMINAL_EVENTS,
-            &["done", "applyDone", "enrichDone", "cancelled", "sessionFailed", "pluginDone"]
+            &[
+                "done",
+                "applyDone",
+                "enrichDone",
+                "cancelled",
+                "sessionFailed",
+                "pluginDone"
+            ]
         );
         // sessionEnd 是收尾后宿主自己补的，绝不能出现在终态集合里
         assert!(!TERMINAL_EVENTS.contains(&"sessionEnd"));

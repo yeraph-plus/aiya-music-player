@@ -18,9 +18,7 @@
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-use aiya_audio::{
-    ClockPref, Engine, EngineCommand, EngineEvent, ModePref, OutputConfig,
-};
+use aiya_audio::{ClockPref, Engine, EngineCommand, EngineEvent, ModePref, OutputConfig};
 
 const RATE: u32 = 48_000;
 
@@ -28,8 +26,7 @@ fn write_wav(path: &std::path::Path, sample_rate: u32, seconds: f64) {
     let n = (sample_rate as f64 * seconds) as usize;
     let mut data = Vec::with_capacity(n * 4);
     for i in 0..n {
-        let s =
-            ((i as f32 / sample_rate as f32) * 2.0 * std::f32::consts::PI * 440.0).sin() * 0.2;
+        let s = ((i as f32 / sample_rate as f32) * 2.0 * std::f32::consts::PI * 440.0).sin() * 0.2;
         for _ in 0..2 {
             data.extend_from_slice(&s.to_le_bytes());
         }
@@ -79,7 +76,14 @@ fn drain(engine: &Engine, ms: u64) -> (Option<Mode>, Option<String>, u64) {
                 reason,
                 ..
             }) => {
-                last = Some(Mode { requested, mode, clock, buffer_ms, format, reason });
+                last = Some(Mode {
+                    requested,
+                    mode,
+                    clock,
+                    buffer_ms,
+                    format,
+                    reason,
+                });
             }
             Some(EngineEvent::Error { message, .. }) => {
                 err = Some(message);
@@ -92,7 +96,12 @@ fn drain(engine: &Engine, ms: u64) -> (Option<Mode>, Option<String>, u64) {
 }
 
 fn cfg(mode: ModePref, buffer_ms: u32, clock: ClockPref) -> OutputConfig {
-    OutputConfig { mode, buffer_ms, clock, release_on_pause: true }
+    OutputConfig {
+        mode,
+        buffer_ms,
+        clock,
+        release_on_pause: true,
+    }
 }
 
 /// 写入速率断言：允许切流空档，但必须 ≥70% 采样率。
@@ -118,8 +127,17 @@ fn main() {
 
     // ---------- 1. 共享 + 事件 ----------
     println!("[1] 共享 / 事件 / 自动缓冲");
-    engine.send(EngineCommand::SetOutputConfig(cfg(ModePref::Shared, 0, ClockPref::Events)));
-    engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token, paused: false });
+    engine.send(EngineCommand::SetOutputConfig(cfg(
+        ModePref::Shared,
+        0,
+        ClockPref::Events,
+    )));
+    engine.send(EngineCommand::Load {
+        path: path.clone(),
+        start_ms: 0,
+        token,
+        paused: false,
+    });
     let (m, err, delta) = drain(&engine, 1200);
     assert!(err.is_none(), "共享模式不该报错：{err:?}");
     let m = m.expect("装载必须回报 AudioMode");
@@ -131,7 +149,11 @@ fn main() {
 
     // ---------- 2. 共享 + 轮询 ----------
     println!("[2] 共享 / 轮询");
-    engine.send(EngineCommand::SetOutputConfig(cfg(ModePref::Shared, 0, ClockPref::Polling)));
+    engine.send(EngineCommand::SetOutputConfig(cfg(
+        ModePref::Shared,
+        0,
+        ClockPref::Polling,
+    )));
     let (m, err, delta) = drain(&engine, 1200);
     assert!(err.is_none(), "轮询共享不该报错：{err:?}");
     let m = m.expect("切时钟必须回报 AudioMode");
@@ -142,14 +164,21 @@ fn main() {
     // ---------- 3. 独占 + 事件（自动缓冲）----------
     println!("[3] 独占 / 事件 / 自动缓冲");
     token += 1;
-    engine.send(EngineCommand::SetOutputConfig(cfg(ModePref::Exclusive, 0, ClockPref::Events)));
+    engine.send(EngineCommand::SetOutputConfig(cfg(
+        ModePref::Exclusive,
+        0,
+        ClockPref::Events,
+    )));
     let (m, err, delta) = drain(&engine, 1500);
     assert!(err.is_none(), "独占可回落，不该报 Error：{err:?}");
     let m = m.expect("切独占必须回报 AudioMode");
     assert_eq!(m.requested, "exclusive");
     if m.mode == "exclusive" {
         assert!(m.reason.is_none(), "拿到独占却带原因：{:?}", m.reason);
-        println!("  独占 ✓ clock={} buffer={}ms format={}", m.clock, m.buffer_ms, m.format);
+        println!(
+            "  独占 ✓ clock={} buffer={}ms format={}",
+            m.clock, m.buffer_ms, m.format
+        );
     } else {
         let r = m.reason.clone().unwrap_or_default();
         assert!(!r.is_empty(), "回落共享必须给出原因（可解释）");
@@ -158,7 +187,12 @@ fn main() {
     assert_sound(delta, 1500, "独占/事件");
     // reload 一次，确认配置在换曲后仍然生效（不是只在切流时有效）
     token += 1;
-    engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token, paused: false });
+    engine.send(EngineCommand::Load {
+        path: path.clone(),
+        start_ms: 0,
+        token,
+        paused: false,
+    });
     let (m2, err2, delta2) = drain(&engine, 1500);
     assert!(err2.is_none(), "换曲后不该报错：{err2:?}");
     let m2 = m2.expect("换曲后必须回报 AudioMode（配置要持续生效）");
@@ -167,7 +201,11 @@ fn main() {
 
     // ---------- 4. 独占 + 轮询 + 深缓冲 ----------
     println!("[4] 独占 / 轮询 / 200ms 缓冲");
-    engine.send(EngineCommand::SetOutputConfig(cfg(ModePref::Exclusive, 200, ClockPref::Polling)));
+    engine.send(EngineCommand::SetOutputConfig(cfg(
+        ModePref::Exclusive,
+        200,
+        ClockPref::Polling,
+    )));
     let (m, err, delta) = drain(&engine, 1500);
     assert!(err.is_none(), "独占轮询不该报 Error：{err:?}");
     let m = m.expect("切独占轮询必须回报 AudioMode");
@@ -192,7 +230,10 @@ fn main() {
             println!("  独占轮询哑火 → 自动切 {other}（{r}）");
         }
         (mode, _) => {
-            println!("  设备拒绝独占轮询 → {mode}（{}）", m.reason.clone().unwrap_or_default());
+            println!(
+                "  设备拒绝独占轮询 → {mode}（{}）",
+                m.reason.clone().unwrap_or_default()
+            );
         }
     }
     assert_sound(delta, 1500, "独占/轮询");
@@ -238,9 +279,18 @@ fn main() {
             );
             println!("  设备不支持 → 报错（符合预期）：{e}");
             // 报错后引擎回到等 Load 状态：切回共享应能恢复出声
-            engine.send(EngineCommand::SetOutputConfig(cfg(ModePref::Shared, 0, ClockPref::Events)));
+            engine.send(EngineCommand::SetOutputConfig(cfg(
+                ModePref::Shared,
+                0,
+                ClockPref::Events,
+            )));
             token += 1;
-            engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token, paused: false });
+            engine.send(EngineCommand::Load {
+                path: path.clone(),
+                start_ms: 0,
+                token,
+                paused: false,
+            });
             let (m, err, delta) = drain(&engine, 1500);
             assert!(err.is_none(), "切回共享后应能恢复：{err:?}");
             assert_eq!(m.expect("恢复后应有 AudioMode").mode, "shared");
@@ -256,8 +306,17 @@ fn main() {
     // ---------- 8. null（不打开设备）----------
     println!("[8] null 输出");
     token += 1;
-    engine.send(EngineCommand::SetOutputConfig(cfg(ModePref::Null, 0, ClockPref::Auto)));
-    engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token, paused: false });
+    engine.send(EngineCommand::SetOutputConfig(cfg(
+        ModePref::Null,
+        0,
+        ClockPref::Auto,
+    )));
+    engine.send(EngineCommand::Load {
+        path: path.clone(),
+        start_ms: 0,
+        token,
+        paused: false,
+    });
     let (m, err, delta) = drain(&engine, 1500);
     assert!(err.is_none(), "null 模式不该报错：{err:?}");
     let m = m.expect("null 模式必须回报 AudioMode");
@@ -269,8 +328,17 @@ fn main() {
     // ---------- 9. null → 共享（切回来要能重新出声）----------
     println!("[9] null → 共享");
     token += 1;
-    engine.send(EngineCommand::SetOutputConfig(cfg(ModePref::Shared, 0, ClockPref::Events)));
-    engine.send(EngineCommand::Load { path: path.clone(), start_ms: 0, token, paused: false });
+    engine.send(EngineCommand::SetOutputConfig(cfg(
+        ModePref::Shared,
+        0,
+        ClockPref::Events,
+    )));
+    engine.send(EngineCommand::Load {
+        path: path.clone(),
+        start_ms: 0,
+        token,
+        paused: false,
+    });
     let (m, err, delta) = drain(&engine, 1500);
     assert!(err.is_none(), "从 null 切回共享不该报错：{err:?}");
     assert_eq!(m.expect("切回共享应有 AudioMode").mode, "shared");

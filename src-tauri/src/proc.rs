@@ -58,4 +58,3 @@ pub fn reveal_in_explorer(path: &Path) -> bool {
     }
     cmd.spawn().is_ok()
 }
-

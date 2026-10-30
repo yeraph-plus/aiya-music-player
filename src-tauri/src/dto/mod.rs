@@ -47,8 +47,10 @@ pub mod refresh;
 
 pub use app::{AppInfo, Diagnostics, ListTiming, RecentError, SpectrumToggle};
 pub use library::{LibraryStats, TrackDetail};
+pub use output::{
+    AudioModeEvent, AudioModeInfo, DesiredOutput, EqSettings, MediaKeysInfo, PowerInfo, StreamsInfo,
+};
 pub use refresh::{RefreshSnapshot, RefreshState};
-pub use output::{AudioModeEvent, AudioModeInfo, DesiredOutput, EqSettings, MediaKeysInfo, PowerInfo, StreamsInfo};
 
 /// 命令失败的统一形状。替代 `{ok:false, error:{code,message}}` 信封。
 ///
@@ -98,7 +100,12 @@ pub enum ApiErrorCode {
 
 impl ApiError {
     pub fn new(code: ApiErrorCode, message: impl Into<String>) -> Self {
-        let err = Self { code, message: message.into(), detail: None, retryable: false };
+        let err = Self {
+            code,
+            message: message.into(),
+            detail: None,
+            retryable: false,
+        };
         record(&err);
         err
     }
@@ -225,7 +232,8 @@ mod ring_tests {
             RECENT_ERROR_LIMIT
         );
         assert!(
-            got.iter().any(|e| e.message == format!("{marker}-{}", total - 1)),
+            got.iter()
+                .any(|e| e.message == format!("{marker}-{}", total - 1)),
             "最新一条应留在环里"
         );
         assert!(

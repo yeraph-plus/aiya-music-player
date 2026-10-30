@@ -13,7 +13,9 @@ fn write_wav(path: &Path, sample_rate: u32, seconds: f64, freq: f32) {
         let t = i as f32 / sample_rate as f32;
         let env = (1.0 - i as f32 / n as f32).min(1.0);
         let s = (t * 2.0 * std::f32::consts::PI * freq).sin() * 0.3 * env;
-        for _ in 0..2 { data.extend_from_slice(&s.to_le_bytes()); }
+        for _ in 0..2 {
+            data.extend_from_slice(&s.to_le_bytes());
+        }
     }
     let data_len = data.len() as u32;
     let file_len = 36 + data_len;
@@ -34,7 +36,9 @@ fn write_wav(path: &Path, sample_rate: u32, seconds: f64, freq: f32) {
 }
 
 fn main() {
-    let dir = std::env::args().nth(1).unwrap_or_else(|| "test-music".into());
+    let dir = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "test-music".into());
     let dir = Path::new(&dir);
     std::fs::create_dir_all(dir).unwrap();
     write_wav(&dir.join("低音测试 220Hz.wav"), 44_100, 5.0, 220.0);

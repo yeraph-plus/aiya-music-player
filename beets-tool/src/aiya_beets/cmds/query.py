@@ -20,6 +20,7 @@ beets 的 `a..b` 范围比较只对在 `item_types` 里**注册过类型**的字
 
 from __future__ import annotations
 
+import itertools
 import re
 import sqlite3
 from pathlib import Path
@@ -195,20 +196,31 @@ def query(rules, raw, fields, limit) -> dict:
     lib = open_library()
     if raw is not None:
         try:
-            matched = list(lib.items(raw.strip()))
+            results = lib.items(raw.strip())
+            # `len()` 走的是 `SELECT COUNT(*)`，不反序列化任何 item。
+            # 写 `len(list(results))` 会把整库读进内存再取长度——几万首时
+            # 是几百 MB 的瞬时峰值，只为得到一个数字。
+            total = len(results)
+            page = list(itertools.islice(results, limit))
         except Exception as e:  # noqa: BLE001 —— 查询语法错误要让用户看见原文
             raise ProtocolError(E_INVALID_ARG, _STAGE, f"查询语法无效：{e}") from None
     elif rules:
         checked = _check_rules(rules)
-        matched = []
+        # 结构化规则只能在 Python 侧求值（见模块头注：beets 的范围查询
+        # 对未注册类型的 flexible 字段会静默 0 命中）。所以这一支必须扫全库，
+        # 但**只保留前 limit 条**——计数不占内存，内存峰值与库大小无关。
+        page = []
+        total = 0
         for item in lib.items():
             if all(_match(item, r) for r in checked):
-                matched.append(item)
+                total += 1
+                if len(page) < limit:
+                    page.append(item)
     else:
-        matched = list(lib.items())
+        results = lib.items()
+        total = len(results)
+        page = list(itertools.islice(results, limit))
 
-    total = len(matched)
-    page = matched[:limit]
     return {
         "items": [_payload(it, want_fields) for it in page],
         "total": total,
@@ -236,6 +248,11 @@ def fields() -> dict:
     # flexible 键只读 SQL：走 beets 的 API 要把全库 item 反序列化一遍，
     # 而这个命令只要"有哪些键"。只读连接，不会与写者抢锁。
     # URI 用正斜杠：Windows 下 `file:D:\x\y.db` 的反斜杠会被当转义。
+    #
+    # 失败**不吞**。曾经这里是 `except sqlite3.Error: flexible = []`，症状是
+    # "插件明明装了、xtractor 也写出了 bpm，字段列表里却没有"——用户能看到的
+    # 只有一个空列表，分不清是"没数据"还是"读不到"。宁可整条命令报错，也不要
+    # 用空列表冒充一个答案。
     try:
         uri = f"file:{Path(str(lib.path)).as_posix()}?mode=ro"
         conn = sqlite3.connect(uri, uri=True, timeout=5)
@@ -244,8 +261,10 @@ def fields() -> dict:
             flexible = [r[0] for r in rows]
         finally:
             conn.close()
-    except sqlite3.Error:
-        flexible = []
+    except sqlite3.Error as e:
+        raise ProtocolError(
+            E_INVALID_ARG, _STAGE, f"读 flexible 字段失败（库不可读？）：{e}"
+        ) from None
     for name in flexible:
         out.append({"name": name, "type": "flexible", "source": "flexible"})
 

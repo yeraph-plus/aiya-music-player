@@ -42,76 +42,86 @@ pub fn spawn(app: AppHandle, hwnd: isize) -> Option<Sender<SmtcUpdate>> {
     // 初始化结果经一次性 channel 回传，保持"失败返回 None"的对外语义。
     let (init_tx, init_rx) = std::sync::mpsc::channel::<bool>();
     let thread_app = app.clone();
-    let spawned = std::thread::Builder::new().name("smtc".into()).spawn(move || {
-        let config = souvlaki::PlatformConfig {
-            dbus_name: "aiya",
-            display_name: "AIYA Music",
-            hwnd: Some(hwnd as *mut std::ffi::c_void),
-        };
-        let mut controls = match souvlaki::MediaControls::new(config) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(error = %e, "SMTC 初始化失败，系统媒体控制不可用");
+    let spawned = std::thread::Builder::new()
+        .name("smtc".into())
+        .spawn(move || {
+            let config = souvlaki::PlatformConfig {
+                dbus_name: "aiya",
+                display_name: "AIYA Music",
+                hwnd: Some(hwnd as *mut std::ffi::c_void),
+            };
+            let mut controls = match souvlaki::MediaControls::new(config) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(error = %e, "SMTC 初始化失败，系统媒体控制不可用");
+                    let _ = init_tx.send(false);
+                    return;
+                }
+            };
+
+            // 按钮事件 → 播放器动作。回调在 WinRT 线程池跑，AppHandle 是 Send+Sync。
+            let cb_app = thread_app.clone();
+            if let Err(e) = controls.attach(move |event| handle_event(&cb_app, event)) {
+                tracing::warn!(error = %e, "SMTC 事件订阅失败");
                 let _ = init_tx.send(false);
                 return;
             }
-        };
+            // 初始为 Stopped，系统里出现条目但不可按
+            let _ = controls.set_playback(souvlaki::MediaPlayback::Stopped);
+            let _ = init_tx.send(true);
 
-        // 按钮事件 → 播放器动作。回调在 WinRT 线程池跑，AppHandle 是 Send+Sync。
-        let cb_app = thread_app.clone();
-        if let Err(e) = controls.attach(move |event| handle_event(&cb_app, event)) {
-            tracing::warn!(error = %e, "SMTC 事件订阅失败");
-            let _ = init_tx.send(false);
-            return;
-        }
-        // 初始为 Stopped，系统里出现条目但不可按
-        let _ = controls.set_playback(souvlaki::MediaPlayback::Stopped);
-        let _ = init_tx.send(true);
-
-        let mut last_playing: Option<bool> = None;
-        while let Ok(update) = rx.recv() {
-            match update {
-                SmtcUpdate::Track { title, artist, album, duration_ms, cover_path } => {
-                    let cover_url = cover_path.as_deref().and_then(cover_url);
-                    // debug 级（默认 info 看不到）：排查媒体浮层"没封面/不能拖"时
-                    // 用它确认三件事——封面路径拿到没有、缩略图通道是否启用、时长有没有值。
-                    // 0x800700A1 那类问题全部发生在这里之后，没有这行就无法区分
-                    // "没进缩略图分支"和"进了但失败"。
-                    tracing::debug!(
-                        thumb = cover_url.is_some(),
-                        cover = cover_path
-                            .as_ref()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_default(),
-                        duration_ms = duration_ms.unwrap_or(0),
-                        "SMTC 推送曲目"
-                    );
-                    let meta = souvlaki::MediaMetadata {
-                        title: Some(&title),
-                        artist: artist.as_deref(),
-                        album: album.as_deref(),
-                        duration: duration_ms.map(Duration::from_millis),
-                        cover_url: cover_url.as_deref(),
-                    };
-                    if let Err(e) = controls.set_metadata(meta) {
-                        tracing::warn!(error = %e, "SMTC set_metadata 失败");
+            let mut last_playing: Option<bool> = None;
+            while let Ok(update) = rx.recv() {
+                match update {
+                    SmtcUpdate::Track {
+                        title,
+                        artist,
+                        album,
+                        duration_ms,
+                        cover_path,
+                    } => {
+                        let cover_url = cover_path.as_deref().and_then(cover_url);
+                        // debug 级（默认 info 看不到）：排查媒体浮层"没封面/不能拖"时
+                        // 用它确认三件事——封面路径拿到没有、缩略图通道是否启用、时长有没有值。
+                        // 0x800700A1 那类问题全部发生在这里之后，没有这行就无法区分
+                        // "没进缩略图分支"和"进了但失败"。
+                        tracing::debug!(
+                            thumb = cover_url.is_some(),
+                            cover = cover_path
+                                .as_ref()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_default(),
+                            duration_ms = duration_ms.unwrap_or(0),
+                            "SMTC 推送曲目"
+                        );
+                        let meta = souvlaki::MediaMetadata {
+                            title: Some(&title),
+                            artist: artist.as_deref(),
+                            album: album.as_deref(),
+                            duration: duration_ms.map(Duration::from_millis),
+                            cover_url: cover_url.as_deref(),
+                        };
+                        if let Err(e) = controls.set_metadata(meta) {
+                            tracing::warn!(error = %e, "SMTC set_metadata 失败");
+                        }
+                        // 换曲后重申当前播放态（SMTC 的 UI 以最后一次设置为准）
+                        if let Some(playing) = last_playing {
+                            let _ = controls.set_playback(playback_state(playing, 0));
+                        }
                     }
-                    // 换曲后重申当前播放态（SMTC 的 UI 以最后一次设置为准）
-                    if let Some(playing) = last_playing {
-                        let _ = controls.set_playback(playback_state(playing, 0));
+                    SmtcUpdate::Progress {
+                        playing,
+                        position_ms,
+                    } => {
+                        if last_playing != Some(playing) || playing {
+                            let _ = controls.set_playback(playback_state(playing, position_ms));
+                        }
+                        last_playing = Some(playing);
                     }
                 }
-                SmtcUpdate::Progress { playing, position_ms } => {
-                    if last_playing != Some(playing) || playing {
-                        let _ = controls
-                            .set_playback(playback_state(playing, position_ms));
-                    }
-                    last_playing = Some(playing);
-                }
+                let _ = &thread_app; // 保持句柄存活到线程结束
             }
-            let _ = &thread_app; // 保持句柄存活到线程结束
-        }
-    });
+        });
     match spawned {
         Err(e) => {
             tracing::warn!(error = %e, "SMTC 线程创建失败");
@@ -188,7 +198,12 @@ pub mod commands {
 
     pub fn play(app: &AppHandle) {
         if let Some(state) = app.try_state::<crate::AppState>() {
-            if state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state().status
+            if state
+                .player
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .state()
+                .status
                 == aiya_player::PlaybackStatus::Paused
             {
                 crate::cmd_toggle(&state, app);
@@ -198,7 +213,12 @@ pub mod commands {
 
     pub fn pause(app: &AppHandle) {
         if let Some(state) = app.try_state::<crate::AppState>() {
-            if state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state().status
+            if state
+                .player
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .state()
+                .status
                 == aiya_player::PlaybackStatus::Playing
             {
                 crate::cmd_toggle(&state, app);
@@ -209,7 +229,10 @@ pub mod commands {
     pub fn next(app: &AppHandle) {
         if let Some(state) = app.try_state::<crate::AppState>() {
             {
-                let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut actor = state
+                    .player
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 actor.reduce(aiya_player::PlayerCommand::Next);
             }
             crate::drive_and_emit(&state, app);
@@ -219,7 +242,10 @@ pub mod commands {
     pub fn prev(app: &AppHandle) {
         if let Some(state) = app.try_state::<crate::AppState>() {
             {
-                let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut actor = state
+                    .player
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 actor.reduce(aiya_player::PlayerCommand::Prev);
             }
             crate::drive_and_emit(&state, app);
@@ -278,7 +304,12 @@ fn seek_relative(app: &AppHandle, delta_ms: i64) -> Result<(), String> {
     let state = app
         .try_state::<crate::AppState>()
         .ok_or_else(|| "app state 不可用".to_string())?;
-    let current = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state().position_ms;
+    let current = state
+        .player
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .state()
+        .position_ms;
     let target = (current as i64 + delta_ms).max(0) as u64;
     commands::seek(app, target);
     Ok(())
@@ -320,11 +351,18 @@ mod tests {
         std::fs::write(&file, b"x").unwrap();
 
         let url = cover_url(&file).expect("存在的文件应当给出 URL");
-        assert!(url.starts_with("file://"), "souvlaki 只认 file:// 前缀：{url}");
+        assert!(
+            url.starts_with("file://"),
+            "souvlaki 只认 file:// 前缀：{url}"
+        );
 
         // souvlaki 的原话：url.trim_start_matches("file://")
         let stripped = url.trim_start_matches("file://");
-        assert_eq!(stripped, file.to_str().unwrap(), "trim 之后必须正好是原生路径");
+        assert_eq!(
+            stripped,
+            file.to_str().unwrap(),
+            "trim 之后必须正好是原生路径"
+        );
         assert_eq!(
             stripped.chars().nth(1),
             Some(':'),

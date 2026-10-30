@@ -88,21 +88,29 @@ mod tests {
         record(&mut conn, "t1", 900, 12).unwrap();
 
         let (count, last): (i64, i64) = conn
-            .query_row("SELECT play_count, last_played_at FROM tracks WHERE id='t1'", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT play_count, last_played_at FROM tracks WHERE id='t1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
         assert_eq!(count, 2);
         assert_eq!(last, 900, "取最后一次播放时间");
         let rows: i64 = conn
-            .query_row("SELECT COUNT(*) FROM history WHERE track_id='t1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM history WHERE track_id='t1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(rows, 2);
         // 没播过的曲目不受影响
         let (c2, l2): (i64, Option<i64>) = conn
-            .query_row("SELECT play_count, last_played_at FROM tracks WHERE id='t2'", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT play_count, last_played_at FROM tracks WHERE id='t2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
         assert_eq!((c2, l2), (0, None));
     }
@@ -114,7 +122,9 @@ mod tests {
         record(&mut conn, "t2", 600, 20).unwrap();
         assert!(clear(&mut conn).unwrap());
 
-        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM history", [], |r| r.get(0)).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM history", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(rows, 0);
         let nonzero: i64 = conn
             .query_row(
@@ -146,12 +156,16 @@ mod tests {
         // 周期内下限 5_000：t1@100 被裁，其余保留
         let removed = prune(&conn, 5_000).unwrap();
         assert_eq!(removed, 1);
-        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM history", [], |r| r.get(0)).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM history", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(rows, 2);
 
         // 统计列不受裁剪影响（累计语义，见 prune 注释）
         let count: i64 = conn
-            .query_row("SELECT play_count FROM tracks WHERE id='t1'", [], |r| r.get(0))
+            .query_row("SELECT play_count FROM tracks WHERE id='t1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(count, 2);
 

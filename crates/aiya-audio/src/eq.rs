@@ -77,7 +77,9 @@ impl EqParams {
         }
         self.bass_db = self.bass_db.clamp(-EQ_GAIN_LIMIT_DB, EQ_GAIN_LIMIT_DB);
         self.treble_db = self.treble_db.clamp(-EQ_GAIN_LIMIT_DB, EQ_GAIN_LIMIT_DB);
-        self.pregain = self.pregain.clamp(-EQ_PREGAIN_LIMIT_DB, EQ_PREGAIN_LIMIT_DB);
+        self.pregain = self
+            .pregain
+            .clamp(-EQ_PREGAIN_LIMIT_DB, EQ_PREGAIN_LIMIT_DB);
         self
     }
 
@@ -159,7 +161,13 @@ impl Coeffs {
             a1 = -2.0 * cos;
             a2 = 1.0 - alpha / a;
         }
-        Some(Coeffs { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 })
+        Some(Coeffs {
+            b0: b0 / a0,
+            b1: b1 / a0,
+            b2: b2 / a0,
+            a1: a1 / a0,
+            a2: a2 / a0,
+        })
     }
 }
 
@@ -228,8 +236,12 @@ impl Eq {
         self.coeffs[SLOT_BASS] =
             Coeffs::design(Shape::LowShelf, bass, EQ_BASS_SHELF_HZ, self.sample_rate);
         let treble = if bypass { 0.0 } else { self.params.treble_db };
-        self.coeffs[SLOT_TREBLE] =
-            Coeffs::design(Shape::HighShelf, treble, EQ_TREBLE_SHELF_HZ, self.sample_rate);
+        self.coeffs[SLOT_TREBLE] = Coeffs::design(
+            Shape::HighShelf,
+            treble,
+            EQ_TREBLE_SHELF_HZ,
+            self.sample_rate,
+        );
     }
 
     /// 是否在做实际滤波（UI/测试用：旁路时调用方可以直接跳过拷贝）。
@@ -298,7 +310,14 @@ mod tests {
         // docs/24 B5b 验收：EQ 全 0 dB 时输出与关 EQ 逐样本一致（旁路证明）
         let src = sine(1000.0, 48_000, 2, 4096);
         let mut off = Eq::new(EqParams::default(), 48_000, 2);
-        let mut on = Eq::new(EqParams { enabled: true, ..Default::default() }, 48_000, 2);
+        let mut on = Eq::new(
+            EqParams {
+                enabled: true,
+                ..Default::default()
+            },
+            48_000,
+            2,
+        );
         assert!(off.is_bypass() && on.is_bypass());
         let a = src.clone();
         off.process_frame(&mut []);
@@ -347,13 +366,41 @@ mod tests {
     fn preset_switching_stays_bounded() {
         // docs/24 B5b 验收：20 次连切预设无爆音——输出不得出现 NaN 或越界尖峰
         let presets: [EqParams; 5] = [
-            EqParams { bands: [6.0; 10], pregain: -4.0, ..Default::default() },
-            EqParams { bands: [-3.0, 2.0, 4.0, 1.0, -2.0, 0.0, 3.0, 5.0, 2.0, -1.0], pregain: -2.0, enabled: true, ..Default::default() },
-            EqParams { bands: [0.0; 10], pregain: 0.0, enabled: true, ..Default::default() },
-            EqParams { bands: [-8.0; 10], pregain: 6.0, enabled: true, ..Default::default() },
+            EqParams {
+                bands: [6.0; 10],
+                pregain: -4.0,
+                ..Default::default()
+            },
+            EqParams {
+                bands: [-3.0, 2.0, 4.0, 1.0, -2.0, 0.0, 3.0, 5.0, 2.0, -1.0],
+                pregain: -2.0,
+                enabled: true,
+                ..Default::default()
+            },
+            EqParams {
+                bands: [0.0; 10],
+                pregain: 0.0,
+                enabled: true,
+                ..Default::default()
+            },
+            EqParams {
+                bands: [-8.0; 10],
+                pregain: 6.0,
+                enabled: true,
+                ..Default::default()
+            },
             EqParams::default(), // enabled=false：旁路 ↔ 滤波之间的切换也要无爆音
         ];
-        let mut eq = Eq::new(EqParams { bass_db: 8.0, treble_db: -6.0, enabled: true, ..presets[0] }, 44_100, 2);
+        let mut eq = Eq::new(
+            EqParams {
+                bass_db: 8.0,
+                treble_db: -6.0,
+                enabled: true,
+                ..presets[0]
+            },
+            44_100,
+            2,
+        );
         let mut peak: f32 = 0.0;
         for round in 0..20 {
             eq.set_params(presets[round % presets.len()]);
@@ -390,7 +437,11 @@ mod tests {
     fn bass_knob_amplifies_low_shelf_region() {
         // docs/39：低音旋钮 +6 dB → 50 Hz 正弦应约 2×（架子在转折频率以下
         // 平台增益），1 kHz 中频应近似不动（与图示段正交）
-        let params = EqParams { bass_db: 6.0, enabled: true, ..Default::default() };
+        let params = EqParams {
+            bass_db: 6.0,
+            enabled: true,
+            ..Default::default()
+        };
         let mut eq = Eq::new(params, 48_000, 1);
         assert!(!eq.is_bypass());
         let rms_at = |eq: &mut Eq, freq: f32| -> f32 {
@@ -418,7 +469,11 @@ mod tests {
     fn treble_knob_amplifies_high_shelf_region() {
         // docs/39：高音旋钮 +6 dB → 10 kHz 正弦应约 2×（7.5 kHz 架子以上
         // 平台增益），500 Hz 应近似不动
-        let params = EqParams { treble_db: 6.0, enabled: true, ..Default::default() };
+        let params = EqParams {
+            treble_db: 6.0,
+            enabled: true,
+            ..Default::default()
+        };
         let mut eq = Eq::new(params, 48_000, 1);
         let rms_at = |eq: &mut Eq, freq: f32| -> f32 {
             let mut v = sine(freq, 48_000, 1, 48_000);
@@ -444,9 +499,17 @@ mod tests {
     #[test]
     fn tone_only_params_block_bypass() {
         // 只有音色旋钮非零（图示全 0、pregain 0）时不是旁路——否则旋钮会静默失效
-        let p = EqParams { bass_db: 3.0, enabled: true, ..Default::default() };
+        let p = EqParams {
+            bass_db: 3.0,
+            enabled: true,
+            ..Default::default()
+        };
         assert!(!p.is_bypass() || !p.enabled);
-        let q = EqParams { treble_db: -3.0, enabled: true, ..Default::default() };
+        let q = EqParams {
+            treble_db: -3.0,
+            enabled: true,
+            ..Default::default()
+        };
         assert!(!q.is_bypass() || !q.enabled);
     }
 }

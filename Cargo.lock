@@ -23,6 +23,7 @@ version = "0.1.0"
 dependencies = [
  "aiya-audio",
  "aiya-beets-client",
+ "aiya-beets-store",
  "aiya-data",
  "aiya-player",
  "image",
@@ -83,6 +84,16 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tracing",
+]
+
+[[package]]
+name = "aiya-beets-store"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

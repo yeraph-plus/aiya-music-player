@@ -39,6 +39,9 @@ from ..runtime import cancel_gen, emit
 
 _STAGE = "enrich"
 
+# 进度事件的节流粒度（见主循环里的说明）。
+PROGRESS_EVERY = 5
+
 # 补登的固定开关。逐个说明（都不是随手挑的）：
 #   -A  noautotag   不做联网匹配：索引只要成员资格，匹配是 DB2 的事
 #   -q  quiet       不问任何问题（没有 TTY，问了就是卡死）
@@ -353,6 +356,16 @@ def enrich(req_id: int, paths: list[str], want, force: bool, gen: int) -> None:
                 "source": spec.name, "status": status,
                 "fields": fields, "message": message,
             })
+
+        # 进度按 5 首节流，最后一首必发。
+        #
+        # 为什么不是每首都发：一个文件有 N 个源就会发 N 条 `enrichItem`，
+        # 再叠一条 `progress` 等于把管道流量翻倍，而宿主那边每条都要过一遍
+        # 事件线程（管道只有 64 KB，反压的代价是"工具看起来卡住"）。
+        # 为什么不是只发终态：400 首要跑十几秒到几分钟，进度条停在 0/N
+        # 与"卡死"在用户眼里没有区别。
+        if (i + 1) % PROGRESS_EVERY == 0 or i + 1 == total:
+            _progress(i + 1)
 
     emit({
         "type": "enrichDone", "session": session,

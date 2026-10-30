@@ -23,7 +23,10 @@ pub struct Launcher {
 
 impl Launcher {
     pub fn new(program: impl Into<String>) -> Self {
-        Self { program: program.into(), ..Self::default() }
+        Self {
+            program: program.into(),
+            ..Self::default()
+        }
     }
 
     pub fn arg(mut self, arg: impl Into<String>) -> Self {
@@ -51,7 +54,8 @@ impl Launcher {
         K: Into<String>,
         V: Into<String>,
     {
-        self.env.extend(envs.into_iter().map(|(k, v)| (k.into(), v.into())));
+        self.env
+            .extend(envs.into_iter().map(|(k, v)| (k.into(), v.into())));
         self
     }
 
@@ -115,7 +119,10 @@ mod tests {
             .env("A", "1")
             .envs([("B", "2")]);
         assert_eq!(l.args, vec!["serve", "--flag", "value"]);
-        assert_eq!(l.env, vec![("A".into(), "1".into()), ("B".into(), "2".into())]);
+        assert_eq!(
+            l.env,
+            vec![("A".into(), "1".into()), ("B".into(), "2".into())]
+        );
         assert_eq!(l.describe(), "tool.exe serve --flag value");
     }
 
@@ -135,7 +142,9 @@ mod tests {
             .command();
         assert_eq!(cmd.get_program().to_string_lossy(), "tool");
         assert_eq!(
-            cmd.get_args().map(|s| s.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+            cmd.get_args()
+                .map(|s| s.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
             vec!["a", "b"]
         );
     }

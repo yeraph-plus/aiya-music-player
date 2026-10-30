@@ -67,7 +67,10 @@ pub fn install() -> &'static Outcome {
 /// 把结果写进日志。分两步是因为日志初始化在 `setup` 里，晚于 `install`。
 pub fn log_outcome() {
     match install() {
-        Outcome::Applied { readback, registered } => tracing::info!(
+        Outcome::Applied {
+            readback,
+            registered,
+        } => tracing::info!(
             aumid = %readback,
             display_name = DISPLAY_NAME,
             registry = registered,
@@ -92,7 +95,7 @@ mod imp {
     use super::*;
     use windows_sys::Win32::System::Com::CoTaskMemFree;
     use windows_sys::Win32::System::Registry::{
-        HKEY, RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_WRITE,
+        RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_WRITE,
         REG_OPTION_NON_VOLATILE, REG_SZ,
     };
     use windows_sys::Win32::UI::Shell::{
@@ -112,7 +115,10 @@ mod imp {
             return Outcome::Mismatch { got: readback };
         }
         let registered = register();
-        Outcome::Applied { readback, registered }
+        Outcome::Applied {
+            readback,
+            registered,
+        }
     }
 
     /// 写 `HKCU\Software\Classes\AppUserModelId\<AUMID>` 的 DisplayName / IconUri。
@@ -208,7 +214,11 @@ mod tests {
     /// ——而且拒绝是静默的（回读能拿到，解析照样失败），所以只能在这里挡。
     #[test]
     fn aumid_follows_the_documented_shape() {
-        assert!(AUMID.len() <= 128, "AUMID 不得超过 128 字符：{}", AUMID.len());
+        assert!(
+            AUMID.len() <= 128,
+            "AUMID 不得超过 128 字符：{}",
+            AUMID.len()
+        );
         assert!(!AUMID.contains(' '), "AUMID 不得含空格：{AUMID}");
         let parts: Vec<&str> = AUMID.split('.').collect();
         assert!(parts.len() >= 2, "至少要 CompanyName.ProductName：{AUMID}");

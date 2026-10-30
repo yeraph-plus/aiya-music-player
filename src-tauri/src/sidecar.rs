@@ -16,7 +16,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -159,7 +159,13 @@ impl SidecarHandle {
             }
         }
         spawn_writer(cmd_rx, shared.clone());
-        spawn_watchdog(shared.clone(), ev_tx, pipe_base.clone(), host_exe, track.clone());
+        spawn_watchdog(
+            shared.clone(),
+            ev_tx,
+            pipe_base.clone(),
+            host_exe,
+            track.clone(),
+        );
 
         Ok(Self {
             cmd_tx,
@@ -264,9 +270,7 @@ fn connect_once(
     // 新建一个黑窗。这个标志是父进程侧的闸门，子进程自己改 subsystem 管不到。
     crate::proc::no_window(&mut cmd);
 
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("启动 sidecar 失败：{e}"))?;
+    let child = cmd.spawn().map_err(|e| format!("启动 sidecar 失败：{e}"))?;
     *lock(&shared.child) = Some(child);
 
     // spawn 后再查：与 shutdown() 的窄竞态（检查在前、spawn 在后）兜底。
@@ -333,7 +337,9 @@ fn connect_and_handshake(pipe: &str) -> Result<Connection, String> {
         if n == 0 {
             return Err("sidecar 在握手中断开（可能协议不兼容或管道冲突）".into());
         }
-        if let Ok(aiya_audio::SidecarToHost::Welcome { protocol }) = serde_json::from_str(line.trim()) {
+        if let Ok(aiya_audio::SidecarToHost::Welcome { protocol }) =
+            serde_json::from_str(line.trim())
+        {
             if protocol != aiya_audio::PROTOCOL_VERSION {
                 return Err(format!("协议不兼容：sidecar v{protocol}"));
             }
@@ -346,7 +352,10 @@ fn connect_and_handshake(pipe: &str) -> Result<Connection, String> {
 
     let reader_file = reader.into_inner();
     let writer_file = writer.into_inner().map_err(|e| e.to_string())?;
-    Ok(Connection { reader: reader_file, writer: writer_file })
+    Ok(Connection {
+        reader: reader_file,
+        writer: writer_file,
+    })
 }
 
 /// 事件接收线程（每代一个）：管道 → ev_tx。EOF/错误即退出，不碰 alive（看门狗按超时判）。
@@ -384,9 +393,7 @@ fn spawn_reader(
                 if shared.generation.load(Ordering::SeqCst) == generation {
                     *lock(&shared.alive) = Instant::now();
                 }
-                let Ok(msg) =
-                    serde_json::from_str::<aiya_audio::SidecarToHost>(line.trim())
-                else {
+                let Ok(msg) = serde_json::from_str::<aiya_audio::SidecarToHost>(line.trim()) else {
                     continue;
                 };
                 match msg {
@@ -418,9 +425,10 @@ fn spawn_reader(
                             Ok(()) => {}
                             Err(mpsc::TrySendError::Full(restage)) => {
                                 if !matches!(restage, aiya_audio::EngineEvent::Position { .. })
-                                    && ev_tx.send(restage).is_err() {
-                                        break;
-                                    }
+                                    && ev_tx.send(restage).is_err()
+                                {
+                                    break;
+                                }
                             }
                             Err(mpsc::TrySendError::Disconnected(_)) => break,
                         }
@@ -567,9 +575,14 @@ fn spawn_watchdog(
                 "sidecar 恢复现场完成"
             );
             *lock(&shared.writer_slot) = Some(writer);
-            spawn_reader(conn.reader, ev_tx.clone(), shared.clone(), gen, track.clone());
+            spawn_reader(
+                conn.reader,
+                ev_tx.clone(),
+                shared.clone(),
+                gen,
+                track.clone(),
+            );
             tracing::info!(generation = gen, "sidecar 已重启");
         })
         .expect("spawn sidecar watchdog");
 }
-

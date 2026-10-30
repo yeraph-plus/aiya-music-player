@@ -73,7 +73,8 @@ fn vertical_scan_query_playlist() {
 
     // 1) 扫描走 DB 线程
     let scan_summary: aiya_data::DbResult<aiya_data::scanner::ScanResult> = db.send(move |conn| {
-        scan_directory(conn, dir.path(), None, |_| {}).map_err(|e| aiya_data::DbError::Custom(e.to_string()))
+        scan_directory(conn, dir.path(), None, |_| {})
+            .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
     });
     let scan = scan_summary.unwrap();
     assert_eq!(scan.imported, 3, "errors={:?}", scan.errors);
@@ -90,12 +91,12 @@ fn vertical_scan_query_playlist() {
                     search: Some("周杰伦".into()),
                     artist_id: None,
                     album_id: None,
-            added_from_ms: None,
-            added_to_ms: None,
-            last_played_from_ms: None,
-            last_played_to_ms: None,
-            last_played_never: None,
-            conds: None,
+                    added_from_ms: None,
+                    added_to_ms: None,
+                    last_played_from_ms: None,
+                    last_played_to_ms: None,
+                    last_played_never: None,
+                    conds: None,
                     source: TrackSource::Library,
                     limit: 10,
                     mode: Mode::Offset,
@@ -118,12 +119,12 @@ fn vertical_scan_query_playlist() {
                     search: None,
                     artist_id: None,
                     album_id: None,
-            added_from_ms: None,
-            added_to_ms: None,
-            last_played_from_ms: None,
-            last_played_to_ms: None,
-            last_played_never: None,
-            conds: None,
+                    added_from_ms: None,
+                    added_to_ms: None,
+                    last_played_from_ms: None,
+                    last_played_to_ms: None,
+                    last_played_never: None,
+                    conds: None,
                     source: TrackSource::Library,
                     limit: 500,
                     mode: Mode::Offset,
@@ -162,13 +163,15 @@ fn vertical_scan_query_playlist() {
                     search: None,
                     artist_id: None,
                     album_id: None,
-            added_from_ms: None,
-            added_to_ms: None,
-            last_played_from_ms: None,
-            last_played_to_ms: None,
-            last_played_never: None,
-            conds: None,
-                    source: TrackSource::Playlist { playlist_id: "p1".into() },
+                    added_from_ms: None,
+                    added_to_ms: None,
+                    last_played_from_ms: None,
+                    last_played_to_ms: None,
+                    last_played_never: None,
+                    conds: None,
+                    source: TrackSource::Playlist {
+                        playlist_id: "p1".into(),
+                    },
                     limit: 10,
                     mode: Mode::Offset,
                     cursor: None,
@@ -189,9 +192,30 @@ fn vertical_scan_query_playlist() {
 #[test]
 fn vertical_smart_playlist_rule_query() {
     let dir = tempfile::tempdir().unwrap();
-    write_mp3_tagged(dir.path(), "01.mp3", "Track A", "Artist One", "Album X", Some("Rock"));
-    write_mp3_tagged(dir.path(), "02.mp3", "Track B", "Artist Two", "Album X", None);
-    write_mp3_tagged(dir.path(), "03.mp3", "Track C", "Artist One", "Album Y", Some("rock"));
+    write_mp3_tagged(
+        dir.path(),
+        "01.mp3",
+        "Track A",
+        "Artist One",
+        "Album X",
+        Some("Rock"),
+    );
+    write_mp3_tagged(
+        dir.path(),
+        "02.mp3",
+        "Track B",
+        "Artist Two",
+        "Album X",
+        None,
+    );
+    write_mp3_tagged(
+        dir.path(),
+        "03.mp3",
+        "Track C",
+        "Artist One",
+        "Album Y",
+        Some("rock"),
+    );
 
     let db_path = dir.path().join("library.sqlite");
     let mut db = aiya_data::open(&db_path).unwrap();
@@ -237,8 +261,10 @@ fn vertical_smart_playlist_rule_query() {
                     last_played_from_ms: None,
                     last_played_to_ms: None,
                     last_played_never: None,
-            conds: None,
-                    source: TrackSource::Playlist { playlist_id: "smart1".into() },
+                    conds: None,
+                    source: TrackSource::Playlist {
+                        playlist_id: "smart1".into(),
+                    },
                     limit: 10,
                     mode: Mode::Offset,
                     cursor: None,
@@ -247,9 +273,16 @@ fn vertical_smart_playlist_rule_query() {
             )
         })
         .unwrap();
-    assert_eq!(page.total, 2, "只有打了 Rock 标签的 01/03 命中：{:?}", page.items);
+    assert_eq!(
+        page.total, 2,
+        "只有打了 Rock 标签的 01/03 命中：{:?}",
+        page.items
+    );
     assert_eq!(page.items[0].title, "Track A");
-    assert_eq!(page.items[1].title, "Track C", "genre 'rock' 与 'Rock' 同 norm，按标题排序");
+    assert_eq!(
+        page.items[1].title, "Track C",
+        "genre 'rock' 与 'Rock' 同 norm，按标题排序"
+    );
 
     // 4) 规则改条件（artist contains）后查询跟着变
     db.send(|conn| {
@@ -279,8 +312,10 @@ fn vertical_smart_playlist_rule_query() {
                     last_played_from_ms: None,
                     last_played_to_ms: None,
                     last_played_never: None,
-            conds: None,
-                    source: TrackSource::Playlist { playlist_id: "smart1".into() },
+                    conds: None,
+                    source: TrackSource::Playlist {
+                        playlist_id: "smart1".into(),
+                    },
                     limit: 10,
                     mode: Mode::Offset,
                     cursor: None,
@@ -301,13 +336,8 @@ fn vertical_smart_playlist_rule_query() {
     .unwrap();
     let err = db
         .send(|conn| {
-            aiya_data::playlist::set_rule(
-                conn,
-                "p_manual",
-                &serde_json::json!({}),
-                11,
-            )
-            .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
+            aiya_data::playlist::set_rule(conn, "p_manual", &serde_json::json!({}), 11)
+                .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
         })
         .unwrap_err();
     assert!(err.to_string().contains("手动歌单"), "实际错误：{err}");
@@ -322,8 +352,10 @@ fn vertical_smart_playlist_rule_query() {
     // 手动加歌应命中 1 首
     let track_a: String = db
         .send(|conn| {
-            conn.query_row("SELECT id FROM tracks WHERE title = 'Track A'", [], |r| r.get(0))
-                .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
+            conn.query_row("SELECT id FROM tracks WHERE title = 'Track A'", [], |r| {
+                r.get(0)
+            })
+            .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
         })
         .unwrap();
     let out = db
@@ -399,7 +431,9 @@ fn vertical_rename_rescan_keeps_same_row() {
     assert_eq!(avail, "online");
     assert_eq!(plays, 9);
     assert_eq!(refs, 1, "歌单引用仍指向同一行");
-    let count: i64 = db.send(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))?)).unwrap();
+    let count: i64 = db
+        .send(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))?))
+        .unwrap();
     assert_eq!(count, 1, "不产生重复行");
 
     db.close();

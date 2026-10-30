@@ -1,0 +1,13 @@
+[package]
+name = "aiya-beets-store"
+version.workspace = true
+edition.workspace = true
+description = "beets 模块自有的派生数据（索引增强结论）：独立 SQLite 文件，不认识应用曲库。"
+
+[dependencies]
+rusqlite.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

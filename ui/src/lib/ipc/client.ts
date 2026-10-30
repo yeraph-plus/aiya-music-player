@@ -21,7 +21,9 @@ import type {
   AlbumPage,
   AppInfo,
   ArtistPage,
+  BeetsFieldCatalog,
   BeetsMarketItem,
+  BeetsQueryPage,
   BeetsConfig,
   BeetsStatus,
   CancelRequested,
@@ -394,6 +396,36 @@ export const ipc = {
      * 与维护四件套共用会话槽——装插件时其他维护任务会被拒。
      */
     pluginInstall: (name: string) => call<JobStarted>('beets_plugin_install', { name }),
+
+    /*
+     * ---- 查询页（docs/47）：读 **beets 库**，产物是「存为歌单」 ----
+     * 与 `enrichment.query` 的分工：这里查的是用户自己的 beets 库（字段取决于
+     * 他装了哪些插件），那边查的是索引增强的结论库（字段固定）。
+     */
+    /**
+     * 查一页。`limit` 缺省由工具侧决定（500）。
+     *
+     * 三种用法，互斥：
+     * - `{ raw: 'mood_happy:1' }` —— beets 自己的查询语法（逃生口）
+     * - `{ rules: [{ field, op, value }] }` —— 结构化，工具侧求值（范围查询可靠）
+     * - `{}` —— 全库
+     *
+     * `fields` 缺省是 `title/artist/album`；想显示 bpm 就自己加。
+     */
+    query: (filter: {
+      raw?: string;
+      rules?: { field: string; op: string; value?: unknown }[];
+      fields?: string[];
+      limit?: number;
+    } = {}) =>
+      call<BeetsQueryPage>('beets_query', {
+        raw: filter.raw ?? null,
+        rules: filter.rules ?? null,
+        fields: filter.fields ?? null,
+        limit: filter.limit ?? null,
+      }),
+    /** 字段清单（含插件写入的 flexible 键）+ 识别源三态。查询页的选择器数据源。 */
+    fields: () => call<BeetsFieldCatalog>('beets_fields'),
   },
 
   /**

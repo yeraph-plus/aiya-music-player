@@ -38,14 +38,26 @@ pub struct Lyrics {
 impl Lyrics {
     /// "没有歌词"：不是错误，UI 显示"暂无"。
     pub fn empty() -> Self {
-        Self { found: false, lines: Vec::new(), offset_ms: 0, synced: false, encoding: None }
+        Self {
+            found: false,
+            lines: Vec::new(),
+            offset_ms: 0,
+            synced: false,
+            encoding: None,
+        }
     }
 }
 
 impl From<aiya_data::lyrics::ParsedLyrics> for Lyrics {
     fn from(p: aiya_data::lyrics::ParsedLyrics) -> Self {
         // 穷尽解构：`ParsedLyrics` 加字段时这里编译失败（见模块注释）
-        let aiya_data::lyrics::ParsedLyrics { found, lines, offset_ms, synced, encoding } = p;
+        let aiya_data::lyrics::ParsedLyrics {
+            found,
+            lines,
+            offset_ms,
+            synced,
+            encoding,
+        } = p;
         Self {
             found,
             lines: lines

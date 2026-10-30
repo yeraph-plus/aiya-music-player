@@ -211,7 +211,14 @@ pub fn run(app: &tauri::AppHandle, params: &RefreshParams, trigger: Trigger) {
             }
         }
         Err(Fail::Skipped(reason)) => {
-            store_last(app, RefreshSnapshot::skipped(trigger.as_str(), started.elapsed().as_millis() as u64, None));
+            store_last(
+                app,
+                RefreshSnapshot::skipped(
+                    trigger.as_str(),
+                    started.elapsed().as_millis() as u64,
+                    None,
+                ),
+            );
             if !trigger.is_auto() {
                 emit(
                     app,
@@ -226,11 +233,14 @@ pub fn run(app: &tauri::AppHandle, params: &RefreshParams, trigger: Trigger) {
         }
         Err(Fail::Failed(message)) => {
             tracing::warn!(trigger = trigger.as_str(), %message, "刷新失败");
-            store_last(app, RefreshSnapshot::skipped(
-                trigger.as_str(),
-                started.elapsed().as_millis() as u64,
-                Some(message.clone()),
-            ));
+            store_last(
+                app,
+                RefreshSnapshot::skipped(
+                    trigger.as_str(),
+                    started.elapsed().as_millis() as u64,
+                    Some(message.clone()),
+                ),
+            );
             emit(
                 app,
                 serde_json::json!({
@@ -352,7 +362,10 @@ pub fn focused() -> bool {
 pub fn start_scheduler(app: tauri::AppHandle, params: Arc<RefreshParams>) {
     let (tx, rx) = mpsc::sync_channel::<Wake>(1);
     if let Some(state) = app.try_state::<crate::AppState>() {
-        *state.refresh_wake.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tx);
+        *state
+            .refresh_wake
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tx);
     }
 
     let builder = std::thread::Builder::new().name("library-refresh-timer".into());
@@ -491,7 +504,10 @@ mod tests {
     fn roots_read_legacy_single_key() {
         let (_dir, conn) = temp_conn();
         crate::setting_set(&conn, "library.root", &serde_json::json!("D:/Music/Old")).unwrap();
-        assert_eq!(roots_from_settings(&conn), vec![PathBuf::from("D:/Music/Old")]);
+        assert_eq!(
+            roots_from_settings(&conn),
+            vec![PathBuf::from("D:/Music/Old")]
+        );
     }
 
     /// 新键优先：两个都在时以数组为准（旧键只是兼容残留）。
@@ -499,12 +515,7 @@ mod tests {
     fn roots_prefer_array_over_legacy() {
         let (_dir, conn) = temp_conn();
         crate::setting_set(&conn, "library.root", &serde_json::json!("D:/Music/Old")).unwrap();
-        crate::setting_set(
-            &conn,
-            "library.roots",
-            &serde_json::json!(["D:/A", "D:/B"]),
-        )
-        .unwrap();
+        crate::setting_set(&conn, "library.roots", &serde_json::json!(["D:/A", "D:/B"])).unwrap();
         assert_eq!(
             roots_from_settings(&conn),
             vec![PathBuf::from("D:/A"), PathBuf::from("D:/B")]
@@ -559,16 +570,39 @@ mod tests {
     /// 会让列表每 30 s 重拉一次，看起来像在抽风。
     #[test]
     fn change_detection_ignores_failures() {
-        let quiet = Outcome { scan: scan(0, 0, 0) };
+        let quiet = Outcome {
+            scan: scan(0, 0, 0),
+        };
         assert!(!quiet.changed());
 
         let failed_only = Outcome {
-            scan: aiya_data::scanner::ScanResult { failed: 5, ..scan(0, 0, 0) },
+            scan: aiya_data::scanner::ScanResult {
+                failed: 5,
+                ..scan(0, 0, 0)
+            },
         };
         assert!(!failed_only.changed(), "解析失败不是变化");
 
-        assert!(Outcome { scan: scan(1, 0, 0) }.changed(), "新导入");
-        assert!(Outcome { scan: scan(0, 2, 0) }.changed(), "重写");
-        assert!(Outcome { scan: scan(0, 0, 1) }.changed(), "文件消失");
+        assert!(
+            Outcome {
+                scan: scan(1, 0, 0)
+            }
+            .changed(),
+            "新导入"
+        );
+        assert!(
+            Outcome {
+                scan: scan(0, 2, 0)
+            }
+            .changed(),
+            "重写"
+        );
+        assert!(
+            Outcome {
+                scan: scan(0, 0, 1)
+            }
+            .changed(),
+            "文件消失"
+        );
     }
 }

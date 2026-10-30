@@ -25,6 +25,8 @@ import type {
   ArtistPage,
   BeetsConfig,
   BeetsMarketItem,
+  BeetsFieldCatalog,
+  BeetsQueryPage,
   Diagnostics,
   EnrichmentMatch,
   EnrichmentWorklist,
@@ -756,6 +758,42 @@ export class MockBackend {
       });
     })();
     return { started: true };
+  }
+
+  /**
+   * beets 查询页（docs/47）的预览数据。
+   *
+   * 参数被刻意简化成"只认 limit"：预览库里没有 beets 的 SQL，也就没有真正
+   * 能做范围查询的东西。假装支持 rules/raw 会让前端在预览环境下点出"有结果"
+   * 而真机上 0 命中——那种假绿比不实现更贵。
+   */
+  async beetsQuery(filter: { limit?: number } = {}): Promise<BeetsQueryPage> {
+    const limit = filter.limit ?? 50;
+    const page = this.tracks.slice(0, limit);
+    return {
+      items: page.map((t, i) => ({
+        id: i + 1,
+        path: `D:/MUSIC_Player/preview/${t.id}.flac`,
+        fields: { title: t.title, artist: t.artist, album: t.album },
+      })),
+      total: this.tracks.length,
+      truncated: this.tracks.length > page.length,
+    };
+  }
+
+  async beetsFields(): Promise<BeetsFieldCatalog> {
+    const builtin = ['title', 'artist', 'album', 'year', 'genre', 'bpm', 'length'];
+    return {
+      fields: builtin.map((name) => ({
+        name,
+        type: name === 'year' || name === 'bpm' ? 'integer' : 'string',
+        source: 'builtin',
+      })),
+      sources: [
+        { name: 'probe', state: 'ready' },
+        { name: 'xtractor', state: 'unwired' },
+      ],
+    };
   }
 
   async beetsPluginCatalog(): Promise<BeetsMarketItem[]> {

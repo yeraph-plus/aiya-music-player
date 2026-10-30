@@ -123,10 +123,7 @@ impl PumpCore {
                     // token 来自引擎回显，不再用"当前 token"顶替：
                     // 过期的 Loaded 会被 Actor 丢弃（不会把旧曲时长写到刚切过去的新曲上）
                     let live = actor.state().token;
-                    actor.reduce(PlayerCommand::Loaded {
-                        token,
-                        duration_ms,
-                    });
+                    actor.reduce(PlayerCommand::Loaded { token, duration_ms });
                     if token == live {
                         should_emit = true;
                     }
@@ -161,7 +158,10 @@ impl PumpCore {
                     };
                     let secs = secs.min(self.last_position_ms / 1000);
                     if let Some(track_id) = tid {
-                        effects.push(PumpEffect::History { track_id, seconds: secs });
+                        effects.push(PumpEffect::History {
+                            track_id,
+                            seconds: secs,
+                        });
                     }
                     actor.reduce(PlayerCommand::Ended { token });
                     self.last_position_ms = 0;
@@ -195,7 +195,11 @@ impl PumpCore {
                         reason,
                     });
                 }
-                EngineEvent::Error { token, kind, message } => {
+                EngineEvent::Error {
+                    token,
+                    kind,
+                    message,
+                } => {
                     // token=0 表示"装载前的错误"，仍要上报
                     if token != 0 && token != actor.state().token {
                         continue;
@@ -319,17 +323,24 @@ mod tests {
             matches!(&cmds[1], EngineCommand::Load { paused: true, .. }),
             "暂停装载必须带 paused:true: {cmds:?}"
         );
-        assert!(!cmds.contains(&EngineCommand::Pause), "暂停态不单独发 Pause");
+        assert!(
+            !cmds.contains(&EngineCommand::Pause),
+            "暂停态不单独发 Pause"
+        );
     }
 
     #[test]
-    fn load_volume_carries_replaygain() {        // 归一化开 + gain_db=-6：装载下发的 SetVolume 必须是 0.85×0.501，
+    fn load_volume_carries_replaygain() {
+        // 归一化开 + gain_db=-6：装载下发的 SetVolume 必须是 0.85×0.501，
         // 否则"归一化"只体现在 UI 上、耳朵听不到
         let mut actor = PlayerActor::new();
         let mut t = track("x");
         t.gain_db = Some(-6.0);
         actor.set_normalize(true);
-        actor.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll { tracks: vec![t], start: 0 }));
+        actor.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![t],
+            start: 0,
+        }));
         let cmds = cmds_for(&mut actor);
         let vol = cmds
             .iter()
@@ -344,13 +355,19 @@ mod tests {
     #[test]
     fn load_volume_respects_mute() {
         let mut actor = PlayerActor::new();
-        actor.reduce(PlayerCommand::SetVolume { volume: 0.8, muted: true });
+        actor.reduce(PlayerCommand::SetVolume {
+            volume: 0.8,
+            muted: true,
+        });
         actor.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
             tracks: vec![track("x")],
             start: 0,
         }));
         let cmds = cmds_for(&mut actor);
-        assert!(cmds.contains(&EngineCommand::SetVolume(0.0)), "静音装载必须下发 0");
+        assert!(
+            cmds.contains(&EngineCommand::SetVolume(0.0)),
+            "静音装载必须下发 0"
+        );
     }
 
     /* ---------------- 节流 ---------------- */
@@ -359,8 +376,8 @@ mod tests {
     fn position_emit_due_is_500ms_window() {
         assert!(position_emit_due(1_000, 500)); // 正好 500ms → 放行
         assert!(!position_emit_due(999, 500)); // 差 1ms → 压掉
-        // 时钟回拨（now < last）不 panic、也不误放开：saturating 兜住溢出，
-        // 结果维持"不广播"，等时间追上再说
+                                               // 时钟回拨（now < last）不 panic、也不误放开：saturating 兜住溢出，
+                                               // 结果维持"不广播"，等时间追上再说
         assert!(!position_emit_due(0, u64::MAX));
     }
 
@@ -423,7 +440,7 @@ mod tests {
         let mut core = PumpCore::new();
         let mut sent = Vec::new();
         let stale = actor.state().token; // 当前曲 token
-        // 用户按"下一首"：Actor 换代到 token+1，产生 pending_load
+                                         // 用户按"下一首"：Actor 换代到 token+1，产生 pending_load
         actor.reduce(PlayerCommand::Next);
         let new_token = actor.state().token;
         assert_ne!(new_token, stale);
@@ -479,9 +496,12 @@ mod tests {
             fx.contains(&PumpEffect::EmitState),
             "位置广播照常（节流窗口起点）"
         );
-        let (fx, acted) = core.ingest(vec![EngineEvent::Eof { token }], &mut actor, 5_100, &mut |c| {
-            sent.push(c)
-        });
+        let (fx, acted) = core.ingest(
+            vec![EngineEvent::Eof { token }],
+            &mut actor,
+            5_100,
+            &mut |c| sent.push(c),
+        );
         assert!(acted, "曲尾推进队列（换曲/停止）必须报告 acted → 全量落库");
         assert_eq!(
             fx,
@@ -505,14 +525,22 @@ mod tests {
         let mut core = PumpCore::new();
         let token = actor.state().token;
         let mut sent = Vec::new();
-        let (fx, acted) = core.ingest(vec![EngineEvent::Eof { token }], &mut actor, 1_000, &mut |c| {
-            sent.push(c)
-        });
+        let (fx, acted) = core.ingest(
+            vec![EngineEvent::Eof { token }],
+            &mut actor,
+            1_000,
+            &mut |c| sent.push(c),
+        );
         assert!(fx.contains(&PumpEffect::EmitState));
         assert!(acted, "自动换曲该报告 acted");
         // 自动换曲：SetRate → Load(第二首, 起点 0, 新 token) → SetVolume
         match &sent[..] {
-            [EngineCommand::SetRate(_), EngineCommand::Load { path, start_ms, token: t, .. }, EngineCommand::SetVolume(_)] => {
+            [EngineCommand::SetRate(_), EngineCommand::Load {
+                path,
+                start_ms,
+                token: t,
+                ..
+            }, EngineCommand::SetVolume(_)] => {
                 assert_eq!(path, "D:/music/b.flac");
                 assert_eq!(*start_ms, 0);
                 assert_eq!(*t, token + 1);

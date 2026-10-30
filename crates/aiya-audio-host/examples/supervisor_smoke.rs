@@ -102,7 +102,12 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
     let mut reader = BufReader::new(reader);
 
     // 握手
-    send(&mut writer, &HostToSidecar::Hello { protocol: PROTOCOL_VERSION });
+    send(
+        &mut writer,
+        &HostToSidecar::Hello {
+            protocol: PROTOCOL_VERSION,
+        },
+    );
     let welcome = recv(&mut reader, Duration::from_secs(3));
     match &welcome {
         Some(SidecarToHost::Welcome { protocol }) if *protocol == PROTOCOL_VERSION => {
@@ -145,8 +150,19 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
     }
 
     // 播放 2s WAV
-    send(&mut writer, &HostToSidecar::Cmd(aiya_audio::EngineCommand::SetVolume(0.8)));
-    send(&mut writer, &HostToSidecar::Cmd(aiya_audio::EngineCommand::Load { path: wav.to_string_lossy().into(), start_ms: 0, token: 1, paused: false }));
+    send(
+        &mut writer,
+        &HostToSidecar::Cmd(aiya_audio::EngineCommand::SetVolume(0.8)),
+    );
+    send(
+        &mut writer,
+        &HostToSidecar::Cmd(aiya_audio::EngineCommand::Load {
+            path: wav.to_string_lossy().into(),
+            start_ms: 0,
+            token: 1,
+            paused: false,
+        }),
+    );
 
     let start = Instant::now();
     let mut loaded = false;
@@ -179,7 +195,10 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
     let wall = start.elapsed().as_secs_f64();
 
     // Shutdown → 子进程应正常退出
-    send(&mut writer, &HostToSidecar::Cmd(aiya_audio::EngineCommand::Shutdown));
+    send(
+        &mut writer,
+        &HostToSidecar::Cmd(aiya_audio::EngineCommand::Shutdown),
+    );
 
     let checks = [
         ("Loaded", loaded),

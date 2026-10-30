@@ -79,7 +79,10 @@ mod lib_tests {
     /// `D:\Music` 会误伤 `D:\Music Backup`（前缀字符串包含关系）。
     #[test]
     fn root_prefix_normalizes_case_and_separator() {
-        assert_eq!(crate::root_prefix_lower("D:\\CkMsr\\Music"), "d:\\ckmsr\\music\\");
+        assert_eq!(
+            crate::root_prefix_lower("D:\\CkMsr\\Music"),
+            "d:\\ckmsr\\music\\"
+        );
         assert_eq!(crate::root_prefix_lower("d:/music/"), "d:/music/");
         assert_eq!(crate::root_prefix_lower("  D:\\X  "), "d:\\x\\");
         assert_eq!(crate::root_prefix_lower("D:\\"), "d:\\", "盘根不再补分隔符");
@@ -113,7 +116,11 @@ mod lib_tests {
             )
             .unwrap();
         }
-        conn.execute("INSERT INTO queue_items (position, track_id) VALUES (0, 't1')", []).unwrap();
+        conn.execute(
+            "INSERT INTO queue_items (position, track_id) VALUES (0, 't1')",
+            [],
+        )
+        .unwrap();
         aiya_data::history::record(&mut conn, "t1", 1_700_000_000, 30).unwrap();
 
         // 统计：只有 t1 在 D:\CkMsr\Music 下
@@ -137,7 +144,11 @@ mod lib_tests {
 
         // 级联：t1 的歌单项/队列项/历史都没了，t3 的歌单项还在
         let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM playlist_items WHERE track_id = 't1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM playlist_items WHERE track_id = 't1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(n, 0);
         let n: i64 = conn
@@ -149,7 +160,11 @@ mod lib_tests {
             .unwrap();
         assert_eq!(n, 0, "播放历史随曲目级联清除");
         let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM playlist_items WHERE track_id = 't3'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM playlist_items WHERE track_id = 't3'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(n, 1, "不受影响的曲目歌单项必须保留");
     }
@@ -160,8 +175,11 @@ mod lib_tests {
     #[test]
     fn history_stats_query_works_against_real_schema() {
         let mut conn = aiya_data::db::open_in_memory().expect("内存库");
-        conn.execute("INSERT INTO artists (id, name, name_norm) VALUES ('ar1','艺人','艺人')", [])
-            .unwrap();
+        conn.execute(
+            "INSERT INTO artists (id, name, name_norm) VALUES ('ar1','艺人','艺人')",
+            [],
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO tracks (id, title, title_norm, artist_id, added_at, path, path_lower)
              VALUES ('t1','标题','标题','ar1', 0, 'D:/m/a.flac', 'd:/m/a.flac')",
@@ -181,7 +199,11 @@ mod lib_tests {
         assert_eq!(s.last_play_at_ms, Some(1_700_000_600_000));
         assert_eq!(s.total_ms, 30_000);
         assert_eq!(s.top_tracks.len(), 1, "同一首曲目只占一行");
-        assert_eq!(s.top_tracks[0].artist.as_deref(), Some("艺人"), "艺人名必须来自 JOIN");
+        assert_eq!(
+            s.top_tracks[0].artist.as_deref(),
+            Some("艺人"),
+            "艺人名必须来自 JOIN"
+        );
         assert_eq!(s.top_tracks[0].play_count, 2);
     }
 
@@ -240,7 +262,9 @@ mod lib_tests {
             .expect("歌单存在");
         assert_eq!(one.id, "pl1");
         // 不存在返回 None（命令层映射成 null，不是错误）
-        assert!(crate::playlist_summary_by_id(&conn, "nope").unwrap().is_none());
+        assert!(crate::playlist_summary_by_id(&conn, "nope")
+            .unwrap()
+            .is_none());
     }
 
     /// P0-1 回归：节流基准必须是泵私有变量，不能被任何"刚刚被归约"的
@@ -264,7 +288,11 @@ mod lib_tests {
     fn snake_case_mapping_matches_tauri_convention() {
         // Tauri 只做 camelCase→snake_case，名字不同就收不到值（P1-17 的成因）。
         // 这里锚定我们依赖的映射规则本身。
-        let cases = [("trackIds", "track_ids"), ("state", "state"), ("from", "from")];
+        let cases = [
+            ("trackIds", "track_ids"),
+            ("state", "state"),
+            ("from", "from"),
+        ];
         for (camel, snake) in cases {
             let mut out = String::new();
             for c in camel.chars() {
@@ -420,6 +448,12 @@ pub struct AppState {
     /// `RunEvent::Exit` 收尾处 kill+wait——安装器可能卡在 pip 阶段好几分钟，
     /// 不能让它在主进程退出后变孤儿）。
     beets_install_child: Mutex<Option<std::process::Child>>,
+    /// beets 模块自有的结论库（`{beets-index}/enrich.db`）。
+    ///
+    /// 懒打开：绝大多数用户从不点"分析"，为一个可能永不使用的 SQLite 文件
+    /// 在启动路径上做一次 IO 不划算。失败不缓存（`OnceLock` 存不进错误），
+    /// 下次调用再试——这个文件的失败原因基本只有权限/磁盘满，重试无副作用。
+    enrich_store: std::sync::OnceLock<std::sync::Arc<aiya_beets_store::Store>>,
 }
 
 /// 列表耗时环的容量。UI 只展示最近 8 条，留 20 条给"翻两页才看出趋势"。
@@ -467,6 +501,31 @@ impl AppState {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// beets 模块的结论库（懒打开、进程内单例）。
+    ///
+    /// 它不是应用数据：文件在 `{beets-index}` 下，schema 由 `aiya-beets-store`
+    /// 自己建，应用库的迁移序列里没有它。放 `AppState` 只是因为它需要一个
+    /// 进程内生命周期，而不是因为它属于应用。
+    fn enrich_store(
+        &self,
+        app: &tauri::AppHandle,
+    ) -> Result<std::sync::Arc<aiya_beets_store::Store>, String> {
+        if let Some(s) = self.enrich_store.get() {
+            return Ok(std::sync::Arc::clone(s));
+        }
+        let path = beets::enrich_db(app);
+        let store = std::sync::Arc::new(
+            aiya_beets_store::Store::open(&path).map_err(|e| format!("{}: {e}", path.display()))?,
+        );
+        // 竞态下别人可能先 set 成功；以已存进去的那个为准，本地这份直接丢。
+        let _ = self.enrich_store.set(std::sync::Arc::clone(&store));
+        Ok(self
+            .enrich_store
+            .get()
+            .map(std::sync::Arc::clone)
+            .unwrap_or(store))
+    }
+
     /// 读设置缓存里的布尔项（缓存未初始化时按 default）。
     fn setting_flag(&self, key: &str, default: bool) -> bool {
         self.settings
@@ -492,10 +551,15 @@ impl AppState {
                 o.get("mode").and_then(Value::as_str).unwrap_or("shared"),
                 o.get("bufferMs").and_then(Value::as_i64).unwrap_or(0),
                 o.get("clock").and_then(Value::as_str).unwrap_or("auto"),
-                o.get("releaseOnPause").and_then(Value::as_bool).unwrap_or(true),
+                o.get("releaseOnPause")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
             );
         }
-        if s.get("exclusiveMode").and_then(Value::as_bool).unwrap_or(false) {
+        if s.get("exclusiveMode")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
             return aiya_audio::OutputConfig::from_parts("exclusive", 0, "auto", true);
         }
         aiya_audio::OutputConfig::default()
@@ -529,8 +593,9 @@ impl AppState {
         let Some(cutoff) = self.history_cutoff(now_secs()) else {
             return;
         };
-        let result: aiya_data::DbResult<usize> =
-            self.db().send(move |conn| aiya_data::history::prune(conn, cutoff));
+        let result: aiya_data::DbResult<usize> = self
+            .db()
+            .send(move |conn| aiya_data::history::prune(conn, cutoff));
         match result {
             Ok(0) => {}
             Ok(n) => tracing::info!(removed = n, "按保留周期裁剪了播放历史"),
@@ -555,7 +620,9 @@ fn default_artwork_dir(app: &AppHandle) -> PathBuf {
 #[cfg(windows)]
 fn fatal_dialog(message: &str) {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_SETFOREGROUND};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, MB_ICONERROR, MB_SETFOREGROUND,
+    };
     let wide = |s: &str| -> Vec<u16> {
         std::ffi::OsStr::new(s)
             .encode_wide()
@@ -582,9 +649,11 @@ fn fatal_dialog(message: &str) {
 /* ---------------- 工具：settings 表读写 ---------------- */
 
 fn setting_get(conn: &rusqlite::Connection, key: &str) -> Option<Value> {
-    conn.query_row("SELECT value_json FROM settings WHERE key = ?1", [key], |r| {
-        r.get::<_, String>(0)
-    })
+    conn.query_row(
+        "SELECT value_json FROM settings WHERE key = ?1",
+        [key],
+        |r| r.get::<_, String>(0),
+    )
     .ok()
     .and_then(|s| serde_json::from_str(&s).ok())
 }
@@ -661,7 +730,10 @@ fn spectrum_set(
 /// 300ms 一次），设置页是低频整体写。混在一起，两边都要做字段级 diff 才能不
 /// 互相覆盖；分键之后各写各的，天然无冲突。
 #[tauri::command]
-fn player_set_eq(app_state: State<'_, AppState>, eq: Json) -> Result<dto::EqSettings, dto::ApiError> {
+fn player_set_eq(
+    app_state: State<'_, AppState>,
+    eq: Json,
+) -> Result<dto::EqSettings, dto::ApiError> {
     let mut v: dto::EqSettings = serde_json::from_value(eq)
         .map_err(|e| dto::ApiError::invalid_arg(format!("EQ 参数不合法：{e}")))?;
     if v.bands.len() != aiya_audio::EQ_BAND_HZ.len() {
@@ -682,9 +754,10 @@ fn player_set_eq(app_state: State<'_, AppState>, eq: Json) -> Result<dto::EqSett
     v.treble_db = v
         .treble_db
         .clamp(-aiya_audio::EQ_GAIN_LIMIT_DB, aiya_audio::EQ_GAIN_LIMIT_DB);
-    v.pregain = v
-        .pregain
-        .clamp(-aiya_audio::EQ_PREGAIN_LIMIT_DB, aiya_audio::EQ_PREGAIN_LIMIT_DB);
+    v.pregain = v.pregain.clamp(
+        -aiya_audio::EQ_PREGAIN_LIMIT_DB,
+        aiya_audio::EQ_PREGAIN_LIMIT_DB,
+    );
 
     let value = serde_json::to_value(&v).map_err(|e| dto::ApiError::invalid_arg(e.to_string()))?;
     app_state
@@ -736,10 +809,7 @@ fn app_get_ui_state(state: State<'_, AppState>) -> Result<Json, dto::ApiError> {
 /// "missing required key" → 视图/滚动/侧栏状态永不落盘，且每 600ms 抛一个
 /// unhandled rejection。注入参数改名（app_state）以腾出 `state`。
 #[tauri::command]
-fn app_set_ui_state(
-    app_state: State<'_, AppState>,
-    state: Json,
-) -> Result<(), dto::ApiError> {
+fn app_set_ui_state(app_state: State<'_, AppState>, state: Json) -> Result<(), dto::ApiError> {
     app_state
         .db()
         .send(move |conn| setting_set(conn, "ui_state", &state).map_err(aiya_data::DbError::Sql))
@@ -788,7 +858,10 @@ fn app_set_settings(
     // 落库成功后 setting_output() 读的就是新值，直接比对
     let next_output = state.setting_output();
     if next_output != prev_output {
-        engine_send(&state, aiya_audio::EngineCommand::SetOutputConfig(next_output));
+        engine_send(
+            &state,
+            aiya_audio::EngineCommand::SetOutputConfig(next_output),
+        );
         // 切回共享/静音是确定的结果；实际状态会由随后到的 AudioMode 确认
         if next_output.mode == aiya_audio::ModePref::Shared {
             let mut st = state
@@ -808,7 +881,11 @@ fn app_set_settings(
     // 保留周期（historyDays）变更：立即按新周期裁剪一次，不等下次写历史。
     // 无差别跑（而不是 diff 旧值）——缓存此刻已是新值，diff 要再开一次库；
     // 空裁剪 0 行删除，代价可忽略。
-    if settings.get("historyDays").and_then(Value::as_i64).is_some() {
+    if settings
+        .get("historyDays")
+        .and_then(Value::as_i64)
+        .is_some()
+    {
         state.prune_history();
     }
 
@@ -880,12 +957,20 @@ fn app_diagnostics(state: State<'_, AppState>) -> Result<dto::Diagnostics, dto::
                 history_rows: count("SELECT COUNT(*) FROM history"),
                 total_duration_ms: count("SELECT COALESCE(SUM(duration_ms),0) FROM tracks"),
                 // 引擎侧目前只暴露 written_frames，没有流计数；保留结构不编数字
-                streams: dto::StreamsInfo { opened: 0, closed: 0, active: 0 },
+                streams: dto::StreamsInfo {
+                    opened: 0,
+                    closed: 0,
+                    active: 0,
+                },
                 list_timings: timings,
                 recent_errors: recent,
                 media_keys: dto::MediaKeysInfo {
                     enabled: smtc_active,
-                    active: if smtc_active { vec!["SMTC".into()] } else { Vec::new() },
+                    active: if smtc_active {
+                        vec!["SMTC".into()]
+                    } else {
+                        Vec::new()
+                    },
                     failed: if smtc_active {
                         Vec::new()
                     } else {
@@ -914,7 +999,6 @@ fn app_diagnostics(state: State<'_, AppState>) -> Result<dto::Diagnostics, dto::
             })
         })
         .map_err(dto::ApiError::from)
-
 }
 
 /// 在资源管理器中打开数据目录。打不开也不算失败（用户就是想看看文件在哪，
@@ -990,7 +1074,9 @@ async fn beets_apply(
 /// 结果走 `cancelled` 事件（UI 据此解锁按钮）。
 #[tauri::command]
 fn beets_cancel() -> Result<dto::beets::CancelRequested, dto::ApiError> {
-    Ok(dto::beets::CancelRequested { requested: beets::cancel_session() })
+    Ok(dto::beets::CancelRequested {
+        requested: beets::cancel_session(),
+    })
 }
 
 /* ---------------- beets 配置：待整理目录与整理输出根（docs/40 十三轮） ----------------
@@ -1013,7 +1099,10 @@ fn beets_cancel() -> Result<dto::beets::CancelRequested, dto::ApiError> {
 /// Windows 路径归一（**仅用于比较**，展示/落库保留用户原始输入）：
 /// 分隔符统一成 `\`、小写、去尾分隔符。
 pub(crate) fn canon_path(p: &str) -> String {
-    p.trim().replace('/', "\\").trim_end_matches('\\').to_lowercase()
+    p.trim()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase()
 }
 
 /// inbox 与扫描根重叠校验：相等或位于其内部都算冲突。
@@ -1035,61 +1124,35 @@ fn setting_str_value(conn: &rusqlite::Connection, key: &str) -> Option<String> {
         .filter(|s| !s.trim().is_empty())
 }
 
-fn beets_config(conn: &rusqlite::Connection) -> dto::beets::BeetsConfig {
-    let roots = read_roots(conn);
-    let inbox = setting_str_value(conn, "beets.inboxPath");
-    let target = setting_str_value(conn, "beets.targetRoot");
-    let effective = target
-        .clone()
-        .filter(|t| roots.iter().any(|r| canon_path(r) == canon_path(t)))
-        .or_else(|| roots.first().cloned());
-    let imported_count = setting_get(conn, "beets.inboxImported")
-        .and_then(|v| v.as_array().cloned())
-        .map(|a| a.len())
-        .unwrap_or(0);
-    dto::beets::BeetsConfig {
-        inbox,
-        target_root: target,
-        effective_target: effective,
-        imported_count,
-    }
-}
-
-/// 曲库目录变化后调用：整理输出根若不再在列表里就清掉（回退首根）。
-/// roots_set（覆盖写）与 library_choose_root（追加）之后都要走一遍。
-fn clear_target_if_invalid(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-    let roots = read_roots(conn);
-    if let Some(t) = setting_str_value(conn, "beets.targetRoot") {
-        if !roots.iter().any(|r| canon_path(r) == canon_path(&t)) {
-            setting_set(conn, "beets.targetRoot", &Value::Null)?;
-        }
-    }
-    Ok(())
+/// 曲库目录（应用事实）。beets 的配置视图要用它判断"勾的输出根还在不在"。
+fn roots_of(app: &tauri::AppHandle) -> Result<Vec<String>, dto::ApiError> {
+    app.try_state::<AppState>()
+        .ok_or_else(|| dto::ApiError::internal("app state 不可用"))?
+        .db()
+        .send(|conn| Ok(read_roots(conn)))
+        .map_err(|e| dto::ApiError::internal(format!("读取曲库目录失败：{e}")))
 }
 
 /// beets 配置快照（UI 的待整理目录行与输出根 radio 都从这里读）。
+///
+/// 数据源是 `{beets}/settings.json`（模块自有），**不是**应用的 settings 表。
 #[tauri::command]
-fn beets_config_get(state: State<'_, AppState>) -> Result<dto::beets::BeetsConfig, dto::ApiError> {
-    state
-        .db()
-        .send(|conn| Ok(beets_config(conn)))
-        .map_err(|e| dto::ApiError::internal(format!("读取 beets 配置失败：{e}")))
+fn beets_config_get(app: AppHandle) -> Result<dto::beets::BeetsConfig, dto::ApiError> {
+    let roots = roots_of(&app)?;
+    Ok(beets::config_view(&app, &roots))
 }
 
 /// 设置待整理目录。`None` = 清除（顺带清空已导入记录——旧记录对新目录无意义）。
 #[tauri::command]
 fn beets_set_inbox(
-    state: State<'_, AppState>,
+    app: AppHandle,
     path: Option<String>,
 ) -> Result<dto::beets::BeetsConfig, dto::ApiError> {
-    // 两段式（读 roots → 校验 → 写）：db().send 的闭包只能回 DbError，
-    // 校验放外面才能把「与曲库目录重叠」表达成 invalid_arg（UI 可识别人话提示）
+    // 两段式（读 roots → 校验 → 写）：校验放在写之前才能把「与曲库目录重叠」
+    // 表达成 invalidArg（UI 可识别人话提示），而不是"保存了但导向重复曲目"。
     let trimmed = path.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let roots = roots_of(&app)?;
     if let Some(p) = trimmed {
-        let roots = state
-            .db()
-            .send(|conn| Ok(read_roots(conn)))
-            .map_err(|e| dto::ApiError::internal(format!("读取曲库目录失败：{e}")))?;
         if path_conflicts_with_roots(p, &roots) {
             return Err(dto::ApiError::invalid_arg(
                 "待整理目录不能与曲库目录相同或在其内部",
@@ -1097,48 +1160,39 @@ fn beets_set_inbox(
         }
     }
     let inbox = trimmed.map(str::to_string);
-    state
-        .db()
-        .send(move |conn| {
-            setting_set(conn, "beets.inboxPath", &json!(inbox)).map_err(aiya_data::DbError::Sql)?;
-            setting_set(conn, "beets.inboxImported", &Value::Null)
-                .map_err(aiya_data::DbError::Sql)?;
-            Ok(beets_config(conn))
-        })
-        .map_err(|e| dto::ApiError::internal(format!("保存待整理目录失败：{e}")))
+    beets::update_settings(&app, move |s| {
+        s.inbox_path = inbox;
+        s.inbox_imported.clear();
+    })
+    .map_err(dto::ApiError::internal)?;
+    Ok(beets::config_view(&app, &roots))
 }
 
 /// 勾选整理输出根（单选）：必须是曲库目录之一。换选只影响未来的移动/导入，
 /// beets 存的是绝对路径，旧条目不受影响。
 #[tauri::command]
 fn beets_set_target(
-    state: State<'_, AppState>,
+    app: AppHandle,
     path: String,
 ) -> Result<dto::beets::BeetsConfig, dto::ApiError> {
     let p = path.trim().to_string();
-    let roots = state
-        .db()
-        .send(|conn| Ok(read_roots(conn)))
-        .map_err(|e| dto::ApiError::internal(format!("读取曲库目录失败：{e}")))?;
+    let roots = roots_of(&app)?;
     if !roots.iter().any(|r| canon_path(r) == canon_path(&p)) {
         return Err(dto::ApiError::invalid_arg("整理输出目录必须是曲库目录之一"));
     }
-    state
-        .db()
-        .send(move |conn| {
-            setting_set(conn, "beets.targetRoot", &json!(p)).map_err(aiya_data::DbError::Sql)?;
-            Ok(beets_config(conn))
-        })
-        .map_err(|e| dto::ApiError::internal(format!("保存整理输出目录失败：{e}")))
+    let saved = p;
+    beets::update_settings(&app, move |s| s.target_root = Some(saved))
+        .map_err(dto::ApiError::internal)?;
+    Ok(beets::config_view(&app, &roots))
 }
 
 /// 在资源管理器打开待整理目录（用户往里拖文件的入口）。
 #[tauri::command]
-fn beets_open_inbox(state: State<'_, AppState>) -> Result<(), dto::ApiError> {
-    let inbox = state
-        .db()
-        .send(|conn| Ok(beets_config(conn).inbox))
-        .map_err(|e| dto::ApiError::internal(format!("读取待整理目录失败：{e}")))?;
+fn beets_open_inbox(app: AppHandle) -> Result<(), dto::ApiError> {
+    let inbox = beets::load_settings(&app)
+        .inbox_path
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let Some(dir) = inbox else {
         return Err(dto::ApiError::invalid_arg("还没设置待整理目录"));
     };
@@ -1146,42 +1200,15 @@ fn beets_open_inbox(state: State<'_, AppState>) -> Result<(), dto::ApiError> {
     Ok(())
 }
 
-/// 排除表硬上限：超过就丢最老的（防常年 copy 用户把 settings 表撑爆；
-/// 2000 条对"待整理目录"是足够宽裕的滚动窗口）。
-const INBOX_IMPORTED_CAP: usize = 2000;
-
 /// 记录"已从待整理目录成功导入"的源文件路径（preview 排除表）。
-/// 幂等：重复记录同一路径只留一条（大小写不敏感）。
 #[tauri::command]
 fn beets_inbox_imported_add(
-    state: State<'_, AppState>,
+    app: AppHandle,
     paths: Vec<String>,
 ) -> Result<dto::beets::BeetsConfig, dto::ApiError> {
-    state
-        .db()
-        .send(move |conn| {
-            let mut list: Vec<String> = setting_get(conn, "beets.inboxImported")
-                .and_then(|v| serde_json::from_value(v).ok())
-                .unwrap_or_default();
-            for p in paths {
-                let p = p.trim();
-                if p.is_empty() {
-                    continue;
-                }
-                let pc = canon_path(p);
-                if !list.iter().any(|e| canon_path(e) == pc) {
-                    list.push(p.to_string());
-                }
-            }
-            if list.len() > INBOX_IMPORTED_CAP {
-                let drop = list.len() - INBOX_IMPORTED_CAP;
-                list.drain(0..drop);
-            }
-            setting_set(conn, "beets.inboxImported", &json!(list))
-                .map_err(aiya_data::DbError::Sql)?;
-            Ok(beets_config(conn))
-        })
-        .map_err(|e| dto::ApiError::internal(format!("记录已导入文件失败：{e}")))
+    beets::remember_imported(&app, paths).map_err(dto::ApiError::internal)?;
+    let roots = roots_of(&app)?;
+    Ok(beets::config_view(&app, &roots))
 }
 
 /// 单元测试：路径重叠校验是这套入库模型的安全边界（inbox 混进扫描根 =
@@ -1207,7 +1234,10 @@ mod beets_config_tests {
 
     #[test]
     fn inbox_inside_root_conflicts() {
-        assert!(path_conflicts_with_roots("D:\\Music\\New\\Albums", &roots()));
+        assert!(path_conflicts_with_roots(
+            "D:\\Music\\New\\Albums",
+            &roots()
+        ));
         assert!(path_conflicts_with_roots("d:/music/new", &roots()));
     }
 
@@ -1242,7 +1272,11 @@ fn refresh_state(state: State<'_, AppState>) -> Result<dto::RefreshState, dto::A
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
-    Ok(dto::RefreshState { interval_secs, focused: refresh::focused(), last })
+    Ok(dto::RefreshState {
+        interval_secs,
+        focused: refresh::focused(),
+        last,
+    })
 }
 
 /// 安装 beets 侧组件（docs/33 §6.2 两条轨道）。
@@ -1277,7 +1311,11 @@ fn beets_reveal(path: String) -> Result<dto::library::RevealResult, dto::ApiErro
     let revealed = proc::reveal_in_explorer(std::path::Path::new(&path));
     Ok(dto::library::RevealResult {
         revealed,
-        reason: if revealed { None } else { Some("explorer 启动失败".into()) },
+        reason: if revealed {
+            None
+        } else {
+            Some("explorer 启动失败".into())
+        },
     })
 }
 
@@ -1320,17 +1358,15 @@ async fn beets_adopt(
     let paths = if paths.is_empty() {
         state
             .db()
-            .send(|conn| aiya_data::beets_sync::online_paths(conn))
+            .send(|conn| aiya_data::repo::online_paths(conn))
             .map_err(dto::ApiError::from)?
     } else {
         paths
     };
-    tauri::async_runtime::spawn_blocking(move || {
-        beets::start_adopt(app, paths, Some(refresh))
-    })
-    .await
-    .map_err(dto::ApiError::internal)?
-    .map_err(map_beets_start)?;
+    tauri::async_runtime::spawn_blocking(move || beets::start_adopt(app, paths, Some(refresh)))
+        .await
+        .map_err(dto::ApiError::internal)?
+        .map_err(map_beets_start)?;
     Ok(dto::beets::JobStarted { started: true })
 }
 
@@ -1384,6 +1420,41 @@ async fn beets_move(
     Ok(dto::beets::JobStarted { started: true })
 }
 
+/// beets 查询页：读 beets 库（工作台家），返回一页命中（docs/47）。
+///
+/// 参数三选一（`rules` 结构化 / `raw` 逃生口 / 都不给=全库），`rules` 与
+/// `raw` 同时给会被工具侧拒——不在这里做"谁优先"的判断，那只会让调用方
+/// 永远不知道自己实际查了什么。
+#[tauri::command]
+async fn beets_query(
+    app: AppHandle,
+    rules: Option<Json>,
+    raw: Option<String>,
+    fields: Option<Vec<String>>,
+    limit: Option<u32>,
+) -> Result<dto::beets::BeetsQueryPage, dto::ApiError> {
+    let raw = raw.filter(|s| !s.trim().is_empty());
+    tauri::async_runtime::spawn_blocking(move || {
+        beets::query_page(&app, rules, raw, fields, limit.map(|v| v as usize))
+    })
+    .await
+    .map_err(dto::ApiError::internal)?
+    .map_err(map_beets_start)
+}
+
+/// 可查字段清单（含插件写入的 flexible 键）+ 识别源三态。
+///
+/// 与 `enrichment_query` 的分工：这条查的是 **beets 库**（用户自己的库，
+/// 字段取决于他装了哪些插件）；那条查的是**索引增强的结论库**（应用独占，
+/// 字段固定是 xtractor 的那 20 个）。查询页用这条，智能歌单用那条。
+#[tauri::command]
+async fn beets_fields(app: AppHandle) -> Result<dto::beets::BeetsFieldCatalog, dto::ApiError> {
+    tauri::async_runtime::spawn_blocking(move || beets::field_catalog(&app))
+        .await
+        .map_err(dto::ApiError::internal)?
+        .map_err(map_beets_start)
+}
+
 /// 插件市场目录（docs/40 §3 白名单）：三态 + 来源档，一次性短进程查询。
 #[tauri::command]
 async fn beets_plugin_catalog(
@@ -1429,13 +1500,16 @@ async fn enrichment_worklist(
         .map_err(dto::ApiError::internal)
 }
 
-/// 起一次分析：清单在命令层算好再交给 sidecar（清单为空就不起进程）。
+/// 起一次分析（清单为空就不起进程）。
 ///
 /// `force` 同时表达两件事，缺一不可：
 /// - 宿主侧：把 `status='empty'` 的也捞进清单（否则"强制重算"对上次跑空的
 ///   文件毫无作用，用户会以为按钮坏了）；
 /// - sidecar 侧：先清旧再补登（`item.remove()` + 重导），否则 beets 会把
 ///   "已在库"的文件直接跳过，插件根本不跑（docs/45 §3.4 实测）。
+///
+/// 清单在 `beets::start_enrich` 里现算而不是在这里：算清单要用到"曲库快照 +
+/// 结论库"两份状态，把其中一半摊在命令层只会让"谁的清单"这个问题有两个答案。
 #[tauri::command]
 async fn beets_enrich_start(
     app: AppHandle,
@@ -1444,16 +1518,10 @@ async fn beets_enrich_start(
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
     let source = enrichment::normalize_source(source).map_err(dto::ApiError::invalid_arg)?;
     let force = force.unwrap_or(false);
-    tauri::async_runtime::spawn_blocking(move || {
-        let paths = enrichment::work_paths(&app, &source, force)?;
-        if paths.is_empty() {
-            return Err("工作清单为空：没有需要分析的曲目".to_string());
-        }
-        beets::start_enrich(app.clone(), source, force, paths)
-    })
-    .await
-    .map_err(dto::ApiError::internal)?
-    .map_err(map_beets_start)?;
+    tauri::async_runtime::spawn_blocking(move || beets::start_enrich(app, source, force))
+        .await
+        .map_err(dto::ApiError::internal)?
+        .map_err(map_beets_start)?;
     Ok(dto::beets::JobStarted { started: true })
 }
 
@@ -1480,11 +1548,10 @@ async fn enrichment_query(
 ) -> Result<Vec<dto::enrichment::EnrichmentMatch>, dto::ApiError> {
     let args: EnrichmentQueryArgs = match query {
         None => EnrichmentQueryArgs::default(),
-        Some(v) => serde_json::from_value(v).map_err(|e| {
-            dto::ApiError::invalid_arg(format!("查询参数不合法：{e}"))
-        })?,
+        Some(v) => serde_json::from_value(v)
+            .map_err(|e| dto::ApiError::invalid_arg(format!("查询参数不合法：{e}")))?,
     };
-    let filter = aiya_data::enrichment::Filter {
+    let filter = aiya_beets_store::Filter {
         source: args.source,
         mood: args.mood,
         dance_min: args.dance_min,
@@ -1632,28 +1699,32 @@ fn library_tracks(
 #[tauri::command]
 fn library_stats(state: State<'_, AppState>) -> Result<dto::LibraryStats, dto::ApiError> {
     let db_path = state.db_path.clone();
-    state.db().send(move |conn| {
-        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
-        let db_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0) as i64;
-        Ok(dto::LibraryStats {
-            tracks: count("SELECT COUNT(*) FROM tracks"),
-            albums: count("SELECT COUNT(*) FROM albums"),
-            artists: count("SELECT COUNT(*) FROM artists"),
-            // locations / missingLocations 对应旧仓库的 media_locations 两列：
-            // 新 schema 把"文件位置"并进 tracks（一曲一位置），所以
-            // locations = 曲目数，missingLocations = 非 online 的位置数。
-            // 此前两个数都是写死的 0/1 → 侧栏永远不提示"位置缺失"，
-            // 用户看着满列表的歌，其实一半文件已经不在盘上了。
-            locations: count("SELECT COUNT(*) FROM tracks"),
-            missing_locations: count("SELECT COUNT(*) FROM tracks WHERE availability <> 'online'"),
-            total_duration_ms: count("SELECT COALESCE(SUM(duration_ms),0) FROM tracks"),
-            db_bytes,
-            schema_version: conn
-                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-                .unwrap_or(0),
+    state
+        .db()
+        .send(move |conn| {
+            let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
+            let db_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0) as i64;
+            Ok(dto::LibraryStats {
+                tracks: count("SELECT COUNT(*) FROM tracks"),
+                albums: count("SELECT COUNT(*) FROM albums"),
+                artists: count("SELECT COUNT(*) FROM artists"),
+                // locations / missingLocations 对应旧仓库的 media_locations 两列：
+                // 新 schema 把"文件位置"并进 tracks（一曲一位置），所以
+                // locations = 曲目数，missingLocations = 非 online 的位置数。
+                // 此前两个数都是写死的 0/1 → 侧栏永远不提示"位置缺失"，
+                // 用户看着满列表的歌，其实一半文件已经不在盘上了。
+                locations: count("SELECT COUNT(*) FROM tracks"),
+                missing_locations: count(
+                    "SELECT COUNT(*) FROM tracks WHERE availability <> 'online'",
+                ),
+                total_duration_ms: count("SELECT COALESCE(SUM(duration_ms),0) FROM tracks"),
+                db_bytes,
+                schema_version: conn
+                    .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                    .unwrap_or(0),
+            })
         })
-    })
-    .map_err(dto::ApiError::from)
+        .map_err(dto::ApiError::from)
 }
 
 /// 专辑浏览聚合（docs/24 §3.2 决策 2）。只含实际有曲目的专辑，
@@ -1750,7 +1821,10 @@ async fn library_scan_body(
     } else {
         // DB 故障要如实报 internal，不能吞成"未配置扫描目录"（那会把用户
         // 引去改配置，而配置根本没坏）。scanning 已置位，提前返回前先复位。
-        match state.db().send(|conn| Ok(refresh::roots_from_settings(conn))) {
+        match state
+            .db()
+            .send(|conn| Ok(refresh::roots_from_settings(conn)))
+        {
             Ok(roots) => roots,
             Err(e) => {
                 state.scanning.store(false, Ordering::SeqCst);
@@ -1826,7 +1900,9 @@ async fn library_scan_body(
 }
 
 #[tauri::command]
-fn library_scan_cancel(state: State<'_, AppState>) -> Result<dto::library::ScanCancel, dto::ApiError> {
+fn library_scan_cancel(
+    state: State<'_, AppState>,
+) -> Result<dto::library::ScanCancel, dto::ApiError> {
     // 置位取消请求，扫描循环在 walk 每条目 / 每批事务边界自行收尾
     //（取消路径不执行 mark_missing，防止误标在线文件）。
     if state.scanning.load(Ordering::SeqCst) {
@@ -1874,11 +1950,13 @@ async fn library_choose_root(
             roots.push(chosen);
         }
         setting_set(conn, "library.roots", &json!(roots))?;
-        clear_target_if_invalid(conn)?;
         Ok(roots)
     });
     let roots = saved.map_err(|e| dto::ApiError::internal(format!("无法保存曲库目录：{e}")))?;
-    Ok(Some(dto::library::ChosenRoot { path: path_str, roots }))
+    Ok(Some(dto::library::ChosenRoot {
+        path: path_str,
+        roots,
+    }))
 }
 
 /// 读 settings 里的根列表：`library.roots` 数组优先，旧 `library.root` 单串兜底。
@@ -1902,7 +1980,9 @@ pub(crate) fn read_roots(conn: &rusqlite::Connection) -> Vec<String> {
 
 /// 读扫描根列表（UI 的 textarea 数据源）。
 #[tauri::command]
-fn library_roots_get(state: State<'_, AppState>) -> Result<dto::library::LibraryRoots, dto::ApiError> {
+fn library_roots_get(
+    state: State<'_, AppState>,
+) -> Result<dto::library::LibraryRoots, dto::ApiError> {
     let roots = state
         .db()
         .send(|conn| Ok(read_roots(conn)))
@@ -1940,7 +2020,6 @@ fn library_roots_set(
         .send(move |conn| {
             setting_set(conn, "library.roots", &json!(to_save))?;
             // 目录列表变了：整理输出根若被移除就清掉（回退首根）
-            clear_target_if_invalid(conn)?;
             Ok(())
         })
         .map_err(|e| dto::ApiError::internal(format!("保存扫描目录失败：{e}")))?;
@@ -2044,19 +2123,25 @@ fn library_reveal_track(
     track_id: String,
 ) -> Result<dto::library::RevealResult, dto::ApiError> {
     let result: aiya_data::DbResult<Option<String>> = state.db().send(move |conn| {
-        conn.query_row("SELECT path FROM tracks WHERE id = ?1", [track_id], |r| r.get(0))
-            .map(Some)
-            .or_else(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                other => Err(aiya_data::DbError::Sql(other)),
-            })
+        conn.query_row("SELECT path FROM tracks WHERE id = ?1", [track_id], |r| {
+            r.get(0)
+        })
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(aiya_data::DbError::Sql(other)),
+        })
     });
     match result {
         Ok(Some(path)) => {
             let revealed = proc::reveal_in_explorer(std::path::Path::new(&path));
             Ok(dto::library::RevealResult {
                 revealed,
-                reason: if revealed { None } else { Some("explorer 启动失败".into()) },
+                reason: if revealed {
+                    None
+                } else {
+                    Some("explorer 启动失败".into())
+                },
             })
         }
         Ok(None) => Ok(dto::library::RevealResult {
@@ -2143,7 +2228,9 @@ fn library_remove_tracks(
         .send(move |conn| {
             let mut removed = 0i64;
             for id in &track_ids {
-                removed += conn.execute("DELETE FROM tracks WHERE id = ?1", [id]).unwrap_or(0) as i64;
+                removed += conn
+                    .execute("DELETE FROM tracks WHERE id = ?1", [id])
+                    .unwrap_or(0) as i64;
             }
             Ok(dto::library::RemoveTracks { removed })
         })
@@ -2235,7 +2322,10 @@ where
 fn playlist_list(
     state: State<'_, AppState>,
 ) -> Result<Vec<dto::playlist::PlaylistSummary>, dto::ApiError> {
-    state.db().send(|conn| playlist_list_all(conn)).map_err(dto::ApiError::from)
+    state
+        .db()
+        .send(|conn| playlist_list_all(conn))
+        .map_err(dto::ApiError::from)
 }
 
 #[tauri::command]
@@ -2245,9 +2335,7 @@ fn playlist_detail(
 ) -> Result<Option<dto::playlist::PlaylistSummary>, dto::ApiError> {
     state
         .db()
-        .send(move |conn| {
-            playlist_summary_by_id(conn, &id).map_err(aiya_data::DbError::Sql)
-        })
+        .send(move |conn| playlist_summary_by_id(conn, &id).map_err(aiya_data::DbError::Sql))
         .map_err(dto::ApiError::from)
 }
 
@@ -2506,16 +2594,20 @@ async fn playlist_import(
         )
     })?;
 
-    let base_dir = file.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
-    let entries = aiya_data::playlist_io::parse_playlist(&text, &base_dir).map_err(|e| match e {
-        aiya_data::playlist_io::ParseFailure::HlsManifest { tag } => dto::ApiError::new(
-            dto::ApiErrorCode::Unsupported,
-            format!("这是流媒体 manifest（HLS，#{tag}），不是静态播放列表——请用 FM 频道功能"),
-        ),
-        aiya_data::playlist_io::ParseFailure::Empty => {
-            dto::ApiError::invalid_arg("文件里没有任何曲目条目")
-        }
-    })?;
+    let base_dir = file
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
+    let entries =
+        aiya_data::playlist_io::parse_playlist(&text, &base_dir).map_err(|e| match e {
+            aiya_data::playlist_io::ParseFailure::HlsManifest { tag } => dto::ApiError::new(
+                dto::ApiErrorCode::Unsupported,
+                format!("这是流媒体 manifest（HLS，#{tag}），不是静态播放列表——请用 FM 频道功能"),
+            ),
+            aiya_data::playlist_io::ParseFailure::Empty => {
+                dto::ApiError::invalid_arg("文件里没有任何曲目条目")
+            }
+        })?;
 
     // 匹配：path_lower 精确对账（对账键与扫描器一致，见 0003 迁移）。
     // 斜杠方向都收：m3u 里常见的 "D:/m/a.flac" 与扫描落库的 "D:\m\a.flac"
@@ -2524,65 +2616,75 @@ async fn playlist_import(
         .try_state::<AppState>()
         .ok_or_else(|| dto::ApiError::internal("app state 不可用"))?;
     let file_for_ids = file.to_string_lossy().into_owned();
-    let result: aiya_data::DbResult<dto::playlist::PlaylistImportResult> = state.db().send(move |conn| {
-        let mut by_path_lower: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        {
-            let mut stmt =
-                conn.prepare("SELECT path_lower, id FROM tracks")?;
-            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-            for row in rows {
-                let (k, v) = row?;
-                by_path_lower.insert(k, v);
+    let result: aiya_data::DbResult<dto::playlist::PlaylistImportResult> =
+        state.db().send(move |conn| {
+            let mut by_path_lower: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            {
+                let mut stmt = conn.prepare("SELECT path_lower, id FROM tracks")?;
+                let rows =
+                    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+                for row in rows {
+                    let (k, v) = row?;
+                    by_path_lower.insert(k, v);
+                }
             }
-        }
-        let lookup = |target: &std::path::Path| -> Option<String> {
-            let s = target.to_string_lossy();
-            by_path_lower.get(&s.to_lowercase())
-                .cloned()
-                .or_else(|| by_path_lower.get(&s.replace('/', "\\").to_lowercase()).cloned())
-                .or_else(|| by_path_lower.get(&s.replace('\\', "/").to_lowercase()).cloned())
-        };
+            let lookup = |target: &std::path::Path| -> Option<String> {
+                let s = target.to_string_lossy();
+                by_path_lower
+                    .get(&s.to_lowercase())
+                    .cloned()
+                    .or_else(|| {
+                        by_path_lower
+                            .get(&s.replace('/', "\\").to_lowercase())
+                            .cloned()
+                    })
+                    .or_else(|| {
+                        by_path_lower
+                            .get(&s.replace('\\', "/").to_lowercase())
+                            .cloned()
+                    })
+            };
 
-        let mut matched_ids: Vec<String> = Vec::new();
-        let mut unmatched = Vec::new();
-        for e in &entries {
-            match lookup(&e.target) {
-                Some(id) => matched_ids.push(id),
-                None => unmatched.push(dto::playlist::PlaylistImportUnmatched {
-                    line: e.line as i64,
-                    raw: e.raw.clone(),
-                    reason: "notFound".into(),
-                }),
+            let mut matched_ids: Vec<String> = Vec::new();
+            let mut unmatched = Vec::new();
+            for e in &entries {
+                match lookup(&e.target) {
+                    Some(id) => matched_ids.push(id),
+                    None => unmatched.push(dto::playlist::PlaylistImportUnmatched {
+                        line: e.line as i64,
+                        raw: e.raw.clone(),
+                        reason: "notFound".into(),
+                    }),
+                }
             }
-        }
-        if matched_ids.is_empty() {
-            // 一条都没匹配上：这是**正常结果**不是库错误（早期版本借
-            // DbError::Custom 的文案再 contains 判回来，等于自己造了个
-            // "解析文案"的反模式）。不建空歌单，清单原样带回去让 UI 说话。
-            return Ok(dto::playlist::PlaylistImportResult {
-                playlist: None,
-                matched: 0,
-                duplicates: 0,
+            if matched_ids.is_empty() {
+                // 一条都没匹配上：这是**正常结果**不是库错误（早期版本借
+                // DbError::Custom 的文案再 contains 判回来，等于自己造了个
+                // "解析文案"的反模式）。不建空歌单，清单原样带回去让 UI 说话。
+                return Ok(dto::playlist::PlaylistImportResult {
+                    playlist: None,
+                    matched: 0,
+                    duplicates: 0,
+                    unmatched,
+                });
+            }
+
+            // 歌单名 = 文件名去扩展名（create 内部已做去重/幂等）
+            let name = file_stem_name(&file_for_ids);
+            let pid = ids::playlist_id(&name);
+            let now = now_secs();
+            let outcome = playlist_repo::create(conn, &pid, &name, &matched_ids, now)?;
+            let summary = playlist_summary_by_id(conn, &pid)
+                .map_err(aiya_data::DbError::Sql)?
+                .ok_or_else(|| aiya_data::DbError::Custom("歌单导入后读不到".into()))?;
+            Ok(dto::playlist::PlaylistImportResult {
+                playlist: Some(summary),
+                matched: outcome.added,
+                duplicates: outcome.skipped,
                 unmatched,
-            });
-        }
-
-        // 歌单名 = 文件名去扩展名（create 内部已做去重/幂等）
-        let name = file_stem_name(&file_for_ids);
-        let pid = ids::playlist_id(&name);
-        let now = now_secs();
-        let outcome = playlist_repo::create(conn, &pid, &name, &matched_ids, now)?;
-        let summary = playlist_summary_by_id(conn, &pid)
-            .map_err(aiya_data::DbError::Sql)?
-            .ok_or_else(|| aiya_data::DbError::Custom("歌单导入后读不到".into()))?;
-        Ok(dto::playlist::PlaylistImportResult {
-            playlist: Some(summary),
-            matched: outcome.added,
-            duplicates: outcome.skipped,
-            unmatched,
-        })
-    });
+            })
+        });
     result.map_err(dto::ApiError::from)
 }
 
@@ -2624,11 +2726,19 @@ async fn playlist_export(
     let relative = match style.as_deref() {
         None | Some("absolute") => false,
         Some("relative") => true,
-        Some(other) => return Err(dto::ApiError::invalid_arg(format!("未知的导出风格：{other}"))),
+        Some(other) => {
+            return Err(dto::ApiError::invalid_arg(format!(
+                "未知的导出风格：{other}"
+            )))
+        }
     };
     match format.as_deref() {
         None | Some("m3u8") | Some("m3u") => (),
-        Some(other) => return Err(dto::ApiError::invalid_arg(format!("未知的导出格式：{other}"))),
+        Some(other) => {
+            return Err(dto::ApiError::invalid_arg(format!(
+                "未知的导出格式：{other}"
+            )))
+        }
     };
 
     let out_path = PathBuf::from(&path);
@@ -2664,9 +2774,8 @@ async fn playlist_export(
     }
     let text = aiya_data::playlist_io::render_playlist(&items, &base_dir, relative);
     let count = items.len() as i64;
-    std::fs::write(&out_path, text).map_err(|e| {
-        dto::ApiError::new(dto::ApiErrorCode::Io, format!("写不进导出文件：{e}"))
-    })?;
+    std::fs::write(&out_path, text)
+        .map_err(|e| dto::ApiError::new(dto::ApiErrorCode::Io, format!("写不进导出文件：{e}")))?;
     Ok(dto::playlist::PlaylistExportResult { path, count })
 }
 
@@ -2686,7 +2795,12 @@ fn smtc_notify(app: &AppHandle, state: &aiya_player::PlayerState) {
     let Some(app_state) = app.try_state::<AppState>() else {
         return;
     };
-    let Some(tx) = app_state.smtc_tx.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() else {
+    let Some(tx) = app_state
+        .smtc_tx
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+    else {
         return;
     };
     let playing = state.status == aiya_player::PlaybackStatus::Playing;
@@ -2695,8 +2809,15 @@ fn smtc_notify(app: &AppHandle, state: &aiya_player::PlayerState) {
         position_ms: state.position_ms,
     });
 
-    let track_id = state.current.as_ref().map(|c| c.id.clone()).unwrap_or_default();
-    let mut last = app_state.smtc_track_id.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let track_id = state
+        .current
+        .as_ref()
+        .map(|c| c.id.clone())
+        .unwrap_or_default();
+    let mut last = app_state
+        .smtc_track_id
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if *last == track_id {
         return;
     }
@@ -2752,7 +2873,11 @@ fn queue_persist_from_actor(
         // PlayerState.index 现在是 Option（空队列=null）；DB 的 -1 哨兵
         // 只在 queue_state 存储层保留，这里做唯一一次换算。
         current_index: s.index.map_or(-1, |i| i as i64),
-        position_ms: if remember_position { s.position_ms as i64 } else { 0 },
+        position_ms: if remember_position {
+            s.position_ms as i64
+        } else {
+            0
+        },
         repeat_mode: match s.repeat {
             aiya_player::RepeatMode::All => "all",
             aiya_player::RepeatMode::One => "one",
@@ -2799,8 +2924,9 @@ fn persist_queue_full_snapshot(state: &AppState, snap: QueueFullPersist) {
 /// 只落状态行（position/音量等，5s 节流）。
 fn persist_queue_state_handle(state: &AppState, actor: &aiya_player::PlayerActor) {
     let p = queue_persist_from_actor(actor, state.setting_flag("rememberPosition", true));
-    let result: aiya_data::DbResult<()> =
-        state.db().send(move |conn| aiya_data::save_queue_state(conn, &p));
+    let result: aiya_data::DbResult<()> = state
+        .db()
+        .send(move |conn| aiya_data::save_queue_state(conn, &p));
     if let Err(e) = result {
         tracing::warn!(error = %e, "queue state persist failed");
     }
@@ -2818,7 +2944,10 @@ fn apply_engine_intents(state: &AppState, actor: &mut aiya_player::PlayerActor) 
 /// Actor 归约后统一收尾：取 pending load → 发引擎；同步音量；推状态。
 /// 返回新快照（命令返回值用）。
 fn drive_and_emit(state: &State<'_, AppState>, app: &AppHandle) -> aiya_player::PlayerState {
-    let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut actor = state
+        .player
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let acted = apply_engine_intents(state, &mut actor);
     // 门控 acted：只有真的下发了引擎意图（切歌/停止）才全量落库。
     // 锁内只取数据，写库在锁外（save_queue_full 全量重写走单 worker，
@@ -2859,7 +2988,11 @@ pub fn quit_app(app: &AppHandle) {
 
 /// 引擎命令统一入口（Engine 在 Mutex 里）。&State 自动 deref 成 &AppState。
 fn engine_send(state: &AppState, cmd: aiya_audio::EngineCommand) {
-    state.engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner).send(cmd);
+    state
+        .engine
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .send(cmd);
 }
 
 /// 从 DB 拿 TrackRef 列表（trackIds 保序）。
@@ -2925,18 +3058,20 @@ fn fetch_track_refs(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_pla
 }
 
 #[tauri::command]
-fn player_state(
-    state: State<'_, AppState>,
-) -> Result<aiya_player::PlayerState, dto::ApiError> {
-    let actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+fn player_state(state: State<'_, AppState>) -> Result<aiya_player::PlayerState, dto::ApiError> {
+    let actor = state
+        .player
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     Ok(actor.state())
 }
 
 #[tauri::command]
-fn player_queue(
-    state: State<'_, AppState>,
-) -> Result<aiya_player::QueueSnapshot, dto::ApiError> {
-    let actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+fn player_queue(state: State<'_, AppState>) -> Result<aiya_player::QueueSnapshot, dto::ApiError> {
+    let actor = state
+        .player
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     Ok(actor.queue_snapshot())
 }
 
@@ -2953,11 +3088,13 @@ fn player_play_tracks(
     }
     let start = start_index.unwrap_or(0);
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::ReplaceAll {
-            tracks,
-            start,
-        }));
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        actor.reduce(aiya_player::PlayerCommand::Queue(
+            aiya_player::QueueOp::ReplaceAll { tracks, start },
+        ));
     }
     Ok(drive_and_emit(&state, &app))
 }
@@ -2990,18 +3127,25 @@ fn player_play_query(
     let tracks = fetch_track_refs(&state, &ids);
     let start = start_index.unwrap_or(0);
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::ReplaceAll {
-            tracks,
-            start,
-        }));
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        actor.reduce(aiya_player::PlayerCommand::Queue(
+            aiya_player::QueueOp::ReplaceAll { tracks, start },
+        ));
     }
     Ok(drive_and_emit(&state, &app))
 }
 
 /// 播放/暂停切换的内部实现（tauri command 与 SMTC 回调共用）。
 fn cmd_toggle(state: &AppState, app: &AppHandle) -> aiya_player::PlayerState {
-    let status_before = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state().status;
+    let status_before = state
+        .player
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .state()
+        .status;
     use aiya_player::PlaybackStatus as PS;
     match status_before {
         PS::Playing => engine_send(state, aiya_audio::EngineCommand::Pause),
@@ -3011,7 +3155,10 @@ fn cmd_toggle(state: &AppState, app: &AppHandle) -> aiya_player::PlayerState {
         }
     }
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::TogglePause);
     }
     drive_and_emit_inner(state, app)
@@ -3029,7 +3176,10 @@ fn player_toggle(
 fn cmd_seek(state: &AppState, app: &AppHandle, position_ms: u64) -> aiya_player::PlayerState {
     engine_send(state, aiya_audio::EngineCommand::Seek(position_ms));
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::Seek(position_ms));
     }
     drive_and_emit_inner(state, app)
@@ -3040,7 +3190,10 @@ fn cmd_seek(state: &AppState, app: &AppHandle, position_ms: u64) -> aiya_player:
 /// 与前者唯一的差别是入参类型，所以逻辑必须**逐行一致**——两处一旦分叉，
 /// 走媒体键触发的那次状态更新就会少落一次库。改这里时记得同步改上面。
 fn drive_and_emit_inner(state: &AppState, app: &AppHandle) -> aiya_player::PlayerState {
-    let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut actor = state
+        .player
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let acted = apply_engine_intents(state, &mut actor);
     // 门控 acted + 锁外落库：与 drive_and_emit 逐行一致（见那里的说明）
     let persist = acted.then(|| queue_full_persist_snapshot(state, &actor));
@@ -3059,7 +3212,10 @@ fn player_next(
     state: State<'_, AppState>,
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::Next);
     }
     Ok(drive_and_emit(&state, &app))
@@ -3071,7 +3227,10 @@ fn player_prev(
     state: State<'_, AppState>,
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::Prev);
     }
     Ok(drive_and_emit(&state, &app))
@@ -3093,8 +3252,14 @@ fn player_set_volume(
     volume: f64,
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        actor.reduce(aiya_player::PlayerCommand::SetVolume { volume, muted: false });
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        actor.reduce(aiya_player::PlayerCommand::SetVolume {
+            volume,
+            muted: false,
+        });
         let v = actor.engine_volume();
         engine_send(&state, aiya_audio::EngineCommand::SetVolume(v));
     }
@@ -3107,9 +3272,15 @@ fn player_toggle_mute(
     state: State<'_, AppState>,
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (v, muted) = actor.volume();
-        actor.reduce(aiya_player::PlayerCommand::SetVolume { volume: v, muted: !muted });
+        actor.reduce(aiya_player::PlayerCommand::SetVolume {
+            volume: v,
+            muted: !muted,
+        });
         let v = actor.engine_volume();
         engine_send(&state, aiya_audio::EngineCommand::SetVolume(v));
     }
@@ -3124,9 +3295,15 @@ fn player_set_rate(
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     // 引擎侧线性插值变速（0.5–2.0，v1 变速变调；WSOLA 不变调后补）
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::SetRate(rate));
-        engine_send(&state, aiya_audio::EngineCommand::SetRate(actor.state().rate as f32));
+        engine_send(
+            &state,
+            aiya_audio::EngineCommand::SetRate(actor.state().rate as f32),
+        );
     }
     Ok(drive_and_emit(&state, &app))
 }
@@ -3138,7 +3315,10 @@ fn player_set_repeat(
     repeat: String,
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // `cycle` 是契约（contracts/ipc.ts）里的"轮转"语义：UI 只发 cycle，
         // 由后端按 顺序 → 列表 → 单曲 推进。此前 `_ => Off` 把 cycle 打成
         // Off 且 Off 幂等 —— 循环按钮永远停在"顺序播放"。
@@ -3152,7 +3332,9 @@ fn player_set_repeat(
             "one" => aiya_player::RepeatMode::One,
             "off" => aiya_player::RepeatMode::Off,
             other => {
-                return Err(dto::ApiError::invalid_arg(format!("未知 repeat 值：{other}")));
+                return Err(dto::ApiError::invalid_arg(format!(
+                    "未知 repeat 值：{other}"
+                )));
             }
         };
         actor.reduce(aiya_player::PlayerCommand::SetRepeat(mode));
@@ -3167,7 +3349,10 @@ fn player_set_shuffle(
     shuffle: bool,
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let cur = actor.state().shuffle;
         if cur != shuffle {
             actor.reduce(aiya_player::PlayerCommand::ToggleShuffle);
@@ -3194,7 +3379,10 @@ fn player_enqueue(
         .and_then(|m| m.as_str())
         .unwrap_or("end");
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         actor.reduce(aiya_player::PlayerCommand::Queue(if mode == "next" {
             aiya_player::QueueOp::PlayNext { tracks }
         } else {
@@ -3215,8 +3403,13 @@ fn player_insert_next(
         return Err(dto::ApiError::not_found("曲目不存在"));
     }
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::PlayNext { tracks }));
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        actor.reduce(aiya_player::PlayerCommand::Queue(
+            aiya_player::QueueOp::PlayNext { tracks },
+        ));
     }
     Ok(drive_and_emit(&state, &app))
 }
@@ -3228,10 +3421,15 @@ fn player_remove_at(
     index: usize,
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::Remove {
-            indices: vec![index],
-        }));
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        actor.reduce(aiya_player::PlayerCommand::Queue(
+            aiya_player::QueueOp::Remove {
+                indices: vec![index],
+            },
+        ));
     }
     Ok(drive_and_emit(&state, &app))
 }
@@ -3244,11 +3442,13 @@ fn player_move(
     to: usize,
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::Move {
-            from,
-            to,
-        }));
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        actor.reduce(aiya_player::PlayerCommand::Queue(
+            aiya_player::QueueOp::Move { from, to },
+        ));
     }
     Ok(drive_and_emit(&state, &app))
 }
@@ -3260,11 +3460,16 @@ fn player_clear(
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     engine_send(&state, aiya_audio::EngineCommand::Stop);
     {
-        let mut actor = state.player.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        actor.reduce(aiya_player::PlayerCommand::Queue(aiya_player::QueueOp::ReplaceAll {
-            tracks: vec![],
-            start: 0,
-        }));
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        actor.reduce(aiya_player::PlayerCommand::Queue(
+            aiya_player::QueueOp::ReplaceAll {
+                tracks: vec![],
+                start: 0,
+            },
+        ));
     }
     Ok(drive_and_emit(&state, &app))
 }
@@ -3299,23 +3504,30 @@ fn lyrics_get(
         .db()
         .send(move |conn| {
             Ok(conn
-                .query_row("SELECT path FROM tracks WHERE id = ?1", [&track_id], |r| r.get(0))
+                .query_row("SELECT path FROM tracks WHERE id = ?1", [&track_id], |r| {
+                    r.get(0)
+                })
                 .ok())
         })
         .map_err(dto::ApiError::from)?;
     let Some(path) = path else {
         return Ok(dto::lyrics::Lyrics::empty());
     };
-    Ok(match aiya_data::lyrics::read_lyrics(std::path::Path::new(&path)) {
-        Some(parsed) => parsed.into(),
-        None => dto::lyrics::Lyrics::empty(),
-    })
+    Ok(
+        match aiya_data::lyrics::read_lyrics(std::path::Path::new(&path)) {
+            Some(parsed) => parsed.into(),
+            None => dto::lyrics::Lyrics::empty(),
+        },
+    )
 }
 
 #[tauri::command]
 fn history_stats(state: State<'_, AppState>) -> Result<dto::history::HistoryStats, dto::ApiError> {
     // 包一层闭包：`send` 给的是 `&mut Connection`，而 SQL 主体只要 `&Connection`
-    state.db().send(|conn| history_stats_from(conn)).map_err(dto::ApiError::from)
+    state
+        .db()
+        .send(|conn| history_stats_from(conn))
+        .map_err(dto::ApiError::from)
 }
 
 /// `history_stats` 的 SQL 主体。
@@ -3353,10 +3565,14 @@ fn history_stats_from(
         .collect();
     // played_at 存 unix 秒，出口换毫秒（与 totalMs 同单位）
     let first = conn
-        .query_row("SELECT MIN(played_at) FROM history", [], |r| r.get::<_, Option<i64>>(0))
+        .query_row("SELECT MIN(played_at) FROM history", [], |r| {
+            r.get::<_, Option<i64>>(0)
+        })
         .unwrap_or(None);
     let last = conn
-        .query_row("SELECT MAX(played_at) FROM history", [], |r| r.get::<_, Option<i64>>(0))
+        .query_row("SELECT MAX(played_at) FROM history", [], |r| {
+            r.get::<_, Option<i64>>(0)
+        })
         .unwrap_or(None);
     Ok(dto::history::HistoryStats {
         total_plays,
@@ -3370,7 +3586,9 @@ fn history_stats_from(
 }
 
 #[tauri::command]
-fn history_clear(state: State<'_, AppState>) -> Result<dto::history::HistoryCleared, dto::ApiError> {
+fn history_clear(
+    state: State<'_, AppState>,
+) -> Result<dto::history::HistoryCleared, dto::ApiError> {
     // 清历史必须与曲目统计列归零同事务（见 aiya_data::history::clear）
     state
         .db()
@@ -3387,11 +3605,17 @@ fn history_clear(state: State<'_, AppState>) -> Result<dto::history::HistoryClea
 /// **在阻塞池线程执行**（注册点用 asynchronous 协议 + spawn_blocking 转交，
 /// docs/38 P1）——本函数内部不做任何主线程假设；无 AppHandle 之外的
 /// 线程局部依赖。
-fn artwork_protocol(app: &AppHandle, request: tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Cow<'static, [u8]>> {
+fn artwork_protocol(
+    app: &AppHandle,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Cow<'static, [u8]>> {
     use tauri::http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, CACHE_CONTROL, CONTENT_TYPE};
 
     fn not_found() -> tauri::http::Response<Cow<'static, [u8]>> {
-        tauri::http::Response::builder().status(404).body(Cow::Borrowed(&b""[..])).unwrap()
+        tauri::http::Response::builder()
+            .status(404)
+            .body(Cow::Borrowed(&b""[..]))
+            .unwrap()
     }
 
     // path: /artwork/<id>；先提取成 String，避免借 request 的生命周期
@@ -3404,23 +3628,28 @@ fn artwork_protocol(app: &AppHandle, request: tauri::http::Request<Vec<u8>>) -> 
         .uri()
         .query()
         .and_then(|q| {
-            q.split('&').find_map(|kv| kv.strip_prefix("size="))?.parse().ok()
+            q.split('&')
+                .find_map(|kv| kv.strip_prefix("size="))?
+                .parse()
+                .ok()
         })
         .unwrap_or(0);
 
     let state = app.state::<AppState>();
 
     // 1) 查记录（DB 线程）
-    let found = state.db().send(move |conn| {
-        aiya_data::find_artwork(conn, artwork_id.as_str())
-    });
+    let found = state
+        .db()
+        .send(move |conn| aiya_data::find_artwork(conn, artwork_id.as_str()));
     let Some((cache_key, mime)) = found.ok().flatten() else {
         return not_found();
     };
 
     // 2) 读原图（cache_key 只含 hash+ext，但仍然 basename 防御）
     let original = state.artwork_dir.join("originals").join(
-        std::path::Path::new(&cache_key).file_name().unwrap_or_default(),
+        std::path::Path::new(&cache_key)
+            .file_name()
+            .unwrap_or_default(),
     );
     let Ok(bytes) = std::fs::read(&original) else {
         return not_found();
@@ -3429,10 +3658,11 @@ fn artwork_protocol(app: &AppHandle, request: tauri::http::Request<Vec<u8>>) -> 
     // 3) 缩略图：size 指定且 ≤512 才缩（防滥用大尺寸请求），否则原图直出
     let mut thumb_used = false;
     let data: Cow<'static, [u8]> = if (1..=512).contains(&size) && mime.starts_with("image/") {
-        let thumb = state
-            .artwork_dir
-            .join("thumbs")
-            .join(format!("{}_{}.jpg", cache_key.split('.').next().unwrap_or("x"), size));
+        let thumb = state.artwork_dir.join("thumbs").join(format!(
+            "{}_{}.jpg",
+            cache_key.split('.').next().unwrap_or("x"),
+            size
+        ));
         if let Ok(cached) = std::fs::read(&thumb) {
             thumb_used = true;
             Cow::Owned(cached)
@@ -3467,9 +3697,7 @@ fn make_thumb(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
     let img = image::load_from_memory(bytes).ok()?;
     let thumb = img.resize_to_fill(size, size, FilterType::Lanczos3);
     let mut out = std::io::Cursor::new(Vec::with_capacity(32 * 1024));
-    thumb
-        .write_to(&mut out, image::ImageFormat::Jpeg)
-        .ok()?;
+    thumb.write_to(&mut out, image::ImageFormat::Jpeg).ok()?;
     Some(out.into_inner())
 }
 
@@ -3604,7 +3832,47 @@ pub fn run() {
                 timings: Mutex::new(VecDeque::with_capacity(TIMING_LIMIT)),
                 settings: Mutex::new(settings0),
                 beets_install_child: Mutex::new(None),
+                enrich_store: std::sync::OnceLock::new(),
             });
+
+            // 一次性迁移：把 settings 表里的 `beets.*` 旧键搬到模块自己的
+            // `settings.json`（docs/47）。搬完就删键——留着的话它还躺在应用的
+            // "设置"里，等于解耦只做了一半。
+            //
+            // 只在 `settings.json` 不存在时执行（`adopt_legacy_settings` 判的）：
+            // 用户已经在新文件里改过配置之后再拿旧值覆盖他，就是"每次启动
+            // 回滚一次设置"。
+            {
+                let st = app.state::<AppState>();
+                let legacy = st.db().send(|conn| {
+                    Ok(beets::Settings {
+                        tool_path: setting_str_value(conn, "beets.toolPath"),
+                        tool_args: setting_str_value(conn, "beets.toolArgs"),
+                        target_root: setting_str_value(conn, "beets.targetRoot"),
+                        inbox_path: setting_str_value(conn, "beets.inboxPath"),
+                        inbox_imported: setting_get(conn, "beets.inboxImported")
+                            .and_then(|v| serde_json::from_value(v).ok())
+                            .unwrap_or_default(),
+                    })
+                });
+                if let Ok(legacy) = legacy {
+                    if beets::adopt_legacy_settings(app.handle(), legacy) {
+                        let _ = st.db().send(|conn| {
+                            for key in [
+                                "beets.toolPath",
+                                "beets.toolArgs",
+                                "beets.targetRoot",
+                                "beets.inboxPath",
+                                "beets.inboxImported",
+                            ] {
+                                setting_set(conn, key, &Value::Null)
+                                    .map_err(aiya_data::DbError::Sql)?;
+                            }
+                            Ok(())
+                        });
+                    }
+                }
+            }
 
             // 曲库刷新管线（docs/33 §7）：定时 30 s + 窗口聚焦。
             // 起在这里而不是首次用到时：定时器要的是"一直在跑"，用户不该为了
@@ -3942,6 +4210,8 @@ pub fn run() {
             beets_update,
             beets_duplicates,
             beets_move,
+            beets_query,
+            beets_fields,
             beets_plugin_catalog,
             beets_plugin_install,
             enrichment_worklist,

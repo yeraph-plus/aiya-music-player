@@ -109,7 +109,8 @@ pub use proto::{encode_line, HostToSidecar, SidecarToHost, PROTOCOL_VERSION};
 /// 设备自检（sidecar --selftest 用）：列出渲染设备名。
 pub fn selftest_info() -> Result<Vec<String>, AudioError> {
     let _ = wasapi::initialize_mta();
-    let enumerator = wasapi::DeviceEnumerator::new().map_err(|e| AudioError::Wasapi(e.to_string()))?;
+    let enumerator =
+        wasapi::DeviceEnumerator::new().map_err(|e| AudioError::Wasapi(e.to_string()))?;
     let collection = enumerator
         .get_device_collection(&wasapi::Direction::Render)
         .map_err(|e| AudioError::Wasapi(e.to_string()))?;

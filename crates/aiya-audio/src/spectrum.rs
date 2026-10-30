@@ -96,7 +96,10 @@ struct RingProducer {
 
 impl RingProducer {
     fn new() -> Self {
-        Self { core: Arc::new(RingCore::new()), dropped: Arc::new(AtomicU64::new(0)) }
+        Self {
+            core: Arc::new(RingCore::new()),
+            dropped: Arc::new(AtomicU64::new(0)),
+        }
     }
 
     /// 推一个样本。满则丢弃（丢新保旧，SPSC 不变量安全）并计数。
@@ -241,9 +244,7 @@ fn consume_loop(
         // 节流：间隔不足时等待（下一轮窗口数据会在环里排队）
         let elapsed = last_frame.elapsed();
         if elapsed.as_millis() < FRAME_MIN_INTERVAL_MS as u128 {
-            std::thread::sleep(
-                std::time::Duration::from_millis(FRAME_MIN_INTERVAL_MS) - elapsed,
-            );
+            std::thread::sleep(std::time::Duration::from_millis(FRAME_MIN_INTERVAL_MS) - elapsed);
         }
         let bands = compute_bands(&staging, sample_rate.load(Ordering::Relaxed) as f32);
         last_frame = std::time::Instant::now();
@@ -277,7 +278,11 @@ pub fn compute_bands(samples: &[f32; FFT_SIZE], sample_rate: f32) -> Vec<u8> {
 
     // 3) 对数分带：20Hz–20kHz 均匀 48 带（每带取最大幅值，动画更有起伏）
     // 带边界：f_i = 20 * 1000^(i/BANDS)；bin = f * FFT_SIZE / sample_rate
-    let sr = if sample_rate >= 8_000.0 { sample_rate } else { 48_000.0 };
+    let sr = if sample_rate >= 8_000.0 {
+        sample_rate
+    } else {
+        48_000.0
+    };
     let half = FFT_SIZE / 2;
     let mut bands = vec![0u8; BANDS];
     let mut bin_lo = 1usize; // 跳过 DC
@@ -392,7 +397,11 @@ mod tests {
             .map(|(i, _)| i)
             .unwrap();
         assert!((27..=33).contains(&peak_band), "peak band = {peak_band}");
-        assert!(bands[peak_band] > 150, "峰值带应有足够强度: {}", bands[peak_band]);
+        assert!(
+            bands[peak_band] > 150,
+            "峰值带应有足够强度: {}",
+            bands[peak_band]
+        );
     }
 
     #[test]
@@ -417,7 +426,11 @@ mod tests {
         let correct = compute_bands(&arr, 96_000.0);
         let wrong = compute_bands(&arr, 48_000.0);
         let peak = |b: &[u8]| {
-            b.iter().enumerate().max_by_key(|(_, v)| **v).map(|(i, _)| i).unwrap()
+            b.iter()
+                .enumerate()
+                .max_by_key(|(_, v)| **v)
+                .map(|(i, _)| i)
+                .unwrap()
         };
         assert!(
             (45..=47).contains(&peak(&correct)),
@@ -449,8 +462,16 @@ mod tests {
         tap.set_enabled(true);
         tap.push_frame(&[1.0, 0.0, 1.0, 0.0], 2); // 两帧 L=1 R=0 → mono=0.5
         let mut out = [0f32; 2];
-        assert_eq!(tap.producer.core.pop(&mut out), 2, "两帧应入环两个单声道样本");
-        assert!((out[0] - 0.5).abs() < 1e-6, "mono = (1+0)/2，实际 {}", out[0]);
+        assert_eq!(
+            tap.producer.core.pop(&mut out),
+            2,
+            "两帧应入环两个单声道样本"
+        );
+        assert!(
+            (out[0] - 0.5).abs() < 1e-6,
+            "mono = (1+0)/2，实际 {}",
+            out[0]
+        );
         assert!((out[1] - 0.5).abs() < 1e-6);
     }
 

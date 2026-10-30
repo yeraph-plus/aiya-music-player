@@ -36,7 +36,9 @@ fn parse_ui_calls(src: &str) -> Vec<UiCall> {
     let mut i = 0usize;
     while let Some(pos) = src[i..].find(needle) {
         let start = i + pos + needle.len();
-        let Some(end_rel) = src[start..].find('\'') else { break };
+        let Some(end_rel) = src[start..].find('\'') else {
+            break;
+        };
         let name = src[start..start + end_rel].to_string();
         i = start + end_rel + 1;
 
@@ -140,12 +142,19 @@ fn all_ui_calls() -> Vec<UiCall> {
 /// 带方括号的宏调用示例，解析结果直接变成 0 条命令，两个测试一起红。
 fn parse_registered(src: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    let Some(start) = src.rfind("generate_handler![") else { return out };
+    let Some(start) = src.rfind("generate_handler![") else {
+        return out;
+    };
     let body = &src[start..];
-    let Some(end) = body.find(']') else { return out };
+    let Some(end) = body.find(']') else {
+        return out;
+    };
     for item in body[..end].split(',') {
         let item = item.trim();
-        let name = item.strip_prefix("generate_handler![").unwrap_or(item).trim();
+        let name = item
+            .strip_prefix("generate_handler![")
+            .unwrap_or(item)
+            .trim();
         if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
             out.insert(name.to_string());
         }
@@ -160,9 +169,13 @@ fn parse_command_params(src: &str) -> BTreeMap<String, Vec<String>> {
     let mut i = 0usize;
     while let Some(pos) = src[i..].find(marker) {
         let from = i + pos + marker.len();
-        let Some(fn_pos) = src[from..].find("fn ") else { break };
+        let Some(fn_pos) = src[from..].find("fn ") else {
+            break;
+        };
         let sig_start = from + fn_pos + 3;
-        let Some(paren) = src[sig_start..].find('(') else { break };
+        let Some(paren) = src[sig_start..].find('(') else {
+            break;
+        };
         let name = src[sig_start..sig_start + paren].trim().to_string();
         // 参数表：按括号深度切逗号（`State<'_, AppState>` 里有逗号）
         let params_src = &src[sig_start + paren..];
@@ -241,9 +254,17 @@ fn snake_case(s: &str) -> String {
 #[test]
 fn every_ui_invoked_command_is_registered() {
     let calls = all_ui_calls();
-    assert!(calls.len() > 30, "解析出的 UI 调用太少，规则可能失效：{}", calls.len());
+    assert!(
+        calls.len() > 30,
+        "解析出的 UI 调用太少，规则可能失效：{}",
+        calls.len()
+    );
     let registered = parse_registered(LIB_RS);
-    assert!(registered.len() > 30, "注册命令解析失败：{}", registered.len());
+    assert!(
+        registered.len() > 30,
+        "注册命令解析失败：{}",
+        registered.len()
+    );
 
     let missing: Vec<&String> = calls
         .iter()
@@ -292,9 +313,18 @@ fn parser_smoke() {
     assert_eq!(
         calls,
         vec![
-            UiCall { name: "a".into(), keys: vec!["id".into()] },
-            UiCall { name: "b".into(), keys: vec![] },
-            UiCall { name: "c".into(), keys: vec!["trackIds".into(), "mode".into()] },
+            UiCall {
+                name: "a".into(),
+                keys: vec!["id".into()]
+            },
+            UiCall {
+                name: "b".into(),
+                keys: vec![]
+            },
+            UiCall {
+                name: "c".into(),
+                keys: vec!["trackIds".into(), "mode".into()]
+            },
         ]
     );
     let reg = parse_registered("generate_handler![\n  x,\n  y,\n]");
@@ -335,7 +365,11 @@ fn new_client_covers_every_registered_command() {
         .map(|c| c.name)
         .collect();
     let registered = parse_registered(LIB_RS);
-    assert!(registered.len() > 50, "注册命令解析失败：{}", registered.len());
+    assert!(
+        registered.len() > 50,
+        "注册命令解析失败：{}",
+        registered.len()
+    );
     let missing: Vec<&String> = registered.iter().filter(|n| !called.contains(*n)).collect();
     assert!(
         missing.is_empty(),

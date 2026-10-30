@@ -69,7 +69,11 @@ pub fn stage(cache_dir: &Path, data: &[u8], mime: Option<&str>) -> DbResult<Stag
     }
     let hash = format!("{:x}", Sha256::digest(data));
     let (ext, detected_mime) = mime_ext(mime);
-    let mime = if ext == ".bin" { mime.unwrap_or(detected_mime).to_string() } else { detected_mime.to_string() };
+    let mime = if ext == ".bin" {
+        mime.unwrap_or(detected_mime).to_string()
+    } else {
+        detected_mime.to_string()
+    };
     let id = format!("aw_{}", &hash[..24.min(hash.len())]);
     let cache_key = format!("{}{}", &hash[..24.min(hash.len())], ext);
 
@@ -94,7 +98,12 @@ pub fn stage(cache_dir: &Path, data: &[u8], mime: Option<&str>) -> DbResult<Stag
         }
     }
 
-    Ok(StagedArtwork { id, cache_key, mime, hash })
+    Ok(StagedArtwork {
+        id,
+        cache_key,
+        mime,
+        hash,
+    })
 }
 
 /// 把 [`stage`] 的结果登记进 artworks 表（同 content_hash 幂等，不覆盖）。
@@ -250,7 +259,11 @@ mod tests {
         assert!(staged.iter().all(|s| s.id == staged[0].id));
         let target = dir.path().join("originals").join(&staged[0].cache_key);
         let written = std::fs::read(&target).unwrap();
-        assert_eq!(written.len(), png.len(), "目标文件必须是完整的一整份，不能是被截断的半张");
+        assert_eq!(
+            written.len(),
+            png.len(),
+            "目标文件必须是完整的一整份，不能是被截断的半张"
+        );
         assert_eq!(written, png);
 
         // tmp 文件不许残留（每个线程的 tmp 都被自己 rename 掉了）
@@ -290,23 +303,36 @@ mod tests {
         assert_eq!(artists, 1);
 
         let got: String = conn
-            .query_row("SELECT artwork_id FROM albums WHERE id = 'al1'", [], |r| r.get(0))
+            .query_row("SELECT artwork_id FROM albums WHERE id = 'al1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(got, "aw_a", "多数票胜出（2 票 art-a vs 1 票 art-b）");
         let got: String = conn
-            .query_row("SELECT artwork_id FROM artists WHERE id = 'ar1'", [], |r| r.get(0))
+            .query_row("SELECT artwork_id FROM artists WHERE id = 'ar1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(got, "aw_a");
         let nulls: i64 = conn
-            .query_row("SELECT COUNT(*) FROM albums WHERE artwork_id IS NULL", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM albums WHERE artwork_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(nulls, 1, "无封面曲目支撑的专辑保持 NULL");
 
         // 曲目全部失去封面 → 实体引用清除（GC 口径一致，不留悬空引用）
-        conn.execute("UPDATE tracks SET artwork_id = NULL", []).unwrap();
+        conn.execute("UPDATE tracks SET artwork_id = NULL", [])
+            .unwrap();
         refresh_entity_artwork(&conn).unwrap();
         let stale: i64 = conn
-            .query_row("SELECT COUNT(*) FROM albums WHERE artwork_id IS NOT NULL", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM albums WHERE artwork_id IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(stale, 0, "曲目无封面后实体引用必须清除");
     }

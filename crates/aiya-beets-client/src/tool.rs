@@ -94,7 +94,7 @@ impl BeetsTool for StdioTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{NullSink, cancel};
+    use crate::session::{cancel, NullSink};
 
     fn tool() -> StdioTool {
         StdioTool::new(Launcher::new("definitely-not-a-real-program-xyz"))

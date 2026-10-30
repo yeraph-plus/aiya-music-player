@@ -173,7 +173,7 @@ print(f"[1] fields OK：{len(names)} 个字段，源 {src_states}")
 # ---------------- 场景 2：enrich（首跑） ----------------
 L2 = [json.dumps({"id": 2, "cmd": "enrich", "paths": PATHS, "want": ["probe"]})]
 lines, _ = run(L2)
-items, done = [], None
+items, done, progs = [], None, []
 for raw in lines:
     kind, obj = classify(raw)
     if kind != "Event":
@@ -182,9 +182,18 @@ for raw in lines:
         items.append(obj)
     elif obj["type"] == "enrichDone":
         done = obj
+    elif obj["type"] == "progress":
+        progs.append(obj)
 
 assert done is not None, "缺 enrichDone（会话会卡在终态上）"
 assert done["session"] == "enr_02", done["session"]
+
+# 进度必须真的在动：只有一条 `progress(current=0)` 等于"进度条停着"，
+# 而那和"卡死"在用户眼里没有区别（几百首要跑十几秒到几分钟）。
+prog = [o for o in progs if o.get("session") == "enr_02"]
+assert len(prog) > 1, f"只有 {len(prog)} 条进度，分析期间没有心跳"
+assert prog[-1]["current"] == len(PATHS), f"末条进度 {prog[-1]} 没走到终点"
+assert all(p["total"] == len(PATHS) for p in prog), "total 与清单长度不符"
 assert done["total"] == len(PATHS) == done["succeeded"], done
 assert done["failed"] == 0 and done["skipped"] == 0, done
 assert done["sources"] == ["probe"], done["sources"]

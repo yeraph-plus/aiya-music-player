@@ -5,9 +5,7 @@
 //! 调用方通过 `DbHandle` 提交闭包，经有界 channel 进线程，结果经 reply channel 返回。
 
 pub mod artwork;
-pub mod beets_sync;
 pub mod db;
-pub mod enrichment;
 pub mod facets;
 pub mod history;
 pub mod ids;
@@ -20,7 +18,7 @@ pub mod repo;
 pub mod scanner;
 pub mod smart;
 
-pub use artwork::{link, stage, save_artwork, StagedArtwork, ARTWORK_SCHEME, find_artwork};
-pub use db::{DbError, DbHandle, DbResult, open, open_conn};
-pub use queue::{QueuePersist, load_queue, save_queue_full, save_queue_state};
+pub use artwork::{find_artwork, link, save_artwork, stage, StagedArtwork, ARTWORK_SCHEME};
+pub use db::{open, open_conn, DbError, DbHandle, DbResult};
+pub use queue::{load_queue, save_queue_full, save_queue_state, QueuePersist};
 pub use repo::{TrackRow, TrackSource, TrackWindowQuery};

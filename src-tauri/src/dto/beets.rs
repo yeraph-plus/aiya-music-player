@@ -154,3 +154,63 @@ pub struct BeetsConfig {
     /// 已导入记录条数（inbox 排除表，防 copy 模式重复入库）
     pub imported_count: usize,
 }
+
+/* ---------------- beets 查询页（docs/47） ---------------- */
+
+/// 查询命中行。
+///
+/// 刻意**不带 `track_id`**：这是 beets 库里的条目，不是应用曲库里的曲目。
+/// 两者能对上只是因为有同一个文件——"存为歌单"时才按 `path` 去曲库查一次，
+/// 查不到就计入"未入库"（而不是现造一行假曲目）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct BeetsQueryHit {
+    /// beets 自己的 item id。只在同一个库里成立，**不要**拿它当稳定键。
+    #[ts(type = "number")]
+    pub id: i64,
+    /// 文件绝对路径——跨库唯一能对上的东西。
+    pub path: String,
+    /// 回带字段（`title`/`artist`/`album` 恒有，其余看用户勾了什么）。
+    #[ts(type = "Record<string, unknown>")]
+    pub fields: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// 一页查询结果。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct BeetsQueryPage {
+    pub items: Vec<BeetsQueryHit>,
+    /// **应用 limit 之前**的真实命中数（工具侧 `SELECT COUNT(*)`，不反序列化）。
+    pub total: u32,
+    /// 还有更多没返回。
+    pub truncated: bool,
+}
+
+/// 一个可查字段。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct BeetsField {
+    pub name: String,
+    /// integer / float / string / bool / date / duration / flexible
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// builtin（beets 内置）/ flexible（插件写的）
+    pub source: String,
+}
+
+/// 字段清单 + 识别源三态。
+///
+/// `sources` 保持原样透传而不是建模成固定结构：源是工具侧的概念（装没装、
+/// 接没接线），宿主只负责显示。给一个 `{name, state}` 的结构会诱使宿主去
+/// 判断"这个源能不能用"，然后就等着两边漂移。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct BeetsFieldCatalog {
+    pub fields: Vec<BeetsField>,
+    #[ts(type = "unknown")]
+    pub sources: serde_json::Value,
+}

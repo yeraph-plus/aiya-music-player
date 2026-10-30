@@ -30,7 +30,8 @@ use crate::norm::norm;
 /// 恰好持有写锁时，锁升级立刻 SQLITE_BUSY（busy_timeout 对升级不生效），
 /// 用户加歌/建单就失败。IMMEDIATE 在事务开始就排队等写锁，等得到。
 fn write_tx(conn: &mut Connection) -> DbResult<rusqlite::Transaction<'_>> {
-    conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(DbError::Sql)
+    conn.transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(DbError::Sql)
 }
 
 /// 与旧仓库一致：名称按字符截断到 80，避免把 UTF-8 多字节字符切成半个。
@@ -63,7 +64,11 @@ pub fn sanitize_name(raw: &str) -> DbResult<String> {
 }
 
 pub fn exists(conn: &Connection, playlist_id: &str) -> DbResult<bool> {
-    match conn.query_row("SELECT 1 FROM playlists WHERE id = ?1", [playlist_id], |_| Ok(())) {
+    match conn.query_row(
+        "SELECT 1 FROM playlists WHERE id = ?1",
+        [playlist_id],
+        |_| Ok(()),
+    ) {
         Ok(()) => Ok(true),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
         Err(e) => Err(DbError::Sql(e)),
@@ -144,9 +149,11 @@ pub fn set_rule(
     // 校验在写库前（与 create_smart 同理）
     let plan = crate::smart::SmartPlan::from_value(rule)?;
     let rule_json = serde_json::to_string(rule).map_err(|e| DbError::Custom(e.to_string()))?;
-    let kind: Option<String> = match conn
-        .query_row("SELECT kind FROM playlists WHERE id = ?1", [playlist_id], |r| r.get(0))
-    {
+    let kind: Option<String> = match conn.query_row(
+        "SELECT kind FROM playlists WHERE id = ?1",
+        [playlist_id],
+        |r| r.get(0),
+    ) {
         Ok(k) => Some(k),
         Err(rusqlite::Error::QueryReturnedNoRows) => None,
         Err(e) => return Err(DbError::Sql(e)),
@@ -161,7 +168,10 @@ pub fn set_rule(
                 "UPDATE playlists SET rule_json = ?2, updated_at = ?3 WHERE id = ?1",
                 params![playlist_id, rule_json, now],
             )?;
-            tx.execute("DELETE FROM playlist_items WHERE playlist_id = ?1", [playlist_id])?;
+            tx.execute(
+                "DELETE FROM playlist_items WHERE playlist_id = ?1",
+                [playlist_id],
+            )?;
             insert_head(&tx, playlist_id, &matched, now)?;
             touch(&tx, playlist_id, now)?;
             tx.commit().map_err(DbError::Sql)?;
@@ -202,14 +212,15 @@ pub fn refresh_smart(
 
     let tx = write_tx(conn)?;
     let existing: HashSet<String> = {
-        let mut stmt =
-            tx.prepare("SELECT track_id FROM playlist_items WHERE playlist_id = ?1")?;
+        let mut stmt = tx.prepare("SELECT track_id FROM playlist_items WHERE playlist_id = ?1")?;
         let rows = stmt.query_map([playlist_id], |r| r.get::<_, String>(0))?;
         rows.collect::<rusqlite::Result<HashSet<_>>>()?
     };
     // 命中里剔除已在表内的（只加不删）；matched 已按确定性顺序排好
-    let fresh: Vec<String> =
-        matched.into_iter().filter(|id| !existing.contains(id)).collect();
+    let fresh: Vec<String> = matched
+        .into_iter()
+        .filter(|id| !existing.contains(id))
+        .collect();
     let outcome = insert_head(&tx, playlist_id, &fresh, now)?;
     let total: i64 = tx.query_row(
         "SELECT COUNT(*) FROM playlist_items WHERE playlist_id = ?1",
@@ -218,7 +229,10 @@ pub fn refresh_smart(
     )?;
     touch(&tx, playlist_id, now)?;
     tx.commit().map_err(DbError::Sql)?;
-    Ok(Some(RefreshOutcome { added: outcome.added, total }))
+    Ok(Some(RefreshOutcome {
+        added: outcome.added,
+        total,
+    }))
 }
 
 pub fn rename(conn: &Connection, playlist_id: &str, name: &str, now: i64) -> DbResult<bool> {
@@ -241,7 +255,10 @@ pub fn clear(conn: &mut Connection, playlist_id: &str, now: i64) -> DbResult<boo
         return Ok(false);
     }
     let tx = write_tx(conn)?;
-    tx.execute("DELETE FROM playlist_items WHERE playlist_id = ?1", [playlist_id])?;
+    tx.execute(
+        "DELETE FROM playlist_items WHERE playlist_id = ?1",
+        [playlist_id],
+    )?;
     touch(&tx, playlist_id, now)?;
     tx.commit().map_err(DbError::Sql)?;
     Ok(true)
@@ -318,9 +335,8 @@ pub fn move_item(
 /// 越界/原地不动 → 空操作（不写库）。
 pub fn reorder_playlists(conn: &mut Connection, from: i64, to: i64) -> DbResult<()> {
     let ids: Vec<String> = {
-        let mut stmt = conn.prepare(
-            "SELECT id FROM playlists ORDER BY sort_position ASC, created_at ASC",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT id FROM playlists ORDER BY sort_position ASC, created_at ASC")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
@@ -451,7 +467,9 @@ fn existing_track_ids(conn: &Connection, track_ids: &[String]) -> DbResult<HashS
             .join(", ");
         let sql = format!("SELECT id FROM tracks WHERE id IN ({placeholders})");
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |r| {
+            r.get::<_, String>(0)
+        })?;
         for row in rows {
             out.insert(row?);
         }
@@ -481,7 +499,9 @@ mod tests {
 
     fn order(conn: &Connection, pid: &str) -> Vec<String> {
         let mut stmt = conn
-            .prepare("SELECT track_id FROM playlist_items WHERE playlist_id = ?1 ORDER BY position ASC")
+            .prepare(
+                "SELECT track_id FROM playlist_items WHERE playlist_id = ?1 ORDER BY position ASC",
+            )
             .unwrap();
         let rows = stmt.query_map([pid], |r| r.get::<_, String>(0)).unwrap();
         rows.map(|r| r.unwrap()).collect()
@@ -489,7 +509,9 @@ mod tests {
 
     fn positions(conn: &Connection, pid: &str) -> Vec<i64> {
         let mut stmt = conn
-            .prepare("SELECT position FROM playlist_items WHERE playlist_id = ?1 ORDER BY position ASC")
+            .prepare(
+                "SELECT position FROM playlist_items WHERE playlist_id = ?1 ORDER BY position ASC",
+            )
             .unwrap();
         let rows = stmt.query_map([pid], |r| r.get::<_, i64>(0)).unwrap();
         rows.map(|r| r.unwrap()).collect()
@@ -516,7 +538,13 @@ mod tests {
         let out = add_tracks(&mut conn, "p1", &v(&["t2", "t3", "不存在", ""]), 200)
             .unwrap()
             .expect("playlist exists");
-        assert_eq!(out, AddOutcome { added: 1, skipped: 3 });
+        assert_eq!(
+            out,
+            AddOutcome {
+                added: 1,
+                skipped: 3
+            }
+        );
         // 首行插入：新块顶到最前（2026-10-30 语义）
         assert_eq!(order(&conn, "p1"), v(&["t3", "t1", "t2"]));
     }
@@ -529,9 +557,15 @@ mod tests {
         create(&mut conn, "p1", "回来", &v(&["t1", "t2"]), 100).unwrap();
         remove_at(&mut conn, "p1", 0, 200).unwrap().unwrap();
         assert_eq!(order(&conn, "p1"), v(&["t2"]));
-        let out = add_tracks(&mut conn, "p1", &v(&["t1"]), 300).unwrap().unwrap();
+        let out = add_tracks(&mut conn, "p1", &v(&["t1"]), 300)
+            .unwrap()
+            .unwrap();
         assert_eq!(out.added, 1, "行 id 撞车会表现为 added=0 而列表没变化");
-        assert_eq!(order(&conn, "p1"), v(&["t1", "t2"]), "首行插入：t1 回到最前");
+        assert_eq!(
+            order(&conn, "p1"),
+            v(&["t1", "t2"]),
+            "首行插入：t1 回到最前"
+        );
         assert_eq!(positions(&conn, "p1"), vec![0, 1]);
     }
 
@@ -540,7 +574,9 @@ mod tests {
     fn add_tracks_inserts_block_at_head_in_input_order() {
         let mut conn = fixture();
         create(&mut conn, "p1", "首插", &v(&["t1", "t2"]), 100).unwrap();
-        add_tracks(&mut conn, "p1", &v(&["t3", "t4"]), 200).unwrap().unwrap();
+        add_tracks(&mut conn, "p1", &v(&["t3", "t4"]), 200)
+            .unwrap()
+            .unwrap();
         assert_eq!(order(&conn, "p1"), v(&["t3", "t4", "t1", "t2"]));
         assert_eq!(positions(&conn, "p1"), vec![0, 1, 2, 3]);
     }
@@ -553,7 +589,9 @@ mod tests {
         assert_eq!(order(&conn, "p1"), v(&["t1", "t3"]));
         assert_eq!(positions(&conn, "p1"), vec![0, 1]);
         let updated: i64 = conn
-            .query_row("SELECT updated_at FROM playlists WHERE id='p1'", [], |r| r.get(0))
+            .query_row("SELECT updated_at FROM playlists WHERE id='p1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(updated, 500);
     }
@@ -592,9 +630,11 @@ mod tests {
         create(&mut conn, "p1", "旧名", &v(&["t1"]), 100).unwrap();
         assert!(rename(&conn, "p1", "  新名  ", 200).unwrap());
         let (name, name_norm): (String, String) = conn
-            .query_row("SELECT name, name_norm FROM playlists WHERE id='p1'", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT name, name_norm FROM playlists WHERE id='p1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
         assert_eq!(name, "新名");
         assert_eq!(name_norm, "新名");
@@ -603,7 +643,11 @@ mod tests {
         assert!(!exists(&conn, "p1").unwrap());
         // 级联：items 一起清掉
         let left: i64 = conn
-            .query_row("SELECT COUNT(*) FROM playlist_items WHERE playlist_id='p1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM playlist_items WHERE playlist_id='p1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(left, 0);
     }
@@ -641,7 +685,11 @@ mod tests {
         };
         assert_eq!(names, v(&["C", "A", "B", "D"]));
         let c_sort: i64 = conn
-            .query_row("SELECT sort_position FROM playlists WHERE id='c'", [], |r| r.get(0))
+            .query_row(
+                "SELECT sort_position FROM playlists WHERE id='c'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(c_sort, 0);
     }
@@ -689,7 +737,11 @@ mod tests {
         let mut conn = smart_fixture();
         let out = create_smart(&mut conn, "sp", "Hits", &smart_rule("Hits"), 100).unwrap();
         assert_eq!(out.added, 2);
-        assert_eq!(order(&conn, "sp"), v(&["t1", "t2"]), "确定性顺序 = title_norm");
+        assert_eq!(
+            order(&conn, "sp"),
+            v(&["t1", "t2"]),
+            "确定性顺序 = title_norm"
+        );
         assert!(exists(&conn, "sp").unwrap());
 
         let out = create_smart(&mut conn, "sp0", "空", &smart_rule("不存在的专辑"), 100).unwrap();
@@ -704,7 +756,9 @@ mod tests {
         let mut conn = smart_fixture();
         create_smart(&mut conn, "sp", "Hits", &smart_rule("Hits"), 100).unwrap();
         // 用户手动把 t3 加进来（非匹配曲目）+ 拖到头部语义下 t3 在最前
-        add_tracks(&mut conn, "sp", &v(&["t3"]), 200).unwrap().unwrap();
+        add_tracks(&mut conn, "sp", &v(&["t3"]), 200)
+            .unwrap()
+            .unwrap();
         assert_eq!(order(&conn, "sp"), v(&["t3", "t1", "t2"]));
 
         // 库里出现了新的命中曲目 t4（t2 改名为不再命中也不影响——只加不删）
@@ -731,7 +785,9 @@ mod tests {
     fn set_rule_replaces_materialization() {
         let mut conn = smart_fixture();
         create_smart(&mut conn, "sp", "Hits", &smart_rule("Hits"), 100).unwrap();
-        add_tracks(&mut conn, "sp", &v(&["t3"]), 200).unwrap().unwrap();
+        add_tracks(&mut conn, "sp", &v(&["t3"]), 200)
+            .unwrap()
+            .unwrap();
         assert_eq!(order(&conn, "sp"), v(&["t3", "t1", "t2"]));
 
         assert!(set_rule(&mut conn, "sp", &smart_rule("别的"), 300).unwrap());
@@ -800,7 +856,11 @@ mod tests {
         assert_eq!(out.added, 601);
         assert_eq!(out.skipped, 2);
         let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM playlist_items WHERE playlist_id='p1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM playlist_items WHERE playlist_id='p1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(n, 601);
     }

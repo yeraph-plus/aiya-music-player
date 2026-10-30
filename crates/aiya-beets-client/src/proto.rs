@@ -62,10 +62,18 @@ pub struct StatusReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema_hash: Option<String>,
     /// 工具自身版本（线上字段原名 `beetsVersion`，见模块注释）。
-    #[serde(default, rename = "beetsVersion", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "beetsVersion",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub tool_version: Option<String>,
     /// 工具宿主运行时的版本（线上字段原名 `pythonVersion`）。
-    #[serde(default, rename = "pythonVersion", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "pythonVersion",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub runtime_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library_path: Option<String>,
@@ -75,23 +83,39 @@ pub struct StatusReport {
     ///
     /// 与 `library_path` 的区别：后者恒有值（工具有内置默认），拿它做展示会
     /// 误导用户；整理类操作的目标根只认显式配置的这个。
-    #[serde(default, rename = "libraryDirectory", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "libraryDirectory",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub library_root: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_dir: Option<String>,
     /// 工具的运行时是否在支持窗口内（工具自报）。
-    #[serde(default, rename = "pythonSupported", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "pythonSupported",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub runtime_supported: Option<bool>,
     /// 工具自报的**能力健康**（形状由工具定义，client 只透传不解释）。
     ///
     /// 为什么用 `Value` 而不是类型化：能力清单是工具的内部结构，client
     /// 一旦给它建模就等于"知道对面有哪些能力"——那正是边界要挡的东西。
     /// 宿主拿到后自己映射成 UI 形状。
-    #[serde(default, rename = "pluginHealth", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "pluginHealth",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub capability_health: Option<serde_json::Value>,
-    #[serde(default, rename = "pluginSummary", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "pluginSummary",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub capability_summary: Option<serde_json::Value>,
     /// 工具的数据根（宿主给的那个目录，工具回报确认）。
     #[serde(default, rename = "dataHome", skip_serializing_if = "Option::is_none")]
@@ -153,14 +177,21 @@ mod tests {
         assert_eq!(r.runtime_version.as_deref(), Some("3.14.7"));
         assert_eq!(r.library_exists, Some(true));
         assert_eq!(r.library_root.as_deref(), Some("C:/Music"));
-        assert_eq!(r.plugins.as_deref(), Some(&["alpha".to_string(), "beta".to_string()][..]));
+        assert_eq!(
+            r.plugins.as_deref(),
+            Some(&["alpha".to_string(), "beta".to_string()][..])
+        );
         assert!(r.speaks(PROTOCOL_VERSION));
         assert!(!r.speaks(PROTOCOL_VERSION + 1));
         // 能力段是透传的：client 不解释形状，只保证能原样取到
         assert_eq!(r.runtime_supported, Some(true));
         assert_eq!(r.data_home.as_deref(), Some("C:/data"));
         assert_eq!(
-            r.capability_health.as_ref().and_then(|v| v.get(0)).and_then(|v| v.get("state")).and_then(|v| v.as_str()),
+            r.capability_health
+                .as_ref()
+                .and_then(|v| v.get(0))
+                .and_then(|v| v.get("state"))
+                .and_then(|v| v.as_str()),
             Some("ready")
         );
         assert!(r.capability_summary.is_some());

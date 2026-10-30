@@ -31,7 +31,12 @@ use crate::{AudioError, AudioErrorKind};
 /// `PartialEq` 只为测试断言"下发了哪些指令、顺序对不对"（宿主泵的换曲/停机
 /// 语义全靠它验证）；比较语义与运行路径无关。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "t", content = "v", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "t",
+    content = "v",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum EngineCommand {
     /// 装载并从 `start_ms` 起播。
     ///
@@ -124,10 +129,17 @@ pub enum EngineEvent {
     /// `unknown`），在错误产生处由 `AudioError::kind()` 定，不经宿主猜——
     /// UI 要靠它决定"跳下一首"还是"提示/亮灰标"。`internal` 只在引擎
     /// 渲染线程 panic 兜底时发出（见 `Engine::spawn`）。
-    Error { token: u64, kind: String, message: String },
+    Error {
+        token: u64,
+        kind: String,
+        message: String,
+    },
     /// EQ 设置已被 sidecar 接受（协议 v6）。`params` 是**生效值**（clamp 后），
     /// UI 以它为准而不是自己发出去的值。未装载时的 SetEq 回报 token=0。
-    EqApplied { token: u64, params: crate::eq::EqParams },
+    EqApplied {
+        token: u64,
+        params: crate::eq::EqParams,
+    },
 }
 
 /// 引擎事件通道容量。Position ~10ms/帧 + Spectrum ~30fps，正常消费下远用不满；
@@ -229,7 +241,8 @@ impl Engine {
 
     /// 已写入设备的累计帧数（诊断/冒烟用）。
     pub fn written_frames(&self) -> u64 {
-        self.written_frames.load(std::sync::atomic::Ordering::Relaxed)
+        self.written_frames
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 发送命令。通道断开（worker 已死）时静默丢弃——这不是无条件容忍：
@@ -372,7 +385,9 @@ fn render_loop(
     tap.spawn_consumer(ev.0.clone());
     let send = |e: EngineEvent| ev.send(e);
 
-    { let _ = wasapi::initialize_mta(); }
+    {
+        let _ = wasapi::initialize_mta();
+    }
 
     // 把渲染线程抬进 "Pro Audio" 调度组：Windows 默认不给音频线程任何优待，
     // 后台有编译/杀毒任务时就是欠载爆音。失败不致命（见 mmcss 模块）。
@@ -402,9 +417,12 @@ fn render_loop(
         // 宿主恢复序列的起点在 Load::start_ms 里，播放中另发 Seek）
         let (mut path, mut start_ms, mut token, mut load_paused) = loop {
             match cmd_rx.recv() {
-                Ok(EngineCommand::Load { path, start_ms, token, paused }) => {
-                    break (path, start_ms, token, paused)
-                }
+                Ok(EngineCommand::Load {
+                    path,
+                    start_ms,
+                    token,
+                    paused,
+                }) => break (path, start_ms, token, paused),
                 Ok(EngineCommand::SetVolume(v)) => pending_volume = v.clamp(0.0, 1.0),
                 Ok(EngineCommand::SetRate(r)) => pending_rate = r.clamp(0.5, 2.0),
                 Ok(EngineCommand::SetSpectrum(on)) => tap.set_enabled(on),
@@ -413,7 +431,10 @@ fn render_loop(
                     let applied = p.clamped();
                     pending_eq = applied;
                     // 未装载阶段 token=0（"装载代数来自最近的 Load"——还没有）
-                    send(EngineEvent::EqApplied { token: 0, params: applied });
+                    send(EngineEvent::EqApplied {
+                        token: 0,
+                        params: applied,
+                    });
                 }
                 Ok(EngineCommand::DeviceChanged) => {
                     // 空闲时只记录（watcher 已记住新设备基线）：装载后
@@ -472,7 +493,16 @@ fn render_loop(
                     pending_volume = volume;
                     break; // EOF/Stop/错误恢复：回顶层等下一条 Load
                 }
-                Ok(LoadExit::NewLoad { path: p, rate, start_ms: s, token: t, cfg, eq, paused, volume }) => {
+                Ok(LoadExit::NewLoad {
+                    path: p,
+                    rate,
+                    start_ms: s,
+                    token: t,
+                    cfg,
+                    eq,
+                    paused,
+                    volume,
+                }) => {
                     path = p;
                     pending_rate = rate;
                     start_ms = s;
@@ -497,7 +527,9 @@ fn render_loop(
         }
     }
 
-    { wasapi::deinitialize(); }
+    {
+        wasapi::deinitialize();
+    }
 }
 
 /// Null 输出的实时节拍（毫秒）：一次解码/推进一小批，避免忙转。
@@ -507,8 +539,11 @@ const NULL_TICK_MS: u64 = 20;
 /// "HtTpS://" 都是合法 URL——此前只认小写前缀，大写 scheme 会被当本地文件
 /// 打开失败（UI 表现为莫名的"文件不存在"）。按前缀长度切片比较，零分配。
 fn is_http_url(path: &str) -> bool {
-    path.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("http://"))
-        || path.get(..8).is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+    path.get(..7)
+        .is_some_and(|s| s.eq_ignore_ascii_case("http://"))
+        || path
+            .get(..8)
+            .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
 }
 
 /// 按 Load 的 path 打开源：http(s) → HLS 流（docs/22 G3），否则本地文件。
@@ -553,7 +588,10 @@ fn play_null(
     if start_ms > 0 && decoder.seekable() {
         decoder.seek_ms(start_ms)?;
     }
-    send(EngineEvent::Loaded { token, duration_ms: decoder.duration_ms() });
+    send(EngineEvent::Loaded {
+        token,
+        duration_ms: decoder.duration_ms(),
+    });
     send(EngineEvent::AudioMode {
         token,
         requested: initial_cfg.mode.as_str().to_string(),
@@ -573,7 +611,10 @@ fn play_null(
     // 静音模式不滤波（没有输出），但参数要记账：切回真实输出时经 LoadExit 带回
     let mut eq_params = initial_eq;
     let mut paused = initial_paused;
-    send(EngineEvent::StateChanged { token, playing: !initial_paused });
+    send(EngineEvent::StateChanged {
+        token,
+        playing: !initial_paused,
+    });
 
     let mut last_tick = std::time::Instant::now();
     loop {
@@ -587,17 +628,26 @@ fn play_null(
             match cmd_rx.try_recv() {
                 Ok(EngineCommand::Pause) if !paused => {
                     paused = true;
-                    send(EngineEvent::StateChanged { token, playing: false });
+                    send(EngineEvent::StateChanged {
+                        token,
+                        playing: false,
+                    });
                 }
                 Ok(EngineCommand::Resume) if paused => {
                     paused = false;
-                    send(EngineEvent::StateChanged { token, playing: true });
+                    send(EngineEvent::StateChanged {
+                        token,
+                        playing: true,
+                    });
                 }
                 Ok(EngineCommand::Seek(ms)) => {
                     // 直播流忽略 seek（UI 禁拖；误触发不能杀播放）
                     if decoder.seekable() {
                         decoder.seek_ms(ms)?;
-                        send(EngineEvent::Position { token, position_ms: decoder.position_ms() });
+                        send(EngineEvent::Position {
+                            token,
+                            position_ms: decoder.position_ms(),
+                        });
                     }
                 }
                 Ok(EngineCommand::SetVolume(v)) => volume = v.clamp(0.0, 1.0),
@@ -605,7 +655,10 @@ fn play_null(
                 Ok(EngineCommand::SetSpectrum(on)) => tap.set_enabled(on),
                 Ok(EngineCommand::SetEq(p)) => {
                     eq_params = p.clamped();
-                    send(EngineEvent::EqApplied { token, params: eq_params });
+                    send(EngineEvent::EqApplied {
+                        token,
+                        params: eq_params,
+                    });
                 }
                 Ok(EngineCommand::SetOutputConfig(c)) => {
                     if c.mode != ModePref::Null {
@@ -624,11 +677,23 @@ fn play_null(
                     cfg = c;
                 }
                 Ok(EngineCommand::Stop) => {
-                    send(EngineEvent::StateChanged { token, playing: false });
+                    send(EngineEvent::StateChanged {
+                        token,
+                        playing: false,
+                    });
                     send(EngineEvent::Eof { token });
-                    return Ok(LoadExit::Finished { cfg, eq: eq_params, volume });
+                    return Ok(LoadExit::Finished {
+                        cfg,
+                        eq: eq_params,
+                        volume,
+                    });
                 }
-                Ok(EngineCommand::Load { path: p, start_ms: s, token: t, paused: np }) => {
+                Ok(EngineCommand::Load {
+                    path: p,
+                    start_ms: s,
+                    token: t,
+                    paused: np,
+                }) => {
                     return Ok(LoadExit::NewLoad {
                         path: p,
                         rate,
@@ -676,10 +741,20 @@ fn play_null(
             position_ms: decoder.position_ms(),
         });
         if eof {
-            send(EngineEvent::Position { token, position_ms: decoder.duration_ms() });
-            send(EngineEvent::StateChanged { token, playing: false });
+            send(EngineEvent::Position {
+                token,
+                position_ms: decoder.duration_ms(),
+            });
+            send(EngineEvent::StateChanged {
+                token,
+                playing: false,
+            });
             send(EngineEvent::Eof { token });
-            return Ok(LoadExit::Finished { cfg, eq: eq_params, volume });
+            return Ok(LoadExit::Finished {
+                cfg,
+                eq: eq_params,
+                volume,
+            });
         }
     }
 }
@@ -688,7 +763,11 @@ fn play_null(
 enum LoadExit {
     /// EOF / Stop / 设备错误：回命令循环等下一条 Load。
     /// 带回最新配置/EQ/音量（播放中用户可能改过设置）
-    Finished { cfg: OutputConfig, eq: crate::eq::EqParams, volume: f32 },
+    Finished {
+        cfg: OutputConfig,
+        eq: crate::eq::EqParams,
+        volume: f32,
+    },
     /// 播放中收到新 Load：直接换曲续播。
     ///
     /// `paused` 随新 Load 的暂停态走（协议 v7）：装载自带暂停时续播也保持暂停。
@@ -707,16 +786,16 @@ enum LoadExit {
 }
 
 fn handle_preload(cmd: &EngineCommand, send: &impl Fn(EngineEvent)) {
-    if cmd == &EngineCommand::Stop { send(EngineEvent::StateChanged { token: 0, playing: false }) }
+    if cmd == &EngineCommand::Stop {
+        send(EngineEvent::StateChanged {
+            token: 0,
+            playing: false,
+        })
+    }
 }
 
 /// 构造 `AudioMode` 事件（"设备到底给了什么"的完整快照）。
-fn mode_event(
-    token: u64,
-    cfg: &OutputConfig,
-    out: &Output,
-    reason: Option<String>,
-) -> EngineEvent {
+fn mode_event(token: u64, cfg: &OutputConfig, out: &Output, reason: Option<String>) -> EngineEvent {
     // 流已释放（切配置失败/暂停释放）时没有事实可报，按请求值占位并说明
     if !out.is_live() {
         return EngineEvent::AudioMode {
@@ -808,12 +887,15 @@ fn play_file(
 ) -> Result<LoadExit, AudioError> {
     let mut decoder = open_source(path)?;
     tap.set_sample_rate(decoder.sample_rate()); // 频谱分带按实际采样率标定
-    // 起点必须在开流之前落定：先播再 seek 会有可闻的"从头闪一下"
-    // （直播流不可 seek：忽略 start_ms，从 live 边缘起播）
+                                                // 起点必须在开流之前落定：先播再 seek 会有可闻的"从头闪一下"
+                                                // （直播流不可 seek：忽略 start_ms，从 live 边缘起播）
     if start_ms > 0 && decoder.seekable() {
         decoder.seek_ms(start_ms)?;
     }
-    send(EngineEvent::Loaded { token, duration_ms: decoder.duration_ms() });
+    send(EngineEvent::Loaded {
+        token,
+        duration_ms: decoder.duration_ms(),
+    });
 
     // 配置意图与设备事实分开记：cfg 是用户设置，out.mode 是设备实际给的。
     // 回落不算错误（Error 会让 UI 弹红条），用 AudioMode 的 reason 说明。
@@ -863,7 +945,10 @@ fn play_file(
     // 重采样后的 f32 输出暂存（乘过增益），随后按设备位深编码成字节。
     // 独占降位深时要两趟：一趟算术、一趟取整，避免在插值内联两套写字节逻辑。
     let mut out_f32: Vec<f32> = Vec::new();
-    send(EngineEvent::StateChanged { token, playing: !initial_paused });
+    send(EngineEvent::StateChanged {
+        token,
+        playing: !initial_paused,
+    });
 
     let mut result: Result<(), AudioError> = Ok(());
     // 流式阶段（padding/write/start）捕获的设备错误；恢复见循环尾部
@@ -933,7 +1018,10 @@ fn play_file(
                             Err(e) => stream_err = Some(e),
                         }
                     }
-                    send(EngineEvent::StateChanged { token, playing: true });
+                    send(EngineEvent::StateChanged {
+                        token,
+                        playing: true,
+                    });
                 }
                 Ok(EngineCommand::Seek(ms)) => {
                     // 淡出后执行：直接 seek 会把正在响的波形从中间切断
@@ -949,7 +1037,10 @@ fn play_file(
                     // UI 以它为准（防"发了 20 结果存了 12"的漂移）
                     eq_params = p.clamped();
                     eq.set_params(eq_params);
-                    send(EngineEvent::EqApplied { token, params: eq_params });
+                    send(EngineEvent::EqApplied {
+                        token,
+                        params: eq_params,
+                    });
                 }
                 Ok(EngineCommand::SetOutputConfig(next)) if next.mode == ModePref::Null => {
                     // 切到静音输出要走另一条渲染路径（play_null）：停流后把当前
@@ -998,7 +1089,12 @@ fn play_file(
                     pending_stop = true;
                     declick_target = 0.0;
                 }
-                Ok(EngineCommand::Load { path: p, start_ms: s, token: t, paused: np }) => {
+                Ok(EngineCommand::Load {
+                    path: p,
+                    start_ms: s,
+                    token: t,
+                    paused: np,
+                }) => {
                     // 换曲：停流后把新 path/起点/代数带回外层续播（绝不能在此丢弃）
                     out.stop();
                     return Ok(LoadExit::NewLoad {
@@ -1022,11 +1118,16 @@ fn play_file(
         }
 
         // ---- 淡出完成后的动作（顺序：暂停 / 切配置 / seek / 停止）----
-        if gain_now <= 0.002 && (pending_pause || pending_seek.is_some() || pending_stop || pending_switch) {
+        if gain_now <= 0.002
+            && (pending_pause || pending_seek.is_some() || pending_stop || pending_switch)
+        {
             if pending_pause {
                 pending_pause = false;
                 paused = true;
-                send(EngineEvent::StateChanged { token, playing: false });
+                send(EngineEvent::StateChanged {
+                    token,
+                    playing: false,
+                });
                 // 独占暂停把设备让出去：否则浏览器/会议软件拿不到声卡
                 // （docs/04 §6 的要求，此前没实现）。
                 if cfg.release_on_pause && out.is_live() && out.mode == OutputMode::Exclusive {
@@ -1043,7 +1144,12 @@ fn play_file(
                         send(mode_event(token, &cfg, &out, note));
                     }
                     SwitchOutcome::KeptPlaying(why) => {
-                        send(mode_event(token, &cfg, &out, Some(format!("切换失败：{why}"))));
+                        send(mode_event(
+                            token,
+                            &cfg,
+                            &out,
+                            Some(format!("切换失败：{why}")),
+                        ));
                     }
                     // 流已彻底释放：交给设备恢复路径重建（会重新退避重试）
                     SwitchOutcome::Dead(e) => {
@@ -1055,7 +1161,10 @@ fn play_file(
             if let Some(ms) = pending_seek.take() {
                 // 直播流不可 seek：整个动作丢弃（out 不能停在 stopped 态不重启）
                 if !decoder.seekable() {
-                    send(EngineEvent::Position { token, position_ms: decoder.position_ms() });
+                    send(EngineEvent::Position {
+                        token,
+                        position_ms: decoder.position_ms(),
+                    });
                 } else {
                     // stop（reset 要求 stopped 态）→ seek → 清池（旧样本作废）→ reset → 重启
                     out.stop();
@@ -1072,7 +1181,10 @@ fn play_file(
                                 stream_err = Some(wasapi_err(e));
                             }
                         }
-                        send(EngineEvent::Position { token, position_ms: decoder.position_ms() });
+                        send(EngineEvent::Position {
+                            token,
+                            position_ms: decoder.position_ms(),
+                        });
                         declick_target = 1.0; // seek 后淡入，避免落点处爆音
                     }
                 }
@@ -1084,10 +1196,17 @@ fn play_file(
         }
 
         if user_stopped {
-            send(EngineEvent::StateChanged { token, playing: false });
+            send(EngineEvent::StateChanged {
+                token,
+                playing: false,
+            });
             send(EngineEvent::Eof { token }); // Stop 视为曲目结束（PlayerActor 决定下一动作）
             out.stop();
-            return Ok(LoadExit::Finished { cfg, eq: eq_params, volume });
+            return Ok(LoadExit::Finished {
+                cfg,
+                eq: eq_params,
+                volume,
+            });
         }
         if let Err(e) = result {
             out.stop();
@@ -1105,15 +1224,17 @@ fn play_file(
             if device_failures >= DEVICE_RECOVERY_ATTEMPTS {
                 tracing::error!(%e, attempts = device_failures, "设备恢复重试耗尽，放弃当前曲目");
                 out.stop();
-                return Err(AudioError::Wasapi(format!("设备恢复失败（{device_failures} 次重试）：{e}")));
+                return Err(AudioError::Wasapi(format!(
+                    "设备恢复失败（{device_failures} 次重试）：{e}"
+                )));
             }
             match reopen_output(&mut out, &decoder, device_failures, &cfg) {
                 Ok(note) => {
                     device_failures += 1; // 写成功后归零；连续失败则退避递增
-                    // 重开成功 = 一条新流：给满哑流观察窗（与 play_file 开局同
-                    // 一待遇）。不重置的话，长时间退避期间的"无写入"会被
-                    // DUMB_STREAM_MS 记在新流头上，刚活过来就被判哑、再进恢复
-                    // 循环，直到重试耗尽——设备短暂抽风一次就升级成播放失败。
+                                          // 重开成功 = 一条新流：给满哑流观察窗（与 play_file 开局同
+                                          // 一待遇）。不重置的话，长时间退避期间的"无写入"会被
+                                          // DUMB_STREAM_MS 记在新流头上，刚活过来就被判哑、再进恢复
+                                          // 循环，直到重试耗尽——设备短暂抽风一次就升级成播放失败。
                     last_write = std::time::Instant::now();
                     tracing::warn!(error = %e, attempt = device_failures, "输出设备失效，已重建（退避重试中）");
                     // 换设备后实际模式可能变（新设备不支持独占 / 反而支持）：
@@ -1142,7 +1263,8 @@ fn play_file(
 
         // 哑流自愈（必须在 `if paused` 之前判断 paused 标志，在其后判断
         // !paused，这里用 !paused 条件即可）：流开着但一帧都写不进去。
-        if !paused && out.is_live() && last_write.elapsed() > Duration::from_millis(DUMB_STREAM_MS) {
+        if !paused && out.is_live() && last_write.elapsed() > Duration::from_millis(DUMB_STREAM_MS)
+        {
             last_write = std::time::Instant::now(); // 重置，避免每轮都触发
             dumb_tries += 1;
             let why = format!(
@@ -1173,7 +1295,8 @@ fn play_file(
                     // 没路可退：必须独占就直接报错（宁可停也不要静默共享），
                     // 其余交给设备恢复路径（它还会退避重试几轮）
                     tracing::error!(reason = %why, "输出流哑火且无可降级路径");
-                    if cfg.mode == ModePref::ExclusiveRequired && out.mode == OutputMode::Exclusive {
+                    if cfg.mode == ModePref::ExclusiveRequired && out.mode == OutputMode::Exclusive
+                    {
                         return Err(AudioError::Device(format!("独占流不工作：{why}")));
                     }
                     stream_err = Some(AudioError::Device(format!("输出流不消费数据：{why}")));
@@ -1239,8 +1362,9 @@ fn play_file(
 
             let pool_frames = pool.len() / channels;
             // 2) 本轮可输出帧数：池内 [pool_pos, pool_frames) 按 rate 换算
-            let max_out =
-                (((pool_frames as f64) - pool_pos) / rate as f64).floor().max(0.0) as usize;
+            let max_out = (((pool_frames as f64) - pool_pos) / rate as f64)
+                .floor()
+                .max(0.0) as usize;
             let out_frames = max_out.min(frames_to_write);
             if out_frames == 0 {
                 if decoder_eof {
@@ -1332,16 +1456,19 @@ fn play_file(
             // 尾巴明明已经播完）。改用"在途 = 一整个缓冲"的时长估算。
             let deadline = std::time::Instant::now() + Duration::from_millis(500);
             let drained_at = std::time::Instant::now()
-                + Duration::from_millis(
-                    padding_ms(&decoder, out.buffer_frames).clamp(10, 500),
-                );
+                + Duration::from_millis(padding_ms(&decoder, out.buffer_frames).clamp(10, 500));
             loop {
                 match cmd_rx.try_recv() {
                     Ok(EngineCommand::Shutdown) => {
                         out.stop();
                         return Ok(LoadExit::Shutdown);
                     }
-                    Ok(EngineCommand::Load { path: p, start_ms: s, token: t, paused: np }) => {
+                    Ok(EngineCommand::Load {
+                        path: p,
+                        start_ms: s,
+                        token: t,
+                        paused: np,
+                    }) => {
                         out.stop();
                         return Ok(LoadExit::NewLoad {
                             path: p,
@@ -1363,7 +1490,10 @@ fn play_file(
                     Ok(EngineCommand::SetOutputConfig(c)) => cfg = c,
                     Ok(EngineCommand::SetEq(p)) => {
                         eq_params = p.clamped();
-                        send(EngineEvent::EqApplied { token, params: eq_params });
+                        send(EngineEvent::EqApplied {
+                            token,
+                            params: eq_params,
+                        });
                     }
                     Ok(EngineCommand::Seek(_))
                     | Ok(EngineCommand::Pause)
@@ -1409,15 +1539,32 @@ fn play_file(
             }
             out.stop();
             if user_stopped {
-                send(EngineEvent::StateChanged { token, playing: false });
+                send(EngineEvent::StateChanged {
+                    token,
+                    playing: false,
+                });
                 send(EngineEvent::Eof { token });
-                return Ok(LoadExit::Finished { cfg, eq: eq_params, volume });
+                return Ok(LoadExit::Finished {
+                    cfg,
+                    eq: eq_params,
+                    volume,
+                });
             }
-            send(EngineEvent::Position { token, position_ms: decoder.duration_ms() });
-            send(EngineEvent::StateChanged { token, playing: false });
+            send(EngineEvent::Position {
+                token,
+                position_ms: decoder.duration_ms(),
+            });
+            send(EngineEvent::StateChanged {
+                token,
+                playing: false,
+            });
             send(EngineEvent::Eof { token });
             // EOF 后回命令循环等下一条 Load
-            return Ok(LoadExit::Finished { cfg, eq: eq_params, volume });
+            return Ok(LoadExit::Finished {
+                cfg,
+                eq: eq_params,
+                volume,
+            });
         }
     }
 }
@@ -1646,7 +1793,6 @@ struct OutputInner {
     clock: Clock,
     /// 实际缓冲深度（毫秒，由 buffer_frames / 采样率算出，不是用户填的值）
     buffer_ms: u32,
-
 }
 
 impl std::ops::Deref for Output {
@@ -1683,7 +1829,6 @@ impl Output {
             let _ = i.client.stop_stream();
         }
     }
-
 }
 
 fn src_format(decoder: &DecodedStream) -> WaveFormat {
@@ -1799,7 +1944,11 @@ fn exclusive_attempts(cfg: &OutputConfig, default_period: Option<i64>) -> Vec<At
                     v
                 };
                 for p in periods {
-                    out.push(Attempt { clock, period_hns: p, buffer_hns: p });
+                    out.push(Attempt {
+                        clock,
+                        period_hns: p,
+                        buffer_hns: p,
+                    });
                 }
             }
             Clock::Polling => {
@@ -1824,7 +1973,11 @@ fn exclusive_attempts(cfg: &OutputConfig, default_period: Option<i64>) -> Vec<At
                     periods.push(ms_to_hns(10));
                 }
                 for p in periods {
-                    out.push(Attempt { clock, period_hns: p, buffer_hns: buf });
+                    out.push(Attempt {
+                        clock,
+                        period_hns: p,
+                        buffer_hns: buf,
+                    });
                 }
             }
         }
@@ -1851,7 +2004,11 @@ fn shared_clock(cfg: &OutputConfig) -> Clock {
 }
 
 /// 共享模式：交给引擎做格式转换（autoconvert），我们只交源格式 f32。
-fn open_shared(decoder: &DecodedStream, buffer_hns: i64, clock: Clock) -> Result<Output, AudioError> {
+fn open_shared(
+    decoder: &DecodedStream,
+    buffer_hns: i64,
+    clock: Clock,
+) -> Result<Output, AudioError> {
     let mut client = new_client()?;
     let mode = match clock {
         Clock::Events => StreamMode::EventsShared {
@@ -1939,7 +2096,8 @@ fn open_exclusive(decoder: &DecodedStream, cfg: &OutputConfig) -> Result<Output,
                 }
             }
         };
-        if negotiated.get_samplespersec() != rate || negotiated.get_nchannels() as usize != channels {
+        if negotiated.get_samplespersec() != rate || negotiated.get_nchannels() as usize != channels
+        {
             best_reason.get_or_insert_with(|| {
                 format!(
                     "设备独占只支持 {} Hz / {} ch（源为 {rate} Hz / {channels} ch，不做重采样）",
@@ -1950,7 +2108,10 @@ fn open_exclusive(decoder: &DecodedStream, cfg: &OutputConfig) -> Result<Output,
             continue;
         }
         // 以协商回来的实际位深为准（driver 可能把 i24-in-32 折成别的东西）
-        let actual = match (negotiated.get_bitspersample(), negotiated.get_subformat().ok()) {
+        let actual = match (
+            negotiated.get_bitspersample(),
+            negotiated.get_subformat().ok(),
+        ) {
             (32, Some(SampleType::Float)) => OutFormat::F32,
             (32, Some(SampleType::Int)) => OutFormat::I24In32,
             (16, _) => OutFormat::I16,
@@ -2285,7 +2446,19 @@ mod tests {
     fn take(pool: &[f32], pos: f64, rate: f64, ch: usize, frames: usize, vol: f32) -> Vec<f32> {
         let mut out = Vec::new();
         let mut eq = crate::eq::Eq::new(crate::eq::EqParams::default(), 48_000, ch);
-        resample_take(pool, pos, rate, ch, frames, vol, 0.0, &mut eq, &mut out, &mut Vec::new(), true);
+        resample_take(
+            pool,
+            pos,
+            rate,
+            ch,
+            frames,
+            vol,
+            0.0,
+            &mut eq,
+            &mut out,
+            &mut Vec::new(),
+            true,
+        );
         out
     }
 
@@ -2327,7 +2500,10 @@ mod tests {
         let s = take(&pool, 0.0, 1.0, 2, 4, 1.0); // rate=1 → 4 帧输出
         for f in 0..4usize {
             assert!((s[f * 2] - f as f32).abs() < 1e-6, "L frame {f}");
-            assert!((s[f * 2 + 1] - (f as f32 + 10.0)).abs() < 1e-6, "R frame {f}");
+            assert!(
+                (s[f * 2 + 1] - (f as f32 + 10.0)).abs() < 1e-6,
+                "R frame {f}"
+            );
         }
     }
 
@@ -2343,7 +2519,19 @@ mod tests {
         let pool = [1.0f32; 4];
         let mut out = Vec::new();
         let mut eq = crate::eq::Eq::new(crate::eq::EqParams::default(), 48_000, 1);
-        resample_take(&pool, 0.0, 1.0, 1, 4, 0.0, 0.25, &mut eq, &mut out, &mut Vec::new(), true);
+        resample_take(
+            &pool,
+            0.0,
+            1.0,
+            1,
+            4,
+            0.0,
+            0.25,
+            &mut eq,
+            &mut out,
+            &mut Vec::new(),
+            true,
+        );
         let expect = [0.0, 0.25, 0.5, 0.75];
         for (i, (v, e)) in out.iter().zip(expect).enumerate() {
             assert!((v - e).abs() < 1e-6, "frame {i}: {v} != {e}");
@@ -2356,7 +2544,19 @@ mod tests {
         let pool2 = [1.0f32; 2];
         let mut out = Vec::new();
         let mut eq = crate::eq::Eq::new(crate::eq::EqParams::default(), 48_000, 1);
-        resample_take(&pool2, 1.0, 1.0, 1, 2, 1.0, 0.25, &mut eq, &mut out, &mut Vec::new(), true);
+        resample_take(
+            &pool2,
+            1.0,
+            1.0,
+            1,
+            2,
+            1.0,
+            0.25,
+            &mut eq,
+            &mut out,
+            &mut Vec::new(),
+            true,
+        );
         assert!((out[0] - 1.0).abs() < 1e-6);
     }
 
@@ -2368,7 +2568,9 @@ mod tests {
         let mut out = Vec::new();
         let mut mono = Vec::new();
         let mut eq = crate::eq::Eq::new(crate::eq::EqParams::default(), 48_000, 1);
-        resample_take(&pool, 0.0, 1.0, 1, 4, 1.0, 0.0, &mut eq, &mut out, &mut mono, false);
+        resample_take(
+            &pool, 0.0, 1.0, 1, 4, 1.0, 0.0, &mut eq, &mut out, &mut mono, false,
+        );
         assert!(mono.is_empty(), "tap 关闭时不得做单声道混算");
         assert_eq!(out, vec![1.0, 1.0, 1.0, 1.0], "音频输出不受 tap 开关影响");
     }
@@ -2392,7 +2594,9 @@ mod tests {
     /// 读出 i16 交错样本。
     fn read_i16(bytes: &[u8]) -> Vec<i16> {
         bytes
-            .as_chunks::<2>().0.iter()
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| i16::from_le_bytes([c[0], c[1]]))
             .collect()
     }
@@ -2400,7 +2604,9 @@ mod tests {
     /// 读出 i24-in-32（右移还原成 24 bit 数值）。
     fn read_i24(bytes: &[u8]) -> Vec<i32> {
         bytes
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) >> 8)
             .collect()
     }
@@ -2411,7 +2617,9 @@ mod tests {
         let mut dst = vec![0u8; src.len() * 4];
         encode_frames(OutFormat::F32, &src, &mut dst);
         let back: Vec<f32> = dst
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         assert_eq!(back, src);
@@ -2451,32 +2659,62 @@ mod tests {
 
     #[test]
     fn writable_shared_tracks_padding() {
-        assert_eq!(writable_frames(Clock::Events, OutputMode::Shared, 8820, 0), 8820);
-        assert_eq!(writable_frames(Clock::Events, OutputMode::Shared, 8820, 4000), 4820);
+        assert_eq!(
+            writable_frames(Clock::Events, OutputMode::Shared, 8820, 0),
+            8820
+        );
+        assert_eq!(
+            writable_frames(Clock::Events, OutputMode::Shared, 8820, 4000),
+            4820
+        );
         // 满缓冲：无可写（此时不该写，否则覆盖未播样本）
-        assert_eq!(writable_frames(Clock::Events, OutputMode::Shared, 8820, 8820), 0);
+        assert_eq!(
+            writable_frames(Clock::Events, OutputMode::Shared, 8820, 8820),
+            0
+        );
         // padding 异常大于 buffer 时饱和到 0，不能下溢成天文数字
-        assert_eq!(writable_frames(Clock::Events, OutputMode::Shared, 480, 900), 0);
+        assert_eq!(
+            writable_frames(Clock::Events, OutputMode::Shared, 480, 900),
+            0
+        );
         // 共享模式即便拿到时钟值也不该改判据（padding 在共享下是可信的）
-        assert_eq!(writable_frames(Clock::Polling, OutputMode::Shared, 480, 100), 380);
+        assert_eq!(
+            writable_frames(Clock::Polling, OutputMode::Shared, 480, 100),
+            380
+        );
     }
 
     #[test]
     fn writable_exclusive_events_writes_full_buffer() {
         // 独占事件：padding 恒等于 buffer（实测两种缓冲深度、每次采样都是满值），
         // 拿它算可写恒得 0 —— 那正是"报在播实际静音"的 P0。事件即信号，写满。
-        assert_eq!(writable_frames(Clock::Events, OutputMode::Exclusive, 9600, 9600), 9600);
-        assert_eq!(writable_frames(Clock::Events, OutputMode::Exclusive, 9600, 0), 9600);
+        assert_eq!(
+            writable_frames(Clock::Events, OutputMode::Exclusive, 9600, 9600),
+            9600
+        );
+        assert_eq!(
+            writable_frames(Clock::Events, OutputMode::Exclusive, 9600, 0),
+            9600
+        );
     }
 
     #[test]
     fn writable_exclusive_polling_trusts_padding() {
         // 独占轮询：50ms 缓冲下 padding 正常波动（实测 70 种取值、写入 49114 帧/秒），
         // 按差额回填才对；坏流（padding 恒满）会算出 0，由哑流自愈接管。
-        assert_eq!(writable_frames(Clock::Polling, OutputMode::Exclusive, 2560, 2203), 357);
-        assert_eq!(writable_frames(Clock::Polling, OutputMode::Exclusive, 2560, 2560), 0);
+        assert_eq!(
+            writable_frames(Clock::Polling, OutputMode::Exclusive, 2560, 2203),
+            357
+        );
+        assert_eq!(
+            writable_frames(Clock::Polling, OutputMode::Exclusive, 2560, 2560),
+            0
+        );
         // 异常 padding > buffer 时饱和
-        assert_eq!(writable_frames(Clock::Polling, OutputMode::Exclusive, 480, 900), 0);
+        assert_eq!(
+            writable_frames(Clock::Polling, OutputMode::Exclusive, 480, 900),
+            0
+        );
     }
 
     // ---- 输出配置 → 尝试序列 ----
@@ -2526,7 +2764,10 @@ mod tests {
         };
         let a = exclusive_attempts(&cfg, Some(100_000));
         assert_eq!(a[0].clock, Clock::Events);
-        assert!(a.iter().any(|x| x.clock == Clock::Polling), "Auto 必须留轮询兜底");
+        assert!(
+            a.iter().any(|x| x.clock == Clock::Polling),
+            "Auto 必须留轮询兜底"
+        );
         // 轮询能配深缓冲（事件被 WASAPI 强制 buffer==period）
         let polling = a.iter().find(|x| x.clock == Clock::Polling).unwrap();
         assert_eq!(polling.buffer_hns, ms_to_hns(DEFAULT_BUFFER_MS));
@@ -2544,7 +2785,10 @@ mod tests {
         assert!(exclusive_attempts(&cfg, None)
             .iter()
             .all(|x| x.clock == Clock::Polling));
-        let cfg = OutputConfig { clock: ClockPref::Events, ..cfg };
+        let cfg = OutputConfig {
+            clock: ClockPref::Events,
+            ..cfg
+        };
         assert!(exclusive_attempts(&cfg, None)
             .iter()
             .all(|x| x.clock == Clock::Events));
@@ -2587,15 +2831,36 @@ mod tests {
     #[test]
     fn config_parsing_never_kills_playback() {
         // 未知模式按共享（不能让一个拼错的字符串把播放器变成没声）
-        assert_eq!(OutputConfig::from_parts("wat", 0, "wat", true).mode, ModePref::Shared);
-        assert_eq!(OutputConfig::from_parts("exclusiveRequired", 0, "", true).mode, ModePref::ExclusiveRequired);
-        assert_eq!(OutputConfig::from_parts("null", 0, "", true).mode, ModePref::Null);
+        assert_eq!(
+            OutputConfig::from_parts("wat", 0, "wat", true).mode,
+            ModePref::Shared
+        );
+        assert_eq!(
+            OutputConfig::from_parts("exclusiveRequired", 0, "", true).mode,
+            ModePref::ExclusiveRequired
+        );
+        assert_eq!(
+            OutputConfig::from_parts("null", 0, "", true).mode,
+            ModePref::Null
+        );
         // 缓冲上限 2s，负数归零
-        assert_eq!(OutputConfig::from_parts("shared", 99_999, "", true).buffer_ms, 2000);
-        assert_eq!(OutputConfig::from_parts("shared", -5, "", true).buffer_ms, 0);
+        assert_eq!(
+            OutputConfig::from_parts("shared", 99_999, "", true).buffer_ms,
+            2000
+        );
+        assert_eq!(
+            OutputConfig::from_parts("shared", -5, "", true).buffer_ms,
+            0
+        );
         // 时钟：未知按 auto
-        assert_eq!(OutputConfig::from_parts("shared", 0, "nope", true).clock, ClockPref::Auto);
-        assert_eq!(OutputConfig::from_parts("shared", 0, "polling", true).clock, ClockPref::Polling);
+        assert_eq!(
+            OutputConfig::from_parts("shared", 0, "nope", true).clock,
+            ClockPref::Auto
+        );
+        assert_eq!(
+            OutputConfig::from_parts("shared", 0, "polling", true).clock,
+            ClockPref::Polling
+        );
     }
 
     // ---- http(s) scheme 判定（RFC 3986 大小写不敏感）----

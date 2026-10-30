@@ -40,7 +40,12 @@ fn main() {
 
     let mut engine = Engine::spawn().expect("engine spawn");
     engine.send(EngineCommand::SetRate(2.0));
-    engine.send(EngineCommand::Load { path: wav.to_string_lossy().into(), start_ms: 0, token: 1, paused: false });
+    engine.send(EngineCommand::Load {
+        path: wav.to_string_lossy().into(),
+        start_ms: 0,
+        token: 1,
+        paused: false,
+    });
 
     let start = Instant::now();
     let mut loaded = false;
@@ -61,7 +66,14 @@ fn main() {
                 got_eof = true;
                 break;
             }
-            Some(aiya_audio::EngineEvent::AudioMode { mode, clock, buffer_ms, format, reason, .. }) => {
+            Some(aiya_audio::EngineEvent::AudioMode {
+                mode,
+                clock,
+                buffer_ms,
+                format,
+                reason,
+                ..
+            }) => {
                 println!("AudioMode {mode}/{clock}/{buffer_ms}ms/{format} reason={reason:?}");
             }
             Some(aiya_audio::EngineEvent::Error { message, .. }) => {

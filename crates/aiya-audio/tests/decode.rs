@@ -71,21 +71,39 @@ fn wav_decode_positions_and_seek() {
     }
     assert!(saw_signal, "decoded signal present");
     assert!(total_samples > 0);
-    assert!(dec.position_ms() <= 300, "position sane: {}", dec.position_ms());
+    assert!(
+        dec.position_ms() <= 300,
+        "position sane: {}",
+        dec.position_ms()
+    );
 
     // seek 到 1s（正弦段内）
     dec.seek_ms(1_000).unwrap();
     if let Some(samples) = dec.next_packet().unwrap() {
-        assert!(samples.iter().any(|s| s.abs() > 0.01), "signal after seek into tone section");
+        assert!(
+            samples.iter().any(|s| s.abs() > 0.01),
+            "signal after seek into tone section"
+        );
     }
-    assert!(dec.position_ms() >= 900, "position after seek: {}", dec.position_ms());
+    assert!(
+        dec.position_ms() >= 900,
+        "position after seek: {}",
+        dec.position_ms()
+    );
 
     // seek 到 3s（静音段：信号只占前 2.5s）
     dec.seek_ms(3_000).unwrap();
     if let Some(samples) = dec.next_packet().unwrap() {
-        assert!(samples.iter().all(|s| s.abs() < 0.01), "silence after seek into quiet section");
+        assert!(
+            samples.iter().all(|s| s.abs() < 0.01),
+            "silence after seek into quiet section"
+        );
     }
-    assert!(dec.position_ms() >= 2_900, "position after seek 2: {}", dec.position_ms());
+    assert!(
+        dec.position_ms() >= 2_900,
+        "position after seek 2: {}",
+        dec.position_ms()
+    );
 }
 
 /* ---------------- 错误分类（docs/22 G1） ---------------- */
@@ -141,7 +159,8 @@ fn write_test_ogg_opus(path: &Path) {
     let mut f = std::fs::File::create(path).unwrap();
     f.write_all(&ogg_page(0x02, 0x1234, 0, opus_head)).unwrap();
     f.write_all(&ogg_page(0x00, 0x1234, 1, &opus_tags)).unwrap();
-    f.write_all(&ogg_page(0x00, 0x1234, 2, &[0x08; 32])).unwrap();
+    f.write_all(&ogg_page(0x00, 0x1234, 2, &[0x08; 32]))
+        .unwrap();
 }
 
 #[test]
@@ -153,8 +172,15 @@ fn unsupported_codec_classified_as_codec_unsupported() {
     // features 里没有 opus（docs/22 D1 明确不做），probe 认识 OGG 容器、
     // make() 阶段失败 → 必须报 codecUnsupported 且带可读格式名
     let err = DecodedStream::open_file(&path).unwrap_err();
-    assert_eq!(err.kind(), AudioErrorKind::CodecUnsupported, "实际错误：{err}");
-    assert!(err.to_string().contains("Opus"), "错误消息要带格式名：{err}");
+    assert_eq!(
+        err.kind(),
+        AudioErrorKind::CodecUnsupported,
+        "实际错误：{err}"
+    );
+    assert!(
+        err.to_string().contains("Opus"),
+        "错误消息要带格式名：{err}"
+    );
 }
 
 #[test]
@@ -206,7 +232,9 @@ const FX_EXPECT: &[(&str, u64)] = &[
 ];
 
 fn fixture(name: &str) -> PathBuf {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
+    let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name);
     assert!(
         p.exists(),
         "缺 fixture {p:?}——在 tests/fixtures/ 下跑 gen_fixtures.py 生成（见那边的文件头）"
@@ -254,8 +282,14 @@ fn check_fixture(name: &str) {
         "{name} 解码出 {frames} 帧，期望 {FX_FRAMES}~{}",
         FX_FRAMES + 2 * 1024
     );
-    assert!(tone_peak > 0.3, "{name} 正弦段峰值只有 {tone_peak}——信号没解出来");
-    assert!(tail_peak < 0.02, "{name} 静音段峰值 {tail_peak}——尾部不是静音，解错了");
+    assert!(
+        tone_peak > 0.3,
+        "{name} 正弦段峰值只有 {tone_peak}——信号没解出来"
+    );
+    assert!(
+        tail_peak < 0.02,
+        "{name} 静音段峰值 {tail_peak}——尾部不是静音，解错了"
+    );
 }
 
 #[test]
@@ -305,7 +339,10 @@ fn all_fixtures_seek() {
                 None => break,
             }
         }
-        assert!(tone_peak > 0.3, "{name} seek 到 100ms 后峰值只有 {tone_peak}");
+        assert!(
+            tone_peak > 0.3,
+            "{name} seek 到 100ms 后峰值只有 {tone_peak}"
+        );
 
         // 拖进静音段：必须安静。容差比 check_fixture 松，因为 seek 落点可能
         // 落在窗函数过渡里，前一两包带一点余音属于正常（这也是我们不开
@@ -318,7 +355,10 @@ fn all_fixtures_seek() {
                 None => break,
             }
         }
-        assert!(tail_peak < 0.05, "{name} seek 到 500ms 后峰值 {tail_peak}——拖到静音区还在响");
+        assert!(
+            tail_peak < 0.05,
+            "{name} seek 到 500ms 后峰值 {tail_peak}——拖到静音区还在响"
+        );
 
         // seek 之后位置只能前进：Ogg/MP4 的落点包可能早于目标，吐出去
         // 就是"拖到 5:00 先听到 4:59"，所以 next_packet 会丢到目标之后

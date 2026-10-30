@@ -32,7 +32,8 @@ use crate::ids;
 use crate::norm::norm;
 
 pub const AUDIO_EXTS: &[&str] = &[
-    "mp3", "flac", "wav", "ogg", "oga", "opus", "m4a", "aac", "wma", "ape", "wv", "aiff", "aif", "dsf",
+    "mp3", "flac", "wav", "ogg", "oga", "opus", "m4a", "aac", "wma", "ape", "wv", "aiff", "aif",
+    "dsf",
 ];
 
 const BATCH_SIZE: usize = 200;
@@ -131,7 +132,10 @@ pub struct ScanResult {
 }
 
 fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 fn is_audio(p: &Path) -> bool {
@@ -167,7 +171,10 @@ fn walk(root: &Path, is_cancelled: &dyn Fn() -> bool) -> (Vec<PathBuf>, usize, b
             // depth==0 是用户指定的库根：哪怕它叫 `.music` 也必须进去
             // （tempfile 的目录名就以 `.tmp` 开头，剪掉根 = 一个文件都扫不到）
             if let Some(name) = entry.file_name().to_str() {
-                if name.starts_with('.') || name == "$RECYCLE.BIN" || name == "System Volume Information" {
+                if name.starts_with('.')
+                    || name == "$RECYCLE.BIN"
+                    || name == "System Volume Information"
+                {
                     // 整个子树剪掉（不只跳过目录条目本身）
                     it.skip_current_dir();
                     continue;
@@ -421,7 +428,8 @@ fn upsert(
                     // 候选已消费：同一 (mtime,size) 只许 relocate 一行
                     if let Some(idx) = reloc {
                         idx.remove(&(mtime, t.size_bytes as i64));
-                    }                    existing = Some((row_id, mtime, t.size_bytes as i64, "missing".into()));
+                    }
+                    existing = Some((row_id, mtime, t.size_bytes as i64, "missing".into()));
                 }
             }
         }
@@ -445,7 +453,11 @@ fn upsert(
     let artist_id = artist_name.as_deref().map(ids::artist_id);
     let album_title = t.album.clone();
     let album_id = album_title.as_deref().map(|al| {
-        let group = t.album_artist.as_deref().or(artist_name.as_deref()).unwrap_or("");
+        let group = t
+            .album_artist
+            .as_deref()
+            .or(artist_name.as_deref())
+            .unwrap_or("");
         ids::album_id(al, group)
     });
 
@@ -574,7 +586,10 @@ enum Item {
     Unchanged,
     /// 解析成功。封面已就地落盘（[`crate::artwork::stage`]），
     /// `parsed.picture` 已清空 —— 交到入库线程手里只剩几十字节。
-    Parsed { parsed: ParsedTrack, artwork: Option<StagedArtwork> },
+    Parsed {
+        parsed: ParsedTrack,
+        artwork: Option<StagedArtwork>,
+    },
     /// 解析失败（失败隔离：只记明细，不中断整批）。
     Failed { path: String, message: String },
 }
@@ -615,13 +630,18 @@ fn snap(
 }
 
 fn load_index(conn: &Connection) -> DbResult<HashMap<String, IndexEntry>> {
-    let mut stmt = conn.prepare("SELECT path_lower, mtime, size_bytes, availability FROM tracks")?;
+    let mut stmt =
+        conn.prepare("SELECT path_lower, mtime, size_bytes, availability FROM tracks")?;
     let mut rows = stmt.query([])?;
     let mut map: HashMap<String, IndexEntry> = HashMap::new();
     while let Some(r) = rows.next()? {
         map.insert(
             r.get(0)?,
-            IndexEntry { mtime: r.get(1)?, size: r.get(2)?, missing: r.get::<_, String>(3)? == "missing" },
+            IndexEntry {
+                mtime: r.get(1)?,
+                size: r.get(2)?,
+                missing: r.get::<_, String>(3)? == "missing",
+            },
         );
     }
     Ok(map)
@@ -636,7 +656,10 @@ fn process_file(
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(e) => {
-            return Item::Failed { path: path.to_string_lossy().into_owned(), message: e.to_string() }
+            return Item::Failed {
+                path: path.to_string_lossy().into_owned(),
+                message: e.to_string(),
+            }
         }
     };
     let mtime = mtime_of(&meta);
@@ -680,12 +703,20 @@ fn process_file(
             };
             Item::Parsed { parsed: t, artwork }
         }
-        Err(message) => Item::Failed { path: path.to_string_lossy().into_owned(), message },
+        Err(message) => Item::Failed {
+            path: path.to_string_lossy().into_owned(),
+            message,
+        },
     }
 }
 
 enum CommitOutcome {
-    Done { count: usize, imported: usize, updated: usize, unchanged: usize },
+    Done {
+        count: usize,
+        imported: usize,
+        updated: usize,
+        unchanged: usize,
+    },
     /// 整批回滚后逐条重放的结果：只有真正失败的行进 `failures`，
     /// 其余照常入库（`imported + updated + unchanged + failures.len()` = 批内条数）。
     Partial {
@@ -707,7 +738,12 @@ fn commit_batch(
     reloc: &mut RelocateIndex,
 ) -> DbResult<CommitOutcome> {
     if batch.is_empty() {
-        return Ok(CommitOutcome::Done { count: 0, imported: 0, updated: 0, unchanged: 0 });
+        return Ok(CommitOutcome::Done {
+            count: 0,
+            imported: 0,
+            updated: 0,
+            unchanged: 0,
+        });
     }
     let count = batch.len();
     let now = now_secs();
@@ -740,7 +776,12 @@ fn commit_batch(
 
     if first_err.is_none() {
         batch.clear();
-        return Ok(CommitOutcome::Done { count, imported, updated, unchanged });
+        return Ok(CommitOutcome::Done {
+            count,
+            imported,
+            updated,
+            unchanged,
+        });
     }
 
     // 慢路径：逐条重放。只把真正失败的行计 failed。
@@ -763,18 +804,33 @@ fn commit_batch(
         }
     }
     batch.clear();
-    Ok(CommitOutcome::Partial { imported, updated, unchanged, failures })
+    Ok(CommitOutcome::Partial {
+        imported,
+        updated,
+        unchanged,
+        failures,
+    })
 }
 
 fn apply_commit(tally: &mut Tally, errors: &mut Vec<ScanError>, outcome: CommitOutcome) {
     match outcome {
-        CommitOutcome::Done { count, imported, updated, unchanged } => {
+        CommitOutcome::Done {
+            count,
+            imported,
+            updated,
+            unchanged,
+        } => {
             tally.imported += imported;
             tally.updated += updated;
             tally.unchanged += unchanged;
             tally.scanned += count;
         }
-        CommitOutcome::Partial { imported, updated, unchanged, failures } => {
+        CommitOutcome::Partial {
+            imported,
+            updated,
+            unchanged,
+            failures,
+        } => {
             tally.imported += imported;
             tally.updated += updated;
             tally.unchanged += unchanged;
@@ -839,7 +895,12 @@ pub fn scan_roots_ext(
         "walking",
         &tally,
         None,
-        Some(roots.first().map(|r| r.to_string_lossy().into_owned()).unwrap_or_default()),
+        Some(
+            roots
+                .first()
+                .map(|r| r.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        ),
         started,
     ));
 
@@ -899,7 +960,9 @@ pub fn scan_roots_ext(
     // 局部线程池而不是 rayon 全局池：扫描是偶发的批任务，不该长期占着全局池；
     // 而且这里要精确控制 N。留一个核给入库线程 —— 它是 SQLite 单写者，
     // 多一个解析 worker 只会在 channel 上堵着，不如把时间片让给写锁。
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(cores.saturating_sub(1).max(1))
         .thread_name(|i| format!("aiya-parse-{i}"))
@@ -920,7 +983,11 @@ pub fn scan_roots_ext(
     let mut report = |t: &Tally, current: Option<String>| {
         // 解析全完了但库里还有积压 → 如实说"正在入库"。
         // 没有这个状态时，用户在"解析快、入库慢"那一段看到的就是进度条不动。
-        let phase = if t.parsed >= total && t.scanned < total { "importing" } else { "parsing" };
+        let phase = if t.parsed >= total && t.scanned < total {
+            "importing"
+        } else {
+            "parsing"
+        };
         on_progress(snap(phase, t, Some(total), current, started));
     };
 
@@ -1147,10 +1214,7 @@ fn mark_missing(
         .map(|(i, _)| format!("path_lower LIKE ?{} ESCAPE '\\'", i + 1))
         .collect::<Vec<_>>()
         .join(" OR ");
-    let like_params: Vec<String> = prefixes
-        .iter()
-        .map(|p| format!("{p}%"))
-        .collect();
+    let like_params: Vec<String> = prefixes.iter().map(|p| format!("{p}%")).collect();
 
     // 同批事务的理由：与主 DB 线程并发时 DEFERRED 的锁升级会立刻 BUSY
     let tx = conn
@@ -1298,7 +1362,11 @@ mod tests {
 
         let mut conn = open_in_memory().unwrap();
         let result = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
-        assert_eq!(result.imported, 1, "one mp3 imported; errors={:?}", result.errors);
+        assert_eq!(
+            result.imported, 1,
+            "one mp3 imported; errors={:?}",
+            result.errors
+        );
         assert_eq!(result.failed, 0);
 
         let (title, artist): (String, String) = conn
@@ -1326,9 +1394,16 @@ mod tests {
 
         let mut conn = open_in_memory().unwrap();
         let result = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
-        assert_eq!(result.failed, 1, "bad file counted as failed; errors={:?}", result.errors);
+        assert_eq!(
+            result.failed, 1,
+            "bad file counted as failed; errors={:?}",
+            result.errors
+        );
         assert_eq!(result.imported, 1, "good file still imported");
-        assert!(result.errors.iter().any(|e| e.path == bad.to_string_lossy()));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.path == bad.to_string_lossy()));
         let _ = good;
     }
 
@@ -1362,7 +1437,9 @@ mod tests {
         write_test_mp3(dir.path(), "b.mp3", "同专辑", "艺人");
         let result2 = scan_directory(&mut conn, dir.path(), Some(cache.path()), |_| {}).unwrap();
         assert_eq!(result2.imported, 1);
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM artworks", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM artworks", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 1, "same picture bytes deduped");
     }
 
@@ -1377,7 +1454,9 @@ mod tests {
         let mut conn = open_in_memory().unwrap();
         scan_directory(&mut conn, dir.path(), Some(cache.path()), |_| {}).unwrap();
         let (_art_id, cache_key): (String, String) = conn
-            .query_row("SELECT id, cache_key FROM artworks", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_row("SELECT id, cache_key FROM artworks", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .unwrap();
         let original = cache.path().join("originals").join(&cache_key);
         assert!(original.exists());
@@ -1386,14 +1465,18 @@ mod tests {
         std::fs::remove_file(&mp3).unwrap();
         let r2 = scan_directory(&mut conn, dir.path(), Some(cache.path()), |_| {}).unwrap();
         assert_eq!(r2.missing, 1);
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM artworks", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM artworks", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 1, "missing 行仍引用，不 GC");
         assert!(original.exists(), "文件也不删");
 
         // 引用消失（曲目行删除）→ 重扫 → 行与原图一起清掉
         conn.execute("DELETE FROM tracks", []).unwrap();
         scan_directory(&mut conn, dir.path(), Some(cache.path()), |_| {}).unwrap();
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM artworks", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM artworks", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 0, "无引用的 artwork 行被 GC");
         assert!(!original.exists(), "originals/ 原图一起删");
     }
@@ -1434,11 +1517,17 @@ mod tests {
         scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
         // 模拟 beets_sync 写入 codec，并把 DB 里的 mtime 改掉，
         // 迫使下次扫描走 upsert 的 DO UPDATE 路径
-        conn.execute("UPDATE tracks SET codec = 'MP3', mtime = 1", []).unwrap();
+        conn.execute("UPDATE tracks SET codec = 'MP3', mtime = 1", [])
+            .unwrap();
         scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
-        let codec: Option<String> =
-            conn.query_row("SELECT codec FROM tracks", [], |r| r.get(0)).unwrap();
-        assert_eq!(codec.as_deref(), Some("MP3"), "重扫不得把 beets 写的 codec 冲回 NULL");
+        let codec: Option<String> = conn
+            .query_row("SELECT codec FROM tracks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            codec.as_deref(),
+            Some("MP3"),
+            "重扫不得把 beets 写的 codec 冲回 NULL"
+        );
     }
 
     /// docs/29 批 A：多根并集单库。两根各一首都要入库；missing 对账只作用
@@ -1460,7 +1549,9 @@ mod tests {
         let dir_out = tempfile::tempdir().unwrap();
         write_test_mp3(dir_out.path(), "c.mp3", "丙", "歌手");
         scan_directory(&mut conn, dir_out.path(), None, |_| {}).unwrap();
-        let total: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(total, 3);
 
         // 只删 A 根的文件 → 重扫两根：A 根那首 missing，B 根与根外都还是 online
@@ -1499,7 +1590,9 @@ mod tests {
             UpsertOutcome::Unchanged,
             "大小写变体必须命中已有行（且 mtime/size 未变 → 早退），而不是新插入"
         );
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 1);
     }
 
@@ -1537,11 +1630,14 @@ mod tests {
         let r1 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
         assert_eq!(r1.imported, 1, "errors={:?}", r1.errors);
 
-        let (tid, old_path): (String, String) =
-            conn.query_row("SELECT id, path FROM tracks", [], |r| Ok((r.get(0)?, r.get(1)?)))
-                .unwrap();
+        let (tid, old_path): (String, String) = conn
+            .query_row("SELECT id, path FROM tracks", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
         // 播放统计 + 歌单引用挂在旧行上
-        conn.execute("UPDATE tracks SET play_count = 7 WHERE id = ?1", [&tid]).unwrap();
+        conn.execute("UPDATE tracks SET play_count = 7 WHERE id = ?1", [&tid])
+            .unwrap();
         conn.execute(
             "INSERT INTO playlists (id,name,name_norm,created_at,updated_at) VALUES ('p1','单','单',1,1)",
             [],
@@ -1559,7 +1655,9 @@ mod tests {
         assert_eq!(r2.missing, 0, "relocate 后没有行需要标 missing");
         assert!(r2.updated >= 1, "relocate 走更新路径（重写标签）：{:?}", r2);
 
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 1, "库里只有一行");
         let (id, path, avail, plays): (String, String, String, i64) = conn
             .query_row(
@@ -1603,14 +1701,24 @@ mod tests {
         std::fs::rename(dir.path().join("a.mp3"), dir.path().join("b.mp3")).unwrap();
         let r2 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
         assert_eq!(r2.imported, 1, "候选歧义 → 走新插入：{:?}", r2.errors);
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 3, "新行 + 原行 + 干扰行，谁也不被冒认");
         let b_avail: String = conn
-            .query_row("SELECT availability FROM tracks WHERE path_lower LIKE '%b.mp3'", [], |r| r.get(0))
+            .query_row(
+                "SELECT availability FROM tracks WHERE path_lower LIKE '%b.mp3'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(b_avail, "online");
         let old_avail: String = conn
-            .query_row("SELECT availability FROM tracks WHERE path_lower LIKE '%a.mp3'", [], |r| r.get(0))
+            .query_row(
+                "SELECT availability FROM tracks WHERE path_lower LIKE '%a.mp3'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(old_avail, "missing", "旧路径行照常标 missing");
     }
@@ -1629,12 +1737,21 @@ mod tests {
         .unwrap();
 
         let mut batch: Vec<Item> = Vec::new();
-        for (p, mtime) in [("/m/ok1.mp3", 100i64), ("/m/bad.mp3", 101), ("/m/ok2.mp3", 102)] {
-            batch.push(Item::Parsed { parsed: parsed_manual(p, 1234, mtime), artwork: None });
+        for (p, mtime) in [
+            ("/m/ok1.mp3", 100i64),
+            ("/m/bad.mp3", 101),
+            ("/m/ok2.mp3", 102),
+        ] {
+            batch.push(Item::Parsed {
+                parsed: parsed_manual(p, 1234, mtime),
+                artwork: None,
+            });
         }
         let outcome = commit_batch(&mut conn, &mut batch, &mut HashMap::new()).unwrap();
         let (imported, failures) = match outcome {
-            CommitOutcome::Partial { imported, failures, .. } => (imported, failures),
+            CommitOutcome::Partial {
+                imported, failures, ..
+            } => (imported, failures),
             CommitOutcome::Done { .. } => {
                 panic!("触发器保证 bad.mp3 必失败，必须走整批回滚 + 重放路径")
             }
@@ -1642,10 +1759,16 @@ mod tests {
         assert_eq!(imported, 2, "两条无辜文件照常入库");
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].0, "/m/bad.mp3");
-        assert!(failures[0].1.contains("boom"), "失败明细: {}", failures[0].1);
+        assert!(
+            failures[0].1.contains("boom"),
+            "失败明细: {}",
+            failures[0].1
+        );
         assert!(batch.is_empty(), "批被清空（无论成败）");
 
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 2);
         let missing: i64 = conn
             .query_row(
@@ -1669,15 +1792,17 @@ mod tests {
         std::fs::remove_file(&mp3).unwrap();
         let r2 = scan_directory_ext(&mut conn, dir.path(), None, || true, |_| {}).unwrap();
         assert!(r2.cancelled);
-        let avail: String =
-            conn.query_row("SELECT availability FROM tracks", [], |r| r.get(0)).unwrap();
+        let avail: String = conn
+            .query_row("SELECT availability FROM tracks", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(avail, "online", "取消路径绝不能执行 mark_missing");
 
         // 取消后再完整重扫 → 正常标 missing
         let r3 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
         assert!(!r3.cancelled);
-        let avail: String =
-            conn.query_row("SELECT availability FROM tracks", [], |r| r.get(0)).unwrap();
+        let avail: String = conn
+            .query_row("SELECT availability FROM tracks", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(avail, "missing");
     }
 
@@ -1714,10 +1839,11 @@ mod tests {
         assert_eq!(r.scanned, BATCH_SIZE, "第二批未开始，scanned 停在批边界");
         assert_eq!(r.imported, BATCH_SIZE, "已提交的第一批保留");
         assert_eq!(r.failed, 0, "取消不该把文件记成失败：{:?}", r.errors);
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, BATCH_SIZE as i64, "已提交批次落库");
     }
-
 
     /// 多值标签（docs/43 §10）：**beets/mutagen 的写法**是单帧内 NUL 分隔
     /// （ID3v2.4 规范的多值形态），lofty 按 NUL 拆成多个 item——
@@ -1731,7 +1857,7 @@ mod tests {
             dir.path(),
             "multi.mp3",
             "协作曲",
-            &["Artist One Artist Two"],
+            &["Artist One\0Artist Two"],
             Some("Rock"),
         );
 
@@ -1770,6 +1896,10 @@ mod tests {
 
         let parsed = parse_file(&path).unwrap();
         assert_eq!(parsed.artist.as_deref(), Some("A; B"), "拆分 + 去重保序");
-        assert_eq!(parsed.genre.as_deref(), Some("Rock; Pop"), "';' 无空格也归一");
+        assert_eq!(
+            parsed.genre.as_deref(),
+            Some("Rock; Pop"),
+            "';' 无空格也归一"
+        );
     }
 }

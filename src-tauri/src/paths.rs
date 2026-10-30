@@ -56,7 +56,11 @@ pub fn portable_data_root() -> Option<PathBuf> {
 /// "不够便携"，不能让启动因为一个目录而失败。这时数据会分裂成两份，所以
 /// 要留一行日志，用户下次报"设置丢了"时能查到原因。
 pub fn data_root(app: &tauri::AppHandle) -> PathBuf {
-    let system = || app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let system = || {
+        app.path()
+            .app_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+    };
     let Some(dir) = portable_data_root() else {
         return system();
     };

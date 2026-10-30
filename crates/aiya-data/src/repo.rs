@@ -8,14 +8,83 @@ use std::time::Instant;
 use rusqlite::types::ToSql;
 use rusqlite::{Connection, Row};
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::db::{DbError, DbResult};
 use crate::norm::norm;
 use crate::smart::to_sql_value;
 
 type Binder = Box<dyn Fn(&mut Vec<Box<dyn ToSql>>) + Send>;
+
+/* ---------------- 文件事实（只读，供外部工具取快照） ---------------- */
+
+/// 一个在线曲目在磁盘上的身份：路径 + 两条失效判据。
+///
+/// `path_lower` 用曲库自己的归一化结果，不让调用方再推导一遍——两份实现
+/// 迟早漂移，症状是"同一个文件被当成两个"。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileFact {
+    pub path: String,
+    pub path_lower: String,
+    pub size_bytes: i64,
+    pub mtime: i64,
+}
+
+/// 全部在线曲目的文件事实，按 `path_lower` 排序。
+///
+/// **只读、无副作用**。它存在的唯一理由：外部工具（beets 模块的索引增强）
+/// 需要知道"曲库里有哪些文件、上次见过的 size/mtime 是多少"，而"什么算
+/// 在线曲目"是曲库的规则，不该由工具自己拼 SQL。方向是单向的——曲库提供
+/// 事实，工具消费；曲库不知道谁在消费。
+pub fn online_files(conn: &Connection) -> DbResult<Vec<FileFact>> {
+    let mut stmt = conn.prepare(
+        "SELECT path, path_lower, size_bytes, mtime FROM tracks
+         WHERE availability = 'online' ORDER BY path_lower",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(FileFact {
+            path: r.get(0)?,
+            path_lower: r.get(1)?,
+            size_bytes: r.get(2)?,
+            mtime: r.get(3)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// 在线路径（顺序同上）。
+pub fn online_paths(conn: &Connection) -> DbResult<Vec<String>> {
+    Ok(online_files(conn)?.into_iter().map(|f| f.path).collect())
+}
+
+/// `path_lower → track_id` 批量反查。
+///
+/// 给"外部工具拿着自己那套键回来要 id"用（结论库只存 path_lower）。分批
+/// 900：SQLite 的变量上限在 3.32 之后是 32766，但没必要求极限——500 条
+/// 一页的查询本来就分不出几批。
+pub fn track_ids_by_paths(
+    conn: &Connection,
+    keys: &[String],
+) -> DbResult<std::collections::HashMap<String, String>> {
+    let mut out = std::collections::HashMap::new();
+    for chunk in keys.chunks(900) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let holes = vec!["?"; chunk.len()].join(",");
+        let sql = format!("SELECT path_lower, id FROM tracks WHERE path_lower IN ({holes})");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (key, id) = row?;
+            out.insert(key, id);
+        }
+    }
+    Ok(out)
+}
 
 /* ---------------- DTO ---------------- */
 
@@ -93,7 +162,11 @@ pub enum Direction {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum TrackSource {
     Library,
     Playlist { playlist_id: String },
@@ -168,8 +241,8 @@ fn default_source() -> TrackSource {
 /* ---------------- 游标（与 contracts/query.ts 同格式：base64url(JSON [value,id])） ---------------- */
 
 fn encode_cursor(value: &Value, id: &str) -> DbResult<String> {
-    let json =
-        serde_json::to_string(&[value, &Value::from(id)]).map_err(|e| DbError::Custom(e.to_string()))?;
+    let json = serde_json::to_string(&[value, &Value::from(id)])
+        .map_err(|e| DbError::Custom(e.to_string()))?;
     use base64::Engine as _;
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json))
 }
@@ -211,7 +284,8 @@ const JOIN_PLAYLIST: &str = "FROM playlist_items pi \
      LEFT JOIN albums al ON al.id = t.album_id \
      LEFT JOIN artists al_ar ON al_ar.id = al.artist_id";
 
-const JOIN_AGG: &str = "FROM (SELECT track_id, COUNT(*) AS played_count, MAX(played_at) AS recent_t0 \
+const JOIN_AGG: &str =
+    "FROM (SELECT track_id, COUNT(*) AS played_count, MAX(played_at) AS recent_t0 \
      FROM history GROUP BY track_id) hs \
      JOIN tracks t ON t.id = hs.track_id \
      LEFT JOIN artists ar ON ar.id = t.artist_id \
@@ -367,12 +441,22 @@ fn build_head(
     // 两种顺序语义：曲库来源 = 列头排序键（q.sort + direction，游标分页同键）；
     // 歌单来源 = 物化顺序（pi.position，首行插入在 0，刷新/重算写同一套位置）。
     let order_sql = if fixed_order.is_empty() {
-        let dir = if q.direction == Direction::Desc { "DESC" } else { "ASC" };
-        format!(" ORDER BY {} {dir}, t.id {dir}", key_expr(q).unwrap_or("t.title_norm"))
+        let dir = if q.direction == Direction::Desc {
+            "DESC"
+        } else {
+            "ASC"
+        };
+        format!(
+            " ORDER BY {} {dir}, t.id {dir}",
+            key_expr(q).unwrap_or("t.title_norm")
+        )
     } else {
         fixed_order.to_string()
     };
-    (format!("SELECT {SELECT_COLS} {join}{where_sql}{order_sql}"), binders)
+    (
+        format!("SELECT {SELECT_COLS} {join}{where_sql}{order_sql}"),
+        binders,
+    )
 }
 
 /// COUNT 用的 FROM：**能省则省**。
@@ -382,7 +466,11 @@ fn build_head(
 /// 只要 38µs（500 倍）。所以只有搜索谓词真的引用 `ar.name_norm` /
 /// `al.title_norm` 时才带上这两个 JOIN。
 fn count_from(q: &TrackWindowQuery) -> String {
-    let has_search = q.search.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+    let has_search = q
+        .search
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
     let base = match &q.source {
         TrackSource::Library => "FROM tracks t".to_string(),
         TrackSource::Playlist { .. } => {
@@ -408,7 +496,10 @@ fn build_count(
     conds: &[(String, serde_json::Value)],
 ) -> (String, Vec<Binder>) {
     let (where_sql, binders) = build_where(q, None, conds);
-    (format!("SELECT COUNT(*) {}{where_sql}", count_from(q)), binders)
+    (
+        format!("SELECT COUNT(*) {}{where_sql}", count_from(q)),
+        binders,
+    )
 }
 
 fn bind_all(
@@ -425,7 +516,8 @@ fn bind_all(
         params.push(Box::new(offset));
     }
     for (i, p) in params.iter().enumerate() {
-        stmt.raw_bind_parameter(i + 1, p.as_ref()).map_err(DbError::Sql)?;
+        stmt.raw_bind_parameter(i + 1, p.as_ref())
+            .map_err(DbError::Sql)?;
     }
     Ok(())
 }
@@ -460,9 +552,8 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
     let limit = q.limit.clamp(1, 500) as i64;
 
     // ---------- 筛选器临时条件（与动态歌单同键，不落库）----------
-    let cond_clauses = crate::smart::conds_from_value(
-        q.conds.as_ref().unwrap_or(&serde_json::Value::Null),
-    )?;
+    let cond_clauses =
+        crate::smart::conds_from_value(q.conds.as_ref().unwrap_or(&serde_json::Value::Null))?;
 
     // ---------- 游标解析 ----------
     let mut cursor_filter: Option<String> = None;
@@ -473,7 +564,11 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
         if let Some(cursor) = q.cursor.as_deref() {
             if let Some(expr) = key_expr(q) {
                 let (value, id) = decode_cursor(cursor)?;
-                let op = if q.direction == Direction::Desc { "<" } else { ">" };
+                let op = if q.direction == Direction::Desc {
+                    "<"
+                } else {
+                    ">"
+                };
                 cursor_filter = Some(format!("(({expr} {op} ?) OR ({expr} = ? AND t.id {op} ?))"));
                 let v2 = value;
                 cursor_binders.push(Box::new(move |v: &mut Vec<Box<dyn ToSql>>| {
@@ -549,7 +644,12 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
         items,
         total,
         limit: limit as usize,
-        mode: if q.mode == Mode::Cursor { "cursor" } else { "offset" }.into(),
+        mode: if q.mode == Mode::Cursor {
+            "cursor"
+        } else {
+            "offset"
+        }
+        .into(),
         next_cursor,
         offset: (q.mode == Mode::Offset).then_some(offset as usize),
         took_ms: started.elapsed().as_millis().min(u32::MAX as u128) as u32,
@@ -633,7 +733,10 @@ pub fn collect_track_ids(
     }
 
     out.truncate(max);
-    Ok(IdCollection { ids: out, truncated })
+    Ok(IdCollection {
+        ids: out,
+        truncated,
+    })
 }
 
 #[cfg(test)]
@@ -650,8 +753,8 @@ mod tests {
             "source": { "kind": "library" }, "mode": "cursor", "limit": 200,
             "sort": "title", "direction": "asc"
         });
-        let q = serde_json::from_value::<TrackWindowQuery>(v)
-            .expect("nested source must deserialize");
+        let q =
+            serde_json::from_value::<TrackWindowQuery>(v).expect("nested source must deserialize");
         assert_eq!(q.source, TrackSource::Library);
 
         // 歌单来源：camelCase playlistId → playlist_id
@@ -659,7 +762,12 @@ mod tests {
             "source": { "kind": "playlist", "playlistId": "pl1" }, "mode": "offset", "offset": 0
         });
         let q2 = serde_json::from_value::<TrackWindowQuery>(v2).expect("playlist source");
-        assert_eq!(q2.source, TrackSource::Playlist { playlist_id: "pl1".into() });
+        assert_eq!(
+            q2.source,
+            TrackSource::Playlist {
+                playlist_id: "pl1".into()
+            }
+        );
 
         // mode/limit 缺省也能反序列化（防御老调用方）
         let v3 = serde_json::json!({});
@@ -683,7 +791,12 @@ mod tests {
         .unwrap();
     }
 
-    fn q_library(sort: Sort, mode: Mode, cursor: Option<String>, offset: Option<usize>) -> TrackWindowQuery {
+    fn q_library(
+        sort: Sort,
+        mode: Mode,
+        cursor: Option<String>,
+        offset: Option<usize>,
+    ) -> TrackWindowQuery {
         TrackWindowQuery {
             sort,
             direction: Direction::Asc,
@@ -716,24 +829,36 @@ mod tests {
         q.added_from_ms = Some(105_000);
         q.added_to_ms = Some(115_000);
         let page = list_tracks(&conn, &q).unwrap();
-        assert_eq!(page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t2"]);
+        assert_eq!(
+            page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec!["t2"]
+        );
 
         // 上次播放 >= 650s → 只有 t2（t1 是 600s，t3 从未播）
         let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
         q.last_played_from_ms = Some(650_000);
         let page = list_tracks(&conn, &q).unwrap();
-        assert_eq!(page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t2"]);
+        assert_eq!(
+            page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec!["t2"]
+        );
 
         // 从未播放 → 只有 t3；never 与范围同给时 never 优先
         let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
         q.last_played_never = Some(true);
         let page = list_tracks(&conn, &q).unwrap();
-        assert_eq!(page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t3"]);
+        assert_eq!(
+            page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec!["t3"]
+        );
         let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
         q.last_played_never = Some(true);
         q.last_played_from_ms = Some(0);
         let page = list_tracks(&conn, &q).unwrap();
-        assert_eq!(page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t3"]);
+        assert_eq!(
+            page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec!["t3"]
+        );
     }
 
     /// 筛选器临时条件（conds）：与动态歌单同键编译成 WHERE，不落库。
@@ -753,7 +878,10 @@ mod tests {
             { "field": "genre", "op": "contains", "value": "oc" }
         ]));
         let page = list_tracks(&conn, &q).unwrap();
-        assert_eq!(page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t2"]);
+        assert_eq!(
+            page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec!["t2"]
+        );
         assert_eq!(page.total, 1);
 
         // 坏键明确报错——UI 的 bug 不该静默变成全量列表
@@ -767,7 +895,11 @@ mod tests {
     fn cond_contains_wildcards_are_literal() {
         let conn = open_in_memory().unwrap();
         insert_fixtures(&conn);
-        conn.execute("UPDATE tracks SET genre='Pop', genre_norm='pop' WHERE id='t1'", []).unwrap();
+        conn.execute(
+            "UPDATE tracks SET genre='Pop', genre_norm='pop' WHERE id='t1'",
+            [],
+        )
+        .unwrap();
 
         // "p%P" 按字面匹配（pop 里没有字面的 %）→ 0 命中；不当转义会命中 t1
         let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
@@ -783,7 +915,10 @@ mod tests {
             { "field": "genre", "op": "contains", "value": "po" }
         ]));
         let page = list_tracks(&conn, &q).unwrap();
-        assert_eq!(page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t1"]);
+        assert_eq!(
+            page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec!["t1"]
+        );
     }
 
     #[test]
@@ -794,19 +929,27 @@ mod tests {
         assert_eq!(page1.total, 3);
         assert_eq!(page1.items.len(), 2);
         assert!(page1.next_cursor.is_some());
-        let page2 =
-            list_tracks(&conn, &q_library(Sort::Title, Mode::Cursor, page1.next_cursor, None)).unwrap();
+        let page2 = list_tracks(
+            &conn,
+            &q_library(Sort::Title, Mode::Cursor, page1.next_cursor, None),
+        )
+        .unwrap();
         let mut ids: Vec<_> = page1.items.iter().map(|t| t.id.clone()).collect();
         ids.extend(page2.items.iter().map(|t| t.id.clone()));
         ids.sort();
-        assert_eq!(ids, vec!["t1", "t2", "t3"], "cursor pages must tile the whole set");
+        assert_eq!(
+            ids,
+            vec!["t1", "t2", "t3"],
+            "cursor pages must tile the whole set"
+        );
     }
 
     #[test]
     fn offset_mode() {
         let conn = open_in_memory().unwrap();
         insert_fixtures(&conn);
-        let page = list_tracks(&conn, &q_library(Sort::Added, Mode::Offset, None, Some(1))).unwrap();
+        let page =
+            list_tracks(&conn, &q_library(Sort::Added, Mode::Offset, None, Some(1))).unwrap();
         assert_eq!(page.items.len(), 2);
         assert_eq!(page.items[0].id, "t2");
         assert_eq!(page.mode, "offset");
@@ -903,7 +1046,9 @@ mod tests {
         )
         .unwrap();
         let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
-        q.source = TrackSource::Playlist { playlist_id: "p1".into() };
+        q.source = TrackSource::Playlist {
+            playlist_id: "p1".into(),
+        };
         let page = list_tracks(&conn, &q).unwrap();
         assert_eq!(page.items[0].id, "t3");
         assert_eq!(page.items[1].id, "t1");
@@ -960,13 +1105,17 @@ mod tests {
         )
         .unwrap();
         let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
-        q.source = TrackSource::Playlist { playlist_id: "p1".into() };
+        q.source = TrackSource::Playlist {
+            playlist_id: "p1".into(),
+        };
         let page = list_tracks(&conn, &q).unwrap();
         let ids: Vec<_> = page.items.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids, vec!["t1", "t2"], "p1 不含 p2 的曲目 t3");
         assert_eq!(page.total, 2);
 
-        q.source = TrackSource::Playlist { playlist_id: "p2".into() };
+        q.source = TrackSource::Playlist {
+            playlist_id: "p2".into(),
+        };
         let page2 = list_tracks(&conn, &q).unwrap();
         let ids2: Vec<_> = page2.items.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids2, vec!["t3"]);
@@ -1041,7 +1190,9 @@ mod tests {
         )
         .unwrap();
         let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
-        q.source = TrackSource::Playlist { playlist_id: "p1".into() };
+        q.source = TrackSource::Playlist {
+            playlist_id: "p1".into(),
+        };
         let got = collect_track_ids(&conn, &q, 10_000).unwrap();
         assert_eq!(got.ids, vec!["t3", "t1", "t2"], "按 position 顺序收全");
         assert!(!got.truncated);

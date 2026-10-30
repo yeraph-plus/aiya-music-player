@@ -124,9 +124,16 @@ try:
     )
     must_gate(text.replace("xtractor:\n    auto: no\n    write: no\n", "xtractor:\n    auto: no\n"),
               HOME_IDX, "xtractor.write 缺失（默认 yes 会写回音频文件）")
+    # library 指错地方：只判"非空"时这条会静默通过，而 beets 会照写一个新空库，
+    # 症状是"索引跑完了，统计一直是 0"——配置看起来完全合规。
+    must_gate(
+        text.replace(f"library: {cfg.yaml_path(idx_home / 'library.db')}",
+                     f"library: {cfg.yaml_path(idx_home / 'other.db')}"),
+        HOME_IDX, "library 指向另一个库文件（结果会写进没人看的库）",
+    )
     # workbench 不设闸：同一个家，用户想怎么写都行
     cfg.verify_config("library: 'x'\n", cfg.PROFILE_WORKBENCH, idx_home)
-    print("[2] 负向五连全部变红（闸不是装饰）")
+    print("[2] 负向六连全部变红（闸不是装饰）")
 
     # ---- 3. 白名单三元组 ----
     assert all(not spec.writes_files for spec in plugins.INDEX_PLUGINS), "索引家不该收写盘插件"

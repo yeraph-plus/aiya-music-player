@@ -260,17 +260,22 @@ mod tests {
         // 模拟曲目被删除导致 current_index 越界（items 被 CASCADE 删短）
         save_queue_full(
             &mut conn,
-            &QueuePersist { current_index: 5, ..QueuePersist::default() },
+            &QueuePersist {
+                current_index: 5,
+                ..QueuePersist::default()
+            },
             &["a".to_string(), "b".to_string()],
         )
         .unwrap();
         // 直接改 queue_state 制造越界（save 不做校验，防御在 load 侧）
-        conn.execute("UPDATE queue_state SET current_index = 5", []).unwrap();
+        conn.execute("UPDATE queue_state SET current_index = 5", [])
+            .unwrap();
         let (p, ids) = load_queue(&conn).unwrap().unwrap();
         assert_eq!(ids.len(), 2);
         assert_eq!(p.current_index, 1, "超出尾部 clamp 到 len-1");
 
-        conn.execute("UPDATE queue_state SET current_index = -9", []).unwrap();
+        conn.execute("UPDATE queue_state SET current_index = -9", [])
+            .unwrap();
         let (p2, _) = load_queue(&conn).unwrap().unwrap();
         assert_eq!(p2.current_index, -1, "脏负值 clamp 回 -1 哨兵");
     }

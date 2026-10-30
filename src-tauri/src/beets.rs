@@ -70,6 +70,224 @@ pub fn data_home(app: &tauri::AppHandle) -> PathBuf {
     crate::paths::data_root(app).join("beets")
 }
 
+/// beets 的"双家"（docs/45 §4）：工作台家与索引家。
+///
+/// 为什么必须要两个家（不是"一个家两种模式"）：
+/// - **工作台家**（`{app_data}/beets`）是用户自己的 beets 库，允许写标签、
+///   允许整理文件——"整理库/重命名/写回标签"这四件套是它的正当职责。
+/// - **索引家**（`{app_data}/beets-index`）只为一件事存在：**分析**。分析要
+///   把文件重导一遍（`beet import -R`），如果跑在用户库上，那一步会按用户的
+///   config 写标签、搬文件，甚至因为 `duplicate_action` 把条目删掉重来。
+///   索引家把 `directory` 钉在 `{home}/scratch`、写盘开关全部关死，最坏
+///   结果是"库里多几条记录"，不是"用户的歌被改了"。
+///
+/// 两个家必须由**宿主显式下发**（`AIYA_BEETS_HOME` + `BEETSDIR` + `AIYA_BEETS_PROFILE`），
+/// 不能让工具自己猜：猜错的后果是拿用户库当草稿纸。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Profile {
+    /// 用户的 beets 库：整理、写回、查询、建歌单
+    Workbench,
+    /// 应用独占的只读分析库：索引增强
+    Index,
+}
+
+impl Profile {
+    fn name(self) -> &'static str {
+        match self {
+            Profile::Workbench => "workbench",
+            Profile::Index => "index",
+        }
+    }
+
+    fn home(self, app: &tauri::AppHandle) -> PathBuf {
+        match self {
+            Profile::Workbench => data_home(app),
+            Profile::Index => index_home(app),
+        }
+    }
+}
+
+/// 索引家的数据目录：`{app_data}/beets-index`。
+///
+/// 与工作台家并列，**不是**它的子目录：beets 会往 home 里放 `config.yaml`、
+/// `library.db`、`state.pickle`，两个家共用父目录只会让"手滑清了工作台"
+/// 顺带清掉索引。
+pub fn index_home(app: &tauri::AppHandle) -> PathBuf {
+    crate::paths::data_root(app).join("beets-index")
+}
+
+/// beets 模块自有的派生数据（索引增强结论）。
+///
+/// 放在索引家里而不是应用库里：见 `crates/aiya-beets-store` 的头注。一句话，
+/// 它是 beets 的中间产物，应用的数据模型里不该有它。
+pub fn enrich_db(app: &tauri::AppHandle) -> PathBuf {
+    index_home(app).join("enrich.db")
+}
+
+/* ---------------- 模块自有配置：不在应用 settings 表里 ---------------- */
+
+/// beets 模块自己的配置，落在 `{data_home}/settings.json`。
+///
+/// ## 为什么搬出应用的 settings 表
+///
+/// 这些键（`beets.toolPath` / `beets.targetRoot` / `beets.inboxImported` …）
+/// 曾经存在应用的 `settings` 表里。它们不是应用设置：应用从不读它们来做任何
+/// 决定，只有 beets 模块自己读。放在应用表里有两个真实代价：
+///
+/// 1. **数据模型耦合**：应用的 settings 里出现"因为装了 beets 才有"的键，
+///    备份、迁移、"导出我的设置"都会被它们污染。
+/// 2. **写路径耦合**：`clear_target_if_invalid` 让**应用**在曲库根变化时去改
+///    beets 的配置——方向反了。现在改成读时校验：target 不在扫描根里就当没设，
+///    用户把目录加回来时它自己恢复，比"被悄悄清掉"更好。
+///
+/// ## 为什么是 json 不是又一张表
+///
+/// 五个标量 + 一个路径数组，没有查询需求。开一个 SQLite 文件只为存这几十字节，
+/// 换来的是又一份 schema、又一次迁移。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Settings {
+    /// 用户显式指定的解释器/可执行文件（设置里填的那个）
+    pub tool_path: Option<String>,
+    pub tool_args: Option<String>,
+    /// 整理输出根（必须是某个扫描根）
+    pub target_root: Option<String>,
+    /// 待整理目录
+    pub inbox_path: Option<String>,
+    /// 已从待整理目录成功导入的源路径（FIFO，防重复）
+    pub inbox_imported: Vec<String>,
+}
+
+/// 读改写串行化：配置只有几 KB，但"读 → 改 → 写"不持锁会在两个命令同时
+/// 到达时丢掉其中一次的改动（用户看到的是"设置保存了又变回去"）。
+static SETTINGS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn settings_path(app: &tauri::AppHandle) -> PathBuf {
+    data_home(app).join("settings.json")
+}
+
+/// 读配置。任何读取失败（不存在、坏 JSON、权限）都回落默认值：
+/// 一份坏掉的配置文件不该让 beets 模块整体不可用——用户重填一次就好。
+pub fn load_settings(app: &tauri::AppHandle) -> Settings {
+    load_at(&settings_path(app))
+}
+
+/// 路径版（可测）：坏文件 / 不存在 / 权限不足一律回落默认值。
+fn load_at(path: &std::path::Path) -> Settings {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// 原子写：先写 `.tmp` 再 rename。
+///
+/// 直接覆盖写有两个失败模式：写到一半断电得到半个 JSON（下次读回落默认值，
+/// 用户的配置静默消失），以及并发读到空文件。rename 在 Windows 上同名替换
+/// 是原子的（同卷）。
+fn write_settings(app: &tauri::AppHandle, s: &Settings) -> Result<(), String> {
+    write_at(&settings_path(app), s)
+}
+
+/// 路径版（可测）。临时文件名带进程号：两个实例同时写时，共用 `.tmp`
+/// 会让后写的把先写的内容 rename 进去（丢一次改动）。
+fn write_at(path: &std::path::Path, s: &Settings) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    let body = serde_json::to_vec_pretty(s).map_err(|e| e.to_string())?;
+    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })
+}
+
+/// 读 → 改 → 写。返回值是闭包的返回值，便于"改完把新视图给调用方"。
+pub fn update_settings<R>(
+    app: &tauri::AppHandle,
+    f: impl FnOnce(&mut Settings) -> R,
+) -> Result<R, String> {
+    let _guard = SETTINGS_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut s = load_settings(app);
+    let out = f(&mut s);
+    write_settings(app, &s)?;
+    Ok(out)
+}
+
+/// 待整理目录排除表的硬上限：超过丢最老的。
+///
+/// 2000 条对"待整理目录"是够宽裕的滚动窗口，同时挡住"常年 copy 用户"
+/// 把配置文件撑到几 MB。
+pub const INBOX_IMPORTED_CAP: usize = 2000;
+
+/// 记下"已成功导入的源文件"（排除表，防 copy 模式重复入库）。
+///
+/// 幂等：同一路径（大小写/分隔符不敏感）只留一条。
+pub fn remember_imported(app: &tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
+    update_settings(app, move |s| {
+        for p in paths {
+            let p = p.trim();
+            if p.is_empty() {
+                continue;
+            }
+            let pc = crate::canon_path(p);
+            if !s.inbox_imported.iter().any(|e| crate::canon_path(e) == pc) {
+                s.inbox_imported.push(p.to_string());
+            }
+        }
+        if s.inbox_imported.len() > INBOX_IMPORTED_CAP {
+            let drop = s.inbox_imported.len() - INBOX_IMPORTED_CAP;
+            s.inbox_imported.drain(0..drop);
+        }
+    })
+}
+
+/// 配置视图（UI 的待整理目录行与输出根 radio 都从这里读）。
+///
+/// `roots` 由调用方给（应用知道用户的曲库目录，本模块不该自己查）：
+/// `effective_target` 就是"用户勾的和曲库现状对不上时该用哪个"这条规则，
+/// 规则在这里，事实从外面来。
+pub fn config_view(app: &tauri::AppHandle, roots: &[String]) -> crate::dto::beets::BeetsConfig {
+    config_view_of(&load_settings(app), roots)
+}
+
+/// 纯函数版（可测）：配置 + 曲库目录 → 视图。
+fn config_view_of(s: &Settings, roots: &[String]) -> crate::dto::beets::BeetsConfig {
+    let target = trimmed(s.target_root.clone());
+    let effective = target
+        .clone()
+        .filter(|t| {
+            roots
+                .iter()
+                .any(|r| crate::canon_path(r) == crate::canon_path(t))
+        })
+        .or_else(|| roots.first().cloned());
+    crate::dto::beets::BeetsConfig {
+        inbox: trimmed(s.inbox_path.clone()),
+        target_root: target,
+        effective_target: effective,
+        imported_count: s.inbox_imported.len(),
+    }
+}
+
+/// 把应用 settings 表里的旧键一次性搬进来（幂等）。
+///
+/// 只在 `settings.json` 还不存在时执行：用户已经在新文件里改过配置之后，
+/// 再用旧值覆盖他等于"每次启动都回滚一次设置"。
+///
+/// 返回 `true` 表示真的搬过（调用方据此清掉旧键）。
+pub fn adopt_legacy_settings(app: &tauri::AppHandle, legacy: Settings) -> bool {
+    let path = settings_path(app);
+    if path.exists() {
+        return false;
+    }
+    write_settings(app, &legacy).is_ok()
+}
+
 /// 整理输出根 → 工具的 `directory:`。
 ///
 /// 这是**用户事实**，不是 beets 知识：播放器本来就知道用户的曲库在哪。
@@ -79,30 +297,30 @@ pub fn data_home(app: &tauri::AppHandle) -> PathBuf {
 /// `beets.targetRoot`）；没勾或勾选的目录已被移除时回退第一个扫描根——
 /// 与"勾选框出现之前"的行为一致，老配置零迁移。
 fn scan_root(app: &tauri::AppHandle) -> Option<String> {
-    app.try_state::<crate::AppState>()
-        .and_then(|st| {
-            st.db()
-                .send(|conn| {
-                    let roots = crate::read_roots(conn);
-                    let target = crate::setting_get(conn, "beets.targetRoot")
-                        .and_then(|v| v.as_str().map(str::to_string))
-                        .filter(|s| !s.trim().is_empty());
-                    Ok(target
-                        .filter(|t| {
-                            roots.iter().any(|r| crate::canon_path(r) == crate::canon_path(t))
-                        })
-                        .or_else(|| roots.first().cloned()))
-                })
-                .ok()
-                .flatten()
-        })
+    // 勾选值来自**本模块自己的配置**，扫描根来自**应用**（用户事实）。
+    // 两者分开取：配置和应用库各有各的写者，混在一次读里会让"谁的目录算数"
+    // 这个问题有两个答案。
+    let target = trimmed(load_settings(app).target_root);
+    app.try_state::<crate::AppState>().and_then(|st| {
+        st.db()
+            .send(|conn| {
+                let roots = crate::read_roots(conn);
+                Ok(target
+                    .filter(|t| {
+                        roots
+                            .iter()
+                            .any(|r| crate::canon_path(r) == crate::canon_path(t))
+                    })
+                    .or_else(|| roots.first().cloned()))
+            })
+            .ok()
+            .flatten()
+    })
 }
 
-fn setting_str(app: &tauri::AppHandle, key: &'static str) -> Option<String> {
-    app.try_state::<crate::AppState>()
-        .and_then(|st| st.db().send(|conn| Ok(crate::setting_get(conn, key))).ok().flatten())
-        .and_then(|v| v.as_str().map(str::to_string))
-        .filter(|s| !s.trim().is_empty())
+/// 去空白 + 空串归一成 `None`（配置里空串和没填是同一件事）。
+fn trimmed(v: Option<String>) -> Option<String> {
+    v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
 /// 参数串切分：空白分隔，支持用双引号包住带空格的项。
@@ -171,8 +389,11 @@ pub fn discover(app: &tauri::AppHandle) -> Option<(ToolEntry, EntrySource)> {
         }
     }
 
-    if let Some(program) = setting_str(app, "beets.toolPath") {
-        let args = setting_str(app, "beets.toolArgs").map(|s| split_args(&s)).unwrap_or_default();
+    let cfg = load_settings(app);
+    if let Some(program) = trimmed(cfg.tool_path) {
+        let args = trimmed(cfg.tool_args)
+            .map(|s| split_args(&s))
+            .unwrap_or_default();
         if PathBuf::from(&program).is_file() {
             return Some((ToolEntry { program, args }, EntrySource::Settings));
         }
@@ -181,7 +402,10 @@ pub fn discover(app: &tauri::AppHandle) -> Option<(ToolEntry, EntrySource)> {
 
     if let Some(found) = find_on_path("aiya-beets") {
         return Some((
-            ToolEntry { program: found.to_string_lossy().into_owned(), args: Vec::new() },
+            ToolEntry {
+                program: found.to_string_lossy().into_owned(),
+                args: Vec::new(),
+            },
             EntrySource::Path,
         ));
     }
@@ -222,7 +446,7 @@ pub fn discover(app: &tauri::AppHandle) -> Option<(ToolEntry, EntrySource)> {
 /// 于是出现"beets 写 A 家、锁建在 B 家"：双家隔离静默失效，症状是"索引跑完了
 /// 却查不到"。现在两侧都钉死：宿主显式覆盖（`env()` 优先于继承值），
 /// 工具侧再在两者不等时 fail-fast。
-fn tool_env(app: &tauri::AppHandle) -> Vec<(String, String)> {
+fn tool_env(app: &tauri::AppHandle, profile: Profile) -> Vec<(String, String)> {
     // 源码树形态需要 PYTHONPATH 才 import 得到包
     #[cfg(debug_assertions)]
     let dev_src = {
@@ -236,21 +460,29 @@ fn tool_env(app: &tauri::AppHandle) -> Vec<(String, String)> {
     #[cfg(not(debug_assertions))]
     let dev_src: Option<PathBuf> = None;
 
-    env_pairs(&data_home(app), scan_root(app), dev_src)
+    env_pairs(&profile.home(app), scan_root(app), dev_src, profile)
 }
 
 /// `tool_env` 的纯函数部分：给定事实 → 环境键值对（可单测，不需要 AppHandle）。
+///
+/// `AIYA_BEETS_PROFILE` **必须显式下发**，即便值是默认的 `workbench`：
+/// 工具侧把"没收到"当默认是它的宽容，不是宿主的许可证。一旦哪天默认改了，
+/// 靠隐式默认的调用方会静默换家——分析跑进用户库这种事不该由默认值决定。
 fn env_pairs(
     home: &std::path::Path,
     root: Option<String>,
     dev_src: Option<PathBuf>,
+    profile: Profile,
 ) -> Vec<(String, String)> {
     let home_str = home.to_string_lossy().into_owned();
     let mut env = vec![
         ("PYTHONIOENCODING".to_string(), "utf-8".to_string()),
         ("PYTHONUTF8".to_string(), "1".to_string()),
+        // 工具侧硬约束：`BEETSDIR` 与 `AIYA_BEETS_HOME` 不同值就拒跑
+        //（否则锁与库分家）。两个键都由这里给，值必然相同。
         ("AIYA_BEETS_HOME".to_string(), home_str.clone()),
         ("BEETSDIR".to_string(), home_str),
+        ("AIYA_BEETS_PROFILE".to_string(), profile.name().to_string()),
     ];
     if let Some(root) = root {
         env.push(("AIYA_BEETS_SCAN_ROOT".to_string(), root));
@@ -262,8 +494,10 @@ fn env_pairs(
 }
 
 /// 入口 + 环境 → 可直接起进程的描述。
-fn launcher_for(app: &tauri::AppHandle, entry: &ToolEntry) -> Launcher {
-    Launcher::new(&entry.program).args(entry.args.clone()).envs(tool_env(app))
+fn launcher_for(app: &tauri::AppHandle, entry: &ToolEntry, profile: Profile) -> Launcher {
+    Launcher::new(&entry.program)
+        .args(entry.args.clone())
+        .envs(tool_env(app, profile))
 }
 
 /// 事件出口：把 client 抽象出来的通道接到 Tauri 事件上。
@@ -296,9 +530,7 @@ fn version_mismatch(got: Option<u32>) -> Option<String> {
         Some(v) => Some(format!(
             "组件协议 v{v} 比播放器支持的 v{want} 新：请升级播放器",
         )),
-        None => Some(format!(
-            "组件没有报协议版本（应为 v{want}）：请重装组件",
-        )),
+        None => Some(format!("组件没有报协议版本（应为 v{want}）：请重装组件",)),
     }
 }
 
@@ -326,8 +558,12 @@ fn status_from(entry: &ToolEntry, source: EntrySource, report: StatusReport) -> 
         plugins: report.plugins,
         // 能力段是工具自报的 JSON，这里才落地成 UI 形状。
         // 解析失败不算致命：老版本工具没这个字段，UI 会显示"未知"。
-        plugin_health: report.capability_health.and_then(|v| serde_json::from_value(v).ok()),
-        plugin_summary: report.capability_summary.and_then(|v| serde_json::from_value(v).ok()),
+        plugin_health: report
+            .capability_health
+            .and_then(|v| serde_json::from_value(v).ok()),
+        plugin_summary: report
+            .capability_summary
+            .and_then(|v| serde_json::from_value(v).ok()),
         config_dir: report.config_dir,
         data_home: report.data_home,
         schema_matched: matched,
@@ -411,10 +647,14 @@ fn query_sidecar(
     source: EntrySource,
     timeout: Duration,
 ) -> Result<BeetsStatus, String> {
-    let tool = StdioTool::new(launcher_for(app, entry));
+    let tool = StdioTool::new(launcher_for(app, entry, Profile::Workbench));
     match tool.status(timeout) {
         Ok(report) => Ok(status_from(entry, source, report)),
-        Err(ToolError::Rejected { code, stage, message }) => Ok(absent(
+        Err(ToolError::Rejected {
+            code,
+            stage,
+            message,
+        }) => Ok(absent(
             &code,
             Some(format!("[{stage}] {message}")),
             Some(entry),
@@ -482,7 +722,8 @@ impl InstallTrack {
 /// 否则单独发一版 beets 会让播放器在这里 404。
 ///
 /// 下载失败会给"下到了什么"的明确错误（见 `verify_asset`），而不是静默卡住。
-const RELEASE_BASE: &str = "https://github.com/yeraph-plus/aiya-music-player/releases/latest/download";
+const RELEASE_BASE: &str =
+    "https://github.com/yeraph-plus/aiya-music-player/releases/latest/download";
 const INSTALLER_ASSET: &str = "aiya-beets-installer.pyz";
 const BUNDLE_ASSET: &str = "aiya-beets-bundle-win-x64.zip";
 
@@ -622,9 +863,8 @@ fn fetch_asset(
         "message": format!("下载 {asset}"),
     }));
     let dest = std::env::temp_dir().join(asset);
-    download_to(&url, &dest).map_err(|e| {
-        format!("{e}\n——若组件尚未发布，可手动下载后设置 {env_key} 指向该文件")
-    })?;
+    download_to(&url, &dest)
+        .map_err(|e| format!("{e}\n——若组件尚未发布，可手动下载后设置 {env_key} 指向该文件"))?;
     verify_asset(&dest, kind)?;
     Ok(dest)
 }
@@ -642,10 +882,7 @@ fn find_system_python() -> Option<String> {
             .stderr(std::process::Stdio::null());
         // Python 是控制台程序：不加这个，点「安装组件」时先闪一个黑框
         crate::proc::no_window(&mut probe);
-        let ok = probe
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
+        let ok = probe.status().map(|s| s.success()).unwrap_or(false);
         if ok {
             return Some(cand.into());
         }
@@ -682,12 +919,10 @@ fn install_via_installer(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .envs(tool_env(app));
+        .envs(tool_env(app, Profile::Workbench));
     // 安装要跑几十秒，黑框会一直杵在那儿——比一闪而过更难看
     crate::proc::no_window(&mut cmd);
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("启动安装器失败：{e}"))?;
+    let mut child = cmd.spawn().map_err(|e| format!("启动安装器失败：{e}"))?;
 
     let stdout = match child.stdout.take() {
         Some(s) => s,
@@ -719,7 +954,10 @@ fn install_via_installer(
         .name("beets-install-recv".into())
         .spawn(move || {
             use std::io::BufRead;
-            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
                 if tx.send(line).is_err() {
                     break; // 主线程已返回/收尸
                 }
@@ -753,9 +991,9 @@ fn install_via_installer(
                     continue;
                 }
                 // 安装器输出 JSON 行；万一有裸行（pip 进度条）也包成 progress，不丢信息
-                let v: serde_json::Value = serde_json::from_str(s).unwrap_or_else(|_| {
-                    serde_json::json!({ "type": "progress", "stage": "pip", "message": s })
-                });
+                let v: serde_json::Value = serde_json::from_str(s).unwrap_or_else(
+                    |_| serde_json::json!({ "type": "progress", "stage": "pip", "message": s }),
+                );
                 if v.get("type").and_then(|t| t.as_str()) == Some("done") {
                     done = true;
                 }
@@ -797,7 +1035,10 @@ fn install_via_installer(
         ));
     }
     if !code.success() || !done {
-        return Err(format!("安装器未成功完成（退出码 {}）", code.code().unwrap_or(-1)));
+        return Err(format!(
+            "安装器未成功完成（退出码 {}）",
+            code.code().unwrap_or(-1)
+        ));
     }
 
     // 入口：venv 里的 aiya-beets 脚本。
@@ -805,7 +1046,10 @@ fn install_via_installer(
     // 我们就记这个位置（见 docs/33 §6.2 A 轨道）。
     let exe = target.join("Scripts").join("aiya-beets.exe");
     if exe.is_file() {
-        return Ok(ToolEntry { program: exe.to_string_lossy().into_owned(), args: Vec::new() });
+        return Ok(ToolEntry {
+            program: exe.to_string_lossy().into_owned(),
+            args: Vec::new(),
+        });
     }
     // 退一步：用 venv 解释器跑模块（Scripts 里没有 console script 的旧式安装）
     let py = target.join("Scripts").join("python.exe");
@@ -859,9 +1103,16 @@ fn install_bundle_to(
                     let args = v
                         .get("args")
                         .and_then(|a| a.as_array())
-                        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str().map(str::to_string))
+                                .collect()
+                        })
                         .unwrap_or_default();
-                    return Ok(ToolEntry { program: program.to_string_lossy().into_owned(), args });
+                    return Ok(ToolEntry {
+                        program: program.to_string_lossy().into_owned(),
+                        args,
+                    });
                 }
             }
         }
@@ -875,7 +1126,10 @@ fn install_bundle_to(
             } else {
                 Vec::new()
             };
-            return Ok(ToolEntry { program: p.to_string_lossy().into_owned(), args });
+            return Ok(ToolEntry {
+                program: p.to_string_lossy().into_owned(),
+                args,
+            });
         }
     }
     Err("套件包展开后找不到入口（缺 manifest.json 且没有 aiya-beets.exe）".to_string())
@@ -924,7 +1178,9 @@ fn extract_safely<R: std::io::Read + std::io::Seek>(
 ) -> Result<(), String> {
     let mut written = 0u64;
     for i in 0..zip.len() {
-        let mut entry = zip.by_index(i).map_err(|e| format!("读取套件包条目失败：{e}"))?;
+        let mut entry = zip
+            .by_index(i)
+            .map_err(|e| format!("读取套件包条目失败：{e}"))?;
         // zip 9 起 `name()` 返回 Result：条目名可能是非法编码（CP437 之外的
         // 未标注原始字节），旧版默默替换成 lossy 字符串——那会让路径校验
         // 对着"替换后的名字"做判断，与真实落盘名不符。宁可在这里失败。
@@ -936,7 +1192,10 @@ fn extract_safely<R: std::io::Read + std::io::Seek>(
             return Err(format!("套件包含非法路径条目，拒绝展开：{name}"));
         };
         // 0o170000 = S_IFMT，0o120000 = S_IFLNK
-        if entry.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000) {
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
             return Err(format!("套件包含符号链接条目，拒绝展开：{name}"));
         }
         let dest = target.join(&rel);
@@ -966,17 +1225,12 @@ fn extract_safely<R: std::io::Read + std::io::Seek>(
 
 /// 记下入口，下次 `discover` 直接命中（设置优先于 PATH 与源码树）。
 fn remember_entry(app: &tauri::AppHandle, entry: &ToolEntry) -> Result<(), String> {
-    let program = serde_json::json!(entry.program);
-    let args = serde_json::json!(entry.args);
-    app.try_state::<crate::AppState>()
-        .ok_or_else(|| "AppState 未就绪".to_string())?
-        .db()
-        .send(move |conn| {
-            crate::setting_set(conn, "beets.toolPath", &program).map_err(aiya_data::DbError::Sql)?;
-            crate::setting_set(conn, "beets.toolArgs", &args).map_err(aiya_data::DbError::Sql)?;
-            Ok(())
-        })
-        .map_err(|e| e.to_string())
+    let program = entry.program.clone();
+    let args = entry.args.join(" ");
+    update_settings(app, move |s| {
+        s.tool_path = Some(program);
+        s.tool_args = Some(args);
+    })
 }
 
 /// 安装（异步）：立刻返回，进度走 `beets:install`，结束时补一条 finished。
@@ -993,12 +1247,12 @@ pub fn start_install(app: tauri::AppHandle, track: String) -> Result<(), String>
             };
             let result = (|| -> Result<ToolEntry, String> {
                 let (env_key, asset, kind) = match track {
-                    InstallTrack::Installer => {
-                        ("AIYA_BEETS_INSTALLER", INSTALLER_ASSET, AssetKind::Installer)
-                    }
-                    InstallTrack::Bundle => {
-                        ("AIYA_BEETS_BUNDLE", BUNDLE_ASSET, AssetKind::Bundle)
-                    }
+                    InstallTrack::Installer => (
+                        "AIYA_BEETS_INSTALLER",
+                        INSTALLER_ASSET,
+                        AssetKind::Installer,
+                    ),
+                    InstallTrack::Bundle => ("AIYA_BEETS_BUNDLE", BUNDLE_ASSET, AssetKind::Bundle),
                 };
                 let path = fetch_asset(env_key, asset, kind, &emit)?;
                 match track {
@@ -1033,10 +1287,12 @@ pub fn start_install(app: tauri::AppHandle, track: String) -> Result<(), String>
 /// 找不到入口时的文案要能指导用户下一步（去扫描入库页装组件），
 /// 而不是一句 "no beets interpreter available"。
 fn tool_or_err(app: &tauri::AppHandle) -> Result<StdioTool, String> {
-    let (entry, _source) = discover(app).ok_or_else(|| {
-        "未安装 beets 组件：请到「扫描入库 → 曲库维护」安装，或先设置 beets.toolPath".to_string()
-    })?;
-    Ok(StdioTool::new(launcher_for(app, &entry)))
+    let (entry, _source) = discover(app).ok_or_else(|| NOT_INSTALLED.to_string())?;
+    Ok(StdioTool::new(launcher_for(
+        app,
+        &entry,
+        Profile::Workbench,
+    )))
 }
 
 /* ---------------- B3：会话槽 + 取消 ---------------- */
@@ -1100,21 +1356,7 @@ pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), St
     // 进协议预留的 options 对象（docs/40 十三轮）：待整理目录固定后，copy 应用的
     // 原件一直留在 inbox，不排除的话下次整理会把同一批文件再导一遍。UI 不用
     // 搬运这份数据，preview 命令签名保持不变。
-    let exclude: Vec<String> = app
-        .try_state::<crate::AppState>()
-        .and_then(|st| {
-            st.db()
-                .send(|conn| {
-                    Ok(crate::setting_get(conn, "beets.inboxImported")
-                        .and_then(|v| v.as_array().cloned())
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter_map(|v| v.as_str().map(str::to_string))
-                        .collect::<Vec<_>>())
-                })
-                .ok()
-        })
-        .unwrap_or_default();
+    let exclude: Vec<String> = load_settings(&app).inbox_imported;
 
     let mut body = serde_json::json!({ "id": 1, "cmd": "preview_import", "paths": paths });
     if !exclude.is_empty() {
@@ -1261,22 +1503,26 @@ pub fn start_duplicates(app: tauri::AppHandle, keys: Vec<String>) -> Result<(), 
 
 /// 起一次索引增强会话：事件走 `beets:enrich`，`enrichItem` 由宿主边收边落库。
 ///
-/// 与其它会话的三处不同，都不是风格选择：
-/// 1. **路径清单由调用方给**：哪些文件"缺结论/结论过期"只有宿主的 DB 知道
-///    （`enrichment::work_paths`），sidecar 不自己挑。
-/// 2. **事件出口不是纯转发**：`enrichment::Sink` 一边转发给 UI，一边把
-///    `enrichItem` 攒起来写关联表（sidecar 不碰应用库，docs/44 §9.1）。
-/// 3. **这里不持 `scanning`**：写锁的粒度在落库函数里（每批一次），提前持有
-///    等于整场挡住 30 s 定时刷新和手动扫描。
-///
-/// 不触发读模型对账：增强只往关联表写，`tracks` 一个字节不变。
-pub fn start_enrich(
-    app: tauri::AppHandle,
-    source: String,
-    force: bool,
-    paths: Vec<String>,
-) -> Result<(), String> {
-    let tool = tool_or_err(&app)?;
+/// 与其它会话的四处不同，都不是风格选择：
+/// 1. **跑在索引家**（`Profile::Index`）。这是本模块最危险的一跳：`enrich`
+///    会先 `item.remove()` 再 `beet import -R` 重导——跑在用户库上，那一步会
+///    按用户的 config 写标签、搬文件。索引家的写盘开关全部钉死，最坏结果是
+///    "索引库里多几条记录"。
+/// 2. **路径清单由 [`crate::enrichment::work_paths`] 现算**：只有应用侧知道
+///    曲库有哪些文件、`size/mtime` 是多少。sidecar 收到的是一份明确清单，
+///    不自己挑文件。
+/// 3. **事件出口不是纯转发**：`enrichment::Sink` 一边转发给 UI，一边把
+///    `enrichItem` 攒起来写**自己的**结论库（`{beets-index}/enrich.db`）。
+///    那个库不与应用库共享文件，所以**不需要** `scanning`——分析再久也不会
+///    挡住用户的扫描。
+/// 4. **不触发读模型对账**：增强只往自己的结论库写，`tracks` 一个字节不变。
+pub fn start_enrich(app: tauri::AppHandle, source: String, force: bool) -> Result<(), String> {
+    let (entry, _src) = discover(&app).ok_or_else(|| NOT_INSTALLED.to_string())?;
+    let paths = crate::enrichment::work_paths(&app, &source, force)?;
+    if paths.is_empty() {
+        return Err("工作清单为空：没有需要分析的曲目".to_string());
+    }
+    let tool = StdioTool::new(launcher_for(&app, &entry, enrich_profile()));
     let sink = Arc::new(crate::enrichment::Sink::start(app.clone())?);
     let exit_sink = Arc::clone(&sink);
     run_session_with(
@@ -1294,6 +1540,75 @@ pub fn start_enrich(
     )
 }
 
+/// 分析会话固定跑索引家。
+///
+/// 抽成函数只为让测试能盯住它：直接写 `Profile::Index` 也能跑，但"哪天有人
+/// 顺手改成 `Workbench`（看起来更简单）"时，没有任何东西会红——而那个改动的
+/// 后果是 `item.remove()` + 按用户 config 重导，也就是**用户的歌被改**。
+pub fn enrich_profile() -> Profile {
+    Profile::Index
+}
+
+/* ---------------- 查询页（docs/47）：读 beets 库，转成歌单 ---------------- */
+
+/// 「组件没装」的统一文案。放在一处：三个调用点各写一句时，改一次要改三处，
+/// 而漏改的那处会让 UI 的"安装指引"分支认不出来（`map_beets_start` 靠关键词
+/// 分类，文案本身就参与判定）。
+pub const NOT_INSTALLED: &str = "未安装 beets 组件：请先在设置里安装，或指定组件路径";
+
+/// 查询页的短进程超时。查询要做 `COUNT(*)` + 取一页，几万条的库也在秒级；
+/// 30 s 是给"库刚被整理过、SQLite 在补索引"留的余量。
+const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 读 beets 库（**工作台家**，用户自己的库）。
+///
+/// 为什么查工作台家而不是索引家：查询页的产物是"存为歌单"，而歌单条目靠
+/// `tracks.path_lower` 关联——索引家是一份应用独占的只读副本，从那里存歌单
+/// 等于让用户对着一个他看不见的库点"添加"，路径大概率不在曲库里。
+///
+/// `rules` 与 `raw` 互斥（工具侧会拒）：不猜优先级，两个都给等于让调用方
+/// 把"我到底想要什么"外包给一个 if。
+pub fn query_page(
+    app: &tauri::AppHandle,
+    rules: Option<serde_json::Value>,
+    raw: Option<String>,
+    fields: Option<Vec<String>>,
+    limit: Option<usize>,
+) -> Result<crate::dto::beets::BeetsQueryPage, String> {
+    let (entry, _source) = discover(app).ok_or_else(|| NOT_INSTALLED.to_string())?;
+    let launcher = launcher_for(app, &entry, Profile::Workbench);
+    let data = aiya_beets_client::session::request_data(
+        &launcher,
+        &serde_json::json!({
+            "id": 1, "cmd": "query",
+            "rules": rules,
+            "raw": raw,
+            "fields": fields,
+            "limit": limit,
+        }),
+        QUERY_TIMEOUT,
+    )
+    .map_err(|e| e.to_string())?;
+    serde_json::from_value(data).map_err(|e| format!("查询应答形状不对（协议漂移？）: {e}"))
+}
+
+/// 可查字段清单（含插件写入的 flexible 键）+ 识别源三态。
+///
+/// 字段清单归工具侧回答（它才知道用户装了哪些插件）；宿主把它原样转给 UI。
+pub fn field_catalog(
+    app: &tauri::AppHandle,
+) -> Result<crate::dto::beets::BeetsFieldCatalog, String> {
+    let (entry, _source) = discover(app).ok_or_else(|| NOT_INSTALLED.to_string())?;
+    let launcher = launcher_for(app, &entry, Profile::Workbench);
+    let data = aiya_beets_client::session::request_data(
+        &launcher,
+        &serde_json::json!({ "id": 1, "cmd": "fields" }),
+        QUERY_TIMEOUT,
+    )
+    .map_err(|e| e.to_string())?;
+    serde_json::from_value(data).map_err(|e| format!("字段清单形状不对（协议漂移？）: {e}"))
+}
+
 /* ---------------- 插件市场（docs/40 §3 白名单版） ---------------- */
 
 /// 插件市场目录：一次性短进程查询（与 status 探测同款开销，~1s）。
@@ -1303,15 +1618,13 @@ pub fn start_enrich(
 pub fn plugin_catalog(
     app: &tauri::AppHandle,
 ) -> Result<Vec<crate::dto::beets::BeetsMarketItem>, String> {
-    let (entry, _source) = discover(app)
-        .ok_or_else(|| "未安装 beets 组件：请到「扫描入库 → 曲库维护」安装".to_string())?;
-    let launcher = launcher_for(app, &entry);
+    let (entry, _source) = discover(app).ok_or_else(|| NOT_INSTALLED.to_string())?;
+    let launcher = launcher_for(app, &entry, Profile::Workbench);
     let rows = aiya_beets_client::session::query_plugin_catalog(&launcher, Duration::from_secs(20))
         .map_err(|e| e.to_string())?;
     rows.into_iter()
         .map(|row| {
-            serde_json::from_value(row)
-                .map_err(|e| format!("目录项形状不对（协议漂移？）: {e}"))
+            serde_json::from_value(row).map_err(|e| format!("目录项形状不对（协议漂移？）: {e}"))
         })
         .collect()
 }
@@ -1370,7 +1683,7 @@ mod tests {
     #[test]
     fn env_pins_beetsdir_to_home() {
         let home = std::path::Path::new(r"D:\data\beets-index");
-        let env = env_pairs(home, None, None);
+        let env = env_pairs(home, None, None, Profile::Index);
         let get = |k: &str| {
             env.iter()
                 .find(|(key, _)| key == k)
@@ -1390,6 +1703,7 @@ mod tests {
             home,
             Some("/music".to_string()),
             Some(PathBuf::from("/repo/beets-tool/src")),
+            Profile::Workbench,
         );
         let get = |k: &str| {
             env.iter()
@@ -1399,6 +1713,96 @@ mod tests {
         };
         assert_eq!(get("AIYA_BEETS_SCAN_ROOT"), "/music");
         assert_eq!(get("PYTHONPATH"), "/repo/beets-tool/src");
+    }
+
+    /// **P0 的回归防线**：profile 必须由宿主显式下发。
+    ///
+    /// 这条测试存在的理由是它曾经不存在：`enrich` 走的是工作台家（用户真库），
+    /// 而 `-R` 重导前的 `item.remove()` 会把用户的条目删掉再按用户的 config
+    /// 重导——"点一下分析"= 改用户的歌。缺的不是代码，是**没有一条测试看着
+    /// 那句环境变量有没有被写上**。
+    #[test]
+    fn env_always_states_profile() {
+        for (profile, want) in [(Profile::Workbench, "workbench"), (Profile::Index, "index")] {
+            let env = env_pairs(std::path::Path::new("/tmp/x"), None, None, profile);
+            let got = env
+                .iter()
+                .find(|(k, _)| k == "AIYA_BEETS_PROFILE")
+                .map(|(_, v)| v.as_str());
+            assert_eq!(got, Some(want), "profile 必须显式下发，不能靠工具侧默认");
+        }
+    }
+
+    /// 分析必须跑在索引家（P0 的第二条防线；第一条看 `env_always_states_profile`）。
+    #[test]
+    fn enrich_runs_in_index_home() {
+        assert_eq!(
+            enrich_profile(),
+            Profile::Index,
+            "分析改回工作台家 = 改用户的歌"
+        );
+    }
+
+    /* ---------------- 模块自有配置（docs/47） ---------------- */
+
+    fn tmp_settings_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("aiya-beets-cfg-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn settings_roundtrip_and_corrupt_falls_back_to_default() {
+        let dir = tmp_settings_dir("roundtrip");
+        let path = dir.join("settings.json");
+        let cfg = Settings {
+            tool_path: Some("C:/x/aiya-beets.exe".into()),
+            tool_args: Some("-m aiya_beets".into()),
+            target_root: Some("D:/Music".into()),
+            inbox_path: Some("D:/Inbox".into()),
+            inbox_imported: vec!["D:/Inbox/a.flac".into()],
+        };
+        write_at(&path, &cfg).unwrap();
+        let back = load_at(&path);
+        assert_eq!(back.tool_path, cfg.tool_path);
+        assert_eq!(back.inbox_imported, cfg.inbox_imported);
+
+        // 坏 JSON 不能让整个模块不可用：回落默认值，用户重填一次就好
+        std::fs::write(&path, b"{ not json").unwrap();
+        let broken = load_at(&path);
+        assert!(broken.tool_path.is_none() && broken.inbox_imported.is_empty());
+        // 不存在的文件同理
+        assert!(load_at(&dir.join("nope.json")).tool_path.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn config_view_falls_back_to_first_root() {
+        let roots = vec!["D:/Music".to_string(), "E:/Audio".to_string()];
+        let cfg = Settings {
+            target_root: Some("D:/Music".into()),
+            inbox_path: Some("  ".into()),
+            ..Settings::default()
+        };
+        // 勾的目录仍在 → 生效值就是它；空串的 inbox 归一成 None
+        let v = config_view_of(&cfg, &roots);
+        assert_eq!(v.target_root.as_deref(), Some("D:/Music"));
+        assert_eq!(v.effective_target.as_deref(), Some("D:/Music"));
+        assert!(v.inbox.is_none(), "空串必须归一成 None");
+
+        // 勾的目录被移除了 → 生效值回退第一个根，但**不清用户的选择**
+        let gone = Settings {
+            target_root: Some("F:/Gone".into()),
+            ..Settings::default()
+        };
+        let v = config_view_of(&gone, &roots);
+        assert_eq!(v.effective_target.as_deref(), Some("D:/Music"));
+        assert_eq!(
+            v.target_root.as_deref(),
+            Some("F:/Gone"),
+            "用户勾的目录不该被静默清掉——加回来时它自己恢复"
+        );
     }
 
     /* ---------------- 安装轨道（docs/33 §6.2） ---------------- */
@@ -1456,7 +1860,11 @@ mod tests {
         handle.join().unwrap();
         assert_eq!(n as usize, body.len());
         assert_eq!(std::fs::read(&dest).unwrap(), body, "字节必须原样落盘");
-        assert_eq!(verify_asset(&dest, AssetKind::Bundle).unwrap(), 1, "1 个条目");
+        assert_eq!(
+            verify_asset(&dest, AssetKind::Bundle).unwrap(),
+            1,
+            "1 个条目"
+        );
     }
 
     /// 最常见的真实故障：release 没发布时下到的是一个 HTML 错误页。
@@ -1485,7 +1893,10 @@ mod tests {
     #[test]
     fn bundle_unpack_follows_manifest_entry() {
         let zip_bytes = make_zip(&[
-            ("manifest.json", br#"{"entry":"python.exe","args":["-m","aiya_beets"]}"#),
+            (
+                "manifest.json",
+                br#"{"entry":"python.exe","args":["-m","aiya_beets"]}"#,
+            ),
             ("python.exe", b"fake interpreter"),
             ("Lib/site-packages/aiya_beets/__init__.py", b""),
         ]);
@@ -1497,7 +1908,10 @@ mod tests {
         let entry = install_bundle_to(&target, &zip_path, &|_| {}).expect("展开应成功");
         assert!(entry.program.ends_with("python.exe"), "{}", entry.program);
         assert_eq!(entry.args, vec!["-m".to_string(), "aiya_beets".to_string()]);
-        assert!(target.join("Lib/site-packages/aiya_beets").is_dir(), "包必须展开到库目录");
+        assert!(
+            target.join("Lib/site-packages/aiya_beets").is_dir(),
+            "包必须展开到库目录"
+        );
     }
 
     /// manifest 缺失时按约定找入口（老套件包 / 手搓包）。
@@ -1510,7 +1924,11 @@ mod tests {
         let target = dir.path().join("bundle");
 
         let entry = install_bundle_to(&target, &zip_path, &|_| {}).expect("展开应成功");
-        assert!(entry.program.ends_with("aiya-beets.exe"), "{}", entry.program);
+        assert!(
+            entry.program.ends_with("aiya-beets.exe"),
+            "{}",
+            entry.program
+        );
         assert!(entry.args.is_empty(), "单文件入口不该带参数");
     }
 
@@ -1574,8 +1992,16 @@ mod tests {
     /// 状态，让 UI 能说清"没装"而不是"出错了"。
     #[test]
     fn absent_status_carries_code_and_entry() {
-        let entry = ToolEntry { program: "C:/x/aiya-beets.exe".into(), args: vec!["serve".into()] };
-        let st = absent("E_TOOL_NOT_FOUND", Some("找不到".into()), Some(&entry), Some(EntrySource::Path));
+        let entry = ToolEntry {
+            program: "C:/x/aiya-beets.exe".into(),
+            args: vec!["serve".into()],
+        };
+        let st = absent(
+            "E_TOOL_NOT_FOUND",
+            Some("找不到".into()),
+            Some(&entry),
+            Some(EntrySource::Path),
+        );
         assert!(!st.found);
         assert_eq!(st.error_code.as_deref(), Some("E_TOOL_NOT_FOUND"));
         assert_eq!(st.error_message.as_deref(), Some("找不到"));
@@ -1584,7 +2010,9 @@ mod tests {
         assert_eq!(st.script_path.as_deref(), Some("serve"));
         assert_eq!(st.entry_source.as_deref(), Some("path"));
         // 失败态不许残留任何"看起来像成功"的字段
-        assert!(st.beets_version.is_none() && st.plugin_health.is_none() && st.library_path.is_none());
+        assert!(
+            st.beets_version.is_none() && st.plugin_health.is_none() && st.library_path.is_none()
+        );
     }
 
     /// 协议版本不符 → **工具存在但不可用**，且必须说清升哪一边。
@@ -1594,24 +2022,37 @@ mod tests {
     /// 一句能照做的话。
     #[test]
     fn protocol_mismatch_marks_tool_unusable() {
-        let entry = ToolEntry { program: "aiya-beets".into(), args: vec![] };
-        let mut report = StatusReport { protocol_version: Some(99), ..Default::default() };
+        let entry = ToolEntry {
+            program: "aiya-beets".into(),
+            args: vec![],
+        };
+        let mut report = StatusReport {
+            protocol_version: Some(99),
+            ..Default::default()
+        };
         report.tool_version = Some("9.9.9".into());
 
         let st = status_from(&entry, EntrySource::Path, report.clone());
         assert!(!st.found, "版本不符不能算可用");
         assert_eq!(st.error_code.as_deref(), Some("E_PROTOCOL_MISMATCH"));
         let msg = st.error_message.clone().unwrap_or_default();
-        assert!(msg.contains("升级播放器"), "组件太新时应提示升级播放器：{msg}");
+        assert!(
+            msg.contains("升级播放器"),
+            "组件太新时应提示升级播放器：{msg}"
+        );
         // 版本/入口照样显示：用户要能看到"我装的是什么"
         assert_eq!(st.protocol_version, Some(99));
         assert_eq!(st.beets_version.as_deref(), Some("9.9.9"));
 
         // 反向：组件太老 → 提示升级组件
-        let old = status_from(&entry, EntrySource::Path, StatusReport {
-            protocol_version: Some(0),
-            ..Default::default()
-        });
+        let old = status_from(
+            &entry,
+            EntrySource::Path,
+            StatusReport {
+                protocol_version: Some(0),
+                ..Default::default()
+            },
+        );
         assert!(!old.found);
         assert!(old.error_message.unwrap_or_default().contains("升级组件"));
 
@@ -1625,47 +2066,72 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn probe_finds_dev_venv_beets() {
-        let venv = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/.venv/Scripts/python.exe");
+        let venv = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../beets-tool/.venv/Scripts/python.exe");
         if !venv.exists() {
             return; // CI/其他机器没有 venv 就跳过
         }
         let status = status_via(&venv.to_string_lossy(), &["-m", "aiya_beets"]);
-        assert!(status.found, "dev 环境应命中工具: {:?}", status.error_message);
-        assert!(status.beets_version.as_deref().unwrap_or_default().starts_with("2.14"));
+        assert!(
+            status.found,
+            "dev 环境应命中工具: {:?}",
+            status.error_message
+        );
+        assert!(status
+            .beets_version
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("2.14"));
         assert!(status.plugins.is_some());
         // 能力三态必须报上来（这是 M2 的验收点之一：lyrics 缺 bs4 要能看见）
         let health = status.plugin_health.expect("工具必须自报插件三态");
-        assert!(health.iter().any(|p| p.state == "ready"), "至少有一个 ready 插件");
-        assert!(health.iter().any(|p| p.name == "lyrics"), "lyrics 应在清单里");
+        assert!(
+            health.iter().any(|p| p.state == "ready"),
+            "至少有一个 ready 插件"
+        );
+        assert!(
+            health.iter().any(|p| p.name == "lyrics"),
+            "lyrics 应在清单里"
+        );
     }
 
     /// 用指定入口跑一次 status（测试用；生产走 `probe`，那里入口来自 `discover`）。
-///
-/// `AIYA_BEETS_HOME` 不设 = 走 beets 自己的默认位置，不碰应用的 app_data。
-/// `PYTHONPATH` 指向仓库源码树，这样源码树里的工具能被 import。
-///
-/// 一次性查询与会话共用进程级会话槽（client 侧修复）：两个真进程 probe
-/// 并行跑会有一方拿到 Busy。生产里 probe 是用户触发的低频操作，测试里
-/// 用这把锁串行化即可。
-static REAL_PROCESS_PROBE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    ///
+    /// `AIYA_BEETS_HOME` 不设 = 走 beets 自己的默认位置，不碰应用的 app_data。
+    /// `PYTHONPATH` 指向仓库源码树，这样源码树里的工具能被 import。
+    ///
+    /// 一次性查询与会话共用进程级会话槽（client 侧修复）：两个真进程 probe
+    /// 并行跑会有一方拿到 Busy。生产里 probe 是用户触发的低频操作，测试里
+    /// 用这把锁串行化即可。
+    static REAL_PROCESS_PROBE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn status_via(program: &str, args: &[&str]) -> BeetsStatus {
-    let _probe_lock = REAL_PROCESS_PROBE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/src");
-    let launcher = Launcher::new(program)
-        .args(args.iter().copied())
-        .env("PYTHONIOENCODING", "utf-8")
-        .env("PYTHONUTF8", "1")
-        .env("PYTHONPATH", src.to_string_lossy());
-    let entry = ToolEntry { program: program.into(), args: args.iter().map(|s| s.to_string()).collect() };
-    let tool = StdioTool::new(launcher);
-    match tool.status(Duration::from_secs(20)) {
-        Ok(report) => status_from(&entry, EntrySource::Dev, report),
-        Err(e) => absent("E_SPAWN", Some(e.to_string()), Some(&entry), Some(EntrySource::Dev)),
+    fn status_via(program: &str, args: &[&str]) -> BeetsStatus {
+        let _probe_lock = REAL_PROCESS_PROBE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/src");
+        let launcher = Launcher::new(program)
+            .args(args.iter().copied())
+            .env("PYTHONIOENCODING", "utf-8")
+            .env("PYTHONUTF8", "1")
+            .env("PYTHONPATH", src.to_string_lossy());
+        let entry = ToolEntry {
+            program: program.into(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+        };
+        let tool = StdioTool::new(launcher);
+        match tool.status(Duration::from_secs(20)) {
+            Ok(report) => status_from(&entry, EntrySource::Dev, report),
+            Err(e) => absent(
+                "E_SPAWN",
+                Some(e.to_string()),
+                Some(&entry),
+                Some(EntrySource::Dev),
+            ),
+        }
     }
-}
 
-/// B 轨道套件包（自带 embeddable 解释器 + 包在 Lib/site-packages）能命中工具。
+    /// B 轨道套件包（自带 embeddable 解释器 + 包在 Lib/site-packages）能命中工具。
     ///
     /// 这条守的是 B 轨道的核心前提：套件包**不需要系统装 Python**，
     /// 解压到任意路径都能跑。产物由 `beets-tool/tools/build_bundle.py` 生成，
@@ -1682,10 +2148,14 @@ fn status_via(program: &str, args: &[&str]) -> BeetsStatus {
         if !py.exists() {
             return; // 没构建套件包（clean checkout / CI）就跳过
         }
-        let manifest: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(root.join("manifest.json")).expect("manifest"))
-                .expect("manifest json");
-        assert_eq!(manifest["entry"], "python.exe", "manifest 的 entry 必须与实测入口一致");
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("manifest.json")).expect("manifest"),
+        )
+        .expect("manifest json");
+        assert_eq!(
+            manifest["entry"], "python.exe",
+            "manifest 的 entry 必须与实测入口一致"
+        );
         let status = status_via(&py.to_string_lossy(), &["-m", "aiya_beets"]);
         assert!(
             status.found,
@@ -1701,13 +2171,21 @@ fn status_via(program: &str, args: &[&str]) -> BeetsStatus {
             "套件包报的协议版本与播放器不一致"
         );
         assert!(
-            status.beets_version.as_deref().unwrap_or_default().starts_with("2.14"),
+            status
+                .beets_version
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("2.14"),
             "套件包自报的 beets 版本: {:?}",
             status.beets_version
         );
         // 自带解释器 ⇒ 运行时版本必须自报，且被判定为支持
         assert!(status.python_version.is_some(), "自带解释器应自报版本");
-        assert_eq!(status.python_supported, Some(true), "自带解释器应判定为支持");
+        assert_eq!(
+            status.python_supported,
+            Some(true),
+            "自带解释器应判定为支持"
+        );
     }
 
     /// 端到端：真 sidecar dump_items（dev venv + dev 隔离库，B2 冒烟留下的 3 条）
@@ -1719,7 +2197,8 @@ fn status_via(program: &str, args: &[&str]) -> BeetsStatus {
     fn dump_parse_end_to_end() {
         let venv = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../beets-tool/.venv/Scripts/python.exe");
-        let beets_home = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/tests/fixtures/beets-home");
+        let beets_home = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../beets-tool/tests/fixtures/beets-home");
         if !venv.exists() || !beets_home.exists() {
             return; // CI/其他机器没有 dev 环境就跳过
         }
@@ -1731,12 +2210,19 @@ fn status_via(program: &str, args: &[&str]) -> BeetsStatus {
             // 与生产路径同一套环境（编码钉 UTF-8 + 数据根），再覆盖隔离库
             .env("PYTHONIOENCODING", "utf-8")
             .env("PYTHONUTF8", "1")
-            .env("PYTHONPATH", PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/src"))
+            .env(
+                "PYTHONPATH",
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/src"),
+            )
             .env("BEETSDIR", &beets_home)
             .spawn()
             .expect("spawn sidecar");
         use std::io::Write;
-        writeln!(child.stdin.take().expect("stdin"), r#"{{"id":1,"cmd":"dump_items"}}"#).unwrap();
+        writeln!(
+            child.stdin.take().expect("stdin"),
+            r#"{{"id":1,"cmd":"dump_items"}}"#
+        )
+        .unwrap();
 
         let mut stdout = child.stdout.take().expect("stdout");
         let mut items: Vec<serde_json::Value> = Vec::new();
@@ -1744,19 +2230,27 @@ fn status_via(program: &str, args: &[&str]) -> BeetsStatus {
             use std::io::BufRead;
             for line in std::io::BufReader::new(&mut stdout).lines() {
                 let Ok(line) = line else { break };
-                let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) else { continue };
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+                    continue;
+                };
                 if v.get("type").and_then(|t| t.as_str()) == Some("item") {
                     items.push(v["item"].clone());
                 }
             }
         }
         let _ = child.wait();
-        assert!(items.len() >= 3, "dev 库应有 B2 冒烟写入的 3 条，实际 {}", items.len());
+        assert!(
+            items.len() >= 3,
+            "dev 库应有 B2 冒烟写入的 3 条，实际 {}",
+            items.len()
+        );
         for it in &items {
             assert!(it["id"].as_i64().unwrap_or(0) > 0, "item id 缺失：{it}");
-            assert!(!it["path"].as_str().unwrap_or_default().is_empty(), "item path 缺失：{it}");
+            assert!(
+                !it["path"].as_str().unwrap_or_default().is_empty(),
+                "item path 缺失：{it}"
+            );
             assert!(it["title"].is_string(), "item title 形状：{it}");
         }
     }
-
 }

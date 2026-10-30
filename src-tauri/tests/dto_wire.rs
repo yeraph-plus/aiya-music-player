@@ -11,12 +11,7 @@ use serde_json::Value;
 
 /// 取对象的键（排序后，便于整体比对）
 fn keys(v: &Value) -> Vec<String> {
-    let mut ks: Vec<String> = v
-        .as_object()
-        .expect("必须是对象")
-        .keys()
-        .cloned()
-        .collect();
+    let mut ks: Vec<String> = v.as_object().expect("必须是对象").keys().cloned().collect();
     ks.sort();
     ks
 }
@@ -31,7 +26,10 @@ fn sorted(list: &[&str]) -> Vec<String> {
 fn api_error_wire_shape() {
     let err = aiya_lib::dto::ApiError::invalid_arg("查询参数不合法");
     let v = serde_json::to_value(&err).unwrap();
-    assert_eq!(keys(&v), sorted(&["code", "detail", "message", "retryable"]));
+    assert_eq!(
+        keys(&v),
+        sorted(&["code", "detail", "message", "retryable"])
+    );
     assert_eq!(v["code"], "invalidArg", "错误码必须是 camelCase 字符串");
     assert_eq!(v["retryable"], false);
     // detail 即使为空也必须是 null（不是缺字段）：TS 生成的是 `string | null`
@@ -97,7 +95,10 @@ fn track_row_has_no_path_and_uses_ms() {
     assert!(ks.contains(&"addedAtMs".to_string()), "键：{ks:?}");
     assert!(ks.contains(&"lastPlayedAtMs".to_string()), "键：{ks:?}");
     assert!(ks.contains(&"genre".to_string()), "键：{ks:?}");
-    assert!(!ks.contains(&"addedAt".to_string()), "秒级旧字段必须消失：{ks:?}");
+    assert!(
+        !ks.contains(&"addedAt".to_string()),
+        "秒级旧字段必须消失：{ks:?}"
+    );
     // 毫秒值原样透出
     assert_eq!(v["addedAtMs"], 1_700_000_000_000i64);
     // 列表行不得出现 path（TrackRow 本就没有，TrackRef 才是敏感点）
@@ -152,7 +153,10 @@ fn player_state_error_is_structured_and_path_is_hidden() {
     );
     // 数字一律 number
     assert!(v["queueVersion"].is_number());
-    assert!(v["updatedAtMs"].is_number(), "快照时间必须带 Ms 后缀且为 number");
+    assert!(
+        v["updatedAtMs"].is_number(),
+        "快照时间必须带 Ms 后缀且为 number"
+    );
     // index/cursor 是 Option：非空队列走 number，不许再出现 -1 哨兵
     assert_eq!(v["index"], 0);
     assert_eq!(v["cursor"], 0);
@@ -182,8 +186,16 @@ fn player_state_empty_queue_sends_null_not_minus_one() {
         updated_at_ms: 0,
     };
     let v = serde_json::to_value(&state).unwrap();
-    assert!(v["index"].is_null(), "空队列 index=null，wire 值：{}", v["index"]);
-    assert!(v["cursor"].is_null(), "空队列 cursor=null，wire 值：{}", v["cursor"]);
+    assert!(
+        v["index"].is_null(),
+        "空队列 index=null，wire 值：{}",
+        v["index"]
+    );
+    assert!(
+        v["cursor"].is_null(),
+        "空队列 cursor=null，wire 值：{}",
+        v["cursor"]
+    );
 }
 
 /// 播放条的音频规格：`lossless` 必须在 payload 里，且三个值都要能表达。
@@ -281,7 +293,10 @@ fn playlist_summary_converts_seconds_to_ms() {
     assert_eq!(v["durationMs"], 3_600_000i64);
     assert!(v["description"].is_null(), "description 必须存在且为 null");
     assert_eq!(v["kind"], "manual");
-    assert!(v["ruleJson"].is_null(), "手动歌单 ruleJson 必须存在且为 null");
+    assert!(
+        v["ruleJson"].is_null(),
+        "手动歌单 ruleJson 必须存在且为 null"
+    );
 }
 
 #[test]
@@ -347,18 +362,27 @@ fn history_stats_uses_ms_and_number_play_counts() {
 fn lyrics_encoding_is_null_when_missing() {
     let empty = aiya_lib::dto::lyrics::Lyrics::empty();
     let v = serde_json::to_value(&empty).unwrap();
-    assert_eq!(keys(&v), sorted(&["found", "lines", "offsetMs", "synced", "encoding"]));
+    assert_eq!(
+        keys(&v),
+        sorted(&["found", "lines", "offsetMs", "synced", "encoding"])
+    );
     assert_eq!(v["found"], false);
     assert!(v["lines"].as_array().unwrap().is_empty());
     // 无歌词时 encoding 是 null（不是缺字段、不是空字符串）
-    assert!(v["encoding"].is_null(), "encoding 必须是 null 而不是空字符串");
+    assert!(
+        v["encoding"].is_null(),
+        "encoding 必须是 null 而不是空字符串"
+    );
 }
 
 #[test]
 fn lyrics_from_parsed_keeps_time_ms() {
     let parsed = aiya_data::lyrics::ParsedLyrics {
         found: true,
-        lines: vec![aiya_data::lyrics::LyricLine { time_ms: 12_345, text: "第一句".into() }],
+        lines: vec![aiya_data::lyrics::LyricLine {
+            time_ms: 12_345,
+            text: "第一句".into(),
+        }],
         offset_ms: -200,
         synced: true,
         encoding: "utf-8".into(),
@@ -406,7 +430,10 @@ fn scan_result_sends_numbers_and_camel_case() {
     );
     assert!(v["elapsedMs"].is_number());
     assert!(v["walkErrors"].is_number());
-    assert_eq!(v["missing"], 2, "文件不在的数量要单独报（不是并进 updated）");
+    assert_eq!(
+        v["missing"], 2,
+        "文件不在的数量要单独报（不是并进 updated）"
+    );
     assert_eq!(v["errors"][0]["message"], "解析失败");
 }
 
@@ -421,16 +448,19 @@ fn small_result_dtos_keep_their_exact_keys() {
     assert_eq!(keys(&reveal), sorted(&["revealed", "reason"]));
     assert_eq!(reveal["reason"], "曲目不在库中");
 
-    let cancel = serde_json::to_value(aiya_lib::dto::library::ScanCancel { cancelled: true }).unwrap();
+    let cancel =
+        serde_json::to_value(aiya_lib::dto::library::ScanCancel { cancelled: true }).unwrap();
     assert_eq!(keys(&cancel), sorted(&["cancelled"]));
 
-    let removed = serde_json::to_value(aiya_lib::dto::library::RemoveTracks { removed: 3 }).unwrap();
+    let removed =
+        serde_json::to_value(aiya_lib::dto::library::RemoveTracks { removed: 3 }).unwrap();
     assert!(removed["removed"].is_number());
 
     let job = serde_json::to_value(aiya_lib::dto::beets::JobStarted { started: true }).unwrap();
     assert_eq!(keys(&job), sorted(&["started"]));
 
-    let req = serde_json::to_value(aiya_lib::dto::beets::CancelRequested { requested: false }).unwrap();
+    let req =
+        serde_json::to_value(aiya_lib::dto::beets::CancelRequested { requested: false }).unwrap();
     assert_eq!(keys(&req), sorted(&["requested"]));
 
     // 市场目录项：键名必须与工具侧 market_report() 逐字对齐（source 是
@@ -504,7 +534,10 @@ fn beets_status_protocol_version_is_number() {
     };
     let v = serde_json::to_value(&st).unwrap();
     // Option<u32> 在 ts-rs 里是 bigint，必须 number（挡回归）
-    assert!(v["protocolVersion"].is_number(), "protocolVersion 必须 number");
+    assert!(
+        v["protocolVersion"].is_number(),
+        "protocolVersion 必须 number"
+    );
     assert!(v["libraryExists"].is_boolean());
     // 库根目录：UI 用它显示"整理到 <dir>"，并在 null 时禁用整理文件
     assert_eq!(v["libraryDirectory"], "D:\\Music");
@@ -541,7 +574,10 @@ fn diagnostics_timing_and_error_wire_shape() {
         keys(&v),
         sorted(&["atMs", "source", "rows", "total", "tookMs", "dbTookMs", "cursor"])
     );
-    assert!(v["atMs"].is_number(), "i64 必须发 number（不是 bigint/string）");
+    assert!(
+        v["atMs"].is_number(),
+        "i64 必须发 number（不是 bigint/string）"
+    );
     assert!(v["tookMs"].is_f64(), "耗时是小数毫秒，别退化成整数");
     assert!(v["cursor"].is_null(), "首屏游标是 null 而不是缺字段");
 
@@ -636,8 +672,8 @@ fn audio_source_wire_values() {
 /// 因为两边都是自己写的。只有对着**对面发的** schema 验才抓得住。
 #[test]
 fn beets_capability_dto_matches_mirrored_schema() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../protocol/aiya-beets-v2.json");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../protocol/aiya-beets-v2.json");
     let schema: Value = serde_json::from_str(
         &std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("读不到协议镜像（{}）：{e}", path.display())),
@@ -661,7 +697,11 @@ fn beets_capability_dto_matches_mirrored_schema() {
         unavailable: 3,
     })
     .unwrap();
-    assert_eq!(keys(&summary), required("PluginSummary"), "pluginSummary 字段名与协议不一致");
+    assert_eq!(
+        keys(&summary),
+        required("PluginSummary"),
+        "pluginSummary 字段名与协议不一致"
+    );
 
     let health = serde_json::to_value(aiya_lib::dto::beets::BeetsPluginHealth {
         name: "alpha".into(),
@@ -671,5 +711,9 @@ fn beets_capability_dto_matches_mirrored_schema() {
         note: String::new(),
     })
     .unwrap();
-    assert_eq!(keys(&health), required("PluginHealth"), "pluginHealth 字段名与协议不一致");
+    assert_eq!(
+        keys(&health),
+        required("PluginHealth"),
+        "pluginHealth 字段名与协议不一致"
+    );
 }

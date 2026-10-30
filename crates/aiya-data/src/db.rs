@@ -35,6 +35,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0006_entity_artwork.sql"),
     include_str!("../migrations/0007_dynamic_materialized.sql"),
     include_str!("../migrations/0008_track_enrichment.sql"),
+    include_str!("../migrations/0009_drop_track_enrichment.sql"),
 ];
 
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
@@ -147,16 +148,15 @@ fn set_aside_files(path: &Path, tag: &str) -> DbResult<()> {
         .unwrap_or_default()
         .as_secs();
     let backup = path.with_file_name(format!("{file_name}.{tag}-{stamp}.bak"));
-    std::fs::rename(path, &backup).map_err(|e| {
-        DbError::Custom(format!(
-            "数据库留底改名失败（{e}）：{}",
-            path.display()
-        ))
-    })?;
+    std::fs::rename(path, &backup)
+        .map_err(|e| DbError::Custom(format!("数据库留底改名失败（{e}）：{}", path.display())))?;
     for suffix in ["-wal", "-shm"] {
         let side = path.with_file_name(format!("{file_name}{suffix}"));
         if side.exists() {
-            let _ = std::fs::rename(&side, path.with_file_name(format!("{file_name}{suffix}.bak")));
+            let _ = std::fs::rename(
+                &side,
+                path.with_file_name(format!("{file_name}{suffix}.bak")),
+            );
         }
     }
     Ok(())
@@ -306,16 +306,28 @@ mod tests {
     fn migrate_creates_schema() {
         let conn = open_in_memory().unwrap();
         let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert!(n >= 9, "expect >= 9 tables, got {n}");
-        let q: i64 = conn.query_row("SELECT COUNT(*) FROM queue_state", [], |r| r.get(0)).unwrap();
+        let q: i64 = conn
+            .query_row("SELECT COUNT(*) FROM queue_state", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(q, 1, "queue_state singleton row must exist");
-        let uv: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        let uv: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(uv, MIGRATIONS.len() as i64, "all migrations applied");
         // artworks 表与 tracks.artwork_id 列存在
         let aw: i64 = conn
-            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='artworks'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='artworks'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(aw, 1);
         let has_col: i64 = conn
@@ -327,7 +339,10 @@ mod tests {
             .unwrap();
         assert_eq!(has_col, 1);
         // 0005：facet 排序列有索引（没有时每页 ORDER BY 都要 temp B-tree）
-        for (table, col) in [("artists", "idx_artists_name_norm"), ("albums", "idx_albums_title_norm")] {
+        for (table, col) in [
+            ("artists", "idx_artists_name_norm"),
+            ("albums", "idx_albums_title_norm"),
+        ] {
             let idx: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name = ?1",
@@ -337,16 +352,24 @@ mod tests {
                 .unwrap();
             assert_eq!(idx, 1, "{table} 的 {col} 缺失");
         }
-        // 0008：索引增强关联表（PK 必须是 (path_lower, source)——单列主键会让
-        // 后一个源整行覆盖前一个源，docs/45 §5.1）
-        let en: i64 = conn
+        // 0009 的解耦防线：**应用库里不许出现 beets 的表**。
+        //
+        // 这条断言比它看起来重要。批 3 把 `track_enrichment` 建在这里，于是
+        // 应用的数据模型里有一条"因为装了 beets 才有"的表——备份、回滚、第三方
+        // 读库都得理解一条与它无关的记录。结论库现在在 `{beets-index}/enrich.db`
+        // （`aiya-beets-store` 自己建表）。谁哪天想"顺手在这儿建一张"，会先撞上它。
+        let beets_tables: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('track_enrichment') WHERE pk > 0",
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE '%beets%'
+                    OR type='table' AND name LIKE '%enrich%'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(en, 2, "track_enrichment 主键列数应为 2");
+        assert_eq!(
+            beets_tables, 0,
+            "应用库里出现了 beets 模块的表：它应该住在 {{beets-index}}/enrich.db"
+        );
     }
 
     #[test]
@@ -354,9 +377,9 @@ mod tests {
         // 每进程唯一文件名：避免上次运行的半迁移库残留影响
         let path = std::env::temp_dir().join(format!("aiya-test-handle-{}.db", std::process::id()));
         let mut db = open(&path).unwrap();
-        let answer: i64 = db.send(|conn| {
-            Ok(conn.query_row("SELECT 40 + 2", [], |r| r.get(0))?)
-        }).unwrap();
+        let answer: i64 = db
+            .send(|conn| Ok(conn.query_row("SELECT 40 + 2", [], |r| r.get(0))?))
+            .unwrap();
         assert_eq!(answer, 42);
         db.close();
     }
@@ -382,7 +405,8 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         {
             let conn = Connection::open(&path).unwrap();
-            conn.execute_batch("CREATE TABLE legacy_only(x); PRAGMA user_version = 99;").unwrap();
+            conn.execute_batch("CREATE TABLE legacy_only(x); PRAGMA user_version = 99;")
+                .unwrap();
         }
 
         let mut db = open(&path).expect("超前版本不能直接报错起不来");
@@ -403,10 +427,7 @@ mod tests {
 
         // 备份留底：同目录下应有 xxx.db.v99-<stamp>.bak
         let dir = path.parent().unwrap();
-        let prefix = format!(
-            "{}.v99-",
-            path.file_name().unwrap().to_string_lossy()
-        );
+        let prefix = format!("{}.v99-", path.file_name().unwrap().to_string_lossy());
         let backups: Vec<String> = std::fs::read_dir(dir)
             .unwrap()
             .filter_map(|e| e.ok())
@@ -427,10 +448,15 @@ mod tests {
     /// 走同一套 quarantine：留底改名 + 从零重建，open 成功且是全新库。
     #[test]
     fn corrupt_db_file_is_quarantined_and_recreated() {
-        let path = std::env::temp_dir().join(format!("aiya-test-corrupt-{}.db", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("aiya-test-corrupt-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         // 非 SQLite 魔数的一堆垃圾字节 → SQLITE_NOTADB
-        std::fs::write(&path, b"definitely not a sqlite database, just garbage bytes!!").unwrap();
+        std::fs::write(
+            &path,
+            b"definitely not a sqlite database, just garbage bytes!!",
+        )
+        .unwrap();
 
         let mut db = open(&path).expect("损坏库不能让 App 起不来");
         let (uv, tracks, settings): (i64, i64, i64) = db
@@ -443,14 +469,15 @@ mod tests {
             })
             .unwrap();
         assert_eq!(uv, MIGRATIONS.len() as i64, "全新库迁移全部跑完");
-        assert_eq!((tracks, settings), (0, 1), "从零重建（queue_state/settings 单行在）");
+        assert_eq!(
+            (tracks, settings),
+            (0, 1),
+            "从零重建（queue_state/settings 单行在）"
+        );
 
         // 留底：同目录应有 xxx.db.corrupt-<stamp>.bak
         let dir = path.parent().unwrap();
-        let prefix = format!(
-            "{}.corrupt-",
-            path.file_name().unwrap().to_string_lossy()
-        );
+        let prefix = format!("{}.corrupt-", path.file_name().unwrap().to_string_lossy());
         let backups: Vec<String> = std::fs::read_dir(dir)
             .unwrap()
             .filter_map(|e| e.ok())
@@ -481,7 +508,10 @@ mod tests {
         }
         assert_eq!(db.senders.load(Ordering::SeqCst), 1, "只剩自己");
         db.close();
-        assert!(db.send::<i64>(|_| Ok(1)).is_err(), "close 后 send 报 Closed");
+        assert!(
+            db.send::<i64>(|_| Ok(1)).is_err(),
+            "close 后 send 报 Closed"
+        );
         let _ = std::fs::remove_file(&path);
     }
 

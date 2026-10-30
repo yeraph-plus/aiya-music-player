@@ -15,7 +15,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use aiya_audio::{EngineCommand, EngineEvent, HostToSidecar, OutputConfig, SidecarToHost, PROTOCOL_VERSION};
+use aiya_audio::{
+    EngineCommand, EngineEvent, HostToSidecar, OutputConfig, SidecarToHost, PROTOCOL_VERSION,
+};
 
 fn write_wav(path: &std::path::Path, sample_rate: u32, seconds: f64) {
     let n = (sample_rate as f64 * seconds) as usize;
@@ -155,10 +157,15 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
         return false;
     };
     let reader = client.try_clone().expect("复制句柄");
-    let mut c = Conn { w: std::io::BufWriter::new(client), r: BufReader::new(reader) };
+    let mut c = Conn {
+        w: std::io::BufWriter::new(client),
+        r: BufReader::new(reader),
+    };
 
     // 1) v4 握手
-    c.send(&HostToSidecar::Hello { protocol: PROTOCOL_VERSION });
+    c.send(&HostToSidecar::Hello {
+        protocol: PROTOCOL_VERSION,
+    });
     let mut line = String::new();
     if c.r.read_line(&mut line).is_err() {
         return false;
@@ -168,7 +175,9 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
             println!("握手 OK: v{protocol}");
         }
         other => {
-            eprintln!("握手失败（sidecar 是旧版本？）：{other:?} —— 先 cargo build -p aiya-audio-host");
+            eprintln!(
+                "握手失败（sidecar 是旧版本？）：{other:?} —— 先 cargo build -p aiya-audio-host"
+            );
             return false;
         }
     }
@@ -180,7 +189,9 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
     };
 
     // 2) 共享 / 轮询 / 显式 120ms：装载前就下发，验"暂存配置，首曲 Load 才开流"
-    c.cmd(EngineCommand::SetOutputConfig(OutputConfig::from_parts("shared", 120, "polling", true)));
+    c.cmd(EngineCommand::SetOutputConfig(OutputConfig::from_parts(
+        "shared", 120, "polling", true,
+    )));
     c.cmd(EngineCommand::SetVolume(0.0));
     c.cmd(EngineCommand::Load {
         path: wav.to_string_lossy().into(),
@@ -190,9 +201,13 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
     });
     let shared = c.wait_mode(Duration::from_secs(4));
     let (s_req, s_mode, s_clock, s_buf) = match &shared {
-        Some(EngineEvent::AudioMode { requested, mode, clock, buffer_ms, .. }) => {
-            (requested.clone(), mode.clone(), clock.clone(), *buffer_ms)
-        }
+        Some(EngineEvent::AudioMode {
+            requested,
+            mode,
+            clock,
+            buffer_ms,
+            ..
+        }) => (requested.clone(), mode.clone(), clock.clone(), *buffer_ms),
         _ => (String::from("?"), String::from("?"), String::from("?"), 0),
     };
     check(
@@ -202,12 +217,26 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
     );
 
     // 3) 播放中切独占（事件）：允许回落，但 requested 必须原样回报
-    c.cmd(EngineCommand::SetOutputConfig(OutputConfig::from_parts("exclusive", 0, "events", true)));
+    c.cmd(EngineCommand::SetOutputConfig(OutputConfig::from_parts(
+        "exclusive",
+        0,
+        "events",
+        true,
+    )));
     let excl = c.wait_mode(Duration::from_secs(4));
     let (e_req, e_mode, e_clock, e_reason) = match &excl {
-        Some(EngineEvent::AudioMode { requested, mode, clock, reason, .. }) => {
-            (requested.clone(), mode.clone(), clock.clone(), reason.clone().unwrap_or_default())
-        }
+        Some(EngineEvent::AudioMode {
+            requested,
+            mode,
+            clock,
+            reason,
+            ..
+        }) => (
+            requested.clone(),
+            mode.clone(),
+            clock.clone(),
+            reason.clone().unwrap_or_default(),
+        ),
         _ => Default::default(),
     };
     check(
@@ -217,17 +246,27 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
     );
     // 切流后必须还在走（重建流不等于停止播放）
     let pos_after_excl = c.max_position(Duration::from_millis(900));
-    check("切独占后仍在推进", pos_after_excl > 0, format!("pos={pos_after_excl}ms"));
+    check(
+        "切独占后仍在推进",
+        pos_after_excl > 0,
+        format!("pos={pos_after_excl}ms"),
+    );
 
     // 4) 切 Null：不出声但解码/进度照走，且回报 mode=null
     let before_null = pos_after_excl;
-    c.cmd(EngineCommand::SetOutputConfig(OutputConfig::from_parts("null", 0, "auto", true)));
+    c.cmd(EngineCommand::SetOutputConfig(OutputConfig::from_parts(
+        "null", 0, "auto", true,
+    )));
     let null_ev = c.wait_mode(Duration::from_secs(4));
     let n_mode = match &null_ev {
         Some(EngineEvent::AudioMode { mode, .. }) => mode.clone(),
         _ => String::from("?"),
     };
-    check("切 Null 回报 mode=null", n_mode == "null", format!("mode={n_mode}"));
+    check(
+        "切 Null 回报 mode=null",
+        n_mode == "null",
+        format!("mode={n_mode}"),
+    );
     let pos_null = c.max_position(Duration::from_millis(900));
     check(
         "Null 下进度仍推进",
@@ -236,13 +275,19 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
     );
 
     // 5) Null → 共享：设备要重新打开，播放不能断
-    c.cmd(EngineCommand::SetOutputConfig(OutputConfig::from_parts("shared", 0, "auto", true)));
+    c.cmd(EngineCommand::SetOutputConfig(OutputConfig::from_parts(
+        "shared", 0, "auto", true,
+    )));
     let back = c.wait_mode(Duration::from_secs(4));
     let b_mode = match &back {
         Some(EngineEvent::AudioMode { mode, .. }) => mode.clone(),
         _ => String::from("?"),
     };
-    check("Null → 共享 恢复出流", b_mode == "shared", format!("mode={b_mode}"));
+    check(
+        "Null → 共享 恢复出流",
+        b_mode == "shared",
+        format!("mode={b_mode}"),
+    );
     let pos_back = c.max_position(Duration::from_millis(900));
     check(
         "恢复后进度继续",

@@ -218,7 +218,11 @@ fn parse_media_playlist(text: &str, base: &Url) -> Result<ParsedMedia, AudioErro
         });
     }
 
-    Ok(ParsedMedia { segments, endlist, target_duration_ms })
+    Ok(ParsedMedia {
+        segments,
+        endlist,
+        target_duration_ms,
+    })
 }
 
 /// master playlist 的第一个变体 URI（有的话）。
@@ -336,7 +340,12 @@ impl Prefetch {
                     }
                 }
             });
-        Self { req_tx, res_rx, inflight: None, cached: None }
+        Self {
+            req_tx,
+            res_rx,
+            inflight: None,
+            cached: None,
+        }
     }
 
     /// 请求预取某段。重复请求同一 URL 直接跳过（轮询会反复喊同一个下一段）。
@@ -488,7 +497,11 @@ impl HlsStream {
             .map_err(|e| AudioError::Decode(format!("playlist 地址无效 {playlist_url:?}：{e}")))?;
         let parsed = parse_media_playlist(&text, &base)?;
 
-        let kind = if parsed.endlist { Kind::Vod } else { Kind::Live };
+        let kind = if parsed.endlist {
+            Kind::Vod
+        } else {
+            Kind::Live
+        };
         let duration_ms = if kind == Kind::Vod {
             parsed.segments.iter().map(|s| s.duration_ms).sum()
         } else {
@@ -503,9 +516,9 @@ impl HlsStream {
         let mut prefetch = Prefetch::new(make_fetcher(), &playlist_url);
 
         // 立即打开第一段：engine 拿到 DecodedStream 就要读 sample_rate/channels
-        let first = pending.pop_front().ok_or_else(|| {
-            AudioError::Decode("HLS playlist 里没有任何段".to_string())
-        })?;
+        let first = pending
+            .pop_front()
+            .ok_or_else(|| AudioError::Decode("HLS playlist 里没有任何段".to_string()))?;
         played.insert(first.uri.clone());
         // 打开首段的同时就把第二段排进预取队列（首段本身就快，这里主要是
         // 让"打开"到"播到段尾"之间有一段完整的时间窗给下载用）
@@ -594,9 +607,7 @@ impl HlsStream {
             &hint,
             DecodeBackend::Symphonia,
         )
-        .map_err(|e| {
-            AudioError::Decode(format!("HLS 段解不开（{}）：{e}", seg.uri))
-        })?;
+        .map_err(|e| AudioError::Decode(format!("HLS 段解不开（{}）：{e}", seg.uri)))?;
         if let Some((rate, ch)) = expected {
             if stream.sample_rate() != rate || stream.channels() != ch {
                 return Err(AudioError::Decode(format!(
@@ -678,8 +689,8 @@ impl HlsStream {
         if parsed.endlist {
             self.kind = Kind::Vod;
             if self.duration_ms == 0 {
-                self.duration_ms = self.position_ms()
-                    + self.pending.iter().map(|s| s.duration_ms).sum::<u64>();
+                self.duration_ms =
+                    self.position_ms() + self.pending.iter().map(|s| s.duration_ms).sum::<u64>();
             }
         }
         Ok(appended)
@@ -812,11 +823,13 @@ impl HlsStream {
                                     // 已经不更新了（甚至 URI 复用被判成旧段）。
                                     // 前者小睡，后者必须报错——否则就是永远静默轮询。
                                     if self.stall_elapsed() >= self.stall_budget() {
-                                        return Err(AudioError::Io(std::io::Error::other(format!(
-                                            "HLS 直播流已停止更新：{} 秒没有新段（{}）",
-                                            self.stall_budget().as_secs(),
-                                            self.playlist_url
-                                        ))));
+                                        return Err(AudioError::Io(std::io::Error::other(
+                                            format!(
+                                                "HLS 直播流已停止更新：{} 秒没有新段（{}）",
+                                                self.stall_budget().as_secs(),
+                                                self.playlist_url
+                                            ),
+                                        )));
                                     }
                                     self.fetcher.sleep(self.poll_interval);
                                     self.stall_slept += self.poll_interval;
@@ -1006,7 +1019,9 @@ mod tests {
     fn vod_playlist_parses_with_durations_and_endlist() {
         let base = Url::parse(BASE).unwrap();
         let p = parse_media_playlist(
-            &playlist("#EXTINF:3.5,\na/seg1.aac\n#EXTINF:2.25,Artist - Title\nseg2.aac\n#EXT-X-ENDLIST"),
+            &playlist(
+                "#EXTINF:3.5,\na/seg1.aac\n#EXTINF:2.25,Artist - Title\nseg2.aac\n#EXT-X-ENDLIST",
+            ),
             &base,
         )
         .unwrap();
@@ -1038,7 +1053,10 @@ mod tests {
             &base,
         )
         .unwrap_err();
-        assert!(matches!(err, AudioError::Unsupported(ref m) if m.contains("AES-128")), "{err}");
+        assert!(
+            matches!(err, AudioError::Unsupported(ref m) if m.contains("AES-128")),
+            "{err}"
+        );
     }
 
     #[test]
@@ -1060,18 +1078,20 @@ mod tests {
             &base,
         )
         .unwrap_err();
-        assert!(matches!(err, AudioError::Unsupported(ref m) if m.contains("EXT-X-MAP")), "{err}");
+        assert!(
+            matches!(err, AudioError::Unsupported(ref m) if m.contains("EXT-X-MAP")),
+            "{err}"
+        );
     }
 
     #[test]
     fn ts_segment_is_explicitly_rejected() {
         let base = Url::parse(BASE).unwrap();
-        let err = parse_media_playlist(
-            &playlist("#EXTINF:1.0,\nseg0.ts"),
-            &base,
-        )
-        .unwrap_err();
-        assert!(matches!(err, AudioError::Unsupported(ref m) if m.contains("MPEG-TS")), "{err}");
+        let err = parse_media_playlist(&playlist("#EXTINF:1.0,\nseg0.ts"), &base).unwrap_err();
+        assert!(
+            matches!(err, AudioError::Unsupported(ref m) if m.contains("MPEG-TS")),
+            "{err}"
+        );
     }
 
     #[test]
@@ -1225,7 +1245,12 @@ mod tests {
         let fetcher = MockFetcher::new()
             .with_seq(
                 BASE,
-                vec![SeqItem::Text(v1), SeqItem::Fail, SeqItem::Fail, SeqItem::Text(v2)],
+                vec![
+                    SeqItem::Text(v1),
+                    SeqItem::Fail,
+                    SeqItem::Fail,
+                    SeqItem::Text(v2),
+                ],
             )
             .with_segment("http://fm.test/live/s1.aac", seg.clone())
             .with_segment("http://fm.test/live/s2.aac", seg);
@@ -1327,14 +1352,20 @@ mod tests {
         let text = playlist("#EXTINF:1.0,\ns1.aac\n#EXTINF:1.0,\ns2.aac\n#EXT-X-ENDLIST");
 
         // 同步侧：有 playlist、只有 s1（若 s2 走同步 → 404 → VOD 直接报错）
-        let sync_side = MockFetcher::new().with_text(BASE, &text).with_segment(s1, seg.clone());
+        let sync_side = MockFetcher::new()
+            .with_text(BASE, &text)
+            .with_segment(s1, seg.clone());
         // 预取侧：只有段字节（预取线程不拉 playlist，seq 里没东西也无所谓）
         let prefetch_side = MockFetcher::new().with_segment(s2, seg);
         let mut nth = 0;
         let mut s = HlsStream::with_fetcher(BASE, move || {
             nth += 1;
             // 第 1 次 = 同步调度，第 2 次 = 预取线程（见 with_fetcher 注释）
-            if nth == 1 { Box::new(sync_side.clone()) } else { Box::new(prefetch_side.clone()) }
+            if nth == 1 {
+                Box::new(sync_side.clone())
+            } else {
+                Box::new(prefetch_side.clone())
+            }
         })
         .unwrap();
 

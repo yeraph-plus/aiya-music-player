@@ -45,11 +45,9 @@ enum SessionEnd {
 struct LocalTime;
 
 impl tracing_subscriber::fmt::time::FormatTime for LocalTime {
-    fn format_time(
-        &self,
-        w: &mut tracing_subscriber::fmt::format::Writer<'_>,
-    ) -> std::fmt::Result {
-        let t = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        let t =
+            time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
         write!(
             w,
             "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}",
@@ -131,7 +129,8 @@ fn main() {
 fn serve_forever(pipe_name: &str) -> Result<(), String> {
     // FILE_FLAG_FIRST_PIPE_INSTANCE：名字被残留实例占用时直接失败，
     // 让 host 的 spawn 重试逻辑兜底（快速重启场景）。
-    let server = NamedPipe::new(pipe_name).map_err(|e| format!("创建管道 {pipe_name} 失败：{e}"))?;
+    let server =
+        NamedPipe::new(pipe_name).map_err(|e| format!("创建管道 {pipe_name} 失败：{e}"))?;
     tracing::info!(%pipe_name, "sidecar 管道已创建，等待 host 连接");
 
     let mut orphan_deadline: Option<Instant> = None;
@@ -184,13 +183,16 @@ fn run_session(
         _ => return Err("首条消息不是 Hello".into()),
     };
     if protocol != PROTOCOL_VERSION {
-        let msg = format!(
-            "协议不兼容：host v{protocol} != sidecar v{PROTOCOL_VERSION}，拒绝启动"
-        );
+        let msg = format!("协议不兼容：host v{protocol} != sidecar v{PROTOCOL_VERSION}，拒绝启动");
         eprintln!("{msg}");
         std::process::exit(2);
     }
-    write_msg(&write_half, &SidecarToHost::Welcome { protocol: PROTOCOL_VERSION })?;
+    write_msg(
+        &write_half,
+        &SidecarToHost::Welcome {
+            protocol: PROTOCOL_VERSION,
+        },
+    )?;
     // 握手成功 = 宿主确实活着：清掉上一轮会话遗留的孤儿退场窗口。不清的话
     // 窗口"只生效一次"——本会话再次出错时死线早已过期，会跳过重连宽限直接
     // 退场。此后若会话出错，serve_forever 的 Err 分支会重新起算 8s。
@@ -239,7 +241,10 @@ fn run_session(
     // 仍然计时：它是"第一声出声要等多久"的一部分，冷启动排查要用。
     let t_engine = Instant::now();
     let mut engine = Engine::spawn().map_err(|e| format!("引擎启动失败：{e}"))?;
-    tracing::info!(elapsed_ms = t_engine.elapsed().as_millis() as u64, "引擎初始化完成");
+    tracing::info!(
+        elapsed_ms = t_engine.elapsed().as_millis() as u64,
+        "引擎初始化完成"
+    );
     let (pong_tx, pong_rx) = mpsc::channel::<()>();
     let (cmd_tx, cmd_rx) = mpsc::channel::<HostToSidecar>();
 
@@ -274,7 +279,10 @@ fn run_session(
         .map_err(|e| format!("起 reader 线程失败：{e}"))?;
 
     // ---- 命令消费 + 事件写回循环（本线程；心跳已在独立线程）----
-    tracing::info!(elapsed_ms = t_engine.elapsed().as_millis() as u64, "命令循环就绪");
+    tracing::info!(
+        elapsed_ms = t_engine.elapsed().as_millis() as u64,
+        "命令循环就绪"
+    );
     // 循环放在闭包里：里面的 `?` 只结束会话，不会把心跳线程漏掉。
     // （直接 `?` 返回的话 hb 线程还持有写端，要等它下一次写失败才退出。）
     let session = (|| -> Result<SessionEnd, String> {
@@ -385,7 +393,10 @@ fn read_line(reader: &mut impl BufRead, out: &mut String) -> std::io::Result<boo
 /// 编码一行 JSON 并落盘（写失败 = 管道断开 = 会话结束）。
 fn write_all_msg(writer: &mut impl Write, msg: &SidecarToHost) -> Result<(), String> {
     let bytes = encode_line(msg).map_err(|e| format!("编码失败：{e}"))?;
-    writer.write_all(&bytes).and_then(|_| writer.flush()).map_err(|e| format!("写管道失败：{e}"))
+    writer
+        .write_all(&bytes)
+        .and_then(|_| writer.flush())
+        .map_err(|e| format!("写管道失败：{e}"))
 }
 
 /// 往共享写端写一条消息。
@@ -394,6 +405,8 @@ fn write_all_msg(writer: &mut impl Write, msg: &SidecarToHost) -> Result<(), Str
 /// 管道是字节模式，两个线程各自 `write_all` 会把 JSON 行搅在一起，host 侧就会
 /// 整行解析失败并静默丢弃（症状是"偶尔丢一条事件"，比崩溃难查得多）。
 fn write_msg(writer: &Mutex<BufWriter<NamedPipe>>, msg: &SidecarToHost) -> Result<(), String> {
-    let mut guard = writer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut guard = writer
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     write_all_msg(&mut *guard, msg)
 }

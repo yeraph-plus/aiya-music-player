@@ -25,12 +25,14 @@ fn mirror() -> (Value, Value) {
     let root = repo_root();
     let schema_path = root.join("protocol/aiya-beets-v2.json");
     let meta_path = root.join("protocol/aiya-beets-v2.meta.json");
-    let schema: Value = serde_json::from_str(
-        &std::fs::read_to_string(&schema_path).unwrap_or_else(|e| {
-            panic!("读不到镜像 schema（{}）：{e}\n——跑 npm run proto:sync", schema_path.display())
-        }),
-    )
-    .expect("镜像不是合法 JSON");
+    let schema: Value =
+        serde_json::from_str(&std::fs::read_to_string(&schema_path).unwrap_or_else(|e| {
+            panic!(
+                "读不到镜像 schema（{}）：{e}\n——跑 npm run proto:sync",
+                schema_path.display()
+            )
+        }))
+        .expect("镜像不是合法 JSON");
     let meta: Value = serde_json::from_str(
         &std::fs::read_to_string(&meta_path)
             .unwrap_or_else(|e| panic!("读不到镜像元数据（{}）：{e}", meta_path.display())),
@@ -78,7 +80,10 @@ fn full_report() -> StatusReport {
 #[test]
 fn mirror_meta_version_matches_client() {
     let (_schema, meta) = mirror();
-    let v = meta.get("protocolVersion").and_then(Value::as_u64).expect("meta.protocolVersion");
+    let v = meta
+        .get("protocolVersion")
+        .and_then(Value::as_u64)
+        .expect("meta.protocolVersion");
     assert_eq!(
         v as u32, PROTOCOL_VERSION,
         "镜像协议版本 {v} 与客户端 PROTOCOL_VERSION {PROTOCOL_VERSION} 不一致：\
@@ -113,7 +118,13 @@ fn status_report_fields_match_schema_required() {
 #[test]
 fn mirror_schema_is_self_consistent() {
     let (schema, _meta) = mirror();
-    for name in ["StatusData", "PluginHealth", "PluginSummary", "CapabilitiesData", "PingData"] {
+    for name in [
+        "StatusData",
+        "PluginHealth",
+        "PluginSummary",
+        "CapabilitiesData",
+        "PingData",
+    ] {
         let block = defs(&schema, name);
         let req = strings(&block["required"]);
         let props: BTreeSet<String> = block["properties"]
@@ -123,7 +134,10 @@ fn mirror_schema_is_self_consistent() {
             .cloned()
             .collect();
         let undefined: Vec<_> = req.difference(&props).cloned().collect();
-        assert!(undefined.is_empty(), "$defs.{name} 的 required 里有未定义的字段：{undefined:?}");
+        assert!(
+            undefined.is_empty(),
+            "$defs.{name} 的 required 里有未定义的字段：{undefined:?}"
+        );
     }
 }
 
@@ -146,25 +160,40 @@ fn terminal_events_exist_in_schema() {
     for t in TERMINAL_EVENTS {
         // sessionFailed 的形状在 Response 里（它有 ok 字段），不在 Event 里
         if *t == "sessionFailed" {
-            let err = defs(&schema, "Response")["oneOf"][1]["properties"]["type"]["const"]
-                .as_str();
-            assert_eq!(err, Some("sessionFailed"), "错误应答必须带 type=sessionFailed 才被当成终态");
+            let err = defs(&schema, "Response")["oneOf"][1]["properties"]["type"]["const"].as_str();
+            assert_eq!(
+                err,
+                Some("sessionFailed"),
+                "错误应答必须带 type=sessionFailed 才被当成终态"
+            );
             continue;
         }
-        assert!(types.contains(*t), "TERMINAL_EVENTS 里的 {t} 在 schema 里不存在：{types:?}");
+        assert!(
+            types.contains(*t),
+            "TERMINAL_EVENTS 里的 {t} 在 schema 里不存在：{types:?}"
+        );
     }
 }
 
 #[test]
 fn every_request_variant_has_cmd_and_is_closed() {
     let (schema, _meta) = mirror();
-    let variants = defs(&schema, "Request")["oneOf"].as_array().expect("Request 必须是 oneOf");
+    let variants = defs(&schema, "Request")["oneOf"]
+        .as_array()
+        .expect("Request 必须是 oneOf");
     // 2026-10-30 加法：enrich / query / fields（docs/45 §4.2，纯加法不升版）
-    assert_eq!(variants.len(), 16, "命令数变了（加命令要改 schema 与这里的期望）");
+    assert_eq!(
+        variants.len(),
+        16,
+        "命令数变了（加命令要改 schema 与这里的期望）"
+    );
     for v in variants {
-        let cmd = v["properties"]["cmd"]["const"].as_str().expect("每个请求都要有 cmd const");
+        let cmd = v["properties"]["cmd"]["const"]
+            .as_str()
+            .expect("每个请求都要有 cmd const");
         assert_eq!(
-            v["additionalProperties"], Value::Bool(false),
+            v["additionalProperties"],
+            Value::Bool(false),
             "请求 {cmd} 必须关闭 additionalProperties（否则拼错字段名不会报错）"
         );
     }

@@ -65,6 +65,19 @@ export const events = {
    */
   beetsMaintenance: (cb: (e: DynamicJson) => void) => sub<DynamicJson>('beets:maintenance', cb),
 
+  /**
+   * beets 索引增强（docs/45）：`progress` → 若干 `enrichItem` →
+   * `enrichDone`（工具侧终态）→ `enrichPersisted`（宿主侧终态）。
+   *
+   * **两条终态不是冗余**：`enrichDone` 说"工具跑了什么"，`enrichPersisted`
+   * 说"结论库里真落了什么"。跳过 / 库外 / 写失败都会让它们不等，排障时
+   * 必须能分开看。UI 判"这一轮结束"要等 `enrichPersisted`——只等 `enrichDone`
+   * 会在落库线程还在写的时候就把进度条收起来，用户看到"100% 但统计没变"。
+   *
+   * 之前这条通道只有 mock 在发（`events.ts` 里没有订阅），等于对着空房间演练。
+   */
+  beetsEnrich: (cb: (e: DynamicJson) => void) => sub<DynamicJson>('beets:enrich', cb),
+
   /** 音频实际输出状态（模式/时钟/缓冲/格式）。偶发，不可丢。 */
   audioMode: (cb: (e: AudioModeEvent) => void) => sub<AudioModeEvent>('audio:mode', cb),
 };

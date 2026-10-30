@@ -84,7 +84,15 @@ fn main() {
                 eof = true;
                 break;
             }
-            Some(aiya_audio::EngineEvent::AudioMode { requested, mode, clock, buffer_ms, format, reason, .. }) => {
+            Some(aiya_audio::EngineEvent::AudioMode {
+                requested,
+                mode,
+                clock,
+                buffer_ms,
+                format,
+                reason,
+                ..
+            }) => {
                 println!("AudioMode requested={requested} actual={mode}/{clock}/{buffer_ms}ms/{format} reason={reason:?}");
             }
             Some(aiya_audio::EngineEvent::Error { message, .. }) => {
