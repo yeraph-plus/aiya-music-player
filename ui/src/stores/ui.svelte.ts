@@ -64,7 +64,7 @@ export type AppPage =
   | 'nowPlaying'
   | 'settings'
   | 'beets'
-  | 'radio';
+  | 'live';
 
 /**
  * 设置页的分组 id。
@@ -298,10 +298,14 @@ class UiStore {
     //   不换算的话 `AppPage` 已经不收这个值，`restore()` 的强制转型会把
     //   一个不存在的路由写进 `ui.page`，症状是侧栏零高亮 + 整页落到 `{:else}`
     //   （正好还是设置页，所以看起来"没错"，实际路由是脏的、还会被写回磁盘）。
+    // - 2026-10-31：`radio`（FM 电台占位页）改成 `live`（直播页，docs/52 §7.4）。
+    //   路由换名而不是加值：那一页的语义整个换了（收藏电台 → 打开一个推流地址），
+    //   留着两个键只会让"哪个才是新的"永远要查。
     const RETIRED_PAGES: ReadonlyMap<string, AppPage> = new Map([
       ['recent', 'library'],
       ['mostPlayed', 'library'],
       ['tools', 'settings'],
+      ['radio', 'live'],
     ]);
     const rawPage = data.page ? (RETIRED_PAGES.get(data.page) ?? data.page) : data.page;
 

@@ -31,6 +31,7 @@ import type {
   CancelRequested,
   ChosenRoot,
   Diagnostics,
+  DroppedItem,
   EnrichmentGc,
   EnrichmentMatch,
   EnrichmentWorklist,
@@ -41,6 +42,7 @@ import type {
   LibraryRoots,
   LibraryStats,
   Lyrics,
+  OpenPathsReceipt,
   PlayerState,
   PlaylistAddResult, PlaylistRefresh,
   PlaylistDeleted,
@@ -132,7 +134,7 @@ export type DynamicJson = Record<string, unknown>;
  *
  * - `installer`：`.pyz` 安装器，用**系统** Python 建 venv。体积小，但要求机器上
  *   有 3.10–3.14 的 Python。
- * - `bundle`：免安装套件包，自带解释器（约 31MB 下载 / 112MB 落盘），解压即用。
+ * - `bundle`：免安装套件包，自带解释器（约 34MB 下载 / 97MB 落盘），解压即用。
  *
  * 播放器对两者做同一件事：下载 → 展开 → 记入口 → 跑一次 status 验证。
  * 它**不判断**哪条更合适——那是用户的机器状况决定的。
@@ -303,6 +305,11 @@ export const ipc = {
     /** 用"当前视图的查询"建队列：整库顺序必须由后端按同一份排序生成 */
     playQuery: (query: TrackQueryInput, startIndex?: number) =>
       call<PlayerState>('player_play_query', { query, startIndex }),
+    /**
+     * 拖入 / 选中一批文件：替换队列并播放第一项（docs/52 §5.3）。
+     * 音频、`m3u8` 清单、老式 `m3u` 歌单都从这一个口进；不进曲库。
+     */
+    openPaths: (paths: string[]) => call<OpenPathsReceipt>('player_open_paths', { paths }),
     toggle: () => call<PlayerState>('player_toggle'),
     next: () => call<PlayerState>('player_next'),
     prev: () => call<PlayerState>('player_prev'),
@@ -332,6 +339,21 @@ export const ipc = {
   lyrics: {
     /** 没找到回 `found=false`（UI 显示"暂无"），不当错误 */
     get: (trackId: string) => call<Lyrics>('lyrics_get', { trackId }),
+  },
+
+  /**
+   * 直播 / 拖放（docs/52）。
+   *
+   * `classify` 是**唯一分类器**的后端出口：UI 不自己写扩展名 if-else ——
+   * 两边各写一份必然漂移（`is_http_url` 大小写不一致就是这么来的）。
+   */
+  live: {
+    classify: (paths: string[]) => call<DroppedItem[]>('classify_paths', { paths }),
+    /** 打开一个 HLS 地址（标题缺省由后端从 URL 推） */
+    open: (url: string, title?: string) =>
+      call<PlayerState>('live_open', { url, title: title ?? null }),
+    /** 选一个本地 m3u8/m3u 文件；取消回 null（取消不是错误） */
+    pick: () => call<string | null>('live_pick_playlist'),
   },
 
   history: {

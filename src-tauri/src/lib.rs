@@ -35,6 +35,7 @@ use aiya_data::scanner;
 mod app_id;
 mod beets;
 pub mod dto;
+mod drop;
 mod enrichment;
 mod logging;
 mod paths;
@@ -3076,7 +3077,63 @@ fn queue_persist_from_actor(
 /// 事件泵、SMTC 全部拖住。
 struct QueueFullPersist {
     p: aiya_data::QueuePersist,
-    ids: Vec<String>,
+    items: Vec<aiya_data::QueueItem>,
+}
+
+/* ---------------- 多态队列：TrackRef ⇄ QueueItem（docs/52 §6） ---------------- */
+
+/// 临时项（`file:` / `stream:`）落库时要留在 `payload` 里的字段。
+///
+/// 为什么要自己定一个结构而不是直接序列化 `TrackRef`：`TrackRef.path` 是
+/// `skip_serializing`（不发给 UI 的安全约束），而队列恢复**恰恰需要**它；
+/// 直接序列化会静默丢路径，重启后临时项就变成空路径。
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TransientPayload {
+    path: String,
+    title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    artist: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<i64>,
+}
+
+/// `TrackRef` → 队列表行。库内曲目只存 id；临时项存 payload。
+fn queue_item_from_ref(r: &aiya_player::TrackRef) -> aiya_data::QueueItem {
+    if !r.is_transient() {
+        return aiya_data::QueueItem::track(r.id.clone());
+    }
+    let payload = TransientPayload {
+        path: r.path.clone(),
+        title: r.title.clone(),
+        artist: r.artist.clone(),
+        duration_ms: r.duration_ms,
+    };
+    let kind = if r.is_stream() {
+        aiya_data::QueueKind::Stream
+    } else {
+        aiya_data::QueueKind::File
+    };
+    aiya_data::QueueItem::transient(
+        kind,
+        serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into()),
+    )
+}
+
+/// 队列表行 → `TrackRef`（临时行）；库内行返回 `None`（由 DB 查询补全）。
+fn ref_from_transient(item: &aiya_data::QueueItem) -> Option<aiya_player::TrackRef> {
+    let payload = item.payload.as_deref()?;
+    let p: TransientPayload = serde_json::from_str(payload).ok()?;
+    Some(match item.kind {
+        aiya_data::QueueKind::Stream => aiya_player::TrackRef::transient_stream(&p.path, p.title),
+        // 未知 kind（脏数据）也按本地文件恢复：至少路径是真的
+        _ => {
+            let mut r = aiya_player::TrackRef::transient_file(&p.path, p.title);
+            r.artist = p.artist;
+            r.duration_ms = p.duration_ms;
+            r
+        }
+    })
 }
 
 /// 锁内：取全量落库数据（不做 IO）。
@@ -3086,16 +3143,22 @@ fn queue_full_persist_snapshot(
 ) -> QueueFullPersist {
     QueueFullPersist {
         p: queue_persist_from_actor(actor, state.setting_flag("rememberPosition", true)),
-        ids: actor.queue_ids(),
+        // 从 refs 而不是 ids 构造：临时项的标题/路径只在 `TrackRef` 上，
+        // 拿 ids 回查库对它们永远是空（docs/52 §6.3）
+        items: actor
+            .queue_refs()
+            .iter()
+            .map(queue_item_from_ref)
+            .collect(),
     }
 }
 
 /// 锁外：全量落库（queue_items 重写 + 状态行）。切歌/清空后调用。
 fn persist_queue_full_snapshot(state: &AppState, snap: QueueFullPersist) {
-    let QueueFullPersist { p, ids } = snap;
+    let QueueFullPersist { p, items } = snap;
     let result: aiya_data::DbResult<()> = state
         .db()
-        .send(move |conn| aiya_data::save_queue_full(conn, &p, &ids));
+        .send(move |conn| aiya_data::save_queue_full(conn, &p, &items));
     if let Err(e) = result {
         tracing::warn!(error = %e, "queue full persist failed");
     }
@@ -3176,11 +3239,37 @@ fn engine_send(state: &AppState, cmd: aiya_audio::EngineCommand) {
 }
 
 /// 从 DB 拿 TrackRef 列表（trackIds 保序）。
-fn fetch_track_refs(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_player::TrackRef> {
+///
+/// **两类 id 都能解**：
+/// 1. 库内曲目 → 查 `tracks`（连音频规格一起带出，播放条的徽章靠它）；
+/// 2. 临时项（`file:` / `stream:` 前缀）→ 查 `queue_items.payload`：标题/艺人
+///    是拖入那一刻写进去的，`tracks` 表里根本没有它们。
+///
+/// 第 2 条是**队列面板点播**必须的：面板回传的是队列里的原 id，里面可能混着
+/// 临时项。只查 `tracks` 会把它们静默丢掉 —— 于是"点第 3 行播的是第 1 行"，
+/// 而且队列里只要有一首直播流，整个点播都会因为空列表直接报"没有可播放的曲目"。
+fn track_refs_by_ids(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_player::TrackRef> {
     let ids = ids.to_vec();
     state
         .db()
         .send(move |conn| {
+            // 临时项先一次读完建映射：条数是个位数，比按 id 逐条回查省事。
+            // 读失败按"没有临时项"处理——库内曲目那条路不该被它带塌。
+            let transient: std::collections::HashMap<String, aiya_player::TrackRef> =
+                aiya_data::queue::load_queue(conn)
+                    .ok()
+                    .flatten()
+                    .map(|(_, items)| {
+                        items
+                            .iter()
+                            .filter(|item| item.kind != aiya_data::QueueKind::Track)
+                            .filter_map(|item| {
+                                ref_from_transient(item).map(|r| (r.id.clone(), r))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
             // 音频规格列一并带出：PlayerState.current 是播放条唯一数据源，
             // 徽章/规格/Hi-Res 判定都靠 current.audio（contracts Track.audio）
             let mut stmt = conn.prepare(
@@ -3194,6 +3283,10 @@ fn fetch_track_refs(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_pla
             )?;
             let mut out = Vec::with_capacity(ids.len());
             for id in &ids {
+                if let Some(hit) = transient.get(id) {
+                    out.push(hit.clone());
+                    continue;
+                }
                 let row = stmt.query_row([id], |r| {
                     let codec: Option<String> = r.get(8)?;
                     let container: Option<String> = r.get(9)?;
@@ -3237,6 +3330,44 @@ fn fetch_track_refs(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_pla
         .unwrap_or_default()
 }
 
+/// 队列恢复：多态条目 → `TrackRef` 列表（docs/52 §6.3）。
+///
+/// 返回 `(tracks, current_id)`：
+/// * `tracks` 按条目顺序，**跳过已在库里被淘汰的**（CASCADE 之后正常不会出现，
+///   防御手改库）；
+/// * `current_id` 是按 `current_index` 取到的那一项的 ref id（临时项的 id 是
+///   前缀派生的，不能直接从条目上读）。
+///
+/// 为什么不能让宿主"拿 id 列表回查"：临时项不在 `tracks` 表里，回查永远空。
+fn build_queue_refs(
+    state: &State<'_, AppState>,
+    items: &[aiya_data::QueueItem],
+    current_index: i64,
+) -> (Vec<aiya_player::TrackRef>, Option<String>) {
+    let track_ids: Vec<String> = items.iter().filter_map(|i| i.track_id.clone()).collect();
+    let mut by_id: std::collections::HashMap<String, aiya_player::TrackRef> =
+        track_refs_by_ids(state, &track_ids)
+            .into_iter()
+            .map(|r| (r.id.clone(), r))
+            .collect();
+    let mut out: Vec<aiya_player::TrackRef> = Vec::with_capacity(items.len());
+    let mut current_id = None;
+    for (i, item) in items.iter().enumerate() {
+        let r = match &item.track_id {
+            Some(id) => by_id.remove(id),
+            None => ref_from_transient(item),
+        };
+        let Some(r) = r else {
+            continue; // 曲目已被删：与 CASCADE 的语义一致，静默跳过
+        };
+        if i as i64 == current_index {
+            current_id = Some(r.id.clone());
+        }
+        out.push(r);
+    }
+    (out, current_id)
+}
+
 #[tauri::command]
 fn player_state(state: State<'_, AppState>) -> Result<aiya_player::PlayerState, dto::ApiError> {
     let actor = state
@@ -3262,7 +3393,7 @@ fn player_play_tracks(
     track_ids: Vec<String>,
     start_index: Option<usize>,
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
-    let tracks = fetch_track_refs(&state, &track_ids);
+    let tracks = track_refs_by_ids(&state, &track_ids);
     if tracks.is_empty() {
         return Err(dto::ApiError::not_found("没有可播放的曲目"));
     }
@@ -3304,7 +3435,7 @@ fn player_play_query(
     if ids.is_empty() {
         return Err(dto::ApiError::not_found("查询结果为空"));
     }
-    let tracks = fetch_track_refs(&state, &ids);
+    let tracks = track_refs_by_ids(&state, &ids);
     let start = start_index.unwrap_or(0);
     {
         let mut actor = state
@@ -3320,18 +3451,27 @@ fn player_play_query(
 
 /// 播放/暂停切换的内部实现（tauri command 与 SMTC 回调共用）。
 fn cmd_toggle(state: &AppState, app: &AppHandle) -> aiya_player::PlayerState {
-    let status_before = state
-        .player
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .state()
-        .status;
+    let (status_before, source_before) = {
+        let actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let s = actor.state();
+        (s.status, s.source)
+    };
     use aiya_player::PlaybackStatus as PS;
-    match status_before {
-        PS::Playing => engine_send(state, aiya_audio::EngineCommand::Pause),
-        PS::Paused => engine_send(state, aiya_audio::EngineCommand::Resume),
-        _ => {
-            // Idle/Error：从当前位置重播（Actor 决定 load）
+    // 直播流（docs/52 §10）：暂停 = 断开、播放 = 重连，**都不走 Pause/Resume**。
+    // 这两个意图由 Actor 转成 pending_stop / pending_load，和其余引擎意图同一
+    // 出口下发——在这里直接发 Pause 会把流留在连着的状态（暂停 30 秒回来听到的
+    // 是 30 秒前），直接发 Resume 则根本没有流可放。
+    let is_stream = source_before == aiya_player::AudioSource::Stream;
+    if !is_stream {
+        match status_before {
+            PS::Playing => engine_send(state, aiya_audio::EngineCommand::Pause),
+            PS::Paused => engine_send(state, aiya_audio::EngineCommand::Resume),
+            _ => {
+                // Idle/Error：从当前位置重播（Actor 决定 load）
+            }
         }
     }
     {
@@ -3548,7 +3688,7 @@ fn player_enqueue(
     track_ids: Vec<String>,
     options: Option<Json>,
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
-    let tracks = fetch_track_refs(&state, &track_ids);
+    let tracks = track_refs_by_ids(&state, &track_ids);
     if tracks.is_empty() {
         return Err(dto::ApiError::not_found("没有可播放的曲目"));
     }
@@ -3578,7 +3718,7 @@ fn player_insert_next(
     state: State<'_, AppState>,
     track_id: String,
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
-    let tracks = fetch_track_refs(&state, &[track_id]);
+    let tracks = track_refs_by_ids(&state, &[track_id]);
     if tracks.is_empty() {
         return Err(dto::ApiError::not_found("曲目不存在"));
     }
@@ -3654,6 +3794,234 @@ fn player_clear(
     Ok(drive_and_emit(&state, &app))
 }
 
+/* ---------------- 拖放 / 直播（docs/52 §5、§7.3） ---------------- */
+
+/// 拖入条目的可播形态（分类之后的中间态）。
+enum DropCandidate {
+    /// 本地音频文件（可能已在曲库里）
+    Audio(String),
+    /// HLS 清单（本地路径）
+    Hls(String),
+}
+
+/// 把一批路径展开成"可播条目"：音频直接过、HLS 直接过、老式 m3u 展开后再过。
+/// 目录与不支持的格式进 `skipped`（人话说明，UI 直接展示在吐司里）。
+fn expand_dropped(paths: &[String], skipped: &mut Vec<String>) -> Vec<DropCandidate> {
+    let mut out = Vec::new();
+    for path in paths {
+        let item = drop::classify(std::path::Path::new(path));
+        match item.kind {
+            dto::DroppedKind::Audio => out.push(DropCandidate::Audio(item.path)),
+            dto::DroppedKind::HlsPlaylist => out.push(DropCandidate::Hls(item.path)),
+            dto::DroppedKind::Playlist => {
+                // 歌单展开一层（不再递归：歌单套歌单是病，且容易成环）
+                match drop::expand_playlist(std::path::Path::new(&item.path)) {
+                    Ok(entries) => {
+                        for entry in entries {
+                            let sub = drop::classify(std::path::Path::new(&entry));
+                            match sub.kind {
+                                dto::DroppedKind::Audio => {
+                                    out.push(DropCandidate::Audio(sub.path))
+                                }
+                                dto::DroppedKind::HlsPlaylist => {
+                                    out.push(DropCandidate::Hls(sub.path))
+                                }
+                                _ => skipped.push(format!("{}（{}）", sub.label, sub.note)),
+                            }
+                        }
+                    }
+                    Err(e) => skipped.push(format!("{}（{e}）", item.label)),
+                }
+            }
+            // 目录**不识别**（用户 2026-10-31 拍板）：一次误拖不该触发递归扫描
+            dto::DroppedKind::Directory => {
+                skipped.push(format!("{}（文件夹不展开，走设置 → 曲库导入）", item.label))
+            }
+            dto::DroppedKind::Unsupported => skipped.push(format!("{}（{}）", item.label, item.note)),
+        }
+    }
+    out
+}
+
+/// 路径分类（拖放与"打开文件…"共用；分类器唯一实现在 `drop` 模块）。
+///
+/// UI 用它决定 overlay 上显示什么、跳过项怎么提示——**判定不重复写一份**，
+/// 这是这个仓在 `is_http_url` 上吃过亏之后的既定做法。
+#[tauri::command]
+fn classify_paths(paths: Vec<String>) -> Vec<dto::DroppedItem> {
+    paths
+        .iter()
+        .map(|p| drop::classify(std::path::Path::new(p)))
+        .collect()
+}
+
+/// 拖入 / 选中一批文件 → **替换队列并播放第一项**（docs/52 §5.3）。
+///
+/// "识别 → 进入播放列表"就是这句话：不追加、不进曲库、不触发扫描。
+/// 已在曲库里的音频文件走库内行（封面/艺人/时长齐全），不在库里的按临时项
+/// （`file:` 前缀）进队列——两种混在同一个队列里，next/prev/队列面板零分支。
+#[tauri::command]
+fn player_open_paths(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<dto::OpenPathsReceipt, dto::ApiError> {
+    let mut skipped: Vec<String> = Vec::new();
+    let candidates = expand_dropped(&paths, &mut skipped);
+    if candidates.is_empty() {
+        // 全部跳过时说清为什么（比"没有可播放的文件"有用）
+        return Err(dto::ApiError::invalid_arg(if skipped.is_empty() {
+            "没有可播放的文件".to_string()
+        } else {
+            format!("没有可播放的文件：{}", skipped.join("；"))
+        }));
+    }
+
+    // 库内解析一次问完（逐条查库是 N 次往返，曲子多的歌单会明显卡）
+    let audio_paths: Vec<String> = candidates
+        .iter()
+        .filter_map(|c| match c {
+            DropCandidate::Audio(p) => Some(p.clone()),
+            DropCandidate::Hls(_) => None,
+        })
+        .collect();
+    let resolved: Vec<Option<String>> = if audio_paths.is_empty() {
+        Vec::new()
+    } else {
+        state
+            .db()
+            .send(move |conn| aiya_data::repo::resolve_paths_aligned(conn, &audio_paths))
+            .map_err(dto::ApiError::from)?
+    };
+    let library_ids: Vec<String> = resolved.iter().flatten().cloned().collect();
+    let library = if library_ids.is_empty() {
+        Vec::new()
+    } else {
+        track_refs_by_ids(&state, &library_ids)
+    };
+
+    let mut tracks: Vec<aiya_player::TrackRef> = Vec::with_capacity(candidates.len());
+    let mut audio_i = 0usize;
+    for candidate in candidates {
+        match candidate {
+            DropCandidate::Audio(path) => {
+                let hit = resolved.get(audio_i).and_then(|o| o.as_ref()).cloned();
+                audio_i += 1;
+                match hit {
+                    Some(id) => {
+                        if let Some(r) = library.iter().find(|r| r.id == id) {
+                            tracks.push(r.clone());
+                        }
+                    }
+                    None => {
+                        let title = std::path::Path::new(&path)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.clone());
+                        tracks.push(aiya_player::TrackRef::transient_file(&path, title));
+                    }
+                }
+            }
+            DropCandidate::Hls(path) => {
+                let title = std::path::Path::new(&path)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.clone());
+                tracks.push(aiya_player::TrackRef::transient_stream(&path, title));
+            }
+        }
+    }
+    if tracks.is_empty() {
+        return Err(dto::ApiError::not_found("队列里没有可播放的条目"));
+    }
+
+    let opened = tracks.len();
+    {
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        actor.reduce(aiya_player::PlayerCommand::Queue(
+            aiya_player::QueueOp::ReplaceAll { tracks, start: 0 },
+        ));
+    }
+    drive_and_emit(&state, &app);
+    Ok(dto::OpenPathsReceipt { opened, skipped })
+}
+
+/// 打开一个 HLS 地址（直播页地址框）。标题缺省取 URL 末段，再不行取主机名。
+#[tauri::command]
+fn live_open(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+    title: Option<String>,
+) -> Result<aiya_player::PlayerState, dto::ApiError> {
+    let url = url.trim().to_string();
+    if !aiya_player::is_stream_path(&url) {
+        return Err(dto::ApiError::invalid_arg(
+            "只支持 http(s) 的 HLS 地址（本地文件请用「打开文件」）",
+        ));
+    }
+    let title = title
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| default_stream_title(&url));
+    let track = aiya_player::TrackRef::transient_stream(&url, title);
+    {
+        let mut actor = state
+            .player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        actor.reduce(aiya_player::PlayerCommand::Queue(
+            aiya_player::QueueOp::ReplaceAll {
+                tracks: vec![track],
+                start: 0,
+            },
+        ));
+    }
+    Ok(drive_and_emit(&state, &app))
+}
+
+/// 地址框留空时的标题：URL 末段文件名 → 主机名 → 原样。
+fn default_stream_title(url: &str) -> String {
+    let stripped = url.split(['?', '#']).next().unwrap_or(url);
+    let tail = stripped.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    if !tail.is_empty() && tail.contains('.') && !tail.starts_with("http") {
+        // 末段像文件名（`index.m3u8`）：去掉扩展名更像"台名"
+        let stem = tail.split('.').next().unwrap_or(tail);
+        if !stem.is_empty() {
+            return stem.to_string();
+        }
+    }
+    stripped
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .filter(|h| !h.is_empty())
+        .unwrap_or(url)
+        .to_string()
+}
+
+/// 选一个本地播放列表文件（直播页「打开文件…」）。
+///
+/// 与 `pick_folder` 同样的线程约束：`blocking_pick_file` 在主线程有死锁风险，
+/// 卸到工作线程。取消返回 `None`（取消是正常操作，不是错误）。
+#[tauri::command]
+async fn live_pick_playlist(app: AppHandle) -> Result<Option<String>, dto::ApiError> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("播放列表", &["m3u8", "m3u"])
+            .blocking_pick_file()
+            .and_then(|p| p.as_path().map(|pp| pp.to_path_buf()))
+    })
+    .await
+    .unwrap_or(None);
+    Ok(picked.map(|p| p.to_string_lossy().into_owned()))
+}
+
 /// 播放历史：一曲播完（EngineEvent::Eof，自然结束或用户切走）记一条。
 /// seconds_played = 该曲播放时长（v1 记整曲；中途跳过不细分百分比）。
 ///
@@ -3661,6 +4029,14 @@ fn player_clear(
 /// play_count / last_played_at 同事务；此前 play_count 根本没人维护，
 /// mostPlayed 列表永远是空的）。
 fn record_history(state: &AppState, track_id: &str, seconds_played: u64) {
+    // 临时项（拖入的本地文件 / 直播流）不在 `tracks` 表里：history.track_id 是
+    // `NOT NULL REFERENCES tracks(id)`，写进去整笔事务会外键失败（docs/52 §6.1）。
+    // 历史是"曲目"语义，这类条目不记账——不需要改表，一个闸门就够。
+    if track_id.starts_with(aiya_player::FILE_ID_PREFIX)
+        || track_id.starts_with(aiya_player::STREAM_ID_PREFIX)
+    {
+        return;
+    }
     let track_id = track_id.to_string();
     let played_at = now_secs();
     let result: aiya_data::DbResult<()> = state
@@ -4104,20 +4480,25 @@ pub fn run() {
                 let remember_position = state.setting_flag("rememberPosition", true);
                 let autoplay_on_start = state.setting_flag("autoplayOnStart", false);
                 let loaded: Result<
-                    Option<(aiya_data::QueuePersist, Vec<String>)>,
+                    Option<(aiya_data::QueuePersist, Vec<aiya_data::QueueItem>)>,
                     aiya_data::DbError,
                 > = state.db().send(|conn| aiya_data::load_queue(conn));
-                if let Ok(Some((p, ids))) = loaded {
-                    if !ids.is_empty() {
-                        let tracks = fetch_track_refs(&state, &ids);
+                if let Ok(Some((p, items))) = loaded {
+                    if !items.is_empty() {
+                        // 多态恢复（docs/52 §6.3）：库内曲目查库、临时项读 payload
+                        let (tracks, current_id) =
+                            build_queue_refs(&state, &items, p.current_index);
                         if !tracks.is_empty() {
                             let repeat = match p.repeat_mode.as_str() {
                                 "all" => aiya_player::RepeatMode::All,
                                 "one" => aiya_player::RepeatMode::One,
                                 _ => aiya_player::RepeatMode::Off,
                             };
-                            let current_id = ids.get(p.current_index.max(0) as usize).cloned();
-                            let start_ms = if remember_position {
+                            // 当前项是直播流：起点强制 0（直播没有"上次听到哪"）
+                            let is_stream_current = current_id
+                                .as_deref()
+                                .is_some_and(|id| id.starts_with(aiya_player::STREAM_ID_PREFIX));
+                            let start_ms = if remember_position && !is_stream_current {
                                 p.position_ms.max(0) as u64
                             } else {
                                 0
@@ -4444,6 +4825,10 @@ pub fn run() {
             player_queue,
             player_play_tracks,
             player_play_query,
+            classify_paths,
+            player_open_paths,
+            live_open,
+            live_pick_playlist,
             player_toggle,
             player_next,
             player_prev,

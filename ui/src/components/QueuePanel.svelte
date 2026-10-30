@@ -1,9 +1,10 @@
 <script lang="ts">
   import type { TrackDetail } from '../lib/ipc';
+  import type { TrackRef } from '../lib/ipc/generated/TrackRef';
   import { artworkUrl } from '../lib/artwork';
   import { startRowDrag, consumeClickSuppressed } from '../lib/drag';
   import { createVirtualWindow } from '../lib/create-virtual-window.svelte';
-  import { formatDurationLong, formatTime } from '../lib/format';
+  import { formatDurationLong, formatTime, isStreamId, transientOrigin } from '../lib/format';
   import { library as libraryStore } from '../stores/library.svelte';
   import Cover from './ui/Cover.svelte';
   import EmptyState from './ui/EmptyState.svelte';
@@ -12,6 +13,14 @@
 
   interface Props {
     ids: string[];
+    /**
+     * 队列里的临时项（拖入的文件 / 直播流）。
+     *
+     * 元数据不能靠 `library_tracks` 取——它们不在曲库里，查了必然空手而归，
+     * 还会把 id 记进负缓存。标题与来源只能由快照自带的这一份给出
+     * （`QueueSnapshot.transient`，docs/52 §7.2）。
+     */
+    transient: TrackRef[];
     /** 当前播放位置（播放顺序下标）；空队列 = null（契约：不用 -1 哨兵） */
     index: number | null;
     onplay: (index: number) => void;
@@ -22,7 +31,10 @@
     onclose: () => void;
   }
 
-  let { ids, index, onplay, onremove, onmove, onclear, onclose }: Props = $props();
+  let { ids, index, transient, onplay, onremove, onmove, onclear, onclose }: Props = $props();
+
+  /** id → 临时项。通常是空 Map（队列全是库内曲目时） */
+  const transientById = $derived(new Map(transient.map((ref) => [ref.id, ref])));
 
   const ROW_HEIGHT = 46;
   /**
@@ -63,11 +75,16 @@
 
   const visible = $derived.by(() => {
     void metaVersion;
-    const out: Array<{ index: number; id: string; track: TrackDetail | undefined }> = [];
+    const out: Array<{
+      index: number;
+      id: string;
+      track: TrackDetail | undefined;
+      transient: TrackRef | undefined;
+    }> = [];
     for (let i = range.start; i < range.end; i += 1) {
       const id = ids[i];
       if (!id) continue;
-      out.push({ index: i, id, track: meta.get(id) });
+      out.push({ index: i, id, track: meta.get(id), transient: transientById.get(id) });
     }
     return out;
   });
@@ -80,6 +97,13 @@
     let sum = 0;
     let known = 0;
     for (const id of ids) {
+      // 临时项的时长来自快照（拖入的文件由引擎回填；直播恒为 null = 0）
+      const item = transientById.get(id);
+      if (item) {
+        known += 1;
+        sum += item.durationMs ?? 0;
+        continue;
+      }
       const track = meta.get(id);
       if (!track) continue;
       known += 1;
@@ -96,7 +120,7 @@
   $effect(() => {
     const missing: string[] = [];
     for (const row of visible) {
-      if (row.track || pending.has(row.id)) continue;
+      if (row.track || row.transient || pending.has(row.id)) continue;
       // 负缓存命中：确认过多次缺失的 id 不再请求，否则 effect 会无限重跑
       if ((failedAttempts.get(row.id) ?? 0) >= META_ATTEMPT_LIMIT) continue;
       missing.push(row.id);
@@ -205,11 +229,29 @@
           <span class="q-grip" aria-hidden="true"><Icon name="grip" size={13} /></span>
           <span class="q-index">{row.index === index ? '▶' : row.index + 1}</span>
           <Cover src={row.track?.artworkId ? artworkUrl(row.track.artworkId, 96) : null} size="sm" alt="" />
-          <span class="q-meta">
-            <span class="q-title">{row.track?.title ?? '载入中…'}</span>
-            <span class="q-artist">{row.track?.artist ?? ''}</span>
-          </span>
-          <span class="q-duration">{formatTime(row.track?.durationMs ?? 0)}</span>
+          {#if row.transient}
+            <!--
+              临时项（docs/52 §7.2）：标题来自快照，副行是**来源标记 + 出处**。
+              这里刻意没有任何"跳到专辑/艺人"的入口——`artistId`/`albumId` 都是
+              null，做成链接点下去只会得到一页空白。
+            -->
+            <span class="q-meta">
+              <span class="q-title">{row.transient.title}</span>
+              <span class="q-artist">
+                <span class="q-tag">{isStreamId(row.id) ? '直播' : '文件'}</span>
+                {transientOrigin(row.id) ?? ''}
+              </span>
+            </span>
+            <span class="q-duration">
+              {isStreamId(row.id) ? '直播' : formatTime(row.transient.durationMs ?? 0)}
+            </span>
+          {:else}
+            <span class="q-meta">
+              <span class="q-title">{row.track?.title ?? '载入中…'}</span>
+              <span class="q-artist">{row.track?.artist ?? ''}</span>
+            </span>
+            <span class="q-duration">{formatTime(row.track?.durationMs ?? 0)}</span>
+          {/if}
           <IconButton
             label="从队列移除"
             size="sm"

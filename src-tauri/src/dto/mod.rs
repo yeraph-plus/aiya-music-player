@@ -52,6 +52,25 @@ pub use output::{
 };
 pub use refresh::{RefreshSnapshot, RefreshState};
 
+// 拖放分类结果（docs/52 §5.2）。形状定义跟着分类器走（`src/drop.rs`，纯函数 +
+// 单测在那里），这里只做出口——命令签名与 ts-rs 都从 `dto::` 拿，与其余 DTO 一致。
+pub use crate::drop::{DroppedItem, DroppedKind};
+
+/// 拖入 / 打开一批文件的回执（docs/52 §5.3）。
+///
+/// 为什么不直接返回 `PlayerState`：UI 需要告诉用户"进去了几项、跳过了哪些、
+/// 为什么跳过"。播放状态本来就走 `player:state` 事件，命令再返回一次只是多
+/// 一份重复；而这份回执只有命令这一条路能给出。
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenPathsReceipt {
+    /// 真正进队列的条目数
+    pub opened: usize,
+    /// 被跳过的条目（人话，直接进吐司，不再二次加工）
+    pub skipped: Vec<String>,
+}
+
 /// 命令失败的统一形状。替代 `{ok:false, error:{code,message}}` 信封。
 ///
 /// 为什么不再用信封：错误本来就有两条通道（Tauri 自己 reject + `ok:false`），

@@ -12,7 +12,8 @@
     formatRate,
     isHiRes,
   } from '../../lib/audio-format';
-  import { formatTime, repeatLabel } from '../../lib/format';
+  import { formatTime, isTransientId, repeatLabel, transientOrigin } from '../../lib/format';
+  import { livePhase } from '../../lib/live';
   import { overlay } from '../../stores/overlay.svelte';
   import { ChevronUp, SlidersHorizontal } from '@lucide/svelte';
   import Icon from '../Icon.svelte';
@@ -100,7 +101,25 @@
   let rateOpen = $state(false);
 
   const positionMs = $derived(dragging ? dragMs : (player?.positionMs ?? 0));
-  const durationMs = $derived(player?.durationMs ?? 0);
+
+  /**
+   * 时长**三态**（docs/52 §7.1）：`null` = 不知道（直播流，或本地文件还没
+   * 探完），`0` = 真空文件，正值 = 可拖。
+   *
+   * 原来是 `player?.durationMs ?? 0`，把"不知道"和"零秒"压成同一个 0 ——
+   * 于是直播流的时长位渲染成 `0:00`、进度条 `max` 走 `durationMs || 1`
+   * 兜底成 1 毫秒。看起来像"一首 0 秒长的坏文件"，而不是"这是直播"。
+   */
+  const durationMs = $derived(player?.durationMs ?? null);
+  /** 只有拿到正时长才允许拖：直播流永远走不进这个分支 */
+  const seekable = $derived(durationMs !== null && durationMs > 0);
+  /**
+   * 直播流（docs/22 G3 的 `AudioSource`，此前定义了没人读）。
+   *
+   * 语义按用户拍板（docs/52 §10）：**暂停 = 断开连接，播放 = 重连**。
+   * 所以徽章要分三态，不能一律写"直播"——暂停时连接是真的没了。
+   */
+  const isStream = $derived(player?.source === 'stream');
   /**
    * bits-ui Slider 的吸附坑（真机实测冻结进度条，mock 测不出来）：
    * value 不在 step 网格上时，SliderRootState 内部的 watch 会把它吸附到
@@ -123,6 +142,16 @@
   const badge = $derived(audioBadge(audio?.codec ?? null, audio?.container ?? null));
   const spec = $derived(formatAudioSpec(audio));
   const tooltip = $derived(audioTooltip(audio));
+
+  /** 直播徽章三态（文案口径与直播页共用 `lib/live.ts`，避免两处各写一遍） */
+  const phase = $derived(livePhase(player?.status));
+
+  /**
+   * 副标题的出处：直播 → 主机名，拖入的本地文件 → 所在目录。
+   * 库内曲目两者都是 `null`，走原来的艺人名。
+   */
+  const transient = $derived(isTransientId(player?.current?.id));
+  const origin = $derived(transientOrigin(player?.current?.id));
 
   const volume = $derived(player?.muted ? 0 : (player?.volume ?? 0.85));
 
@@ -187,7 +216,12 @@
       </div>
       <div class="line2">
         {#if player?.current}
-          <span class="artist">{player.current.artist ?? '未知艺人'}</span>
+          {#if transient}
+            <!-- 临时项没有艺人：直播给主机名、拖入的文件给所在目录（docs/52 §7.1） -->
+            <span class="artist">{origin ?? (isStream ? '网络直播流' : '外部音频文件')}</span>
+          {:else}
+            <span class="artist">{player.current.artist ?? '未知艺人'}</span>
+          {/if}
           {#if badge}
             <span
               class="fmt-badge"
@@ -209,10 +243,12 @@
 
   <div class="transport">
     <div class="controls">
+      <!-- 临时项（拖入的文件 / 直播流）不在曲库里，id 是 `file:`/`stream:`
+           前缀串——写进歌单就是一行永远查不到的坏数据，直接禁掉 -->
       <IconButton
-        label="把当前曲目加入播放列表"
+        label={transient ? '临时项不能加入播放列表' : '把当前曲目加入播放列表'}
         round
-        disabled={!hasTrack}
+        disabled={!hasTrack || transient}
         onclick={addCurrentToPlaylist}
       >
         <Icon name="heart" />
@@ -223,7 +259,7 @@
       </IconButton>
 
       <IconButton
-        label={playing ? '暂停' : '播放'}
+        label={playing ? (isStream ? '断开直播' : '暂停') : isStream ? '连接直播' : '播放'}
         size="lg"
         variant="solid"
         round
@@ -249,26 +285,58 @@
       </IconButton>
     </div>
 
-    <div class="timeline">
-      <span class="t">{formatTime(positionMs)}</span>
-      <Slider
-        label="播放进度"
-        value={sliderMs}
-        min={0}
-        max={durationMs || 1}
-        step={100}
-        disabled={!hasTrack || durationMs === 0}
-        oninput={(value) => {
-          dragging = true;
-          dragMs = value;
-        }}
-        oncommit={(value) => {
-          if (!dragging) return;
-          dragging = false;
-          onseek(value);
-        }}
-      />
-      <span class="t">{formatTime(durationMs)}</span>
+    <div class="timeline" class:live={isStream}>
+      <!--
+        左 = 已收听时长。直播没有"当前位置"这个概念，但 `positionMs` 在 stream
+        下单调递增（Actor 从 0 起算、断开即归零），直接当已收听时长用就对。
+      -->
+      <span class="t" title={isStream ? '已收听' : undefined}>{formatTime(positionMs)}</span>
+
+      {#if isStream}
+        <!--
+          直播：进度条换成一条**呼吸的横线**（docs/52 §7.1）。
+          - 纯 CSS 动画，**不另起 rAF**（守 docs/46 §7 单 rAF 约定）；
+          - 不是 `<input>`，也不留 disabled 滑块：直播没有可拖的刻度，
+            给一个"拖不动"的滑块只会让人以为是坏的；
+          - 断开时（paused = 已断连）动画停下、变暗，和徽章三态对齐。
+        -->
+        <span class="live-bar" class:on={playing} aria-hidden="true"></span>
+      {:else}
+        <Slider
+          label="播放进度"
+          value={sliderMs}
+          min={0}
+          max={Math.max(durationMs ?? 0, 1)}
+          step={100}
+          disabled={!hasTrack || !seekable}
+          oninput={(value) => {
+            dragging = true;
+            dragMs = value;
+          }}
+          oncommit={(value) => {
+            if (!dragging) return;
+            dragging = false;
+            onseek(value);
+          }}
+        />
+      {/if}
+
+      {#if isStream}
+        <span
+          class="t live-badge"
+          class:on={phase.tone === 'on'}
+          class:wait={phase.tone === 'wait'}
+          title={phase.tone === 'on'
+            ? '直播流 · 暂停会断开连接，再播放即重连'
+            : phase.tone === 'wait'
+              ? '正在连接直播流…'
+              : '已断开连接 · 按播放重新连接'}
+        >
+          <span class="live-dot" aria-hidden="true"></span>{phase.text}
+        </span>
+      {:else}
+        <span class="t">{seekable ? formatTime(durationMs) : '--:--'}</span>
+      {/if}
     </div>
   </div>
 
@@ -578,6 +646,102 @@
 
   .timeline .t:last-child {
     text-align: right;
+  }
+
+  /* ---------------- 直播（docs/52 §7.1） ---------------- */
+
+  /*
+   * 呼吸条：替代进度滑块。纯 CSS 动画，**不另起 rAF**（守 docs/46 §7
+   * 单循环约定）；也不是 `<input>`——直播没有可拖的刻度，摆一个拖不动的
+   * 滑块只会让人以为是坏的。
+   *
+   * `.on` = 正在播。断开（paused）时摘掉它：暂停在本产品里就是**真的断连**，
+   * 界面不该继续"流动"骗人。
+   */
+  .live-bar {
+    position: relative;
+    flex: 1;
+    height: 3px;
+    border-radius: var(--radius-pill);
+    background: var(--surface-active);
+    overflow: hidden;
+  }
+
+  .live-bar::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--accent) 75%, transparent) 50%,
+      transparent 100%
+    );
+    animation: live-breathe 2.8s ease-in-out infinite;
+  }
+
+  /* 断开：一条静止的灰线，动画与渐变一起撤掉 */
+  .live-bar:not(.on)::after {
+    animation: none;
+    background: none;
+  }
+
+  @keyframes live-breathe {
+    0%,
+    100% {
+      transform: translateX(-60%);
+      opacity: 0.3;
+    }
+    50% {
+      transform: translateX(60%);
+      opacity: 1;
+    }
+  }
+
+  /* 徽章：`直播` / `连接中` / `已断开`。宽度自适应（时长位那个 38px 装不下） */
+  .timeline .t.live-badge {
+    width: auto;
+    min-width: 38px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    padding-left: 4px;
+    letter-spacing: 0.02em;
+    color: var(--text-3);
+  }
+
+  .timeline .t.live-badge.on {
+    color: var(--accent-text);
+  }
+
+  .timeline .t.live-badge.wait {
+    color: var(--text-2);
+  }
+
+  .live-dot {
+    flex: none;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .live-badge.on .live-dot {
+    animation: live-pulse 1.8s ease-in-out infinite;
+  }
+
+  @keyframes live-pulse {
+    50% {
+      opacity: 0.25;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .live-bar::after,
+    .live-badge.on .live-dot {
+      animation: none;
+    }
   }
 
   /* ---------------- 右：队列 / EQ / 倍速 / 音量 ---------------- */

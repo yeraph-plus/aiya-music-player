@@ -8,6 +8,7 @@ pub mod state;
 
 pub use actor::PlayerActor;
 pub use state::{
-    AudioError, AudioErrorCode, AudioSource, PlaybackStatus, PlayerCommand, PlayerState, QueueOp,
-    QueueSnapshot, RepeatMode, TrackAudio, TrackRef,
+    is_stream_path, AudioError, AudioErrorCode, AudioSource, PlaybackStatus, PlayerCommand,
+    PlayerState, QueueOp, QueueSnapshot, RepeatMode, TrackAudio, TrackRef, FILE_ID_PREFIX,
+    STREAM_ID_PREFIX,
 };

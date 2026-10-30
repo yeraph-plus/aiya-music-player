@@ -38,6 +38,7 @@ import type {
   BeetsFieldCatalog,
   BeetsQueryPage,
   Diagnostics,
+  DroppedItem,
   EnrichmentMatch,
   EnrichmentWorklist,
   EqSettings,
@@ -46,6 +47,7 @@ import type {
   LibraryStats,
   ListTiming,
   Lyrics,
+  OpenPathsReceipt,
   PlayerState,
   PlaylistAddResult,
   PlaylistExportResult,
@@ -137,6 +139,24 @@ function audioFor(id: string): TrackAudio {
       // 认不出（ALAC/AAC 共用 M4A 容器）：lossless = null，UI 显示"未知"
       return { codec: 'AAC', container: 'Mp4', sampleRate: 48000, bitsPerSample: 16, bitrate: 256, channels: 2, lossless: null };
   }
+}
+
+/**
+ * 直播标题的缺省值：与 Rust 侧 `default_stream_title` 同一套口径。
+ *
+ * 末段像文件名（`index.m3u8`）就去掉扩展名当"台名"，否则退到主机名。
+ * 抄一遍而不是让 UI 自己猜：真机下发的 `title` 已经是这个值，预览要是
+ * 另算一套，同一串 URL 在两边会显示成不同的名字。
+ */
+function defaultStreamTitle(url: string): string {
+  const stripped = url.split(/[?#]/)[0] ?? url;
+  const tail = stripped.replace(/\/+$/, '').split('/').pop() ?? '';
+  if (tail && tail.includes('.') && !tail.startsWith('http')) {
+    const stem = tail.split('.')[0];
+    if (stem) return stem;
+  }
+  const host = stripped.split('://')[1]?.split('/')[0];
+  return host || url;
 }
 
 function toRef(track: TrackRow): TrackRef {
@@ -313,6 +333,11 @@ export class MockBackend {
     updatedAtMs: Date.now(),
   };
   private queueIds: string[] = [];
+  /**
+   * 队列里的临时项（`file:` / `stream:`）。真机由 `queue_snapshot()` 给出，
+   * 预览里跟着 `playStream` 一起摆——队列面板靠它给这一类行画标题与来源标记。
+   */
+  private queueTransient: TrackRef[] = [];
   /** 频谱假帧定时器：只在 `spectrum_set(true)` 期间跑 */
   private spectrumTimer: ReturnType<typeof setInterval> | null = null;
   /**
@@ -1669,6 +1694,8 @@ export class MockBackend {
       // 本来就是空的，兜底 0 无观察者。
       index: this.playerState.index ?? 0,
       cursor: this.playerState.cursor ?? 0,
+      // 临时项（直播/拖入的文件）不在曲库里，标题只能由快照自己带
+      transient: this.queueTransient,
       version: this.playerState.queueVersion,
       tookMs: 0,
     };
@@ -1676,6 +1703,7 @@ export class MockBackend {
 
   private playQueue(ids: string[], startIndex: number): PlayerState {
     this.queueIds = ids;
+    this.queueTransient = [];
     const current = this.tracks.find((t) => t.id === ids[startIndex]) ?? null;
     this.playerState = {
       ...this.playerState,
@@ -1706,7 +1734,13 @@ export class MockBackend {
 
   toggle(): PlayerState {
     if (this.playerState.status === 'playing') {
-      this.playerState = { ...this.playerState, status: 'paused' };
+      // 直播：暂停 = 断开连接，位置归零（与 `actor.rs` 的 Stream 分支一致）
+      const disconnecting = this.playerState.source === 'stream';
+      this.playerState = {
+        ...this.playerState,
+        status: 'paused',
+        positionMs: disconnecting ? 0 : this.playerState.positionMs,
+      };
     } else if (this.playerState.status === 'paused') {
       this.playerState = { ...this.playerState, status: 'playing' };
     }
@@ -1820,6 +1854,7 @@ export class MockBackend {
 
   clear(): PlayerState {
     this.queueIds = [];
+    this.queueTransient = [];
     this.playerState = {
       ...this.playerState,
       queueLength: 0,
@@ -1828,6 +1863,128 @@ export class MockBackend {
       cursor: null,
       status: 'idle',
       current: null,
+    };
+    this.emitPlayer();
+    return this.playerState;
+  }
+
+  /* ---------------- 直播 / 拖放（docs/52） ---------------- */
+
+  /**
+   * 拖入条目的分类（预览版）。
+   *
+   * 真机是宿主读文件头 + 扩展名（`src-tauri/src/drop.rs`，6 条单测钉着
+   * "`.m3u` 按内容分流"这类判断）。预览里**读不到文件内容**，只能按扩展名
+   * 猜——故意保持"猜"的粗糙度：这条路径在预览里要验的是 UI 的反应
+   * （吐司文案、跳过清单、进不进队列），分类精度归 Rust 单测管。
+   */
+  classifyPaths(paths: string[]): DroppedItem[] {
+    return paths.map((path) => {
+      const label = path.split(/[\\/]/).pop() || path;
+      const ext = label.includes('.') ? (label.split('.').pop() ?? '').toLowerCase() : '';
+
+      // 没有扩展名 = 当文件夹（真机上 `is_dir()` 说了算）
+      if (!ext) return { path, kind: 'directory' as const, note: '文件夹', label };
+
+      if (ext === 'm3u8') return { path, kind: 'hlsPlaylist' as const, note: 'HLS 清单', label };
+      if (ext === 'm3u') return { path, kind: 'playlist' as const, note: 'm3u 歌单', label };
+      if (['mp3', 'flac', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'aiff', 'aif'].includes(ext)) {
+        return { path, kind: 'audio' as const, note: '', label };
+      }
+      // 认识但解不了的要报格式名，不能笼统说"不支持"
+      const named: Record<string, string> = {
+        wma: 'WMA 不支持',
+        opus: 'Opus 不支持',
+        ape: 'APE 不支持',
+        wv: 'WavPack 不支持',
+        dsf: 'DSD 不支持',
+        dff: 'DSD 不支持',
+      };
+      return {
+        path,
+        kind: 'unsupported' as const,
+        note: named[ext] ?? '不支持的格式',
+        label,
+      };
+    });
+  }
+
+  /**
+   * 拖入一批文件：替换队列并播第一项（docs/52 §5.3）。
+   *
+   * 预览里只认两种结局：**音频直接开播**、其余全进 `skipped`。`.m3u` 展开是
+   * 宿主的读盘活，浏览器里没有那份文件，一律报跳过——比假装展开成功诚实。
+   */
+  openPaths(paths: string[]): OpenPathsReceipt {
+    const items = this.classifyPaths(paths);
+    const playable = items.filter((it) => it.kind === 'audio' || it.kind === 'hlsPlaylist');
+    const skipped = items
+      .filter((it) => !playable.includes(it))
+      .map((it) => `${it.label}：${it.note || '无法识别'}`);
+
+    const first = playable[0];
+    if (first) {
+      if (first.kind === 'hlsPlaylist') {
+        this.playStream(`file:///${first.path.replace(/\\/g, '/')}`, first.label);
+      } else {
+        // 预览的曲库是内存假数据，拖进来的路径查不到行：借第一首曲目的元数据
+        // 顶替，让"播放条出现时长/可拖"这条 UI 路径走得通
+        const stand = this.tracks[0];
+        if (stand) this.playTracks([stand.id], 0);
+      }
+    }
+    return { opened: playable.length, skipped };
+  }
+
+  /** 打开一个 HLS 地址（直播页的地址框 / 拖入的 m3u8） */
+  liveOpen(url: string, title?: string): PlayerState {
+    const clean = url.trim();
+    if (!clean) return this.playerState;
+    const name = title?.trim() || defaultStreamTitle(clean);
+    return this.playStream(clean, name);
+  }
+
+  /** 「打开文件…」：浏览器没有系统对话框，回一个假清单让 UI 路径走通 */
+  livePickPlaylist(): string {
+    return 'D:\\MUSIC_Player\\test-music\\live.m3u8';
+  }
+
+  /**
+   * 直播流的播放状态。
+   *
+   * 三处必须和 Rust 侧对齐，否则预览会"看起来对、真机不对"：
+   * - `durationMs = null`（直播没有总时长，播放条据三态切 LIVE 徽章）；
+   * - `source = 'stream'`（唯一读这个字段的地方是播放条）；
+   * - `current.id` 带 `stream:` 前缀，且 `audio = null`（临时项没有曲库元数据）。
+   */
+  private playStream(url: string, title: string): PlayerState {
+    const ref: TrackRef = {
+      id: `stream:${url}`,
+      title,
+      artist: null,
+      album: null,
+      artistId: null,
+      albumId: null,
+      durationMs: null,
+      artworkId: null,
+      gainDb: null,
+      audio: null,
+    };
+    this.queueIds = [ref.id];
+    this.queueTransient = [ref];
+    this.playerState = {
+      ...this.playerState,
+      queueLength: 1,
+      queueVersion: this.playerState.queueVersion + 1,
+      index: 0,
+      cursor: 0,
+      status: 'playing',
+      source: 'stream',
+      current: ref,
+      durationMs: null,
+      positionMs: 0,
+      token: this.playerState.token + 1,
+      error: null,
     };
     this.emitPlayer();
     return this.playerState;

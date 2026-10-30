@@ -5,12 +5,14 @@
   import Sidebar from './shell/Sidebar.svelte';
   import TitleBar from './shell/TitleBar.svelte';
   import EqPanel from './EqPanel.svelte';
+  import Icon from './Icon.svelte';
   import InlineError from './ui/InlineError.svelte';
   import QueuePanel from './QueuePanel.svelte';
   import SideDrawer from './ui/SideDrawer.svelte';
   import { errorMessage } from '../lib/errors';
   import type { SpectrumSource } from '../lib/spectrum-source';
   import { eq } from '../stores/eq.svelte';
+  import { drop } from '../stores/drop.svelte';
   import { list } from '../stores/list.svelte';
   import { nav } from '../stores/nav.svelte';
   import { notify } from '../stores/notify.svelte';
@@ -138,6 +140,7 @@
   <SideDrawer open={ui.queueOpen} label="播放队列" onclose={() => ui.closeQueue()}>
     <QueuePanel
       ids={player.queueIds}
+      transient={player.queueTransient}
       index={playerState?.index ?? null}
       onplay={(index) => void playQueueAt(index)}
       onremove={(index) => player.removeAt(index)}
@@ -152,4 +155,82 @@
       <EqPanel />
     </div>
   </SideDrawer>
+
+  <!--
+    拖放蒙版（docs/52 §5.2）：整窗都是落点，所以这一层也铺满整窗。
+    `pointer-events: none` —— 原生拖放由宿主接管，蒙版只负责显示，
+    绝不能拦住指针（否则 enter/over/leave 的判定会抖）。
+
+    文案分两行：第一行说"松开做什么"，第二行是 enter 时分类器的预告
+    （`drop.hint`）。**文件夹不识别**这条规则就靠第二行在松手前说清，
+    而不是等落点后弹一句"失败"。
+  -->
+  {#if drop.hovering}
+    <div class="drop-veil">
+      <div class="drop-card">
+        <span class="drop-icon"><Icon name="folder" size={22} /></span>
+        <strong>松开即播放</strong>
+        <span class="drop-hint">{drop.hint ?? '音频文件 / m3u8 直播清单'}</span>
+      </div>
+    </div>
+  {/if}
 </div>
+
+<style>
+  /*
+   * 拖放蒙版（docs/52 §5.2）。
+   *
+   * 层级压在所有常驻壳层之上、吐司（z-index 60）之下：拖拽期间不该压住
+   * 提示，但必须压住播放条与抽屉。
+   *
+   * 背景用 `--surface-1` 72% 半透明而不是纯黑：整个应用在这一刻还在
+   * 正常渲染（背景频谱也可能在动），盖一层死黑会让窗口像"卡住了"。
+   */
+  .drop-veil {
+    position: absolute;
+    inset: 0;
+    z-index: 55;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: color-mix(in srgb, var(--surface-1) 72%, transparent);
+    /* 指针必须穿透：原生拖放由宿主接管，蒙版只是显示 */
+    pointer-events: none;
+  }
+
+  .drop-card {
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    max-width: min(520px, 80vw);
+    padding: 26px 34px;
+    border-radius: var(--radius-lg);
+    border: 1px dashed var(--accent);
+    background: color-mix(in srgb, var(--surface-3) 92%, transparent);
+    box-shadow: 0 18px 48px var(--shadow);
+    text-align: center;
+  }
+
+  .drop-icon {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-pill);
+    background: var(--accent-weak);
+    color: var(--accent-text);
+  }
+
+  .drop-card strong {
+    font-size: 14px;
+    font-weight: 550;
+    color: var(--text-1);
+  }
+
+  .drop-hint {
+    font-size: 11.5px;
+    color: var(--text-2);
+    /* 预告里可能带"（走设置 → 曲库导入）"，允许折行 */
+    line-height: 1.5;
+  }
+</style>

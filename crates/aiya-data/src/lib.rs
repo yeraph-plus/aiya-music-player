@@ -20,5 +20,7 @@ pub mod smart;
 
 pub use artwork::{find_artwork, link, save_artwork, stage, StagedArtwork, ARTWORK_SCHEME};
 pub use db::{open, open_conn, DbError, DbHandle, DbResult};
-pub use queue::{load_queue, save_queue_full, save_queue_state, QueuePersist};
+pub use queue::{
+    load_queue, save_queue_full, save_queue_state, QueueItem, QueueKind, QueuePersist,
+};
 pub use repo::{TrackRow, TrackSource, TrackWindowQuery};

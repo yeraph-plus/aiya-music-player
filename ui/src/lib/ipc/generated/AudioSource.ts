@@ -2,6 +2,6 @@
 
 /**
  * 音源类别（docs/22 G3）：本地文件 vs 网络流。UI 据此对 stream 曲目
- * 禁拖进度条、时长位显示"直播中"。
+ * 禁拖进度条、时长位显示"直播"。
  */
 export type AudioSource = "file" | "stream";

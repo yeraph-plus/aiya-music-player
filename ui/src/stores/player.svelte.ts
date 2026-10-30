@@ -1,5 +1,6 @@
 import { events, ipc } from '../lib/ipc';
 import type { PlayerState } from '../lib/ipc/generated/PlayerState';
+import type { TrackRef } from '../lib/ipc/generated/TrackRef';
 import type { TrackQueryInput } from '../lib/ipc/client';
 import { RemoteSpectrumSource, type SpectrumSource } from '../lib/spectrum-source';
 import { errorMessage } from '../lib/errors';
@@ -22,6 +23,14 @@ import { errorMessage } from '../lib/errors';
 class PlayerStore {
   state = $state<PlayerState | null>(null);
   queueIds = $state<string[]>([]);
+  /**
+   * 队列里的**临时项**（拖入的文件 / 直播流）的展示字段。
+   *
+   * 库内曲目的元数据由 `library_tracks` 按可见区间批量取；临时项查库必然
+   * 查不到，只能由快照自己带（`QueueSnapshot.transient`，docs/52 §7.2）。
+   * 通常是空数组——队列全是库内曲目时它一直是空的。
+   */
+  queueTransient = $state<TrackRef[]>([]);
   /**
    * 倍速滑杆草稿：拖动中的本地即时显示（IPC 防抖期间画面跟手）。
    * `null` = 无草稿，显示值以后端状态为准（对账模式与 eq store 一致）。
@@ -81,6 +90,7 @@ class PlayerStore {
       // 版本回退丢弃：暂停期间并发发出的旧请求后回来，会把队列覆盖回旧内容
       if (snapshot.version < this.version) return;
       this.queueIds = snapshot.ids;
+      this.queueTransient = snapshot.transient;
       this.version = snapshot.version;
     } catch (e) {
       // 队列快照拉取失败只降级（保留旧 ids），不打断播放

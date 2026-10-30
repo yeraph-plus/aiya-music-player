@@ -38,6 +38,11 @@ pub struct PlayerActor {
     /// Loading 期间用户按过暂停（此前该命令被静默吞掉）：Loaded 到达且
     /// token 匹配时直接落 Paused 而不是 Playing。
     pending_pause: bool,
+    /// 本次 Stop 是"直播暂停 = 断开"引起的，**不是曲终**。
+    ///
+    /// 引擎对 Stop 的回报是 `Eof`（它没法区分"停"和"放完了"），而 `Ended`
+    /// 的默认语义是"推进队列"。不认领就会暂停一下跳到下一首（docs/52 §10）。
+    disconnecting: bool,
     /// 随机模式的播放历史栈（Prev 的"上一首"来源）。存 queue 下标。
     history: PlayHistory,
     /// Actor 自己维护的单调位置估计（无引擎回报时给 UI）
@@ -77,6 +82,7 @@ impl PlayerActor {
             pending_load: None,
             pending_stop: false,
             pending_pause: false,
+            disconnecting: false,
             history: PlayHistory::default(),
             last_reported_ms: 0,
             source: AudioSource::File,
@@ -129,6 +135,13 @@ impl PlayerActor {
                 .collect(),
             index: self.cursor,
             cursor: self.cursor,
+            // 只挑临时项：库内行由 UI 走 library_tracks 批量补元数据
+            transient: self
+                .queue
+                .iter()
+                .filter(|t| t.is_transient())
+                .cloned()
+                .collect(),
             version: self.queue_version,
             took_ms: 0,
         }
@@ -228,6 +241,14 @@ impl PlayerActor {
         self.queue.iter().map(|t| t.id.clone()).collect()
     }
 
+    /// 队列原序的完整 `TrackRef`（宿主落库 / 恢复时用）。
+    ///
+    /// 为什么不是"让宿主拿 ids 回查库"：`file:` / `stream:` 这些临时项**不在
+    /// 库里**，回查只会查空。多态队列的落库必须带着 ref 本身（docs/52 §6.3）。
+    pub fn queue_refs(&self) -> Vec<TrackRef> {
+        self.queue.clone()
+    }
+
     /* ---------------- 内部工具 ---------------- */
 
     fn current_track(&self) -> Option<&TrackRef> {
@@ -305,9 +326,10 @@ impl PlayerActor {
             let token = self.next_token();
             self.pending_load = Some((token, track.path.clone(), start_ms, autoplay));
             // 音源类别在产生处判定（docs/22 G3）：http(s) 路径 = 网络流。
-            // 引擎侧 open_source 用同一前缀规则开 HLS，两处必须一致。
-            self.source = if track.path.starts_with("http://") || track.path.starts_with("https://")
-            {
+            // 用 `is_stream_path`（大小写不敏感）而不是手写前缀比较：引擎那边
+            // 就是 `eq_ignore_ascii_case`，两处不一致时 `HTTP://` 会一边当流
+            // 打开、另一边标成 File（进度条可拖，一拖报错）。
+            self.source = if crate::state::is_stream_path(&track.path) {
                 AudioSource::Stream
             } else {
                 AudioSource::File
@@ -321,6 +343,7 @@ impl PlayerActor {
             self.last_reported_ms = start_ms; // 换曲必须重置，否则快照带上上一曲的残留进度
             self.pending_stop = false; // 新的装载取代旧的停止意图
             self.pending_pause = false; // 新的装载取代旧的暂停意图
+            self.disconnecting = false; // 新的装载也取代"这次停是断开"的旧语境
             self.duration_ms = track.duration_ms.map(|d| d.max(0) as u64);
             self.error = None;
         } else {
@@ -337,6 +360,7 @@ impl PlayerActor {
         self.status = PlaybackStatus::Idle;
         self.source = AudioSource::File;
         self.pending_pause = false;
+        self.disconnecting = false;
     }
 
     /* ---------------- 命令归约 ---------------- */
@@ -346,9 +370,25 @@ impl PlayerActor {
             PlayerCommand::TogglePause => match self.status {
                 PlaybackStatus::Playing => {
                     self.status = PlaybackStatus::Paused;
+                    // 直播语义（docs/52 §10 用户拍板）：**暂停 = 断开**。
+                    // 直播没有"位置"，留着连接只会攒一段延迟——回来听到的是
+                    // 30 秒前而不是现在，还得自己追。所以这里真的停引擎（丢掉
+                    // HlsStream 连预取线程一起退出），用户按播放时重连。
+                    if self.source == AudioSource::Stream {
+                        self.pending_stop = true;
+                        // 这次 Stop 不是"曲终"，随之而来的 Eof 要认领掉
+                        self.disconnecting = true;
+                        self.position_ms = 0; // 已收听时长从新连接重新算
+                        self.last_reported_ms = 0;
+                    }
                 }
                 PlaybackStatus::Paused => {
-                    self.status = PlaybackStatus::Playing;
+                    if self.source == AudioSource::Stream {
+                        // 直播语义：播放 = 重连（重新拉 playlist、跳到最新段）
+                        self.instruct_load(true, 0);
+                    } else {
+                        self.status = PlaybackStatus::Playing;
+                    }
                 }
                 PlaybackStatus::Idle | PlaybackStatus::Error => {
                     if !self.queue.is_empty() {
@@ -602,6 +642,11 @@ impl PlayerActor {
                 if token != self.token {
                     return; // 过期回报丢弃
                 }
+                // 直播暂停时主动断开的"曲终"确认（见 TogglePause）：那一 Stop 是
+                // 我们自己发的，不是播放结束。不认领的话会当场跳到下一首。
+                if std::mem::take(&mut self.disconnecting) {
+                    return;
+                }
                 // repeat=one：重播本曲
                 if self.repeat == RepeatMode::One && self.current_track().is_some() {
                     self.instruct_load(true, 0);
@@ -736,6 +781,126 @@ mod tests {
             audio: None,
             path: format!("D:/m/{id}.flac"),
         }
+    }
+
+    fn stream_track(url: &str) -> TrackRef {
+        TrackRef::transient_stream(url, "某直播")
+    }
+
+    /// 播放一个流：队列就一项，autoplay=true。
+    fn play_stream(p: &mut PlayerActor, url: &str) {
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![stream_track(url)],
+            start: 0,
+        }));
+        p.take_pending_load().expect("装载意图");
+    }
+
+    /// `HTTP://` 也要标成流（引擎那边大小写不敏感，两边曾经不一致）
+    #[test]
+    fn uppercase_scheme_is_still_a_stream() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![stream_track("HTTP://fm.test/live.m3u8")],
+            start: 0,
+        }));
+        assert_eq!(p.state().source, AudioSource::Stream);
+        assert_eq!(p.state().duration_ms, None, "直播没有总时长");
+    }
+
+    /// 直播暂停 = 断开（docs/52 §10）：状态落 Paused、下发 Stop、已收听时长归零
+    #[test]
+    fn pausing_a_stream_disconnects() {
+        let mut p = PlayerActor::new();
+        play_stream(&mut p, "https://fm.test/live.m3u8");
+        // 装载完成 → 正在播；播了 42 秒
+        let token = p.state().token;
+        p.reduce(PlayerCommand::Loaded {
+            token,
+            duration_ms: 0,
+        });
+        p.reduce(PlayerCommand::Position { position_ms: 42_000 });
+        assert_eq!(p.state().status, PlaybackStatus::Playing);
+
+        p.reduce(PlayerCommand::TogglePause);
+        assert_eq!(p.state().status, PlaybackStatus::Paused);
+        assert_eq!(p.state().position_ms, 0, "断开后已收听时长归零");
+        assert!(p.take_pending_stop(), "直播暂停必须真的停引擎（断流）");
+        assert!(!p.take_pending_stop(), "Stop 只发一次");
+    }
+
+    /// 断开引起的 Eof 不是曲终：队列里还有下一首，也必须留在原曲
+    #[test]
+    fn eof_from_disconnect_does_not_advance_queue() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![stream_track("https://fm.test/a.m3u8"), track("b")],
+            start: 0,
+        }));
+        p.take_pending_load().unwrap();
+        let token = p.state().token;
+        p.reduce(PlayerCommand::Loaded {
+            token,
+            duration_ms: 0,
+        });
+        p.reduce(PlayerCommand::TogglePause);
+        assert!(p.take_pending_stop());
+
+        p.reduce(PlayerCommand::Ended { token });
+        assert_eq!(p.state().index, Some(0), "不许推进到第二项");
+        assert_eq!(p.state().status, PlaybackStatus::Paused);
+        assert!(p.take_pending_load().is_none(), "也不许重新装载");
+
+        // 认领之后，真正的曲终照常推进（标志只吃一次）
+        p.reduce(PlayerCommand::Ended { token });
+        p.take_pending_load().expect("这次应当前进到 b 并装载");
+        assert_eq!(p.state().index, Some(1));
+    }
+
+    /// 直播恢复播放 = 重连：重新下发 Load（而不是把状态翻回 Playing 了事）
+    #[test]
+    fn resuming_a_stream_reconnects() {
+        let mut p = PlayerActor::new();
+        play_stream(&mut p, "https://fm.test/live.m3u8");
+        let token = p.state().token;
+        p.reduce(PlayerCommand::Loaded {
+            token,
+            duration_ms: 0,
+        });
+        p.reduce(PlayerCommand::TogglePause);
+        assert_eq!(p.state().status, PlaybackStatus::Paused);
+
+        p.reduce(PlayerCommand::TogglePause);
+        let (token2, path, start_ms, autoplay) = p.take_pending_load().expect("重连必须重新装载");
+        assert_eq!(path, "https://fm.test/live.m3u8");
+        assert_eq!(start_ms, 0, "直播没有断点续听");
+        assert!(autoplay);
+        assert!(token2 > token, "新装载要有新 token，旧回调才会被丢弃");
+        assert_eq!(p.state().status, PlaybackStatus::Loading);
+    }
+
+    /// 普通文件的暂停语义不变：不停止引擎、位置保留
+    #[test]
+    fn pausing_a_file_keeps_the_engine_loaded() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![track("a")],
+            start: 0,
+        }));
+        p.take_pending_load().unwrap();
+        let token = p.state().token;
+        p.reduce(PlayerCommand::Loaded {
+            token,
+            duration_ms: 180_000,
+        });
+        p.reduce(PlayerCommand::Position { position_ms: 30_000 });
+        p.reduce(PlayerCommand::TogglePause);
+        assert_eq!(p.state().status, PlaybackStatus::Paused);
+        assert_eq!(p.state().position_ms, 30_000);
+        assert!(!p.take_pending_stop(), "文件暂停不该停引擎");
+        p.reduce(PlayerCommand::TogglePause);
+        assert_eq!(p.state().status, PlaybackStatus::Playing);
+        assert!(p.take_pending_load().is_none(), "文件恢复不重新装载");
     }
 
     #[test]

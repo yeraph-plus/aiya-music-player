@@ -84,6 +84,11 @@ export function mergeSettings(raw: unknown): AppSettings {
     merged.bgSpectrumStyle = DEFAULT_SETTINGS.bgSpectrumStyle;
   }
 
+  // 「最近打开」是新键：老配置里没有它（`...DEFAULT_SETTINGS` 兜成空表），
+  // 这里只负责挡住被手改成别的形状的值——`AppSettings` 说是数组，运行期
+  // 从磁盘 JSON 强转来的可能是个对象，下游 `.length` 会静默变成 undefined。
+  if (!Array.isArray(merged.liveRecent)) merged.liveRecent = DEFAULT_SETTINGS.liveRecent;
+
   if (typeof legacySpectrum === 'boolean') {
     if (typeof rest.bgSpectrum !== 'boolean') merged.bgSpectrum = legacySpectrum;
     if (typeof rest.npSpectrum !== 'boolean') {

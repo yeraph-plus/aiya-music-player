@@ -232,13 +232,85 @@ impl AudioError {
 }
 
 /// 音源类别（docs/22 G3）：本地文件 vs 网络流。UI 据此对 stream 曲目
-/// 禁拖进度条、时长位显示"直播中"。
+/// 禁拖进度条、时长位显示"直播"。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "lowercase")]
 pub enum AudioSource {
     File,
     Stream,
+}
+
+/// 路径是不是网络流（http/https，**大小写不敏感**）。
+///
+/// 与引擎 `engine.rs::is_http_url` 同一规则，两处必须同时改：此前引擎大小写
+/// 不敏感、Actor 只认小写，`HTTP://` 会被引擎当流打开、播放态却标 File
+/// （进度条可拖，一拖报错）。现在两边都过一遍 `eq_ignore_ascii_case`。
+pub fn is_stream_path(path: &str) -> bool {
+    path.get(..7)
+        .is_some_and(|s| s.eq_ignore_ascii_case("http://"))
+        || path
+            .get(..8)
+            .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+}
+
+/* ---------------- 临时项（能播但不进曲库，docs/52 §6） ---------------- */
+
+/// 拖入的本地文件的 id 前缀。
+///
+/// **为什么用前缀而不是给 `TrackRef` 加字段**：`TrackRef` 是 wire 契约
+/// （`PlayerState.current` / `QueueSnapshot` 直接用），加字段等于 UI、宿主、
+/// 持久化三处一起改。而"是不是库里的曲目"这一位信息用前缀就够表达，且天然
+/// 唯一——曲库 id 是 uuid v5（36 字符十六进制），永远撞不上。
+pub const FILE_ID_PREFIX: &str = "file:";
+/// 直播流的 id 前缀（同上）
+pub const STREAM_ID_PREFIX: &str = "stream:";
+
+impl TrackRef {
+    /// 拖入的本地文件（不进曲库）：id 带前缀，`duration_ms` 留空由引擎
+    /// Loaded 事件回填。
+    pub fn transient_file(path: &str, title: impl Into<String>) -> Self {
+        Self {
+            id: format!("{FILE_ID_PREFIX}{path}"),
+            title: title.into(),
+            artist: None,
+            album: None,
+            artist_id: None,
+            album_id: None,
+            duration_ms: None,
+            artwork_id: None,
+            gain_db: None,
+            audio: None,
+            path: path.to_string(),
+        }
+    }
+
+    /// 直播流：`duration_ms = None`（直播没有总时长），不可 seek。
+    pub fn transient_stream(url: &str, title: impl Into<String>) -> Self {
+        Self {
+            id: format!("{STREAM_ID_PREFIX}{url}"),
+            title: title.into(),
+            artist: None,
+            album: None,
+            artist_id: None,
+            album_id: None,
+            duration_ms: None,
+            artwork_id: None,
+            gain_db: None,
+            audio: None,
+            path: url.to_string(),
+        }
+    }
+
+    /// 是不是"不在曲库里"的临时项（拖入文件 / 直播流）。
+    pub fn is_transient(&self) -> bool {
+        self.id.starts_with(FILE_ID_PREFIX) || self.id.starts_with(STREAM_ID_PREFIX)
+    }
+
+    /// 直播流项（播放条按 stream 渲染）
+    pub fn is_stream(&self) -> bool {
+        self.id.starts_with(STREAM_ID_PREFIX)
+    }
 }
 
 /// 随机模式的播放历史栈：Prev 的"上一首"来源。
@@ -348,6 +420,14 @@ pub struct QueueSnapshot {
     pub ids: Vec<String>,
     pub index: usize,
     pub cursor: usize,
+    /// 队列里的**临时项**（`file:` / `stream:` 前缀）及其展示字段。
+    ///
+    /// 为什么不把整个队列的 `TrackRef` 都给出去：一万首队列的标题/封面键是
+    /// 几百 KB，而 UI 本来就要靠 `library_tracks` 批量取库内元数据（那里还
+    /// 有列表字段）。临时项只有几条，**且查库必然查不到**——不给它开个口，
+    /// 队列面板就只能给它们画一行空白（docs/52 §7.2）。
+    #[serde(default)]
+    pub transient: Vec<TrackRef>,
     #[ts(type = "number")]
     pub version: u64,
     pub took_ms: u32,

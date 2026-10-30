@@ -54,6 +54,10 @@ export const settingsSchema = z
       })
       .passthrough()
       .optional(),
+    /** 直播页「最近打开」（docs/52 §7.3）：上限 20，按 URL 去重 */
+    liveRecent: z
+      .array(z.object({ url: z.string(), title: z.string().optional() }).passthrough())
+      .optional(),
     /** v1 遗留字段：只在新代码回落时读它，不再写 */
     exclusiveMode: z.boolean().optional(),
   })
@@ -89,6 +93,12 @@ export const uiStateSchema = z
         'nowPlaying',
         'settings',
         'beets',
+        'live',
+        /**
+         * `radio`（旧「FM 电台」页）**只读保留**：磁盘上的 UiState 可能还落着
+         * 这个值。写进枚举是为了让整份状态过校验（校验失败会丢掉整份），
+         * 换算成 `live` 由 `ui.restore()` 的退役表负责，不回写。
+         */
         'radio',
       ])
       .optional(),

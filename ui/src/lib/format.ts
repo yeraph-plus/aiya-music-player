@@ -123,3 +123,61 @@ export function shortenPath(path: string, maxSegments = 3): string {
   if (parts.length <= maxSegments) return path;
   return `…/${parts.slice(-maxSegments).join('/')}`;
 }
+
+/* ---------------- 临时项（不进曲库，docs/52 §6） ---------------- */
+
+/**
+ * 与 Rust 侧 `TrackRef::FILE_ID_PREFIX` / `STREAM_ID_PREFIX` **一字不差**。
+ *
+ * 这两条是 UI 唯一能看到的"这一项从哪来"的信息：`TrackRef.path` 是
+ * `skip_serializing`（路径只在宿主内部流转，不下发 UI），而 `id` 里带着
+ * 原始路径/URL。改前缀要两边一起改，否则来源那行字静默变空。
+ */
+export const FILE_ID_PREFIX = 'file:';
+export const STREAM_ID_PREFIX = 'stream:';
+
+/** 不在曲库里的项（拖入的本地文件 / 直播流） */
+export function isTransientId(id: string | null | undefined): boolean {
+  return Boolean(id && (id.startsWith(FILE_ID_PREFIX) || id.startsWith(STREAM_ID_PREFIX)));
+}
+
+/** 直播流项（队列面板/播放条据此把"时长"换成"直播"） */
+export function isStreamId(id: string | null | undefined): boolean {
+  return Boolean(id && id.startsWith(STREAM_ID_PREFIX));
+}
+
+/**
+ * 临时项的"来源"一行字：本地文件 → 所在目录（末 2 段），直播 → 主机名。
+ *
+ * 为什么不是"编码 + 码率"（docs/52 §7.1 的原计划）：这两样此刻都拿不到——
+ * `TrackRef.audio` 由曲库单曲查询填，临时项恒为 `null`；要把 TS 里的
+ * `stream_type` / ADTS 帧率接到 UI，得给 `PlayerState` 加字段 + 重生成
+ * ts-rs 绑定。用户拍板"给什么码率就播什么码率、不做额外支持"，那就别为了
+ * 一个副标题开新契约。目录名和主机名是此刻**确定**的信息，也是用户真正
+ * 会拿来对号入座的东西。
+ *
+ * 认不出来返回 `null`（调用方回落到通用文案，不要显示半截 URL）。
+ */
+export function transientOrigin(id: string | null | undefined): string | null {
+  if (!id) return null;
+
+  if (id.startsWith(STREAM_ID_PREFIX)) {
+    const url = id.slice(STREAM_ID_PREFIX.length);
+    // 本地播放列表（`file:///…/index.m3u8`）没有主机名
+    if (/^file:/i.test(url)) return '本地播放列表';
+    try {
+      const host = new URL(url).host;
+      return host || null;
+    } catch {
+      return null;
+    }
+  }
+
+  if (id.startsWith(FILE_ID_PREFIX)) {
+    const path = id.slice(FILE_ID_PREFIX.length);
+    const cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+    return cut > 0 ? shortenPath(path.slice(0, cut), 2) : null;
+  }
+
+  return null;
+}

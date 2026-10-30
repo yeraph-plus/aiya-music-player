@@ -137,11 +137,20 @@ impl DecodedStream {
         Self::open_with_backend(Box::new(src), &hint, DecodeBackend::Symphonia)
     }
 
-    /// HLS (m3u8) 流（docs/22 G3）：ADTS AAC 路线，live 轮询 / VOD 顺序
-    /// 拉段都在 `HlsStream` 内部完成。直播流 duration=0、不可 seek。
+    /// HLS (m3u8) 流（docs/22 G3 / docs/52）：ADTS 或 MPEG-TS 段，live 轮询 /
+    /// VOD 顺序拉段都在 `HlsStream` 内部完成。直播流 duration=0、不可 seek。
     pub fn open_hls(url: &str) -> Result<Self, AudioError> {
         Ok(Self {
             inner: Inner::Hls(HlsStream::new(url)?),
+        })
+    }
+
+    /// 本地 m3u8（docs/52 §4）：base = 文件所在目录，相对段地址照 URL 规则
+    /// 解析。**必须在 `open_file` 之前判**——文本文件交给 symphonia probe
+    /// 只会报"文件坏了"。
+    pub fn open_local_hls(path: &Path) -> Result<Self, AudioError> {
+        Ok(Self {
+            inner: Inner::Hls(HlsStream::new_from_local(path)?),
         })
     }
 
@@ -485,6 +494,43 @@ fn known_unsupported_ext(path: &Path) -> Option<&'static str> {
         "dsf" | "dff" => "DSD",
         _ => return None,
     })
+}
+
+/* ---------------- 扩展名口径（给"识别拖入的文件"用） ---------------- */
+
+/// 引擎（Symphonia 0.5 + 已开的 features）真的能解的扩展名。
+///
+/// **为什么要有这张表**（docs/52 §5.2）：拖入/对话框要回答"这个文件能不能播"，
+/// 而这份知识此前散在两处——[`known_unsupported_ext`] 的"注定放不出"名单和
+/// 根 `Cargo.toml` 的 symphonia features。两边各写一份迟早漂移（本仓已经在
+/// `is_http_url` 上吃过一次大小写不一致的亏）。这里是**唯一源**：扫到这些
+/// 扩展名就算音频，其余一律当不支持。
+///
+/// 与 `aiya-data::scanner` 的 14 种扩展名同集合，区别是这里剔掉了引擎解不了
+/// 的五种（opus/wma/ape/wv/dsf）——它们由 [`unsupported_ext_name`] 报格式名。
+pub const SUPPORTED_AUDIO_EXT: &[&str] = &[
+    "mp3", "flac", "wav", "ogg", "oga", "m4a", "aac", "aiff", "aif",
+];
+
+/// 扩展名 → "认识但解不了"的格式名。用于把 WMA/APE/Opus 报成格式名而不是
+/// "文件坏了"。
+pub fn unsupported_ext_name(path: &Path) -> Option<&'static str> {
+    known_unsupported_ext(path)
+}
+
+/// 是不是 HLS 播放列表文件（按扩展名）。
+///
+/// `.m3u` 也算：它可能是老式歌单，也可能是 HLS 清单。两种都由
+/// [`crate::hls`] 打开——真歌单会被解析成"没有任何段"的明确报错，而不是
+/// 走 symphonia probe 报"文件坏了"。
+pub fn is_hls_playlist_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("m3u8" | "m3u")
+    )
 }
 
 #[cfg(test)]

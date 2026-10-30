@@ -152,6 +152,16 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     case 'player_clear':
       return mock.clear();
 
+    /* ---------------- 直播 / 拖放（docs/52） ---------------- */
+    case 'classify_paths':
+      return mock.classifyPaths(a.paths as string[]);
+    case 'player_open_paths':
+      return mock.openPaths(a.paths as string[]);
+    case 'live_open':
+      return mock.liveOpen(a.url as string, (a.title as string | null) ?? undefined);
+    case 'live_pick_playlist':
+      return mock.livePickPlaylist();
+
     /* ---------------- lyrics / history ---------------- */
     case 'lyrics_get':
       return mock.lyricsGet(a.trackId as string);
@@ -307,11 +317,26 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
  * `listen` 的异步语义一致，`events.ts` 的 sub 不用改。
  */
 export function installMock(
-  options: { failCommands?: string[]; beetsFound?: boolean; missingLocations?: number } = {},
+  options: {
+    failCommands?: string[];
+    beetsFound?: boolean;
+    missingLocations?: number;
+    /**
+     * 启动即进"正在播一个直播流"的状态（`?live=<url>`）。
+     *
+     * 为什么要在**安装时**就把状态摆好、而不是暴露一个 `window.__mock` 让 e2e
+     * 去调：真机上"直播在播"这个画面只有一条入口（`live_open` 或拖入 m3u8），
+     * 测试从同一份状态出发才能证明播放条的渲染分支走的是契约字段
+     * （`source` / `durationMs`），而不是被测试工具硬塞的本地变量。
+     */
+    liveStream?: string;
+  } = {},
 ): () => void {
   const mock = new MockBackend();
   if (options.beetsFound !== undefined) mock.beetsFound = options.beetsFound;
   if (options.missingLocations !== undefined) mock.missingLocations = options.missingLocations;
+  // 早于任何监听者：状态存在 `playerState` 里，`boot` 的 fetchState 会取到
+  if (options.liveStream) mock.liveOpen(options.liveStream);
   const failing = new Set(options.failCommands ?? []);
 
   const transport: Transport = {

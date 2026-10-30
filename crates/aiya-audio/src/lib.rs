@@ -14,6 +14,9 @@ pub mod hls;
 pub mod mmcss;
 pub mod proto;
 pub mod spectrum;
+/// MPEG-TS 段剥离（docs/52 §3）：只剥 TS 包层 + PES 头，输出 ADTS / MPEG audio
+/// 裸字节喂给现有 probe。不是 demuxer——不碰解码、时间轴、视频。
+pub mod ts;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AudioError {

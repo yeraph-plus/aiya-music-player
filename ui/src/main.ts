@@ -24,10 +24,14 @@ if (!('__TAURI_INTERNALS__' in window)) {
   const params = new URLSearchParams(window.location.search);
   const failCmd = params.get('failCmd');
   const missing = Number(params.get('missing'));
+  const live = params.get('live');
   installMock({
     ...(failCmd ? { failCommands: [failCmd] } : {}),
     ...(params.get('beets') === 'absent' ? { beetsFound: false } : {}),
     ...(Number.isFinite(missing) && missing > 0 ? { missingLocations: missing } : {}),
+    // `?live=<url>`：启动即进"正在播一个直播流"，用来验播放条的直播三态
+    // （docs/52 §7.1）——这条渲染分支没有别的入口能稳定复现
+    ...(live ? { liveStream: live } : {}),
   });
 }
 

@@ -115,6 +115,22 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* 临时项的来源标记（`直播` / `文件`，docs/52 §7.2）。
+   一个小方标签而不是纯文字：它要回答的是"这一行不属于曲库"，
+   与标题/艺人同字号会被当成艺人名的一部分读过去。 */
+.q-tag {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 3px;
+  border-radius: 3px;
+  border: 1px solid var(--line-strong);
+  font-size: 9px;
+  line-height: 12px;
+  letter-spacing: 0.03em;
+  color: var(--text-3);
+  vertical-align: 1px;
+}
+
 /* 队列/歌词的空态已统一到 EmptyState.svelte（.k-empty） */
 
 /* docs/25 §6：抽屉壳是 SideDrawer（窗口左缘滑出，AppShell 宿主），

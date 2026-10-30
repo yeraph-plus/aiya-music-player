@@ -178,6 +178,21 @@ export interface AppSettings {
    * 两者刻意分开：请求独占而设备拒绝时，这里仍是 `exclusive`。
    */
   output: DesiredOutput;
+  /**
+   * 直播页「最近打开」（docs/52 §7.3）。上限 20，按 URL 去重、最新在前。
+   *
+   * 为什么放设置 KV 而不是建表：20 条记录 + 一张表 + 增删查命令 + IPC 类型，
+   * 换来的只是"记得上次开过哪几个台"。KV 已经存在、已经落盘、已经有迁移，
+   * 这个量级不值得再开一条数据链。
+   */
+  liveRecent: LiveRecentEntry[];
+}
+
+/** 直播页最近打开的一条 */
+export interface LiveRecentEntry {
+  url: string;
+  /** 用户手改过的标题；缺省由宿主按 URL 推（`default_stream_title`） */
+  title?: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -213,4 +228,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // 共享 + 200ms + 事件驱动：最不容易出事的组合。独占要用户主动开，
   // 因为它会锁住设备（别的程序放不出声）。
   output: { mode: 'shared', bufferMs: 200, clock: 'auto', releaseOnPause: true },
+  // 空表起步：没开过直播的机器不该看到一条假记录
+  liveRecent: [],
 };

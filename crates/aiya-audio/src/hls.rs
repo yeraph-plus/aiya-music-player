@@ -1,8 +1,13 @@
-//! HLS (m3u8) 流式解码源 — docs/22 G3，路线 A：ADTS AAC packed-audio。
+//! HLS (m3u8) 流式解码源 — docs/22 G3 / docs/52。
 //!
-//! 为什么是 ADTS 而不是 TS/fMP4：Symphonia 0.5 没有 TS demuxer、fMP4 要升
-//! 0.6（live 泄漏 #586，docs/21 §4 冻结）；AAC 的 ADTS 裸流用现有 `aac`
-//! feature 就能逐段 probe。Liquidsoap 的 FM 出流也定 adts（docs/22 §3）。
+//! 段格式两条路（docs/52）：
+//! * **ADTS AAC 裸段**（`.aac` / 无扩展名）：直接 `probe(hint=aac)`，最初实现；
+//! * **MPEG-TS 段**（实测 6 个真台 6/6 都是这种）：先经 [`crate::ts::strip`]
+//!   剥包层与 PES 头，输出 ADTS / MPEG audio 裸字节再 probe。判定用**内容嗅探**
+//!   （`0x47` + 188 对齐），不看扩展名——带查询串的段名是真实存在的情况。
+//!
+//! 为什么不做 TS demuxer：HLS 规范要求 TS 里的 AAC 用 ADTS 封装，剥掉包层就是
+//! 现成的 ADTS 流；Symphonia 0.5 没有 TS demuxer，升 0.6 是另一条大路（docs/21）。
 //!
 //! 调度模型（engine 只认 [`crate::decoder::DecodedStream`]，这里是其中
 //! 一个变体）：
@@ -10,15 +15,19 @@
 //! * live（无 ENDLIST）：段取空后回轮 playlist 追加新段；断网按墙钟预算
 //!   退避重连（含拉取耗时，见 [`OUTAGE_BUDGET`]），超预算报
 //!   `AudioError::Io`（引擎按错误恢复流程处理）。
-//! * 每段独立 probe（hint=aac）解码；**跨段采样率/声道变化 = 流错误**
-//!   （ADTS 允许中途换参，但我们的输出流/WASAPI 已按首段开好，换参只能断）。
+//! * 每段独立 probe（hint 按段内容选 aac / mp3）；**跨段采样率/声道变化 =
+//!   流错误**（输出流/WASAPI 已按首段开好，换参只能断）。
 //!
-//! 显式拒绝（docs/22 §4 明确不做，报 `Unsupported` 说人话）：
-//! TS 段、AES-128/SAMPLE-AES 加密、`EXT-X-MAP`（fMP4 初始化段）。
-//! master playlist（多 rendition）取第一个变体继续，tracing 记日志。
+//! 取字节口是 [`Fetcher`]：`http(s)` 走 ureq，`file:` 读盘——同一个
+//! [`HybridFetcher`] 两种都认，所以本地 m3u8 与远程流共用整套调度状态机
+//! （docs/52 §4：端到端验收因此可以脱离网络进 `verify`）。
 //!
-//! 端到端验收随远程版 R2 FM soak（Liquidsoap 出真段）；这里单测锁
-//! 解析矩阵 + 调度状态机（[`MockFetcher`] 注入，不出网）。
+//! 显式拒绝（报 `Unsupported` 说人话）：AES-128/SAMPLE-AES 加密、`EXT-X-MAP`
+//! （fMP4 初始化段）、LATM 封装的 AAC。master playlist（多 rendition）取第一个
+//! 变体——给什么码率就播什么，没有带宽自适应的意义，tracing 记一行。
+//!
+//! 端到端验收：本地 m3u8 + 本地 TS 段（`FileFetcher` 路径）不依赖网络；
+//! 单测锁解析矩阵 + 调度状态机 + TS 剥离往返（[`MockFetcher`] 注入，不出网）。
 
 use std::collections::{HashSet, VecDeque};
 use std::io::{Cursor, Read};
@@ -28,6 +37,7 @@ use std::time::{Duration, Instant};
 use url::Url;
 
 use crate::decoder::{DecodeBackend, DecodedStream};
+use crate::ts::{self, TsState};
 use crate::AudioError;
 
 /// 段与 playlist 的拉取口。抽 trait 是为了单测注入 [`MockFetcher`]——
@@ -49,13 +59,18 @@ pub(crate) trait Fetcher: Send {
 /// [`OUTAGE_BUDGET`]），调大前先看那里的账。
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// 生产实现：ureq 同步阻塞。引擎线程本来就是阻塞模型（读文件也是阻塞），
-/// 不为拉段引入异步运行时。
-struct HttpFetcher {
+/// 生产实现：**一个实现两种 scheme**（docs/52 §4）。
+///
+/// `http(s):` → ureq 同步阻塞；`file:` → 读盘。为什么不拆两个 `HlsStream`：
+/// 本地 m3u8 只是 base URL 从 `http://` 换成 `file:`，调度状态机（live 轮询 /
+/// 段预取 / 断网预算）一行都不该分叉；而且远程 m3u8 里出现 `file:` 段、本地
+/// m3u8 里出现远程段都不该崩。ureq Agent 在 file-only 场景只是白建一次几十
+/// 字节的结构，代价可以忽略。
+struct HybridFetcher {
     agent: ureq::Agent,
 }
 
-impl HttpFetcher {
+impl HybridFetcher {
     fn new() -> Self {
         Self {
             agent: ureq::AgentBuilder::new()
@@ -64,6 +79,29 @@ impl HttpFetcher {
                 .build(),
         }
     }
+}
+
+/// `file:` URL → 本地路径。非 file scheme 返回 None（调用方走 http）。
+fn file_url_path(url: &str) -> Option<std::path::PathBuf> {
+    let parsed = Url::parse(url).ok()?;
+    if parsed.scheme() != "file" {
+        return None;
+    }
+    parsed.to_file_path().ok()
+}
+
+/// 打开本地文件并读字节（带上限）。
+///
+/// 错误里必须带**段名/文件名**：`std::fs` 的原文只有"系统找不到指定的文件"，
+/// 用户拿不到"哪一段缺了"（本地 m3u8 里段是相对路径，缺段是最常见的坏法）。
+fn read_local(path: &std::path::Path, url: &str, cap: u64, what: &str) -> Result<Vec<u8>, AudioError> {
+    let file = std::fs::File::open(path).map_err(|e| {
+        AudioError::Io(std::io::Error::new(
+            e.kind(),
+            format!("读本地{what}失败 {}：{e}", path.display()),
+        ))
+    })?;
+    read_capped(file, url, cap, what)
 }
 
 fn http_err(url: &str, e: ureq::Error) -> AudioError {
@@ -96,17 +134,27 @@ fn read_capped(reader: impl Read, url: &str, cap: u64, what: &str) -> Result<Vec
     Ok(bytes)
 }
 
-impl Fetcher for HttpFetcher {
+impl Fetcher for HybridFetcher {
     fn fetch_text(&mut self, url: &str) -> Result<String, AudioError> {
-        let body = self.agent.get(url).call().map_err(|e| http_err(url, e))?;
+        let bytes = match file_url_path(url) {
+            Some(path) => read_local(&path, url, PLAYLIST_MAX_BYTES, "播放列表")?,
+            None => {
+                let body = self.agent.get(url).call().map_err(|e| http_err(url, e))?;
+                read_capped(body.into_reader(), url, PLAYLIST_MAX_BYTES, "播放列表")?
+            }
+        };
         // m3u8 规范要求 UTF-8；坏字节按 lossy 兜底（比整条流报错友好）
-        let bytes = read_capped(body.into_reader(), url, PLAYLIST_MAX_BYTES, "播放列表")?;
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
     fn fetch_bytes(&mut self, url: &str) -> Result<Vec<u8>, AudioError> {
-        let body = self.agent.get(url).call().map_err(|e| http_err(url, e))?;
-        read_capped(body.into_reader(), url, SEGMENT_MAX_BYTES, "媒体段")
+        match file_url_path(url) {
+            Some(path) => read_local(&path, url, SEGMENT_MAX_BYTES, "媒体段"),
+            None => {
+                let body = self.agent.get(url).call().map_err(|e| http_err(url, e))?;
+                read_capped(body.into_reader(), url, SEGMENT_MAX_BYTES, "媒体段")
+            }
+        }
     }
 
     fn sleep(&mut self, d: Duration) {
@@ -201,11 +249,9 @@ fn parse_media_playlist(text: &str, base: &Url) -> Result<ParsedMedia, AudioErro
         }
 
         // ---- URI 行 = 一个段 ----
-        if line.to_ascii_lowercase().ends_with(".ts") {
-            return Err(AudioError::Unsupported(
-                "MPEG-TS 段不支持：本播放器只解 ADTS AAC 段（.aac / 无扩展名）".into(),
-            ));
-        }
+        // 段格式**不在这里判**（docs/52 §3.2）：靠扩展名判会漏掉带查询串的
+        // 段名（实测 `..._6570.ts?nimblesessionid=...`），而且 TS 现在支持了。
+        // 判定推迟到打开段时的内容嗅探，报错时机才和真实原因对齐。
         let resolved = base
             .join(line)
             .map_err(|e| AudioError::Decode(format!("段地址解析失败 {line:?}: {e}")))?
@@ -445,6 +491,9 @@ pub(crate) struct HlsStream {
     failures: u32,
     /// 单测注入：轮询间隔
     poll_interval: Duration,
+    /// TS 包剥离的跨段定位状态（PAT/PMT 可能只在首段出现，docs/52 §3.2）。
+    /// 非 TS 段（原生 ADTS）不会碰它。
+    ts_state: TsState,
 }
 
 impl std::fmt::Debug for HlsStream {
@@ -466,8 +515,21 @@ impl std::fmt::Debug for HlsStream {
 impl HlsStream {
     /// 打开 HLS 流：拉 playlist →（master 则跟进第一个变体）→ 解析 →
     /// 立即打开第一段（engine 构造后马上要 sample_rate/channels 发 Loaded）。
+    ///
+    /// `url` 可以是 `http(s):` 或 `file:`（[`HybridFetcher`] 两种都认）。
     pub fn new(url: &str) -> Result<Self, AudioError> {
-        Self::with_fetcher(url, || Box::new(HttpFetcher::new()))
+        Self::with_fetcher(url, || Box::new(HybridFetcher::new()))
+    }
+
+    /// 打开**本地** m3u8（docs/52 §4）：把路径转成 `file:` URL 后走同一条链。
+    ///
+    /// base 就是 m3u8 所在目录，相对段地址照 `Url::join` 解析——与远程流
+    /// 完全同一套逻辑，所以本地 m3u8 能当端到端验收的替身（不出网）。
+    pub fn new_from_local(path: &std::path::Path) -> Result<Self, AudioError> {
+        let url = Url::from_file_path(path).map_err(|()| {
+            AudioError::Unsupported(format!("本地播放列表路径无法解析：{}", path.display()))
+        })?;
+        Self::new(url.as_str())
     }
 
     /// `make_fetcher` 会被调用两次：同步调度一份、预取线程一份。测试里传
@@ -526,12 +588,14 @@ impl HlsStream {
             prefetch.submit(&next.uri);
         }
         // 打开首段：构造期还没有断网状态，给全额重试窗口
+        let mut ts_state = TsState::new();
         let current = Some(Box::new(Self::open_segment(
             &mut *fetcher,
             &mut prefetch,
             &first,
             None,
             OUTAGE_BUDGET,
+            &mut ts_state,
         )?));
         let sample_rate = current.as_ref().unwrap().sample_rate();
         let channels = current.as_ref().unwrap().channels();
@@ -557,6 +621,7 @@ impl HlsStream {
             outage_slept: Duration::ZERO,
             failures: 0,
             poll_interval: LIVE_POLL_INTERVAL,
+            ts_state,
         })
     }
 
@@ -584,15 +649,20 @@ impl HlsStream {
         }
     }
 
-    /// 打开一段：取字节（优先预取，兜底同步拉）→ probe（hint=aac，ADTS）→
-    /// 校验与首段参数一致。`expected` = Some((rate, ch)) 时跨段变化报流错误。
-    /// `window` = 同步兜底的重试墙钟窗口（见 [`OUTAGE_BUDGET`]）。
+    /// 打开一段：取字节（优先预取，兜底同步拉）→ **若是 TS 先剥成 ES** →
+    /// probe → 校验与首段参数一致。`expected` = Some((rate, ch)) 时跨段变化报
+    /// 流错误。`window` = 同步兜底的重试墙钟窗口（见 [`OUTAGE_BUDGET`]）。
+    ///
+    /// TS 判定用内容嗅探（`0x47` + 188 对齐），不看扩展名：带查询串的段名
+    /// （实测 Power POP）用扩展名判会漏，漏了就会把 TS 字节当 ADTS 喂给 probe，
+    /// 报出来是"段解不开"而不是真实原因（docs/52 §1.2）。
     fn open_segment(
         fetcher: &mut dyn Fetcher,
         prefetch: &mut Prefetch,
         seg: &RawSegment,
         expected: Option<(u32, usize)>,
         window: Duration,
+        ts: &mut TsState,
     ) -> Result<DecodedStream, AudioError> {
         // 预取命中 = 零网络等待；没命中（预取失败/还没到）走同步重试，
         // 这条路会真的阻塞音频线程，所以只留给异常情况。
@@ -600,8 +670,16 @@ impl HlsStream {
             Some(b) => b,
             None => Self::fetch_with_retry(fetcher, &seg.uri, window)?,
         };
+        // 段格式分流：TS 剥出 ES 字节 + 封装种类，其余按原生 ADTS 直接 probe
+        let (bytes, extent) = if ts::is_ts(&bytes) {
+            let (es, kind) = ts::strip(&bytes, ts)
+                .map_err(|e| AudioError::Decode(format!("HLS 段 {}：{e}", seg.uri)))?;
+            (es, kind.hint_ext())
+        } else {
+            (bytes, "aac")
+        };
         let mut hint = symphonia::core::probe::Hint::new();
-        hint.with_extension("aac");
+        hint.with_extension(extent);
         let stream = DecodedStream::open_with_backend(
             Box::new(Cursor::new(bytes)),
             &hint,
@@ -859,6 +937,7 @@ impl HlsStream {
                 &seg,
                 Some((self.sample_rate, self.channels)),
                 window,
+                &mut self.ts_state,
             );
             let fetch_cost = t0.elapsed();
             match opened {
@@ -1084,14 +1163,50 @@ mod tests {
         );
     }
 
+    /// TS 段不再被解析期拒绝（docs/52 §1.2 那个 bug 的反向锁）：带查询串的
+    /// 段名曾经既不匹配 `.ts` 后缀、到了 probe 才炸，现在一律收下、由内容决定。
     #[test]
-    fn ts_segment_is_explicitly_rejected() {
+    fn ts_segments_are_accepted_including_query_strings() {
         let base = Url::parse(BASE).unwrap();
-        let err = parse_media_playlist(&playlist("#EXTINF:1.0,\nseg0.ts"), &base).unwrap_err();
-        assert!(
-            matches!(err, AudioError::Unsupported(ref m) if m.contains("MPEG-TS")),
-            "{err}"
+        let p = parse_media_playlist(
+            &playlist(
+                "#EXTINF:1.0,\nseg0.ts\n#EXTINF:1.0,\nseg1.ts?nimblesessionid=42\n#EXT-X-ENDLIST",
+            ),
+            &base,
+        )
+        .unwrap();
+        assert_eq!(p.segments.len(), 2);
+        assert_eq!(p.segments[0].uri, "http://fm.test/live/seg0.ts");
+        assert_eq!(
+            p.segments[1].uri,
+            "http://fm.test/live/seg1.ts?nimblesessionid=42"
         );
+    }
+
+    /// TS 段端到端：mux（测试内最小封装器）→ 打开流 → 剥 → probe → 认得出
+    /// 采样率。这条把 "hls 接缝 + ts 剥离 + symphonia hint" 串成一条。
+    #[test]
+    fn ts_segment_opens_through_the_real_pipeline() {
+        let adts = adts_segment(6, 4, 2); // 44100Hz 双声道
+        let ts_bytes = crate::ts::tests::mux_segment(&adts, true);
+        let fetcher = MockFetcher::new()
+            .with_text(BASE, &playlist("#EXTINF:1.0,\nseg0.ts\n#EXT-X-ENDLIST"))
+            .with_segment("http://fm.test/live/seg0.ts", ts_bytes);
+        let s = open(fetcher);
+        assert_eq!(s.sample_rate(), 44100, "TS 剥出来的 ADTS 必须认得出采样率");
+        assert_eq!(s.channels(), 2);
+        // 首段开了、ts_state 记下了音频 PID（后续段靠它定位）
+        assert_eq!(s.ts_state.audio_kind(), Some(crate::ts::TsAudio::Adts));
+    }
+
+    /// 非 TS 的假段（既不是 ADTS 也不是 TS）报"段解不开"，错误里带段地址。
+    #[test]
+    fn garbage_segment_reports_segment_url() {
+        let fetcher = MockFetcher::new()
+            .with_text(BASE, &playlist("#EXTINF:1.0,\nbad.ts\n#EXT-X-ENDLIST"))
+            .with_segment("http://fm.test/live/bad.ts", vec![0x00; 400]);
+        let err = try_open(fetcher).unwrap_err();
+        assert!(err.to_string().contains("bad.ts"), "{err}");
     }
 
     #[test]
@@ -1390,6 +1505,51 @@ mod tests {
         let fetcher = MockFetcher::new().with_text(BASE, &playlist("#EXT-X-ENDLIST"));
         let err = try_open(fetcher).unwrap_err();
         assert!(err.to_string().contains("没有任何段"), "{err}");
+    }
+
+    /// 本地 m3u8（docs/52 §4）：真读盘、真走 `file:` URL、相对段地址。
+    ///
+    /// 这条的价值是把端到端验收从网络上摘下来：段一个是 TS、一个是原生
+    /// ADTS，覆盖两条段路径 + 跨段状态，全部不依赖 HTTP。
+    #[test]
+    fn local_playlist_reads_segments_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let adts = adts_segment(6, 4, 2);
+        // seg0 是 TS（带 PAT/PMT），seg1 是原生 ADTS：同一条链两种段格式
+        std::fs::write(
+            dir.path().join("seg0.ts"),
+            crate::ts::tests::mux_segment(&adts, true),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("seg1.aac"), &adts).unwrap();
+        let m3u8 = dir.path().join("live.m3u8");
+        std::fs::write(
+            &m3u8,
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:1.0,\nseg0.ts\n#EXTINF:1.0,\nseg1.aac\n#EXT-X-ENDLIST\n",
+        )
+        .unwrap();
+
+        let mut s = HlsStream::new_from_local(&m3u8).expect("本地 m3u8 应能打开");
+        assert_eq!(s.sample_rate(), 44100);
+        assert_eq!(s.channels(), 2);
+        assert!(s.seekable() == false, "直播/VOD 都不可 seek");
+        // 两段都消费完 → EOF（垃圾负载解不出样本，但调度必须走完两段）
+        while let Ok(Some(_)) = s.next_packet() {}
+        assert_eq!(s.pending.len(), 0, "两段都应被消费");
+    }
+
+    /// 本地 m3u8 缺段：报错带段地址（而不是"文件坏了"）
+    #[test]
+    fn local_playlist_missing_segment_names_the_segment() {
+        let dir = tempfile::tempdir().unwrap();
+        let m3u8 = dir.path().join("live.m3u8");
+        std::fs::write(
+            &m3u8,
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:1.0,\nnope.ts\n#EXT-X-ENDLIST\n",
+        )
+        .unwrap();
+        let err = HlsStream::new_from_local(&m3u8).unwrap_err();
+        assert!(err.to_string().contains("nope.ts"), "{err}");
     }
 
     /// URI 复用（滚动段名）：服务端每一轮都用同一个 `seg.aac`，只有

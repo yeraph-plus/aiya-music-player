@@ -546,14 +546,19 @@ fn is_http_url(path: &str) -> bool {
             .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
 }
 
-/// 按 Load 的 path 打开源：http(s) → HLS 流（docs/22 G3），否则本地文件。
+/// 按 Load 的 path 打开源：http(s) → HLS 流（docs/22 G3），本地 `.m3u8`/`.m3u`
+/// → 本地 HLS（docs/52 §4），其余本地文件 → 文件解码。
 /// 判定放在 engine 入口一处，队列/UI 永远只递字符串。
 fn open_source(path: &str) -> Result<DecodedStream, AudioError> {
     if is_http_url(path) {
-        DecodedStream::open_hls(path)
-    } else {
-        DecodedStream::open_file(Path::new(path))
+        return DecodedStream::open_hls(path);
     }
+    let local = Path::new(path);
+    // 顺序不能反：m3u8 是文本，交给 open_file 只会报"文件坏了"
+    if crate::decoder::is_hls_playlist_path(local) {
+        return DecodedStream::open_local_hls(local);
+    }
+    DecodedStream::open_file(local)
 }
 
 /// 无声渲染：解码、进度、变速、seek 全部照常，只是没有音频设备参与。

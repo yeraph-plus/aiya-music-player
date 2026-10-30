@@ -24,14 +24,15 @@
   import BrowseView from './views/BrowseView.svelte';
   import BeetsView from './views/BeetsView.svelte';
   import LibraryView from './views/LibraryView.svelte';
+  import LiveView from './views/LiveView.svelte';
   import HomeView from './views/HomeView.svelte';
   import NowPlayingView from './views/NowPlayingView.svelte';
-  import RadioView from './views/RadioView.svelte';
   import SettingsView from './views/SettingsView.svelte';
   import { boot } from './lib/boot';
   import { onKeydown } from './lib/keyboard';
   import { createMediaSession, type MediaSessionBridge } from './lib/media-session';
   import { applyLook, readRowHeight, writeLook } from './lib/look';
+  import { drop } from './stores/drop.svelte';
   import { list } from './stores/list.svelte';
   import { notify } from './stores/notify.svelte';
   import { player } from './stores/player.svelte';
@@ -101,9 +102,12 @@
     mediaSessionActions = ui.settings.mediaKeys;
 
     const disposeBoot = boot({ onState: (next) => mediaSession?.update(next) });
+    // 壳级拖放（docs/52 §5.2）：整窗都是落点，不分页面
+    const disposeDrop = drop.attach();
 
     return () => {
       disposeBoot();
+      disposeDrop();
       notify.dispose();
       list.dispose();
       ui.dispose();
@@ -140,8 +144,8 @@
       <LibraryView />
     {:else if ui.page === 'nowPlaying'}
       <NowPlayingView />
-    {:else if ui.page === 'radio'}
-      <RadioView />
+    {:else if ui.page === 'live'}
+      <LiveView />
     {:else if ui.page === 'beets'}
       <BeetsView />
     {:else}

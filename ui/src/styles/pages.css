@@ -504,42 +504,9 @@
   font-size: 12px;
 }
 
-/* ---------------- FM 电台（规划占位） ---------------- */
-
-.radio-page {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: 12px;
-  text-align: center;
-  color: var(--text-2);
-}
-
-.radio-page .radio-icon {
-  width: 64px;
-  height: 64px;
-  border-radius: 18px;
-  display: grid;
-  place-items: center;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  color: var(--text-3);
-}
-
-.radio-page h1 {
-  margin: 0;
-  font-size: 20px;
-  color: var(--text-1);
-}
-
-.radio-page p {
-  margin: 0;
-  max-width: 380px;
-  font-size: 12.5px;
-  line-height: 1.8;
-}
+/* FM 电台占位页的样式已随页面退役（2026-10-31，docs/52 §7.4）：
+   直播页有自己的 scoped 样式（`views/LiveView.svelte`），全局这里不留下
+   无主的 `.radio-page` 规则——那些选择器一条都匹配不到了。 */
 
 /* ---------------- 设置单页 ---------------- */
 
