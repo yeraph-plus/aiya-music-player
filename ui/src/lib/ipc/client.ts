@@ -205,6 +205,15 @@ export const ipc = {
     scanCancel: () => call<ScanCancel>('library_scan_cancel'),
     /** 打开系统目录选择器；用户取消返回 null。选中时回填完整根列表 */
     chooseRoot: () => call<ChosenRoot | null>('library_choose_root'),
+    /**
+     * 打开系统目录选择器，**只回路径**（不写任何设置）。
+     *
+     * 与 `chooseRoot` 的区别是副作用：那条会把选中的目录追加进曲库目录，
+     * 只适合"加一个曲库根"。选待整理目录 / 整理落点必须用这条——否则
+     * 选完就把它变成了曲库根（copy 模式下原件被再扫一遍 = 重复曲目），
+     * 而且紧接着的重叠校验会拒绝这次选择，用户看不懂为什么。
+     */
+    pickFolder: () => call<string | null>('pick_folder'),
     /** 扫描根列表（settings `library.roots`；textarea 数据源） */
     rootsGet: () => call<LibraryRoots>('library_roots_get'),
     /** 覆盖写扫描根列表（后端再归一化：trim/去空/去引号/去重） */
@@ -437,12 +446,17 @@ export const ipc = {
     fields: () => call<BeetsFieldCatalog>('beets_fields'),
 
     /**
-     * 只读入库：把**曲库根**整批登记进索引家（不做分析）。
+     * 只读入库：把 **`root`**（缺省＝曲库根）登记进索引家（不做分析）。
      *
      * 异步：进度走 `beets:index`（`progress` → `indexDone`）。
      * 这是查询页的前置条件——索引库空着时任何筛选都是 0 命中。
+     *
+     * `root` 传落点子目录是给"整理完补索引"用的：整根重扫实测 82 s（96 批
+     * 进程启动开销），一个落点目录 1 s。宿主在 apply 结束时会自己补一次，
+     * UI 只在需要重扫某个特定目录时才传。
      */
-    indexImport: () => call<JobStarted>('beets_index_import'),
+    indexImport: (root?: string) =>
+      call<JobStarted>('beets_index_import', root ? { root } : {}),
   },
 
   /**

@@ -1,0 +1,112 @@
+/* 整理库（beets）页的共享词汇。
+ *
+ * 2026-10-30：这一页拆成 安装 / 索引 / 整理 三个子页之后，`.panel` /
+ * `.panel-head` / `.dim` 这套形状被三处同时需要。留在各自的 `<style>` 里
+ * 等于把同一段 CSS 抄三遍（以前 ImportPanel + BeetsSection 就是这么腐化的：
+ * 两处 panel 的内边距差 2px，肉眼看不出来但会让人觉得"哪里不对"）。
+ *
+ * 所以这里放**跨子页复用**的东西，命名统一 `beets-` 前缀避免与页面级类撞名。
+ * 只属于某个子页的（专辑卡、结果表列宽）仍留在那个组件的 scoped style 里——
+ * 全局样式表不该知道"专辑卡长什么样"。
+ */
+
+/* 页面容器：一列卡片，间距统一。原先在 BeetsView 的 scoped style 里 */
+.beets-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 卡片：标题 + 说明 + 内容 */
+.beets-panel {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.beets-panel-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.beets-panel-head strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* 一行内的键值对（曲库 1849 首 / 索引库 1849 条 / 落点 …） */
+.beets-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.beets-row b {
+  color: var(--text-1);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 路径展示：等宽 + 单行省略，title 挂全路径 */
+.beets-path {
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.beets-dim {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.beets-danger {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--danger);
+}
+
+.beets-warn {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--warn);
+}
+
+/* 未就绪时的门：三个子页都可能遇到（没装 / 协议不符），形状统一 */
+.beets-gate {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* 小徽标：锁定状态 / 未入库 / 证据层级 */
+.beets-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--surface-input);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.beets-badge.warn {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+.beets-badge.accent {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}

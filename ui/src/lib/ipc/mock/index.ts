@@ -48,6 +48,10 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     // 浏览器里没有系统目录选择器：返回 null = 用户取消（契约里的正常分支）
     case 'library_choose_root':
       return null;
+    // 纯目录选择器（不写设置）：mock 回一个假目录，让「选择待整理目录」
+    // 这条路径在浏览器预览里也能走完（真机走系统对话框）
+    case 'pick_folder':
+      return mock.pickFolder();
     case 'library_roots_get':
       return mock.rootsGet();
     case 'library_roots_set':
@@ -222,9 +226,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       void (a.paths as string[] | undefined);
       return mock.beetsPreview();
     case 'beets_apply':
-      void (a.decisions as ApplyDecision[] | undefined);
-      void (a.resume as boolean | undefined);
-      return { started: true };
+      return mock.beetsApply((a.decisions as ApplyDecision[] | undefined) ?? []);
     // 自动刷新管线的诊断查询：预览环境没有真管线，回一份"从没跑过"。
     case 'refresh_state':
       return { intervalSecs: 30, focused: true, last: null };

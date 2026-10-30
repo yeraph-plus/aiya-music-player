@@ -84,3 +84,6 @@ beets-tool/.runtime/
 # 基准/验收截图：`tools/bench/*.mjs` 的产物，本机 84MB，只服务当场比对，
 # 结论已经写进 docs/46，不必入库。
 tools/bench/shots/
+
+# 会话工具的本地记忆/临时数据（误落时会跑到仓库子目录里，别进版本库）
+.workbuddy/

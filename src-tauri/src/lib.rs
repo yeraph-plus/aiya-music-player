@@ -1105,15 +1105,42 @@ pub(crate) fn canon_path(p: &str) -> String {
         .to_lowercase()
 }
 
-/// inbox 与扫描根重叠校验：相等或位于其内部都算冲突。
+/// 两个目录是否有重叠：相等、a 在 b 里面、b 在 a 里面，三者都算。
+///
+/// 为什么"父目录"也算：`D:\` 与 `D:\Music` 不相等也不在对方里面（反方向），
+/// 但把 `D:\` 当作待整理目录，预览会递归扫到整个曲库——同一批文件被再导一遍。
+/// 三个方向覆盖完才叫"不重叠"。
+///
+/// 分隔符边界不能省：裸 `starts_with` 会把 `D:\Music Backup` 当成 `D:\Music`
+/// 的子目录（经典前缀陷阱，单元测试 `sibling_directory_is_allowed` 钉着）。
+fn paths_overlap(a: &str, b: &str) -> bool {
+    let (a, b) = (canon_path(a), canon_path(b));
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    a == b || a.starts_with(&format!("{b}\\")) || b.starts_with(&format!("{a}\\"))
+}
+
+/// inbox 与扫描根重叠校验：任一方向重叠都算冲突。
 fn path_conflicts_with_roots(path: &str, roots: &[String]) -> bool {
+    if canon_path(path).is_empty() {
+        return true;
+    }
+    roots.iter().any(|r| paths_overlap(path, r))
+}
+
+/// `path` 是否落在某个根的**内部或与之相等**（不含"是根的父目录"）。
+///
+/// 整理落点用的就是这条：落点在曲库之外 → 整理完的文件扫描器看不见，用户会
+/// 看到"整理成功了，曲库里没有"。
+pub(crate) fn path_within_roots(path: &str, roots: &[String]) -> bool {
     let c = canon_path(path);
     if c.is_empty() {
-        return true;
+        return false;
     }
     roots.iter().any(|r| {
         let rc = canon_path(r);
-        c == rc || c.starts_with(&format!("{rc}\\"))
+        !rc.is_empty() && (c == rc || c.starts_with(&format!("{rc}\\")))
     })
 }
 
@@ -1168,8 +1195,13 @@ fn beets_set_inbox(
     Ok(beets::config_view(&app, &roots))
 }
 
-/// 勾选整理输出根（单选）：必须是曲库目录之一。换选只影响未来的移动/导入，
-/// beets 存的是绝对路径，旧条目不受影响。
+/// 勾选整理落点（docs/49 §4：落点单独选，可以是曲库目录本身，也可以是它
+/// 里面的子目录——"整理到 D:\Music\整理" 这种分法是常态）。
+///
+/// 必须在曲库目录**之内**：落点在曲库外，整理完的文件扫描器看不见，症状是
+/// "整理成功了，曲库里没有"，而 beets 侧一切正常。
+///
+/// 换落点只影响未来的整理；beets 存的是绝对路径，旧条目不受影响。
 #[tauri::command]
 fn beets_set_target(
     app: AppHandle,
@@ -1177,8 +1209,10 @@ fn beets_set_target(
 ) -> Result<dto::beets::BeetsConfig, dto::ApiError> {
     let p = path.trim().to_string();
     let roots = roots_of(&app)?;
-    if !roots.iter().any(|r| canon_path(r) == canon_path(&p)) {
-        return Err(dto::ApiError::invalid_arg("整理输出目录必须是曲库目录之一"));
+    if !path_within_roots(&p, &roots) {
+        return Err(dto::ApiError::invalid_arg(
+            "整理落点必须在曲库目录之内（可以选曲库目录本身或它的子目录）",
+        ));
     }
     let saved = p;
     beets::update_settings(&app, move |s| s.target_root = Some(saved))
@@ -1215,7 +1249,7 @@ fn beets_inbox_imported_add(
 /// 重复曲目），正反例都要钉死。
 #[cfg(test)]
 mod beets_config_tests {
-    use super::{canon_path, path_conflicts_with_roots};
+    use super::{canon_path, path_conflicts_with_roots, path_within_roots};
 
     fn roots() -> Vec<String> {
         vec!["D:\\Music".into(), "E:\\Audio\\FLAC".into()]
@@ -1249,8 +1283,36 @@ mod beets_config_tests {
     }
 
     #[test]
+    fn parent_of_root_conflicts() {
+        // 反方向的重叠：把 D:\ 当整理源，预览会递归扫到整个曲库
+        assert!(path_conflicts_with_roots("D:\\", &roots()));
+        // 前缀但不在分隔符边界上：D:\Mu 不是 D:\Music 的祖先目录
+        assert!(!path_conflicts_with_roots("D:\\Mu", &roots()));
+    }
+
+    #[test]
     fn empty_path_conflicts() {
         assert!(path_conflicts_with_roots("  ", &roots()));
+    }
+
+    /* ---- 整理落点（docs/49 §4）：在内即可，不必相等 ---- */
+
+    #[test]
+    fn target_accepts_root_and_subdirectory() {
+        assert!(path_within_roots("D:\\Music", &roots()));
+        assert!(path_within_roots("D:\\Music\\整理", &roots()));
+        assert!(path_within_roots("d:/music/a/b", &roots()));
+    }
+
+    #[test]
+    fn target_rejects_outside_and_fake_sibling() {
+        // 落点在曲库外 → 整理完扫描器看不见
+        assert!(!path_within_roots("E:\\Sorted", &roots()));
+        // 假兄弟：裸 starts_with 会把它当成 D:\Music 的子目录
+        assert!(!path_within_roots("D:\\Music2", &roots()));
+        // 父目录不是"之内"
+        assert!(!path_within_roots("D:\\", &roots()));
+        assert!(!path_within_roots("  ", &roots()));
     }
 }
 
@@ -1530,9 +1592,16 @@ async fn beets_enrich_start(
 /// 为什么单独一条命令：查询页读的是索引库，它空着的时候任何筛选都是 0 命中。
 /// 而 `enrich` 在分析器（xtractor）未接线时整批被拒——入库不该被分析器的
 /// 进度绑架（docs/49 §3.8）。进度走 `beets:index`，终态 `indexDone`。
+///
+/// `root` 缺省 = 曲库根（UI 上的「建立索引 / 重建索引」）。整理完的自动补索引
+/// 由宿主自己调 `beets::start_index_import` 并传落点，不经过这里——那条路径
+/// 不需要 UI 参与（关掉整理页也应当补上）。
 #[tauri::command]
-async fn beets_index_import(app: AppHandle) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    tauri::async_runtime::spawn_blocking(move || beets::start_index_import(app))
+async fn beets_index_import(
+    app: AppHandle,
+    root: Option<String>,
+) -> Result<dto::beets::JobStarted, dto::ApiError> {
+    tauri::async_runtime::spawn_blocking(move || beets::start_index_import(app, root))
         .await
         .map_err(dto::ApiError::internal)?
         .map_err(map_beets_start)?;
@@ -1929,6 +1998,32 @@ fn library_scan_cancel(
     } else {
         Ok(dto::library::ScanCancel { cancelled: false })
     }
+}
+
+/// 选一个文件夹，**只回路径，不写任何设置**。
+///
+/// 为什么不能拿 `library_choose_root` 顶替：那条会把选中的目录**追加进
+/// `library.roots`**（它是"加一个曲库目录"的动作）。用它来选「待整理目录」
+/// 会把待整理目录变成曲库根——copy 模式下原件留在 inbox，扫描器再扫一遍就是
+/// 重复曲目；更要命的是紧接着 `beets_set_inbox` 的重叠校验会拒绝这个选择，
+/// 用户看到的是"待整理目录不能与曲库目录相同或在其内部"，完全猜不到是自己
+/// 刚才那一下把它加进去的。整理落点同理（落点校验比的是"在不在曲库里"）。
+///
+/// `beets_preview` 的源、`beets_set_inbox` 的值、`beets_set_target` 的值都用这条。
+#[tauri::command]
+async fn pick_folder(app: AppHandle) -> Result<Option<String>, dto::ApiError> {
+    use tauri_plugin_dialog::DialogExt;
+    // blocking_pick_folder 在主线程调用有死锁风险（tauri-plugin-dialog 警告），
+    // 与 library_choose_root 同样卸到工作线程
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .blocking_pick_folder()
+            .and_then(|p| p.as_path().map(|pp| pp.to_path_buf()))
+    })
+    .await
+    .unwrap_or(None);
+    Ok(picked.map(|p| p.to_string_lossy().into_owned()))
 }
 
 /// 选目录并**追加**进 `library.roots`（docs/29 批 A：多目录并集单库）。
@@ -4274,6 +4369,7 @@ pub fn run() {
             library_scan,
             library_scan_cancel,
             library_choose_root,
+            pick_folder,
             library_roots_get,
             library_roots_set,
             library_roots_count,

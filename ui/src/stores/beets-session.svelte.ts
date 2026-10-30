@@ -1,0 +1,291 @@
+import type { AlbumPreview, BeetsImportEvent } from '../lib/beets';
+import { events, ipc, type ApplyDecision } from '../lib/ipc';
+import { errorMessage } from '../lib/errors';
+import { beetsConfig } from './beets-config.svelte';
+
+/**
+ * beets 导入会话 store（模块级单例）。
+ *
+ * `beets:import` 事件在模块加载时全局 listen 一次，不随组件生命周期：
+ * 之前 ImportPanel 自己订阅，面板一关监听就拆，刷新/重开面板会丢掉
+ * 进行中的会话；预览 → 应用 → 对齐的流转状态也散在组件里。
+ * 现在会话状态（phase / 进度快照 / 错误 / 应用结果）都在这里持久，
+ * 组件只消费快照并调用命令（beets_preview / beets_apply / beets_cancel）。
+ *
+ * 启动恢复：宿主在会话进行中刷新 UI 时没有快照命令，store 从 idle 开始
+ * （与旧行为一致）。事件处理对乱序/重复 sessionEnd 幂等：settle() 只会把
+ * phase 归 idle，不会清数据，重复到达无害。
+ *
+ * 事件 type 清单见 contracts/src/domain.ts 的 BeetsImportEvent：
+ * album / progress / albumError / applied / applyDone / cancelled /
+ * cancelAck / libraryRefreshed / libraryRefreshSkipped /
+ * done / sessionEnd（没有独立的 sessionFailed，失败语义由
+ * 命令失败时的 failed phase 承担）。
+ */
+export type BeetsPhase = 'idle' | 'previewing' | 'applying' | 'failed';
+
+/** 专辑 id → 应用结果（单张专辑的应用明细） */
+export type BeetsApplyResult = {
+  written: number;
+  moved: boolean;
+  failed: Array<{ path: string; message: string; code?: string }>;
+};
+
+class BeetsSessionStore {
+  /** 会话阶段：命令发起时进入，收尾事件（done/applyDone 链/cancelled/sessionEnd）归 idle */
+  phase = $state<BeetsPhase>('idle');
+  /** 最近一次错误（命令失败或对齐失败），展示用；新一轮预览时清空 */
+  lastError = $state<string | null>(null);
+
+  /** 预览出的专辑列表（事件流累积） */
+  albums = $state<AlbumPreview[]>([]);
+  /** 专辑 id → 选中的候选 id（null = 保持当前标签）；store 只写默认值（strong 才默认选第一个） */
+  picked = $state<Record<string, string | null>>({});
+  /** 最近一次事件 payload 快照：预览进度 / 应用进度 */
+  progress = $state<{ current: number; total: number } | null>(null);
+  applyProgress = $state<{ current: number; total: number } | null>(null);
+  /** 专辑 id → 应用结果 */
+  results = $state<Record<string, BeetsApplyResult>>({});
+  applySummary = $state<{ applied: number; skipped: number; failed: number; moved: number; resumedSkipped?: number } | null>(null);
+  /** v2：上一次应用中断后可续跑（UI 据此显示「续跑」按钮） */
+  canResume = $state(false);
+  /** v2：最近一次 applyDone 的续跑跳过数（断点已完成的专辑数） */
+  resumedSkipped = $state<number | null>(null);
+  /** 逐条会话错误（albumError / 对齐失败 / 取消提示） */
+  errors = $state<Array<{ path: string; message: string }>>([]);
+  /** 预览完成的分组数（null = 本轮还没有 done） */
+  doneCount = $state<number | null>(null);
+
+  /** 本次会话下发的应用决策（applyDone 时据此把成功路径记进排除表；续跑重发同一批） */
+  private lastDecisions: ApplyDecision[] = [];
+
+  /** 每次曲库刷新真的写出变化时递增；消费方据此触发主视图重拉（刷新逻辑不进 store） */
+  syncVersion = $state(0);
+
+  /** 事件订阅是否已建立（见 `ensureListening` 的注释，**不能**在构造函数里做） */
+  private listening = false;
+
+  /**
+   * 懒订阅 `beets:import`。
+   *
+   * 曾经在构造函数里订阅（模块加载即订阅）。在真宿主（Tauri）里没问题，但
+   * 浏览器预览下会**静默失效**：本模块在静态 import 链上，求值早于 `main.ts`
+   * 安装 mock transport，那一次 `listen` 落到 Tauri 的通道上、被 `sub()` 的
+   * catch 吞掉，于是再也没有第二个订阅者——症状是点「开始整理」后永远停在
+   * 「匹配中 …」，一条事件都收不到。
+   *
+   * 放到第一次发命令时订阅：那时 transport 一定已经就位，且命令必然早于
+   * 它自己的事件（progress 都在命令之后才会发）。
+   */
+  private ensureListening(): void {
+    if (this.listening) return;
+    this.listening = true;
+    events.beetsImport((evt) => this.onEvent(evt as unknown as BeetsImportEvent));
+  }
+
+  /* ---------------- 命令 ----------------
+   * 组件只调这四个方法、只读上面的快照，不再自己 invoke（docs/18 §4.1）。
+   * 失败统一写 `lastError` + `phase='failed'`，不抛：会话组件没有 catch 的位置，
+   * 而错误就该显示在面板里（那里已经有一块"需要 beets 2.14+"的提示区）。
+   */
+
+  /**
+   * 面板主按钮：弹目录选择器 → 清空上一轮 → 发起预览。
+   *
+   * 选择器与预览合成一个动作：用户点了"选择文件夹预览"，中途取消就是没发生，
+   * 不该留下半个已重置的会话。目录来自 `library_choose_root`（同一个系统对话框，
+   * 与曲库根目录无关，后端只负责返回路径）。
+   */
+  async chooseAndPreview(): Promise<void> {
+    this.lastError = null;
+    let path: string | null = null;
+    try {
+      const chosen = await ipc.library.chooseRoot();
+      path = chosen?.path ?? null;
+    } catch (e) {
+      this.lastError = errorMessage(e);
+      return;
+    }
+    if (!path) return; // 用户取消：不动会话状态
+    this.reset();
+    await this.preview([path]);
+  }
+
+  /** 选文件夹 → 只读预览。用户取消选择返回 false（不是错误） */
+  async preview(paths: string[]): Promise<boolean> {
+    this.ensureListening();
+    this.lastError = null;
+    // 阶段在**命令返回之前**就置上：点下去那一刻按钮就该锁住。
+    // 反过来（等 await 回来再置）有两个坑：真宿主里那几十毫秒用户能重复点；
+    // 而副作用快的后端（浏览器预览的 mock 会把整轮事件在命令返回前发完）
+    // 会让终态事件先到、这里再把阶段写回 previewing——**永远卡在匹配中**。
+    this.phase = 'previewing';
+    try {
+      await ipc.beets.preview(paths);
+    } catch (e) {
+      this.lastError = errorMessage(e);
+      this.phase = 'failed';
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 整理入库（docs/40 十三轮）：对待整理目录跑预览。排除表（已导入过的
+   * inbox 源文件）由宿主在 start_preview 里注入 options，这里不感知。
+   */
+  async previewInbox(inbox: string): Promise<void> {
+    this.ensureListening();
+    this.reset();
+    await this.preview([inbox]);
+  }
+
+  /** 应用决策（写标签 + 可选移动/复制 + 随后自动对齐读模型）。
+   *  `resume`（v2）：中断后续跑——保留上一轮的结果展示，sidecar 按断点跳过已完成的 */
+  async apply(decisions: ApplyDecision[], resume = false): Promise<void> {
+    this.ensureListening();
+    this.lastError = null;
+    this.lastDecisions = decisions;
+    if (!resume) {
+      this.results = {};
+      this.applySummary = null;
+      this.resumedSkipped = null;
+    }
+    this.canResume = false;
+    // 与 preview 同理：阶段先置，终态交给 applyDone / cancelled / sessionEnd
+    this.phase = 'applying';
+    try {
+      await ipc.beets.apply(decisions, resume);
+    } catch (e) {
+      this.lastError = errorMessage(e);
+      this.phase = 'failed';
+      // 命令没发出去（如会话槽被占）≠ 中断，不提供续跑
+      this.canResume = false;
+      return;
+    }
+  }
+
+  /** v2：续跑上一次中断的应用（重发同一批 decisions + resume:true） */
+  async resumeLast(): Promise<void> {
+    if (this.lastDecisions.length === 0) return;
+    await this.apply(this.lastDecisions, true);
+  }
+
+  /** 取消当前预览/应用：sidecar 收尾到最近检查点，已完成部分保留 */
+  async cancel(): Promise<void> {
+    try {
+      await ipc.beets.cancel();
+    } catch (e) {
+      // 取消失败不阻塞流程：sidecar 会在 sessionEnd 自己收尾
+      console.warn('beets.cancel failed:', errorMessage(e));
+    }
+  }
+
+  /** 清空会话数据回到 idle（新一轮预览前调用）。
+   *  lastDecisions 一并清：新一轮预览意味着旧批次不再是"上次中断的应用"。 */
+  reset(): void {
+    this.phase = 'idle';
+    this.lastError = null;
+    this.albums = [];
+    this.picked = {};
+    this.progress = null;
+    this.applyProgress = null;
+    this.results = {};
+    this.applySummary = null;
+    this.errors = [];
+    this.doneCount = null;
+    this.canResume = false;
+    this.resumedSkipped = null;
+    this.lastDecisions = [];
+  }
+
+  private onEvent(evt: BeetsImportEvent): void {
+    switch (evt.type) {
+      case 'album': {
+        this.albums = [...this.albums, evt.album];
+        // 默认选择：只有 strong 才默认选第一个候选（docs/08 §4.1 低置信度不默认勾选）
+        const strong = evt.album.candidates[0];
+        this.picked = {
+          ...this.picked,
+          [evt.album.id]: evt.album.recommendation === 'strong' && strong ? strong.id : null,
+        };
+        break;
+      }
+      case 'progress':
+        if (evt.stage === 'writing') {
+          this.applyProgress = { current: evt.current, total: evt.total };
+          if (this.phase === 'idle') this.phase = 'applying';
+        } else {
+          this.progress = { current: evt.current, total: evt.total };
+          if (this.phase === 'idle') this.phase = 'previewing';
+        }
+        break;
+      case 'albumError':
+        this.errors = [...this.errors, { path: evt.path, message: evt.beets_message }];
+        break;
+      case 'applied':
+        this.results = {
+          ...this.results,
+          [evt.albumId]: { written: evt.written, moved: evt.moved, failed: evt.failed },
+        };
+        break;
+      case 'applyDone': {
+        this.applySummary = { applied: evt.applied, skipped: evt.skipped, failed: evt.failed, moved: evt.moved, resumedSkipped: evt.resumedSkipped };
+        this.resumedSkipped = evt.resumedSkipped ?? null;
+        // docs/40 十三轮：把成功应用的源路径记进排除表（inbox copy 模式防重复
+        // 导入——原件留在待整理目录，不排除的话下次整理会再导一遍）。排除表
+        // 本体在宿主 settings 里，preview 时由宿主注入 options.excludePaths。
+        const okPaths = this.lastDecisions
+          .filter((d) => d.action !== 'skip' && (this.results[d.album]?.written ?? 0) > 0)
+          .flatMap((d) => d.paths);
+        if (okPaths.length > 0) {
+          void ipc.beets
+            .inboxImportedAdd(okPaths)
+            .then((c) => {
+              beetsConfig.importedCount = c.importedCount;
+            })
+            .catch(() => {}); // 排除表是锦上添花，失败不打断收尾流程
+        }
+        // 应用完成：宿主的 on_exit 会触发一次扫描刷新（结果走 libraryRefreshed），
+        // 面板收尾不等它——扫描很快，主视图重拉由 syncVersion 驱动
+        this.settle();
+        break;
+      }
+      case 'cancelled':
+        // 取消收尾：已完成的部分保留，归 idle 解锁按钮。
+        // v2：断点已在（完成的 decision 有 checkpoint），提供续跑——
+        // **只对应用阶段**（stage=writing）：预览阶段的取消不能把上一批
+        // 已完成的 decisions 误报成"可续跑"（checkpoint 会全跳过，白转一圈）。
+        this.errors = [...this.errors, { path: 'cancel', message: '已取消（已完成的部分保留）' }];
+        this.canResume = evt.stage === 'writing' && this.lastDecisions.length > 0;
+        this.settle();
+        break;
+      case 'cancelAck':
+        // sidecar 回执，无需状态变化
+        break;
+      case 'libraryRefreshed':
+        // 曲库刷新真的写出变化 → 通知主视图重拉（与面板是否在场无关）
+        if (evt.changed) this.syncVersion += 1;
+        this.settle();
+        break;
+      case 'libraryRefreshSkipped':
+        this.errors = [...this.errors, { path: 'refresh', message: '有扫描正在进行，本次刷新让位；稍后再试' }];
+        this.settle();
+        break;
+      case 'done':
+        this.doneCount = evt.albums;
+        this.settle();
+        break;
+      case 'sessionEnd':
+        this.settle();
+        break;
+    }
+  }
+
+  /** 会话收尾：幂等归 idle（容忍乱序/重复 sessionEnd），不清数据 */
+  private settle(): void {
+    if (this.phase !== 'idle') this.phase = 'idle';
+  }
+}
+
+export const beetsSession = new BeetsSessionStore();

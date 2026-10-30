@@ -192,6 +192,24 @@ class UiStore {
   libraryTab = $state<'all' | 'recent' | 'added'>('all');
 
   /**
+   * 整理库页的三个子页（2026-10-30 用户拍板：安装 / 索引 / 整理 分页）。
+   *
+   * 为什么还要跨导航保留：整理页是**长流程**（选目录 → 联网匹配 → 逐张专辑
+   * 挑候选），用户中途去曲库看一眼再回来，落回「安装」页等于把刚匹出来的
+   * 结果藏起来（会话数据还在 store 里，只是看不见了）。
+   *
+   * 默认值 `index` 而不是 `install`：装好的人占绝大多数，每次进页面先看安装
+   * 说明是无用的。没装的情况由壳在探测完成后翻到 `install`（见
+   * `beetsTabTouched`：用户手动点过就不要再替他做决定）。
+   */
+  beetsTab = $state<'install' | 'index' | 'organize'>('index');
+  /**
+   * 用户是否手动切过整理库页的 tab。只被"探测到没装就翻到安装页"这条规则
+   * 读——手动选过之后自动翻页必须让位，否则用户点了「索引」两秒后又被拽回去。
+   */
+  beetsTabTouched = false;
+
+  /**
    * 初始值不是纯 `DEFAULT_SETTINGS`：主题/密度先取 localStorage 镜像
    * （`lib/look.ts`）。否则 `main.ts` 已经把首帧设成浅色，这里却是深色，
    * `App` 的主题 effect 首次运行会把 `data-theme` 写回深色，等 bootstrap

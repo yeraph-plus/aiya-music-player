@@ -306,17 +306,23 @@ fn roots_for_tools(app: &tauri::AppHandle) -> (Option<String>, Option<String>) {
     let target = trimmed(load_settings(app).target_root);
     app.try_state::<crate::AppState>()
         .and_then(|st| st.db().send(|conn| Ok(crate::read_roots(conn))).ok())
-        .map(|roots| {
-            let dest = target
-                .filter(|t| {
-                    roots
-                        .iter()
-                        .any(|r| crate::canon_path(r) == crate::canon_path(t))
-                })
-                .or_else(|| roots.first().cloned());
-            (roots.first().cloned(), dest)
-        })
+        .map(|roots| (roots.first().cloned(), pick_dest(target, &roots)))
         .unwrap_or((None, None))
+}
+
+/// 落点取哪个：勾选值合法就用它，否则回退第一个扫描根。
+///
+/// 合法性判据与 `beets_set_target` **必须同一条**：落点可以是曲库目录本身，
+/// 也可以是它的子目录（docs/49 §3.4）。
+///
+/// 曾经这里是 `canon_path(r) == canon_path(t)`（严格相等），而校验已经放宽到
+/// 子目录 —— 后果是「选了子目录当落点」被静默判为非法、回退成曲库根：设置里
+/// 明明写着 `D:\Music\整理`，实际整理却把文件倒进 `D:\Music`。两条判据分离
+/// 就会这样，所以复用同一个函数，并由 `pick_dest_*` 的单测钉住。
+fn pick_dest(target: Option<String>, roots: &[String]) -> Option<String> {
+    target
+        .filter(|t| crate::path_within_roots(t, roots))
+        .or_else(|| roots.first().cloned())
 }
 
 /// 去空白 + 空串归一成 `None`（配置里空串和没填是同一件事）。
@@ -1410,6 +1416,11 @@ pub fn start_apply(
 ) -> Result<(), String> {
     let tool = tool_or_err(&app)?;
 
+    // 整理写入的落点。apply 结束后要按它补一次索引 —— 见下面 on_exit 的说明。
+    // 在**发命令前**取：落点是被 `apply` 正在使用的那个（`tool_env` 同一个来源），
+    // 结束后再取可能已经被用户改掉，补索引就会扫错目录。
+    let dest = roots_for_tools(&app).1;
+
     // on_exit 里拿一份 AppHandle（会话线程要能独立跑，不能借用 &app）
     let exit_app = app.clone();
     run_session(
@@ -1429,6 +1440,17 @@ pub fn start_apply(
                 // 走完整刷新管线而不是只 dump+sync —— apply 会写标签改 mtime，
                 // 扫描段正好把这些文件的 mtime/size 与标签一起还原（docs/33 §7）。
                 crate::refresh::spawn(&exit_app, params, crate::refresh::Trigger::Action);
+            }
+            // 上面那条只管**应用曲库**（扫描器是它自己的，unchanged 预筛让整库
+            // 增量很廉价）。索引家是**另一个库文件**，apply 写的是整理家，它不会
+            // 自己知道有新文件 —— 不补这一步，刚整理好的歌在查询页永远 0 命中。
+            //
+            // 传 `dest`（落点）而不是整根：整根 96 批 ≈ 82 s，全是进程启动开销；
+            // 落点通常 1 批 ≈ 1 s。详见 `start_index_import` 的实测表。
+            if let Err(e) = start_index_import(exit_app.clone(), dest) {
+                // 补索引失败**不影响整理结果**（文件已经搬好了），所以只记日志。
+                // 用户仍可手动「重建索引」——那是这条路的兜底，不是主路径。
+                tracing::warn!(error = %e, "整理后补索引未能启动（整理结果不受影响）");
             }
         }),
     )
@@ -1573,7 +1595,7 @@ pub fn query_profile() -> Profile {
 /// 混一条通道会让查询页的进度条在两种粒度之间跳。
 pub const INDEX_CHANNEL: &str = "beets:index";
 
-/// 只读入库：把**曲库根**整批登记进索引家，不做分析（docs/49 §3.8）。
+/// 只读入库：把 **`root`**（缺省＝曲库根）登记进索引家，不做分析（docs/49 §3.8）。
 ///
 /// 与 `start_enrich` 的分工很硬：
 /// * 这条 → "索引库里有行"，查询页的前提；
@@ -1581,13 +1603,35 @@ pub const INDEX_CHANNEL: &str = "beets:index";
 ///
 /// 曾经以为入库是分析的副产品，实测发现分析器没接好时连库都不建（`enrich`
 /// 直接 E_INVALID_ARG），于是筛选页永远 0 命中。所以两条路必须分开。
-pub fn start_index_import(app: tauri::AppHandle) -> Result<(), String> {
+///
+/// ## 为什么 `root` 可传子目录（整理后补索引就走这条）
+///
+/// 索引家与整理家是**两个库文件**，`apply` 只写整理家；不补的话"刚整理完的歌
+/// 在查询页搜不到"。补的代价取决于扫多大范围，实测（1846 首曲库、beets 2.14.1）：
+///
+/// | 扫什么 | 批数 | 耗时 |
+/// |---|---|---|
+/// | 整根 | 96 | **82 s** |
+/// | 一个落点目录（1 首） | 1 | **0.99 s** |
+///
+/// 82 s 里几乎全是**进程启动开销**（每批 `python -m beets import` 固定 ~0.85 s，
+/// 与批内文件数关系很小：实测 1 个已入库文件 0.88 s、20 个 1.25 s），不是解析。
+/// 所以"整理完顺手整根重扫"是不能接受的 82 秒，而落点通常只有一两批。
+///
+/// 传子目录**不会被 `-R` 误跳过**：beets 的增量记忆（`statefile: state.pickle`
+/// 的 `taghistory`）记的是「一个导入任务的那批 paths 元组」，新文件组成新元组；
+/// 实测新目录只扫该目录 → 索引库 1849 → 1850。
+pub fn start_index_import(app: tauri::AppHandle, root: Option<String>) -> Result<(), String> {
     let (entry, _src) = discover(&app).ok_or_else(|| NOT_INSTALLED.to_string())?;
     let tool = StdioTool::new(launcher_for(&app, &entry, Profile::Index));
+    let mut body = serde_json::json!({ "id": 1, "cmd": "index_import" });
+    if let Some(r) = trimmed(root) {
+        body["root"] = serde_json::Value::String(r);
+    }
     run_session(
         tool,
         &app,
-        serde_json::json!({ "id": 1, "cmd": "index_import" }),
+        body,
         INDEX_CHANNEL,
         "已有 beets 任务在执行（可先取消）",
         Box::new(|| {}),
@@ -1772,6 +1816,47 @@ mod tests {
         };
         assert_eq!(get("AIYA_BEETS_SCAN_ROOT"), "/music");
         assert_eq!(get("AIYA_BEETS_DEST"), "/music/整理");
+    }
+
+    /* ---------------- 落点口径：与 beets_set_target 同一条判据 ---------------- */
+
+    /// 子目录落点必须**真的生效**，不能静默回退成曲库根。
+    ///
+    /// 这条是回归测试：`beets_set_target` 已经放宽到接受子目录，而
+    /// `roots_for_tools` 里曾经还写着严格相等，于是"设置里存着 D:\Music\整理"
+    /// 会被判非法、实际用 D:\Music —— 文件倒进曲库根，用户看不出是哪一步错了。
+    #[test]
+    fn pick_dest_accepts_subdirectory() {
+        let roots = vec!["D:\\Music".to_string()];
+        assert_eq!(
+            pick_dest(Some("D:\\Music\\整理".to_string()), &roots),
+            Some("D:\\Music\\整理".to_string())
+        );
+        // 等于根也合法
+        assert_eq!(
+            pick_dest(Some("D:\\Music".to_string()), &roots),
+            Some("D:\\Music".to_string())
+        );
+    }
+
+    /// 曲库外的落点不算数 → 回退第一个根。
+    /// 假兄弟（`D:\Music2`）不能因为字符串前缀像就被当成子目录。
+    #[test]
+    fn pick_dest_falls_back_when_outside() {
+        let roots = vec!["D:\\Music".to_string()];
+        assert_eq!(
+            pick_dest(Some("E:\\Other".to_string()), &roots),
+            Some("D:\\Music".to_string())
+        );
+        assert_eq!(
+            pick_dest(Some("D:\\Music2".to_string()), &roots),
+            Some("D:\\Music".to_string()),
+            "D:\\Music2 是 D:\\Music 的假兄弟，不是子目录"
+        );
+        // 未设置 → 回退第一个根
+        assert_eq!(pick_dest(None, &roots), Some("D:\\Music".to_string()));
+        // 没有根 → None（没有可落的地方）
+        assert_eq!(pick_dest(Some("D:\\Music".to_string()), &[]), None);
     }
 
     #[test]

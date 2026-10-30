@@ -567,15 +567,139 @@ export class MockBackend {
   }
 
   /**
-   * 导入预览 / 同步的事件流演练（批 D 把 mock 的 beets 状态改成"存在"之后
-   * 才需要）：不演这两条的话，预览里点「选择文件夹」或「从 beets 同步」会让
-   * 会话停在 previewing/syncing 永不解锁——假数据也要能自圆其说。
+   * 应用导入决策的事件流演练。
+   *
+   * 必须发 `applied` + `applyDone`：会话 store 只在 `applyDone` 里收尾（归 idle、
+   * 写汇总、记排除表）。不演这两条，整理页点完「应用」会永远停在"处理中"，
+   * 按钮再也解不了锁——假数据自圆其说的最低要求。
+   */
+  async beetsApply(decisions: Array<{ album: string; action: string; paths?: string[] }>): Promise<{
+    started: boolean;
+  }> {
+    const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:import', e);
+    const touched = decisions.filter((d) => d.action !== 'skip');
+    const total = touched.length;
+    let applied = 0;
+    let moved = 0;
+
+    for (let i = 0; i < total; i += 1) {
+      const d = touched[i];
+      emit({ type: 'progress', session: 'imp_01', stage: 'writing', current: i + 1, total, path: null });
+      await new Promise((r) => setTimeout(r, 80));
+      const willMove = d.action === 'apply_move' || d.action === 'apply_copy';
+      if (willMove) moved += 1;
+      applied += 1;
+      emit({
+        type: 'applied',
+        session: 'imp_01',
+        albumId: d.album,
+        written: (d.paths ?? []).length || 1,
+        moved: willMove,
+        failed: [],
+      });
+    }
+
+    emit({
+      type: 'applyDone',
+      session: 'imp_01',
+      applied,
+      skipped: decisions.length - touched.length,
+      failed: 0,
+      moved,
+    });
+    emit({ type: 'sessionEnd' });
+    return { started: true };
+  }
+
+  /**
+   * 导入预览的事件流演练（`beets:import`）。
+   *
+   * 为什么必须**发出专辑**而不是只发 done(0)：整理页的整块 UI（专辑卡、候选
+   * 下拉、逐字段 diff、应用按钮）只在收到 album 事件后才会渲染。以前这条回
+   * `albums: 0`，预览里那一页永远空白，改版式时只能靠想象——等于没有预览。
+   *
+   * 形状与 `beets-tool/src/aiya_beets/cmds/importer.py` 的 candidate_payload
+   * 逐字对齐（album / mapping / evidence），字段少一个，真机就会和预览不一样。
    */
   async beetsPreview(): Promise<{ started: boolean }> {
     const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:import', e);
-    emit({ type: 'progress', session: 'imp_01', stage: 'scan', current: 0, total: 0, path: null });
+    const dir = 'D:/MUSIC_Player/inbox';
+
+    emit({ type: 'progress', session: 'imp_01', stage: 'scan', current: 0, total: 2, path: null });
     await new Promise((r) => setTimeout(r, 120));
-    emit({ type: 'done', session: 'imp_01', albums: 0 });
+
+    const albums = [
+      {
+        id: 'alb_000',
+        paths: [`${dir}/Sample Album/01 - Intro.wav`, `${dir}/Sample Album/02 - Theme.wav`],
+        recommendation: 'strong',
+        current: {
+          album: 'Sample Album',
+          artist: 'Demo Artist',
+          tracks: [
+            { title: '01 - Intro', path: `${dir}/Sample Album/01 - Intro.wav`, artist: 'Demo Artist', album: 'Sample Album' },
+            { title: '02 - Theme', path: `${dir}/Sample Album/02 - Theme.wav`, artist: 'Demo Artist', album: 'Sample Album' },
+          ],
+        },
+        candidates: [
+          {
+            id: 'cand_000_00',
+            confidence: 0.97,
+            fromScratch: false,
+            extraItems: 0,
+            extraTracks: 0,
+            evidence: 'recordingId',
+            reasons: ['AcoustID 指纹命中 2/2 首'],
+            album: {
+              id: 'mbid-demo-1',
+              album: 'Sample Album (Deluxe)',
+              artist: 'Demo Artist',
+              albumartist: 'Demo Artist',
+              year: 2019,
+              genre: 'Electronic',
+              dataSource: 'MusicBrainz',
+              tracks: [],
+            },
+            mapping: {
+              [`${dir}/Sample Album/01 - Intro.wav`]: { title: 'Intro', artist: 'Demo Artist', album: 'Sample Album (Deluxe)' },
+              [`${dir}/Sample Album/02 - Theme.wav`]: { title: 'Theme', artist: 'Demo Artist', album: 'Sample Album (Deluxe)' },
+            },
+          },
+        ],
+      },
+      {
+        id: 'alb_001',
+        paths: [`${dir}/Loose Track.wav`],
+        recommendation: 'low',
+        current: { album: '', artist: '', tracks: [{ title: 'Loose Track', path: `${dir}/Loose Track.wav` }] },
+        candidates: [
+          {
+            id: 'cand_001_00',
+            confidence: 0.41,
+            fromScratch: false,
+            extraItems: 1,
+            extraTracks: 1,
+            evidence: 'similarity',
+            reasons: ['仅标题相似，没有指纹或时长印证'],
+            album: {
+              id: 'mbid-demo-2',
+              album: 'Unknown Collection',
+              artist: 'Someone',
+              year: null,
+              genre: null,
+              dataSource: 'MusicBrainz',
+            },
+            mapping: { [`${dir}/Loose Track.wav`]: { title: 'Loose Track', artist: 'Someone' } },
+          },
+        ],
+      },
+    ];
+
+    for (const album of albums) {
+      emit({ type: 'album', session: 'imp_01', album });
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    emit({ type: 'done', session: 'imp_01', albums: albums.length });
     return { started: true };
   }
 
@@ -1046,10 +1170,12 @@ export class MockBackend {
     return { removed: 0 };
   }
 
-  /* ---------------- beets 配置（docs/40 十三轮）：inbox / 输出根 / 排除表 ----------------
-   * 与真后端同语义的校验：inbox 不得与任何曲库目录相同或在内部（copy 留
-   * 原件会重复入库）；输出根必须在曲库目录里。mock 曲库根固定
-   * D:/MUSIC_Player/test-music，e2e 用别的目录即可绕开校验。 */
+  /* ---------------- beets 配置（docs/49 §4）：inbox / 落点 / 排除表 ----------------
+   * 与真后端同语义的校验：
+   * - inbox 与任何曲库目录**任一方向**重叠都拒（在里面 → copy 的原件被扫；
+   *   是父目录 → 预览把整个曲库再导一遍）；
+   * - 落点必须在曲库目录**之内**（可以是子目录，不必相等）。
+   * mock 曲库根固定 D:/MUSIC_Player/test-music，e2e 用别的目录即可绕开校验。 */
 
   private beetsInbox: string | null = null;
   private beetsTarget: string | null = null;
@@ -1060,13 +1186,27 @@ export class MockBackend {
     return p.trim().replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase();
   }
 
+  /** 重叠：相等 / a 在 b 里 / b 在 a 里（与 Rust paths_overlap 同语义） */
+  private static overlaps(a: string, b: string): boolean {
+    const ca = MockBackend.normPath(a);
+    const cb = MockBackend.normPath(b);
+    if (!ca || !cb) return false;
+    return ca === cb || ca.startsWith(`${cb}\\`) || cb.startsWith(`${ca}\\`);
+  }
+
+  /** 在内或相等（含分隔符边界，防 D:\Music2 冒充 D:\Music 的子目录） */
+  private static within(a: string, b: string): boolean {
+    const ca = MockBackend.normPath(a);
+    const cb = MockBackend.normPath(b);
+    if (!ca || !cb) return false;
+    return ca === cb || ca.startsWith(`${cb}\\`);
+  }
+
   beetsConfigGet(): BeetsConfig {
     const roots = this.scanRoots;
     const target = this.beetsTarget;
     const effective =
-      target && roots.some((r) => MockBackend.normPath(r) === MockBackend.normPath(target))
-        ? target
-        : (roots[0] ?? null);
+      target && roots.some((r) => MockBackend.within(target, r)) ? target : (roots[0] ?? null);
     return {
       inbox: this.beetsInbox,
       targetRoot: target,
@@ -1078,13 +1218,8 @@ export class MockBackend {
   beetsSetInbox(path: string | null): BeetsConfig {
     const p = path?.trim();
     if (p) {
-      const c = MockBackend.normPath(p);
-      const conflict = this.scanRoots.some((r) => {
-        const rc = MockBackend.normPath(r);
-        return c === rc || c.startsWith(`${rc}\\`);
-      });
-      if (conflict) {
-        throw new Error('待整理目录不能与曲库目录相同或在其内部');
+      if (this.scanRoots.some((r) => MockBackend.overlaps(p, r))) {
+        throw new Error('待整理目录不能与曲库目录重叠（相同、在里面、或是它的上级目录都不行）');
       }
       this.beetsInbox = p;
     } else {
@@ -1096,8 +1231,8 @@ export class MockBackend {
 
   beetsSetTarget(path: string): BeetsConfig {
     const p = path.trim();
-    if (!this.scanRoots.some((r) => MockBackend.normPath(r) === MockBackend.normPath(p))) {
-      throw new Error('整理输出目录必须是曲库目录之一');
+    if (!this.scanRoots.some((r) => MockBackend.within(p, r))) {
+      throw new Error('整理落点必须在曲库目录之内（可以选曲库目录本身或它的子目录）');
     }
     this.beetsTarget = p;
     return this.beetsConfigGet();
@@ -1118,8 +1253,25 @@ export class MockBackend {
     return this.beetsConfigGet();
   }
 
+  /**
+   * 纯目录选择器（`pick_folder`）。浏览器里没有系统对话框，所以回假路径。
+   *
+   * **交替返回**两个目录：待整理目录需要一个曲库之外的，整理落点需要一个在
+   * 曲库之内的——同一个路径不可能同时满足（这正是不该复用二者的原因）。
+   * 交替让"选待整理目录"和"选落点"两条路在预览里都能各走完一次。
+   */
+  private pickSeq = 0;
+
+  pickFolder(): string {
+    // 两个干净路径（不拼 `..`）：展示用，也免得规范化差异让校验结论变得难猜
+    const root = this.scanRoots[0] ?? 'D:/MUSIC_Player/test-music';
+    this.pickSeq += 1;
+    return this.pickSeq % 2 === 1 ? 'D:/MUSIC_Player/inbox' : `${root}/整理`;
+  }
+
   /** 清空整个曲库记录（真后端级联清歌单条目/历史；mock 只清 tracks） */
-  clearLibrary(): RemoveTracks {    const removed = this.tracks.length;
+  clearLibrary(): RemoveTracks {
+    const removed = this.tracks.length;
     this.tracks = [];
     return { removed };
   }
