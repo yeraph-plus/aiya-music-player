@@ -12,11 +12,25 @@ YAML 键名（`library` / `directory` / `plugins`）、单引号转义规则、�
 
 ## 两个刻意的"不"
 
-1. **已存在的 config.yaml 一个字都不动**（仅 `workbench` 家）。用户手改过的配置
-   不能被应用每次启动覆盖；要恢复默认就删掉这个文件。
+1. **已存在的 config.yaml 里，除了 `directory` 那一行，一个字都不动**（仅 `workbench`
+   家）。用户手改过的配置不能被应用每次启动覆盖；要恢复默认就删掉这个文件。
 2. **没有扫描根时省略 directory 行**（仅 `workbench` 家）。瞎猜一个目录比不写更糟
    ——猜错等于把用户的文件 move 到他没预期的地方（`config['directory']` 恒有内置
    默认 `~/Music`，所以"不写"和"写默认"是两件事）。
+
+## 为什么 `directory` 是例外（2026-10-30 真机事故）
+
+它**不是用户偏好，是应用事实**：曲库根（`AIYA_BEETS_SCAN_ROOT`）与整理落点
+（`AIYA_BEETS_DEST`）由播放器决定，用户没有编辑入口。
+
+原实现把它也归进"写一次就不再碰"，于是：用户第一次进设置页时还没有曲库目录
+→ 生成 config 时省略 `directory` → **此后永远不补**。结果 `beets move/copy`
+用内置默认 `~/Music`，整理出来的文件全落到 `C:/Users/<me>/Music/Non-Album/…`，
+而界面上明明写着落点是 `D:/Music/整理`。实测撞到：两首歌被 copy 到
+`~/Music/Non-Album/`，落点目录是空的。
+
+所以 `directory` 单独走 [`_sync_directory`]：只改这一行（没有就插在 `library`
+之后），其余行逐字节保留。这也是 docs/49 §7.1「落点外科式修改」那条测试。
 
 ## 索引家为什么反过来（docs/45 §6.1）
 
@@ -52,6 +66,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -246,6 +261,34 @@ def _render_workbench(home: Path, root: str | None, plugins: list[str] | None) -
         lines.append(f"directory: {yaml_path(root)}")
     lines.append("plugins: " + " ".join(names))
     return "\n".join(lines) + "\n"
+
+
+# `directory:` 行（含行尾），用来做外科式替换。故意只认行首：被注释掉的
+# `# directory:` 不该被当成"已经有这一行"。
+_DIRECTORY_LINE = re.compile(r"^directory:[^\n]*$", re.MULTILINE)
+
+
+def _sync_directory(text: str, root: str) -> str:
+    """把 `directory` 行改成 `root`，**其余行逐字节保留**。
+
+    为什么不整份重渲染：workbench 是用户的家，`plugins`、`path_formats`、
+    他自己加的任何行都算他的；整份重写等于每次启动回滚一次他的配置。
+
+    但 `directory` 是例外——它是应用事实（曲库根 / 整理落点），而且必须跟着变，
+    否则第一次没配目录时省掉的那一行永远补不回来，`move/copy` 就落到 beets
+    内置默认的 `~/Music`（真机事故，见模块头）。
+    """
+    want = f"directory: {yaml_path(root)}"
+    if _DIRECTORY_LINE.search(text):
+        # 用函数替换而不是字符串：路径里的反斜杠会被 re.sub 当转义序列吃掉
+        return _DIRECTORY_LINE.sub(lambda _m: want, text, count=1)
+    # 没有就插在 library 行之后：beets 的键顺序无所谓，但人读起来这两行挨着最自然
+    lines = text.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.startswith("library:"):
+            lines.insert(i + 1, want + "\n")
+            return "".join(lines)
+    return want + "\n" + text
 
 
 def _render_index(home: Path, plugins: list[str] | None, root: str | None) -> str:
@@ -487,5 +530,17 @@ def ensure_config(home: Path | None = None, prof: str | None = None) -> Path:
         return path
 
     if not path.is_file():
-        path.write_text(render_config(base, dest_root() or scan_root()), encoding="utf-8", newline="\n")
+        path.write_text(
+            render_config(base, dest_root() or scan_root()), encoding="utf-8", newline="\n"
+        )
+    else:
+        # 已存在 → 只同步 `directory` 一行，其余逐字节保留。
+        # 为什么要同步：第一次生成时可能还没有曲库目录（那行被省略），
+        # 此后用户配上了落点，若永不补，move/copy 会落进 beets 默认的 ~/Music。
+        root = dest_root() or scan_root()
+        if root:
+            text = path.read_text(encoding="utf-8")
+            want = _sync_directory(text, root)
+            if want != text:
+                path.write_text(want, encoding="utf-8", newline="\n")
     return path

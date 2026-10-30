@@ -298,6 +298,62 @@ try:
     assert payload["error"]["code"] == "E_CONFIG", payload
     assert "BEETSDIR" in payload["error"]["beets_message"], payload
     print("[8] BEETSDIR 冲突 fail-fast OK")
+
+    # ---- 9. workbench 的 directory 外科式同步（docs/49 §7.1）----
+    #
+    # 守的是一个真机事故：第一次生成 config 时还没有曲库目录，`directory` 行
+    # 被省略；此后永远不补 → beets 的 move/copy 用内置默认 ~/Music，
+    # 整理出来的文件落到 C:\Users\<me>\Music\Non-Album\，而界面写着 D:\Music\整理。
+    #
+    # 同时守住"用户的家不能被覆盖"：其余行必须**逐字节**保留。
+    USER_WB = (
+        "# 我自己的注释，不许动\n"
+        "library: '/somewhere/library.db'\n"
+        "plugins: replaygain lyrics myplugin\n"
+        "path_formats:\n"
+        "    default: '$artist/$title'\n"
+    )
+    wb_home = Path(WORK) / "wb-sync"
+    wb_home.mkdir(parents=True, exist_ok=True)
+    wb_cfg = wb_home / "config.yaml"
+    wb_cfg.write_text(USER_WB, encoding="utf-8", newline="\n")
+
+    saved = {k: os.environ.get(k) for k in ("AIYA_BEETS_HOME", "AIYA_BEETS_PROFILE",
+                                            "AIYA_BEETS_DEST", "AIYA_BEETS_SCAN_ROOT")}
+    try:
+        os.environ["AIYA_BEETS_HOME"] = str(wb_home)
+        os.environ["AIYA_BEETS_PROFILE"] = "workbench"
+        os.environ["AIYA_BEETS_SCAN_ROOT"] = "D:/Music"
+        os.environ["AIYA_BEETS_DEST"] = "D:/Music/整理"
+        cfg.ensure_config(wb_home, "workbench")
+        after = wb_cfg.read_text(encoding="utf-8")
+
+        assert "directory: 'D:/Music/整理'" in after, after
+        # 外科式：去掉新插的那一行，剩余必须与用户原文逐字节相同
+        rest = "".join(
+            ln for ln in after.splitlines(keepends=True)
+            if not ln.startswith("directory:")
+        )
+        assert rest == USER_WB, "除 directory 外必须逐字节保留：\n%r\n%r" % (USER_WB, rest)
+
+        # 换落点 → 只改那一行，其他照旧
+        os.environ["AIYA_BEETS_DEST"] = "D:/Music/新整理"
+        cfg.ensure_config(wb_home, "workbench")
+        moved = wb_cfg.read_text(encoding="utf-8")
+        assert "directory: 'D:/Music/新整理'" in moved, moved
+        assert "D:/Music/整理" not in moved, "旧落点必须被替换，不能两行并存"
+        rest2 = "".join(
+            ln for ln in moved.splitlines(keepends=True)
+            if not ln.startswith("directory:")
+        )
+        assert rest2 == USER_WB, "换落点不该动别的行"
+        print("[9] workbench directory 外科式同步 OK")
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 finally:
     shutil.rmtree(WORK, ignore_errors=True)
 

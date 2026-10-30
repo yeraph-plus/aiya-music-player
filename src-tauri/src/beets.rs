@@ -256,16 +256,14 @@ pub fn config_view(app: &tauri::AppHandle, roots: &[String]) -> crate::dto::beet
 }
 
 /// 纯函数版（可测）：配置 + 曲库目录 → 视图。
+///
+/// 落点合法性走 [`pick_dest`]，与 `beets_set_target` 的校验、`tool_env` 的
+/// 下发**同一套判据**。这三处曾经各写一遍，放宽子目录时漏掉其中一处就会
+/// 出现"界面显示 A、实际写到 B"——2026-10-30 真的发生了（`config_view_of`
+/// 还留着严格相等，UI 显示曲库根而 `tool_env` 已经下发子目录）。
 fn config_view_of(s: &Settings, roots: &[String]) -> crate::dto::beets::BeetsConfig {
     let target = trimmed(s.target_root.clone());
-    let effective = target
-        .clone()
-        .filter(|t| {
-            roots
-                .iter()
-                .any(|r| crate::canon_path(r) == crate::canon_path(t))
-        })
-        .or_else(|| roots.first().cloned());
+    let effective = pick_dest(target.clone(), roots);
     crate::dto::beets::BeetsConfig {
         inbox: trimmed(s.inbox_path.clone()),
         target_root: target,
@@ -659,10 +657,11 @@ fn query_sidecar(
     entry: &ToolEntry,
     source: EntrySource,
     timeout: Duration,
-) -> Result<BeetsStatus, String> {
+) -> Result<BeetsStatus, ToolError> {
     let tool = StdioTool::new(launcher_for(app, entry, Profile::Workbench));
     match tool.status(timeout) {
         Ok(report) => Ok(status_from(entry, source, report)),
+        // 工具自己回了 ok:false —— 那是"真的不可用"，带着它给的码
         Err(ToolError::Rejected {
             code,
             stage,
@@ -673,7 +672,43 @@ fn query_sidecar(
             Some(entry),
             Some(source),
         )),
-        Err(e) => Err(e.to_string()),
+        // 其余原样上抛：Busy 与真正的不可达必须由调用方分开处理
+        Err(e) => Err(e),
+    }
+}
+
+/// 会话槽被占时的状态：组件**在**，只是这一刻读不到细节。
+///
+/// 不能复用 [`absent`]：那条会把 `found` 置 false，UI 于是显示「未安装 beets」
+/// 并把用户踹到安装页——而真相是"你刚点的预览/整理还在跑"。
+/// 2026-10-30 真机撞到的就是这个：预览在联网匹配（MusicBrainz 单请求 6 s，
+/// 一张专辑要发很多次），期间页面自己跳去了安装页，看起来像组件凭空没了。
+///
+/// `schema_matched` 保持 false（没拿到报告就谈不上契约匹配），UI 因此会禁用
+/// 写操作——这正合适：槽被占时本来也发不出写命令。
+fn busy_status(entry: &ToolEntry, source: EntrySource) -> BeetsStatus {
+    BeetsStatus {
+        found: true,
+        interpreter: Some(entry.program.clone()),
+        script_path: (!entry.args.is_empty()).then(|| entry.args.join(" ")),
+        entry_source: Some(source.as_str().to_string()),
+        protocol_version: None,
+        beets_version: None,
+        python_version: None,
+        python_supported: None,
+        library_path: None,
+        library_exists: None,
+        library_directory: None,
+        plugins: None,
+        plugin_health: None,
+        plugin_summary: None,
+        config_dir: None,
+        data_home: None,
+        schema_matched: false,
+        library_lock: Some("held".into()),
+        library_lock_holder: Some("本应用正在执行 beets 任务".into()),
+        error_code: Some("E_BEETS_BUSY".into()),
+        error_message: Some("组件正在执行其它任务（完成后再看状态）".into()),
     }
 }
 
@@ -689,7 +724,15 @@ pub fn probe(app: &tauri::AppHandle) -> BeetsStatus {
     };
     match query_sidecar(app, &entry, source, Duration::from_secs(10)) {
         Ok(status) => status,
-        Err(e) => absent("E_BEETS_UNREACHABLE", Some(e), Some(&entry), Some(source)),
+        // 会话槽被占：组件在，只是这一刻问不到明细。**不能**当成不可达，
+        // 否则"正在跑整理"会被 UI 读成"beets 没装"。
+        Err(ToolError::Busy) => busy_status(&entry, source),
+        Err(e) => absent(
+            "E_BEETS_UNREACHABLE",
+            Some(e.to_string()),
+            Some(&entry),
+            Some(source),
+        ),
     }
 }
 
@@ -1447,6 +1490,10 @@ pub fn start_apply(
             //
             // 传 `dest`（落点）而不是整根：整根 96 批 ≈ 82 s，全是进程启动开销；
             // 落点通常 1 批 ≈ 1 s。详见 `start_index_import` 的实测表。
+            tracing::info!(
+                dest = dest.as_deref().unwrap_or("-"),
+                "整理完成：应用曲库交给 refresh(action)，索引家按落点补扫"
+            );
             if let Err(e) = start_index_import(exit_app.clone(), dest) {
                 // 补索引失败**不影响整理结果**（文件已经搬好了），所以只记日志。
                 // 用户仍可手动「重建索引」——那是这条路的兜底，不是主路径。
@@ -2004,6 +2051,27 @@ mod tests {
         );
     }
 
+    /// 子目录落点必须**显示成生效值**，否则界面说"落到曲库根"、实际写到子目录。
+    ///
+    /// 2026-10-30 的真实事故：`beets_set_target` 放宽到子目录、`roots_for_tools`
+    /// 也改了，但 `config_view_of` 还留着严格相等 —— UI 显示 `D:\CkMsr\Music`，
+    /// 而工具拿到的 `AIYA_BEETS_DEST` 是 `D:\CkMsr\Music\_整理测试`。
+    #[test]
+    fn config_view_shows_subdirectory_target() {
+        let roots = vec!["D:/Music".to_string()];
+        let cfg = Settings {
+            target_root: Some("D:/Music/整理".into()),
+            ..Settings::default()
+        };
+        let v = config_view_of(&cfg, &roots);
+        assert_eq!(v.target_root.as_deref(), Some("D:/Music/整理"));
+        assert_eq!(
+            v.effective_target.as_deref(),
+            Some("D:/Music/整理"),
+            "子目录落点必须原样显示，不能回退成曲库根"
+        );
+    }
+
     /* ---------------- 安装轨道（docs/33 §6.2） ---------------- */
 
     /// 造一个最小 zip（内存里拼，不落盘）。
@@ -2212,6 +2280,26 @@ mod tests {
         assert!(
             st.beets_version.is_none() && st.plugin_health.is_none() && st.library_path.is_none()
         );
+    }
+
+    /// 忙碌（会话槽被占）**不是**不可用：`found` 必须留 true。
+    ///
+    /// 守的是一个真机 bug（2026-10-30）：预览在联网匹配时，`beets_status`
+    /// 撞上会话槽返回 Busy，`probe` 把它统一翻成 `E_BEETS_UNREACHABLE`，
+    /// 于是 `found=false` → 整理库页自行跳到"未安装"的安装页。用户看到的
+    /// 是"组件凭空消失"，实际只是他自己刚点的预览还在跑。
+    #[test]
+    fn busy_status_stays_found() {
+        let entry = ToolEntry {
+            program: "C:/x/aiya-beets.exe".into(),
+            args: vec!["serve".into()],
+        };
+        let st = busy_status(&entry, EntrySource::Dev);
+        assert!(st.found, "忙碌时必须仍报 found，否则 UI 会当成未安装");
+        assert_eq!(st.error_code.as_deref(), Some("E_BEETS_BUSY"));
+        assert_eq!(st.interpreter.as_deref(), Some("C:/x/aiya-beets.exe"));
+        // 没拿到报告就谈不上契约匹配，写操作应当被 UI 拦住
+        assert!(!st.schema_matched);
     }
 
     /// 协议版本不符 → **工具存在但不可用**，且必须说清升哪一边。
