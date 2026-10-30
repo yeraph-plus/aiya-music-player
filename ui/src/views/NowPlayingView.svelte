@@ -53,7 +53,11 @@
        播放条的歌曲区是同一个开关（封面角标箭头朝下 = 已展开，再点收起），
        Esc 也走同一条历史栈（lib/keyboard.ts）。三个入口语义一致，
        页内再放一个圆形按钮就是第四个重复动作。 -->
-  <NowPlayingSpectrum source={spectrumSource} style={spectrumStyle} />
+  <NowPlayingSpectrum
+    source={spectrumSource}
+    style={spectrumStyle}
+    paused={player.state?.status !== 'playing'}
+  />
 
   <div class="np-info">
     {#if current?.artworkId}

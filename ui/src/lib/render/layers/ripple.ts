@@ -40,6 +40,7 @@ import {
   ShaderMaterial,
 } from 'three';
 import { onThemeChange, themeColor } from '../../accent';
+import type { RidgeGlow } from '../../settings';
 import type { SpectrumSource } from '../../spectrum-source';
 import type { Frame, GlLayer, GlStage } from '../context';
 import { RidgeCurve } from '../ridge-curve';
@@ -70,6 +71,28 @@ const LAYERS = 22;
  */
 const RING_WINDOW = 0.12;
 
+/**
+ * 光效档位（**与山形共用同一份设置** `ridgeGlow`，docs/46 §3.2）。
+ *
+ * 两层的几何不同（山形是实形 + 脊线，波纹是一排线），但档位的**语义必须一致**：
+ * 同一个"锐光"在山形上是清晰脊线、在波纹上却毫无变化的话，用户会当成开关坏了。
+ * 所以三档的判据是同一套：光的多少 + 边缘的锐度。
+ *
+ * - `soft` 柔雾：光晕**完全归零**（与山形 soft 的三层光归零对齐），线画粗、
+ *   略压暗 → 只有形状，没有光；
+ * - `balanced` 平衡：一层近场光晕（半径 9px），线宽原样；
+ * - `neon` 锐光：线收细（×0.72）提亮（×1.18），光晕更强更聚（半径 6.4px）
+ *   → 每条线的"线心"能单独看出来。
+ *
+ * 只改 uniform，不重建材质——切档不会闪黑帧（与 `RidgeLayer.setGlow` 同一约定）。
+ */
+const GLOW_PRESETS: Record<RidgeGlow, { line: number; width: number; halo: number; haloK: number }> =
+  {
+    soft: { line: 0.92, width: 1.35, halo: 0, haloK: 9.0 },
+    balanced: { line: 1.0, width: 1.0, halo: 0.18, haloK: 9.0 },
+    neon: { line: 1.18, width: 0.72, halo: 0.34, haloK: 6.4 },
+  };
+
 const VERT = /* glsl */ `
   varying vec2 vUv;
   void main() {
@@ -82,12 +105,16 @@ const FRAG = /* glsl */ `
   varying vec2 vUv;
   uniform sampler2D uRamp;   // 256×1：横向高度曲线（0–1），S 方向已环形化
   uniform vec3 uColor;
-  uniform float uTime;       // 秒：层间相位随它漂移
+  uniform float uTime;       // 秒：层间相位随它漂移（暂停时冻结）
   uniform float uEnergy;     // 整体能量（0–1）：安静段把浪压平
   uniform float uHeightPx;   // 画布高度（CSS px）：uv 距离 → 像素距离
   uniform float uHorizon;    // 地平线的 uv.y
   uniform float uSpan;       // 水面占的 uv 高度
   uniform float uGain;       // 整层总增益（主题相关的观感微调）
+  uniform float uLine;       // 线亮度系数（光效档位）
+  uniform float uWidth;      // 线宽系数（>1 更软、<1 更锐）
+  uniform float uHalo;       // 近层光晕强度
+  uniform float uHaloK;      // 光晕半径（px）：越大收得越快
 
   vec3 lin2srgb(vec3 c) {
     vec3 lo = c * 12.92;
@@ -136,15 +163,15 @@ const FRAG = /* glsl */ `
       float h = texture2D(uRamp, vec2(vUv.x + off, 0.5)).r;
 
       float d = (vUv.y - (base + h * amp)) * uHeightPx;
-      float w = 0.8 + 1.2 * k;               // 线宽 px：近处更粗
+      float w = (0.8 + 1.2 * k) * uWidth;    // 线宽 px：近处更粗；档位再乘一次
       float line = exp(-(d * d) / (w * w));  // 高斯截面，天然抗锯齿
       // 光晕只给近层：远层是 1px 细线，光晕在那儿既看不见又白花成本
-      float halo = exp(-abs(d) / 9.0) * 0.18 * step(0.55, k);
+      float halo = exp(-abs(d) / uHaloK) * uHalo * step(0.55, k);
 
       // 远层近乎不可见（0.05），近层才真正"画出来"——这是纵深的本体，
       // 均匀 alpha 会让所有线一样重，读成格栅。上限压到 0.35 是因为背景
       // 后面有表格文字：线一旦比正文抢眼，整个背景就变成"条纹贴纸"。
-      acc += line * (0.05 + 0.30 * pow(k, 1.4)) + halo;
+      acc += line * (0.05 + 0.30 * pow(k, 1.4)) * uLine + halo;
     }
 
     float a =
@@ -185,8 +212,25 @@ export class RippleLayer implements GlLayer {
    * ——但窗本身只依赖下标，所以窗值预计算一次（`window`），每帧只做一次乘加。
    */
   private readonly window = new Float32Array(POINTS);
+  /** 暂停时喂给曲线的一帧全 0：让曲线自己衰减回静息值，不留残峰 */
+  private readonly zero = new Float32Array(BANDS);
+  /** 暂停态：冻结时间 + 收平振幅 */
+  private paused = false;
+  /**
+   * 收平/起振的过渡系数（0–1）。
+   *
+   * 暂停时直接跳 0 会"啪"一下没掉，像渲染挂了；这里用 70ms 时间常数做淡出，
+   * 大约四帧收平——是"淡下去"，但仍然是一次性收干净，不停留旧形状。
+   */
+  private gate = 1;
+  /** 图层自己的时钟：**只在播放时推进**，所以暂停后水面不再漂移 */
+  private clock = 0;
 
-  constructor(private readonly source: SpectrumSource) {
+  constructor(
+    private readonly source: SpectrumSource,
+    /** 初始光效档位；之后由 `setGlow` 驱动（组件用单独 effect，避免换档重建图层） */
+    glow: RidgeGlow = 'balanced',
+  ) {
     this.texture = new DataTexture(this.heights, POINTS, 1, RedFormat, HalfFloatType);
     this.texture.minFilter = LinearFilter;
     this.texture.magFilter = LinearFilter;
@@ -213,6 +257,11 @@ export class RippleLayer implements GlLayer {
         // 总增益：背景是氛围，不能比列表文字更亮。0.7 是"看得到、但截图缩略时
         // 几乎注意不到"的量级（正在播放页的 2D 版是页内主角，不需要这个折让）。
         uGain: { value: 0.72 },
+        // 光效档位的初值；构造函数末尾 `setGlow` 会按传入档位覆盖
+        uLine: { value: 1 },
+        uWidth: { value: 1 },
+        uHalo: { value: 0.18 },
+        uHaloK: { value: 9 },
       },
       transparent: true,
       depthTest: false,
@@ -228,8 +277,31 @@ export class RippleLayer implements GlLayer {
     this.scene.add(mesh);
 
     this.buildWindow();
+    this.setGlow(glow);
     this.syncTheme();
     this.unsubscribeTheme = onThemeChange(() => this.syncTheme());
+  }
+
+  /** 换档位只改 uniform，不重建材质（切档不闪黑帧） */
+  setGlow(glow: RidgeGlow): void {
+    const p = GLOW_PRESETS[glow] ?? GLOW_PRESETS.balanced;
+    const u = this.material.uniforms;
+    u.uLine!.value = p.line;
+    u.uWidth!.value = p.width;
+    u.uHalo!.value = p.halo;
+    u.uHaloK!.value = p.haloK;
+  }
+
+  /**
+   * 播放/暂停。
+   *
+   * 暂停时的期望是"静止 + 收平"，不是"停在上一帧"：
+   * 1. 冻结 `clock` ⇒ 层间平移不再推进，水面不漂；
+   * 2. 喂全 0 + `gate` 淡出 ⇒ 振幅收平，**不保留暂停前的峰谷**。
+   * 只冻时间不收平的话，暂停画面里会留一片凝固的浪；用户明确要的是"拉平"。
+   */
+  setPaused(paused: boolean): void {
+    this.paused = paused;
   }
 
   /** 预计算环形窗：两端为 0（压向静息值），中间为 1（原样） */
@@ -252,10 +324,22 @@ export class RippleLayer implements GlLayer {
   }
 
   draw(stage: GlStage, frame: Frame): void {
-    this.curve.update(this.source.frame(), frame.dt);
+    this.advance(frame.dt);
+    // 暂停时喂全 0：曲线自身的平滑会把残余峰谷衰减掉，配合 gate 收平，
+    // 恢复播放时从 0 重新长起来，而不是"接上暂停前那一帧"
+    this.curve.update(this.paused ? this.zero : this.source.frame(), frame.dt);
     this.upload();
-    this.material.uniforms.uTime!.value = frame.time;
+    this.material.uniforms.uTime!.value = this.clock;
     stage.renderer.render(this.scene, this.camera);
+  }
+
+  /** 推进时钟与收平系数（暂停时时钟不动、gate 趋向 0） */
+  private advance(dt: number): void {
+    if (!this.paused) this.clock += dt;
+    const target = this.paused ? 0 : 1;
+    const k = 1 - Math.exp(-dt / 0.07);
+    this.gate += (target - this.gate) * k;
+    if (Math.abs(this.gate - target) < 0.002) this.gate = target;
   }
 
   /**
@@ -279,10 +363,12 @@ export class RippleLayer implements GlLayer {
       const v = near[i] as number;
       energySum += v;
       const w = win[i] as number;
-      h[i] = DataUtils.toHalfFloat(v * w + rest * (1 - w));
+      // 乘 gate：暂停收平时连振幅一起收，否则线会平在 0.45 的能量下限上
+      h[i] = DataUtils.toHalfFloat((v * w + rest * (1 - w)) * this.gate);
     }
     // 能量按曲线均值归一：均值 0.32 视为"满浪"（与 2D 版同一口径）
-    this.material.uniforms.uEnergy!.value = Math.min(1, energySum / POINTS / 0.32);
+    this.material.uniforms.uEnergy!.value =
+      Math.min(1, energySum / POINTS / 0.32) * this.gate;
     this.texture.needsUpdate = true;
   }
 

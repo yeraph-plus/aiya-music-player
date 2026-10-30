@@ -1,5 +1,6 @@
 <script lang="ts">
   import { themeColor } from '../lib/accent';
+  import { subscribeRender } from '../lib/render/scheduler';
   import type { SpectrumStyle } from '../lib/settings';
   import type { SpectrumSource } from '../lib/spectrum-source';
 
@@ -8,9 +9,14 @@
     source: SpectrumSource | null;
     /** 可视化形态（设置「频谱风格」，docs/26 §3）：切换即时生效，不重建数据订阅 */
     style: SpectrumStyle;
+    /**
+     * 是否暂停。暂停时本页也走"静止 + 收平"（用户 2026-10-30：所有频谱暂停时
+     * 都该拉平，不暂存状态），与背景层同一语义。
+     */
+    paused: boolean;
   }
 
-  let { source, style }: Props = $props();
+  let { source, style, paused }: Props = $props();
 
   /**
    * 正在播放页·居中式可视化（docs/26 §3）。
@@ -42,13 +48,24 @@
    * 维度，DPR 变化（拖到不同缩放比的显示器）也一并跟上。
    */
   let canvas = $state<HTMLCanvasElement | null>(null);
-  let frameId = 0;
 
   const reducedMotion =
     typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   /** 时间平滑后的显示值（48 带） */
   let display: Float32Array | null = null;
+
+  /**
+   * 只在播放时推进的毫秒时钟（驱动波纹横移、环形慢转）。
+   *
+   * 不用 `performance.now()` 的原因是暂停语义：时间一直走的话，暂停画面里
+   * 波纹还在漂、环形还在转——用户要的是"暂停即静止"。
+   */
+  let clock = 0;
+  /** 收平系数：暂停时淡到 0，恢复时淡回 1（约 70ms 时间常数，不是硬切） */
+  let gate = 1;
+  /** 上一帧时间戳（秒），用来把"每帧 0.25"换算成与帧率无关的系数 */
+  let lastAt = 0;
 
   /** 中点二次贝塞尔画一条经过 pts（[x,y] 数组）的开放曲线 */
   function smoothPath(ctx: CanvasRenderingContext2D, pts: Array<[number, number]>): void {
@@ -284,20 +301,27 @@
     cssH = target.clientHeight;
   }
 
-  function draw(): void {
+  /** 由调度器每帧调用一次（`now` 是 rAF 时间戳，毫秒） */
+  function draw(now: number): void {
     const target = canvas;
     if (!target || !source) return;
     const ctx = target.getContext('2d');
     if (!ctx) return;
 
-    // 尺寸没量到（首帧 / 页面切换中）时继续排队，别在这一帧把 canvas 清零
+    // 尺寸没量到（首帧 / 页面切换中）：本帧跳过，别把 canvas 清零；下一帧还会来
     if (cssW === 0 || cssH === 0) {
       measure(target);
-      if (cssW === 0 || cssH === 0) {
-        frameId = requestAnimationFrame(draw);
-        return;
-      }
+      if (cssW === 0 || cssH === 0) return;
     }
+
+    // 帧率无关的推进：dt 由调度器给的时间戳算，144Hz 上不会跟得太急、
+    // 30fps 上也不会拖尾（原来的"每帧 ×0.25"是逐帧常数）
+    const dt = lastAt === 0 ? 1 / 60 : Math.min(0.1, (now - lastAt) / 1000);
+    lastAt = now;
+    if (!paused) clock += dt * 1000;
+    const targetGate = paused ? 0 : 1;
+    gate += (targetGate - gate) * (1 - Math.exp(-dt / 0.07));
+    if (Math.abs(gate - targetGate) < 0.002) gate = targetGate;
 
     // 两个维度**各自**比：旧代码只比 width，窗口只在纵向变大时 height 属性
     // 不更新，浏览器把旧位图纵向拉伸（详见组件头部注释）
@@ -314,21 +338,25 @@
     const bands = source.frame();
     const n = bands.length;
     if (!display || display.length !== n) display = new Float32Array(n);
+    // 时间平滑：0.25/帧 @60fps 换算成 dt 形式，帧率变了手感不变。
+    // 暂停时目标值取 0——不是"停在上一帧"，而是收平（恢复播放从 0 长起来）
+    const smooth = 1 - Math.pow(1 - 0.25, dt * 60);
     for (let i = 0; i < n; i += 1) {
-      display[i] = display[i] + ((bands[i] as number) - display[i]) * 0.25;
+      const v = paused ? 0 : (bands[i] as number);
+      display[i] = display[i] + (v - display[i]) * smooth;
     }
 
     // 主题色取缓存值：每帧 getComputedStyle 会强制一次样式解析（见 accent.ts）
     const accent = themeColor('--accent');
-    const vals = Array.from(display, (v) => Math.max(0, v));
-    const now = performance.now();
+    // gate 再压一道：暂停时形状要"拉平"，而不是留一条凝固的曲线
+    const vals = Array.from(display, (v) => Math.max(0, v) * gate);
 
     if (style === 'radial') {
       // 环形直接用 48 带（绕圆一周，首尾相接天然对称，无需镜像）
-      drawRadial(ctx, vals, cssW, cssH, accent, now);
+      drawRadial(ctx, vals, cssW, cssH, accent, clock);
     } else if (style === 'ripple') {
       // 中轴波纹：一条横贯页面中线的曲线（见 drawRipple）
-      drawRipple(ctx, vals, cssW, cssH, accent, now);
+      drawRipple(ctx, vals, cssW, cssH, accent, clock);
     } else {
       // 镜像带序列：左半倒序 + 右半正序（中心带不重复）→ 水平居中对称
       const mirrored: number[] = [];
@@ -336,12 +364,13 @@
       for (let i = 1; i < n; i += 1) mirrored.push(vals[i] as number);
       drawMirror(ctx, mirrored, cssW, cssH, accent);
     }
-
-    frameId = requestAnimationFrame(draw);
   }
 
-  // 订阅与绘制循环同生命周期；source 由父级按设置派生（null = 不画）。
-  // style 故意不进依赖：形态切换只换画笔，不重启订阅（tap 是引用计数的全局开关）。
+  // 绘制挂全应用单例调度器（docs/46 §7 第 2 条：全应用一个 rAF）。
+  // 原来这里自排 `requestAnimationFrame` 并自我续帧，于是"背景层 + 页内"
+  // 同时存在两个循环；统一到调度器后，后台/隐藏暂停也只由一处判断。
+  // style / paused 故意不进依赖：形态或播放态变化只影响画笔，不重启订阅
+  // （tap 是引用计数的全局开关，重订阅会让频谱断一帧）。
   $effect(() => {
     if (!source || reducedMotion) return;
     // canvas 是 $state（bind:this），首帧可能还没绑定——赋值后 effect 会重跑
@@ -353,10 +382,10 @@
     const ro = new ResizeObserver(() => measure(target));
     ro.observe(target);
     source.start();
-    frameId = requestAnimationFrame(draw);
+    const stop = subscribeRender(draw);
     return () => {
       ro.disconnect();
-      cancelAnimationFrame(frameId);
+      stop();
       source.stop();
     };
   });

@@ -141,6 +141,14 @@ export class RidgeLayer implements GlLayer {
   private readonly heights = new Uint16Array(POINTS * 2);
   private readonly curve = new RidgeCurve({ bandCount: BANDS, points: POINTS });
   private readonly unsubscribeTheme: () => void;
+  /** 暂停时喂给曲线的一帧全 0：让曲线自己衰减回底边，不留残峰 */
+  private readonly zero = new Float32Array(BANDS);
+  private paused = false;
+  /**
+   * 收平系数。暂停时 70ms 淡到 0（约四帧），不是硬切——硬切看着像渲染挂了。
+   * 停播时山形要"落回底边"，而不是凝固在暂停前那一帧的高度上。
+   */
+  private gate = 1;
 
   constructor(
     private readonly source: SpectrumSource,
@@ -212,9 +220,24 @@ export class RidgeLayer implements GlLayer {
   }
 
   draw(stage: GlStage, frame: Frame): void {
-    this.curve.update(this.source.frame(), frame.dt);
+    // 收平系数（暂停 → 0）
+    const target = this.paused ? 0 : 1;
+    const k = 1 - Math.exp(-frame.dt / 0.07);
+    this.gate += (target - this.gate) * k;
+    if (Math.abs(this.gate - target) < 0.002) this.gate = target;
+
+    // 暂停时喂全 0：曲线衰减到底边，恢复播放时从底边重新长起来
+    this.curve.update(this.paused ? this.zero : this.source.frame(), frame.dt);
     this.upload();
     stage.renderer.render(this.scene, this.camera);
+  }
+
+  /**
+   * 播放/暂停：暂停时山形要落回底边（"拉平"），不能凝固在上一帧的起伏上。
+   * 与 `RippleLayer.setPaused` 同一语义。
+   */
+  setPaused(paused: boolean): void {
+    this.paused = paused;
   }
 
   /**
@@ -230,9 +253,10 @@ export class RidgeLayer implements GlLayer {
   private upload(): void {
     const { near, far } = this.curve;
     const h = this.heights;
+    const gate = this.gate;
     for (let i = 0; i < POINTS; i += 1) {
-      h[i] = DataUtils.toHalfFloat(near[i] as number);
-      h[POINTS + i] = DataUtils.toHalfFloat(far[i] as number);
+      h[i] = DataUtils.toHalfFloat((near[i] as number) * gate);
+      h[POINTS + i] = DataUtils.toHalfFloat((far[i] as number) * gate);
     }
     this.texture.needsUpdate = true;
   }

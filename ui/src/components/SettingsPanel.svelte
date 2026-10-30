@@ -106,13 +106,6 @@
   const gl = $derived(settings.glEffects);
 
   /**
-   * 光晕档位只对**山形**有效（波纹是线阵，没有"脊线"可发光）。
-   * 换成波纹时把这一项置灰而不是藏起来：它是背景观感的一部分，
-   * 用户切回山形就要能立刻找到、恢复原状。
-   */
-  const ridgeShape = $derived(settings.bgSpectrumStyle === 'ridge');
-
-  /**
    * 本机 3D 能力（探测结果有缓存，打开设置页只探一次）。
    *
    * 放在这里的理由：`glEffects` 是个用户看不懂后果的开关——"我的机器到底行不行"
@@ -332,24 +325,20 @@
           />
         </div>
 
-        <div class="setting-row" style:opacity={gl && ridgeShape ? 1 : 0.5}>
+        <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
           <div>
             <div class="setting-title">背景频谱光效</div>
             <div class="setting-hint">
-              {#if !gl}
-                已随「全局 3D 效果」关闭
-              {:else if !ridgeShape}
-                只有「山形」形态有脊线可发光，波纹形态不使用这一档
-              {:else}
-                背景山脊的发光强度：柔雾只看得到起伏，锐光有清晰的脊线与边缘光
-              {/if}
+              {gl
+                ? '山形与波纹共用这一档：柔雾只有形状没有光，平衡在边缘带一点光，锐光把脊线/线心描出来'
+                : '已随「全局 3D 效果」关闭'}
             </div>
           </div>
           <SegmentedControl
             label="背景频谱光效"
             value={settings.ridgeGlow}
             options={RIDGE_GLOWS}
-            disabled={!gl || !ridgeShape}
+            disabled={!gl}
             onchange={(value) => apply({ ridgeGlow: value as RidgeGlow })}
           />
         </div>

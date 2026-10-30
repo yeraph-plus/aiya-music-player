@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { themeColor } from '../lib/accent';
   import { detectCapability } from '../lib/render/capability';
   import { createGlStage, type GlStage } from '../lib/render/context';
@@ -16,11 +17,17 @@
     enabled: boolean;
     /** 背景频谱形态（山形 / 波纹，见 `BgSpectrumStyle`） */
     shape: BgSpectrumStyle;
-    /** 山形光晕档位（docs/46 §3.2；只对 `shape='ridge'` 有效） */
+    /** 背景频谱光效档位（docs/46 §3.2；山形与波纹**共用**同一档语义） */
     glow: RidgeGlow;
+    /**
+     * 是否处于暂停态。暂停时频谱要**静止并收平**（用户 2026-10-30："所有频谱
+     * 都应该暂停时拉平，不暂存状态"）——不是凝固在上一帧的起伏上。
+     * 流动渐变不受影响：它不是频谱，是常驻的环境光。
+     */
+    paused: boolean;
   }
 
-  let { source, enabled, shape, glow }: Props = $props();
+  let { source, enabled, shape, glow, paused }: Props = $props();
 
   /**
    * 全应用背景（docs/25 §5 T4c app 化；T4h 起背景频谱改山形曲线）。
@@ -119,19 +126,21 @@
   // 没法像光晕档位那样只改 uniform。重建发生在同一帧内（旧层 dispose 后新层
   // `add`），舞台不重建，所以不会有黑帧。
   //
-  // 光晕档位**不进依赖**：它只对山形有效，改档时走下面单独的 effect 调
-  // `setGlow`，避免"调一下光晕把整层重建一次"。
+  // 光效档位**不进依赖**：改档只改 uniform，不重建图层（避免"调一下光效整层重建"）
   $effect(() => {
     const current = stage;
     const src = specGl ? source : null;
     const want = shape;
+    // 初始档位在重建那一刻取一次就够（后续变化走下一条 effect），所以 untrack：
+    // 否则切档会连带触发本 effect、把整层重建一遍
+    const initialGlow = untrack(() => glow);
     if (!current || !src) {
       ridgeLayer = null;
       rippleLayer = null;
       return;
     }
     if (want === 'ripple') {
-      const layer = new RippleLayer(src);
+      const layer = new RippleLayer(src, initialGlow);
       current.add(layer);
       rippleLayer = layer;
       return () => {
@@ -140,7 +149,7 @@
         layer.dispose();
       };
     }
-    const layer = new RidgeLayer(src);
+    const layer = new RidgeLayer(src, initialGlow);
     current.add(layer);
     ridgeLayer = layer;
     return () => {
@@ -150,9 +159,19 @@
     };
   });
 
+  // 光效档位：两种形态共用（波纹按"光的多少 + 边缘锐度"映射到同一语义）
   $effect(() => {
     // 读 `glow` 建立依赖；图层可能还没建（首帧/档 1），null 直接跳过
-    ridgeLayer?.setGlow(glow);
+    const level = glow;
+    ridgeLayer?.setGlow(level);
+    rippleLayer?.setGlow(level);
+  });
+
+  // 暂停：频谱静止 + 收平（不暂存暂停前的起伏）
+  $effect(() => {
+    const isPaused = paused;
+    ridgeLayer?.setPaused(isPaused);
+    rippleLayer?.setPaused(isPaused);
   });
 
   // 数据源订阅与绘制订阅同生命周期：有源就 start（开引擎 tap），无源 stop。
@@ -204,9 +223,14 @@
     const height = target.clientHeight;
     // 尺寸为 0（布局尚未结算/页面切走）：本帧跳过，调度器下一帧还会来
     if (width === 0 || height === 0) return;
-    if (target.width !== Math.round(width * dpr)) {
-      target.width = Math.round(width * dpr);
-      target.height = Math.round(height * dpr);
+    // 宽高**各自**比：只比宽度时，窗口只在纵向变高（最大化/分屏/拖下沿）会让
+    // `height` 属性留在旧值，浏览器把旧位图纵向拉伸——这正是 2026-10-30 在
+    // NowPlayingSpectrum 上修过的那个 bug，2D 兜底路径当时漏了同一处。
+    const bw = Math.round(width * dpr);
+    const bh = Math.round(height * dpr);
+    if (target.width !== bw || target.height !== bh) {
+      target.width = bw;
+      target.height = bh;
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
@@ -235,7 +259,8 @@
     for (let i = 0; i < n; i += 1) {
       // RemoteSpectrumSource.frame() 已经归一化到 0–1（引擎 0–255 → /255），
       // 这里**不能**再除 255——T4h 曾二次归一化把带值压到 ~0.4%，山成贴底平线
-      const v = Math.min(1, Math.max(0, bands[i] as number));
+      // 暂停时目标值取 0：山形在约 90ms 内落回底边，不保留暂停前的起伏
+      const v = paused ? 0 : Math.min(1, Math.max(0, bands[i] as number));
       display[i] = display[i] + (v - display[i]) * 0.3;
       // 轻微伽马压低持续偏热的低频带，山形重心回到中频
       eased[i] = Math.pow(display[i], 1.2);

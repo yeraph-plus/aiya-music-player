@@ -77,6 +77,7 @@
     enabled={bgSpectrumOn}
     shape={ui.settings.bgSpectrumStyle}
     glow={ui.settings.ridgeGlow}
+    paused={playerState?.status !== 'playing'}
   />
 
   <TitleBar />

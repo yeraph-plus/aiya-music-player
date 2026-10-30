@@ -35,8 +35,12 @@ const RIDGE_GLOW_VALUES: ReadonlySet<string> = new Set(RIDGE_GLOWS.map((s) => s.
  * 结果对象，于是用户改任何一个设置，这些死键就跟着 `setSettings` 再写回磁盘一次
  * ——"停写"实际没停，只是从没被读过。实测本机库里的 `app_settings` 至今还带着
  * `spectrumEngine` 与 `accentFromArtwork`（docs/26 说要清、当时漏了），就是这条。
+ *
+ * 2026-10-30 增补两个：`density`（只留一套行高）与 `glass`（从加上那天起就没有
+ * 消费方，壳层也不做玻璃）。它们同样必须在读时剔除——本文件的"写回"路径是
+ * `setSettings(state.snapshot(settings))` 整个对象，留一个死键就永远写回一次。
  */
-const RETIRED_KEYS = ['spectrum', 'spectrumEngine', 'accentFromArtwork'] as const;
+const RETIRED_KEYS = ['spectrum', 'spectrumEngine', 'accentFromArtwork', 'density', 'glass'] as const;
 
 /**
  * 动态 JSON → `AppSettings`：以默认值为底合并 + 旧键迁移。
