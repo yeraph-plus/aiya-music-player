@@ -1,0 +1,61 @@
+# SVM 模型自托管：把 upf.edu 的 beta5 模型归档里打包所需 12 件抽出来，
+# 重打 zip 挂到本仓库固定 release 上——bins 载体从此走 GitHub（快、稳、可钉 sha）。
+#
+# 为什么不直接用 upf.edu 作载体：本机实测 ~17KB/s 且频繁断流；runner 3 秒拉完，
+# 但用户安装时再走一次 upf.edu 就是把慢源转嫁给每一次安装。
+#
+# 12 件清单 = beets-xtractor 配置模板的全集（danceability/gender/genre_rosamerica/
+# mood_acoustic|mood_aggressive|mood_electronic|mood_happy|mood_sad|mood_party|
+# mood_relaxed/voice_instrumental/moods_mirex）。beta5 归档里另有 6 件
+# （genre_dortmund/electronic/tzanetakis、ismir04_rhythm 等）不在模板内，不随包。
+#
+# 幂等：release 已存在则只追加资产（--clobber）。换模型版本时改 VERSION 重跑。
+name: svm models selfhost
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: svm-models-selfhost
+  cancel-in-progress: false
+
+env:
+  VERSION: "v2.1_beta5"
+  UPF: "https://essentia.upf.edu/svm_models/essentia-extractor-svm_models-v2.1_beta5.tar.gz"
+
+jobs:
+  selfhost:
+    name: 抽取 12 件模型并挂到固定 release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 下载、抽取、重打包
+        run: |
+          set -e
+          curl -sL -o m5.tar.gz --retry 3 "$UPF"
+          echo "sha256(tar.gz): $(sha256sum m5.tar.gz)"
+          mkdir m5 && tar -xzf m5.tar.gz -C m5
+          mkdir out
+          for f in danceability gender genre_rosamerica mood_acoustic \
+                   mood_aggressive mood_electronic mood_happy mood_sad \
+                   mood_party mood_relaxed voice_instrumental moods_mirex; do
+            src=$(find m5 -name "$f.history" | head -1)
+            [ -n "$src" ] || { echo "缺模型：$f.history"; exit 1; }
+            cp "$src" "out/$f.history"
+          done
+          cd out
+          zip ../svm-models.zip ./*.history
+          sha256sum svm-models.zip ./*.history
+
+      - name: 挂到固定 release（推新删旧语义：clobber 资产）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "svm-models-$VERSION" 2>/dev/null || \
+            gh release create "svm-models-$VERSION" --prerelease \
+              --title "SVM models $VERSION（beets-xtractor 高层特征，12 件）" \
+              --notes "Essentia Gaia SVM 模型（.history），供播放器随提取器分发与校验。来源：essentia.upf.edu/svm_models（$VERSION 归档重打包）。"
+          gh release upload "svm-models-$VERSION" svm-models.zip --clobber
