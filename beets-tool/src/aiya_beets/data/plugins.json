@@ -253,6 +253,129 @@
       "indexForced": {
         "auto": "no"
       }
+    },
+    {
+      "name": "ftintitle",
+      "title": "feat. 入标题",
+      "note": "导入时把艺人名里的「feat. XXX」挪进标题，艺人字段保持干净",
+      "builtin": true,
+      "packages": [],
+      "imports": [],
+      "exe": [],
+      "writes": false,
+      "network": false,
+      "bundle": false,
+      "indexForced": {
+        "auto": "no"
+      }
+    },
+    {
+      "name": "the",
+      "title": "冠词归一",
+      "note": "导入时把「The Beatles」规范化为「Beatles, The」，排序与查询更稳",
+      "builtin": true,
+      "packages": [],
+      "imports": [],
+      "exe": [],
+      "writes": false,
+      "network": false,
+      "bundle": false
+    },
+    {
+      "name": "zero",
+      "title": "隐私标签剥离",
+      "note": "导入时从文件标签里清掉 comment、encoder 等多余字段（改文件，与 scrub 互补）",
+      "builtin": true,
+      "packages": [],
+      "imports": [],
+      "exe": [],
+      "writes": true,
+      "network": false,
+      "bundle": false
+    },
+    {
+      "name": "unimported",
+      "title": "未入库查找",
+      "note": "找出曲库目录里没登记进 beets 库的文件（只读，维护向）",
+      "builtin": true,
+      "packages": [],
+      "imports": [],
+      "exe": [],
+      "writes": false,
+      "network": false,
+      "bundle": false
+    },
+    {
+      "name": "missing",
+      "title": "缺曲目查找",
+      "note": "对照专辑曲目表找出库里的缺 track（只读，查询型）",
+      "builtin": true,
+      "packages": [],
+      "imports": [],
+      "exe": [],
+      "writes": false,
+      "network": false,
+      "bundle": false
+    },
+    {
+      "name": "importadded",
+      "title": "入库时间保留",
+      "note": "导入时用文件时间戳填 added——迁移/备份的库不丢原始入库时间",
+      "builtin": true,
+      "packages": [],
+      "imports": [],
+      "exe": [],
+      "writes": false,
+      "network": false,
+      "bundle": false
+    },
+    {
+      "name": "discogs",
+      "title": "Discogs 源",
+      "note": "Discogs 元数据源（电子乐强项）；需在 beets config 里配自己的 API token",
+      "builtin": true,
+      "packages": ["discogs-client>=2.3,<3"],
+      "imports": ["discogs_client"],
+      "exe": [],
+      "writes": false,
+      "network": true,
+      "bundle": false
+    },
+    {
+      "name": "beatport",
+      "title": "Beatport 源",
+      "note": "Beatport 元数据源（舞曲/电子）；上游 OAuth 接口历史上不稳，失效可换社区 beets-beatport4",
+      "builtin": true,
+      "packages": ["requests-oauthlib>=1.3,<3"],
+      "imports": ["requests_oauthlib"],
+      "exe": [],
+      "writes": false,
+      "network": true,
+      "bundle": false
+    },
+    {
+      "name": "parentwork",
+      "title": "作品分组",
+      "note": "按 work 分组古典/现场曲目，查询可按作品聚合",
+      "builtin": true,
+      "packages": [],
+      "imports": [],
+      "exe": [],
+      "writes": false,
+      "network": false,
+      "bundle": false
+    },
+    {
+      "name": "alternatives",
+      "title": "多副本管理",
+      "note": "管理主库之外的镜像副本（FLAC 主库 + MP3 拷贝等）；转码档要用 ffmpeg",
+      "builtin": false,
+      "packages": ["beets-alternatives>=0.14,<1"],
+      "imports": ["beetsplug.alternatives"],
+      "exe": ["ffmpeg"],
+      "writes": true,
+      "network": false,
+      "bundle": false
     }
   ]
 }
