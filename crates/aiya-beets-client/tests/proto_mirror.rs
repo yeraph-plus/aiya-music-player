@@ -154,8 +154,9 @@ fn terminal_events_exist_in_schema() {
             .unwrap_or_else(|| panic!("每个 Event 变体都要有 type const：{v}"));
         types.insert(name.to_string());
     }
-    // 20 种纯事件（2026-10-30 +enrichItem/enrichDone；终态错误信封在 Response）
-    assert_eq!(variants.len(), 20, "Event 变体数变了：{}", variants.len());
+    // 21 种纯事件（2026-10-30 +enrichItem/enrichDone；2026-10-31 +indexDone；
+    // 终态错误信封在 Response）
+    assert_eq!(variants.len(), 21, "Event 变体数变了：{}", variants.len());
 
     for t in TERMINAL_EVENTS {
         // sessionFailed 的形状在 Response 里（它有 ok 字段），不在 Event 里
@@ -182,9 +183,10 @@ fn every_request_variant_has_cmd_and_is_closed() {
         .as_array()
         .expect("Request 必须是 oneOf");
     // 2026-10-30 加法：enrich / query / fields（docs/45 §4.2，纯加法不升版）
+    // 2026-10-31 补登：index_import（此前实际在跑但漏在契约外，P0-2）
     assert_eq!(
         variants.len(),
-        16,
+        17,
         "命令数变了（加命令要改 schema 与这里的期望）"
     );
     for v in variants {

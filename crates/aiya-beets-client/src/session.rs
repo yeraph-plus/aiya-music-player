@@ -573,6 +573,11 @@ pub fn request_data(
 ///
 /// `pub` 是为了让 `tests/proto_mirror.rs` 拿它与镜像 schema 里的 `type`
 /// 常量集合比对——改名而忘了改这里，症状是"会话永远不结束"，很难现场定位。
+///
+/// 2026-10-31 补：adoptDone/updateDone/duplicatesDone/moveDone/dumpDone/indexDone。
+/// 此前只有导入链的终态在这张表里，维护四件套 + dump + 索引入库成功后客户端
+/// 等不到终态，会话空转到 600 s 看门狗误杀——期间会话槽占死、on_exit 对账
+/// （整理后修正库路径的唯一时机）被推迟（发布前审查 P0-1）。
 pub const TERMINAL_EVENTS: &[&str] = &[
     "done",
     "applyDone",
@@ -580,6 +585,12 @@ pub const TERMINAL_EVENTS: &[&str] = &[
     "cancelled",
     "sessionFailed",
     "pluginDone",
+    "adoptDone",
+    "updateDone",
+    "duplicatesDone",
+    "moveDone",
+    "dumpDone",
+    "indexDone",
 ];
 
 /// 起会话转发线程：把每一行 JSON 转发给 `sink`，见终态事件后收尾。
@@ -902,7 +913,7 @@ mod tests {
     /// 真起一个子进程验协议：用 `echo` 之类保证跨平台可用的命令不存在，
     /// 所以这里不 spawn，只验纯逻辑（真进程验证在 src-tauri 的 dev 测试里）。
     #[test]
-    fn terminal_event_set_is_the_documented_five() {
+    fn terminal_event_set_is_the_documented_twelve() {
         assert_eq!(
             TERMINAL_EVENTS,
             &[
@@ -911,7 +922,13 @@ mod tests {
                 "enrichDone",
                 "cancelled",
                 "sessionFailed",
-                "pluginDone"
+                "pluginDone",
+                "adoptDone",
+                "updateDone",
+                "duplicatesDone",
+                "moveDone",
+                "dumpDone",
+                "indexDone"
             ]
         );
         // sessionEnd 是收尾后宿主自己补的，绝不能出现在终态集合里
