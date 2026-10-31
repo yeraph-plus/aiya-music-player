@@ -135,7 +135,7 @@ jobs:
           $root = Join-Path $env:RUNNER_TEMP "aiya-check"
           Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
           $dst = Join-Path $root "beets-tool\bundle"
-          Expand-Archive -Path "beets-tool/dist/aiya-beets-bundle-win-x64.zip" -DestinationPath $dst -Force
+          Expand-Archive -Path "beets-tool/dist/aiya-beets-portable-win-x64.zip" -DestinationPath $dst -Force
           $py = Join-Path $dst "python.exe"
           $m = Get-Content (Join-Path $dst "manifest.json") -Raw | ConvertFrom-Json
           $bins = ($m.binaries | ForEach-Object { $_.target }) -join ","
