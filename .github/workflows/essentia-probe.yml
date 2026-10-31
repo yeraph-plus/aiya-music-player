@@ -1,0 +1,104 @@
+# Essentia 兼容性探针：验证社区 Gaia 构建 + 两代 SVM 模型的 highlevel 产出。
+#
+# 背景：AIYA 下发的 AB win-i686 提取器没编 Gaia2，highlevel（danceability/mood）
+# 整段不可用（docs/50 §2.5 钉死 compute:0）。候选替代：brendanerofeev/essentia
+# 的 gaia-win64-2 构建（自带 Qt5Core.dll 依赖）。模型与二进制必须版本匹配
+# （beets-xtractor 文档：beta5 模型配 beta5 提取器），本机到 upf.edu 的下载
+# 速度不可用（~17KB/s），所以整场实验搬进 runner：
+#
+#   · 下载 Gaia 构建 + beta1/beta5 两套模型（同时测 runner 到 upf.edu 的速度）
+#   · 生成 3 秒正弦波 wav，在无任何配置的干净目录分别喂两套模型
+#   · 断言输出 JSON 是否出现 highlevel 段，打印 danceability / mood 值
+#   · 打出全部 sha256（载体钉扎用）
+#
+# 手动触发，产物只有日志；模型换版/提取器换版时重跑一次即可。
+name: essentia probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: essentia-probe
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: Gaia 构建 × 两代模型 实测
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 取 Gaia 构建与两代模型
+        shell: pwsh
+        run: |
+          $t0 = Get-Date
+          curl.exe -sL -o gaia.zip https://github.com/brendanerofeev/essentia/releases/download/gaia-win64-2/essentia-gaia-win64.zip
+          Expand-Archive gaia.zip -DestinationPath gaia
+          Write-Host "gaia.zip 用时 $([int]((Get-Date) - $t0).TotalSeconds)s"
+
+          $t1 = Get-Date
+          curl.exe -sL -o beta1.tar.gz --retry 3 https://essentia.upf.edu/svm_models/essentia-extractor-svm_models-v2.1_beta1.tar.gz
+          Write-Host "beta1 ($((Get-Item beta1.tar.gz).Length) B) 用时 $([int]((Get-Date) - $t1).TotalSeconds)s"
+          tar -xzf beta1.tar.gz -C . ; if ($LASTEXITCODE -ne 0) { throw "beta1 解包失败" }
+
+          $t2 = Get-Date
+          curl.exe -sL -o beta5.tar.gz --retry 3 https://essentia.upf.edu/svm_models/essentia-extractor-svm_models-v2.1_beta5.tar.gz
+          Write-Host "beta5 ($((Get-Item beta5.tar.gz).Length) B) 用时 $([int]((Get-Date) - $t2).TotalSeconds)s"
+          New-Item -ItemType Directory -Force m5 | Out-Null
+          tar -xzf beta5.tar.gz -C m5 ; if ($LASTEXITCODE -ne 0) { throw "beta5 解包失败" }
+
+          Write-Host "sha256（钉扎用）"
+          Get-FileHash -Algorithm SHA256 gaia.zip, beta1.tar.gz, beta5.tar.gz, gaia/streaming_extractor_music.exe, gaia/Qt5Core.dll | ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), $_.Path }
+
+      - name: 实测 highlevel（beta1 / beta5 各跑一次）
+        shell: python
+        run: |
+          import glob, hashlib, json, math, os, struct, subprocess, wave
+
+          exe = os.path.abspath("gaia/streaming_extractor_music.exe")
+          wav = "probe.wav"
+          with wave.open(wav, "w") as w:
+              w.setnchannels(1); w.setsampwidth(2); w.setframerate(44100)
+              w.writeframes(b"".join(
+                  struct.pack("<h", int(12000 * math.sin(2 * math.pi * 440 * i / 44100)))
+                  for i in range(44100 * 3)))
+
+          def model_dir(tag):
+              hits = glob.glob(f"**/{tag}*/**/*.history", recursive=True) or glob.glob(f"**/{tag}*/**.history", recursive=True)
+              return sorted({os.path.dirname(h) for h in hits})[0] if hits else None
+
+          # tar 解出来的目录名可能带版本号，各代模型目录按实际落点找
+          b1 = model_dir("v2.1_beta1")
+          b5 = model_dir("m5")
+          print("beta1 模型目录:", b1)
+          print("beta5 模型目录:", b5)
+
+          for tag, mdir in (("beta1", b1), ("beta5", b5)):
+              if not mdir:
+                  print(f"== {tag}: 没找到 .history，跳过 ==")
+                  continue
+              models = sorted(glob.glob(os.path.join(mdir, "*.history")))
+              profile = "highlevel:\n  compute: 1\n  svm_models:\n" + \
+                        "".join(f"    - {m}\n" for m in models)
+              open("profile.yaml", "w", encoding="utf-8", newline="\n").write(profile)
+              out = f"out-{tag}.json"
+              r = subprocess.run([exe, wav, out, "profile.yaml"],
+                                 capture_output=True, text=True, errors="replace", timeout=300)
+              print(f"== {tag}: exit={r.returncode} models={len(models)} ==")
+              if r.returncode != 0:
+                  print((r.stderr or r.stdout)[-800:])
+                  continue
+              j = json.load(open(out, encoding="utf-8"))
+              hl = j.get("highlevel", {})
+              print("  highlevel 键数:", len(hl))
+              for k in ("danceability", "mood_happy", "mood_acoustic", "gender", "voice_instrumental"):
+                  v = hl.get(k)
+                  print(f"  {k}: {v.get('value') if isinstance(v, dict) else v}")
