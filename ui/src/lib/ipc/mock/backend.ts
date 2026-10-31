@@ -1766,13 +1766,26 @@ export class MockBackend {
   }
 
   playTracks(trackIds: string[], startIndex = 0): PlayerState {
-    return this.playQueue([...trackIds], startIndex);
+    this.playQueue([...trackIds], startIndex);
+    // 对齐 actor：QueueOp::ReplaceAll → instruct_load(true, 0)，点播即出声。
+    // 此前 mock 停在 paused，与真机行为漂移（CDP 真窗口实测发现）。
+    return this.setPlayingIf(true);
   }
 
   playQuery(query: TrackQuery, startIndex = 0): PlayerState {
     const q = parseTrackQuery(query);
     const rows = this.sortForSource(this.filter(q), q);
-    return this.playQueue(rows.map((t) => t.id), startIndex);
+    this.playQueue(rows.map((t) => t.id), startIndex);
+    return this.setPlayingIf(true);
+  }
+
+  /** playQueue 落在 paused；命令级起播语义由调用方决定（见 actor.rs 各分支） */
+  private setPlayingIf(autoplay: boolean): PlayerState {
+    if (autoplay && this.playerState.status === 'paused' && this.playerState.index != null) {
+      this.playerState = { ...this.playerState, status: 'playing' };
+      this.emitPlayer();
+    }
+    return this.playerState;
   }
 
   toggle(): PlayerState {
@@ -1801,6 +1814,9 @@ export class MockBackend {
 
   private step(delta: number): PlayerState {
     if (!this.queueIds.length) return this.playerState;
+    // 对齐 actor 的 Next/Prev：暂停中切曲保持暂停，播放中切曲保持播放
+    // （"暂停中点下一首应保持暂停（主流播放器行为）"——actor.rs 同注释）
+    const wasPlaying = this.playerState.status === 'playing';
     // index 现在是 number | null（空队列=null）；走到这 queueIds 非空，
     // 但防御式兜底 0，别让 null 参与算术得 NaN。
     let next = (this.playerState.index ?? 0) + delta;
@@ -1808,7 +1824,8 @@ export class MockBackend {
     if (next >= this.queueIds.length) {
       next = this.playerState.repeat === 'all' ? 0 : this.queueIds.length - 1;
     }
-    return this.playQueue(this.queueIds, next);
+    this.playQueue(this.queueIds, next);
+    return this.setPlayingIf(wasPlaying);
   }
 
   seek(positionMs: number): PlayerState {
