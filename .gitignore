@@ -88,3 +88,6 @@ tools/bench/shots/
 
 # 会话工具的本地记忆/临时数据（误落时会跑到仓库子目录里，别进版本库）
 .workbuddy/
+
+.install-shot.png
+.state-shot.png
