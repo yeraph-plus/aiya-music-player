@@ -204,9 +204,12 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "删除旧 release $tag 失败" }
           }
 
-          # --prerelease：`releases/latest` 会跳过 prerelease，通道不抢播放器的 "Latest"
-          gh release create $tag --prerelease --title "beets portable $env:BEETS_VERSION（固定下载通道）" `
-            --notes "beets 便携包固定下载通道：每次发布整体替换（推新删旧）。播放器按固定 URL 下载，不要手动改这个 release。"
+          # --prerelease：`releases/latest` 会跳过 prerelease，通道不抢播放器的 "Latest"。
+          # 标题用日期不用小版本：只有一版滚动打包，别干扰应用主体的版本线。
+          # 说明只写用途与现状，不写发布机制。
+          $date = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow, 'China Standard Time').ToString('yyyy-MM-dd')
+          gh release create $tag --prerelease --title "beets portable（$date）" `
+            --notes "AIYA Music 的 Beets 预配置环境（Windows x64）：自带 Python 解释器，预置歌词抓取、封面抓取、MusicBrainz 同步、音频特征插件与 Essentia 提取器，解压即用，不需要本机 Python。在播放器「Beets → 安装 → 预配置环境」一键下载安装，随包附 SHA256SUMS 供播放器校验。包内工具版本 $env:BEETS_VERSION，协议 v2。"
           if ($LASTEXITCODE -ne 0) { throw "创建 $tag 失败" }
           gh release upload $tag $files --clobber
           if ($LASTEXITCODE -ne 0) { throw "上传到 $tag 失败" }
