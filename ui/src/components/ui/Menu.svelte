@@ -1,5 +1,6 @@
 <script lang="ts">
   import { DropdownMenu, Portal } from 'bits-ui';
+  import { Check } from '@lucide/svelte';
   import type { MenuItem } from '../../lib/menu';
 
   /**
@@ -75,9 +76,9 @@
     {/snippet}
   </DropdownMenu.Trigger>
 
-  <DropdownMenu.Portal>
+    <DropdownMenu.Portal>
     <DropdownMenu.Content
-      class="k-menu"
+      class={`k-menu${items.some((i) => i.selected) ? ' has-check' : ''}`}
       side="bottom"
       align="start"
       sideOffset={2}
@@ -89,6 +90,11 @@
           disabled={item.disabled ?? false}
           onSelect={() => pick(item)}
         >
+          <!-- 选中标记（发布前 UI 审查 P10）：此前调用方往 label 里拼 '✓ '，
+               读屏会把"勾"念出来。菜单里有任一选中项时整组预留勾位对齐。 -->
+          <span class="k-menu-check" class:on={item.selected} aria-hidden="true">
+            {#if item.selected}<Check size={13} />{/if}
+          </span>
           {item.label}
         </DropdownMenu.Item>
       {/each}
@@ -105,15 +111,15 @@
   }
 
   :global(.k-menu) {
-    z-index: 60;
+    z-index: var(--z-menu);
     /* 视觉沿用旧 .context-menu：190px 起、6px 内距、10px 圆角、毛玻璃 */
     min-width: 190px;
     padding: 6px;
     border: 1px solid var(--line);
     border-radius: 10px;
     background: var(--surface-4);
-    box-shadow: 0 18px 40px var(--shadow);
-    backdrop-filter: blur(18px);
+    box-shadow: var(--shadow-4);
+    backdrop-filter: blur(var(--blur-pop));
   }
 
   :global(.k-menu-item) {
@@ -122,11 +128,24 @@
     text-align: left;
     padding: 7px 10px;
     border-radius: 7px;
-    font-size: 12.5px;
+    font-size: var(--fs-base);
     color: var(--text-1);
     cursor: default;
     user-select: none;
     outline: none;
+  }
+
+  /* 选中标记前位：菜单里有任一 selected 项时整组预留勾位对齐（.has-check
+     由组件按 items 计算，见 Content 的 class） */
+  :global(.k-menu-check) {
+    display: none;
+  }
+
+  :global(.k-menu.has-check .k-menu-check) {
+    display: inline-block;
+    width: 14px;
+    color: var(--accent-text);
+    vertical-align: -2px;
   }
 
   /* 高亮使用 `data-highlighted`（键盘导航与 hover 都写这个属性），

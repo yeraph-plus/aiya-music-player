@@ -17,6 +17,7 @@ src-tauri/target/
 *.tsbuildinfo
 
 # Playwright（E2E 产物）
+test-results/
 ui/test-results/
 ui/playwright-report/
 

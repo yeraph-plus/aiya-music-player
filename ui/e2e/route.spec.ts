@@ -165,7 +165,7 @@ test('一级路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => 
 async function openLibrarySettings(page: Page): Promise<void> {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
-  await page.locator('.settings-tab', { hasText: '曲库' }).click();
+  await page.locator('.text-tab', { hasText: '曲库' }).click();
   await expect(page.locator('.main h1')).toHaveText('设置');
 }
 
@@ -195,7 +195,7 @@ test('2026-10-30：首页「位置缺失」告警 → 设置页曲库组（滚�
   await expect(page.locator('.main h1')).toHaveText('设置');
   // 落在曲库组：tab 高亮 + 该组滚进视野。
   // 用 poll 而不是一次性取值：滚动是 `behavior:'smooth'`，跨一屏的距离要几百毫秒。
-  await expect(page.locator('.settings-tab.on')).toHaveText('曲库');
+  await expect(page.locator('.text-tab.on')).toHaveText('曲库');
   await expect
     .poll(
       () => page.locator('#settings-library').evaluate((el) => el.getBoundingClientRect().top),
@@ -280,7 +280,7 @@ test('docs/29 批 A 八轮：曲库页扫描条只做指示，不再有第二个
   await page.goto('/');
   // 在设置页「曲库」组发起扫描 → 切到曲库页看环境指示条
   await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
-  await page.locator('.settings-tab', { hasText: '曲库' }).click();
+  await page.locator('.text-tab', { hasText: '曲库' }).click();
   await page.getByRole('button', { name: '立即索引' }).click();
   await page.locator('.sidebar .nav-item', { hasText: '曲库' }).click();
   const bar = page.locator('.scan-bar');
@@ -304,7 +304,7 @@ test('设置页「曲库」组：统计卡 + 曲库卡片；beets 段与诊断�
   await expect(page.locator('#settings-library .stat-card', { hasText: '索引大小' })).toHaveCount(1);
 
   // 整页六个 tab（曲库/外观/播放/系统/快捷键/关于）——2026-10-30 曲库提到第一位
-  await expect(page.locator('.settings-tabs .settings-tab')).toHaveCount(6);
+  await expect(page.locator('.text-tabs .text-tab')).toHaveCount(6);
 
   // 整理库（beets）在 2026-10-30 已搬成侧栏独立一页（docs/48）
   await expect(page.locator('#tools-beets')).toHaveCount(0);
@@ -317,7 +317,7 @@ test('设置页「曲库」组：统计卡 + 曲库卡片；beets 段与诊断�
   // 设置 → 关于：版本 + 数据目录 + 最近错误（单页平铺，tab 点击只滚动）。
   // 2026-10-28 九轮半拍板：一行一项；平台/Schema/播放列表/重新读取已删；
   // 版本行带禁用的「获取更新」占位按钮；爱发电二维码在支持开发行
-  await page.locator('.settings-tab', { hasText: '关于' }).click();
+  await page.locator('.text-tab', { hasText: '关于' }).click();
   const about = page.locator('.settings-about');
   await expect(about.locator('.setting-row', { hasText: '版本' })).toContainText('0.1.0');
   await expect(about.getByRole('button', { name: '获取更新' })).toBeDisabled();
@@ -331,7 +331,7 @@ test('设置页「曲库」组：统计卡 + 曲库卡片；beets 段与诊断�
   await expect(about.getByRole('button', { name: '重新读取' })).toHaveCount(0);
 
   // 清空播放历史按钮随迁在曲库卡的动作行
-  await page.locator('.settings-tab', { hasText: '曲库' }).click();
+  await page.locator('.text-tab', { hasText: '曲库' }).click();
   await expect(page.getByRole('button', { name: '清空播放历史' })).toBeVisible();
 });
 
@@ -371,7 +371,7 @@ test('docs/48：未装 beets 时整理库页只给安装引导，不出查询区
 test('docs/51：安装页给出插件勾选与卸载入口（卸载只删组件）', async ({ page }) => {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '整理库' }).click();
-  await page.locator('.main .pt-tab', { hasText: '安装' }).click();
+  await page.locator('.main .text-tab', { hasText: '安装' }).click();
 
   const main = page.locator('.main');
   // 内嵌插件表不依赖已装组件（`beets_plugin_table` 读的是编译期 JSON），
@@ -428,14 +428,15 @@ test('docs/49：整理库拆成 安装/索引/整理 三个子页，各自只放
   await page.locator('.sidebar .nav-item', { hasText: '整理库' }).click();
 
   const main = page.locator('.main');
-  const tabs = main.locator('.pt-tab');
+  const tabs = main.locator('.text-tab');
   await expect(tabs).toHaveCount(3);
   await expect(tabs.nth(0)).toHaveText('安装');
   await expect(tabs.nth(1)).toHaveText('索引');
   await expect(tabs.nth(2)).toHaveText('整理');
 
   // 默认停在「索引」：装好的人占多数，每次先看安装说明是无用的
-  await expect(tabs.nth(1)).toHaveClass(/active/);
+  // TextTabs 的当前项语义是 aria-current（比类字符串稳，类名是样式的事）
+  await expect(tabs.nth(1)).toHaveAttribute('aria-current', 'true');
   await expect(main.getByRole('button', { name: '查询' })).toBeVisible();
   await expect(main).not.toContainText('待整理目录');
 
@@ -455,7 +456,7 @@ test('docs/49：整理库拆成 安装/索引/整理 三个子页，各自只放
 test('docs/49：整理链路 待整理目录 → 预览 → 应用所选 → 汇总', async ({ page }) => {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '整理库' }).click();
-  await page.locator('.main .pt-tab', { hasText: '整理' }).click();
+  await page.locator('.main .text-tab', { hasText: '整理' }).click();
 
   const main = page.locator('.main');
 
@@ -605,7 +606,7 @@ test('B4-3c：搜索落独立结果页，三段（曲目/专辑/艺人）+ 卡�
 
   await expect(page.locator('.main h1')).toHaveText('搜索「深」');
   // 2026-10-28：曲库三 tab 不出现在搜索页（那是曲库页的子状态）
-  await expect(page.locator('.lib-tabs')).toHaveCount(0);
+  await expect(page.locator('.text-tabs')).toHaveCount(0);
   // 按 h2 文本锁定段（卡片副标题也含"专辑/艺人"字样，hasText 会串段）
   const albumRow = page.locator('.facet-row').filter({
     has: page.locator('h2', { hasText: /^专辑$/ }),

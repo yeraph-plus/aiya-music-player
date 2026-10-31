@@ -48,7 +48,7 @@ body {
   color: var(--text-1);
   font-family:
     var(--font-ui);
-  font-size: 13px;
+  font-size: var(--fs-md);
   overflow: hidden;
   user-select: none;
 }
@@ -105,6 +105,18 @@ select:disabled {
 select:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: 1px;
+}
+
+/*
+ * 全局键盘焦点环（发布前 UI 审查 P0-2）：Button/IconButton/Chip/Card/.link 族
+ * 等高频交互件此前裸奔 UA 默认焦点环，与 Switch/Slider/Select 的自画 accent
+ * 环视觉分裂。`:where()` 特异性为 0——各组件自带的焦点样式可以照常覆盖；
+ * 已经自画环的（select 上方这条、Switch、Slider、PlayerBar .now）不受影响。
+ */
+:where(button, [role='button'], a, [role='tab']):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: inherit;
 }
 
 h1,

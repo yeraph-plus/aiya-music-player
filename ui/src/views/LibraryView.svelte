@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ArrowDown, ArrowUp } from '@lucide/svelte';
   import Icon from '../components/Icon.svelte';
+  import TextTabs from '../components/ui/TextTabs.svelte';
   import Header from '../components/content/Header.svelte';
   import Button from '../components/ui/Button.svelte';
   import Card from '../components/ui/Card.svelte';
@@ -168,32 +169,34 @@
       {#if ui.page === 'library'}
         <!-- tab 索引（2026-10-28）：小标题形态贴着大标题，当前项高亮。
              只在曲库页给——搜索页复用 library view，但三个 tab 在那里
-             是"同库换排序"，语义不成立（2026-10-28 用户指出后收窄） -->
-        <div class="lib-tabs" role="tablist" aria-label="曲库视图切换">
-          {#each LIB_TABS as tab (tab.key)}
-            <button
-              class="lib-tab"
-              class:on={ui.libraryTab === tab.key}
-              role="tab"
-              aria-selected={ui.libraryTab === tab.key}
-              title={tab.key === 'all'
+             是"同库换排序"，语义不成立（2026-10-28 用户指出后收窄）。
+             语义归 TextTabs（nav + aria-current）：此前这里套的是完整
+             tablist/tab 角色却没有 tabpanel，与另两处互相矛盾（P8）。 -->
+        <TextTabs
+          items={LIB_TABS.map((t) => ({
+            id: t.key,
+            label: t.label,
+            title:
+              t.key === 'all'
                 ? '再点一次重新加载'
-                : `再点一次切换最新/最旧顺序（当前：${ui.direction === 'desc' ? '倒序' : '正序'}）`}
-              onclick={() => list.openLibraryTab(tab.key)}
-            >
-              {tab.label}
-              <!-- 方向箭头只画在活跃 tab 上：ui.direction 是全局共享状态，
-                   非活跃 tab 的箭头会说谎（2026-10-30） -->
-              {#if ui.libraryTab === tab.key && tab.key !== 'all'}
-                {#if ui.direction === 'desc'}
-                  <ArrowDown size={11} strokeWidth={2.4} aria-hidden="true" />
-                {:else}
-                  <ArrowUp size={11} strokeWidth={2.4} aria-hidden="true" />
-                {/if}
+                : `再点一次切换最新/最旧顺序（当前：${ui.direction === 'desc' ? '倒序' : '正序'}）`,
+          }))}
+          value={ui.libraryTab}
+          onchange={(key) => list.openLibraryTab(key as (typeof LIB_TABS)[number]['key'])}
+          label="曲库视图切换"
+        >
+          {#snippet trailing(tab)}
+            <!-- 方向箭头只画在活跃 tab 上：ui.direction 是全局共享状态，
+                 非活跃 tab 的箭头会说谎（2026-10-30） -->
+            {#if ui.libraryTab === tab.id && tab.id !== 'all'}
+              {#if ui.direction === 'desc'}
+                <ArrowDown size={11} strokeWidth={2.4} aria-hidden="true" />
+              {:else}
+                <ArrowUp size={11} strokeWidth={2.4} aria-hidden="true" />
               {/if}
-            </button>
-          {/each}
-        </div>
+            {/if}
+          {/snippet}
+        </TextTabs>
       {/if}
       {#if view.kind === 'playlist'}
         <Button variant="primary" onclick={() => void list.playAll()} disabled={header.playDisabled}>
@@ -261,7 +264,7 @@
     </div>
     <span>
       {progress.phase === 'walking'
-        ? '正在遍历目录…（到扫描入库页可取消）'
+        ? '正在遍历目录…（到设置 → 曲库可取消）'
         : `${progress.scanned}/${progress.total ?? '?'} · 新增 ${progress.imported} · 跳过 ${progress.skipped} · 失败 ${progress.failed}`}
     </span>
   </div>
@@ -384,35 +387,6 @@
 
   /* 曲库 tab 索引（2026-10-28）：小标题贴着大标题，当前项 accent 下划线。
      纯文字档（不做胶囊底）——它们是"换个排序看同一批歌"的轻索引 */
-  .lib-tabs {
-    display: flex;
-    align-items: baseline;
-    gap: 14px;
-    margin-left: 18px;
-  }
-
-  .lib-tab {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    padding: 2px 0;
-    border: none;
-    background: none;
-    font-size: 12.5px;
-    color: var(--text-2);
-    border-bottom: 2px solid transparent;
-  }
-
-  .lib-tab:hover {
-    color: var(--text-1);
-  }
-
-  .lib-tab.on {
-    color: var(--text-1);
-    font-weight: 600;
-    border-bottom-color: var(--accent);
-  }
-
   /* 搜索结果页的专辑/艺人段（B4-3c）。2026-10-28 二次修订：横滚撤掉，
      换行网格——结果不该藏在滚动方向后面；每个卡 200px 起，自动换行 */
   .facet-rows {

@@ -28,7 +28,10 @@
     indeterminate = false,
     label,
     disabled = false,
-    role = 'cell',
+    // 不给默认值（发布前 UI 审查 P6.1）：role="cell" 要求 row/grid 祖先，
+    // IndexPanel 在 ul/li 里用它时默认值会产出非法 ARIA。表格调用方
+    // （TrackList/PlaylistList/TrackTable）显式传 'cell' / 'columnheader'。
+    role,
     ontoggle,
   }: Props = $props();
 </script>

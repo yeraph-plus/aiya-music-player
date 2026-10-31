@@ -41,7 +41,7 @@
     border-radius: var(--radius-sm);
     background: var(--surface-cover);
     color: var(--text-3);
-    font-size: 13px;
+    font-size: var(--fs-md);
   }
 
   .k-cover img {
@@ -54,22 +54,22 @@
     width: 22px;
     height: 22px;
     border-radius: 4px;
-    font-size: 10px;
+    font-size: var(--fs-2xs);
   }
 
   .k-cover.md {
     width: 48px;
     height: 48px;
     border-radius: var(--radius-md);
-    font-size: 17px;
+    font-size: var(--fs-xl);
   }
 
   .k-cover.lg {
     width: 92px;
     height: 92px;
     border-radius: var(--radius-lg);
-    font-size: 30px;
-    box-shadow: 0 12px 30px var(--shadow);
+    font-size: var(--fs-hero);
+    box-shadow: var(--shadow-3);
   }
 
   .k-cover.round-lg {

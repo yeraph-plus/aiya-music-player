@@ -259,7 +259,7 @@
     justify-content: space-between;
     /* 10px 左内距对齐导航文字缩进；右 2px 让 + 号贴边但不顶到滚动条 */
     padding: 2px 2px 2px 9px;
-    font-size: 11px;
+    font-size: var(--fs-sm);
     letter-spacing: 0.06em;
     color: var(--text-3);
     text-transform: uppercase;
@@ -284,7 +284,7 @@
 
   .pl-name {
     flex: 1;
-    font-size: 12px;
+    font-size: var(--fs-base);
   }
 
   /* 动态歌单徽标：activity 图标（心电波形=随规则动的曲目），主题色。
@@ -299,7 +299,7 @@
 
   .pl-count {
     flex: none;
-    font-size: 10px;
+    font-size: var(--fs-2xs);
     line-height: 1;
     padding: 3px 6px;
     border-radius: 999px;
@@ -311,7 +311,7 @@
   .side-empty {
     margin: 0;
     padding: 8px 10px;
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     color: var(--text-3);
   }
 

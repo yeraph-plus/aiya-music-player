@@ -13,6 +13,20 @@ class SelectionStore {
   anchor = $state(-1);
   /** 当前焦点行（键盘上下移动） */
   selectedIndex = $state(-1);
+  /**
+   * 「把 DOM 焦点交给焦点行」的请求计数（发布前 UI 审查 P0-1）。
+   *
+   * 只有键盘 move 意图（keyboard.ts）会调 `requestRowFocus()` 置位：方向键
+   * 移动的不只是高亮 class，DOM 焦点必须跟过去——否则 Space 播的是焦点
+   * 所在的旧行、Enter 播的是高亮的新行。点选、"定位到正在播放"等编程路径
+   * **不**置位（点选时浏览器已把焦点给到行上；定位不该抢用户焦点）。
+   * 行组件盯着这个计数执行 focus；store 字段，重挂载不清零。
+   */
+  focusNonce = $state(0);
+
+  requestRowFocus(): void {
+    this.focusNonce++;
+  }
 
   /**
    * 列表最近一次「跟随滚动」到过的焦点下标。普通字段即可：只做闸门，不进渲染。

@@ -189,7 +189,7 @@
   .drop-veil {
     position: absolute;
     inset: 0;
-    z-index: 55;
+    z-index: var(--z-pop);
     display: grid;
     place-items: center;
     padding: 24px;
@@ -207,7 +207,7 @@
     border-radius: var(--radius-lg);
     border: 1px dashed var(--accent);
     background: color-mix(in srgb, var(--surface-3) 92%, transparent);
-    box-shadow: 0 18px 48px var(--shadow);
+    box-shadow: var(--shadow-4);
     text-align: center;
   }
 
@@ -222,13 +222,13 @@
   }
 
   .drop-card strong {
-    font-size: 14px;
+    font-size: var(--fs-lg);
     font-weight: 550;
     color: var(--text-1);
   }
 
   .drop-hint {
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     color: var(--text-2);
     /* 预告里可能带"（走设置 → 曲库导入）"，允许折行 */
     line-height: 1.5;

@@ -97,9 +97,13 @@
   :global(.k-dlg-overlay) {
     position: fixed;
     inset: 0;
-    z-index: 50;
+    z-index: var(--z-modal);
     background: var(--backdrop);
-    backdrop-filter: blur(4px);
+    backdrop-filter: blur(var(--blur-scrim));
+    /* 入场动画（发布前 UI 审查 P1-3）：此前瞬现，与 SideDrawer/Toast 的弹层感
+       不一致。bits-ui 关闭即拆 DOM，CSS 动画做不了退场——退场仍瞬消，至少
+       进出"有东西发生过"。只动 opacity/transform，RM 下关断。 */
+    animation: k-dlg-fade 120ms var(--ease);
   }
 
   :global(.k-dlg) {
@@ -109,7 +113,7 @@
     /* bits-ui 的浮层用 transform 做动画/定位，居中也走 transform，
        所以这里必须写成 translate(-50%, -50%) 而不是 margin */
     transform: translate(-50%, -50%);
-    z-index: 51;
+    z-index: var(--z-modal-content);
     width: 380px;
     max-height: 80vh;
     display: flex;
@@ -118,9 +122,30 @@
     border: 1px solid var(--line-strong);
     border-radius: 14px;
     background: var(--surface-3);
-    box-shadow: 0 30px 80px var(--shadow);
-    backdrop-filter: blur(28px);
+    box-shadow: var(--shadow-5);
+    backdrop-filter: blur(var(--blur-modal));
     outline: none;
+    animation: k-dlg-pop 120ms var(--ease);
+  }
+
+  @keyframes k-dlg-fade {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes k-dlg-pop {
+    from {
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(0.98);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(.k-dlg-overlay),
+    :global(.k-dlg) {
+      animation: none;
+    }
   }
 
   :global(.k-dlg.md) {
@@ -141,7 +166,7 @@
   :global(.k-dlg-title) {
     flex: 1;
     min-width: 0;
-    font-size: 13.5px;
+    font-size: var(--fs-md);
     font-weight: 600;
     color: var(--text-1);
   }
@@ -150,7 +175,7 @@
     flex: none;
     margin: 0;
     padding: 14px 16px 0;
-    font-size: 12px;
+    font-size: var(--fs-base);
     line-height: 1.7;
     color: var(--text-2);
   }

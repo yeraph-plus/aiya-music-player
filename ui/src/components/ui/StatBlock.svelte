@@ -48,7 +48,7 @@
   }
 
   .k-stat.lg .k-stat-value {
-    font-size: 30px;
+    font-size: var(--fs-hero);
   }
 
   .k-stat-label {

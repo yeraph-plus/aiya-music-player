@@ -430,14 +430,14 @@
   .result-bar {
     position: sticky;
     top: 0;
-    z-index: 2;
+    z-index: var(--z-sticky);
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
     padding: 9px 16px;
     background: var(--surface-head);
-    backdrop-filter: blur(10px);
+    backdrop-filter: blur(var(--blur-head));
     border-bottom: 1px solid var(--line);
   }
 
@@ -445,7 +445,7 @@
     display: flex;
     align-items: center;
     gap: 9px;
-    font-size: 12px;
+    font-size: var(--fs-base);
   }
 
   /* 表格与表头共用同一套列宽：两边各写一份的话，改列时会漏改一边，
@@ -463,7 +463,7 @@
 
   .table-head {
     height: 30px;
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     color: var(--text-3);
     border-bottom: 1px solid var(--line);
   }
@@ -476,7 +476,7 @@
 
   .row {
     height: 38px;
-    font-size: 12.5px;
+    font-size: var(--fs-base);
     color: var(--text-1);
     border-bottom: 1px solid var(--line);
   }
@@ -526,7 +526,7 @@
 
   code {
     font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     padding: 1px 5px;
     border-radius: 4px;
     background: var(--surface-input);

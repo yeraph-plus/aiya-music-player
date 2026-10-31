@@ -18,7 +18,7 @@
    */
 
   interface Props {
-    variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
+    variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'link';
     /** sm=28px（表格行内、chip 旁），md=--control-h（默认 32px） */
     size?: 'sm' | 'md';
     disabled?: boolean;
@@ -56,6 +56,7 @@
   class:primary={variant === 'primary'}
   class:ghost={variant === 'ghost'}
   class:danger={variant === 'danger'}
+  class:link={variant === 'link'}
   class:sm={size === 'sm'}
   class:loading
   disabled={disabled || loading}
@@ -139,6 +140,36 @@
   .k-btn.danger:hover:not(:disabled) {
     background: color-mix(in srgb, var(--danger) 12%, transparent);
     border-color: color-mix(in srgb, var(--danger) 48%, transparent);
+  }
+
+  /*
+   * 链接按钮（发布前 UI 审查 P3）：取代散落 6 个文件的 .link / .rate-reset /
+   * .rule-del 手写族——同一意图（行内 accent 链接状动作）此前 5 种类名各写
+   * 一遍，且全部没有焦点环。形状上剥掉按钮盒（高/内距/边框/底色归零），
+   * 键盘焦点环来自 base.css 的全局 :focus-visible。
+   */
+  .k-btn.link {
+    height: auto;
+    padding: 0 2px;
+    border: none;
+    border-radius: 0;
+    background: none;
+    color: var(--accent-text);
+    font-size: inherit;
+    line-height: inherit;
+    white-space: normal;
+  }
+
+  .k-btn.link:hover:not(:disabled) {
+    background: none;
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .k-btn.link.sm {
+    height: auto;
+    padding: 0 2px;
   }
 
   .k-btn:disabled {

@@ -29,6 +29,12 @@
     pressed?: boolean;
     /** 纯视觉高亮（不写 aria-pressed） */
     active?: boolean;
+    /** 面板开合态（写 aria-expanded，样式与 pressed 同级：抽屉触发键用） */
+    expanded?: boolean;
+    /** 转圈并禁止点按（发布前 UI 审查 P4：此前播放键 loading 是手写替身） */
+    loading?: boolean;
+    /** 右下角"生效中"打点（EQ 启用提示；不用 accent 底——那是"抽屉开着"） */
+    dot?: boolean;
     disabled?: boolean;
     children: Snippet;
     onclick?: (event: MouseEvent) => void;
@@ -42,6 +48,9 @@
     round = false,
     pressed,
     active = false,
+    expanded,
+    loading = false,
+    dot = false,
     disabled = false,
     children,
     onclick,
@@ -62,14 +71,22 @@
   aria-label={label}
   title={label}
   aria-pressed={pressed === undefined ? undefined : pressed}
-  {disabled}
+  aria-expanded={expanded}
+  aria-busy={loading || undefined}
+  disabled={disabled || loading}
   {onclick}
 >
-  {@render children()}
+  {#if loading}
+    <span class="k-icon-spin" aria-hidden="true"></span>
+  {:else}
+    {@render children()}
+  {/if}
+  {#if dot}<span class="k-icon-dot" aria-hidden="true"></span>{/if}
 </button>
 
 <style>
   .k-icon-btn {
+    position: relative; /* dot 的定位锚 */
     display: inline-grid;
     place-items: center;
     width: 30px;
@@ -84,6 +101,52 @@
   .k-icon-btn:hover:not(:disabled) {
     background: var(--surface-hover);
     color: var(--text-1);
+  }
+
+  /* 按下反馈（发布前 UI 审查 P2-5）：Button/Card 都有 :active，这里补齐 */
+  .k-icon-btn:active:not(:disabled) {
+    background: var(--surface-active);
+  }
+
+  /* 面板开合态：与 DrawerBtn 时代 [aria-expanded='true'] 同视觉（accent 底），
+     和 .on（当前项 surface 底）、.pressed（切换态）三分 */
+  .k-icon-btn[aria-expanded='true'] {
+    background: var(--accent-weak);
+    color: var(--accent-text);
+  }
+
+  /* 生效中打点：accent 小点，右下角（原 .drawer-dot） */
+  .k-icon-dot {
+    position: absolute;
+    right: 5px;
+    bottom: 5px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  /* loading 转圈：与 Button 的 k-spin 同款（conic + currentColor，RM 降速）。
+     实心播放键上 currentColor = play-fg（深色），白底深圈，与旧手写版一致 */
+  .k-icon-spin {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: conic-gradient(transparent 0 25%, currentColor 75% 100%);
+    mask: radial-gradient(circle, transparent 0 3px, #000 3.5px);
+    animation: k-icon-spin 720ms linear infinite;
+  }
+
+  @keyframes k-icon-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .k-icon-spin {
+      animation-duration: 2s;
+    }
   }
 
   .k-icon-btn:disabled {
@@ -103,10 +166,12 @@
     border-radius: var(--radius-lg);
   }
 
-  /* 当前项：底色 + 主色图标 */
+  /* 当前项：accent 底（发布前 UI 审查 P2-5 收编——此前 .on 是 surface 底，
+     ListToolbar 被迫用 :global 覆盖成 accent；全仓唯一 active 用户是筛选键，
+     直接统一成与 pressed 同色系，组件外的样式补丁随之删除） */
   .k-icon-btn.on {
-    background: var(--surface-hover);
-    color: var(--text-1);
+    background: var(--accent-weak);
+    color: var(--accent-text);
   }
 
   /* 切换按钮的按下态：用主色，和"当前项"区分开 */

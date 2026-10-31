@@ -89,7 +89,7 @@
 
   h1 {
     margin: 3px 0 4px;
-    font-size: 22px;
+    font-size: var(--fs-2xl);
     font-weight: 600;
     letter-spacing: -0.01em;
     overflow: hidden;
@@ -99,31 +99,31 @@
 
   /* 有封面时标题更大一档：封面本来就是视觉重心 */
   .with-cover h1 {
-    font-size: 26px;
+    font-size: var(--fs-display);
   }
 
   /* 大标题形态（列表页）：三层结构取消后的唯一视觉锚点。30px 实测偏压，
      2026-10-28 收到 26px——与封面页标题同档，整站标题只有一个量级 */
   .big h1 {
     margin-top: 0;
-    font-size: 26px;
+    font-size: var(--fs-display);
     letter-spacing: -0.02em;
   }
 
   .big .ch-meta {
     margin-top: 6px;
-    font-size: 12.5px;
+    font-size: var(--fs-base);
   }
 
   p {
     margin: 0;
-    font-size: 12px;
+    font-size: var(--fs-base);
     color: var(--text-2);
   }
 
   .ch-meta {
     margin-top: 4px;
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
   }
@@ -138,7 +138,7 @@
     border-radius: 50%;
     background: var(--surface-cover);
     color: var(--accent-text);
-    box-shadow: 0 12px 30px var(--shadow);
+    box-shadow: var(--shadow-3);
   }
 
   .ch-actions {

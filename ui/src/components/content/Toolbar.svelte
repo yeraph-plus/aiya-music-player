@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import Chip from '../ui/Chip.svelte';
+  import TextTabs from '../ui/TextTabs.svelte';
 
   /**
    * 页内工具条零件：tab 组 + 筛选 chip + 右侧次级动作。
@@ -48,19 +49,13 @@
   -->
   <div class="content-toolbar">
     {#if tabs?.length}
-      <nav class="pt-tabs" aria-label="视图切换">
-        {#each tabs as tab (tab.id)}
-          <button
-            class="pt-tab"
-            class:active={active === tab.id}
-            aria-current={active === tab.id ? 'true' : undefined}
-            onclick={() => ontab?.(tab.id)}
-          >
-            {tab.label}
-            {#if tab.count !== undefined}<span class="pt-count">{tab.count}</span>{/if}
-          </button>
-        {/each}
-      </nav>
+      <TextTabs
+        items={tabs}
+        value={active ?? ''}
+        onchange={(id) => ontab?.(id)}
+        label="视图切换"
+        variant="pill"
+      />
     {/if}
 
     {#each filters ?? [] as filter (filter.label)}
@@ -85,43 +80,8 @@
   /* 分隔线只跟 tab 走（docs/28）：tab 行是页面级分区，值得一条线；
      chips/次级动作的残行不值得——曲库页撤掉 tab 后只剩时间筛选 chip，
      不该再拖一条孤立的分隔线 */
-  .content-toolbar:has(.pt-tabs) {
+  .content-toolbar:has(:global(.text-tabs)) {
     border-bottom: 1px solid var(--line);
-  }
-
-  .pt-tabs {
-    display: flex;
-    gap: 2px;
-    flex-wrap: wrap;
-    min-width: 0;
-  }
-
-  .pt-tab {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 28px;
-    padding: 5px 11px;
-    border-radius: 8px;
-    color: var(--text-2);
-    font-size: 12px;
-    white-space: nowrap;
-  }
-
-  .pt-tab:hover {
-    background: var(--surface-hover);
-    color: var(--text-1);
-  }
-
-  .pt-tab.active {
-    background: var(--surface-active);
-    color: var(--text-1);
-  }
-
-  .pt-count {
-    color: var(--text-3);
-    font-size: 10.5px;
-    font-variant-numeric: tabular-nums;
   }
 
   .pt-spacer {

@@ -437,7 +437,7 @@
         <div class="rule-editor">
           <div class="rule-head">
             <span class="rule-title">满足以下全部条件</span>
-            <button class="link" type="button" onclick={addCond}>+ 添加条件</button>
+            <Button variant="link" onclick={addCond}>+ 添加条件</Button>
           </div>
           {#each editRule.all as cond, i (i)}
             {@const spec = COND_MODES[modeOfCond(cond)]}
@@ -477,7 +477,7 @@
                   />
                 </div>
               {/if}
-              <button class="link rule-del" type="button" aria-label="删除条件" onclick={() => removeCond(i)}>×</button>
+              <Button variant="link" ariaLabel="删除条件" onclick={() => removeCond(i)}>×</Button>
             </div>
           {:else}
             <p class="rule-empty dim">无条件 = 匹配整个曲库</p>
@@ -666,7 +666,7 @@
   }
 
   .edit-kind-label {
-    font-size: 12.5px;
+    font-size: var(--fs-base);
     color: var(--text-1);
   }
 
@@ -684,7 +684,7 @@
   }
 
   .rule-title {
-    font-size: 12px;
+    font-size: var(--fs-base);
     color: var(--text-2);
   }
 
@@ -705,16 +705,10 @@
     min-width: 0;
   }
 
-  .rule-del {
-    flex: none;
-    font-size: 14px;
-    line-height: 1;
-    padding: 2px 6px;
-  }
 
   .rule-empty {
     margin: 0;
-    font-size: 12px;
+    font-size: var(--fs-base);
   }
 
   .rule-meta {
@@ -741,7 +735,7 @@
   .filter-label {
     flex: none;
     width: 56px;
-    font-size: 12.5px;
+    font-size: var(--fs-base);
     color: var(--text-2);
   }
 
@@ -785,7 +779,7 @@
     border-radius: var(--radius-md);
     text-align: left;
     color: var(--text-1);
-    font-size: 12.5px;
+    font-size: var(--fs-base);
   }
 
   .pick-row:hover {
@@ -802,7 +796,7 @@
 
   .pick-count {
     flex: none;
-    font-size: 11px;
+    font-size: var(--fs-sm);
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
@@ -810,7 +804,7 @@
   .pick-empty {
     margin: 0;
     padding: 18px 10px;
-    font-size: 12.5px;
+    font-size: var(--fs-base);
     color: var(--text-2);
     text-align: center;
   }

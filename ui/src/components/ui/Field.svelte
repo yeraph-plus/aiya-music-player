@@ -1,6 +1,5 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte';
-
+  
   /**
    * 字段：标签 + 单行输入 + 说明 / 错误。
    *
@@ -27,8 +26,6 @@
     oninput?: (value: string) => void;
     /** 回车提交（搜索框、重命名对话框） */
     onenter?: () => void;
-    /** 输入框右侧的内联内容（清除按钮、单位） */
-    trailing?: Snippet;
     id?: string;
     /** 视觉上隐藏标签（标题栏搜索框这种"位置已说明用途"的场景） */
     hideLabel?: boolean;
@@ -50,7 +47,6 @@
     type = 'text',
     oninput,
     onenter,
-    trailing,
     id,
     hideLabel = false,
     maxlength,
@@ -81,7 +77,6 @@
         if (event.key === 'Enter') onenter?.();
       }}
     />
-    {#if trailing}<span class="k-field-trailing">{@render trailing()}</span>{/if}
   </div>
   {#if error}
     <p class="k-field-msg error" id={descId}>{error}</p>
@@ -156,12 +151,6 @@
     cursor: default;
   }
 
-  .k-field-trailing {
-    flex: none;
-    display: flex;
-    align-items: center;
-    color: var(--text-3);
-  }
 
   .k-field-msg {
     margin: 0;

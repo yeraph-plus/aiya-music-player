@@ -125,17 +125,12 @@
   }
 
   .lt-count {
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
   }
 
   .lt-space {
     flex: 1;
-  }
-
-  .lt-filter :global(.k-icon-btn.on) {
-    background: var(--accent-weak);
-    color: var(--accent-text);
   }
 </style>

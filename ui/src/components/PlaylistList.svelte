@@ -13,6 +13,7 @@
    * 拖拽排序语义：按住行拖动（`lib/drag` 的 startRowDrag），松手时
    * onmove(from, to)；拖拽激活后的残留 click 被吞掉，避免误选中。
    */
+  import { tick } from 'svelte';
   import { Play } from '@lucide/svelte';
   import type { TrackRow } from '../lib/ipc';
   import type { TrackSort } from '../lib/query';
@@ -22,7 +23,8 @@
   import { centeredScrollTopForRow, scrollTopForRow } from '../lib/virtual';
   // 别名导入：组件已有 `selection` prop（选择集 ReadonlySet），同名会遮蔽 store
   import { selection as selectionStore } from '../stores/selection.svelte';
-  import CheckCell from './ui/CheckCell.svelte';
+  import Button from './ui/Button.svelte';
+import CheckCell from './ui/CheckCell.svelte';
   import ListToolbar from './ListToolbar.svelte';
   import { formatTime, highlight } from '../lib/format';
   import type { TrackWindow } from '../lib/track-window';
@@ -183,6 +185,11 @@
     return out;
   });
 
+  // roving tabindex 的锚（发布前 UI 审查 P0-1）：只有焦点行是 0，其余行 -1，
+  // Tab 一次进列表、方向键在行间移动焦点。什么都没选时锚在第一个可见行——
+  // 否则 Tab 永远进不了列表（全部 -1 = 没有入口）。
+  const focusAnchor = $derived(selectedIndex >= 0 ? selectedIndex : (rows[0]?.index ?? -1));
+
   /**
    * 插入线的纵坐标。drop-line 是 scroller 内的绝对定位元素，随内容一起滚，
    * 所以这里是**内容坐标**：行边界 + 表头占位，与滚动位置无关——
@@ -220,6 +227,19 @@
     selectionStore.followedIndex = selectedIndex;
     const target = scrollTopForRow(selectedIndex, ROW_HEIGHT, vw.viewportHeight, vw.scroller.scrollTop, HEAD_HEIGHT);
     if (target !== vw.scroller.scrollTop) vw.scroller.scrollTop = target;
+  });
+
+  // 键盘移动后把 DOM 焦点交给目标行（发布前 UI 审查 P0-1）：此前方向键只挪
+  // 高亮 class、焦点原地不动——Space 播的是焦点所在旧行、Enter 播的是高亮
+  // 新行，同一屏幕两个键播出两首歌。focusNonce 只由键盘 move 意图置位
+  // （selection.requestRowFocus()），点选/定位到正在播放等编程路径不抢焦点。
+  // preventScroll：滚动由上面的跟随效果负责，这里只管焦点。
+  $effect(() => {
+    if (selectionStore.focusNonce === 0 || selectedIndex < 0 || !vw.scroller) return;
+    const idx = selectedIndex;
+    void tick().then(() => {
+      vw.scroller?.querySelector<HTMLElement>(`.row[data-index='${idx}']`)?.focus({ preventScroll: true });
+    });
   });
 
   // 「定位到正在播放」：父组件解析出下标后滚一次（居中），回报复位。
@@ -321,7 +341,8 @@
             class:drag-source={dragState?.active && dragState.from === row.index}
             style={`height:${rowHeight}px`}
             role="row"
-            tabindex="0"
+            tabindex={row.index === focusAnchor ? 0 : -1}
+            data-index={row.index}
             onpointerdown={(event) => handlePointerDown(event, row.index)}
             onclick={(event) => {
               // 拖拽激活后松手会派发一次残留 click，吞掉避免误选中
@@ -361,6 +382,7 @@
           >
             {#if batchMode}
               <CheckCell
+                role="cell"
                 checked={selection.has(row.index)}
                 label={`选择第 ${row.index + 1} 行`}
                 ontoggle={(event) => oncheck(row.index, event)}
@@ -439,7 +461,7 @@
             <span class="cell">{row.error}</span>
             <span class="cell"></span>
             <span class="cell"></span>
-            <span class="cell num"><button class="link" onclick={() => onretry(row.index)}>重试</button></span>
+            <span class="cell num"><Button variant="link" onclick={() => onretry(row.index)}>重试</Button></span>
           </div>
         {:else}
           <div class="row skeleton" role="row" aria-busy="true">

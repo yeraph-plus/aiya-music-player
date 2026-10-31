@@ -31,12 +31,6 @@
     side?: 'top' | 'bottom' | 'left' | 'right';
     align?: 'start' | 'center' | 'end';
     sideOffset?: number;
-    /**
-     * 内容的附加类。默认 `k-pop` 是"小面板"外观（12px 内距 + 毛玻璃）；
-     * 队列抽屉这类要铺满自定义内容的面板用 `contentClass` 追加覆盖类
-     * （`k-pop` 仍在，覆盖类写 `padding:0` 等差异项即可）。
-     */
-    contentClass?: string;
     trigger: Snippet<[TriggerProps]>;
     children: Snippet;
   }
@@ -47,7 +41,6 @@
     side = 'top',
     align = 'center',
     sideOffset = 8,
-    contentClass,
     trigger,
     children,
   }: Props = $props();
@@ -62,7 +55,7 @@
 
   <Popover.Portal>
     <Popover.Content
-      class={`k-pop${contentClass ? ` ${contentClass}` : ''}`}
+      class="k-pop"
       {side}
       {align}
       {sideOffset}
@@ -75,13 +68,13 @@
 
 <style>
   :global(.k-pop) {
-    z-index: 55;
+    z-index: var(--z-pop);
     padding: 12px;
     border: 1px solid var(--line);
     border-radius: 12px;
     background: var(--surface-4);
-    box-shadow: 0 18px 40px var(--shadow);
-    backdrop-filter: blur(18px);
+    box-shadow: var(--shadow-4);
+    backdrop-filter: blur(var(--blur-pop));
     outline: none;
   }
 </style>

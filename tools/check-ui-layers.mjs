@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// UI 分层门禁：组件/视图不许绕过 lib 直接摸宿主。
+// UI 门禁（两件事，历史上只有第一件）：
+//
+// 1. 分层：组件/视图不许绕过 lib 直接摸宿主。
 //
 // 为什么需要机器检查：`check-boundary.mjs` 守的是 Rust 侧的 beets 边界，UI
 // 侧一直只有"约定"——而约定在第一次赶工时就会破。真实发生过的那次是
@@ -15,6 +17,11 @@
 // 豁免：`lib/ipc/transport.ts`（数据协议换气口）、`lib/window-chrome.ts`
 // （窗口 chrome），以及 `main.ts` / `App.svelte` 这类入口——它们本来就是
 // 组装的最后一步。豁免不是"白名单目录"，是"这三类文件确实在边界外"。
+//
+// 2. z-index 取值必须来自 token 梯（发布前 UI 审查 P1-3）。此前 14 个裸值
+// 靠各文件注释维系，Toast/Menu/Select 同值 60、谁在上取决于 portal 的 DOM
+// 顺序。阶梯契约见 tokens.css 的 --z-* 区段；这里只验"写的是 var(--z-*)"，
+// 裸数字一律红——否则收编成果两周内回潮。
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -81,3 +88,38 @@ if (violations) {
   process.exit(1);
 }
 console.log('UI 分层门禁通过：components/views/stores 未绕过 lib/');
+
+/* ---------------- z-index token 梯 ---------------- */
+
+// 裸 z-index 一律违规；var(--z-*) 合法。tokens.css 是定义处（豁免）。
+// CSS 与 svelte <style> 都扫；注释行（/* */ 续行）跳过。
+// 判定用两段包含而不是单正则：`z-index:\s*(?!var...)` 的 \s* 会回退一格，
+// 让负向前瞻落在空格上、把合法的 var 声明也判成违规（实测 18 处全误报）。
+const zFiles = [];
+(function zWalk(d) {
+  for (const name of readdirSync(d)) {
+    const p = join(d, name);
+    if (statSync(p).isDirectory()) zWalk(p);
+    else if (/\.(css|svelte)$/.test(name) && !p.endsWith('tokens.css')) zFiles.push(p);
+  }
+})(SRC);
+
+let zViolations = 0;
+for (const file of zFiles) {
+  const lines = readFileSync(file, 'utf8').split('\n');
+  for (const [i, line] of lines.entries()) {
+    const t = line.trim();
+    if (t.startsWith('*') || t.startsWith('/*') || t.startsWith('//')) continue;
+    if (!/z-index:/.test(line) || /z-index:\s*var\(--z-/.test(line)) continue;
+    zViolations++;
+    console.error(
+      `${relative(ROOT, file).replace(/\\/g, '/')}:${i + 1}  [z-ladder] z-index 必须取自 tokens.css 的 --z-* 阶梯\n    ${t}`
+    );
+  }
+}
+
+if (zViolations) {
+  console.error(`\nz-index 阶梯门禁未通过：${zViolations} 处裸值`);
+  process.exit(1);
+}
+console.log('z-index 阶梯门禁通过：全部取自 --z-* token');

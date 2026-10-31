@@ -18,6 +18,7 @@
   import { ChevronUp, SlidersHorizontal } from '@lucide/svelte';
   import Icon from '../Icon.svelte';
   import Cover from '../ui/Cover.svelte';
+  import Button from '../ui/Button.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import Popover from '../ui/Popover.svelte';
   import Slider from '../ui/Slider.svelte';
@@ -263,12 +264,11 @@
         size="lg"
         variant="solid"
         round
+        {loading}
         disabled={!hasTrack && (player?.queueLength ?? 0) === 0}
         onclick={ontoggle}
       >
-        {#if loading}
-          <span class="spinner"></span>
-        {:else if playing}
+        {#if playing}
           <Icon name="pause" size={16} />
         {:else}
           <Icon name="play" size={16} />
@@ -343,30 +343,25 @@
   <div class="right">
     <!--
       队列 / EQ 抽屉触发键（docs/25 §6）：内容宿主是 AppShell 的 SideDrawer
-      （窗口右缘滑出，几何确定不抖）。这里只是普通开关键：aria-expanded
-      手动同步，外点/Esc/焦点还原全部由抽屉负责。不用 IconButton：
-      EQ 的"生效中"打点需要 relative 定位锚点，裸 button 自持样式。
+      （窗口右缘滑出，几何确定不抖）。这里只是普通开关键：开合态走 IconButton
+      的 expanded（aria-expanded + accent 底），外点/Esc/焦点还原全部由抽屉负责。
+      EQ 的"生效中"打点走 dot。
     -->
-    <button
-      class="drawer-btn"
-      aria-expanded={queueOpen}
-      aria-label={`播放队列（${player?.queueLength ?? 0} 首）`}
-      title={`播放队列（${player?.queueLength ?? 0} 首）`}
+    <IconButton
+      label={`播放队列（${player?.queueLength ?? 0} 首）`}
+      expanded={queueOpen}
       onclick={() => onqueueopen(!queueOpen)}
     >
       <Icon name="queue" />
-    </button>
-    <button
-      class="drawer-btn"
-      class:on={eqEnabled}
-      aria-expanded={eqOpen}
-      aria-label={`均衡器（${eqEnabled ? '已启用' : '已关闭'}）`}
-      title={`均衡器（${eqEnabled ? '已启用' : '已关闭'}）`}
+    </IconButton>
+    <IconButton
+      label={`均衡器（${eqEnabled ? '已启用' : '已关闭'}）`}
+      expanded={eqOpen}
+      dot={eqEnabled}
       onclick={() => oneqopen(!eqOpen)}
     >
       <SlidersHorizontal size={16} />
-      {#if eqEnabled}<span class="drawer-dot" aria-hidden="true"></span>{/if}
-    </button>
+    </IconButton>
 
     <!-- 倍速：保持气泡（小面板贴键无抖动问题），不进抽屉 -->
     <Popover
@@ -391,7 +386,7 @@
       <div class="rate-panel">
         <div class="rate-head">
           <span>播放速度</span>
-          <button class="rate-reset" onclick={() => onrate(1)}>复位</button>
+          <Button variant="link" onclick={() => onrate(1)}>复位</Button>
         </div>
         <Slider
           label="播放速度"
@@ -442,7 +437,7 @@
     /* 边线已撤（用户拍板"区域之间不留 border"）：与主区的分隔改由一条
      * **上抛阴影**承担——播放条是全应用最"实"的一层，阴影既给出分界，
      * 又暗示它悬浮在背景之上（方向朝上，光从上面来）。 */
-    box-shadow: 0 -6px 18px color-mix(in srgb, var(--shadow) 50%, transparent);
+    box-shadow: var(--shadow-up);
     /* 半透明（docs/25 T4g 定档 95%——与顶栏同档，接近不透明）：
      * 全应用背景从底下透出来。底色用 surface-3（顶栏是 surface-2）——
      * 同档不同阶，有一点色差。原 backdrop-filter 摘除——持久壳层垫着
@@ -547,7 +542,7 @@
   }
 
   .title {
-    font-size: 12.5px;
+    font-size: var(--fs-base);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -558,7 +553,7 @@
     align-items: center;
     gap: 6px;
     margin-top: 2px;
-    font-size: 11px;
+    font-size: var(--fs-sm);
     color: var(--text-2);
     overflow: hidden;
     white-space: nowrap;
@@ -574,7 +569,7 @@
     padding: 0 4px;
     border-radius: 3px;
     border: 1px solid var(--line-strong);
-    font-size: 9.5px;
+    font-size: var(--fs-2xs);
     line-height: 14px;
     letter-spacing: 0.04em;
     color: var(--text-2);
@@ -587,7 +582,7 @@
 
   .fmt-spec {
     flex: none;
-    font-size: 10px;
+    font-size: var(--fs-2xs);
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
@@ -614,27 +609,13 @@
     gap: 12px;
   }
 
-  .spinner {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    border: 2px solid color-mix(in srgb, var(--play-fg) 30%, transparent);
-    border-top-color: var(--play-fg);
-    animation: spin 0.7s linear infinite;
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
 
   .timeline {
     width: 100%;
     display: flex;
     align-items: center;
     gap: 10px;
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
   }
@@ -761,47 +742,7 @@
 
   /* ---------------- 倍速面板（Popover 内容） ---------------- */
 
-  /* 抽屉触发键（队列/EQ 共用）：内容宿主在 AppShell 的 SideDrawer，这里只是
-     开关键。30px 圆形 ghost 键外观（与 IconButton 同款，但要挂 aria-expanded
-     和 EQ 打点的 relative 锚点，裸 button 自持样式）。 */
-  .drawer-btn {
-    position: relative;
-    display: inline-grid;
-    place-items: center;
-    width: 30px;
-    height: 30px;
-    border-radius: var(--radius-pill);
-    color: var(--text-2);
-    flex: none;
-    transition:
-      background var(--dur-fast) var(--ease),
-      color var(--dur-fast) var(--ease);
-  }
 
-  .drawer-btn:hover {
-    background: var(--surface-hover);
-    color: var(--text-1);
-  }
-
-  .drawer-btn[aria-expanded='true'] {
-    background: var(--accent-weak);
-    color: var(--accent-text);
-  }
-
-  /* EQ 启用打点：不用 accent 底（那是"抽屉开着"），只点一颗小点表示"生效中" */
-  .drawer-btn.on {
-    color: var(--text-1);
-  }
-
-  .drawer-dot {
-    position: absolute;
-    right: 5px;
-    bottom: 5px;
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: var(--accent);
-  }
 
   .rate-chip {
     flex: none;
@@ -836,12 +777,12 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     margin-bottom: 10px;
   }
 
   .rate-reset {
-    font-size: 11px;
+    font-size: var(--fs-sm);
     color: var(--text-2);
     padding: 1px 6px;
     border-radius: 4px;
@@ -855,7 +796,7 @@
   .rate-scale {
     display: flex;
     justify-content: space-between;
-    font-size: 10px;
+    font-size: var(--fs-2xs);
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
     margin-top: 6px;

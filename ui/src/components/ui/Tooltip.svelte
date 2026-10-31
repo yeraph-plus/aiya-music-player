@@ -47,15 +47,15 @@
 
 <style>
   :global(.k-tip) {
-    z-index: 70;
+    z-index: var(--z-tooltip);
     padding: 5px 8px;
     border: 1px solid var(--line);
     border-radius: 6px;
     background: var(--surface-4);
     color: var(--text-1);
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     line-height: 1.4;
-    box-shadow: 0 8px 20px var(--shadow);
+    box-shadow: var(--shadow-2);
     pointer-events: none;
   }
 </style>

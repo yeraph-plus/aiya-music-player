@@ -22,13 +22,13 @@
   gap: 8px;
   padding: 14px 14px 10px;
   border-bottom: 1px solid var(--line);
-  font-size: 12.5px;
+  font-size: var(--fs-base);
 }
 
 .queue-panel header .dim,
 .lyrics-panel header .dim {
   color: var(--text-2);
-  font-size: 11px;
+  font-size: var(--fs-sm);
   margin-right: auto;
 }
 
@@ -81,7 +81,7 @@
 }
 
 .q-index {
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -95,14 +95,14 @@
 }
 
 .q-title {
-  font-size: 12px;
+  font-size: var(--fs-base);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .q-artist {
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--text-2);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -110,7 +110,7 @@
 }
 
 .q-duration {
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
 }
@@ -124,7 +124,7 @@
   padding: 0 3px;
   border-radius: 3px;
   border: 1px solid var(--line-strong);
-  font-size: 9px;
+  font-size: var(--fs-2xs);
   line-height: 12px;
   letter-spacing: 0.03em;
   color: var(--text-3);
@@ -202,7 +202,7 @@
   text-align: left;
   padding: 8px 10px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: var(--fs-md);
   line-height: 1.55;
   color: var(--text-2);
   transition:
@@ -224,5 +224,5 @@
   font-weight: 600;
   background: var(--accent-weak);
   /* 激活行略微放大字号（用户反馈）：视觉重心落在当前句上 */
-  font-size: 14.5px;
+  font-size: var(--fs-lg);
 }

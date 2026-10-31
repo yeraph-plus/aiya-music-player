@@ -27,7 +27,9 @@
 
   const presetItems = $derived(
     Object.entries(EQ_PRESETS).map(([key, preset]) => ({
-      label: (eq.presetKey === key ? '✓ ' : '') + preset.label,
+      label: preset.label,
+      // 选中标记走 MenuItem.selected（组件画勾）——往 label 里拼 '✓ ' 会被读屏念出来
+      selected: eq.presetKey === key,
       action: () => eq.applyPreset(key),
     })),
   );
@@ -163,12 +165,12 @@
     gap: 10px;
     padding: 14px 16px 12px;
     border-bottom: 1px solid var(--line);
-    font-size: 12.5px;
+    font-size: var(--fs-base);
   }
 
   header .dim {
     margin-right: auto;
-    font-size: 11px;
+    font-size: var(--fs-sm);
   }
 
   .eq-body {
@@ -189,7 +191,7 @@
   .sec-head,
   .eq-section h2 {
     margin: 0;
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     font-weight: 600;
     color: var(--text-2);
     letter-spacing: 0.02em;
@@ -236,14 +238,14 @@
   }
 
   .knob-name {
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     color: var(--text-1);
   }
 
   /* 增益数值：旋钮正下方的档位主指示，字号提到 12px；三态染色
      （+ 红 / − 绿 / 0 沿用中性灰——中国市场涨红跌绿惯例） */
   .knob-val {
-    font-size: 12px;
+    font-size: var(--fs-base);
   }
 
   .knob-val.gain-pos {
@@ -264,7 +266,7 @@
     border: 1px solid var(--line);
     border-radius: var(--radius-md);
     background: var(--surface-1);
-    font-size: 12.5px;
+    font-size: var(--fs-base);
     color: var(--text-1);
     text-align: left;
   }
@@ -302,13 +304,13 @@
   }
 
   .eq-val {
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
   }
 
   .eq-hz {
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
     color: var(--text-3);
   }
 </style>

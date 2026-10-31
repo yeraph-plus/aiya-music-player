@@ -20,14 +20,12 @@
     /** 无障碍名称；视觉标签由调用方渲染 */
     label: string;
     disabled?: boolean;
-    id?: string;
   }
 
-  let { checked, onchange, label, disabled = false, id }: Props = $props();
+  let { checked, onchange, label, disabled = false }: Props = $props();
 </script>
 
 <Switch.Root
-  {id}
   {checked}
   {disabled}
   aria-label={label}
@@ -71,7 +69,7 @@
     height: 16px;
     border-radius: 50%;
     background: var(--accent-fg);
-    box-shadow: 0 1px 3px var(--shadow);
+    box-shadow: var(--shadow-1);
     transition: transform var(--dur-fast) var(--ease);
   }
 

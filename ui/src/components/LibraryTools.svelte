@@ -53,17 +53,10 @@
   let clearConfirm = $state(false);
   let clearing = $state(false);
 
-  /** 两个确认条的取消键：出现时移入焦点（alertdialog 的键盘可达性） */
-  let removalCancelEl = $state<HTMLButtonElement | null>(null);
-  let clearCancelEl = $state<HTMLButtonElement | null>(null);
-
-  $effect(() => {
-    if (pendingRemoval) removalCancelEl?.focus();
-  });
-
-  $effect(() => {
-    if (clearConfirm) clearCancelEl?.focus();
-  });
+  /* 两个确认条是**页面内联区块**而不是模态（发布前 UI 审查 P5 降级）：
+   * 此前挂 role="alertdialog" 却没有焦点圈禁/滚动锁，向读屏承诺了模态语义；
+   * 取消键的 autofocus 也随之撤掉——非模态区块不该抢焦点。出现时的播报
+   * 由条内 role="alert" 的文本承担。 */
 
   const stats = $derived(library.stats);
 
@@ -207,21 +200,23 @@
     {/if}
 
     {#if pendingRemoval}
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <!-- Esc 处理只服务"焦点在确认条内"的场景（从危险/取消键冒泡上来），
+           容器自身不可聚焦、非交互——role=group 只为可访问性命名 -->
       <div
         class="roots-confirm"
-        role="alertdialog"
+        role="group"
         aria-label="移除目录确认"
-        tabindex="-1"
         onkeydown={(event) => {
-          // 焦点在确认条内时 Esc 归它：stopPropagation 挡住 window 上的
-          // 全局 Esc（否则关确认条的同时还会清掉列表选择集）
+          // 焦点在确认条内（危险/取消键）时 Esc 归它：stopPropagation 挡住
+          // window 上的全局 Esc（否则关确认条的同时还会清掉列表选择集）
           if (event.key === 'Escape') {
             event.stopPropagation();
             dismissRemoval();
           }
         }}
       >
-        <span class="roots-confirm-text">
+        <span class="roots-confirm-text" role="alert">
           将停止监听 <b>{pendingRemoval.paths[0]}</b>
           {#if pendingRemoval.count !== null}，涉及 <b>{pendingRemoval.count}</b> 首曲目{/if}。
         </span>
@@ -232,17 +227,19 @@
           <Button size="sm" onclick={() => void confirmKeep()} disabled={saving}>
             仅停止监听
           </Button>
-          <button class="link" bind:this={removalCancelEl} onclick={dismissRemoval} disabled={saving}>取消</button>
+          <Button variant="link" onclick={dismissRemoval} disabled={saving}>取消</Button>
         </div>
       </div>
     {/if}
 
     {#if clearConfirm}
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <!-- Esc 处理只服务"焦点在确认条内"的场景（从危险/取消键冒泡上来），
+           容器自身不可聚焦、非交互——role=group 只为可访问性命名 -->
       <div
         class="roots-confirm"
-        role="alertdialog"
+        role="group"
         aria-label="清空曲库确认"
-        tabindex="-1"
         onkeydown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
@@ -250,7 +247,7 @@
           }
         }}
       >
-        <span class="roots-confirm-text">
+        <span class="roots-confirm-text" role="alert">
           将删除全部 <b>{stats?.tracks ?? 0}</b> 首曲目的索引记录，歌单内容、播放队列与播放历史一并清空
           （歌单本身保留；<b>磁盘文件不动</b>）。此操作不可撤销。
         </span>
@@ -258,7 +255,7 @@
           <Button size="sm" variant="danger" onclick={() => void doClear()} disabled={clearing}>
             确认清空
           </Button>
-          <button class="link" bind:this={clearCancelEl} onclick={() => (clearConfirm = false)} disabled={clearing}>取消</button>
+          <Button variant="link" onclick={() => (clearConfirm = false)} disabled={clearing}>取消</Button>
         </div>
       </div>
     {/if}
@@ -300,7 +297,7 @@
           <span class="task-name">
             <RefreshCw size={13} class="spinning" /> 曲库索引 · {phaseText(progress.phase)}
           </span>
-          <button class="link" onclick={() => scan.cancel()}>取消任务</button>
+          <Button variant="link" onclick={() => scan.cancel()}>取消任务</Button>
         </div>
         <div class="progress">
           <i style={`width:${progress.total ? Math.min(100, Math.round((progress.scanned / progress.total) * 100)) : 8}%`}></i>

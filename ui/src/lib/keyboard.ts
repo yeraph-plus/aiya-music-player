@@ -167,7 +167,9 @@ export function onKeydown(event: KeyboardEvent): void {
     total: list.total,
     selectedIndex: selection.selectedIndex,
     hasSelection: selection.size > 0,
-    hasPanel: ui.queueOpen,
+    // 队列与 EQ 抽屉都算"面板"（此前只算了队列：EQ 开着时 Esc 的 closePanel
+    // 意图落到 closeQueue 上是 no-op，全靠 SideDrawer 自己的监听兜底）
+    hasPanel: ui.queueOpen || ui.eqOpen,
     // 有模态时吞掉全局快捷键：否则在「确认删除」弹窗上敲空格会顺手播放
     modalOpen: overlay.hasModal,
     bindings: resolveShortcutBindings(ui.settings.shortcuts),
@@ -178,6 +180,9 @@ export function onKeydown(event: KeyboardEvent): void {
     case 'move':
       event.preventDefault();
       selection.selectedIndex = intent.index;
+      // DOM 焦点跟着走（roving focus）：只挪高亮 class 的话，Space 播的是
+      // 焦点所在旧行、Enter 播的是高亮新行（发布前 UI 审查 P0-1）
+      selection.requestRowFocus();
       return;
     case 'play':
       event.preventDefault();
@@ -190,7 +195,10 @@ export function onKeydown(event: KeyboardEvent): void {
       selection.clear();
       return;
     case 'closePanel':
-      ui.closeQueue();
+      // 关当前开着的那个（互斥由 setQueue/setEqDrawer 保证，但都关着时
+      // 这里就是空操作——hasPanel 已经挡住了这种情况）
+      if (ui.eqOpen) ui.setEqDrawer(false);
+      else ui.closeQueue();
       return;
     case 'action':
       event.preventDefault();

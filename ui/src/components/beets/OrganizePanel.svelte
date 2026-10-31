@@ -499,7 +499,7 @@
     border: 1px solid var(--line);
     background: var(--surface-input);
     color: var(--text-2);
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     cursor: pointer;
     max-width: 260px;
     overflow: hidden;
@@ -535,7 +535,7 @@
     display: flex;
     flex-direction: column;
     gap: 3px;
-    font-size: 12px;
+    font-size: var(--fs-base);
     color: var(--danger);
     line-height: 1.5;
   }
@@ -548,7 +548,7 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    font-size: 12px;
+    font-size: var(--fs-base);
   }
 
   .album-head {
@@ -559,7 +559,7 @@
   }
 
   .album-head b {
-    font-size: 13px;
+    font-size: var(--fs-md);
     font-weight: 600;
   }
 
@@ -568,13 +568,13 @@
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
-    font-size: 11px;
+    font-size: var(--fs-sm);
   }
 
   .diff-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
   }
 
   .diff-table td,
@@ -595,7 +595,7 @@
   }
 
   .track-diff {
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
   }
 
   .track-row {
@@ -611,7 +611,7 @@
 
   .apply-result {
     color: var(--accent);
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     line-height: 1.5;
   }
 

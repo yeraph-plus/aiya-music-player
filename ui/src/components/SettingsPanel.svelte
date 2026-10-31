@@ -10,6 +10,7 @@
     ThemeMode,
   } from '../lib/settings';
   import { AMBIENT_SCHEMES, BG_SPECTRUM_STYLES, RIDGE_GLOWS, SPECTRUM_STYLES } from '../lib/settings';
+  import TextTabs from './ui/TextTabs.svelte';
   import {
     SHORTCUT_ACTIONS,
     SHORTCUT_LABELS,
@@ -256,19 +257,14 @@
         {#snippet actions()}
           <!-- 语义用 nav + aria-current 而不是 role="tablist"/"tab"（同 content/Toolbar
                的先例）：tab 只做 scrollIntoView 跳转，五个区块平铺常驻，不是「切换
-               面板」；硬套 tab 角色会让读屏软件期待一个 tabpanel。 -->
-          <nav class="settings-tabs" aria-label="设置分组">
-            {#each SECTIONS as section (section.id)}
-              <button
-                class="settings-tab"
-                class:on={active === section.id}
-                aria-current={active === section.id ? 'true' : undefined}
-                onclick={() => jumpTo(section.id)}
-              >
-                {section.label}
-              </button>
-            {/each}
-          </nav>
+               面板」；硬套 tab 角色会让读屏软件期待一个 tabpanel。语义与外观
+               现归 TextTabs（发布前 UI 审查 P8）。 -->
+          <TextTabs
+            items={SECTIONS.map((s) => ({ id: s.id, label: s.label }))}
+            value={active}
+            onchange={(id) => jumpTo(id as (typeof SECTIONS)[number]['id'])}
+            label="设置分组"
+          />
         {/snippet}
       </Header>
     </div>
@@ -785,7 +781,7 @@
      与 tab 的关系是"tab 跳到这" */
   .group-title {
     margin: 22px 0 2px;
-    font-size: 14px;
+    font-size: var(--fs-lg);
     font-weight: 600;
     color: var(--text-1);
     scroll-margin-top: 12px;
@@ -856,7 +852,7 @@
   }
 
   .stat-text b {
-    font-size: 21px;
+    font-size: var(--fs-2xl);
     font-weight: 400; /* 用户拍板：数字不加粗，靠字号本身立住 */
     line-height: 1.15;
     color: var(--text-1);
@@ -865,7 +861,7 @@
   }
 
   .stat-text span {
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     color: var(--text-2);
   }
 
@@ -914,7 +910,7 @@
   }
 
   .support-item figcaption {
-    font-size: 12px;
+    font-size: var(--fs-base);
     color: var(--text-2);
   }
 
@@ -954,33 +950,7 @@
     margin: 0 auto;
   }
 
-  /* tab 形态与曲库页 .lib-tab 同款：纯文字 + accent 下划线，小标题档 */
-  .settings-tabs {
-    display: flex;
-    align-items: baseline;
-    gap: 14px;
-    margin-left: 18px;
-  }
-
-  .settings-tab {
-    padding: 2px 0;
-    border: none;
-    background: none;
-    font-size: 12.5px;
-    color: var(--text-2);
-    border-bottom: 2px solid transparent;
-  }
-
-  .settings-tab:hover {
-    color: var(--text-1);
-  }
-
-  .settings-tab.on {
-    color: var(--text-1);
-    font-weight: 600;
-    border-bottom-color: var(--accent);
-  }
-
+  /* tab 形态与曲库页同款：纯文字 + accent 下划线，小标题档（TextTabs 统一） */
   /* 被「全局 3D 效果」闸门关掉的行：整行压暗，与"这一项自己关着"区分开。
    * 只给控件加 disabled 不够——关闭态的开关本来也是灰的，两者会混成一片。
    * 用内联 style:opacity 而不是 `.setting-row.muted` 规则：Svelte 5 的未使用

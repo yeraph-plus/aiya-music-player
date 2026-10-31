@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Button from './Button.svelte';
   /**
    * 行内错误条（kit 第 16 件，docs/24 §6 零件表 20）。
    *
@@ -23,10 +24,10 @@
   <!-- 错误详情是用户可能要贴给别人的内容，放开选择（docs/19 §5） -->
   <span class="msg selectable">{message}</span>
   {#if action}
-    <button class="link" onclick={action.onclick}>{action.label}</button>
+    <Button variant="link" onclick={action.onclick}>{action.label}</Button>
   {/if}
   {#if ondismiss}
-    <button class="link" onclick={ondismiss}>关闭</button>
+    <Button variant="link" onclick={ondismiss}>关闭</Button>
   {/if}
 </div>
 
@@ -41,7 +42,7 @@
     border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
     background: color-mix(in srgb, var(--danger) 10%, transparent);
     color: var(--danger);
-    font-size: 12px;
+    font-size: var(--fs-base);
   }
 
   .msg {

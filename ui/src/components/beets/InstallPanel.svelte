@@ -441,19 +441,19 @@
     align-items: center;
     gap: 6px;
     margin: 0;
-    font-size: 12.5px;
+    font-size: var(--fs-base);
     font-weight: 600;
   }
 
   .track p {
     margin: 0;
-    font-size: 12px;
+    font-size: var(--fs-base);
     line-height: 1.55;
   }
 
   .beets-path {
     font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-    font-size: 11px;
+    font-size: var(--fs-sm);
     color: var(--text-3);
     word-break: break-all;
   }
@@ -480,7 +480,7 @@
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
-    font-size: 12px;
+    font-size: var(--fs-base);
     cursor: pointer;
   }
 
@@ -490,7 +490,7 @@
 
   .pick-name {
     font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
   }
 
   .pick-title {
@@ -502,7 +502,7 @@
     border-radius: 4px;
     border: 1px solid var(--line-1);
     font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
     color: var(--text-3);
   }
 
@@ -513,7 +513,7 @@
 
   .pick-note {
     padding-left: 20px;
-    font-size: 11px;
+    font-size: var(--fs-sm);
     color: var(--text-3);
   }
 
@@ -522,7 +522,7 @@
   .facts {
     width: 100%;
     border-collapse: collapse;
-    font-size: 12px;
+    font-size: var(--fs-base);
   }
 
   .facts th {
@@ -545,7 +545,7 @@
 
   .facts .mono {
     font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     color: var(--text-2);
   }
 
@@ -570,7 +570,7 @@
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
-    font-size: 12px;
+    font-size: var(--fs-base);
   }
 
   /* 未启用的插件压暗但保留——它解释了"为什么某个字段查不到" */
@@ -580,6 +580,6 @@
 
   .plugin-name {
     font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
   }
 </style>

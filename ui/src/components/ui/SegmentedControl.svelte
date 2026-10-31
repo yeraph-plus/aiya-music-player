@@ -98,7 +98,7 @@
   :global(.k-seg-item[data-state='checked']) {
     background: var(--surface-3);
     color: var(--text-1);
-    box-shadow: 0 1px 2px var(--shadow);
+    box-shadow: var(--shadow-1);
   }
 
   :global(.k-seg-item[disabled]) {

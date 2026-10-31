@@ -9,6 +9,7 @@
   import Cover from './ui/Cover.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import IconButton from './ui/IconButton.svelte';
+import Button from './ui/Button.svelte';
   import Icon from './Icon.svelte';
 
   interface Props {
@@ -27,7 +28,7 @@
     onremove: (index: number) => void;
     onmove: (from: number, to: number) => void;
     onclear: () => void;
-    /** 关闭（头部的 × 键；Esc/外点由外层 Popover 处理，不走这里） */
+    /** 关闭（头部的 × 键；Esc/外点由外层 SideDrawer 处理，不走这里） */
     onclose: () => void;
   }
 
@@ -185,7 +186,7 @@
   <header>
     <strong>播放队列</strong>
     <span class="dim">{ids.length} 首{totalMs > 0 ? ` · ${formatDurationLong(totalMs)}` : ''}</span>
-    <button class="link" onclick={onclear} disabled={ids.length === 0}>清空</button>
+    <Button variant="link" onclick={onclear} disabled={ids.length === 0}>清空</Button>
     <IconButton label="关闭队列" size="sm" onclick={onclose}>
       <Icon name="close" size={13} />
     </IconButton>

@@ -84,7 +84,7 @@
     border: none;
     border-radius: 6px;
     background: none;
-    font-size: 12px;
+    font-size: var(--fs-base);
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
   }
@@ -108,7 +108,7 @@
   :global(.k-pag-gap) {
     min-width: 16px;
     text-align: center;
-    font-size: 12px;
+    font-size: var(--fs-base);
     color: var(--text-3);
   }
 </style>

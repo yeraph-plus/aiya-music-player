@@ -15,6 +15,8 @@ export interface MenuItem {
   action: () => void;
   disabled?: boolean;
   danger?: boolean;
+  /** 选中标记（预设菜单的当前项）：组件画勾，读屏不把"✓"念进 label */
+  selected?: boolean;
 }
 
 export interface TrackMenuActions {

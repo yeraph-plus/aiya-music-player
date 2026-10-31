@@ -105,7 +105,7 @@
     height: 11px;
     border-radius: 50%;
     background: var(--play-bg);
-    box-shadow: 0 1px 4px var(--shadow);
+    box-shadow: var(--shadow-1);
     transition: transform var(--dur-fast) var(--ease);
   }
 

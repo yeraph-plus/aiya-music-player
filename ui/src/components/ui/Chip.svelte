@@ -113,7 +113,7 @@
     height: 18px;
     border-radius: 50%;
     color: var(--text-3);
-    font-size: 13px;
+    font-size: var(--fs-md);
     line-height: 1;
   }
 

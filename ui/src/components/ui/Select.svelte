@@ -117,7 +117,7 @@
   }
 
   :global(.k-select-content) {
-    z-index: 60;
+    z-index: var(--z-select);
     /* 与触发按钮同宽（bits-ui 会设 --bits-select-anchor-width），长选项再撑开 */
     width: var(--bits-select-anchor-width, max-content);
     min-width: 120px;
@@ -126,8 +126,8 @@
     border: 1px solid var(--line);
     border-radius: 10px;
     background: var(--surface-4);
-    box-shadow: 0 18px 40px var(--shadow);
-    backdrop-filter: blur(18px);
+    box-shadow: var(--shadow-4);
+    backdrop-filter: blur(var(--blur-pop));
     outline: none;
   }
 
@@ -142,7 +142,7 @@
     text-align: left;
     padding: 7px 10px;
     border-radius: 7px;
-    font-size: 12.5px;
+    font-size: var(--fs-base);
     color: var(--text-1);
     cursor: default;
     user-select: none;

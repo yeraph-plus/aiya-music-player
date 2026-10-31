@@ -102,6 +102,29 @@
   let ridgeLayer = $state<RidgeLayer | null>(null);
   let rippleLayer = $state<RippleLayer | null>(null);
 
+  /**
+   * 2D 兜底画布的 CSS 尺寸缓存（发布前 UI 审查 P2-3）。
+   *
+   * draw() 此前每帧读 `clientWidth/clientHeight`——那是布局查询，在 rAF 里
+   * 逐帧读会把绘制循环和样式/布局绑在一起（页面别处一改样式就多一次强制
+   * 布局）。NowPlayingSpectrum 已用 RO 缓存修过同一处并注明缘由，这条路径
+   * 漏了。RO 只在尺寸真的变了时回调一次，正好是我们要的时机。
+   */
+  let cssW = 0;
+  let cssH = 0;
+  $effect(() => {
+    const target = canvas;
+    if (!target) return;
+    const measure = () => {
+      cssW = target.clientWidth;
+      cssH = target.clientHeight;
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(target);
+    return () => ro.disconnect();
+  });
+
   $effect(() => {
     const target = glCanvas;
     if (!target || !glActive) return;
@@ -219,8 +242,9 @@
     if (!ctx) return;
 
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const width = target.clientWidth;
-    const height = target.clientHeight;
+    // 尺寸读的是 RO 缓存（见上方注释），不再逐帧查布局
+    const width = cssW;
+    const height = cssH;
     // 尺寸为 0（布局尚未结算/页面切走）：本帧跳过，调度器下一帧还会来
     if (width === 0 || height === 0) return;
     // 宽高**各自**比：只比宽度时，窗口只在纵向变高（最大化/分屏/拖下沿）会让
@@ -316,7 +340,7 @@
   .ambient-bg {
     position: absolute;
     inset: 0;
-    z-index: 0;
+    z-index: var(--z-bg);
     overflow: hidden;
     pointer-events: none;
   }

@@ -400,7 +400,7 @@
     position: absolute;
     /* 整页居中：内容席位（.np-info/.np-lyrics）是 z-index 1，本层垫在其后 */
     inset: 0;
-    z-index: 0;
+    z-index: var(--z-bg);
     width: 100%;
     height: 100%;
     pointer-events: none;

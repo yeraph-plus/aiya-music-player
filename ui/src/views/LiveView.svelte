@@ -186,13 +186,13 @@
 
   .live-head h1 {
     margin: 4px 0 2px;
-    font-size: 22px;
+    font-size: var(--fs-2xl);
     color: var(--text-1);
   }
 
   .live-head p {
     margin: 0;
-    font-size: 12px;
+    font-size: var(--fs-base);
     color: var(--text-2);
   }
 
@@ -213,7 +213,7 @@
     border: 1px solid var(--line);
     background: var(--surface-2);
     color: var(--text-1);
-    font-size: 12.5px;
+    font-size: var(--fs-base);
     font-variant-numeric: tabular-nums;
   }
 
@@ -259,7 +259,7 @@
 
   .stage-title {
     margin: 4px 0 0;
-    font-size: 19px;
+    font-size: var(--fs-xl);
     font-weight: 560;
     color: var(--text-1);
     max-width: 100%;
@@ -270,14 +270,14 @@
 
   .stage-origin {
     margin: 0;
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     color: var(--text-3);
   }
 
   /* 已收听时长：等宽数字，别让秒位跳动时整行左右抖 */
   .stage-time {
     margin: 6px 0 0;
-    font-size: 26px;
+    font-size: var(--fs-display);
     font-variant-numeric: tabular-nums;
     color: var(--text-2);
     letter-spacing: 0.02em;
@@ -286,7 +286,7 @@
   .stage-hint {
     margin: 4px 0 0;
     max-width: 46ch;
-    font-size: 11px;
+    font-size: var(--fs-sm);
     line-height: 1.5;
     color: var(--text-3);
   }
@@ -298,7 +298,7 @@
     padding: 2px 9px;
     border-radius: var(--radius-pill);
     border: 1px solid var(--line-strong);
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
     letter-spacing: 0.04em;
     color: var(--text-3);
   }
@@ -327,19 +327,19 @@
     align-items: baseline;
     justify-content: space-between;
     margin-bottom: 8px;
-    font-size: 12.5px;
+    font-size: var(--fs-base);
     color: var(--text-1);
   }
 
   .recent-count {
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
 
   .recent-empty {
     margin: 0;
-    font-size: 11.5px;
+    font-size: var(--fs-sm);
     color: var(--text-3);
   }
 
@@ -374,7 +374,7 @@
   }
 
   .recent-title {
-    font-size: 12px;
+    font-size: var(--fs-base);
     color: var(--text-1);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -382,7 +382,7 @@
   }
 
   .recent-url {
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
     color: var(--text-3);
     overflow: hidden;
     text-overflow: ellipsis;

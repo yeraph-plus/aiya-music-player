@@ -190,18 +190,18 @@
     border-radius: 6px;
     background: var(--accent);
     color: var(--surface-1);
-    font-size: 13px;
+    font-size: var(--fs-md);
     font-weight: 700;
     letter-spacing: 0;
   }
 
   .tb-brand strong {
-    font-size: 14.5px;
+    font-size: var(--fs-lg);
     font-weight: 700;
   }
 
   .tb-sub {
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
     color: var(--text-2);
     letter-spacing: 0.22em;
   }
@@ -251,7 +251,7 @@
     outline: none;
     background: transparent;
     color: var(--text-1);
-    font-size: 12.5px;
+    font-size: var(--fs-base);
   }
 
   .tb-search input::placeholder {

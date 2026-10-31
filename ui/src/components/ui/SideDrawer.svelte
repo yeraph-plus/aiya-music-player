@@ -87,7 +87,7 @@
   .sd-root {
     position: fixed;
     inset: 0;
-    z-index: 56; /* 浮层级：> .k-pop 55，< Menu 60（抽屉里的预设菜单要盖住面板） */
+    z-index: var(--z-drawer); /* 浮层级：> .k-pop 55，< Menu 60（抽屉里的预设菜单要盖住面板） */
     /* 容器本身不拦截指针：拦截只归遮罩（且遮罩让出了顶栏与播放条）——
        抽屉开着时播放条触发键仍可点，否则互斥切换/再点关闭会被吃掉 */
     pointer-events: none;
@@ -121,7 +121,7 @@
     background: var(--surface-4);
     border: 1px solid var(--line);
     border-radius: 14px;
-    box-shadow: -18px 0 44px var(--shadow);
+    box-shadow: var(--shadow-4-left);
     outline: none;
   }
 </style>

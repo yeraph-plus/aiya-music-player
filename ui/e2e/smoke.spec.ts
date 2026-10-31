@@ -11,7 +11,7 @@ import { expect, test, type Page } from '@playwright/test';
  *
  * 这一版使用：
  * - 壳体：`.titlebar`（唯一全局条）、`.sidebar .nav-item`（一级导航）
- * - 页内：`.main h1`（Header 标题，故意不带类名 —— 标题类名会随批次变）、`.content-toolbar .pt-tab`（Toolbar）
+ * - 页内：`.main h1`（Header 标题，故意不带类名 —— 标题类名会随批次变）、`.content-toolbar .text-tab`（Toolbar）
  * - 列表：`.list .row`（虚拟列表）、`.tt-row`（首页紧凑表）
  * 版式细节（`.page-pad`、`.tt-*`、间距）**不参与断言** —— 那些会继续变。
  *
@@ -86,7 +86,7 @@ test('歌单：侧栏点开 → 标题与列表来自该歌单', async ({ page }
 test('导航链：曲库 → 侧栏切专辑宫格（docs/28 一级项）→ 详情 → 逐级返回', async ({ page }) => {
   await openLibrary(page);
   // docs/28：曲库页第一层 tab 已撤（连同分隔线），专辑/艺人从侧栏进
-  await expect(page.locator('.main .content-toolbar .pt-tab')).toHaveCount(0);
+  await expect(page.locator('.main .content-toolbar .text-tab')).toHaveCount(0);
 
   await page.locator('.sidebar .nav-item', { hasText: '专辑' }).click();
   await expect(page.locator('.main h1')).toHaveText('专辑');
@@ -127,14 +127,14 @@ test('播放链路：双击行播放 → 播放条与队列激活行', async ({ 
 
 test('曲库 tab：最近添加/最近播放切换（2026-10-28 自推荐页迁来）', async ({ page }) => {
   await openLibrary(page);
-  const tabs = page.locator('.lib-tabs .lib-tab');
+  const tabs = page.locator('.text-tabs .text-tab');
   await expect(tabs).toHaveCount(3);
-  await expect(page.locator('.lib-tab.on')).toHaveText('全部曲目');
+  await expect(page.locator('.text-tab.on')).toHaveText('全部曲目');
 
   // 切「最近添加」：标题与高亮跟随，列表仍在（mock 种子有 added 排序数据）
   await tabs.filter({ hasText: '最近添加' }).click();
   await expect(page.locator('.main h1')).toHaveText('最近添加');
-  await expect(page.locator('.lib-tab.on')).toHaveText('最近添加');
+  await expect(page.locator('.text-tab.on')).toHaveText('最近添加');
   await firstRow(page).waitFor({ state: 'visible' });
 
   // 同 tab 二次点击 = 翻转正倒序（2026-10-30）：首行必须变化
@@ -157,7 +157,7 @@ test('曲库 tab：最近添加/最近播放切换（2026-10-28 自推荐页迁�
 
   // 歌单页没有 tab（tab 是曲库页的子状态）
   await page.locator('.sidebar .playlist-item').first().click();
-  await expect(page.locator('.lib-tabs')).toHaveCount(0);
+  await expect(page.locator('.text-tabs')).toHaveCount(0);
 });
 
 test('设置页：单页平铺 + tab 跳转定位 + 主题切换生效', async ({ page }) => {
@@ -170,7 +170,7 @@ test('设置页：单页平铺 + tab 跳转定位 + 主题切换生效', async (
   // 六个 tab（2026-10-30：曲库组由「扫描入库」页并入，并提到第一位），
   // 初始高亮第一组；六个区块全部渲染（含小标题）。
   // 语义是"滚动到某个区块"而不是"切换面板"→ nav + aria-current（同 content/Toolbar）
-  const tabs = page.locator('.settings-tabs .settings-tab');
+  const tabs = page.locator('.text-tabs .text-tab');
   await expect(tabs).toHaveCount(6);
   await expect(tabs.first()).toHaveText('曲库');
   await expect(tabs.first()).toHaveAttribute('aria-current', 'true');
