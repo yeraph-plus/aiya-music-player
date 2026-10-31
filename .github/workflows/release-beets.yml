@@ -7,21 +7,21 @@
 #   2. 宿主原先写死 `releases/latest/download`，两个发布节奏互相踩——单独发
 #      beets 会让 `latest` 指过去，而播放器 release 不带 beets 资产时又 404。
 #
-# 拆开之后：本工作流只产出 `aiya-beets-*`，命名统一走 "portable" 语系：
+# 拆开之后：本工作流只产出 `aiya-beets-*`，只有**一条固定通道**，没有版本
+# 分支（2026-10-31 拍板：外围包手动发布、每次更新都要整套实测，版本 release
+# 只会积灰）——推新删旧，`beets-portable` 这一条 release 永远是最新发布：
 #
-#   · 版本 tag `beets-portable-v<version>`：一次发布一个，release 标
-#     `--prerelease`——GitHub 的 "Latest" 徽章永远只落在播放器 release 上，
-#     beets 这种手动维护、每次更新都要整套实测的外围包不能占用它
-#     （2026-10-31 拍板：起用 "latest" 之类的标注容易误导）。
-#   · 固定下载通道 tag `beets-portable`：同样 `--prerelease`，每次发布把资产
-#     `--clobber` 上去。宿主常量指向 `releases/download/beets-portable/...`，
-#     固定 URL、零 API 查询，与播放器发布完全解耦。
+#   · release 标 `--prerelease`：GitHub 的 "Latest" 徽章永远只落在播放器
+#     release 上（起用 "latest" 之类的标注容易误导）。
+#   · 宿主常量指向 `releases/download/beets-portable/...`，固定 URL、零 API
+#     查询，与播放器发布完全解耦。
 #
 # ## 触发方式
 #
 #   · 手动（workflow_dispatch）：默认**只构建不发布**，产物落在 Actions artifacts。
-#     勾 `publish` 且填 `version` 才建 tag 并上传——发布是不可撤销的，不能手滑。
-#   · 打 tag `beets-portable-v*`：构建后直接发布（tag 已存在，不需要再填 version）。
+#     勾 `publish` 才发布——发布是不可撤销的，不能手滑。
+#   · 打 tag `beets-portable`：构建后直接发布（固定通道推新删旧）。
+#     本地发布动作 = `git tag -f beets-portable && git push -f origin beets-portable`。
 #
 # ## 只发 Windows
 #
@@ -36,17 +36,13 @@ name: Release beets
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "beets 版本号（发布时必填，如 0.2.0；建 tag beets-portable-v<version>）"
-        required: false
-        default: ""
       publish:
-        description: "勾选后发布到 Release（并更新固定下载通道 beets-portable）"
+        description: "勾选后发布（推新删旧：整体替换 beets-portable 通道）"
         type: boolean
         default: false
   push:
     tags:
-      - "beets-portable-v*"
+      - "beets-portable"
 
 permissions:
   contents: write
@@ -172,11 +168,8 @@ jobs:
           $man = (Get-Content "beets-tool/dist/bundle/manifest.json" -Raw | ConvertFrom-Json).version
           Write-Host "包内=$pkg manifest=$man"
           if ($pkg -ne $man) { throw "manifest 版本 $man 与包内 $pkg 不一致" }
-          $tagVersion = "${{ github.event_name == 'push' && github.ref_name || inputs.version }}"
-          $tagVersion = $tagVersion -replace '^beets-portable-v', ''
-          if ($tagVersion -and ($tagVersion -ne $pkg)) {
-            throw "tag/输入版本 $tagVersion 与包内 $pkg 不一致（先改 pyproject 与 __init__）"
-          }
+          # 版本只随包走（pyproject / __init__ / manifest），发布通道不再带版本号
+          "BEETS_VERSION=$pkg" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       # 手动触发的默认产物：不发布也能拿到文件去真机试
       - uses: actions/upload-artifact@v4
@@ -189,10 +182,12 @@ jobs:
           retention-days: 14
 
       # ---------------------------------------------------------------
-      # 发布：手动勾了 publish，或者打了 beets-v* tag
+      # 发布：手动勾了 publish，或者打了 beets-portable tag。
+      # 推新删旧：整条 release 连旧 tag 一起删掉再重建，通道上永远只有
+      # 最新一次发布，不留版本分支。删-建之间 URL 短暂 404，窗口分钟级。
       # ---------------------------------------------------------------
-      - name: 发布到 Release
-        if: startsWith(github.ref, 'refs/tags/beets-portable-v') || inputs.publish
+      - name: 发布到固定通道（推新删旧）
+        if: github.ref == 'refs/tags/beets-portable' || inputs.publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -201,30 +196,18 @@ jobs:
             "beets-tool/dist/aiya-beets-portable-win-x64.zip",
             "beets-tool/dist/SHA256SUMS"
           )
-          $version = "${{ inputs.version }}"
-          if (-not $version) { $version = ("${{ github.ref_name }}" -replace '^beets-portable-v', '') }
-          if (-not $version) { throw "发布必须给 version（或打 beets-portable-v* tag）" }
-          $tag = "beets-portable-v$version"
+          $tag = "beets-portable"
 
-          Write-Host "→ $tag"
-          # --prerelease：beets 包不参与仓库 "Latest" 的竞争（见文件头）
-          gh release create $tag --prerelease --title "beets portable $version" --generate-notes $files
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "release 已存在，改为追加上传（--clobber）"
-            gh release upload $tag $files --clobber
-            if ($LASTEXITCODE -ne 0) { throw "上传到 $tag 失败" }
+          gh release view $tag --json tagName 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete $tag --yes --cleanup-tag
+            if ($LASTEXITCODE -ne 0) { throw "删除旧 release $tag 失败" }
           }
 
-          # 固定下载通道：宿主写死 `releases/download/beets-portable/<asset>`。
-          # 必须有，否则播放器就要知道具体版本号才能下载。
-          $floating = "beets-portable"
-          gh release view $floating 2>$null | Out-Null
-          if ($LASTEXITCODE -ne 0) {
-            # --prerelease：`releases/latest` 会跳过 prerelease，通道不抢播放器的 "Latest"
-            gh release create $floating --prerelease --title "beets portable（固定下载通道）" `
-              --notes "指向最近一次 beets 便携包发布，供播放器按固定 URL 下载。不要手动改这个 release。"
-            if ($LASTEXITCODE -ne 0) { throw "创建固定下载通道 $floating 失败" }
-          }
-          gh release upload $floating $files --clobber
-          if ($LASTEXITCODE -ne 0) { throw "更新固定下载通道 $floating 失败" }
-          Write-Host "OK $tag + $floating"
+          # --prerelease：`releases/latest` 会跳过 prerelease，通道不抢播放器的 "Latest"
+          gh release create $tag --prerelease --title "beets portable $env:BEETS_VERSION（固定下载通道）" `
+            --notes "beets 便携包固定下载通道：每次发布整体替换（推新删旧）。播放器按固定 URL 下载，不要手动改这个 release。"
+          if ($LASTEXITCODE -ne 0) { throw "创建 $tag 失败" }
+          gh release upload $tag $files --clobber
+          if ($LASTEXITCODE -ne 0) { throw "上传到 $tag 失败" }
+          Write-Host "OK $tag（推新删旧）"

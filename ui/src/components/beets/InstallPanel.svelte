@@ -73,6 +73,15 @@
   {/if}
 {/snippet}
 
+<!-- 卡内安装状态：只报自己这一轨，跟在按钮正下方（下载/校验/解压阶段与报错都落在动作位上） -->
+{#snippet trackStatus(track: BeetsInstallTrack)}
+  {#if install.running && install.track === track}
+    <p class="track-status">{install.stage} · {install.message}</p>
+  {:else if install.error && install.track === track}
+    <p class="track-status track-status-error">{install.error}</p>
+  {/if}
+{/snippet}
+
 {#snippet uninstallLine()}
   {#if uninstall.running}
     <p class="beets-dim">{uninstall.message || '正在卸载…'}</p>
@@ -119,7 +128,6 @@
         曲库与配置不受影响，用下面任一方式重装即可。
       </p>
     {/if}
-    {@render progressLine()}
 
     <section class="beets-panel">
       <div class="beets-panel-head">
@@ -143,6 +151,7 @@
           下载并安装
         </Button>
       </div>
+      {@render trackStatus('bundle')}
     </section>
 
     <!-- 本机安装：只有这条路能改插件清单；没探测到 Python 就不渲染这张卡 -->
@@ -180,6 +189,7 @@
             安装（{chosen.length} 个插件）
           </Button>
         </div>
+        {@render trackStatus('installer')}
       </section>
     {:else if python !== null}
       <p class="beets-dim install-note">
@@ -357,6 +367,17 @@
   /* 状态行：裸文本不进卡，与两张安装卡同列间距 */
   .install-note {
     margin: 0;
+  }
+
+  /* 卡内安装状态：跟在按钮正下方；报错换警示色（scoped 类避免被基类压掉） */
+  .track-status {
+    margin: 0;
+    font-size: var(--fs-sm);
+    color: var(--text-3);
+  }
+
+  .track-status-error {
+    color: var(--danger);
   }
 
   .beets-path {
