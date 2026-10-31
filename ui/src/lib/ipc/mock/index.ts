@@ -208,6 +208,8 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
         interpreter: 'preview',
         scriptPath: null,
         entrySource: 'settings',
+        // 预览桩按"本机安装"演：装后状态卡的换插件/卸载分支靠它渲染
+        installTrack: 'installer',
         protocolVersion: 2,
         beetsVersion: '2.14.1 (preview)',
         pythonVersion: '3.14 (preview)',

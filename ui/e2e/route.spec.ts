@@ -443,9 +443,9 @@ test('docs/49：Beets 拆成 安装/分析/整理 三个子页，各自只放自
   await expect(main.getByRole('button', { name: '查询' })).toBeVisible();
   await expect(main).not.toContainText('待整理目录');
 
-  // 安装页：组件状态是这一页的主体，且不该再出现查询区
+  // 安装页：装后状态卡随轨道（mock 桩 = 本机安装），且不该再出现查询区
   await tabs.nth(0).click();
-  await expect(main).toContainText('组件状态');
+  await expect(main).toContainText('本机安装');
   await expect(main).toContainText('入口来源');
   await expect(main.getByRole('button', { name: '查询' })).toHaveCount(0);
 

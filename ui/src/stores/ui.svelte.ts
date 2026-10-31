@@ -710,6 +710,7 @@ function readBeetsStatus(raw: unknown): BeetsStatus | null {
     interpreter: str(o.interpreter),
     scriptPath: str(o.scriptPath),
     entrySource: str(o.entrySource),
+    installTrack: str(o.installTrack),
     protocolVersion: num(o.protocolVersion),
     beetsVersion: str(o.beetsVersion),
     pythonVersion: str(o.pythonVersion),

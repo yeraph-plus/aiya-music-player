@@ -17,11 +17,15 @@
    *
    * 状态说明是一行裸文本，不进卡；依赖自检与"另下 X"提示已删：装之前替用户
    * 操心缺什么，不如让安装脚本自己说清楚。
-   * 已安装态只剩三块：组件状态、重装/换插件、卸载。
+   * 已安装态 = **一张状态卡，能力面随轨道**（installTrack 由宿主按入口形状
+   * 推导）：bundle 只有重新下载与删除（播放器直连操作）；installer 才有
+   * 换插件与卸载（脚本过闸 + 宿主执行）。
    */
 
   const found = $derived(ui.beets?.found === true);
   const mismatch = $derived(found && ui.beets?.schemaMatched === false);
+  /** 安装轨道（宿主按入口形状推导）：决定装后状态卡的能力面 */
+  const track = $derived(ui.beets?.installTrack === 'bundle' ? 'bundle' : 'installer');
   const install = $derived(ui.beetsInstall);
   const uninstall = $derived(ui.beetsUninstall);
   const python = $derived(ui.beetsPython);
@@ -46,10 +50,6 @@
     picked = [...next];
   }
 
-  function trackText(track: BeetsInstallTrack): string {
-    return track === 'bundle' ? '预配置环境' : '本机安装';
-  }
-
   /** 安装阶段徽章文本：宿主发的 stage 词 → 人话；未知词原样显示 */
   const stageText: Record<string, string> = {
     prepare: '准备',
@@ -59,7 +59,6 @@
     bin: '外置工具',
   };
   const stageLabel = (s: string): string => stageText[s] ?? s;
-
   /** 入口来源（docs/33 §6.1）：排障第一个问题是"为什么用的是这个" */
   function entryText(source: string | null | undefined): string {
     switch (source) {
@@ -74,14 +73,6 @@
     }
   }
 </script>
-
-{#snippet progressLine()}
-  {#if install.running}
-    <p class="beets-dim">{trackText(install.track)} · {install.stage} · {install.message}</p>
-  {:else if install.error}
-    <p class="beets-danger">{install.error}</p>
-  {/if}
-{/snippet}
 
 <!-- 卡内安装状态：只报自己这一轨，跟在按钮正下方——阶段是徽章，消息是文本 -->
 {#snippet trackStatus(track: BeetsInstallTrack)}
@@ -220,42 +211,58 @@
             <TriangleAlert size={15} /> Beets 与播放器的协议契约不一致
           </strong>
           <span class="beets-dim">
-            schema 指纹比对失败，查询会读到对不上的形状，因此整页停用。重装整理组件，
+            schema 指纹比对失败，查询会读到对不上的形状，因此整页停用。按当前安装方式重装，
             或升级播放器后重试。
           </span>
         </div>
         <div class="beets-gate">
-          <Button
-            variant="primary"
-            size="sm"
-            loading={install.running && install.track === 'installer'}
-            disabled={install.running}
-            onclick={() => void ui.installBeets('installer', chosen)}
-          >
-            {#snippet icon()}<Download size={14} />{/snippet}
-            重装（本机安装）
-          </Button>
-          <Button
-            size="sm"
-            loading={install.running && install.track === 'bundle'}
-            disabled={install.running}
-            onclick={() => void ui.installBeets('bundle')}
-          >
-            {#snippet icon()}<Package size={14} />{/snippet}
-            重装（预配置环境）
-          </Button>
+          {#if track === 'bundle'}
+            <Button
+              variant="primary"
+              size="sm"
+              loading={install.running && install.track === 'bundle'}
+              disabled={install.running}
+              onclick={() => void ui.installBeets('bundle')}
+            >
+              {#snippet icon()}<Package size={14} />{/snippet}
+              重装（预配置环境）
+            </Button>
+          {:else}
+            <Button
+              variant="primary"
+              size="sm"
+              loading={install.running && install.track === 'installer'}
+              disabled={install.running || !(python?.found ?? false)}
+              onclick={() => void ui.installBeets('installer', chosen)}
+            >
+              {#snippet icon()}<Download size={14} />{/snippet}
+              重装（本机安装）
+            </Button>
+          {/if}
         </div>
-        {@render progressLine()}
+        {@render trackStatus('bundle')}
+        {@render trackStatus('installer')}
       </section>
     {/if}
 
+    <!-- 装后状态卡：一张卡，能力面随安装轨道走——
+         bundle 只有重下载与删除（都是播放器直连操作，不经 Python）；
+         installer 才有换插件，卸载由脚本过闸、宿主执行 -->
     <section class="beets-panel">
       <div class="beets-panel-head">
-        <strong>组件状态</strong>
-        <span class="beets-dim">
-          这些是工具自报的事实。入口一栏用来回答
-          「为什么用的是这个」——同时装了两份时它是唯一能看出差别的线索。
-        </span>
+        {#if track === 'bundle'}
+          <strong>预配置环境</strong>
+          <span class="beets-dim">
+            自带解释器与固定插件清单。更新 = 重新下载；删除 = 组件目录整体移除——
+            两个动作都是播放器直连操作，不经过 Python。
+          </span>
+        {:else}
+          <strong>本机安装</strong>
+          <span class="beets-dim">
+            本机 Python 建的隔离环境。换插件 = 重跑安装脚本；卸载先由脚本过闸算账，
+            再由播放器执行删除（运行中的解释器删不掉自己）。
+          </span>
+        {/if}
       </div>
       <div class="beets-row">
         <span>beets <b>{ui.beets.beetsVersion ?? '未知版本'}</b></span>
@@ -305,49 +312,38 @@
           {/if}
         </tbody>
       </table>
-    </section>
 
-    <section class="beets-panel">
-      <div class="beets-panel-head">
-        <strong>重装 / 换插件</strong>
-        <span class="beets-dim">
-          重装不碰曲库，也不删你的 beets 库；只是把工具本身重新铺一遍。
-        </span>
-      </div>
-      <div class="beets-gate">
-        <Button
-          size="sm"
-          loading={install.running && install.track === 'installer'}
-          disabled={install.running || !(python?.found ?? false)}
-          onclick={() => void ui.installBeets('installer', chosen)}
-        >
-          {#snippet icon()}<Download size={14} />{/snippet}
-          本机安装{python?.found ? `（Python ${python.version}）` : '（未找到 Python）'}
-        </Button>
-        <Button
-          size="sm"
-          loading={install.running && install.track === 'bundle'}
-          disabled={install.running}
-          onclick={() => void ui.installBeets('bundle')}
-        >
-          {#snippet icon()}<Package size={14} />{/snippet}
-          预配置环境
-        </Button>
-      </div>
-      {@render pluginPicker('换装时可改勾选：勾上的会装依赖，并写进配置的启用清单。')}
-      {@render progressLine()}
-    </section>
-
-    <section class="beets-panel">
-      <div class="beets-panel-head">
-        <strong>卸载组件</strong>
-        <span class="beets-dim">
-          只删安装目录（预配置环境 / 虚拟环境 / 下载缓存）。你的 beets 曲库与分析库<b>不动</b>——
-          它们是你的数据，要清理请用各自的入口。
-        </span>
-      </div>
-      {#if confirming}
+      {#if track !== 'bundle'}
+        {@render pluginPicker('换插件时改勾选：勾上的会装依赖，并写进配置的启用清单。')}
         <div class="beets-gate">
+          <Button
+            size="sm"
+            loading={install.running && install.track === 'installer'}
+            disabled={install.running || !(python?.found ?? false)}
+            onclick={() => void ui.installBeets('installer', chosen)}
+          >
+            {#snippet icon()}<Download size={14} />{/snippet}
+            换插件并重装{python?.found ? `（Python ${python.version}）` : '（未找到 Python）'}
+          </Button>
+        </div>
+        {@render trackStatus('installer')}
+      {:else}
+        <div class="beets-gate">
+          <Button
+            size="sm"
+            loading={install.running && install.track === 'bundle'}
+            disabled={install.running}
+            onclick={() => void ui.installBeets('bundle')}
+          >
+            {#snippet icon()}<Package size={14} />{/snippet}
+            重新下载并安装（更新到通道最新）
+          </Button>
+        </div>
+        {@render trackStatus('bundle')}
+      {/if}
+
+      <div class="beets-gate">
+        {#if confirming}
           <Button
             variant="danger"
             size="sm"
@@ -359,18 +355,20 @@
             }}
           >
             {#snippet icon()}<Trash2 size={14} />{/snippet}
-            确认卸载
+            {track === 'bundle' ? '确认删除' : '确认卸载'}
           </Button>
           <Button size="sm" disabled={uninstall.running} onclick={() => (confirming = false)}>取消</Button>
-        </div>
-      {:else}
-        <div class="beets-gate">
+        {:else}
           <Button size="sm" disabled={uninstall.running} onclick={() => (confirming = true)}>
             {#snippet icon()}<Trash2 size={14} />{/snippet}
-            卸载组件
+            {track === 'bundle' ? '删除组件' : '卸载组件'}
           </Button>
-        </div>
-      {/if}
+        {/if}
+      </div>
+      <p class="install-note">
+        {track === 'bundle' ? '删除' : '卸载'}只动组件目录（预配置环境 / 虚拟环境 / 下载缓存），
+        你的 beets 曲库与分析库<b>不动</b>——它们是你的数据，要清理请用各自的入口。
+      </p>
       {@render uninstallLine()}
     </section>
   {/if}

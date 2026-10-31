@@ -514,6 +514,21 @@ fn version_mismatch(got: Option<u32>) -> Option<String> {
     }
 }
 
+/// 从入口形状推导安装轨道（`bundle` / `installer`）。
+///
+/// 推导而不是另存一份状态：bundle 的入口永远是 `bundle\python.exe`，A 轨道
+/// 永远在 `venv\Scripts\` 里，两个形状不会撞；入口没了它也就没了。PATH/
+/// 环境变量的自装入口归到 `installer`——同样有 Python 环境，卸载走同一套
+/// "脚本过闸 + 宿主执行"，没有安装目录时自然落进幂等分支。
+fn install_track_of(entry: &ToolEntry) -> &'static str {
+    let p = entry.program.to_ascii_lowercase();
+    if p.contains("\\bundle\\") || p.contains("/bundle/") {
+        "bundle"
+    } else {
+        "installer"
+    }
+}
+
 /// 协议报告 → UI 契约。
 ///
 /// 两边字段名不同是刻意的：crate 用中性词（`tool_version` / `runtime_version` /
@@ -528,6 +543,7 @@ fn status_from(entry: &ToolEntry, source: EntrySource, report: StatusReport) -> 
         interpreter: Some(entry.program.clone()),
         script_path: (!entry.args.is_empty()).then(|| entry.args.join(" ")),
         entry_source: Some(source.as_str().into()),
+        install_track: Some(install_track_of(entry).to_string()),
         protocol_version: report.protocol_version,
         beets_version: report.tool_version,
         python_version: report.runtime_version,
@@ -594,6 +610,7 @@ fn absent(
         interpreter: entry.map(|e| e.program.clone()),
         script_path: entry.and_then(|e| (!e.args.is_empty()).then(|| e.args.join(" "))),
         entry_source: source.map(|s| s.as_str().to_string()),
+        install_track: entry.map(install_track_of).map(str::to_string),
         protocol_version: None,
         beets_version: None,
         python_version: None,
@@ -661,6 +678,7 @@ fn busy_status(entry: &ToolEntry, source: EntrySource) -> BeetsStatus {
         interpreter: Some(entry.program.clone()),
         script_path: (!entry.args.is_empty()).then(|| entry.args.join(" ")),
         entry_source: Some(source.as_str().to_string()),
+        install_track: Some(install_track_of(entry).to_string()),
         protocol_version: None,
         beets_version: None,
         python_version: None,
@@ -2829,7 +2847,7 @@ mod tests {
         // BeetsStatus 只有 Deserialize；用 JSON 反序列化锚定输入形状
         let v = serde_json::json!({
             "found": true, "interpreter": "py", "scriptPath": "-m aiya_beets",
-            "entrySource": "settings",
+            "entrySource": "settings", "installTrack": "installer",
             "protocolVersion": 1, "beetsVersion": "2.14.1", "pythonVersion": "3.14.7",
             "pythonSupported": true,
             "libraryPath": "l.db", "libraryExists": true,
@@ -2849,6 +2867,8 @@ mod tests {
         assert_eq!(st.library_exists, Some(true));
         assert_eq!(st.plugins, Some(vec!["musicbrainz".to_string()]));
         assert_eq!(st.entry_source.as_deref(), Some("settings"));
+        // 装后状态卡按轨道出能力面：入口形状推导的结果要能过 IPC
+        assert_eq!(st.install_track.as_deref(), Some("installer"));
         assert_eq!(st.python_supported, Some(true));
         assert_eq!(st.data_home.as_deref(), Some("d"));
         // v2：schema 比对结论 + 库锁三态原样透传

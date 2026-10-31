@@ -541,6 +541,7 @@ fn beets_status_protocol_version_is_number() {
         interpreter: Some("aiya-beets.exe".into()),
         script_path: None,
         entry_source: Some("settings".into()),
+        install_track: Some("installer".into()),
         protocol_version: Some(1),
         beets_version: Some("2.14.1".into()),
         python_version: None,

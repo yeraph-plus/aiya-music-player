@@ -24,7 +24,16 @@ scriptPath: string | null,
  * 排障第一个问题永远是"为什么用的是这个"，让发现层直接回答，
  * 而不是让用户去翻日志。
  */
-entrySource: string | null, protocolVersion: number | null, beetsVersion: string | null, pythonVersion: string | null, 
+entrySource: string | null, 
+/**
+ * 这次安装走的是哪条轨道：`bundle`（预配置环境）/ `installer`（本机安装）。
+ *
+ * 由入口形状推导（bundle 的入口是包内解释器，A 轨道的入口在 venv 里），
+ * 不是另存的状态——与"装没装"同生命周期。UI 据此决定装后状态卡的
+ * 能力面：bundle 只有重下载与删除（都是播放器直连操作），installer
+ * 才有换插件与卸载（脚本过闸、宿主执行）。
+ */
+installTrack: string | null, protocolVersion: number | null, beetsVersion: string | null, pythonVersion: string | null, 
 /**
  * 运行时是否在支持窗口内（工具自报；None = 老版本工具没报）。
  */
