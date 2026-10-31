@@ -1,6 +1,6 @@
 # 59 · 注释与文档文风治理：调研与批次计划（2026-11-01）
 
-> 类型：调研 + 批次计划　状态：G0–G1 已完成，G2–G7 待执行　
+> 类型：调研 + 批次计划　状态：G0–G2 已完成；G3–G7 待执行　
 > 证据来源：全仓 grep 取证与三路抽样（Rust 76 文件 / 前端 208 文件 / docs 67 文件），
 > 本节所有引文均逐字摘自仓库文件，路径相对仓库根。
 
@@ -182,7 +182,7 @@ ADR 体系停止使用，docs/adr/ 六份记录删除，其中仍然成立的事
 |---|---|---|---|
 | G0（本批） | 调研与计划 | 本文档 | — |
 | G1 | 根 `AGENTS.md`：项目结构与依赖边界、开发操作（命令表、验证门禁、环境前提）、§2 文风规范、§3 文档制度；吸收 docs/adr 六份记录的事实入约束节；`tools/check-style.mjs`（report-only） | AGENTS.md + 检查脚本；删除 docs/adr/ 与 42-release-fix-ledger | 文档中每条命令可在仓库根直接执行；结构与目录实况一致 |
-| G2 | README 门面化：一句话介绍、特性、截图、下载/两种发布形态、快速开始、架构一段 + 指针；原 README 内容迁移——决策与命令细节入 AGENTS.md，进度指向 docs/35 | 新 README + 仓库内截图（`docs/img/`） | 非作者视角 3 分钟内明白项目是什么、怎么装、怎么跑；含 ≥3 张截图 |
+| G2 | README 门面化：一句话介绍、特性、截图、下载/两种发布形态、快速开始、架构一段 + 指针；原 README 内容迁移——决策与命令细节入 AGENTS.md，进度指向 docs/35 | 新 README + 仓库内截图（`docs/img/`）。2026-11-01 完成：截图三张由用户提供（真实 `tauri dev` 环境），落 `library.png`（曲库 + 均衡器抽屉）、`now-playing.png`（正在播放）、`settings.png`（设置），README 一排三张 | 非作者视角 3 分钟内明白项目是什么、怎么装、怎么跑；含 ≥3 张截图 |
 | G3 | 前端注释第一片：`stores/ui.svelte.ts`、`Icon.svelte`、`lib/format.ts`、`lib/artwork.ts`、`lib/settings*.ts`、`lib/beets.ts` | 本片内编年史/训诫/拍板清零 | svelte-check 0 error；本片注释无日期戳 |
 | G4 | 前端注释第二片：`components/**`（PlayerBar、SettingsPanel、beets/*、shell/* 等）+ `lib/render/**` | 同上 | 同上 |
 | G5 | Rust 注释第一片：`src-tauri/src/`（beets.rs、lib.rs、refresh.rs、pump.rs、hls.rs 等） | 禁词清零、比喻重述、日期叙事迁出 | cargo test 全绿；cargo doc 无 warning |
