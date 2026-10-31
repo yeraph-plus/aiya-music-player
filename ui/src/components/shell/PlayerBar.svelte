@@ -24,23 +24,18 @@
   import Slider from '../ui/Slider.svelte';
 
   /**
-   * 底部播放条：**唯一常驻的播放控制面**。
+   * 底部播放条：唯一常驻的播放控制面。
    *
-   * B3b-2 换皮时改了三处**实现**（外观口径不变）：
-   * 1. 两个 `<input type="range">` → `Slider`（bits-ui）。顺带把全局
-   *    `input[type=range]` 那套 `-webkit-slider-thumb` 伪元素样式删了 ——
-   *    它在亮色主题下拇指是深色圆点、深色主题下又是浅色，两套值各写一遍。
-   *    **进度用 `oncommit`、音量用 `oninput`**：拖动中每帧 seek 会让 Rust 侧
-   *    反复 flush 输出缓冲（实测有咔哒声），音量则相反 —— 用户期待拖的时候就听到。
-   * 2. 图标键 → `IconButton`（圆形 + `solid` 只给中间那颗播放键）。
-   * 3. 封面 → `Cover size="md"`（48px）。
+   * 进度与音量的提交时机不同：进度使用 `oncommit`，音量使用 `oninput`。
+   * 拖动中逐帧 seek 会使 Rust 侧反复 flush 输出缓冲（实测产生咔哒声）；
+   * 音量则相反，用户预期拖动过程中即可听到变化。
    *
-   * docs/25 §6 按键重排（用户五点反馈）：
-   * - 左侧歌曲区域**本身就是正在播放页的入口**（侧栏席位已撤）；
-   * - 主五键 = 加入歌单 / 上一首 / 播放 / 下一首 / 模式单键循环；
-   * - 队列与 EQ 改走窗口右缘的 `SideDrawer`（AppShell 宿主），这里只留
-   *   触发键——气泡定位抖动的根源（floating-ui 测量+翻转）整个消失；
-   * - 倍速保持 Popover 气泡（小面板贴键，无抖动问题），迁到右侧键区。
+   * 按键布局（docs/25 §6）：
+   * - 左侧歌曲区域同时是正在播放页的入口；
+   * - 主控五键为加入歌单、上一首、播放、下一首、播放模式单键循环；
+   * - 队列与 EQ 由 AppShell 宿主的 `SideDrawer` 承担，此处只保留触发键，
+   *   避免 Popover 依赖 floating-ui 测量与翻转导致的定位抖动；
+   * - 倍速仍用贴键的 Popover（小面板，无定位抖动问题），位于右侧键区。
    */
 
   interface Props {
@@ -104,33 +99,35 @@
   const positionMs = $derived(dragging ? dragMs : (player?.positionMs ?? 0));
 
   /**
-   * 时长**三态**（docs/52 §7.1）：`null` = 不知道（直播流，或本地文件还没
-   * 探完），`0` = 真空文件，正值 = 可拖。
+   * 时长三态（docs/52 §7.1）：`null` = 未知（直播流，或本地文件尚未解析完成），
+   * `0` = 空文件，正值 = 可拖动。
    *
-   * 原来是 `player?.durationMs ?? 0`，把"不知道"和"零秒"压成同一个 0 ——
-   * 于是直播流的时长位渲染成 `0:00`、进度条 `max` 走 `durationMs || 1`
-   * 兜底成 1 毫秒。看起来像"一首 0 秒长的坏文件"，而不是"这是直播"。
+   * 使用 `?? 0` 合并会把"未知"与"零秒"压成同一个值：直播流的时长位渲染为
+   * `0:00`，进度条 `max` 经 `durationMs || 1` 兜底为 1 毫秒，表现为"时长为零的
+   * 损坏文件"，而非"这是直播"。
    */
   const durationMs = $derived(player?.durationMs ?? null);
-  /** 只有拿到正时长才允许拖：直播流永远走不进这个分支 */
+  /** 仅有正时长时才允许拖动：直播流不会进入该分支 */
+
   const seekable = $derived(durationMs !== null && durationMs > 0);
   /**
-   * 直播流（docs/22 G3 的 `AudioSource`，此前定义了没人读）。
+   * 直播流（`AudioSource` 的 `stream` 取值，docs/22 G3）。
    *
-   * 语义按用户拍板（docs/52 §10）：**暂停 = 断开连接，播放 = 重连**。
-   * 所以徽章要分三态，不能一律写"直播"——暂停时连接是真的没了。
+   * 语义（docs/52 §10）：暂停即断开连接，播放即重新连接。因此徽章分三态，
+   * 不能统一显示"直播"——暂停状态下连接已不存在。
    */
   const isStream = $derived(player?.source === 'stream');
   /**
-   * bits-ui Slider 的吸附坑（真机实测冻结进度条，mock 测不出来）：
-   * value 不在 step 网格上时，SliderRootState 内部的 watch 会把它吸附到
-   * 最近网格点——这次写入走的是 `onValueChange` 通道，于是**程序化的
-   * 位置更新也会回调 oninput**，`dragging` 被卡成 true，`positionMs`
-   * 从此钉死在 dragMs（引擎继续报位置，但拖动镜像把它全盖住）。
-   * 播放位置的毫秒值对 step=100 几乎总是非法 → 必现；mock 后端的位置
-   * 定时器同样按 100ms 步进推进（见 mock/backend.ts 的 tickPosition），
-   * 恰好永远合法 → e2e 全绿。解法：传入前自己吸附到网格，内部
-   * watch 看到的永远是合法值，不会触发那次写入。
+   * bits-ui Slider 的吸附行为（真机可复现进度条冻结，mock 后端无法复现）：
+   * value 不在 step 网格上时，SliderRootState 内部的 watch 会将其吸附到最近
+   * 网格点；该写入经由 `onValueChange` 通道，因此程序化的位置更新同样会触发
+   * `oninput`，`dragging` 被判为 true，`positionMs` 从此固定为 `dragMs`
+   * （引擎仍上报位置，但拖动镜像覆盖之）。
+   *
+   * 播放位置的毫秒值对 step=100 几乎总是非网格值，故该路径必然触发；mock 后端
+   * 的位置定时器按 100ms 步进推进（见 mock/backend.ts 的 `tickPosition`），恰好
+   * 始终落在网格上，e2e 因此全绿。处理方式：传入前先吸附到网格，内部 watch
+   * 读取的值始终合法，不再触发该写入。
    */
   const sliderMs = $derived(Math.round(positionMs / 100) * 100);
   const playing = $derived(player?.status === 'playing');
@@ -148,8 +145,8 @@
   const phase = $derived(livePhase(player?.status));
 
   /**
-   * 副标题的出处：直播 → 主机名，拖入的本地文件 → 所在目录。
-   * 库内曲目两者都是 `null`，走原来的艺人名。
+   * 副标题来源：直播流取主机名，拖入的本地文件取所在目录。
+   * 库内曲目两者均为 `null`，回落到艺人名。
    */
   const transient = $derived(isTransientId(player?.current?.id));
   const origin = $derived(transientOrigin(player?.current?.id));
@@ -157,9 +154,8 @@
   const volume = $derived(player?.muted ? 0 : (player?.volume ?? 0.85));
 
   /**
-   * 播放模式（单键循环的四态）。后端字段是 repeat + shuffle 两个正交开关，
-   * 这里合成用户心智里的一个"模式"：随机优先显示（shuffle 开着就是随机，
-   * 不管 repeat 是什么）。
+   * 播放模式（单键循环四态）。后端为 repeat 与 shuffle 两个正交开关，此处
+   * 合成为单一"模式"取值：shuffle 开启时一律显示随机，与 repeat 取值无关。
    */
   type PlayMode = 'all' | 'one' | 'shuffle' | 'sequential';
   const mode = $derived<PlayMode>(
@@ -182,14 +178,13 @@
 
 <footer class="player">
   <!--
-    歌曲区域 = 正在播放页**开关**（docs/25 §6：侧栏席位撤了，入口搬到这里——
-    "正在听什么"的信息本身就在这，点它是最近的路）。无曲目也允许点进
-    空态页（页面自己会说明"未在播放"），不做 disabled。
+    歌曲区域即正在播放页的开关（docs/25 §6）。该区域本身展示当前播放内容，
+    作为入口比经由侧栏更直接。无曲目时仍可进入，由页面显示空态（"未在播放"），
+    不设为 disabled。
 
-    封面上的折线箭头 2026-10-30 改成 **hover 提示**：原来是压在封面右下角的
-    16px 小徽章，静止时也在，等于把封面裁掉一个角、又小到看不清；现在整块
-    封面盖一层暗色蒙版 + 居中折线箭头，只在悬停/键盘聚焦时出现——朝上 =
-    可以展开，朝下 = 已经展开、再点收起。页内不再放返回键，退出走这里或顶栏返回。
+    封面悬停提示：整块封面覆盖暗色蒙版与居中折线箭头，仅悬停或键盘聚焦时
+    出现。箭头朝上表示可展开，朝下表示已展开、再次点击收起。页面内不设返回键，
+    退出经此处或顶栏返回。
   -->
   <button
     class="now"
@@ -434,14 +429,13 @@
     gap: 16px;
     height: var(--player-h);
     padding: 0 18px;
-    /* 边线已撤（用户拍板"区域之间不留 border"）：与主区的分隔改由一条
-     * **上抛阴影**承担——播放条是全应用最"实"的一层，阴影既给出分界，
-     * 又暗示它悬浮在背景之上（方向朝上，光从上面来）。 */
+    /* 不设边线：与主区的分隔由上抛阴影承担。播放条是全应用最实的一层，
+     * 阴影既给出分界，也表明它悬浮于背景之上（方向朝上，光源在上）。 */
     box-shadow: var(--shadow-up);
-    /* 半透明（docs/25 T4g 定档 95%——与顶栏同档，接近不透明）：
-     * 全应用背景从底下透出来。底色用 surface-3（顶栏是 surface-2）——
-     * 同档不同阶，有一点色差。原 backdrop-filter 摘除——持久壳层垫着
-     * 动画频谱 canvas 就是每帧全条重模糊（docs/25 §5 方案 B 红线）。 */
+    /* 半透明 95%（与顶栏同档，接近不透明）：应用级背景从下层透出。底色取
+     * surface-3，顶栏取 surface-2，同档不同阶，形成轻微色差。
+     * 不使用 backdrop-filter：持久壳层覆盖在动画频谱 canvas 之上时，每帧都
+     * 需对整条重新模糊（docs/25 §5）。 */
     background: color-mix(in srgb, var(--surface-3) 95%, transparent);
   }
 
@@ -472,14 +466,13 @@
   }
 
   /*
-   * 折线箭头 = 「还有一页」的提示，同时是开合状态的读数：
-   * 朝上（未展开，可以上去）/ 朝下（已展开，再点收起）。
+   * 折线箭头表示「还有一页」，同时反映开合状态：朝上为未展开（可进入），
+   * 朝下为已展开（再次点击收起）。
    *
-   * 形态是**盖住整块封面的暗色蒙版 + 居中箭头**（2026-10-30 用户拍板）：
-   * 原来是压角的 16px 小徽章，静止时也在，等于从封面裁掉一个角还看不清。
-   * 蒙版只在 hover / 键盘聚焦时淡入——48px 的封面经不起常驻装饰，
-   * 而"这块能不能点"本来就是要伸手的时候才需要回答的问题。
-   * 黑色蒙版 + 白箭头：落在任何封面上都是同一对比度，不跟主题走。
+   * 形态为覆盖整块封面的暗色蒙版加居中箭头。角标式小徽章在静止时同样显示，
+   * 会在封面角落切出一块且尺寸过小难以辨认。蒙版仅在 hover 或键盘聚焦时
+   * 淡入：48px 的封面不宜常驻装饰，而"此处可点击"这一信息只在用户准备操作
+   * 时需要。黑色蒙版与白箭头在任何封面上对比度一致，不随主题变化。
    */
   .now-cue {
     position: absolute;
@@ -661,7 +654,7 @@
     animation: live-breathe 2.8s ease-in-out infinite;
   }
 
-  /* 断开：一条静止的灰线，动画与渐变一起撤掉 */
+  /* 断开态：静止灰线，不播放动画、不加渐变 */
   .live-bar:not(.on)::after {
     animation: none;
     background: none;

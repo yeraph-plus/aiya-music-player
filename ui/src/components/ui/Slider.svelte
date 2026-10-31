@@ -2,19 +2,18 @@
   import { Slider } from 'bits-ui';
 
   /**
-   * 滑块：进度 / 音量 / 倍速三处共用。
+   * 滑块：进度、音量与倍速三处共用。
    *
-   * 内核 `bits-ui/Slider`（单拇指）：指针捕获、`Home/End`、`←/→` 步进、
-   * `aria-valuenow/min/max`。取代三个 `<input type="range">`（它们各自写了
-   * 一套 `-webkit-slider-thumb` 伪元素样式，亮暗主题下还不一致）。
+   * 内核为 `bits-ui/Slider`（单拇指），提供指针捕获、Home/End、←/→ 步进与
+   * `aria-valuenow/min/max`。
    *
-   * ## `oninput` 与 `oncommit` 的分工（不是可选优化，是正确性）
+   * ## `oninput` 与 `oncommit` 的分工（属正确性要求，非可选优化）
    *
-   * - `oninput` 每次指针移动都触发 → **音量**用它（用户拖着就想听到变化）
-   * - `oncommit` 只在松手/键盘结束时触发 → **进度条 seek 必须用它**
-   *   拖动中每帧 seek 会让 Rust 侧反复 flush 输出缓冲，实测有咔哒声
+   * - `oninput` 在每次指针移动时触发 → 音量使用此回调（用户拖动时期待听到变化）
+   * - `oncommit` 在松手或键盘操作结束时触发 → 进度条 seek 必须使用此回调；
+   *   拖动中逐帧 seek 会使 Rust 侧反复 flush 输出缓冲，实测产生咔哒声
    *
-   * 两者都可选；只传一个也行。
+   * 两者均可选，可只传其一。
    */
 
   interface Props {
@@ -124,9 +123,9 @@
     cursor: default;
   }
 
-  /* 竖向（EQ 频段）：轨道竖画，宽度即厚度，高度由调用方给。
-     min-width 必须归零——横向档的 min-width:40 会把 22px 的竖轨撑到 40px，
-     溢出波段列（2026-10-28 EQ 抽屉横滚的真因之一） */
+  /* 竖向（EQ 频段）：轨道竖画，宽度即厚度，高度由调用方指定。
+     min-width 须归零：横向档的 min-width:40 会把 22px 的竖轨撑到 40px，导致
+     EQ 抽屉出现横向滚动 */
   :global(.k-slider.vert) {
     width: 22px;
     min-width: 0;

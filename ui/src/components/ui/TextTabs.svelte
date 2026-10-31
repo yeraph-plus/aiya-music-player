@@ -2,19 +2,18 @@
   import type { Snippet } from 'svelte';
 
   /**
-   * 文本页签（发布前 UI 审查 P8 抽件）：此前同一交互有**三套实现、两种语义**
-   * —— Toolbar 胶囊底（nav+aria-current）、SettingsPanel 下划线（nav，样式与
-   * LibraryView 逐行复制）、LibraryView 下划线却套了完整 tablist/tab 角色
-   * （又没有 tabpanel，读屏模型失实）。抽成一件后：
+   * 文本页签：页内导航与视图切换的统一实现。
    *
-   * · 语义只有一种：`nav` + `aria-current="true"`（页签切换的是"当前视图"
-   *   而不是 tabpanel 的显隐，tab 角色模型在这里不成立——Toolbar 与
-   *   SettingsPanel 的既有注释论证过，LibraryView 归队）。
-   * · 外观两档：`pill`（内容工具条）/ `underline`（页面级分组）。
- * · `disabled` 置灰失效（beets 未安装时的分析/整理 tab）：不可点，但位置还在
- *   ——用户看得见"还有这两页"，只是现在进不去。
-   * · `count` 是可选角标（工具条的曲目数）；`title` 透传（曲库 tab 的
-   *   "再点一次切换顺序"提示）。
+   * 语义只有一种：`nav` 加 `aria-current="true"`。页签切换的是"当前视图"，而非
+   * tabpanel 的显隐，因此不适用 tab 角色模型。
+   *
+   * 外观两档：`pill`（内容工具条）/ `underline`（页面级分组）。
+   *
+   * `disabled` 置灰失效（beets 未安装时的分析、整理页签）：不可点击但保留位置，
+   * 用户仍可看到这两页存在。
+   *
+   * `count` 为可选角标（工具条的曲目数）；`title` 透传（曲库页签的"再次点击切换
+   * 排序方向"提示）。
    */
   interface TabItem {
     id: string;

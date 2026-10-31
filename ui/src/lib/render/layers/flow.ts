@@ -1,45 +1,44 @@
 /**
- * 背景流动渐变（docs/46 §3.1，P1；2026-10-30 重写为纯晕染）。
+ * 背景流动渐变（docs/46 §3.1）。
  *
- * 做什么：在固定 CSS 渐变**之上**叠一层缓慢漂移的彩色光雾，让背景"活着"
- * 但不抢内容。**不是**重画那 5 套配色 —— `--ambient-bg` 是设计资产的唯一
- * 来源，这一层只加动态，不动配色资产。
+ * 作用：在固定 CSS 渐变之上叠一层缓慢漂移的彩色光雾，使背景保持动态而不
+ * 干扰内容。不重绘配色方案——`--ambient-bg` 是配色资产的唯一来源，本层只
+ * 增加动态，不修改配色资产。
  *
- * 2026-10-30 换画法：原实现是 3 octave fbm + 域扭曲 + smoothstep 遮罩，
- * 用户反馈"有明显的色块和尖角"。根因是**画法本身**——smoothstep 是阈值，
- * 阈值处一阶导不连续，暗背景上一定读得出边缘；域扭曲又把噪声坐标拉出折角。
- * 现在改成 5 个椭圆高斯斑叠加：exp(-r²) 处处可导，没有阈值就没有边缘，
- * 也没有"形状"可读，只有浓淡。顺带便宜了（5 次 exp vs 12 次噪声取样）。
+ * 画法为 5 个椭圆高斯斑叠加：exp(-r²) 处处可导，不存在阈值，因此不产生可辨
+ * 边缘，也没有可辨识的形状，只有浓淡变化。基于噪声的做法（fbm + 域扭曲 +
+ * smoothstep 遮罩）在阈值处一阶导不连续，暗背景上必然读得出边界，域扭曲还会
+ * 把噪声坐标拉出折角。高斯叠加的采样成本亦更低（5 次 exp 对比 12 次噪声取样）。
  *
- * 两层结构（这是本文件的核心决定）：
+ * 两层结构（本文件的核心设计）：
  *
- *   低分辨率场（384×216，每 90ms 算一次）
+ *   低分辨率场（384×216，每 90ms 计算一次）
  *        ↓ 双线性放大 + 抖动
  *   全分辨率合成（每帧一次带纹理的四边形）
  *
- * 为什么不直接全屏跑：场的成本 ∝ 像素数。4K@2x 是 8M 像素，而这个场本身
- * **低频又极慢**（时间系数 0.06，一轮约 100s），90ms 更新一次与逐帧更新在
- * 画面上无法区分 —— 变化量远小于 8bit 的一个色阶。所以把贵的部分关在
- * 384×216 里，全分辨率只做一次纹理采样。
+ * 不直接在全屏计算的原因：场的成本与像素数成正比。4K@2x 为 8M 像素，而该场
+ * 低频且变化极慢（时间系数 0.06，一轮约 100s），90ms 更新与逐帧更新在画面上
+ * 无法区分——变化量小于 8bit 的一个色阶。昂贵的计算因此限定在 384×216 内，
+ * 全分辨率仅做一次纹理采样。
  *
- * 8bit 目标 + 极暗的光雾 = 必然出现色带。合成时叠一点有序噪声（dither）
- * 就能打散，代价是一次 hash —— 不加的话暗背景上会看到一圈圈等高线。
+ * 8bit 目标配合极暗光雾必然产生色带，合成时叠加有序噪声（dither）可将其打散；
+ * 代价是一次 hash 运算，不加则暗背景上会出现等高线状条纹。
  */
 
 import { PlaneGeometry, Color, LinearFilter, Mesh, OrthographicCamera, Scene, ShaderMaterial, Vector2, WebGLRenderTarget, NoBlending, CustomBlending, OneFactor, OneMinusSrcAlphaFactor, AddEquation } from 'three';
 import { onThemeChange, themeColor } from '../../accent';
 import type { Frame, GlLayer, GlStage } from '../context';
 
-/** 场的分辨率：低频到 384×216 已经绰绰有余，再大纯属浪费 */
+/** 场的分辨率：低频内容在 384×216 已足够，更高分辨率无收益 */
 const FIELD_W = 384;
 const FIELD_H = 216;
 
 /**
- * 场的最短更新间隔。
+ * 场的最小更新间隔。
  *
- * 90ms ≈ 11Hz。选它的依据是"变化量是否可辨"而不是"省多少"：时间系数
- * 0.06 下，90ms 内场的位移约 0.0054 个噪声周期，换算成 8bit 通道远小于
- * 1 个色阶 —— 逐帧更新看不出差别。
+ * 90ms 约合 11Hz。取值的依据是变化是否可辨：时间系数 0.06 下，90ms 内场的
+ * 位移约 0.0054 个噪声周期，换算到 8bit 通道远小于 1 个色阶，逐帧更新与
+ * 90ms 更新在画面上无差别。
  */
 const FIELD_INTERVAL_MS = 90;
 
@@ -62,9 +61,9 @@ const FRAG_FIELD = /* glsl */ `
   /**
    * 单个椭圆高斯斑。
    *
-   * exp(-r²) 在中心为 1、远处趋 0，**处处可导**——这是"晕染"与"云"的根本
-   * 区别：fbm + smoothstep 是"阈值切出来的形状"（阈值处必有一阶或二阶不连续，
-   * 于是有边缘、有色块、有尖角），高斯斑没有形状，只有浓淡。
+   * exp(-r²) 在中心为 1、远处趋 0，处处可导。这使晕染与基于阈值的形状区分开来：
+   * fbm 加 smoothstep 由阈值切出形状，阈值处存在一阶或二阶不连续，因而出现边缘
+   * 与色块；高斯斑没有可辨形状，只有浓淡变化。
    */
   float blob(vec2 p, vec2 c, vec2 r) {
     vec2 d = (p - c) / r;
@@ -181,11 +180,11 @@ export class FlowLayer implements GlLayer {
       transparent: true,
       depthTest: false,
       depthWrite: false,
-      // **必须用 CustomBlending 显式写因子**，不能用 `AdditiveBlending`：
-      // three 的 AdditiveBlending 是 (SRC_ALPHA, ONE)，而这里的着色器输出的
-      // 已经是预乘色 (col*alpha, alpha)，再乘一次 alpha 就等于平方——实测
-      // 云团最亮处 rgb 只剩 1/255，画面接近全黑（只剩 alpha 在加）。
-      // 预乘加色应当是 (ONE, ONE)，见下方 syncTheme。
+      // 需使用 CustomBlending 显式指定因子，不能用 `AdditiveBlending`：
+      // three 的 AdditiveBlending 为 (SRC_ALPHA, ONE)，而本着色器输出已是预乘色
+      // (col*alpha, alpha)，再乘一次 alpha 等于取平方——实测云团最亮处 rgb 仅剩
+      // 1/255，画面接近全黑（仅 alpha 在累加）。预乘加色应为 (ONE, ONE)，
+      // 见下方 syncTheme。
       blending: CustomBlending,
       blendSrc: OneFactor,
       blendDst: OneFactor,

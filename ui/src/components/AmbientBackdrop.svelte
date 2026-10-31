@@ -21,9 +21,8 @@
     /** 背景频谱光效档位（docs/46 §3.2；山形与波纹**共用**同一档语义） */
     glow: RidgeGlow;
     /**
-     * 是否处于暂停态。暂停时频谱要**静止并收平**（用户 2026-10-30："所有频谱
-     * 都应该暂停时拉平，不暂存状态"）——不是凝固在上一帧的起伏上。
-     * 流动渐变不受影响：它不是频谱，是常驻的环境光。
+     * 是否处于暂停态。暂停时频谱静止并收平，而非凝固在暂停瞬间的起伏上。
+     * 流动渐变不受影响：它属于常驻环境光，不是频谱。
      */
     paused: boolean;
   }
@@ -31,48 +30,40 @@
   let { source, enabled, shape, glow, paused }: Props = $props();
 
   /**
-   * 全应用背景（docs/25 §5 T4c app 化；T4h 起背景频谱改山形曲线）。
+   * 全应用背景（docs/25 §5、docs/46）。
    *
-   * **单一档位**（用户拍板，撤销 standard/immersive 双档）：原本列表页
-   * 走"重遮罩保可读性"（veil 压 surface-1 渐变、氛围 0.6、频谱更虚），
-   * 正在播放页走沉浸档（无遮罩、氛围满档、频谱 alpha 0.75/blur 14）。
-   * 用户反馈沉浸档的透明度观感更好 —— 现在所有页面统一走这一档，
-   * 可读性遮罩（第 3 层）整个撤销。
+   * 全应用只有一套背景：正在播放页侧栏退出、主区铺满后，本层天然覆盖整个
+   * 窗口，不为任何单页另绘第二层，因此本组件不需要知道当前路由。
    *
-   * **正在播放页不再叠背景**（docs/46 §5.2，2026-10-30 用户拍板）：那一页侧栏
-   * 整体退出、主区铺满，于是本层天然铺满整个窗口 —— 全应用只有这一套背景，
-   * 不为任何单页再画第二层。本组件也因此不需要知道当前在哪个路由。
+   * 只有一种视觉档位：各页面共用同一透明度，可读性遮罩层不启用。
    *
-   * 三层（第 4 层是界面布局本身，在四区席位里）：
+   * 三层（第 4 层为界面布局本身，属四区席位）：
    * - 第 1 层 背景：固定 CSS 渐变（`--ambient-bg`，tokens.css 按
-   *   `html[data-ambient]` 定义，设置页成套切换）。**不跟随封面**。
-   * - 第 2 层 流动渐变（docs/46 §3.1，P1）：WebGL 上的一层缓慢流动的彩色
-   *   光雾，叠在第 1 层之上**加色**。它只加动态、不改配色资产——`--ambient-bg`
-   *   仍是配色唯一来源，颜色从 `--accent` 派生。硬件 GL 不可用时整层不建。
-   * - 第 3 层 频谱环境光：形态由设置 `bgSpectrumStyle` 决定（2026-10-30 起
-   *   可分形态）。`ridge` 山形曲线（docs/26 调研）：48 带先做时间平滑，再
-   *   重采样成平滑山脊线，闭合到底边填充渐变——远山一层（低幅低透明）+
-   *   近山一层（主形）；`ripple` 波纹地形：同一份曲线当作水面截面，沿视线
-   *   一层层画等深线，铺满下半屏（画法见 `layers/ripple.ts`）。
+   *   `html[data-ambient]` 定义，设置页成套切换）。不跟随封面。
+   * - 第 2 层 流动渐变（docs/46 §3.1）：WebGL 上缓慢流动的彩色光雾，叠在第 1 层
+   *   之上做加色。`--ambient-bg` 仍是配色唯一来源，颜色由 `--accent` 派生。
+   *   硬件 GL 不可用时整层不创建。
+   * - 第 3 层 频谱环境光：形态由 `bgSpectrumStyle` 决定。`ridge` 山形
+   *   （docs/26）：48 带先做时间平滑，再重采样为平滑脊线并闭合到底边填充渐变，
+   *   分远山（低幅低透明）与近山（主形）两层。`ripple` 波纹：同一曲线作为水面
+   *   截面，沿视线逐层绘制等深线铺满下半屏（画法见 `layers/ripple.ts`）。
    *
-   * **两种形态互斥**：它们争的是同一块屏幕、同一种数据，同时画会既看不清
-   * 山也看不清水。切换时整层重建（几何结构不同，不是改个 uniform 能变的）。
+   * 两种形态互斥：使用同一块屏幕与同一份数据，同时绘制会互相削弱，两者均难以
+   * 辨认。切换时整层重建——几何结构不同，无法通过 uniform 切换。
    *
-   * **两条光栅路径并存**（档位见 `lib/render/capability.ts`）：
-   * - 档 2（硬件 GL）：两种形态都画在**同一个** GL canvas 上，图层按
-   *   `add()` 顺序同帧叠放（`layers/ridge.ts` / `layers/ripple.ts` + `flow.ts`）。
-   *   光晕都是解析的（到脊线/线心的像素距离取指数衰减），没有离屏、没有模糊核。
-   * - 档 1（软件光栅 / GL 不可用）：只有山形，退回原来的 Canvas 2D 实现
-   *   （160×90 buffer + `ctx.filter blur(14px)` 放大）。波纹**不**做 2D 兜底：
-   *   那是 22 层全窗口描边 + shadowBlur，在软件光栅上正是最不该做的事；
-   *   这类机器退回山形即可，它是唯一验证过的低级路径。
+   * 两条光栅路径（档位见 `lib/render/capability.ts`）：
+   * - 档 2（硬件 GL）：两种形态绘制在同一 GL canvas 上，图层按 `add()` 顺序同帧
+   *   叠放（`layers/ridge.ts`、`layers/ripple.ts`、`flow.ts`）。光晕由解析方式
+   *   计算（按到脊线或线心的距离取指数衰减），无离屏缓冲与模糊核。
+   * - 档 1（软件光栅或 GL 不可用）：仅山形，使用 Canvas 2D 实现（160×90 buffer
+   *   加 `ctx.filter blur(14px)` 放大）。波纹不做 2D 兜底：22 层全窗口描边加
+   *   shadowBlur 在软件光栅上开销最大，此类机器退回山形即可。
    *
-   * 绘制循环挂全应用单例调度器（`lib/render/scheduler`，docs/46 §7）：
-   * 这里**不再自己排 rAF**，由调度器每帧调用一次 `draw`。理由是 docs/26
-   * 的真实事故——组件内多次 `requestAnimationFrame` 会让调度数按 2^n 增长，
-   * 几秒内主线程被淹没、UI 假死。多图层时代这条必须从结构上杜绝。
+   * 绘制循环挂全应用单例调度器（`lib/render/scheduler`，docs/46 §7），本组件不
+   * 自行排 rAF。组件内多处 `requestAnimationFrame` 会使调度数按 2^n 增长，数秒
+   * 内占满主线程并导致界面无响应（docs/26 实测）。多图层场景需从结构上排除。
    *
-   * `prefers-reduced-motion: reduce` 时环境层整体不渲染（静态背景保留）。
+   * `prefers-reduced-motion: reduce` 时环境层不渲染，静态背景保留。
    */
   let canvas = $state<HTMLCanvasElement | null>(null);
 
@@ -80,14 +71,14 @@
   const tapOn = $derived(Boolean(source) && enabled && !reducedMotion.value);
 
   /**
-   * GL 舞台是否该建。
+   * GL 舞台是否创建。
    *
-   * 档位判在**渲染 canvas 元素**这一层，而不是只在 `createGlStage` 里判：
-   * 后者返回 null 时 `bind:this` 已经把画布渲染出来了，会留下一个全屏透明
-   * canvas 白占一层合成（软件光栅实测就是这样：档 1、但画布还在）。
+   * 档位判断放在 canvas 元素渲染这一层，而非仅在 `createGlStage` 内：后者返回
+   * null 时 `bind:this` 已渲染画布，会留下一个全屏透明 canvas 额外占用一层
+   * 合成（软件光栅实测即为此情形：档 1，画布仍存在）。
    *
-   * 只看 `enabled`（已含 `glEffects` 闸门）不要求 `source`：流动渐变不需要
-   * 频谱数据，tap 失败时背景仍该是活的。
+   * 只要求 `enabled`（已含 `glEffects` 闸门），不要求 `source`：流动渐变不依赖
+   * 频谱数据，tap 失败时背景仍应保持动态。
    */
   const glActive = $derived(enabled && !reducedMotion.value && detectCapability().tier >= 2);
 
@@ -101,12 +92,11 @@
   let rippleLayer = $state<RippleLayer | null>(null);
 
   /**
-   * 2D 兜底画布的 CSS 尺寸缓存（发布前 UI 审查 P2-3）。
+   * 2D 兜底画布的 CSS 尺寸缓存。
    *
-   * draw() 此前每帧读 `clientWidth/clientHeight`——那是布局查询，在 rAF 里
-   * 逐帧读会把绘制循环和样式/布局绑在一起（页面别处一改样式就多一次强制
-   * 布局）。NowPlayingSpectrum 已用 RO 缓存修过同一处并注明缘由，这条路径
-   * 漏了。RO 只在尺寸真的变了时回调一次，正好是我们要的时机。
+   * 直接在 draw() 里逐帧读 `clientWidth/clientHeight` 会把绘制循环与样式/布局
+   * 绑定：页面任意处改样式都会追加一次强制布局。ResizeObserver 只在尺寸真正
+   * 变化时回调一次，正是这里需要的时机。
    */
   let cssW = 0;
   let cssH = 0;
@@ -141,13 +131,13 @@
     };
   });
 
-  // 频谱图层随"数据源 + 形态"挂载/卸载。
+  // 频谱图层随"数据源 + 形态"挂载与卸载。
   //
-  // 形态进依赖 ⇒ 切换时整层重建：山形是闭合填充、波纹是线阵，几何结构不同，
-  // 没法像光晕档位那样只改 uniform。重建发生在同一帧内（旧层 dispose 后新层
-  // `add`），舞台不重建，所以不会有黑帧。
+  // 形态进入依赖数组，因此切换时整层重建：山形为闭合填充，波纹为线阵，几何结构
+  // 不同，无法像光效档位那样仅修改 uniform。重建在同一帧内完成（旧层 dispose 后
+  // 新层 `add`），舞台不重建，不产生黑帧。
   //
-  // 光效档位**不进依赖**：改档只改 uniform，不重建图层（避免"调一下光效整层重建"）
+  // 光效档位不进入依赖：改档只修改 uniform，不重建图层。
   $effect(() => {
     const current = stage;
     const src = specGl ? source : null;
@@ -245,9 +235,9 @@
     const height = cssH;
     // 尺寸为 0（布局尚未结算/页面切走）：本帧跳过，调度器下一帧还会来
     if (width === 0 || height === 0) return;
-    // 宽高**各自**比：只比宽度时，窗口只在纵向变高（最大化/分屏/拖下沿）会让
-    // `height` 属性留在旧值，浏览器把旧位图纵向拉伸——这正是 2026-10-30 在
-    // NowPlayingSpectrum 上修过的那个 bug，2D 兜底路径当时漏了同一处。
+    // 宽高各自比较：仅比较宽度时，窗口只纵向变化（最大化、分屏、拖动下沿）会使
+    // `height` 属性停留在旧值，浏览器将旧位图纵向拉伸。NowPlayingSpectrum 的 2D
+    // 兜底路径曾出现该缺陷（同一处遗漏）。
     const bw = Math.round(width * dpr);
     const bh = Math.round(height * dpr);
     if (target.width !== bw || target.height !== bh) {
@@ -279,8 +269,8 @@
     if (!display || display.length !== n) display = new Float32Array(n);
     const eased: number[] = new Array(n);
     for (let i = 0; i < n; i += 1) {
-      // RemoteSpectrumSource.frame() 已经归一化到 0–1（引擎 0–255 → /255），
-      // 这里**不能**再除 255——T4h 曾二次归一化把带值压到 ~0.4%，山成贴底平线
+      // RemoteSpectrumSource.frame() 已归一化到 0–1（引擎 0–255 → /255），此处
+      // 不得再次除以 255：二次归一化会把带值压到约 0.4%，山形贴近底边成一条平线
       // 暂停时目标值取 0：山形在约 90ms 内落回底边，不保留暂停前的起伏
       const v = paused ? 0 : Math.min(1, Math.max(0, bands[i] as number));
       display[i] = display[i] + (v - display[i]) * 0.3;
@@ -344,7 +334,7 @@
   }
 
   /* 第 1 层：固定渐变（--ambient-bg 随 html[data-ambient] 切换）。
-   * 单一档位（用户拍板）：满档不衰减——原列表页的 0.6 随双档一起撤销。 */
+   * 单档，不做透明度衰减。 */
   .ambient-art {
     position: absolute;
     inset: 0;
@@ -352,8 +342,8 @@
     opacity: 1;
   }
 
-  /* 第 2、3 层：GL 画布。本身不参与布局，尺寸由样式给（100%），
-   * three 那边 setSize 时传 updateStyle=false，所以两边不会互相踩。 */
+  /* 第 2、3 层：GL 画布。不参与布局，尺寸由样式给定（100%）；
+   * three 侧 setSize 传 updateStyle=false，两边不互相覆盖。 */
   .ambient-flow {
     position: absolute;
     inset: 0;
@@ -363,8 +353,7 @@
 
   .ambient-spectrum {
     position: absolute;
-    /* T4h 回退让位尝试：背景层就是**整个窗口**（用户拍板"不用改了"）——
-       山形经 blur 后边缘发散，让位与否视觉上几乎不可辨 */
+    /* 背景层覆盖整个窗口：山形经模糊后边缘向外发散，收窄与否在视觉上无法区分 */
     inset: 0;
     width: 100%;
     height: 100%;

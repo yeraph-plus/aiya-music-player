@@ -179,10 +179,10 @@ import Button from './ui/Button.svelte';
 </script>
 
 <!--
-  壳体（B5a）：本组件只渲染**内容**。外层浮层（定位/Esc/外点关闭/焦点还原/
-  aria-expanded）由 PlayerBar 里队列键的 kit `Popover` 负责 —— 此前是
-  `<svelte:window>` 手写外点 + Esc 两件套，且触发键双触发问题要靠
-  `closest('[data-queue-trigger]')` 自防。
+  职责边界：本组件只渲染内容。定位、Esc、外点关闭、焦点还原与 aria-expanded
+  由 PlayerBar 中队列键所用的 kit `Popover` 提供。自行处理这五件事需要在
+  `<svelte:window>` 上挂两套监听，并且要额外用 `closest('[data-queue-trigger]')`
+  阻止触发键的点击被自己派发的关闭逻辑吞掉。
 -->
 <div class="queue-panel queue-float" aria-label="播放队列">
   <header>

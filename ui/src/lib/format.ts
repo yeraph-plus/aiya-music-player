@@ -147,16 +147,14 @@ export function isStreamId(id: string | null | undefined): boolean {
 }
 
 /**
- * 临时项的"来源"一行字：本地文件 → 所在目录（末 2 段），直播 → 主机名。
+ * 临时项的来源短句：本地文件取所在目录（末 2 段），直播取主机名。
  *
- * 为什么不是"编码 + 码率"（docs/52 §7.1 的原计划）：这两样此刻都拿不到——
- * `TrackRef.audio` 由曲库单曲查询填，临时项恒为 `null`；要把 TS 里的
- * `stream_type` / ADTS 帧率接到 UI，得给 `PlayerState` 加字段 + 重生成
- * ts-rs 绑定。用户拍板"给什么码率就播什么码率、不做额外支持"，那就别为了
- * 一个副标题开新契约。目录名和主机名是此刻**确定**的信息，也是用户真正
- * 会拿来对号入座的东西。
+ * 副标题不显示"编码 + 码率"：两者在 UI 侧都取不到。`TrackRef.audio` 由曲库单曲
+ * 查询填充，临时项恒为 `null`；把 TS 容器内的 `stream_type` / ADTS 帧率接到 UI
+ * 需要给 `PlayerState` 加字段并重生成 ts-rs 绑定。播放码率由流决定，不提供码率
+ * 选择（docs/52 §10）。
  *
- * 认不出来返回 `null`（调用方回落到通用文案，不要显示半截 URL）。
+ * 无法判定来源时返回 `null`，由调用方回落到通用文案。
  */
 export function transientOrigin(id: string | null | undefined): string | null {
   if (!id) return null;

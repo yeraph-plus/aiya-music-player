@@ -171,7 +171,8 @@
     none: '无匹配',
   };
 
-  /** 证据层级（协议 v2）：回答"为什么推荐这个"。自强到弱，similarity 最该被怀疑 */
+  /** 证据层级（协议 v2）：说明推荐理由的强度来源。自强到弱排列，
+   *  similarity 最需要人工复核。 */
   const EVIDENCE_LABELS: Record<EvidenceTier, string> = {
     recordingId: '指纹级 · Recording ID',
     metadataSlot: '双源印证',
@@ -492,7 +493,7 @@
     flex-wrap: wrap;
   }
 
-  /* 长路径上限：Chip 自身不裁文本，目录 chip 限宽后省略（视觉与旧 .root-chip 一致） */
+  /* 长路径上限：Chip 自身不裁文本，目录 chip 限宽后省略 */
   .root-chips :global(.k-chip),
   .root-chips :global(.k-chip-main) {
     max-width: 260px;

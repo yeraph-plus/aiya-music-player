@@ -2,19 +2,17 @@
   import type { Snippet } from 'svelte';
 
   /**
-   * 按钮：**唯一**的按钮外观定义。
+   * 按钮：唯一的按钮外观定义。
    *
-   * 已取代并删除全局 `.btn` / `.btn.primary` / `.btn.danger` / `.apply-btn`
-   * 四份手写规则（原在 `styles/shell.css` 与 `ImportPanel` 里，各写了一遍
-   * height/padding/border-radius）。B3b-3 收尾后 `grep 'class="btn'` 在
-   * `ui/src` 已归零，旧规则随之删除（2026-10-26）。
+   * 全仓的按钮高度、padding 与 border-radius 只在本文件定义一处。分散定义会让
+   * 同一行的按钮高度相差 2–4px，且修改时需逐个文件同步。
    *
-   * 为什么不用 `bits-ui/button`：`Button.Root` 是 builder 模式，产出的是裸 `<button>`
-   * + `data-state`，样式仍然全要自己写；而按钮的难点恰恰在样式变体矩阵，不在行为
-   * （按下/禁用是浏览器原生）。判断线见 docs/24 §4.5。
+   * 不使用 `bits-ui/button`：`Button.Root` 为 builder 模式，产出裸 `<button>`
+   * 加 `data-state`，样式仍需自行实现；而按钮的复杂度集中在样式变体矩阵，
+   * 行为（按下、禁用）由浏览器原生提供。判断线见 docs/24 §4.5。
    *
-   * 类名用 `k-` 前缀而不是 `.btn`：替换期与旧全局 CSS **共存**，`.btn` 两边同名
-   * 会让"这条规则到底谁赢"取决于 scoped 哈希，调试时看不出来。
+   * 类名使用 `k-` 前缀而非 `.btn`：需与全局 CSS 共存，两者同名时规则优先级
+   * 取决于 scoped 哈希，难以定位冲突来源。
    */
 
   interface Props {
@@ -143,10 +141,9 @@
   }
 
   /*
-   * 链接按钮（发布前 UI 审查 P3）：取代散落 6 个文件的 .link / .rate-reset /
-   * .rule-del 手写族——同一意图（行内 accent 链接状动作）此前 5 种类名各写
-   * 一遍，且全部没有焦点环。形状上剥掉按钮盒（高/内距/边框/底色归零），
-   * 键盘焦点环来自 base.css 的全局 :focus-visible。
+   * 链接按钮：行内 accent 链接状动作的唯一形状。剥掉按钮盒（高/内距/边框/
+   * 底色归零），键盘焦点环来自 base.css 的全局 :focus-visible——若各自实现，
+   * 这类动作极易漏掉焦点环。
    */
   .k-btn.link {
     height: auto;

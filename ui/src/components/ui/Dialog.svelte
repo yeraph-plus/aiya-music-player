@@ -5,31 +5,29 @@
   import IconButton from './IconButton.svelte';
 
   /**
-   * 对话框外壳：标题 + 可选的说明 + 主体 + 动作区。
+   * 对话框外壳：标题、可选说明、主体与动作区。
    *
-   * 取代三个组件里各写一遍的「backdrop + role=dialog + 手写焦点陷阱」：
-   * 原 ConfirmDialog 一类壳里各写一遍的 20 行 `FOCUSABLE_SELECTOR` + `trapFocus` 是
-   * 手写的焦点环，它做对了 Tab 循环但没做**关闭后还原焦点**、没做滚动锁、
-   * 也没做 aria-modal 下的背景 inert。bits-ui 的 `Dialog.Content` 四样都有
-   * （FocusScope / DismissibleLayer / EscapeLayer / ScrollLock）。
+   * 焦点管理交给 bits-ui：`Dialog.Content` 组合了 FocusScope、DismissibleLayer、
+   * EscapeLayer 与 ScrollLock，提供 Tab 循环、关闭后还原焦点、滚动锁与
+   * aria-modal 下的背景 inert。手写焦点陷阱通常只能覆盖 Tab 循环。
    *
-   * ### 与调用方约定
+   * ### 与调用方的约定
    *
-   * - **挂载即打开**（`open` 恒 true）：三个对话框现在都是 `{#if overlay.dialog?.kind}` 控制的，
-   *   卸载即关闭。所以这里不接受 `open` prop —— 多一个受控状态就多一处"关了但还挂着"的坑。
-   * - **`autofocus` 是回调不是选择器**：调用方手里才有元素引用（`bind:this`），
-   *   传个选择器进来还要先 `querySelector`，反而更绕。不给就交给 FocusScope 选第一个可聚焦元素。
-   * - **Enter 不在这里统一接管**。焦点在按钮上时回车由浏览器原生激活，再在 window 上
-   *   补一次就会双触发。危险操作的焦点默认落在「取消」（调用方用 autofocus 指定），
-   *   所以"回车误确认"这条风险由焦点位置挡，不靠拦截按键。
+   * - 挂载即打开（`open` 恒为 true）：调用方以 `{#if overlay.dialog?.kind}` 控制
+   *   挂载，卸载即关闭。因此本组件不接收 `open` prop——额外的受控状态会产生
+   *   "已关闭但仍挂载"的状态。
+   * - `autofocus` 为回调而非选择器：元素引用由调用方持有（`bind:this`），传选择器
+   *   还需在本组件内 `querySelector`。未提供时由 FocusScope 选取第一个可聚焦元素。
+   * - Enter 不在此统一接管：焦点位于按钮时回车由浏览器原生激活，再于 window 上
+   *   补一次会双触发。危险操作的初始焦点落在「取消」（由调用方通过 autofocus
+   *   指定），回车误确认由焦点位置规避，不通过拦截按键实现。
    */
 
   interface Props {
     /**
-     * 标题。**不给则整个头部（标题 + 关闭键）都不渲染**——极简壳，比如
-     * 歌单选择器（docs/25 用户反馈：点行即添加，标题和关闭键都是噪音；
-     * 关闭走 Esc / 点遮罩）。a11y 仍需要 Dialog.Title，用 `label` 以视觉
-     * 隐藏形式挂上。
+     * 标题。未提供时不渲染整个头部（标题与关闭键），用于极简壳，如歌单选择器
+     * （docs/25：点击行即添加，标题与关闭键无信息量，关闭走 Esc 或点击遮罩）。
+     * 无障碍仍需 Dialog.Title，此时以视觉隐藏形式使用 `label` 挂载。
      */
     title?: string;
     /** 无头部时的无障碍名称（视觉隐藏的 Dialog.Title 文本） */
@@ -100,9 +98,9 @@
     z-index: var(--z-modal);
     background: var(--backdrop);
     backdrop-filter: blur(var(--blur-scrim));
-    /* 入场动画（发布前 UI 审查 P1-3）：此前瞬现，与 SideDrawer/Toast 的弹层感
-       不一致。bits-ui 关闭即拆 DOM，CSS 动画做不了退场——退场仍瞬消，至少
-       进出"有东西发生过"。只动 opacity/transform，RM 下关断。 */
+    /* 入场动画 120ms，与 SideDrawer、Toast 的弹层节奏一致。bits-ui 关闭时立即
+       移除 DOM，CSS 无法承担退场动画，因此退场仍是瞬消。仅动画 opacity 与
+       transform，reduced-motion 下关闭。 */
     animation: k-dlg-fade 120ms var(--ease);
   }
 

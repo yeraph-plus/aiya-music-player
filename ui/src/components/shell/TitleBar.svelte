@@ -16,22 +16,22 @@
   import { ui } from '../../stores/ui.svelte';
 
   /**
-   * 宽 TitleBar：**唯一一条横贯全宽的全局栏**。
+   * 顶栏：唯一横贯全宽的全局栏。
    *
-   * 四件东西一行：应用名 / 返回上一页 / 搜索框 / 窗口三键。
-   * 为什么搜索放在这里而不是页面里（docs/24 §3.1 修订 v2）：搜索是**全局**能力，
-   * 页面级容器会随滚动走、随路由消失，而搜索必须常驻。之前那一级叫 TopBar，
-   * 它一存在就必然持续吸收"不知道放哪"的东西 —— 所以这一级被删掉了。
+   * 一行四项：应用名、返回上一页、搜索框、窗口三键。
+   * 搜索置于此处而非页面内（docs/24 §3.1）：搜索属全局能力，页面级容器会随滚动
+   * 移出视野、随路由卸载，而搜索需常驻。本层不设可扩展的页面级父栏，避免其成为
+   * 归属不明的控件的默认去处。
    *
-   * 返回键读 `nav.canGoBack`（与侧栏共用同一个历史栈），不是自己猜"上一页是谁"。
+   * 返回键读取 `nav.canGoBack`（与侧栏共用同一历史栈），不自行推断上一页。
    */
 
   let maximized = $state(false);
   let input = $state<HTMLInputElement | null>(null);
 
   onMount(() => {
-    // 搜索框的焦点注册从 AppShell 上移到这里：按钮和输入框在同一个组件里，
-    // 不再需要一个 bind:this + $effect 把引用从壳传出来
+    // 搜索框的焦点注册放在本组件内：触发按钮与输入框同属一处，不需要
+    // 额外的 bind:this + $effect 把引用从壳传进来
     const disposeSearch = registerSearchFocus(() => input?.focus());
     if (!isNative) return disposeSearch;
 
@@ -75,13 +75,13 @@
   </div>
 
   <!--
-    **搜索框不换 `Field`**（B3b-2 决定）：`data-tauri-drag-region="false"` 必须挂在
-    胶囊这层 div 上，而 `Field` 的内层盒子由组件自己渲染、kit 不透传任意 DOM 属性
-    （开口子等于放弃封装）；另外它是 chrome 不是表单字段 —— 无标签、30px 高、999 圆角。
-    换来的统一性不值得让 kit 长出"透传属性"这条后门。
+    搜索框不使用 `Field`：`data-tauri-drag-region="false"` 须挂在胶囊容器这层 div，
+    而 `Field` 的内层盒子由组件自身渲染，kit 不向内部 DOM 透传任意属性（开放该
+    能力等于放弃封装）。此外它属于窗口 chrome 而非表单字段：无标签、30px 高、
+    999 圆角，复用表单零件的统一性不足以让 kit 为此增加属性透传。
 
-    `data-tauri-drag-region="false"` 是**必须的**：胶囊容器是个 div（不是可点元素），
-    顶栏又是 deep 拖拽区 —— 不加这一行，点输入框左右的内边距会开始拖窗口。
+    `data-tauri-drag-region="false"` 为必需：胶囊容器是 div（非可点元素），顶栏为
+    深度拖拽区，缺少该属性时点击输入框左右内边距会触发窗口拖动。
     反向陷阱：给这里的任何元素加 `tabindex="0"` 也会让整条拖拽区静默失效。
   -->
   <div class="tb-search" data-tauri-drag-region="false">
@@ -156,12 +156,11 @@
     /* 左内距交给 .tb-brand 自己管——它的定宽与侧栏对齐（见下） */
     padding: 0;
     min-width: 0;
-    /* 半透明（docs/25 T4g 定档 95%——用户反馈要接近不透明）：全应用
-     * 背景从底下透出来。底色用 surface-2（播放条是 surface-3）——同档
-     * 不同阶，叠起来有一点色差变化。不用 backdrop-filter——它是持久壳层，
-     * 垫着动画频谱 canvas 就是每帧全条重模糊（docs/25 §5 方案 B 红线）。
-     * 边线已撤（用户拍板"区域之间不留 border"）：顶栏与主区的分隔靠
-     * 底色阶差本身。 */
+    /* 半透明 95%（接近不透明）：应用级背景从下层透出。底色取 surface-2，
+     * 播放条取 surface-3，同档不同阶，叠放后产生轻微色差。
+     * 不使用 backdrop-filter：顶栏属持久壳层，覆盖在动画频谱 canvas 之上时
+     * 每帧都需对整条重新模糊（docs/25 §5）。
+     * 不设边线：与主区的分隔由底色阶差承担。 */
     background: color-mix(in srgb, var(--surface-2) 95%, transparent);
     user-select: none;
   }
@@ -235,8 +234,8 @@
   }
 
   .tb-search:focus-within {
-    /* 对齐 Field/Select 的焦点语言（accent）：此前只到 line-strong，
-       同屏三种输入框两种焦点色（发布前 UI 审查 P2-7） */
+    /* 与 Field / Select 使用同一焦点语言（accent）；仅取 line-strong 会使同屏
+       输入框出现两种焦点色 */
     border-color: var(--accent);
   }
 

@@ -2,13 +2,11 @@
   import type { Snippet } from 'svelte';
 
   /**
-   * 空态：四段式（图标 / 标题 / 说明 / 动作）。
+   * 空态：四段式（图标、标题、说明、动作），全部空态的唯一实现，
+   * 各页面不再自行组织居中布局与次要文字颜色。
    *
-   * 取代 `.empty` / `.playlist-empty` / `.queue-empty` / `.lyrics-empty` / `.tt-empty`
-   * ——五处各写一遍"居中 + 灰字 + 上边距"，字色深浅还不一致。
-   *
-   * `action` 用 snippet 而不是 `label + onclick`：空态里有时是两个按钮
-   * （"扫描曲库" + "打开设置"），用固定字段会逼出第二个 prop。
+   * `action` 使用 snippet 而非 `label + onclick`：空态中可能出现两个按钮
+   * （如"扫描曲库"与"打开设置"），固定字段会迫使其增加第二个 prop。
    */
 
   interface Props {

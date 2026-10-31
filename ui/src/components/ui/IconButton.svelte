@@ -2,15 +2,15 @@
   import type { Snippet } from 'svelte';
 
   /**
-   * 图标按钮：**没有文字**的按钮，所以 `label` 是必填的 —— 它同时产出
-   * `aria-label` 与 `title`（鼠标悬停可见）。没有 label 的图标按钮等于
-   * 对读屏软件不存在，这类问题在代码评审里看不出来，只在真机上暴露。
+   * 图标按钮：无文字，因此 `label` 为必填项，同时产出 `aria-label` 与 `title`
+   * （悬停可见）。缺少 label 的图标按钮对读屏软件不可见，此类问题在代码评审中
+   * 难以发现，只在真机上暴露。
    *
-   * 取代 `.icon-btn` / `.icon-btn.on` / `.icon-btn.tiny` / `.icon-btn.play`。
+   * 类名统一为 `.k-icon-btn`，不再区分按语义命名的多套前缀。
    *
-   * `pressed` 与 `active` 是两件事，旧类名 `.on` 把它们混成一个：
-   * - `pressed` → `aria-pressed`，用于**切换按钮**（随机播放开/关）
-   * - `active`  → 只是视觉高亮，用于**当前项**（队列抽屉开着）
+   * `pressed` 与 `active` 表示两种状态：
+   * - `pressed` → `aria-pressed`，用于切换按钮（如随机播放开关）
+   * - `active`  → 仅视觉高亮，用于当前项（如队列抽屉已打开）
    */
 
   interface Props {
@@ -31,7 +31,7 @@
     active?: boolean;
     /** 面板开合态（写 aria-expanded，样式与 pressed 同级：抽屉触发键用） */
     expanded?: boolean;
-    /** 转圈并禁止点按（发布前 UI 审查 P4：此前播放键 loading 是手写替身） */
+    /** 转圈并禁止点按（播放键等待引擎响应时使用） */
     loading?: boolean;
     /** 右下角"生效中"打点（EQ 启用提示；不用 accent 底——那是"抽屉开着"） */
     dot?: boolean;
@@ -103,13 +103,13 @@
     color: var(--text-1);
   }
 
-  /* 按下反馈（发布前 UI 审查 P2-5）：Button/Card 都有 :active，这里补齐 */
+  /* 按下反馈：与 Button、Card 的 :active 行为保持一致 */
   .k-icon-btn:active:not(:disabled) {
     background: var(--surface-active);
   }
 
-  /* 面板开合态：与 DrawerBtn 时代 [aria-expanded='true'] 同视觉（accent 底），
-     和 .on（当前项 surface 底）、.pressed（切换态）三分 */
+  /* 面板开合态（`aria-expanded="true"`）：accent 底，与 `.pressed`（切换态）、
+     `.on`（当前项）三者语义不同，取值由各自的属性或类名决定 */
   .k-icon-btn[aria-expanded='true'] {
     background: var(--accent-weak);
     color: var(--accent-text);
@@ -166,9 +166,8 @@
     border-radius: var(--radius-lg);
   }
 
-  /* 当前项：accent 底（发布前 UI 审查 P2-5 收编——此前 .on 是 surface 底，
-     ListToolbar 被迫用 :global 覆盖成 accent；全仓唯一 active 用户是筛选键，
-     直接统一成与 pressed 同色系，组件外的样式补丁随之删除） */
+  /* 当前项：accent 底，表示当前所处的项（如筛选键），与 `.pressed` 的切换语义
+     区分开 —— 前者描述位置，后者描述开关状态 */
   .k-icon-btn.on {
     background: var(--accent-weak);
     color: var(--accent-text);

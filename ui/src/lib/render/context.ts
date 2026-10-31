@@ -1,20 +1,20 @@
 /**
- * 全应用唯一的 WebGL 舞台（docs/46 §7，P1 落地）。
+ * 全应用唯一的 WebGL 舞台（docs/46 §7）。
  *
- * 为什么"唯一"：
+ * 唯一性的依据：
  *
- * 1. **上下文是稀缺资源**。Chromium 每进程只给 ~16 个 WebGL 上下文，超出后
- *    它会静默丢掉最老的那个 —— 症状是"某处画面突然黑了"，而且极难归因
- *    （哪块黑取决于谁的上下文先被丢，与代码执行顺序无关）。
- * 2. **一层一个 canvas 会让合成器多切一层**。流动渐变、山形、将来的页面频谱
- *    如果各占一个 canvas，同一帧里就是三次独立的合成事务。同一个 GL canvas
- *    内按顺序画完，脏区一次提交。
- * 3. 舞台是"分辨率 / DPR / 上下文丢失"这类脏活的唯一落点。图层只管画，不用
- *    各自处理 `devicePixelRatio` 变化和 `webglcontextlost`。
+ * 1. WebGL 上下文是稀缺资源。Chromium 每进程约提供 16 个上下文，超出后静默丢弃
+ *    最旧的上下文，表现为某处画面突然变黑，且难以归因——哪一块变黑取决于上下文
+ *    被丢弃的顺序，与代码执行顺序无关。
+ * 2. 每层一个 canvas 会使合成器多切一层。流动渐变、山形、页面频谱若各占一个
+ *    canvas，同一帧即产生多次独立合成事务；同一 GL canvas 内顺序绘制，脏区只需
+ *    一次提交。
+ * 3. 舞台是分辨率、DPR 与上下文丢失等问题的唯一处理点。图层只负责绘制，不各自
+ *    处理 `devicePixelRatio` 变化与 `webglcontextlost`。
  *
- * 图层按 `add()` 顺序**在同一帧里依次画**（`autoClear = false`），所以后加的
- * 图层叠在先加的之上，等价于 DOM 里的 z 序。想调整叠放顺序就调 `add` 的顺序，
- * 不要靠 z-index —— 它们共享同一张画布，CSS 层级对它们无效。
+ * 图层按 `add()` 顺序在同一帧内依次绘制（`autoClear = false`），后加图层叠在先加
+ * 图层之上，等价于 DOM 的 z 序。调整叠放顺序应修改 `add` 顺序，不能依赖 z-index：
+ * 图层共享同一张画布，CSS 层级对其无效。
  */
 
 import { WebGLRenderer } from 'three';
@@ -63,9 +63,9 @@ export class GlStage {
     this.canvas = canvas;
     this.renderer = new WebGLRenderer({
       canvas,
-      // 背景是 CSS 渐变，画布必须透明，否则会把第 1 层整个盖掉
+      // 背景由 CSS 渐变承担，画布须透明，否则会覆盖第 1 层
       alpha: true,
-      // 全屏 shader 靠自身做抗锯齿（平滑函数），MSAA 在这里是纯浪费
+      // 全屏 shader 自身以平滑函数做抗锯齿，MSAA 在此无收益
       antialias: false,
       depth: false,
       stencil: false,
@@ -83,11 +83,11 @@ export class GlStage {
   }
 
   /**
-   * 上下文丢失/恢复。
+   * 上下文丢失与恢复。
    *
-   * 丢失是**正常的**：驱动更新、GPU 重置、休眠唤醒都会触发，不是异常。
-   * 必须 `preventDefault()` 才有资格被恢复；不拦的话浏览器不会发 restored，
-   * 这块画布就永久黑着（直到整页重载）。
+   * 上下文丢失属正常事件，驱动更新、GPU 重置、休眠唤醒均可触发。只有调用
+   * `preventDefault()` 才具备恢复资格；未处理时浏览器不发送 restored，该画布将
+   * 保持黑屏直到整页重载。
    */
   private handleLost = (event: Event): void => {
     event.preventDefault();
@@ -166,16 +166,16 @@ export class GlStage {
       try {
         layer.draw(this, frame);
       } catch (error) {
-        // 单层画挂不该连带别的层一起黑
+        // 单个图层绘制失败不应影响其他图层
         console.error(`[render] layer "${layer.name}" failed:`, error);
       }
     }
   }
 
   /**
-   * 卸载。`forceContextLoss()` 是必须的：`dispose()` 只释放 three 侧的
-   * 资源，GL 上下文本身要到 GC 才回收；而 HMR 每次热更都会重建舞台，
-   * 不主动丢就会在几次热更后撞上上下文上限。
+   * 卸载。需要调用 `forceContextLoss()`：`dispose()` 只释放 three 侧资源，GL
+   * 上下文要等 GC 才回收；HMR 每次热更都会重建舞台，不主动释放会在数次热更后
+   * 达到上下文数量上限。
    */
   dispose(): void {
     this.canvas.removeEventListener('webglcontextlost', this.handleLost);

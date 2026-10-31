@@ -2,16 +2,16 @@
   import { Switch } from 'bits-ui';
 
   /**
-   * 开关：设置页里"开/关"类选项。
+   * 开关：设置页中"开/关"类选项的唯一实现。
    *
-   * 内核 `bits-ui/Switch.Root`：`role="switch"`、`aria-checked`、空格/回车切换。
-   * 取代全局 `.switch` / `.switch.on`（那两个只有鼠标，键盘按不动）。
+   * 内核为 `bits-ui/Switch.Root`，提供 `role="switch"`、`aria-checked` 与空格/回车
+   * 切换，键盘可达（手写实现通常只有鼠标响应）。
    *
-   * 与 Checkbox 的区别：它**没有**受控 double-flip 的问题 —— 状态翻转由 bits-ui
-   * 内部完成后回调 `onCheckedChange`，调用方只写设置、不回写本地副本。
-   * 唯一约束：不要在回调里再手动取反一次（会来回跳）。
+   * 与 Checkbox 的差别：不存在受控翻转两次的问题。状态翻转由 bits-ui 内部完成后
+   * 回调 `onCheckedChange`，调用方只写设置，不回写本地副本。约束是不要在回调内
+   * 再手动取反一次，否则值会来回跳变。
    *
-   * 可见标签由调用方提供（设置页的 `.setting-title`），`label` 只用于无障碍。
+   * 可见标签由调用方提供（设置页的 `.setting-title`），`label` 仅用于无障碍。
    */
 
   interface Props {

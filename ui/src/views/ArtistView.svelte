@@ -16,8 +16,8 @@
    * （`ui.artistId`）直接可寻址，曲目列表 = 曲库查询 + artistId 筛选，
    * 列表接线共用 TrackListPanel。
    *
-   * **不做图片获取逻辑**（用户拍板）：artists 表的 artwork_id 扫描器从不
-   * 填写，头部与宫格卡片一律 user 图标，`artworkUrl` 在本页没有位置。
+   * 不做图片获取逻辑：artists 表的 artwork_id 扫描器从不填写，头部与宫格卡片
+   * 一律 user 图标，`artworkUrl` 在本页没有位置。
    */
   const artist = $derived(facets.artistById(ui.artistId ?? ''));
 

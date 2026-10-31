@@ -3,14 +3,14 @@
   import Cover from './Cover.svelte';
 
   /**
-   * 卡片：首页歌单/曲库入口的方块。
+   * 卡片：首页歌单与曲库入口的方块，尺寸与悬停反馈由此统一。
    *
-   * 取代 `.playlist-card` / `.library-card`（首页两份，尺寸与 hover 各写一遍）。
+   * 恒渲染为 `<button>`：卡片在本应用中只作为可点击入口存在，不承载交互子元素
+   * （HTML 不允许 button 嵌套 button）。需要按钮的卡片应使用 `StatBlock` 加外层
+   * 容器组合。
    *
-   * 恒渲染成 `<button>`：卡片在本应用里**只作为可点入口**存在。不适合放交互子元素
-   * （HTML 不允许 button 套 button）—— 需要按钮的卡片请用 `StatBlock` + 外层容器。
-   *
-   * `cover` 三态与 `Header` 一致：缺省=无封面位（纯图标）/ `null`=占位符 / 字符串=图片。
+   * `cover` 三态与 `Header` 一致：缺省为无封面位（纯图标）、`null` 为占位符、
+   * 字符串为图片 URL。
    */
 
   interface Props {

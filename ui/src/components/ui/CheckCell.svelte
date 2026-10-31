@@ -12,13 +12,12 @@
     /** 行内 cell / 表头 columnheader */
     role?: 'cell' | 'columnheader';
     /**
-     * 勾选切换。鼠标点击与键盘 Space/Enter **都走这里**。
+     * 勾选切换。鼠标点击与键盘 Space/Enter 均经由此回调。
      *
-     * 键盘必须拦在 Checkbox 上（B4-1 实测）：bits-ui 的 `Checkbox.Root`
-     * 收 Space/Enter 只翻**内部** state、不派发 click，受控模型收不到 →
-     * "勾上了又自己掉"。这个防护曾经复制粘贴在四个调用点（两个表格的
-     * 表头+行内），B4-2c 收进本组件 —— 改语义只改这一处。
-     * `KeyboardEvent` 同样有 `shiftKey`/`ctrlKey`，Shift 连选不丢。
+     * 键盘事件须拦截在 Checkbox 上：bits-ui 的 `Checkbox.Root` 对 Space/Enter 只
+     * 翻转内部状态，不派发 click，受控模型因此收不到事件，表现为勾选后立即复位。
+     * 该处理集中在本组件内，四个调用点（两个表格的表头与行内）共用同一实现。
+     * `KeyboardEvent` 同样携带 shiftKey/ctrlKey，Shift 连选不受影响。
      */
     ontoggle: (event: MouseEvent | KeyboardEvent) => void;
   }
@@ -28,9 +27,9 @@
     indeterminate = false,
     label,
     disabled = false,
-    // 不给默认值（发布前 UI 审查 P6.1）：role="cell" 要求 row/grid 祖先，
-    // IndexPanel 在 ul/li 里用它时默认值会产出非法 ARIA。表格调用方
-    // （TrackList/PlaylistList/TrackTable）显式传 'cell' / 'columnheader'。
+    // 不设默认值：role="cell" 要求存在 row 或 grid 祖先，IndexPanel 在 ul/li 内
+    // 使用时，默认值会产生非法 ARIA。表格调用方（TrackList / PlaylistList /
+    // TrackTable）显式传 'cell' 或 'columnheader'。
     role,
     ontoggle,
   }: Props = $props();

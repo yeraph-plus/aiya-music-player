@@ -1,14 +1,11 @@
 /**
- * beets 导入的事件与预览形状（docs/08 §3.2 事件协议）。
+ * beets 导入协议：预览与事件的前端形状（事件协议见 docs/08 §3.2）。
  *
- * 为什么没有生成类型：这些结构由 Python sidecar 产出，Rust 宿主只做
- * "逐行 JSON 转发"，不进强类型 DTO（`beets:import` 事件的载荷是动态的）。
- * 所以这里是**前端对协议的手写镜像** —— 改 sidecar 的字段要同步改这里，
- * 且只有 `beets-session` 的 switch 分支会碰到字段（写错一处就编译不过）。
+ * 这些结构没有生成类型：载荷由 Python sidecar 产出，Rust 宿主逐行转发 JSON、不做
+ * 强类型转换。本文件是协议的手写镜像，`beets-session` 的 switch 分支按它取字段；
+ * sidecar 改字段时两侧同步修改。
  *
- * 2026-10-25 批次 4：从已删除的 `@aiya/contracts` 搬来。
- * 应用决策（`ApplyDecision`）不在这里：它是**命令入参**，定义在
- * `lib/ipc/client.ts`（`candidate` 原样回传，宿主不解读）。
+ * `ApplyDecision` 不在此文件：它是命令入参，定义在 `lib/ipc/client.ts`。
  */
 
 /** 单曲级标签（当前与候选同形，UI 才能逐字段对齐） */
@@ -39,7 +36,7 @@ export interface CandidatePreview {
   fromScratch: boolean;
   extraItems: number;
   extraTracks: number;
-  /** v2：证据层级——回答"为什么推荐这个"（机器判定看它，reasons 是人话） */
+  /** v2：证据层级，说明推荐依据；机器判定读 `evidence`，`reasons` 为展示用短句 */
   evidence?: EvidenceTier;
   /** v2：判到该层的依据短句 */
   reasons?: string[];
@@ -81,16 +78,15 @@ export type BeetsImportEvent =
   | { type: 'cancelled'; session: string; stage: string }
   /** sidecar 收到取消命令的回执 */
   | { type: 'cancelAck' }
-  /* ---- 曲库刷新终态（宿主扫描段；beets 对账已随 docs/43 §8-E 移除） ---- */
-  /** 正在扫描全库（写库互斥被占），本次刷新让位（自动触发时不会发这条） */
+  /* ---- 曲库刷新终态（宿主扫描段；beets 对账不在本事件流，见 docs/43 §8-E） ---- */
+  /** 正在扫描全库（写库互斥被占），本次刷新让位（自动触发时不发此事件） */
   | { type: 'libraryRefreshSkipped'; reason: string }
   /* ---- 自动刷新管线终态（docs/33 §7） ---- */
   /**
-   * 一次刷新跑完（扫描 → 对齐 → 单 bump）。
+   * 一次刷新完成（扫描 → 对齐 → 单 bump）。
    *
-   * **只有真的写出变化才发**，唯一例外是手动触发（用户点了按钮必须看到回应）。
-   * 所以"没收到这条"不等于管线没在工作 —— 它可能只是没发现变化，
-   * 详情看 `refresh_state` 命令返回的最近一次快照。
+   * 发出条件：确有写入变化；手动触发例外（用户操作需要可见反馈）。未收到该事件
+   * 仅表示无变化，最近一次结果见 `refresh_state` 返回的快照。
    */
   | {
       type: 'libraryRefreshed';

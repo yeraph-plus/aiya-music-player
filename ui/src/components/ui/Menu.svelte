@@ -4,35 +4,31 @@
   import type { MenuItem } from '../../lib/menu';
 
   /**
-   * 右键菜单（数据驱动）：`items` 进，菜单出。
+   * 右键菜单（数据驱动）：输入 `items`，输出菜单。
    *
-   * 取代 `components/ContextMenu.svelte` —— 那份实现自己算翻转（`Math.min` 夹到
-   * 窗口内）、自己铺一层 backdrop 接外点、自己在 `svelte:window` 上接 Esc。
-   * 这三样都是 bits-ui 已经写对的东西，而且它还会做**键盘导航**（上下键、Home/End、
-   * 输入首字母跳转、Esc 后把焦点还给触发点），手写版本一样都没有。
+   * 定位、碰撞翻转、外部点击关闭、Esc 处理与焦点还原全部由 bits-ui 承担，
+   * 本组件只把点击坐标转换成锚点位置。bits-ui 同时提供键盘导航（上下键、
+   * Home/End、首字母跳转、Esc 后焦点归还触发点）。
    *
-   * ### 为什么是 `DropdownMenu` 而不是 `ContextMenu`
+   * ### 选用 `DropdownMenu` 而非 `ContextMenu` 的依据
    *
-   * 我们的模型是「事件坐标 → 单例菜单」，菜单的生命周期与**行节点**解耦
-   * （虚拟列表会回收行）。`ContextMenu.Root` 的坐标只能由它自己的
-   * `Trigger.oncontextmenu` 捕获（`menu.svelte.js` 里 `#handleOpen(e)` 读 clientX/Y，
-   * 没有对外暴露 point 的入参），所以要把它挂在每一行上 —— 正是要避免的做法。
+   * 本组件的模型是「事件坐标 → 单例菜单」，菜单生命周期与行节点解耦（虚拟列表
+   * 会回收行）。`ContextMenu.Root` 的坐标只能由其自身的 `Trigger.oncontextmenu`
+   * 捕获（内部读取 clientX/Y，未对外暴露坐标入参），因此必须挂到每一行上，
+   * 与该模型冲突。
    *
-   * `DropdownMenu` 的定位基准是**触发元素的 rect**，于是这里放一个 0×0 的锚点
-   * 摆在点击坐标上：定位、碰撞翻转、外点关闭、Esc、焦点还原全部由 bits-ui 负责，
-   * 我们只负责把坐标变成锚点位置。副作用是锚点是个一次性隐藏元素，
-   * 菜单关闭时随组件一起卸载，行怎么回收都影响不到它。
+   * `DropdownMenu` 的定位基准是触发元素的 rect，因此此处放置一个 0×0 锚点在
+   * 点击坐标上。副作用是锚点为一次性隐藏元素，菜单关闭时随组件卸载，不受行
+   * 回收影响。
    *
-  * 坑（docs/24 §4.5）：`class` 不带 scoped 哈希 → 样式一律 `:global(.k-*)`；
-  * `class:` 指令不能用在组件上 → 拼字符串。
-  *
-  * 坑 2（docs/25 §1 T3 实测）：**锚点必须 portal 到 body**。锚点是
-  * `position: fixed`，一旦 Menu 被放进带 `transform` 的容器（bits-ui 的
-  * Popover.Content 就用 transform 定位——EQ 抽屉是第一个这样的宿主），
-  * fixed 退化为"相对该容器定位"，点击坐标变成容器内偏移，菜单整体
-  * 飞出视口。portal 到 body 后 fixed 恒等于视口坐标；对原右键菜单
-  * （宿主在 body 层）零行为差异。
-  */
+   * 约束（docs/24 §4.5）：组件的 `class` 不带 scoped 哈希，样式一律使用
+   * `:global(.k-*)`；`class:` 指令不能用于组件，需拼接字符串。
+   *
+   * 锚点必须 portal 到 body：锚点为 `position: fixed`，若 Menu 被置于带
+   * `transform` 的容器内（bits-ui 的 Popover.Content 以 transform 定位，EQ 抽屉
+   * 即此类宿主），fixed 会退化为相对该容器定位，点击坐标成为容器内偏移，菜单
+   * 整体移出视口。portal 到 body 后 fixed 恒等于视口坐标（docs/25 §1）。
+   */
 
   interface Props {
     x: number;
@@ -59,10 +55,9 @@
   <DropdownMenu.Trigger>
     {#snippet child({ props })}
       <!--
-        0×0 锚点。`tabindex="-1"` 是必须的：默认的 button 会进 Tab 序列，
-        用户按 Tab 会落到一个看不见的东西上。`pointer-events:none` 让它在点击
-        坐标处不遮挡任何东西（菜单已经开着，下一次点击应该落到下层元素上）。
-        portal 到 body：见坑 2（transform 祖先会让 fixed 失效）。
+        0×0 锚点。`tabindex="-1"` 为必需：默认 button 会进入 Tab 序列，焦点将落在
+        不可见元素上。`pointer-events:none` 使其在点击坐标处不遮挡下层，菜单打开时
+        下一次点击应落到下层元素。portal 到 body 的原因见文件头。
       -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -- 这是定位锚点，不是控件 -->
       <Portal>
@@ -90,8 +85,8 @@
           disabled={item.disabled ?? false}
           onSelect={() => pick(item)}
         >
-          <!-- 选中标记（发布前 UI 审查 P10）：此前调用方往 label 里拼 '✓ '，
-               读屏会把"勾"念出来。菜单里有任一选中项时整组预留勾位对齐。 -->
+          <!-- 选中标记：勾选图标由组件渲染，避免调用方在 label 中拼接 '✓ '
+               而被读屏念出。菜单中存在任一选中项时，整组预留勾位以保持对齐。 -->
           <span class="k-menu-check" class:on={item.selected} aria-hidden="true">
             {#if item.selected}<Check size={13} />{/if}
           </span>

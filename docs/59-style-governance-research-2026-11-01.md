@@ -1,6 +1,6 @@
 # 59 · 注释与文档文风治理：调研与批次计划（2026-11-01）
 
-> 类型：调研 + 批次计划　状态：G0–G2 已完成；G3–G7 待执行　
+> 类型：调研 + 批次计划　状态：G0–G4 已完成；G4b 部分执行后暂停（改写强度复核未通过，标准待重定）；G5–G7 待执行　
 > 证据来源：全仓 grep 取证与三路抽样（Rust 76 文件 / 前端 208 文件 / docs 67 文件），
 > 本节所有引文均逐字摘自仓库文件，路径相对仓库根。
 
@@ -183,15 +183,16 @@ ADR 体系停止使用，docs/adr/ 六份记录删除，其中仍然成立的事
 | G0（本批） | 调研与计划 | 本文档 | — |
 | G1 | 根 `AGENTS.md`：项目结构与依赖边界、开发操作（命令表、验证门禁、环境前提）、§2 文风规范、§3 文档制度；吸收 docs/adr 六份记录的事实入约束节；`tools/check-style.mjs`（report-only） | AGENTS.md + 检查脚本；删除 docs/adr/ 与 42-release-fix-ledger | 文档中每条命令可在仓库根直接执行；结构与目录实况一致 |
 | G2 | README 门面化：一句话介绍、特性、截图、下载/两种发布形态、快速开始、架构一段 + 指针；原 README 内容迁移——决策与命令细节入 AGENTS.md，进度指向 docs/35 | 新 README + 仓库内截图（`docs/img/`）。2026-11-01 完成：截图三张由用户提供（真实 `tauri dev` 环境），落 `library.png`（曲库 + 均衡器抽屉）、`now-playing.png`（正在播放）、`settings.png`（设置），README 一排三张 | 非作者视角 3 分钟内明白项目是什么、怎么装、怎么跑；含 ≥3 张截图 |
-| G3 | 前端注释第一片：`stores/ui.svelte.ts`、`Icon.svelte`、`lib/format.ts`、`lib/artwork.ts`、`lib/settings*.ts`、`lib/beets.ts` | 本片内编年史/训诫/拍板清零 | svelte-check 0 error；本片注释无日期戳 |
-| G4 | 前端注释第二片：`components/**`（PlayerBar、SettingsPanel、beets/*、shell/* 等）+ `lib/render/**` | 同上 | 同上 |
+| G3 | 前端注释第一片：`stores/ui.svelte.ts`、`Icon.svelte`、`lib/format.ts`、`lib/artwork.ts`、`lib/settings*.ts`、`lib/beets.ts` | 本片内编年史/训诫/拍板清零。2026-11-01 完成：7 个文件按 §2.3 强度重写（换语域，不止删日期），注释 247 增 / 332 删，非注释改动 0 行；顺带修正两处失实注释（`artwork.ts` 的对端指针 `src-tauri/src/artwork*.rs` 不存在，改为 `lib.rs::artwork_protocol` + `aiya-data/src/artwork.rs`；`ui.svelte.ts` 中悬空的「本机 Python 探测结果」注释无对应字段，删除） | svelte-check 0 error；本片注释无日期戳 |
+| G4 | 前端注释第二片：`components/**`（PlayerBar、SettingsPanel、beets/*、shell/* 等）+ `lib/render/**` | 本片内编年史/训诫/拍板清零。2026-11-01 完成：27 个源文件按 §2.3 强度重写，注释 722 增 / 807 删，非注释改动 0 行（剥离注释后逐文件比对 `git show HEAD:` 与工作区，38 个改动文件全部一致）。`check-style` 在 `ui/src/components` 与 `ui/src/lib/render` 下命中归零 | svelte-check 0 error / 0 warning；`gen:types:check` 70 个类型一致；本片无日期戳 |
+| G4b | 前端注释第三片（本批新增，覆盖 G3/G4 未涉及的目录）：`views/**`（39 处命中）、`lib/**` 剩余（39 处）、`stores/**` 剩余（20 处）、`main.ts`（1 处） | **部分执行后暂停**。已改 `views/**` 7 个文件（LibraryView 20→0、BrowseView 5→0、HomeView 5→0、BeetsView 4→0、ArtistView 1→0、LiveView 1→0），累计注释 50 增 / 61 删，非注释改动 0 行；顺带删除一处悬空注释（`LibraryView` 中指向的 `.lib-tabs` 规则已不存在）。未动：`views/NowPlayingView`（2 处）、`views/SettingsView`（1 处）、`lib/**` 39 处、`stores/**` 20 处、`main.ts` 1 处。暂停原因：改写强度经复核未达预期，§2.3 的语域标准需重新定义后再继续 | svelte-check 0 error / 0 warning；`gen:types:check` 70 个类型一致；剥离注释后 64 个改动文件代码零差异 |
 | G5 | Rust 注释第一片：`src-tauri/src/`（beets.rs、lib.rs、refresh.rs、pump.rs、hls.rs 等） | 禁词清零、比喻重述、日期叙事迁出 | cargo test 全绿；cargo doc 无 warning |
 | G6 | Rust 注释第二片：`crates/*`（session、decoder、engine、state、playlist、history、artwork、scanner、db、proto），ADR-000N 指针改写为 AGENTS.md §3 条目 | 本片禁词清零、比喻重述、日期叙事迁出 | cargo test 全绿；cargo doc 无 warning |
 | G7 | 文档体系修复：`docs/INDEX.md`（分型登记、撞号登记：10 号两份并存）、61 份编号文档补元信息头、00–09 补日期、标题体例统一；`check:style` 转入 `verify` 阻断 | INDEX + 修复 + 门禁 | `npm run verify` 全绿（含 style 门禁） |
 
-规模估计：前端两片合计触达约 400–500 注释行，Rust 两片约 200 行，均为注释/文档
-改动，不改逻辑代码。每批通用验收：`cargo test` + `svelte-check` +
-`gen:types:check` 通过；diff 中不得出现行为性改动。
+规模估计：前端三片合计触达约 700 注释行（G3 换算 332 删、G4 807 删），Rust
+两片约 200 行，均为注释/文档改动，不改逻辑代码。每批通用验收：`cargo test` +
+`svelte-check` + `gen:types:check` 通过；diff 中不得出现行为性改动。
 
 ## 5. 风险与边界
 

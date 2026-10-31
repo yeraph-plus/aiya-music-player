@@ -49,38 +49,32 @@ import TextTabs from './ui/TextTabs.svelte';
   let { settings, onsave }: Props = $props();
 
   /**
-   * 识别信息与排障数据（版本/平台/Schema/数据目录/最近错误），
-   * 2026-10-28 从扫描入库页的「高级与诊断」折叠区迁来——它们描述的是
-   * 整个应用，放在「关于」tab 比挂在入库页更对位。数据同源：
-   * `ui.diagnostics`，与系统 tab 的集成状态共用一份。
+   * 识别信息与排障数据：版本、平台、Schema 版本、数据目录、最近错误。
+   *
+   * 描述对象是整个应用而非某个功能，因此归入「关于」组。数据源为
+   * `ui.diagnostics`，与「系统」组的集成状态共用同一份快照。
    */
   const sys = $derived(ui.diagnostics);
   const recentErrors = $derived(sys?.recentErrors ?? []);
 
   /**
-   * 曲库统计（曲目 / 专辑 / 艺人 / 总时长 / 索引大小 / 位置缺失）。
+   * 曲库统计：曲目、专辑、艺人、总时长、索引大小、位置缺失。
    *
-   * 只读：真正的拉取在 `boot.ts` 与每次扫描收尾（`library.loadStats`），
-   * 这个区块不自己发请求——设置页打开一次就查一遍库，属于"看页码就查数据库"。
+   * 只读派生值。拉取发生在 `boot.ts` 启动流程与每次扫描收尾
+   * （`library.loadStats`）；本区块不发请求，避免每次进入设置页触发一次全库统计。
    */
   const stats = $derived(library.stats);
 
   /**
-   * 单页平铺 + tab 跳转（2026-10-28 用户拍板改回）。
+   * 布局契约：六个区块全部平铺渲染，顶部 tab 只做跳转定位。
    *
-   * 演进史：旧版「全区块平铺 + scroll-spy」的病根是点击分组靠
-   * scrollIntoView 平滑滚动、滚动中 spy 又不断写回高亮——两边互相拉扯，
-   * 切一次组高亮抖好几下。上一版改成 tab 条件渲染，抖动消失了，但用户
-   * 不喜欢"设置被切成五页"。现在是折中：**六个区块全部平铺渲染，顶部
-   * tab 只做跳转定位**——点击 scrollIntoView，没有 spy；高亮只跟点击走
-   * （tab 的语义是"跳过去"，不是"你在这"），滚动永不写回高亮，拉扯
-   * 从根上不存在。
+   * 高亮仅由点击写入，滚动不写回。若改由 scroll-spy 让滚动反向驱动高亮，
+   * 平滑滚动期间程序写入的 scrollTop 会连续触发高亮更新，一次跳转产生数次
+   * 可见抖动。tab 的语义是"跳到该组"而不是"当前位于该组"，因此不需要双向同步。
    *
-   * 2026-10-30：`library` 是新加的一组（原「扫描入库」页整体并入，见下方
-   * 该 section 的注释）。排序按"数据 → 内容 → 应用"：曲库在最前（它是这一页
-   * 里唯一有**实际内容**的组——目录、扫描、统计都在这里，用户进设置十次有
-   * 八次是为了看它）；之后才是外观/播放这类偏好，系统/快捷键/关于收尾。
-   * 用户当天拍板："曲库这一级提到设置页面最前"。
+   * 分组顺序按数据 → 内容 → 应用：曲库居首，目录、扫描、执行状态、统计等
+   * 唯一带实际内容的区块都在该组，也是进入设置页的主要目的；其后为外观、
+   * 播放等偏好，系统、快捷键、关于收尾。
    */
   type Section = SettingsSection;
   let active = $state<Section>('library');
@@ -110,14 +104,14 @@ import TextTabs from './ui/TextTabs.svelte';
   }
 
   /**
-   * 消费 `nav.settingsAt()` 挂上的一次性跳转请求（曲库页「位置缺失」告警用）。
+   * 一次性跳转请求（`nav.settingsAt()` 写入，本组件消费后立即清空）。
    *
-   * 为什么 `await tick()`：请求是在**路由切换之前**写进去的，本组件可能是
-   * 这一帧才第一次挂载——那时 `sectionEls` 还是空对象，直接 `scrollIntoView`
-   * 会静默什么都不做（`.?.` 吃掉）。tick 之后 bind:this 已填好。
+   * 需要 `await tick()`：请求在路由切换之前写入，本组件可能在本帧才首次挂载，
+   * 此时 `sectionEls` 尚未由 `bind:this` 填充，直接 `scrollIntoView` 会被可选链
+   * 静默跳过。tick 之后绑定已完成。
    *
-   * 读后立刻清空：这是一次性请求，不是"当前分组"状态（后者会让滚动与 tab
-   * 高亮重新互相拉扯，正是这页上一版回退掉的设计）。
+   * 清空而非保留：这是一次性请求，不是"当前分组"状态；后者会让滚动与高亮
+   * 重新互相驱动，与本页的布局契约冲突。
    */
   $effect(() => {
     const want = ui.settingsSection;
@@ -127,16 +121,16 @@ import TextTabs from './ui/TextTabs.svelte';
   });
 
   /**
-   * 录制态**不放在组件里**：全局快捷键的 listener 也挂在 window 上，
-   * 组件内 stopPropagation 拦不住它（同节点按注册顺序触发）。
-   * 状态进 `stores/capture`，`lib/keyboard.ts` 自己看这个标志让路。
+   * 录制态不保存在组件内：全局快捷键的 listener 同样挂在 window 上，
+   * 组件内的 `stopPropagation` 无法拦截（同一节点按注册顺序触发）。
+   * 状态存放于 `stores/capture`，`lib/keyboard.ts` 读取该标志后让路。
    */
   const capturing = $derived(capture.action);
   onDestroy(() => capture.stop());
 
   const bindings = $derived(resolveShortcutBindings(settings.shortcuts));
-  // 快捷键区的即时冲突提示（诊断块的"快捷键冲突"已随分区搬去扫描入库页，
-  // 但录制的当下就该看到冲突，这里保留一份轻量提示）
+  // 快捷键区的即时冲突提示：诊断块的「快捷键冲突」留在系统组，本处保留一份
+  // 轻量提示，使录制当下即可看到冲突。
   const conflicts = $derived(findConflicts(bindings));
 
   function apply(patch: Partial<AppSettings>): void {
@@ -144,18 +138,18 @@ import TextTabs from './ui/TextTabs.svelte';
   }
 
   /**
-   * 全局 3D 闸门（docs/46 §6.2）：关掉后虽然 `bgSpectrum` / `npSpectrum` 的**值**
-   * 还在设置里，但一律不生效。UI 上必须把下面几项置灰而不是隐藏——用户要能看见
-   * "我关掉的是哪些东西"，隐藏会让人以为功能消失了。
+   * 全局 3D 闸门（docs/46 §6.2）：关闭后 `bgSpectrum` / `npSpectrum` 的取值仍保留
+   * 在设置中，但不参与渲染。相关行置灰而非隐藏：用户需要看见被关掉的是哪几项，
+   * 隐藏会使这些设置看起来已被移除。
    */
   const gl = $derived(settings.glEffects);
 
   /**
-   * 本机 3D 能力（探测结果有缓存，打开设置页只探一次）。
+   * 本机 3D 能力（探测结果在 `lib/render/capability` 内缓存，每次挂载只探一次）。
    *
-   * 放在这里的理由：`glEffects` 是个用户看不懂后果的开关——"我的机器到底行不行"
-   * 应该由应用直接说出来，而不是让用户自己试。软件渲染（远程桌面 / 关了硬件加速）
-   * 下开着它只会更卡，所以 hint 要明确劝关。
+   * `glEffects` 的后果对用户不可见，因此由应用直接给出结论而不是让用户试错：
+   * 软件渲染（远程桌面、禁用硬件加速）下保持开启只会增加开销，提示语据此
+   * 建议关闭。
    */
   const cap = detectCapability();
 
@@ -166,7 +160,7 @@ import TextTabs from './ui/TextTabs.svelte';
     apply({ shortcuts });
   }
 
-  /** 录制快捷键时接管按键；Esc 只取消录制，不再有关闭面板语义（设置已是页面） */
+  /** 录制快捷键时接管按键。Esc 只取消录制：设置已是独立页面，不存在关闭面板语义 */
   function onWindowKey(event: KeyboardEvent): void {
     const action = capture.action;
     if (!action) return;
@@ -188,10 +182,9 @@ import TextTabs from './ui/TextTabs.svelte';
   }
 
   /**
-   * 输出选项的取值**必须**与 `aiya-audio` 的 `ModePref::parse` /
-   * `ClockPref::parse` 对得上（`crates/aiya-audio/src/engine.rs`）。
-   * 后端对未知值一律按 `shared` / `auto` 处理——写错不会报错，只会静默失效，
-   * 所以这里刻意只列后端认的字符串，不给"看起来更自然"的别名。
+   * 输出模式的取值须与 `aiya-audio` 的 `ModePref::parse` / `ClockPref::parse`
+   * 一致（`crates/aiya-audio/src/engine.rs`）。后端对未知取值按 `shared` / `auto`
+   * 处理，写错不报错而是静默降级，因此此处只列后端识别的字符串，不提供别名。
    */
   const OUTPUT_MODES: Array<{ value: string; label: string; hint: string }> = [
     { value: 'shared', label: '共享', hint: '与系统混音，其他程序照常出声' },
@@ -200,15 +193,15 @@ import TextTabs from './ui/TextTabs.svelte';
     { value: 'null', label: '静音', hint: '不开音频设备：进度照常走但不出声（排查用）' },
   ];
 
-  /** 分段控件要 `title`，这里把 `hint` 映射过去；模块级只算一次，
-   *  否则每次渲染都造新数组，RadioGroup 会重挂、键盘焦点丢失。 */
+  /** 分段控件使用 `title`，此处把 `hint` 映射过去。模块级只求值一次：
+   *  内联求值会每次渲染产生新数组引用，导致 RadioGroup 重挂并丢失键盘焦点。 */
   const OUTPUT_OPTIONS = OUTPUT_MODES.map(({ value, label, hint }) => ({ value, label, title: hint }));
 
   /**
-   * 0 = 交给引擎按模式取默认（共享 200ms、独占按设备周期）
+   * 0 = 交由引擎按输出模式取默认值（共享 200ms，独占取设备周期）。
    *
-   * value 写成字符串：分段控件的值是 `string`，这里若留 number 就要在
-   * 每次渲染时 `String()` 一遍，反而更容易写错比较（`'0' === 0` 恒 false）。
+   * 值写成字符串：分段控件的值为 `string`，保留 number 会导致每次渲染都要
+   * `String()` 转换，且 `'0' === 0` 恒为 false，比较更容易出错。
    */
   const BUFFER_OPTIONS: Array<{ value: string; label: string }> = [
     { value: '0', label: '自动' },
@@ -218,10 +211,10 @@ import TextTabs from './ui/TextTabs.svelte';
   ];
 
   /**
-   * 自动刷新间隔（秒）。0 = 只保留"切回窗口时刷新"。
+   * 自动刷新间隔（秒）。0 = 仅保留"切回窗口时刷新"。
    *
-   * 上限只给到 5 分钟：再慢就不如关掉定时（切回窗口已经覆盖了主要场景），
-   * 留一个"每半小时想起来才扫一次"的档位只会让用户以为它坏了。
+   * 上限取 5 分钟：更长的间隔不如关闭定时（切回窗口刷新已覆盖主要场景），
+   * 保留半小时级档位反而会让用户误以为定时刷新失效。
    */
   const REFRESH_OPTIONS: Array<{ value: string; label: string }> = [
     { value: '0', label: '关闭' },
@@ -256,17 +249,17 @@ import TextTabs from './ui/TextTabs.svelte';
 <svelte:window onkeydown={onWindowKey} />
 
 <div class="settings-page">
-  <!-- 头部与内容同在一根居中列（2026-10-28 用户拍板）：设置是表单式页面，
-       内容列 1020 上限后左侧留白很大，标题还贴屏幕左会显得割裂 -->
+  <!-- 头部与内容共用一条居中列：本页为表单式布局，内容列上限 1020，
+       头部若单独贴屏幕左缘会与内容列错位 -->
   <div class="settings-headwrap">
     <div class="page-pad">
-      <!-- 大标题固定「设置」+ 右侧 tab 只做跳转（2026-10-28 用户拍板改回单页） -->
+      <!-- 大标题固定「设置」，右侧 tab 只做跳转定位 -->
       <Header title="设置" big>
         {#snippet actions()}
-          <!-- 语义用 nav + aria-current 而不是 role="tablist"/"tab"（同 content/Toolbar
-               的先例）：tab 只做 scrollIntoView 跳转，五个区块平铺常驻，不是「切换
-               面板」；硬套 tab 角色会让读屏软件期待一个 tabpanel。语义与外观
-               现归 TextTabs（发布前 UI 审查 P8）。 -->
+          <!-- 语义用 nav + aria-current，而非 role="tablist"/"tab"（同 content/Toolbar）：
+               tab 只执行 scrollIntoView 跳转，六个区块平铺常驻，不构成"切换面板"；
+               套用 tab 角色会让读屏软件等待一个不存在的 tabpanel。
+               语义与外观统一由 TextTabs 提供。 -->
           <TextTabs
             items={SECTIONS.map((s) => ({ id: s.id, label: s.label }))}
             value={active}
@@ -278,31 +271,29 @@ import TextTabs from './ui/TextTabs.svelte';
     </div>
   </div>
 
-  <!-- 内容容器自己滚：头部（标题+tab）固定。六个区块全部平铺渲染，
-       tab 点击只 scrollIntoView 跳转（2026-10-28 用户拍板改回单页）。
-       顺序：曲库在最前（2026-10-30 用户拍板），其余按"内容 → 应用"。 -->
+  <!-- 内容容器独立滚动，头部（标题 + tab）固定。六个区块全部平铺渲染，
+       tab 点击只执行 scrollIntoView。分组顺序：曲库居首，其余按内容 → 应用。 -->
   <div class="settings-scroll">
     <!--
-      曲库（2026-10-30）：原「扫描入库」独立页整体并入，**并提到六组的第一位**。
+      曲库组。
 
-      为什么拆掉那一页：beets 拆成独立「整理库」页之后（docs/48），那一页
-      只剩"本应用的曲库怎么进来"一件事——一个侧栏一级席位换一条卡片，代价
-      太大。曲库目录本身是**配置**（跟"最近播放保留多久"同性质），归设置页。
+      「扫描入库」独立页撤销的依据（docs/48）：beets 拆为独立「整理库」页之后，
+      该页只剩导入曲库目录一件事，占用一个一级导航席位与一张卡片的体量不匹配。
+      曲库目录属于配置项（与"播放记录保留多久"同性质），归设置页。
 
-      为什么排第一：六组里只有这一组是"有内容"的（目录列表、扫描、执行状态、
-      统计），其余五组都是偏好开关。用户进设置，绝大多数时候是来管曲库的。
+      排在首位：六组中只有该组含实际内容（目录列表、扫描、执行状态、统计），
+      其余五组均为偏好开关。
 
-      与原来那一页的差别只有排版：不再有页面大标题与「曲库」小结，改用设置页
-      统一的 group-title；统计卡与卡片原样搬过来（`components/LibraryTools`
-      本组件一行引用即可，它自己不依赖页面壳）。
+      与已撤销页面的差别仅在排版：使用设置页统一的 group-title，不再有页面级
+      大标题与组内小标题；统计卡与目录卡原样引入（`components/LibraryTools`
+      不依赖页面壳）。
     -->
     <section class="settings-section" id="settings-library" bind:this={sectionEls.library}>
       <h3 class="group-title">曲库</h3>
 
-      <!-- 统计卡：图标 + 大数字 + 标签。数字 tabular 不抖；图标用中性描边件，
-           不抢数字的戏。六项正好铺满 3×2（五项时第二行只有两个，右边空一块，
-           看着像布局没做完）。索引大小与文件容量是两件事：前者是 SQLite 索引
-           自己的体积，后者是音乐文件加起来多大 -->
+      <!-- 统计卡：图标 + 数值 + 标签。数值使用等宽数字（tabular-nums）以免更新时抖动；
+           图标用中性描边样式，不与数值争夺视觉权重。六项铺满 3×2 网格。
+           索引大小与文件容量是两个量：前者为 SQLite 索引自身体积，后者为音频文件总量 -->
       {#if stats}
         <div class="lib-stats">
           <StatBlock layout="row" value={stats.tracks} label="曲目">
@@ -331,9 +322,9 @@ import TextTabs from './ui/TextTabs.svelte';
         </div>
       {/if}
 
-      <!-- 卡片出血 16px：统计卡与目录卡自带 16px 水平内边距，与设置页内容列
-           （720 居中）叠加后，卡内文字比下方设置行左缘缩进 16px —— 整块看着
-           比页面窄一圈。用负 margin 抵消，卡内文字回到与设置行同一条左缘。 -->
+      <!-- 16px 出血：统计卡与目录卡自带 16px 水平内边距，与内容列（720 居中）叠加后
+           卡内文字比下方设置行左缘多缩进 16px，整块显得比页面窄一圈。负 margin
+           抵消该差值，卡内文字回到与设置行相同的左缘。 -->
       <div class="lib-bleed"><LibraryTools /></div>
     </section>
     <section class="settings-section" bind:this={sectionEls.appearance}>
@@ -693,9 +684,8 @@ import TextTabs from './ui/TextTabs.svelte';
       <h3 class="group-title">快捷键</h3>
 
       <!--
-        录制规则 + 恢复默认（2026-10-28 十二轮拍板）：盒子放组顶——用户
-        点下任何绑定键之前就该知道 Esc/Backspace 的行为；边框套住让它像
-        一条"操作须知"，而不是飘在列表底部的尾注。
+        录制规则与恢复默认放在组首：用户在点击绑定键之前需要知道 Esc / Backspace
+        的行为。外框使其读作操作须知，而非列表末尾的附注。
       -->
       <div class="shortcut-foot">
         <span class="dim">Esc 取消录制，Backspace 清空绑定。↑/↓ 与 Enter 是列表导航，不占用快捷键。</span>
@@ -731,11 +721,12 @@ import TextTabs from './ui/TextTabs.svelte';
       </section>
 
     <!--
-      关于（识别信息 + 排障，从扫描入库页迁来）。2026-10-28 九轮半拍板：
-      改成与设置项同款的「一行一项」；平台/Schema/播放列表计数三行删掉
-      （内部信息或恒为 0）；「重新读取」删掉（诊断随页面加载自动拉）；
-      版本行带「获取更新」占位按钮（功能未做，恒禁用）；数据目录与
-      「打开目录」并成一行。
+      关于组：识别信息与排障。
+
+      布局与设置项一致（一行一项）。平台、Schema 版本、播放列表计数不展示：
+      属内部信息或恒为 0。不提供「重新读取」按钮：诊断随页面加载自动拉取。
+      「获取更新」为占位按钮，功能未提供，恒禁用。数据目录与「打开目录」
+      合为一行。
     -->
     <section class="settings-section settings-about" bind:this={sectionEls.about}>
       <h3 class="group-title">关于</h3>
@@ -777,11 +768,10 @@ import TextTabs from './ui/TextTabs.svelte';
       </div>
 
       <!--
-        支持开发（2026-10-28 十一轮拍板）：独立区块放「关于」最下面，居中，
-        不配描述文案——图就是文案。结构按"多二维码并排"预留：以后加别的
-        平台，在 .support-items 里并排多一个 .support-item 即可。
-        爱发电二维码是静态图，不做外链——Tauri 开浏览器要走 shell open，
-        等真做「获取更新」时一起把外链基建搭起来。
+        支持开发：独立区块置于「关于」末尾并居中，不配描述文案。
+        结构按多二维码并排预留：新增平台时在 .support-items 内并列一个
+        .support-item 即可。爱发电二维码使用静态图而非外链，因为打开外部
+        浏览器需要 shell open 能力，该基建随「获取更新」一并引入。
       -->
       <div class="support-block">
         <div class="support-items">
@@ -796,9 +786,8 @@ import TextTabs from './ui/TextTabs.svelte';
 </div>
 
 <style>
-  /* docs/19 §5：提示文案是用户可能要复制的内容，从全局 user-select:none
-     里豁免（diag 样式本体在全局 overlays.css；「关于」的路径与错误详情
-     同样是用户可能要复制的内容，一并豁免） */
+  /* docs/19 §5：提示文案属于用户可能复制的文本，在全局 user-select:none 下豁免。
+     「关于」组的数据目录路径与错误详情同理，一并豁免（diag 样式本体在 overlays.css） */
   .setting-hint,
   .shortcut-foot .dim,
   .datadir-path,
@@ -808,8 +797,7 @@ import TextTabs from './ui/TextTabs.svelte';
     cursor: text;
   }
 
-  /* 单页平铺的区块小标题（2026-10-28 改回）：比 setting-title 大一档，
-     与 tab 的关系是"tab 跳到这" */
+  /* 平铺区块的组标题：比 setting-title 大一档，是 tab 跳转的落点 */
   .group-title {
     margin: 22px 0 2px;
     font-size: var(--fs-lg);
@@ -822,19 +810,15 @@ import TextTabs from './ui/TextTabs.svelte';
     margin-top: 4px;
   }
 
-  /* 统计卡（2026-10-28 七轮拍板：放大字号 + 图标 + 卡片感，随「扫描入库」
-     页并入设置页时原样搬来）：左侧图标座（accent 弱底色圆角方块），右侧
-     大数字 + 小标签竖排。
+  /* 统计卡：左侧为图标座（accent 弱底色圆角方块），右侧竖排数值与标签。
 
-     为什么用 grid 而不是原来那条 flex-wrap：设置列只有 720 宽，五张卡按
-     内容宽度排会折成"4 + 1"——"索引大小"孤零零占一行，像布局塌了。等宽
-     网格下是 3 + 2，每张卡同宽、左缘成列，看着是有意的两行。minmax(180px)
-     让窄窗口自动降到两列，不用再写断点。
+     使用 grid 而非 flex-wrap：设置列宽 720，按内容宽度排列会折成 4 + 1，
+     「索引大小」单独占一行。等宽网格得到 3 + 2，各卡同宽且左缘对齐。
+     minmax(180px) 使窄窗口自动降为两列，无需额外断点。六项填满 3 × 2。
 
-     2026-10-30 补第六项（文件容量）后正好 3 × 2 铺满，第二行不再右侧空一块。
-     左右 -17px 是"出血"：卡片自带 1px 边框 + 16px 内边距，与内容列叠加后
-     卡内文字比下方设置行缩进 17px，整块看着比页面窄一圈；负 margin 把卡片
-     外缘推出去，卡内文字回到与设置行同一条左缘（实测 388 = 388）。 */
+     左右 -17px 为出血：卡片自带 1px 边框与 16px 内边距，与内容列叠加后卡内
+     文字比下方设置行多缩进 17px；负 margin 将卡片外缘推出，卡内文字与设置行
+     左缘对齐 */
   .lib-stats {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -842,8 +826,8 @@ import TextTabs from './ui/TextTabs.svelte';
     margin: 12px -17px 14px;
   }
 
-  /* 目录卡片同款出血（`LibraryTools` 根元素 `.library-tools` 在全局样式表里，
-     这里包一层才能给 scoped 规则） */
+  /* 目录卡同款出血（`LibraryTools` 根元素 `.library-tools` 定义在全局样式表，
+     此处需包一层才能应用 scoped 规则） */
   .lib-bleed {
     margin: 0 -17px;
   }
@@ -869,8 +853,8 @@ import TextTabs from './ui/TextTabs.svelte';
     border: 1px solid var(--line);
   }
 
-  /* 支持开发区块：「关于」末尾居中展示；.support-items 是并排容器，
-     以后加别的平台二维码就并排多一个 .support-item（图 + 一行小字） */
+  /* 支持开发区块：「关于」组末尾居中；.support-items 为并排容器，
+     新增平台二维码时并列一个 .support-item（图像 + 一行说明） */
   .support-block {
     margin-top: 18px;
     display: flex;
@@ -898,14 +882,13 @@ import TextTabs from './ui/TextTabs.svelte';
   }
 
   /* 最近错误块：diag-block 全局只有 margin-bottom，与上方数据目录行的
-     间距落在块自己的 margin-top 上 */
+     间距由本块的 margin-top 提供 */
   .last-errors {
     margin-top: 14px;
   }
 
-  /* 大标题 + 右侧 tab（2026-10-28，与曲库页同构）：头部固定不滚，
-     内容在 .settings-scroll 容器里滚——tab 是条件渲染，没有滚动定位，
-     旧 scroll-spy 的抖动从根上消失 */
+  /* 大标题 + 右侧 tab（与曲库页同构）：头部固定，内容在 .settings-scroll 内滚动。
+     tab 只做 scrollIntoView，不做滚动定位，因此不存在 scroll-spy 的抖动 */
   .settings-page {
     flex: 1;
     min-height: 0;
@@ -933,14 +916,15 @@ import TextTabs from './ui/TextTabs.svelte';
     margin: 0 auto;
   }
 
-  /* tab 形态与曲库页同款：纯文字 + accent 下划线，小标题档（TextTabs 统一） */
-  /* 被「全局 3D 效果」闸门关掉的行：整行压暗，与"这一项自己关着"区分开。
-   * 只给控件加 disabled 不够——关闭态的开关本来也是灰的，两者会混成一片。
-   * 用内联 style:opacity 而不是 `.setting-row.muted` 规则：Svelte 5 的未使用
-   * 选择器裁剪会把"只由 class: 指令产生"的类名判成没用过，规则整条被删
-   * （实测：class 加上了、样式表里查不到这条规则、computed opacity 仍是 1）。 */
+  /* tab 形态与曲库页一致：纯文字 + accent 下划线，小标题档（由 TextTabs 统一） */
 
-  /* "本机只检测到软件渲染"这类环境警告：跟着 hint 走，但要能一眼看见 */
+  /* 被「全局 3D 效果」闸门关闭的行：整行压暗，与"该项自身关闭"区分。
+     仅给控件加 disabled 不足以表达——关闭态的开关本身即为灰色，两种情况会混淆。
+     使用内联 style:opacity 而非 `.setting-row.muted` 规则：Svelte 5 的未使用
+     选择器裁剪会把"仅由 class: 指令产生"的类名判为未使用并删除整条规则
+     （表现为 class 已加上、规则不存在、computed opacity 仍为 1） */
+
+  /* 环境警告（如"仅检测到软件渲染"）：随 hint 排布，需具备足够对比度 */
   .hint-warn {
     display: block;
     margin-top: 3px;

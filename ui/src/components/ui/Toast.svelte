@@ -4,16 +4,14 @@
   /**
    * 轻提示（kit 第 17 件，docs/24 §6 零件表 20）。
    *
-   * 只管呈现：出现/消失的时机归 `stores/notify`（2.6s 自动消失），
-   * 这里不做计时——两处职责分开，别的宿主（比如将来的设置页内提示）
-   * 也能复用同一段样式。
+   * 只负责呈现：出现与消失的时机归 `stores/notify`（2.6s 自动消失），本组件不做
+   * 计时。职责分离后，其他宿主（如页内提示）可复用同一段样式。
    *
-   * `aria-live="polite"`（docs/19 §5）：成功反馈不打断朗读；
-   * assertive 是 `InlineError` 的专属属性。
+   * `aria-live="polite"`（docs/19 §5）：成功反馈不打断朗读；assertive 为
+   * `InlineError` 专用。
    *
-   * 进场走 CSS `toast-in`，退场补 `out:fade`（发布前 UI 审查 P1-3：
-   * 此前 2.6s 到点瞬消，与进场不成对）。只退场用 svelte 过渡、进场留给
-   * CSS：svelte 的 `transition:` 会同时接管进出，反而覆盖掉 toast-in。
+   * 进场使用 CSS `toast-in`，退场使用 `out:fade`，两者时长匹配。退场使用 svelte
+   * 过渡而进场留给 CSS，是因为 `transition:` 会同时接管进入与退出，覆盖 toast-in。
    */
   interface Props {
     message: string;
@@ -30,8 +28,8 @@
     left: 50%;
     bottom: calc(var(--player-h) + 16px);
     transform: translateX(-50%);
-    /* 65：排在 Menu(61)/Select(62) 之上、Tooltip(70) 之下——此前与两者同值 60，
-       菜单开着时弹 toast 的层叠结果取决于 portal 的 DOM 顺序（发布前 UI 审查 P10） */
+    /* 层序 65：位于 Menu(61)、Select(62) 之上，Tooltip(70) 之下。与菜单同值时，
+       菜单打开状态下弹出 toast 的叠放结果取决于 portal 的 DOM 顺序 */
     z-index: var(--z-toast);
     padding: 8px 14px;
     border-radius: 999px;

@@ -16,41 +16,23 @@ import { readLook } from '../lib/look';
 import { notify } from './notify.svelte';
 
 /**
- * 一级路由。**11 值**，每个值对应 `App.svelte` 里的一个分支（docs/24 §3.2）。
+ * 一级路由：**12 个值**，每个值对应 `App.svelte` 的渲染分支（docs/24 §3.2；
+ * `albums` / `artists` 共用一个宫格分支）。
  *
- * 2026-10-26 B4-1 拆页：此前是 `home | nowPlaying | radio | settings` 四个值，
- * 六个列表视图全都寄居在 `home` 上，靠 `libraryDetail: boolean` + `view` 两个
- * 字段拼出"我现在到底在哪"——`App.svelte` 里那句
- * `{#if ui.page === 'home'}{#if ui.libraryDetail}<LibraryView/>{:else}<HomeView/>`
- * 就是这个双字段组合的化石。列表视图升级成一级值之后，`libraryDetail` 删掉，
- * 那句嵌套判断变成一行一个分支。
+ * 列表页为 `library` / `playlist` / `album` / `artist` / `search`，共用
+ * `ListStore` 的查询与虚拟列表（见 `isListPage`）；`albums` / `artists` 是宫格
+ * 浏览页，`album` / `artist` 是详情页，`nowPlaying` / `settings` / `beets` /
+ * `live` 各自独立成页。
  *
- * 2026-10-26 B4-3b 再扩 4 值：`albums`/`artists` 是宫格浏览页（非列表页），
- * `album`/`artist` 是详情页（列表页）。**详情页的参数复用 `albumId`/`artistId`
- * 两个筛选字段**，不新增 `facetId`：详情页的曲目列表本来就是"曲库查询 +
- * albumId 过滤"（`list.query()` 已从这两个字段取筛选），复用意味着查询、
- * 返回栈快照、UiState 持久化三处**零改动**——新字段则三处都要跟着加。
- * 代价是"page=album 的参数"与"library 页的筛选 chip"共享一个存储位，但
- * 两者永远不会同时可见（不同路由值），语义不冲突。
+ * `playlist` 的参数是 `playlistId`；`album` / `artist` 的参数复用
+ * `albumId` / `artistId` 两个筛选字段，不设独立 `facetId`：详情页的曲目列表
+ * 即"曲库查询 + albumId 过滤"，`list.query()` 从这两个字段取筛选，因此查询、
+ * 返回栈快照、UiState 持久化三处无需按路由分支。代价是页面参数与曲库筛选 chip
+ * 共享同一存储位；两者不会同时可见（不同路由值），语义不冲突。
  *
- * 2026-10-26 B4-3c 加 `search`：独立搜索结果页（此前搜索直接寄居曲库列表）。
- * 交给 LibraryView 渲染（曲目列表与曲库页同一查询路径），头部多专辑/艺人两个
- * 聚合段。`search` 是列表页（isListPage），因为它就是"library + search 过滤"。
- *
- * `playlist` / `album` / `artist` 是带参数的路由，参数见上。
- *
- * 2026-10-26 docs/28 减 2 值：`recent` / `mostPlayed` 单页退役（常听收进
- * 推荐页 top-15，最近播放被筛选器取代，侧栏席位让给专辑/艺人宫格页）。
- * 旧 UiState 里落着这两个值的，由 `restore()` 兜底换算成曲库。
- *
- * 2026-10-26 docs/29 批 A 加 `tools`：侧栏第七项「扫描入库」（扫描/beets
- * 任务 + 日志诊断从设置页拆出，成为独立路由页——任务是长时跑的，
- * 值得一个可以停留、可以刷新、可以分享位置的一级入口）。
- *
- * 2026-10-30 `tools` 退役：beets 搬成独立「整理库」页（docs/48）之后，那一页
- * 只剩"本应用的曲库怎么进来"——一条目录卡片撑不起一个一级席位，于是整体
- * 并入设置页的「曲库」组（`SettingsPanel`）。旧 UiState 落着 `tools` 的由
- * `restore()` 换算成 `settings`，不留空路由。
+ * 已退役的路由名由 `restore()` 换算，来源见该函数的 `RETIRED_PAGES`：
+ * `recent` / `mostPlayed`（docs/28）、`tools`（docs/48 §5）、`radio`
+ * （docs/52 §7.4）。
  */
 export type AppPage =
   | 'home'
@@ -95,17 +77,15 @@ export function isListPage(page: AppPage): boolean {
 /**
  * 界面状态 store：视图、搜索排序、筛选、队列抽屉、设置、诊断。
  *
- * 边界（2026-10-26 收窄过一次）：只描述"界面在哪、长什么样"。
- * 歌单在 `library.playlists` + `playlists`（编排），歌词在 `stores/lyrics`，
- * 列表怎么刷在 `list`——这三样都不在这里。
+ * 职责范围限于"界面在哪、长什么样"。歌单归 `library.playlists` + `playlists`
+ * （编排），歌词归 `stores/lyrics`，列表刷新归 `list`。
  *
- * 这里只持有"是什么"，不持有"列表怎么刷"——reload/TrackWindow 仍在 App：
- * store 改完状态后由 App 触发一次 reload。
+ * 本 store 只持有状态，不执行刷新：reload 与 TrackWindow 在 App，状态变更后由
+ * App 触发一次 reload。
  *
- * 动态边界（docs/18 §4.3）：`app_get_settings` / `app_get_ui_state` 返回的是
- * **无 DTO 的动态 JSON**（老配置文件缺字段是常态），所以这两个走 zod：
- * 开发期 `devValidate` 报形状不符，生产期只做合并默认值。
- * 其余命令的返回值都由 Rust 生成类型，不再二次校验。
+ * 校验边界（docs/18 §4.3）：`app_get_settings` / `app_get_ui_state` 返回无 DTO 的
+ * 动态 JSON（旧配置缺字段是常态），经 zod 处理——开发期 `devValidate` 报形状不符，
+ * 生产期只合并默认值。其余命令的返回值由 Rust 生成类型，不二次校验。
  */
 class UiStore {
   page = $state<AppPage>('home');
@@ -116,35 +96,33 @@ class UiStore {
   eqOpen = $state(false);
   /**
    * 列表批量操作模式（docs/27）：开 = 显示勾选列，关 = 隐藏。
-   * 会话态不持久化；Ctrl+点行会自动把它打开（用户不一定要找到开关），
+   * 会话态不持久化；Ctrl+点击行会自动开启（`lib/row-selection.ts`），
    * 关闭时由调用方清空选择集。
    */
   batchMode = $state(false);
 
   /**
-   * 一次性跳转请求：设置页的哪个分组该滚到视野里（`nav.settingsAt()` 写入，
-   * `SettingsPanel` 消费后立刻清空）。
+   * 一次性跳转请求：设置页的哪个分组该滚入视野（`nav.settingsAt()` 写入，
+   * `SettingsPanel` 消费后立即清空）。
    *
-   * 存在的理由：设置页是**单页平铺 + tab 跳转**，分组不是路由。曲库页的
-   * 「位置缺失」告警要能把人送到「曲库」组（扫描入库页退役后那组在设置页里），
-   * 只切路由的话人会落在「外观」组顶部，还得自己找 —— 那等于没送到。
+   * 设置页是**单页平铺 + tab 跳转**，分组不是路由：曲库页的「位置缺失」告警
+   * 需要把视口送到「曲库」组，只切路由会落在「外观」组顶部。
    *
-   * 用一次性请求而不是"当前分组"状态：分组高亮只跟点击走（见 SettingsPanel
-   * 的说明），把它变成持久状态会让滚动与高亮重新开始互相拉扯。
+   * 用一次性请求而不是"当前分组"状态：分组高亮只跟点击走（见 `SettingsPanel`
+   * 的说明），改成持久状态会让滚动与高亮相互干扰。
    */
   settingsSection = $state<SettingsSection | null>(null);
 
   /**
    * 当前列表视图（`list.query()` 用它算 `source`）。
    *
-   * **是 getter，不是独立状态**：拆页之前 `page` / `libraryDetail` / `view`
-   * 三个字段各自可写，能拼出"page=home、libraryDetail=true、view=playlist"
-   * 这种自相矛盾的组合，而每个读它们的地方都只检查其中两个。现在
-   * `page`（+ `playlistId`）是唯一真相，`view` 由它派生 —— 想改路由只能
-   * 走 `enterList` / `setView` / `openPage`。
+   * **是 getter，不是独立状态**：`page`（+ `playlistId`）是唯一真相，`view` 由它
+   * 派生，改路由只能走 `enterList` / `setView` / `openPage`。独立字段可与 `page`
+   * 拼出自相矛盾的组合（如 `page=home` 而 `view=playlist`），而读取方只检查其中
+   * 一部分。
    *
-   * 返回值**引用稳定**：同一个路由永远拿到同一个对象。否则 `$derived(ui.view)`
-   * 这类写法每次求值都得到新对象，下游按引用做记忆的地方会白算一遍。
+   * 返回值**引用稳定**：同一个路由恒得到同一个对象。否则 `$derived(ui.view)`
+   * 每次求值都产生新对象，下游按引用做的记忆失效。
    */
   get view(): View {
     switch (this.page) {
@@ -182,30 +160,27 @@ class UiStore {
   albumId = $state<string | null>(null);
 
   /**
-   * 曲库页的 tab 索引（2026-10-28 用户拍板：最近播放/最近添加从推荐页
-   * 迁来，成为曲库页「全部曲目」旁的 tab，不再是一级路由）。
+   * 曲库页的 tab 索引：全部曲目 / 最近播放 / 最近添加（docs/28）。
    *
-   * **会话态不持久化**（重启回「全部曲目」是可预期的复位）；
-   * 只在 `page === 'library'` 时参与 `list.query()` 的 source 换算——
-   * 搜索页/详情页同走 LIBRARY_VIEW 但不吃 tab，见 list store 的 query()。
+   * 会话态，不持久化：重启回到「全部曲目」。仅在 `page === 'library'` 时参与
+   * `list.query()` 的 source 换算；搜索页与详情页同走 `LIBRARY_VIEW`，不使用 tab。
    */
   libraryTab = $state<'all' | 'recent' | 'added'>('all');
 
   /**
-   * Beets 页的三个子页（2026-10-30 用户拍板：安装 / 分析 / 整理 分页；2026-10-31 未安装时后两个 tab 置灰失效）。
+   * Beets 页的子页：安装 / 分析 / 整理（docs/51 §1）。未安装时后两个 tab 置灰
+   * （docs/48）。
    *
-   * 为什么还要跨导航保留：整理页是**长流程**（选目录 → 联网匹配 → 逐张专辑
-   * 挑候选），用户中途去曲库看一眼再回来，落回「安装」页等于把刚匹出来的
-   * 结果藏起来（会话数据还在 store 里，只是看不见了）。
+   * 跨导航保留：整理页是长流程（选目录 → 联网匹配 → 逐张专辑挑候选），中途转到
+   * 曲库再返回时保持原 tab。
    *
-   * 默认值 `index` 而不是 `install`：装好的人占绝大多数，每次进页面先看安装
-   * 说明是无用的。没装的情况由壳在探测完成后翻到 `install`（见
-   * `beetsTabTouched`：用户手动点过就不要再替他做决定）。
+   * 默认 `index`：已安装占多数。未安装时由壳在探测完成后翻到 `install`，见
+   * `beetsTabTouched`。
    */
   beetsTab = $state<'install' | 'index' | 'organize'>('index');
   /**
-   * 用户是否手动切过整理库页的 tab。只被"探测到没装就翻到安装页"这条规则
-   * 读——手动选过之后自动翻页必须让位，否则用户点了「索引」两秒后又被拽回去。
+   * 用户是否手动切过整理库页的 tab。只有"探测到未安装则翻到安装页"这条规则读它：
+   * 手动选择之后自动翻页让位。
    */
   beetsTabTouched = false;
 
@@ -243,12 +218,9 @@ class UiStore {
   /**
    * 防抖写 UiState。
    *
-   * 定时器与 `scrollTop` 都归这里（批次 3 之前定时器挂在 App.svelte，调用方
-   * 还得传一个 timer 对象进来 —— 三个调用点各写一遍 clear/arm，纯搬砖）。
-   *
-   * `scrollTop` 放在 ui 而不是列表 store：它本来就是 UiState 的字段，而
-   * 列表 store 依赖 ui（不能反向 import），放这边 store 才不用为了一个整数
-   * 在每层传 getter。列表滚动时调 `ui.scrollTop = n` 再 `scheduleUiSave()`。
+   * 定时器与 `scrollTop` 都归这里：`scrollTop` 是 UiState 的字段，而列表 store
+   * 依赖 ui（不能反向 import），放在本 store 才不需要逐层传 getter。列表滚动时
+   * 调 `ui.scrollTop = n` 再 `scheduleUiSave()`。
    *
    * 600 ms 是"滚动停下就存"的经验值：再短会每滚一屏写一次库。
    */
@@ -264,7 +236,7 @@ class UiStore {
         page: this.page,
         playlistId: this.playlistId,
       };
-      // 视图状态丢失不影响可用性，失败只记日志（别打断滚动）
+      // 视图状态丢失不影响可用性，失败只记日志
       void ipc.app.setUiState(state as DynamicJson).catch((e) => {
         console.warn('setUiState failed:', errorMessage(e));
       });
@@ -277,13 +249,12 @@ class UiStore {
   }
 
   /**
-   * 还原 UiState。**要兼容拆页之前的旧文件**（docs/24 §3.2）。
+   * 还原 UiState，兼容拆页之前的旧形状（docs/24 §3.2）。
    *
-   * 旧形状是 `page: 'home'|'nowPlaying'|'radio'|'settings'` + `libraryDetail`
-   * + `view: 'library'|'recent'|'mostPlayed'|'playlist:xxx'`。旧文件里
-   * `page` 恒为 `home` 也可能表示六个列表视图之一，所以**不能**只看 `page`：
-   * 先认新字段，缺了再按旧字段换算。换算错的表现是"重启后回到首页、
-   * 用户以为丢了位置"，不报错，只会被当成玄学。
+   * 旧形状：`page: 'home'|'nowPlaying'|'radio'|'settings'` + `libraryDetail` +
+   * `view: 'library'|'recent'|'mostPlayed'|'playlist:xxx'`。旧文件中 `page` 为
+   * `home` 时也可能表示六个列表视图之一，因此先认新字段，缺失时按旧字段换算；
+   * 只看 `page` 会把列表视图还原成首页。
    */
   restore(data: UiState): void {
     if (data.sort) this.sort = data.sort;
@@ -291,16 +262,11 @@ class UiStore {
     this.artistId = data.artistId ?? null;
     this.albumId = data.albumId ?? null;
 
-    // 退役的一级路由换算：
-    // - docs/28：recent/mostPlayed 单页退役，旧文件落在这两个值上时换算成曲库
-    //   （恢复成"最近播放"没有意义——那个页面已经不存在了）
-    // - 2026-10-30：`tools`（扫描入库页）并入设置页「曲库」组，落在 settings。
-    //   不换算的话 `AppPage` 已经不收这个值，`restore()` 的强制转型会把
-    //   一个不存在的路由写进 `ui.page`，症状是侧栏零高亮 + 整页落到 `{:else}`
-    //   （正好还是设置页，所以看起来"没错"，实际路由是脏的、还会被写回磁盘）。
-    // - 2026-10-31：`radio`（FM 电台占位页）改成 `live`（直播页，docs/52 §7.4）。
-    //   路由换名而不是加值：那一页的语义整个换了（收藏电台 → 打开一个推流地址），
-    //   留着两个键只会让"哪个才是新的"永远要查。
+    // 退役路由换算表。未写入此表会导致强制转型把不存在的路由写进 `ui.page`：
+    // 侧栏零高亮、整页落到 `App.svelte` 的 `{:else}` 分支，该脏值还会写回磁盘。
+    // - recent / mostPlayed：单页退役，语义并入曲库 tab（docs/28）
+    // - tools：扫描入库页并入设置页「曲库」组（docs/48 §5）
+    // - radio：改名 live，页面语义整体更换（docs/52 §7.4）
     const RETIRED_PAGES: ReadonlyMap<string, AppPage> = new Map([
       ['recent', 'library'],
       ['mostPlayed', 'library'],
@@ -314,7 +280,7 @@ class UiStore {
       this.page = rawPage as AppPage;
       this.playlistId = data.playlistId ?? null;
     } else if (data.libraryDetail) {
-      // 旧形状：home + libraryDetail=true 其实是某个列表视图
+      // 旧形状：home + libraryDetail=true 表示某个列表视图
       //（parseViewKey 对 retired 的 'recent'/'mostPlayed' 键同样回落曲库）
       const legacy = parseViewKey(data.view);
       this.applyView(legacy);
@@ -323,9 +289,8 @@ class UiStore {
       this.playlistId = null;
     }
 
-    // 启动就落在设置页时**不会**经过 openPage，诊断块会一直空着
-    // （显示"正在读取…"直到用户手动点刷新）。这里补一次。
-    // 2026-10-30：曲库组并入设置页后，"读诊断的两页"只剩设置一页。
+    // 启动即落在设置页时不经过 openPage，诊断块会保持空值（显示"正在读取…"
+    // 直到手动刷新）。这里补一次读取。
     if (this.page === 'settings') void this.refreshDiagnostics();
   }
 
@@ -337,13 +302,8 @@ class UiStore {
     this.queueOpen = false;
     this.eqOpen = false;
     this.scheduleUiSave();
-    // 进设置页要重拉诊断/beets 状态：设置页的「关于」与「整理库」相关提示都读它。
-    //
-    // 历史坑（docs/29 批 A）：这里原先只写了 settings，从侧栏点进「扫描入库」时
-    // 诊断区永远停在"正在读取…"，只有手动点一下刷新才出来——当时的 e2e 只断言了
-    // 目录结构，没看这两块内容，所以漏掉了。那条路由 2026-10-30 已退役并入设置页，
-    // 判断随之收成一条；但**这个赋值语义要留着**（进页面先清空再拉，别让上一份
-    // 陈旧诊断顶着"已加载"的样子）。
+    // 进设置页要重拉诊断与 beets 状态：设置页的「关于」与「整理库」提示都读它。
+    // 先置空再拉取，避免上一份陈旧诊断以"已加载"呈现。
     if (page === 'settings') {
       this.diagnostics = null;
       void this.refreshDiagnostics();
@@ -351,14 +311,12 @@ class UiStore {
   }
 
   /**
-   * 进入「列表视图」上下文：一级页回落首页、关掉队列抽屉、清搜索与筛选、
-   * 换成目标视图。
+   * 进入列表视图上下文：切到目标视图、关闭队列与 EQ 抽屉、清空搜索与筛选。
    *
-   * 抽出来之前这段在 list store 里抄了 4 份（openHome / openBuiltinView /
-   * openPlaylist / setSearch），4×6 行同样的赋值。漏一行不会报错，只会留下
-   * "切了视图筛选还在"这种状态残留 —— 症状是列表少一半数据，最难查的一类。
+   * 四个调用点（`openHome` / `openBuiltinView` / `openPlaylist` / `setSearch`）共用
+   * 这段赋值，避免逐处复制时遗漏——遗漏项表现为切换视图后筛选残留、列表数据不全。
    *
-   * 它**不负责落盘与重载**：调用方决定（搜索每敲一个字都落盘太吵）。
+   * 不负责落盘与重载：由调用方决定（搜索每次输入都落盘过于频繁）。
    */
   enterList(view: View): void {
     this.applyView(view);
@@ -370,9 +328,8 @@ class UiStore {
   }
 
   /**
-   * 回首页仪表盘。清理语义与 `enterList` 一致（首页不是列表页，但它同样是
-   * "用户主动导航到别处"，旧搜索词不该跟着 —— 否则回去看到的是"首页 +
-   * 一个还在生效的搜索框"）。
+   * 回首页仪表盘。清理语义与 `enterList` 一致：首页不是列表页，但同属用户主动
+   * 导航，旧搜索词不保留。
    */
   enterHome(): void {
     this.page = 'home';
@@ -385,11 +342,10 @@ class UiStore {
   }
 
   /**
-   * 进入搜索结果页（B4-3c）。
+   * 进入搜索结果页。
    *
-   * 与 enterList 的唯一差别：**不清 search**（search 是本页的主题），
-   * 且目标是 search 页。旧筛选与歌单参数不该跟着搜索词走——在歌单里
-   * 搜索会得到"全库搜索结果"，原来歌单的上下文到此为止。
+   * 与 `enterList` 的差别：不清 `search`（本页以搜索为主题），目标页为 `search`。
+   * 旧筛选与歌单参数不随搜索词带入：在歌单内搜索得到全库结果，歌单上下文至此结束。
    */
   enterSearch(): void {
     this.page = 'search';
@@ -401,14 +357,13 @@ class UiStore {
   }
 
   /**
-   * 进入专辑/艺人详情页（B4-3b）。
+   * 进入专辑 / 艺人详情页。
    *
-   * 参数复用 `albumId`/`artistId` 筛选字段（AppPage 注释说明了为什么不加
-   * 独立字段），所以**不能**先调 `enterList` 再覆盖——enterList 会把两个
-   * 筛选字段清空，顺序错了就是"详情页显示全库"。清理语义与 enterList
-   * 一致（从别处点进来，旧搜索词与另一侧筛选不该跟着），只是目标值不同。
+   * 参数复用 `albumId` / `artistId` 筛选字段（见 `AppPage`）。不可先调 `enterList`
+   * 再覆盖：`enterList` 清空两个筛选字段，顺序错误会使详情页显示全库。清理语义与
+   * `enterList` 一致，仅目标值不同。
    *
-   * 它不负责落盘与重载（同 enterList：调用方决定）。
+   * 不负责落盘与重载。
    */
   enterFacet(kind: 'album' | 'artist', id: string): void {
     this.search = '';
@@ -421,18 +376,14 @@ class UiStore {
   }
 
   /**
-   * 只换视图，**不动**搜索/筛选/队列抽屉。
+   * 只换视图，不清搜索 / 筛选 / 队列抽屉。
    *
-   * `enterList` 清三样是因为它代表"用户主动导航到某处"（从别的地方点进来，
-   * 旧筛选不该跟着）。但有两类调用方不是这个语义：
-   * - `playlists.refresh()` 发现当前歌单已被删掉 → 退回曲库，此时不该
-   *   顺手把用户的搜索词也清掉；
-   * - `playlists.play()` 先切视图再 playlist 整列表起播 → 同一个动作内部，
-   *   清筛选会把"按当前筛选播放"变成"播放全部"。
+   * `enterList` 清三样的前提是"用户主动导航到某处"。两个调用方不满足该前提：
+   * - `playlists.refresh()` 发现当前歌单已删除，需退回曲库，此时搜索词应保留；
+   * - `playlists.play()` 先切视图再按整列表起播，清筛选会把"按当前筛选播放"变成
+   *   播放全部。
    *
-   * 拆页之前这两处直接写 `ui.view = ...`，绕过了 enterList 的清理 —— 行为
-   * 看着对，但那是因为**清理逻辑当时不在同一个字段上**。现在 `view` 没有
-   * setter，语义差异必须是两个方法，不能靠"有的地方绕过"。
+   * `view` 无 setter，两类语义由两个方法区分。
    */
   setView(view: View): void {
     this.applyView(view);
@@ -447,7 +398,7 @@ class UiStore {
     this.setQueue(!this.queueOpen);
   }
 
-  /** 队列抽屉开合的**唯一入口**（B5a 起 PlayerBar 的 Popover 直接受控于它） */
+  /** 队列抽屉开合的**唯一入口**（`PlayerBar` 的 Popover 直接受控于它） */
   setQueue(open: boolean): void {
     this.queueOpen = open;
     // EQ 抽屉与队列同侧同层，互斥（docs/25 §1）：一个开另一个关
@@ -458,7 +409,7 @@ class UiStore {
     this.queueOpen = false;
   }
 
-  /** EQ 抽屉开合的唯一入口（docs/25 §1 T3）；开时关队列，规则对等 */
+  /** EQ 抽屉开合的唯一入口（docs/25 §1）；开时关队列，规则对等 */
   setEqDrawer(open: boolean): void {
     this.eqOpen = open;
     if (open) this.queueOpen = false;
@@ -467,19 +418,18 @@ class UiStore {
   /* ---------------- 设置 ---------------- */
 
   /**
-   * 必须 snapshot：settings 是 `$state`，里面的 `shortcuts` / `output` 是 Proxy。
-   * Proxy 过不了结构化克隆，直接 invoke 会抛 "An object could not be cloned."，
-   * 而主题/密度在本地已经生效 —— 看起来一切正常，设置却没落盘。
+   * 必须 snapshot：settings 是 `$state`，其中的 `shortcuts` / `output` 是 Proxy。
+   * Proxy 无法结构化克隆，直接 invoke 会抛 "An object could not be cloned."；
+   * 此时主题/密度已在本地生效，表现为设置项看似生效但未写盘。
    *
-   * 先用新值本地生效（主题切换要跟手），再以后端返回的为准：
-   * 后端会补齐默认值/拒绝非法值，这一步是"以磁盘为准"的对账。
+   * 先用新值本地生效（主题切换需要即时响应），再以后端返回的为准：后端会补齐
+   * 默认值、拒绝非法值，这一步是"以磁盘为准"的对账。
    *
-   * 请求代次：快速连改两个设置会并发两条 setSettings，先发的可能后回来，
-   * 把"以磁盘为准"的合并结果盖回旧值。只有最新一次发出的响应允许落盘；
-   * 过期响应的失败也同样静默（新请求成功的话旧失败是噪音）。
+   * 请求代次：快速连改两个设置会并发两条 setSettings，先发的可能后返回，把
+   * "以磁盘为准"的合并结果盖回旧值。只有最新一次发出的响应允许落盘；过期响应
+   * 的失败同样静默（新请求成功时旧失败无意义）。
    *
-   * 失败**默认落到全局错误条**（不再收一个可选回调）：漏传回调的调用点会让
-   * 写盘失败静默吞掉，症状是"设置看着生效、重启就回滚"——比不生效更难查。
+   * 失败**落到全局错误条**：写盘失败若被静默，外观是"设置看着生效、重启就回滚"。
    */
   private settingsGeneration = 0;
 
@@ -542,11 +492,10 @@ class UiStore {
    * 装没装、缺不缺依赖的三态由 `beets_status` 的 pluginHealth 另行给出。
    */
   beetsPlugins = $state<BeetsPluginItem[]>([]);
-  /** 本机 Python 探测结果（`null` = 还没探测过） */
   /**
    * 卸载进度。与安装分开一个状态：两者终态事件不同
-   * （install 以 `finished` 收尾，uninstall 以 `done` 收尾），混在一起会让
-   * 「安装中」和「卸载中」互相覆盖。
+   * （install 以 `finished` 收尾，uninstall 以 `done` 收尾），共用一个状态会在
+   * 「安装中」与「卸载中」之间互相覆盖。
    */
   beetsUninstall = $state<{ running: boolean; message: string; error: string | null }>({
     running: false,
@@ -599,7 +548,7 @@ class UiStore {
    * 安装/更新便携包（单轨，docs/58）。
    *
    * `plugins` 是预置之外的启用清单：装完写进 settings，工具侧渲染 config 照它
-   * 启用。失败原样抛给按钮旁的文字——用户机器状况是我们猜不到的。
+   * 启用。失败原因原样透传到按钮旁的文字（本机环境差异无法预判）。
    */
   async installBeets(plugins: string[] = []): Promise<void> {
     this.beetsInstall = {
@@ -636,7 +585,7 @@ class UiStore {
   /**
    * 加载内嵌插件表（幂等：已经拿到就不重复取）。
    *
-   * 只在安装页进入时调；失败不弹错——最坏是勾选清单空着，用户仍能装基础组件。
+   * 只在安装页进入时调；失败不弹错——最坏情况是勾选清单为空，基础组件仍可安装。
    */
   async loadBeetsPlugins(): Promise<void> {
     if (this.beetsPlugins.length > 0) return;
@@ -690,11 +639,11 @@ class UiStore {
 }
 
 /**
- * 动态 JSON → `BeetsStatus`：逐字段 typeof 收口（与 `watchBeetsInstall` 同风格）。
+ * 动态 JSON → `BeetsStatus`：逐字段 typeof 收口（与 `watchBeetsInstall` 同一方式）。
  *
- * 终态载荷来自 beets 工具的 stdout，宿主只透传不解释——工具版本不齐时
- * 缺字段是常态。`found` 是判别字段：连它都不是 boolean，整包丢弃
- * （返回 null = 保留探测时的旧状态，别让坏载荷把设置页打成"未检测"）。
+ * 终态载荷来自 beets 工具的 stdout，宿主只透传不解释——工具版本不齐时缺字段是
+ * 常态。`found` 是判别字段：它不是 boolean 时整包丢弃（返回 null = 保留探测期的
+ * 旧状态，避免坏载荷使设置页显示为未检测）。
  */
 function readBeetsStatus(raw: unknown): BeetsStatus | null {
   if (!raw || typeof raw !== 'object') return null;

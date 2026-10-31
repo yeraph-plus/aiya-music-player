@@ -53,8 +53,7 @@ import Progress from '../components/ui/Progress.svelte';
     }
     if (isSearchPage) {
       return {
-        // 2026-10-28 二次修订：与其他列表页同一标题级（大标题 + 统计），
-        // kicker/subtitle 两层撤销
+        // 搜索页与其他列表页同一标题级：大标题 + 统计，不用 kicker/subtitle 两层
         kicker: undefined as string | undefined,
         title: ui.search.trim() ? `搜索「${ui.search.trim()}」` : '搜索',
         subtitle: undefined as string | undefined,
@@ -64,8 +63,8 @@ import Progress from '../components/ui/Progress.svelte';
       };
     }
     return {
-      // 2026-10-28 用户拍板：列表页取消 kicker/描述三层标题，大标题 + 统计描述。
-      // 标题随 tab 走（最近播放/最近添加已是曲库页的 tab 索引）
+      // 列表页标题形态：大标题 + 统计描述，不用 kicker/subtitle 三层。
+      // 标题随 tab 走（最近播放/最近添加是曲库页的 tab 索引）
       kicker: undefined as string | undefined,
       title: LIB_TABS.find((t) => t.key === ui.libraryTab)?.label ?? '全部曲目',
       subtitle: undefined as string | undefined,
@@ -79,14 +78,13 @@ import Progress from '../components/ui/Progress.svelte';
 
   const isSearchPage = $derived(ui.page === 'search');
 
-  /** 列表页（非歌单非搜索）用大标题形态；搜索页 2026-10-28 起同档 */
+  /** 列表页与搜索页同用大标题形态（非歌单页） */
   const isListPage = $derived(view.kind !== 'playlist');
 
   /**
-   * 曲库页 tab 索引（2026-10-28：最近播放/最近添加从推荐页迁来，成为
-   * 「全部曲目」旁的小标题 tab）。排序控件只在「全部曲目」给——
+   * 曲库页 tab 索引：「全部曲目」旁的三个小标题 tab。排序控件只在「全部曲目」给——
    * 另两个 tab 的顺序是语义（默认倒序），再点一次整 tab 翻转正倒序
-   * （2026-10-30，list.openLibraryTab），sort 表头仍然没有意义。
+   * （`list.openLibraryTab`），列头排序对它们没有意义。
    */
   const LIB_TABS = [
     { key: 'all', label: '全部曲目' },
@@ -95,13 +93,10 @@ import Progress from '../components/ui/Progress.svelte';
   ] as const;
 
   /**
-   * 排序控件开关（2026-10-28 拍板扩展）：曲库页非 all tab 的顺序是语义；
-   * 手动歌单的顺序也是语义（拖拽排序 + pi.position），不吃列头；
-   * 动态歌单没有手动顺序（它是一条查询），排序交给列头——规则编辑器
-   * 已不再暴露排序键。
+   * 排序控件开关：曲库页非 all tab 的顺序是语义，不给列头排序；手动歌单的顺序
+   * 也是语义（拖拽排序 + `pi.position`），同样不吃列头；动态歌单物化后的顺序
+   * 等于入库序（首行插入在 0），与手动歌单同一套语义。列头排序只服务曲库页。
    */
-  // 动态歌单物化后（2026-10-30）顺序 = 入库序（首行插入在 0），与手动歌单
-  // 同一套语义——列头排序只服务曲库页。
   const canSort = $derived(view.kind === 'library' && ui.libraryTab === 'all');
 
   /**
@@ -128,9 +123,8 @@ import Progress from '../components/ui/Progress.svelte';
     return () => clearTimeout(facetSearchTimer);
   });
 
-  /** 卡片段只在查询词与当前展示一致时渲染（防抖期间的旧结果显示旧段）。
-   *  2026-10-28：横滚时代的「最多 8 张」截断撤销——换行网格放得下，
-   *  搜索命中多少给多少（后端聚合自带上限） */
+  /** 卡片段只在查询词与当前展示一致时渲染（防抖期间保留上一次结果）。
+   *  搜索命中多少给多少，不截断——换行网格放得下，后端聚合自带上限 */
   const searchAlbums = $derived(
     isSearchPage && facetQuery ? facets.albums : null,
   );
@@ -151,8 +145,8 @@ import Progress from '../components/ui/Progress.svelte';
 </script>
 
 <!--
-  根容器（2026-10-28）：搜索页整页滚动——卡片段换行后可能很高，若仍由
-  .list 内部独扛滚动，卡片段会把列表压到没法用（flex 收缩，滚动"失效"）。
+  根容器：搜索页整页滚动。卡片段换行后可能很高，若仍由 .list 内部独扛滚动，
+  卡片段会把列表压到没法用（flex 收缩，滚动"失效"）。
   非搜索页 display 行为与直接挂在 .main 下完全一致（list 内部滚）；
   搜索页整页滚，列表区保底高度不被挤没（见 .lib-root.scroll）。
 -->
@@ -168,11 +162,10 @@ import Progress from '../components/ui/Progress.svelte';
   >
     {#snippet actions()}
       {#if ui.page === 'library'}
-        <!-- tab 索引（2026-10-28）：小标题形态贴着大标题，当前项高亮。
-             只在曲库页给——搜索页复用 library view，但三个 tab 在那里
-             是"同库换排序"，语义不成立（2026-10-28 用户指出后收窄）。
-             语义归 TextTabs（nav + aria-current）：此前这里套的是完整
-             tablist/tab 角色却没有 tabpanel，与另两处互相矛盾（P8）。 -->
+        <!-- tab 索引：小标题形态贴着大标题，当前项高亮。只在曲库页给——
+             搜索页复用 library view，但三个 tab 在那里是"同库换排序"，
+             语义不成立。语义归 TextTabs（nav + aria-current）：套完整的
+             tablist/tab 角色而没有 tabpanel，会让读屏软件等待一个不存在的面板。 -->
         <TextTabs
           items={LIB_TABS.map((t) => ({
             id: t.key,
@@ -188,7 +181,7 @@ import Progress from '../components/ui/Progress.svelte';
         >
           {#snippet trailing(tab)}
             <!-- 方向箭头只画在活跃 tab 上：ui.direction 是全局共享状态，
-                 非活跃 tab 的箭头会说谎（2026-10-30） -->
+                 非活跃 tab 上的箭头会与实际顺序不符 -->
             {#if ui.libraryTab === tab.id && tab.id !== 'all'}
               {#if ui.direction === 'desc'}
                 <ArrowDown size={11} strokeWidth={2.4} aria-hidden="true" />
@@ -206,7 +199,7 @@ import Progress from '../components/ui/Progress.svelte';
         </Button>
         {#if currentPlaylist}
           {#if currentPlaylist.kind === 'smart'}
-            <!-- 物化模型（2026-10-30）：刷新重跑规则，只追加新命中的曲目 -->
+            <!-- 物化模型：刷新重跑规则，只追加新命中的曲目 -->
             <Button
               onclick={() => {
                 if (currentPlaylist) void playlists.refreshSmart(currentPlaylist);
@@ -257,8 +250,8 @@ import Progress from '../components/ui/Progress.svelte';
 
 {#if library.scan && library.scanning}
   {@const progress = library.scan}
-  <!-- 扫描时的环境指示（八轮拍板）：只报进度不带按钮——全应用唯一的
-       取消入口在「扫描入库」页的执行状态卡，别再造第二份取消 -->
+  <!-- 扫描时的环境指示：只报进度不带按钮。全应用唯一的取消入口在设置页
+       「扫描入库」的执行状态卡，不另造第二份取消 -->
   <div class="scan-bar">
     <Progress value={progress.total ? Math.min(100, Math.round((progress.scanned / progress.total) * 100)) : 8} label="扫描进度" />
     <span>
@@ -307,8 +300,8 @@ import Progress from '../components/ui/Progress.svelte';
 {#if isSearchPage && !ui.search.trim()}
   <EmptyState fill title="在上方搜索框输入关键词" hint="曲目、专辑与艺人会同时匹配" />
 {:else}
-  <!-- 搜索页的曲目小标题（2026-10-28）：与上面的专辑/艺人两段同一级，
-        明确隔开——其他页面没有这段，别渲染 -->
+  <!-- 搜索页的曲目小标题：与上面的专辑/艺人两段同一级，明确隔开。
+       其他页面没有这段 -->
   {#if isSearchPage}
     <div class="facet-rows tracks-head"><h2>曲目</h2></div>
   {/if}
@@ -344,8 +337,8 @@ import Progress from '../components/ui/Progress.svelte';
         </EmptyState>
       {:else if view.kind === 'library' && ui.libraryTab === 'recent' && (library.stats?.tracks ?? 0) > 0}
         <!-- 「最近播放」空 ≠ 空库：库里有歌只是还没播过，"添加曲库"文案
-             会把用户引去重扫（2026-10-30 分模式差分）。库真空的时候仍走
-             下面的"曲库还是空的"——那才是该给的动作 -->
+             会把用户引去重扫。库真空时才走下面的"曲库还是空的" ——
+             那才是该给的动作 -->
         <EmptyState title="还没有播放记录" hint="双击任意曲目开始播放，听过的会出现在这里">
           {#snippet action()}
             <Button onclick={() => list.openLibraryTab('all')}>先看全部曲目</Button>
@@ -384,10 +377,8 @@ import Progress from '../components/ui/Progress.svelte';
     min-height: 340px;
   }
 
-  /* 曲库 tab 索引（2026-10-28）：小标题贴着大标题，当前项 accent 下划线。
-     纯文字档（不做胶囊底）——它们是"换个排序看同一批歌"的轻索引 */
-  /* 搜索结果页的专辑/艺人段（B4-3c）。2026-10-28 二次修订：横滚撤掉，
-     换行网格——结果不该藏在滚动方向后面；每个卡 200px 起，自动换行 */
+  /* 搜索结果页的专辑/艺人段：换行网格，不做横滚——结果不该藏在滚动方向
+     后面。每个卡 200px 起，自动换行 */
   .facet-rows {
     display: flex;
     flex-direction: column;

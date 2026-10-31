@@ -1,18 +1,15 @@
 /**
  * 设置迁移与合并（docs/46 §6.2）。
  *
- * 为什么从 `stores/ui.svelte.ts` 里抽出来：这段逻辑是**纯的**（输入磁盘 JSON、
- * 输出 AppSettings），但原先是 store 文件里的私有函数——想验证"旧配置能不能
- * 正确迁移"就只能靠手动改 blob 再重启，而这类 bug 的代价是用户配置丢失。
- * 抽成独立模块后可以直接在浏览器控制台/自动化里喂用例（见 docs/46 §6.2
- * 的三种旧组合），不必启动整条引导链。
+ * 纯函数：输入磁盘 JSON，输出 `AppSettings`。独立成模块以便直接喂用例验证
+ * （docs/46 §6.2 的三种旧组合），无需启动引导链；迁移错误的代价是用户配置丢失。
  *
  * 三条约定：
- * 1. 旧键**解构剔除**，不跟着下一次 `setSettings` 写回磁盘（"停写"要真停）；
- * 2. 派生只在**新键缺失**时发生——已经在新版本里把背景关掉、页面留着的用户，
- *    下次启动不能被 blob 里的旧值翻回去；
- * 3. 形态/档位走白名单收口：blob 里出现不认识的字符串时落默认，不让它流进
- *    画笔的 switch（"类型说有四种、实际有第五种"是最难查的那类）。
+ * 1. 旧键在读时剔除，不随下一次 `setSettings` 写回磁盘；
+ * 2. 派生值只在新键缺失时产生——已在新版本中关闭背景、保留页内频谱的配置，重启后
+ *    不被 blob 中的旧值覆盖；
+ * 3. 形态与档位经白名单收口：不认识的字符串落默认值，不进入画笔的 switch
+ *    （"类型声明四种、运行期出现第五种"是难定位的一类问题）。
  */
 
 import { devValidate, settingsSchema } from './ipc/schema';
@@ -30,31 +27,28 @@ const BG_SPECTRUM_STYLE_VALUES: ReadonlySet<string> = new Set(BG_SPECTRUM_STYLES
 const RIDGE_GLOW_VALUES: ReadonlySet<string> = new Set(RIDGE_GLOWS.map((s) => s.value));
 
 /**
- * 已退役的键：**读时消化，写时剔除**。
+ * 已退役的键：读时消化，写时剔除。
  *
- * 为什么必须显式删：`{ ...DEFAULT_SETTINGS, ...raw }` 会把 raw 里的未知键原样带进
- * 结果对象，于是用户改任何一个设置，这些死键就跟着 `setSettings` 再写回磁盘一次
- * ——"停写"实际没停，只是从没被读过。实测本机库里的 `app_settings` 至今还带着
- * `spectrumEngine` 与 `accentFromArtwork`（docs/26 说要清、当时漏了），就是这条。
+ * 剔除是必需的：`{ ...DEFAULT_SETTINGS, ...raw }` 会把 raw 的未知键带入结果对象，
+ * 用户修改任一设置时这些死键随 `setSettings` 再写回磁盘一次，"停写"实际未停。
  *
- * 2026-10-30 增补两个：`density`（只留一套行高）与 `glass`（从加上那天起就没有
- * 消费方，壳层也不做玻璃）。它们同样必须在读时剔除——本文件的"写回"路径是
- * `setSettings(state.snapshot(settings))` 整个对象，留一个死键就永远写回一次。
+ * `spectrum` / `spectrumEngine` / `accentFromArtwork` 来自频谱与封面取色的旧方案；
+ * `density` 因行高只保留一套；`glass` 无消费方（壳层不做玻璃）。写回路径是整个
+ * 对象快照，残留一个死键即永久写回。
  */
 const RETIRED_KEYS = ['spectrum', 'spectrumEngine', 'accentFromArtwork', 'density', 'glass'] as const;
 
 /**
- * 动态 JSON → `AppSettings`：以默认值为底合并 + 旧键迁移。
+ * 动态 JSON → `AppSettings`：以默认值为底合并，并迁移旧键。
  *
- * 为什么不直接断言成 `AppSettings`：老配置文件里没有 `output`（2026-10 才加），
- * 直接断言会让 `settings.output.mode` 在运行期是 undefined —— 类型说有、
- * 实际没有，是这类 bug 最难查的形态。
+ * 不做直接断言：旧配置可能缺少 `output` 等后加字段，断言会使
+ * `settings.output.mode` 在运行期为 undefined（类型声明存在、运行期不存在）。
  */
 export function mergeSettings(raw: unknown): AppSettings {
   devValidate(settingsSchema, raw, 'app.settings');
   const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
 
-  // 取值要在剔除**之前**（剔除后就只剩 undefined 了）
+  // 取值须在剔除之前（剔除后只剩 undefined）
   const legacySpectrum = obj.spectrum;
   const legacyStyle = obj.spectrumStyle;
   const rest: Record<string, unknown> = { ...obj };
@@ -62,12 +56,12 @@ export function mergeSettings(raw: unknown): AppSettings {
 
   const merged: AppSettings = { ...DEFAULT_SETTINGS, ...(rest as Partial<AppSettings>) };
 
-  // 形态更名（2026-10-30）：`'wave'`（心电图）退役，席位由 `'ripple'`（中轴波纹）
-  // 接管。这里**显式映射**而不是靠白名单落回默认——用户当初选的就是"折线感"，
-  // 落回镜像曲线等于把手里的选择改掉。必须在白名单检查之前跑，否则 wave 先被
-  // 判为不认识、直接变成 'mirror'。
-  // （比较走 String()：`merged` 是从磁盘 JSON 强转来的，类型说 SpectrumStyle
-  //  并不代表运行期不会出现 'wave'——这正是这次要处理的情况。）
+  // 形态更名：`'wave'`（心电图）退役，由 `'ripple'`（中轴波纹）接管。这里
+  // **显式映射**而不是靠白名单落回默认——用户原选择是"折线感"，落回镜像曲线
+  // 等于改掉其选择。必须早于白名单检查，否则 'wave' 先被判为不认识而变成
+  // 'mirror'。
+  // （比较走 String()：`merged` 由磁盘 JSON 强转而来，类型声明为 SpectrumStyle
+  //  不代表运行期不会出现 'wave'。）
   if (String(merged.spectrumStyle) === 'wave') merged.spectrumStyle = 'ripple';
 
   // 形态/档位白名单：旧配置里的 `'off'` 也走这条（它已不在 SPECTRUM_STYLES 里），
@@ -97,8 +91,8 @@ export function mergeSettings(raw: unknown): AppSettings {
   if (typeof legacySpectrum === 'boolean') {
     if (typeof rest.bgSpectrum !== 'boolean') merged.bgSpectrum = legacySpectrum;
     if (typeof rest.npSpectrum !== 'boolean') {
-      // 用**原始** spectrumStyle 判断：'off' 的旧配置 = 当时页面上没画，
-      // 此时不能因为上面已经把它改写成 'mirror' 就误判成"页面开着"
+      // 判据用**原始** spectrumStyle：'off' 表示旧配置下页面未渲染频谱。若改用
+      // 已归一化为 'mirror' 的值，会被误判为"页面开着"。
       merged.npSpectrum = legacySpectrum && String(legacyStyle) !== 'off';
     }
   }

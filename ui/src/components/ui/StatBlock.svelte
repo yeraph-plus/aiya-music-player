@@ -2,17 +2,15 @@
   import type { Snippet } from 'svelte';
 
   /**
-   * 统计块：一个数字 + 一行标签。
+   * 统计块：一个数值加一行标签。
    *
-   * 取代侧栏底部统计（`.sidebar-footer strong` + 四行文本）、诊断页的
-   * 键值网格，以及设置页手写的 `.stat-card`（发布前 UI 审查 P1：死件与
-   * 手写替身并存）。数字一律 tabular-nums —— 统计数字之间不该因为 1 比 8
-   * 窄而抖动。
+   * 全部统计展示的唯一实现，各处的同类网格与卡片均由此承担。数值一律使用
+   * tabular-nums：等宽数字使数值更新时不因字形宽度差异而抖动。
    *
-   * `hint` 是标签下的补充（"3 张专辑"），不给就只显示两行。
+   * `hint` 为标签下的补充说明（如"3 张专辑"），未提供时只显示两行。
    *
-   * `layout="row"` 是设置页的卡片形态：可选 `icon` 槽在左（accent 圆角方块），
-   * 数字 + 标签在右，整块带卡片底。`warn` 时图标底随语义走 warn 色。
+   * `layout="row"` 是设置页的卡片形态：可选 `icon` 槽居左（accent 圆角方块），
+   * 数值与标签居右，整块带卡片底色。`warn` 时图标底色随语义取 warn 色。
    */
 
   interface Props {
@@ -126,7 +124,7 @@
   }
 
   .k-stat.row .k-stat-value {
-    font-weight: 400; /* 用户拍板：数字不加粗，靠字号本身立住 */
+    font-weight: 400; /* 数值不加粗，权重由字号承担 */
     line-height: 1.15;
     white-space: nowrap;
   }

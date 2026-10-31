@@ -3,17 +3,16 @@
   import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 
   /**
-   * 列表底部分页（2026-10-28，专辑/艺人宫格页先用）。
+   * 列表底部分页，用于专辑与艺人宫格页。
    *
-   * 为什么前端分页：后端 facets 命令是冻结接口——一次最多返回
-   * `FACET_LIMIT`（500）条 + total，没有 offset 参数。聚合本身毫秒级，
-   * 对已拉取的这批数据做纯展示分页就够了；真到 500 条不够用那天，
-   * 该动的是后端加 offset，不是在这里造假分页。
+   * 采用前端分页的原因：后端 facets 命令为冻结接口，单次最多返回 `FACET_LIMIT`
+   * （500）条加 total，无 offset 参数。聚合本身为毫秒级，对已拉取的数据做展示层
+   * 分页即可满足；若 500 条不足，应修改后端增加 offset，而非在此伪造分页。
    *
-   * 页码序列由 bits-ui 的 Pagination 生成：首尾恒在、当前页 ±1 恒在，
-   * 中段超出折叠成省略号（总页数 ≤7 全量平铺不折叠）——与此前手写的
-   * 折叠规则一致；另白送页码间的方向键漫游、data-selected/aria-current
-   * 联动与首尾页禁用。对外 API（page/pageCount/onchange）不变。
+   * 页码序列由 bits-ui 的 Pagination 生成：首页与末页恒显示，当前页 ±1 恒显示，
+   * 中段超出折叠为省略号（总页数 ≤7 时全量平铺）。同时提供页码间方向键漫游、
+   * data-selected 与 aria-current 联动、首末页禁用。对外 API 为
+   * page / pageCount / onchange。
    */
 
   interface Props {
@@ -26,7 +25,7 @@
   let { page, pageCount, onchange }: Props = $props();
 </script>
 
-<!-- Root 渲染的是普通 div：补上 nav 语义（此前手写 <nav> 的等价物） -->
+<!-- Root 渲染的是普通 div，此处补上 nav 语义 -->
 <Pagination.Root
   count={pageCount}
   perPage={1}

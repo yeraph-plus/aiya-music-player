@@ -26,14 +26,13 @@
   const playerState = $derived(player.state);
 
   /**
-   * 全应用背景的频谱源（docs/25 §5 T4c app 化）：设置开着才建
-   * （tap 按需订阅，关着引擎零开销）。原先在 NowPlayingView——背景
-   * 升为全应用层后跟着搬进来。
+   * 全应用背景的频谱源（docs/25 §5）：仅在设置开启时创建，tap 按需订阅，
+   * 关闭时引擎侧零开销。
    *
-   * 2026-10-30（docs/46 §6.2）：`spectrum` 拆成两个开关，这一层只认
-   * `bgSpectrum`；正在播放页的开关由 NowPlayingView 自己派生。二者任一为真
-   * 时 tap 都开着（`RemoteSpectrumSource` 的引用计数负责叠放）。
-   * `glEffects` 是**能力闸门**：关掉时连源都不建，引擎侧也不订阅。
+   * `spectrum` 拆为两个开关后（docs/46 §6.2），本层只读取 `bgSpectrum`；
+   * 正在播放页的开关由 NowPlayingView 自行派生。任一为真时 tap 均开启
+   * （`RemoteSpectrumSource` 通过引用计数处理叠加）。
+   * `glEffects` 为能力闸门：关闭时不创建源，引擎侧也不订阅。
    */
   let spectrumSource = $state<SpectrumSource | null>(null);
 
@@ -53,11 +52,11 @@
   });
 
   /**
-   * 正在播放页：侧栏**整体退出**、主区铺满（docs/46 §5.2 用户拍板）。
+   * 正在播放页：侧栏整体退出，主区铺满（docs/46 §5.2）。
    *
-   * 为什么不叠覆盖层：背景是 `.app` 的全窗口绝对定位层，挡住它的只是侧栏
-   * 那块 82% 不透明的面板。侧栏一退，背景连续地铺满整个窗口——正在播放页
-   * **零额外背景绘制**，也就省掉了最贵的那块全屏合成。
+   * 不使用覆盖层：背景是 `.app` 的全窗口绝对定位层，遮挡它的只有侧栏那块
+   * 不透明面板。侧栏退出后背景连续铺满窗口，正在播放页因此产生零额外背景
+   * 绘制，省去最昂贵的全屏合成。
    */
   const npOpen = $derived(ui.page === 'nowPlaying');
 
@@ -71,9 +70,9 @@
 </script>
 
 <div class="app" class:np-open={npOpen}>
-  <!-- 背景四层（1-3 层，T4c 起 app 化；T4d 起第 1 层是固定渐变，不跟随封面）：
-       绝对定位在 .app 根部、四区席位之下。全应用只有这一套背景——
-       正在播放页靠"侧栏退出 + 主区铺满"露出它，而不是再叠一层。 -->
+  <!-- 背景：绝对定位在 .app 根部、四区席位之下。第 1 层为固定渐变，不跟随封面。
+       全应用只有这一套背景；正在播放页通过"侧栏退出 + 主区铺满"露出它，
+       不另叠一层，否则两套频谱会同时消耗 GPU。 -->
   <AmbientBackdrop
     source={spectrumSource}
     enabled={bgSpectrumOn}

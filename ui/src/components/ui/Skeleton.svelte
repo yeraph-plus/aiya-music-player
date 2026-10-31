@@ -1,13 +1,12 @@
 <script lang="ts">
   /**
-   * 骨架屏：列表加载中的占位行 / 卡片块。
-   *
-   * 取代 `.skeleton` / `.shimmer` / `.tt-skeleton`。三种形态：
-   * - `line`  一行文字条（宽度可给）
+   * 骨架屏：列表加载中的占位行与卡片块。三种形态：
+   * - `line`  一行文字条（宽度可指定）
    * - `block` 一个矩形（封面、图表位）
-   * - `row`   整行（左封面 + 两条文字），列表首屏用
+   * - `row`   整行（左封面加两条文字），用于列表首屏
    *
-   * `count` 只对 `row` 有意义（一次渲染 N 行）。动画用 `prefers-reduced-motion` 关掉。
+   * `count` 仅对 `row` 有意义（一次渲染 N 行）。动画在 `prefers-reduced-motion`
+   * 下关闭。
    */
 
   interface Props {

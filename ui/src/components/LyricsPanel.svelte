@@ -94,8 +94,8 @@
 <svelte:window ontouchstart={markUserScroll} onpointerdown={markUserScroll} />
 
 <aside class="lyrics-panel" aria-label="歌词">
-  <!-- 无头部（T4d）、无底部提示条（用户反馈：编码/跳转提示去掉）——
-       正在播放页的页面语境已经说明这里是什么；唯一消费方是正在播放页右列 -->
+  <!-- 无头部、无底部提示条：唯一消费方是正在播放页的右列，页面语境已经说明
+       这里是什么；歌词的编码与跳转结果通过播放器吐司位反馈，不在此重复。 -->
   <div
     class="lyrics-body"
     bind:this={scroller}
@@ -110,10 +110,9 @@
         hint="在同目录放一个同名的 .lrc 文件即可显示"
       />
     {:else}
-      <!-- 上下各半高空白占位（用户拍板）：歌词区上下居中——激活行跟随滚动
-           本来就把激活行滚到容器中线，占位让**第一句之前 / 最后一句之后**
-           也有半屏余量，首尾句同样能滚到中线；占位用 flex-basis 50% 直接
-           由容器高度算出，不需要 JS 测量。 -->
+      <!-- 上下各设半高空白占位：激活行跟随滚动时会滚到容器中线，占位使第一句
+           之前与最后一句之后同样留出半屏余量，首尾句也能滚到中线。占位高度用
+           flex-basis 50% 由容器高度直接算出，无需 JS 测量。 -->
       <div class="lyrics-pad" aria-hidden="true"></div>
       {#if !lyrics.synced}
         <!-- 纯文本歌词没有逐行 seek 语义，整块放开选择（docs/19 §5）；

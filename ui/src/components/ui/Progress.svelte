@@ -2,13 +2,11 @@
   import { Progress } from 'bits-ui';
 
   /**
-   * 进度条：扫描/导入的确定进度。
+   * 进度条：扫描与导入的确定进度，全应用唯一实现。
    *
-   * 内核 `bits-ui/Progress.Root`：它只做一件事 —— 把
-   * `role="progressbar"` + `aria-valuenow/min/max` 算对（含 `value=null` 的
-   * "不确定"态，此时不带 valuenow）。填充宽度由我们用百分比画。
-   *
-   * 取代 `.progress` / `.progress > i`（扫描条）与导入面板里那两条内联进度。
+   * 内核为 `bits-ui/Progress.Root`，负责 `role="progressbar"` 与
+   * `aria-valuenow/min/max`（`value=null` 表示不确定态，此时不带 valuenow）。
+   * 填充宽度按百分比绘制。
    */
 
   interface Props {

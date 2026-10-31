@@ -1,16 +1,16 @@
 /**
- * 逐帧绘制调度器：**全应用一个 rAF**（docs/46 §7）。
+ * 逐帧绘制调度器：全应用一个 rAF（docs/46 §7）。
  *
- * 为什么不能各画各的：
- * 1. docs/26 踩过一个坑——`draw()` 里多写一次 `requestAnimationFrame(draw)`，
- *    调度数按 2^n 增长，几秒内主线程被回调淹没、整个 UI 假死（点击全部失效）。
- *    一个页面一个循环就已经够险，再叠"背景层 + 页面层 + 将来更多"必然出事。
- * 2. 三个 canvas 各自 rAF，同一帧里会被拆成三次独立的渲染事务，合成器要合并
- *    三次 dirty region；统一调度后，同一帧的绘制挨在一起，脏区一次提交。
- * 3. 后台/隐藏时只需要一处判断就能整体停摆，而不是每个组件各写一遍。
+ * 统一调度而非各自调度的原因：
+ * 1. 在 `draw()` 内再次调用 `requestAnimationFrame(draw)` 会使调度数按 2^n 增长，
+ *    数秒内回调占满主线程，界面完全无响应（点击失效）。单页面单循环已接近上限，
+ *    叠加背景层与页面层后必然发生（docs/26 实测）。
+ * 2. 多个 canvas 各自 rAF 时，同一帧被拆成多次独立渲染事务，合成器需合并多个
+ *    dirty region；统一调度后同帧绘制连续提交，脏区一次合并。
+ * 3. 后台与隐藏状态只需一处判断即可整体停摆，无需每个组件各写一遍。
  *
  * 用法：`const off = subscribeRender((now) => draw(now)); … off();`
- * 订阅是幂等的——同一个函数重复订阅只算一次（Set 语义）。
+ * 订阅幂等：同一函数重复订阅只计一次（Set 语义）。
  */
 
 export type RenderTick = (now: number) => void;
@@ -18,7 +18,7 @@ export type RenderTick = (now: number) => void;
 const ticks = new Set<RenderTick>();
 let frameId = 0;
 let scheduled = false;
-/** 页面隐藏时整体暂停（不是"少画"，是"完全不排帧"） */
+/** 页面隐藏时整体暂停：不排帧，而非降低帧率 */
 let paused = typeof document !== 'undefined' && document.hidden;
 
 function schedule(): void {

@@ -1,43 +1,40 @@
 /**
  * 渲染能力探测（docs/46 §7）。
  *
- * 为什么需要一层探测，而不是"有 WebGL 就用"：
+ * 需要探测而非"有 WebGL 即使用"的原因：docs/46 §2.3 实测显示，软件光栅环境
+ * （SwiftShader，对应远程桌面、禁用硬件加速、部分老核显）下 Canvas 2D 管线无法
+ * 完成一次测量，而 WebGL shader 版 p95 为 1.3ms。因此"为兼容低端机保留 Canvas 2D"
+ * 的直觉并不成立：两条路径都需保留，选择取决于具体机器。
  *
- * docs/46 §2.3 实测——在软件光栅（SwiftShader，等价于远程桌面 / 禁用硬件加速 /
- * 部分老核显）下，**当前这套 Canvas 2D 管线会慢到跑不完一次测量**，而 WebGL
- * shader 版 p95 只有 1.3ms。也就是说"为了兼容低端机而留在 Canvas 2D"这个直觉
- * 是反的：两边都得有，选哪边取决于机器。
+ * 探测结果分三档，只回答"该机器可达到哪一档"：
  *
- * 于是分三档，探测只回答"这台机器能到哪一档"：
+ *   档 2  WebGL（硬件加速可用）      —— 流动渐变、山形光晕、页面频谱
+ *   档 1  Canvas 2D（GL 不可用）      —— 两套 2D 实现，原样保留
+ *   档 0  静态背景                    —— 仅 CSS 渐变，不执行逐帧绘制
  *
- *   档 2  WebGL（硬件加速可用）      —— 流动渐变 + 山形光晕 + 页面频谱
- *   档 1  Canvas 2D（GL 不可用）      —— 现有的两套 2D 实现，原样保留
- *   档 0  静态背景（只关不掉动画时）  —— 只剩 CSS 渐变，不跑任何逐帧绘制
+ * 探测本身只返回 2 或 1。软件光栅落档 1 而非档 0：软栅下 shader 版 p95 1.3ms，
+ * 快于 Canvas 2D 管线，保留 2D 兜底优于全部关闭。档 0 仅由用户的「全局 3D 效果」
+ * 开关触发（见 `AppShell` 的 `glEffects` 闸门）。
  *
- * 注意：**探测本身只会返回 2 或 1**。软件光栅（SwiftShader / 禁用硬件加速）
- * 落到档 1 而不是档 0 —— 那是 docs/46 §2.3 实测的结论：软栅下 shader 版 p95
- * 1.3ms，反而比 Canvas 2D 管线快，所以留着 2D 兜底比全关更合理。档 0 只由
- * 用户的「全局 3D 效果」开关触发（见 `AppShell` 的 `glEffects` 闸门）。
- *
- * 用户开关（`settings.glEffects`）在这之上另算：关掉时无论探测结果如何都走档 0。
+ * 用户开关（`settings.glEffects`）单独计算：关闭时无论探测结果如何均走档 0。
  */
 
 /** 渲染档位（不含用户开关） */
 export type GlTier = 0 | 1 | 2;
 
 export interface Capability {
-  /** 这台机器能到的最高档位 */
+  /** 该机器可达的最高档位 */
   tier: GlTier;
-  /** 是否走硬件加速。false 表示只有软件光栅（SwiftShader / llvmpipe 之类） */
+  /** 是否使用硬件加速。false 表示仅有软件光栅（SwiftShader、llvmpipe 等） */
   hardware: boolean;
-  /** GPU 标识串，诊断/日志用；拿不到时为空串 */
+  /** GPU 标识串，用于诊断与日志；无法获取时为空串 */
   renderer: string;
-  /** 探测失败的原因（仅日志用） */
+  /** 探测失败原因（仅用于日志） */
   note: string;
 }
 
 /**
- * `failIfMajorPerformanceCaveat: true` 是关键：Chromium 在"只有软件渲染可用"时
+ * `failIfMajorPerformanceCaveat: true` 是判断依据：Chromium 在仅可使用软件渲染时
  * 会直接返回 null，不需要匹配 renderer 字符串。字符串匹配留作二次确认——
  * 有些驱动会把软件实现报成硬件名，反之亦然。
  */
@@ -46,8 +43,8 @@ const SOFTWARE_HINT = /swiftshader|llvmpipe|basic render|software|microsoft basi
 let cached: Capability | null = null;
 
 /**
- * 探测并缓存。**只探一次**：每次调都创建/销毁上下文的话，代价不说，还会在
- * 上下文名额紧张时把真正在用的那个挤掉（Chromium 上限 ~16 个）。
+ * 探测并缓存。只探测一次：每次调用都创建并销毁上下文，除耗时外，还会在上下文
+ * 名额紧张时挤掉正在使用的上下文（Chromium 上限约 16 个）。
  */
 export function detectCapability(): Capability {
   if (cached) return cached;
@@ -73,7 +70,7 @@ function probe(): Capability {
     canvas.width = 1;
     canvas.height = 1;
 
-    // 先按"必须硬件加速"要一个：拿不到就说明只有软件光栅
+    // 先请求"必须硬件加速"的上下文：获取失败即说明仅有软件光栅
     const strict = canvas.getContext('webgl2', {
       failIfMajorPerformanceCaveat: true,
       antialias: false,
@@ -83,7 +80,7 @@ function probe(): Capability {
     }) as WebGL2RenderingContext | null;
 
     if (!strict) {
-      // 退一步问问"有没有 WebGL，不管快慢"——有的话是软件光栅，走档 1
+      // 退一步请求不带性能门槛的 WebGL2：能获取即为软件光栅，落档 1
       const any = canvas.getContext('webgl2') as WebGL2RenderingContext | null;
       const renderer = any ? readRenderer(any) : '';
       if (any) release(any);

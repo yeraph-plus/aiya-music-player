@@ -44,7 +44,8 @@
     picked = [...next];
   }
 
-  /** 安装阶段徽章文本：宿主发的 stage 词 → 人话；未知词原样显示 */
+  /** 安装阶段徽章文本：宿主下发的 stage 取值映射为面向用户的短语；未知取值原样显示 */
+
   const stageText: Record<string, string> = {
     prepare: '准备',
     download: '下载',

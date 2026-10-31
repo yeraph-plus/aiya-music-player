@@ -5,19 +5,19 @@
   /**
    * 分段控件：2–5 个互斥短选项（密度、输出模式、缓冲）。
    *
-   * 内核 `bits-ui/RadioGroup`，**不是 ToggleGroup**。2026-10-26 实测换的：
-   * ToggleGroup（`type="single"`）点/空格按当前项会**取消选中**，回调给
-   * `undefined`；这里只吃掉 undefined 不写回，结果 UI 变成"两个都不选"、
-   * 设置里却还是旧值 —— 状态与画面分叉。RadioGroup 天然不允许空值，
-   * 与"分段控件永远有值"这个语义同构（实测：Space 后仍是 checked 的那个）。
+   * 内核使用 `bits-ui/RadioGroup`，不使用 ToggleGroup。ToggleGroup
+   * （`type="single"`）在点击或空格按当前项时会取消选中，回调收到 `undefined`；
+   * 若仅忽略 undefined 而不写回，界面会呈现"两项均未选中"而设置仍为旧值，状态
+   * 与画面不一致。RadioGroup 不允许空值，与"分段控件恒有取值"的语义一致
+   * （实测空格后仍为原选中项）。
    *
-   * RadioGroup 渲染 `role="radiogroup"` + `role="radio"`，`data-state` 是
-   * `checked` / `unchecked`（不是 ToggleGroup 的 `on` / `off`）。
-   * 方向键走焦点（roving）+ 选中，这是 WAI-ARIA radio group 的标准行为。
+   * RadioGroup 渲染 `role="radiogroup"` 与 `role="radio"`，`data-state` 取值为
+   * `checked` / `unchecked`（ToggleGroup 为 `on` / `off`）。方向键采用 roving
+   * 焦点并同时改变选中项，符合 WAI-ARIA radio group 标准。
    *
-   * `orientation="horizontal"` 必须显式给：默认 vertical，左右方向键不生效。
+   * `orientation="horizontal"` 须显式指定：默认为 vertical，左右方向键不生效。
    *
-   * 值类型是 `string`，调用方在自己的联合类型里窄化（`onchange` 里断言）。
+   * 值类型为 `string`，调用方在自身联合类型中窄化（于 `onchange` 内断言）。
    */
 
   interface Props {

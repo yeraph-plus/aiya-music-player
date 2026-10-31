@@ -1,17 +1,18 @@
 <script lang="ts">
   /**
-   * 歌单视图专用：**可拖放排序**的曲目列表（2026-10-28 拆分）。
+   * 歌单视图专用的曲目列表，支持拖放排序。
    *
-   * 为什么从 TrackList 分叉而不是继续共用：TrackList 一个组件靠
-   * `onmove?` / `canSort` / `filterCount?` 等散落开关编码"曲库/歌单/
-   * 详情页"多种语境，越挂越多。现在三个分支各管各的——
-   * `TrackTable`（纯榜单，首页）、`TrackList`（管理列表，曲库/详情页，
-   * 无拖拽）、本组件（拖放排序，仅歌单）。行结构与 CSS 类名刻意保持
-   * 一致（`.row` / `.grid-head`，见 lists.css），改动行渲染时两个
-   * 文件要同步——头部这条注释就是提醒。
+   * 与 TrackList 分叉而不共用一个组件：合用时需以 `onmove?` / `canSort` /
+   * `filterCount?` 等分散开关编码"曲库 / 歌单 / 详情页"多种语境，开关数量随
+   * 场景增长。当前三个分支各自独立：`TrackTable`（首页榜单）、`TrackList`
+   * （管理列表，不可拖拽）、本组件（可拖放排序，仅歌单）。
    *
-   * 拖拽排序语义：按住行拖动（`lib/drag` 的 startRowDrag），松手时
-   * onmove(from, to)；拖拽激活后的残留 click 被吞掉，避免误选中。
+   * 行结构与 CSS 类名与 TrackList 一致（`.row` / `.grid-head`，见 lists.css）；
+   * 修改行渲染时两个文件需同步。
+   *
+   * 拖拽语义：按住行拖动（`lib/drag` 的 `startRowDrag`），松手时回调
+   * `onmove(from, to)`。拖拽激活后的残留 click 由 `consumeClickSuppressed`
+   * 吞掉，避免误选中。
    */
   import { tick } from 'svelte';
   import { ChevronDown, ChevronUp, Play } from '@lucide/svelte';
@@ -47,16 +48,16 @@ import CheckCell from './ui/CheckCell.svelte';
     /** 一次性恢复位置；应用后由父组件置空 */
     restoreScrollTop: number | null;
     /**
-     * 「定位到正在播放」的目标下标（父组件按当前查询解析）；`null` = 无事。
-     * 一次性语义：滚过去就回报 `onlocated` 复位，**不做持续自动跟随**——
-     * 播放中把用户正在浏览的位置反复拽回播放行是修掉的老 bug。
+     * 「定位到正在播放」的目标下标（父组件按当前查询解析）；`null` 表示无请求。
+     * 一次性语义：滚动后回报 `onlocated` 复位，不做持续自动跟随——播放过程中
+     * 反复把浏览位置拉回播放行会打断阅读。
      */
     locateIndex: number | null;
     onlocated: () => void;
     playing: boolean;
     /**
-     * 播放。**只由双击 / 封面悬浮播放键 / 键盘 Enter 触发**（B4-1 交互语义，
-     * docs/24 §6）：单击的职责是选中，与"点一下就切歌"的旧行为区分。
+     * 播放。仅由双击、封面悬浮播放键或键盘 Enter 触发（docs/24 §6）：
+     * 单击的职责是选中，不承担切歌，以免二者混淆。
      */
     onplay: (index: number) => void;
     /**
@@ -186,9 +187,9 @@ import CheckCell from './ui/CheckCell.svelte';
     return out;
   });
 
-  // roving tabindex 的锚（发布前 UI 审查 P0-1）：只有焦点行是 0，其余行 -1，
-  // Tab 一次进列表、方向键在行间移动焦点。什么都没选时锚在第一个可见行——
-  // 否则 Tab 永远进不了列表（全部 -1 = 没有入口）。
+  // roving tabindex 的锚：只有焦点行是 0，其余行 -1，Tab 一次进列表、方向键
+  // 在行间移动焦点。什么都没选时锚在第一个可见行——否则 Tab 永远进不了列表
+  // （全部 -1 = 没有入口）。
   const focusAnchor = $derived(selectedIndex >= 0 ? selectedIndex : (rows[0]?.index ?? -1));
 
   /**
@@ -215,13 +216,13 @@ import CheckCell from './ui/CheckCell.svelte';
     onrestored();
   });
 
-  // 焦点行（键盘/点选）变化时把它滚进视野。
-  // **必须挡住重跑**：这个 effect 在组件重挂载、视口尺寸变化（抽屉开合/
-  // 窗口缩放）、行高变化时都会重跑，而不只是焦点变化——双击播放后
-  // selectedIndex 一直停在播放行上，重跑一次就把用户正在浏览的位置拽回
-  // 播放行（实测：播放中滚动列表反复跳回正在播放的条目）。
-  // 闸门 `selection.followedIndex` 记录「已经跟随到过的下标」，焦点没变
-  // 就不滚；存 store 而非局部变量是因为重挂载会清零局部变量、闸就失效。
+  // 焦点行（键盘或点选）变化时将其滚入视野。
+  // 需要拦截重复执行：该 effect 在组件重挂载、视口尺寸变化（抽屉开合、窗口
+  // 缩放）、行高变化时均会重跑，而非仅在焦点变化时。双击播放后 selectedIndex
+  // 长期停在播放行上，每次重跑都会把浏览位置拉回播放行（表现为播放中滚动列表
+  // 反复跳回正在播放的条目）。
+  // 闸门 `selection.followedIndex` 记录已跟随到的下标，焦点未变则不滚动；存于
+  // store 而非局部变量，因为重挂载会清零局部变量而使闸门失效。
   $effect(() => {
     if (!vw.scroller || selectedIndex < 0) return;
     if (selectionStore.followedIndex === selectedIndex) return;
@@ -230,11 +231,10 @@ import CheckCell from './ui/CheckCell.svelte';
     if (target !== vw.scroller.scrollTop) vw.scroller.scrollTop = target;
   });
 
-  // 键盘移动后把 DOM 焦点交给目标行（发布前 UI 审查 P0-1）：此前方向键只挪
-  // 高亮 class、焦点原地不动——Space 播的是焦点所在旧行、Enter 播的是高亮
-  // 新行，同一屏幕两个键播出两首歌。focusNonce 只由键盘 move 意图置位
-  // （selection.requestRowFocus()），点选/定位到正在播放等编程路径不抢焦点。
-  // preventScroll：滚动由上面的跟随效果负责，这里只管焦点。
+  // 键盘移动后把 DOM 焦点交给目标行。若只移动高亮类名而焦点不动，Space 会播放
+  // 焦点所在行、Enter 播放高亮行，同一屏幕两个键对应两首歌。focusNonce 仅由键盘
+  // move 意图置位（selection.requestRowFocus()），点选与定位到正在播放等编程路径
+  // 不夺取焦点。preventScroll：滚动由上述跟随效果负责，此处只处理焦点。
   $effect(() => {
     if (selectionStore.focusNonce === 0 || selectedIndex < 0 || !vw.scroller) return;
     const idx = selectedIndex;
@@ -298,7 +298,7 @@ import CheckCell from './ui/CheckCell.svelte';
     class:dragging={dragState?.active}
     bind:this={vw.scroller}
     onscroll={() => {
-      // 先让水管同步 scrollTop，再上报（沿用 B4-1 前的回调形状）
+      // 先由虚拟窗口同步 scrollTop，再上报滚动位置
       vw.handleScroll();
       onscroll(vw.scrollTop, Math.floor(vw.scrollTop / ROW_HEIGHT));
     }}
@@ -360,12 +360,12 @@ import CheckCell from './ui/CheckCell.svelte';
                 event.stopPropagation();
                 return;
               }
-              // 勾选列 / 播放键 / 跳转链接里的点击不是"选中这一行"。
-              // Svelte 5 把 click 委托到根节点统一派发，stopPropagation 拦不住
-              // 同一批委托 handler，由行自己认出来源才是可靠的那道闸。
+              // 勾选列、播放键、跳转链接上的点击不代表"选中该行"。
+              // Svelte 5 将 click 委托到根节点统一派发，stopPropagation 无法拦截
+              // 同一批委托 handler，因此由行自身判断事件来源。
               if (isRowInternalTarget(event.target)) return;
-              // Ctrl+点行 = 批量意图：批量模式没开就顺手打开（docs/27 第 5 点），
-              // 用户不用先去找工具条上的开关
+              // Ctrl/⌘ + 点击行表达批量意图：批量模式未开启时自动开启（docs/27 第 5 点），
+              // 不要求用户先去工具条查找开关
               if ((event.ctrlKey || event.metaKey) && !batchMode) onbatchmode(true);
               onselect(row.index, event);
             }}

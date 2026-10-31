@@ -2,23 +2,22 @@
   import { Select } from 'bits-ui';
 
   /**
-   * 下拉选择（kit 零件）：受控的 `value`/`onchange`，选项外置。
+   * 下拉选择（kit 零件）：受控的 `value` / `onchange`，选项外置。
    *
-   * 为什么不用原生 `<select>`：Chromium 里给 select 设样式**去不掉**原生
-   * 控件外观，弹出的选项列表更是完全不受 CSS 管——深色主题下出现一条
-   * 浏览器原生亮色下拉条（2026-10-28 用户实测两次）。bits-ui 的 Select
-   * 用 portal 渲染选项列表（跟随主题变量），还白送键盘导航、typeahead、
-   * 碰撞翻转和 aria 联动。
+   * 不使用原生 `<select>`：Chromium 无法通过样式移除 select 的原生控件外观，
+   * 弹出的选项列表完全不受 CSS 控制，深色主题下会出现浏览器原生亮色下拉列表
+   * （实测可复现）。bits-ui 的 Select 通过 portal 渲染选项列表（跟随主题变量），
+   * 并提供键盘导航、typeahead、碰撞翻转与 aria 联动。
    *
-   * 触发按钮的外观与 `Field` 的输入框同族（k-field-box 同参数）：
-   * --control-h 高、--radius-md 圆角、--surface-input 底、focus 描边。
-   * 选项列表沿用 `Menu` 的深色面板参数（surface-4 + 毛玻璃 + 10px 圆角）。
+   * 触发按钮外观与 `Field` 的输入框同族（k-field-box 同参数）：`--control-h` 高度、
+   * `--radius-md` 圆角、`--surface-input` 底色、focus 描边。选项列表沿用 `Menu`
+   * 的深色面板参数（surface-4 加毛玻璃，10px 圆角）。
    *
-   * 选项的 `value` 允许空串（"任意流派"这类"不限"语义项）。
+   * 选项的 `value` 允许空串，用于"不限"语义项（如"任意流派"）。
    */
 
   interface Props {
-    /** 触发按钮的 aria 标签（可见标签在旁边的布局里，读屏靠这个） */
+    /** 触发按钮的 aria 标签（可见标签位于相邻布局，读屏依赖此属性） */
     label: string;
     value: string;
     options: Array<{ value: string; label: string }>;

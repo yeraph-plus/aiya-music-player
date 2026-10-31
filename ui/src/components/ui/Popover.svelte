@@ -3,23 +3,21 @@
   import { Popover } from 'bits-ui';
 
   /**
-   * 弹出面板：触发元素 + 内容。
+   * 弹出面板：触发元素加内容。
    *
-   * 取代 `PlayerBar` 里手写的那套（`svelte:window onpointerdown` 判 `box.contains`
-   * 收面板 + `onkeydown` 判 Esc）：手写版只有"点外面关闭"，没有
-   * **Esc 后把焦点还回触发按钮**、没有**碰撞翻转**（面板在窗口下沿会被裁掉）、
-   * 也没有 aria-expanded / aria-controls 的联动。
+   * 由 bits-ui 承担外部点击关闭、Esc 关闭并将焦点归还触发元素、碰撞翻转
+   * （面板在窗口下沿会被裁切）与 aria-expanded / aria-controls 联动。
    *
-   * ### 为什么 trigger 是 snippet 而不是 `children`
+   * ### trigger 使用 snippet 而非 `children`
    *
-   * 触发元素是**调用方的按钮**（播放条上的倍速 chip），bits-ui 需要把
-   * `aria-expanded` / `aria-controls` / `onclick` / `onkeydown` 挂到它身上。
-   * 所以 `trigger` 拿到 props 后自己展开到元素上 —— 这也是唯一能让组件样式
-   * 留在调用方手里的写法（`Popover.Trigger` 默认会渲染自己的 button）。
+   * 触发元素是调用方的按钮（播放条上的倍速 chip），bits-ui 需将 `aria-expanded`、
+   * `aria-controls`、`onclick` 与 `onkeydown` 挂到该元素上。`trigger` 取得 props 后
+   * 自行展开到元素，这也是让组件样式留在调用方的唯一写法
+   * （`Popover.Trigger` 默认渲染自己的 button）。
    *
-   * 类型用 `Record<string, any>`：这些 props 是 bits-ui 内部的合并结果，
-   * 没有导出成公共类型；写成 `unknown` 会让调用方的 `{...props}` 在
-   * svelte-check 里报"不能展开到 button 属性"。
+   * 类型写作 `Record<string, any>`：这些 props 是 bits-ui 内部的合并结果，未导出为
+   * 公共类型；写作 `unknown` 会使调用方的 `{...props}` 在 svelte-check 中报无法
+   * 展开到 button 属性。
    */
 
   type TriggerProps = Record<string, any>;

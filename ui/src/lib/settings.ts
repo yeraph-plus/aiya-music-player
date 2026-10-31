@@ -1,17 +1,14 @@
 /**
- * 设置项的类型与默认值。
+ * 设置项类型与默认值。
  *
- * 2026-10-25 批次 4：从已删除的 `@aiya/contracts` 搬来。
+ * 与 `lib/ipc/schema.ts` 分工并存，不合并：
+ * - 本文件：编译期类型与默认值，字段必填且有初始值；
+ * - `schema.ts`：读磁盘时的 zod 校验，字段全 optional + passthrough——旧配置
+ *   文件缺字段是常态。
  *
- * 与 `lib/ipc/schema.ts` 的分工（两者**刻意并存**，别合并）：
- * - 这里：**写代码时**要的类型与默认值（字段必填、有初始值）；
- * - `schema.ts`：**读磁盘时**的 zod 校验（字段全 optional + passthrough，
- *   因为老配置文件缺字段是常态）。
- *
- * `output`（2026-10-25 补）：输出模式/缓冲/时钟。形状直接用 Rust 生成的
- * `DesiredOutput` —— 枚举取值（`shared` / `exclusive` / `exclusiveRequired` /
- * `null`、`auto` / `events` / `polling`）由 `aiya-audio` 的 `parse` 定义，
- * 前端抄一份字符串常量迟早对不上。
+ * `output` 的形状复用 Rust 的 `DesiredOutput`：取值集合（`shared` / `exclusive` /
+ * `exclusiveRequired` / `null`，`auto` / `events` / `polling`）由 `aiya-audio` 的
+ * `parse` 定义，前端另存字符串常量会与后端失配。
  */
 
 import type { DesiredOutput } from './ipc/generated/DesiredOutput';
@@ -20,11 +17,10 @@ import type { ShortcutAction } from './shortcuts';
 export type ThemeMode = 'dark' | 'light';
 
 /**
- * 主题颜色：固定 CSS 渐变 + 配套强调色，成套切换。
+ * 主题配色：固定 CSS 渐变 + 配套强调色，成套切换。
  *
- * 每个方案在 tokens.css 按 `html[data-ambient]` 定义各自的 `--ambient-bg`
- * 与强调色三件套；`aurora` 是默认（主题自带蓝色 + 蓝青渐变）。
- * 不跟随封面 —— 早期"封面预模糊 + 主色提取"的实现已移除，代码里不再有分支。
+ * 每个方案在 tokens.css 以 `html[data-ambient]` 定义 `--ambient-bg` 与强调色
+ * 三件套；`aurora` 为默认。配色不取自封面：主色提取方案已移除，无对应分支。
  */
 export type AmbientScheme = 'aurora' | 'ember' | 'meadow' | 'dusk' | 'mono';
 
@@ -38,12 +34,11 @@ export const AMBIENT_SCHEMES: Array<{ value: AmbientScheme; label: string }> = [
 ];
 
 /**
- * 界面缩放档位（docs/56）：整体缩放文字与间距，适配高分屏可读性。
+ * 界面缩放档位（docs/56）：整体缩放文字与间距。
  *
- * 实现是 `html` 内联 font-size（1rem = 16px × 档位），tokens.css 的尺寸轴
- * 全部以 rem 计，所以档位切换是**全局整倍缩放**——相对设计不变，不是
- * 2026-10-30 移除的那种"密度档"（那是改行高不改字号，两码事）。
- * 白名单收口：档位外的值（手改配置出现 87.5 之类）一律落回 100。
+ * 实现为 `html` 内联 font-size（1rem = 16px × 档位），tokens.css 的尺寸轴以 rem
+ * 计，因此切换档位是全局整倍缩放，相对比例不变。与行高类密度档不同：后者改行高
+ * 不改字号。档位外的值（手改配置出现 87.5 等）收敛到 100。
  */
 export const UI_SCALES = [90, 100, 110, 125, 150] as const;
 export type UiScale = (typeof UI_SCALES)[number];
@@ -61,24 +56,16 @@ export function normalizeUiScale(value: unknown): UiScale {
 }
 
 /**
- * 频谱风格（2026-10-26 起）：**正在播放页**可视化的形态（docs/26 §3）。
+ * 正在播放页的频谱形态（docs/26 §3）。
  *
- * 取代旧 `spectrumEngine`（compact/pro）——它的唯一消费方（SpectrumPanel
- * 五形态）已随 T4a 页面改版移除，且 pro 需要渲染层 AudioNode、原生引擎
- * 架构（ADR-0006）下本就无法成立。
+ * 取值：`mirror` 镜像曲线、`radial` 径向环形、`ripple` 中轴波纹。`ripple` 在页内
+ * 只画一条居中曲线：地形形态（多层等深线铺满下半屏）与背景层
+ * `bgSpectrumStyle = 'ripple'` 重复，且页内只覆盖内容区，水面会在画布边缘断开，
+ * 因此地形仅用于背景。
  *
- * 2026-10-30（docs/46 §6）：`'off'` 退役——它和 `npSpectrum=false` 是同一个
- * 语义的第二个入口（历史叠加），现在由开关独占。旧配置里的 `'off'` 在
- * `mergeSettings` 落回默认形态，不写回。
- *
- * 同日：`'wave'`（心电图）退役。它的"每带一个 R 波 + S 波"折线在低频段
- * 会挤成一片尖刺、在高频段又拉成锯齿，看上去像算错了幅度；席位由
- * `'ripple'` 接管。旧值 `'wave'` 在迁移里映射到 `'ripple'`。
- *
- * 同日定版：`'ripple'` 在页内只画**一条居中曲线**。它中途试过地形版
- * （22 层等深线铺满下半屏），但那套和背景层 `bgSpectrumStyle='ripple'`
- * 重复，页内又只覆盖内容区、水面会在画布边缘断掉，所以地形只留给背景，
- * 页内降为单线主视觉。
+ * 旧取值 `'off'` 与 `'wave'` 由 `mergeSettings` 消化：`'off'`（与
+ * `npSpectrum = false` 语义重复）落默认形态，`'wave'` 映射到 `'ripple'`，均不写回
+ * 磁盘（docs/46 §6）。
  */
 export type SpectrumStyle = 'mirror' | 'radial' | 'ripple';
 
@@ -90,16 +77,14 @@ export const SPECTRUM_STYLES: Array<{ value: SpectrumStyle; label: string }> = [
 ];
 
 /**
- * 背景频谱**光效**档位（docs/46 §3.2）。
+ * 背景频谱光效档位（docs/46 §3.2）。
  *
- * 这是**审美**开关，不是性能开关：三档只改 shader 里的衰减/线宽系数，
- * 成本差异可忽略。放出来是因为"柔雾（形状不可辨光）"与"锐光（脊线/线清晰）"
- * 是互斥的观感，一次性拍板风险大，让用户自己定调更稳。
+ * 审美开关，非性能开关：三档只改 shader 的衰减与线宽系数，开销差异可忽略。
+ * "柔雾"（形状不可辨的光）与"锐光"（脊线清晰）互斥，故不固定单档。
  *
- * 2026-10-30 起**山形与波纹共用**这一档（用户要求"两者都应用背景频谱光效"）：
- * 两个图层的几何不同，但档位的语义统一为"光的多少 + 边缘的锐度"，否则同一个
- * 档位在两种形态下的表现不一致，会被当成开关失效。键名 `ridgeGlow` 是历史
- * 遗留（先有山形），不改名以免动迁移。
+ * 山形与波纹共用该档位：两图层几何不同，档位语义仍统一为光的强度与边缘锐度；
+ * 语义不统一会使同一档位在两种形态下表现不一致，被视为开关失效。
+ * 键名 `ridgeGlow` 沿用山形时期的命名，改名会牵动迁移。
  */
 export type RidgeGlow = 'soft' | 'balanced' | 'neon';
 
@@ -110,15 +95,14 @@ export const RIDGE_GLOWS: Array<{ value: RidgeGlow; label: string }> = [
 ];
 
 /**
- * 背景频谱的形态（2026-10-30，docs/46 P5 之二）。
+ * 背景频谱形态（docs/46）。
  *
- * 与正在播放页的 `spectrumStyle` **刻意分开**：背景是常驻氛围，页内是
- * 一次性聚焦的视觉，两者最优形态不同（背景要淡、要大、要能一直看；页内
- * 可以更亮更密）。共用一个键会让用户为了页内试形态而改掉背景。
+ * 与页内 `spectrumStyle` 分开：背景是常驻氛围（淡、范围大、可长时间观看），页内
+ * 是一次性聚焦的视觉（可更亮更密），两者最优形态不同。共用一个键会迫使用户为了
+ * 页内试形态而改动背景。
  *
- * - `ridge` 山形：闭合填充的环境光，边界柔和，最不抢内容（默认，保持
- *   用户当前看到的样子）
- * - `ripple` 波纹：一层层等深线铺向下半屏，结构感强，适合当"水面"看
+ * - `ridge` 山形：闭合填充的环境光，边界柔和（默认）
+ * - `ripple` 波纹：等深线层叠铺向下半屏，结构感强
  */
 export type BgSpectrumStyle = 'ridge' | 'ripple';
 
@@ -134,32 +118,31 @@ export interface AppSettings {
   /** 界面缩放档位（百分比，见 `UI_SCALES`）；`html` 内联 font-size 随它走（docs/56） */
   uiScale: UiScale;
   /**
-   * 禁用系统缩放（docs/56）：开启后 Rust 侧把 webview zoom 补偿为 1/scale，
-   * 内容按 100% 物理密度渲染（高分屏上字变小、一屏内容变多、无位图模糊），
-   * 即时生效无需重启。与「界面缩放」正交且相乘：环境倍率（本开关）×
-   * 用户倍率（界面缩放）。zoom 由 Rust 的 apply_scale_policy 独占管理。
+   * 禁用系统缩放（docs/56）：开启后 Rust 侧把 webview zoom 补偿为 1/scale，内容
+   * 按 100% 物理密度渲染（高分屏上字号更小、单屏内容更多、无位图缩放模糊），即时
+   * 生效。与环境倍率（本开关）正交并相乘：环境倍率 × 界面缩放。zoom 由 Rust 的
+   * `apply_scale_policy` 独占管理。
    */
   disableSystemScale: boolean;
   /** 按 ReplayGain 调整音量（近似实现：换算到音量系数） */
   normalizeVolume: boolean;
   /**
-   * 全局 3D / WebGL 效果总闸（2026-10-30，docs/46 §6.2）。
+   * 全局 3D / WebGL 效果总闸（docs/46 §6.2）。
    *
-   * **能力闸门，不是收藏夹**：关掉时所有 WebGL 图层不渲染、不创建上下文，
-   * 背景退回静态 CSS 渐变；`bgSpectrum` / `npSpectrum` 的值保留但一律无效。
-   * 毛玻璃（`backdrop-filter`）是 CSS 合成，不归这个闸门管。
+   * 能力闸门，非收藏夹：关闭时所有 WebGL 图层不渲染、不创建上下文，背景退回静态
+   * CSS 渐变；`bgSpectrum` / `npSpectrum` 保留取值但一律无效。毛玻璃
+   * （`backdrop-filter`）属 CSS 合成，不受该闸门控制。
    *
-   * 为什么需要它：WebGL 在软件光栅（远程桌面 / 禁用硬件加速 / 老核显）下
-   * 不可用，而这类机器没法在编译期识别。给用户一个能自己关的总闸，比
-   * 只靠自动探测更可靠（探测也会错）。
+   * 存在理由：软件光栅（远程桌面、禁用硬件加速、老核显）下 WebGL 不可用，该环境
+   * 无法在编译期识别；自动探测同样会误判，故保留用户可关闭的开关。
    */
   glEffects: boolean;
   /**
    * 背景动态频谱（山形环境光）。
    *
-   * 开启时背景层订阅引擎 tap（`spectrum_set(true)`）；关闭时只剩第 1 层
-   * 静态渐变，引擎侧零开销。它同时也是毛玻璃的成本开关：背景一静止，
-   * `backdrop-filter` 的结果就被合成器缓存，玻璃变一次性开销。
+   * 开启时背景层订阅引擎 tap（`spectrum_set(true)`），关闭时只剩第 1 层静态渐变，
+   * 引擎侧零开销。该开关同时决定毛玻璃成本：背景静止后 `backdrop-filter` 的结果被
+   * 合成器缓存，玻璃降为一次性开销。
    */
   bgSpectrum: boolean;
   /** 正在播放页频谱。与 `bgSpectrum` 各自独立（docs/46 §5：两个页面分开控制） */
@@ -173,9 +156,8 @@ export interface AppSettings {
   /**
    * 系统媒体控制（Windows SMTC / 锁屏 / 蓝牙耳机）。
    *
-   * 开启后由系统路由媒体键 —— 这也是为什么不再注册全局快捷键：
-   * `globalShortcut` 一旦占用媒体键，Chromium 就不再向系统发布媒体会话，
-   * 系统媒体面板会整个消失（实测）。
+   * 开启后媒体键交由系统路由，因此不注册全局快捷键：`globalShortcut` 占用媒体键
+   * 会使 Chromium 不再向系统发布媒体会话，系统媒体面板随之消失（实测）。
    */
   mediaKeys: boolean;
   /** 应用启动后自动播放上次的曲目 */
@@ -187,35 +169,32 @@ export interface AppSettings {
   /** 关闭窗口时最小化到托盘而不是退出 */
   closeToTray: boolean;
   /**
-   * 自动刷新曲库的间隔（秒）。0 = 只保留"切回窗口时刷新"。
+   * 自动刷新曲库的间隔（秒）。0 = 仅保留"切回窗口时刷新"。
    *
-   * 为什么让它可配而不是写死 30 s：库大的机器上一次刷新要扫几万条目录，
-   * 有人会想调慢；反过来改标签频繁的人想调快。下限由宿主夹到 10 s
-   * （再短就该上文件监听了，那是另一套东西）。
+   * 可配而非固定 30 s：大库一次刷新需遍历数万条目录记录，需要更慢的节奏；频繁
+   * 改标签的场景则需要更快。下限由宿主夹到 10 s——更短需改用文件监听（另一套机制）。
    */
   refreshSeconds: number;
   /**
    * 播放记录保留周期（天）。0 = 永久。
    *
-   * 2026-10-28 拍板：最近播放的记录范围收敛到这一个设置——history 表
-   * 只存周期内的行（宿主在启动 / 每次写历史 / 改设置时裁剪），防止
-   * 重度使用一年堆几十万行。「最近播放」tab、常听榜都基于裁剪后的
-   * history，自动遵循；筛选器不再另设"上次播放"档（功能重叠）。
+   * 记录范围由该设置唯一定义：history 表只存周期内的行，宿主在启动、写历史、改
+   * 设置时裁剪，行数由此收敛。「最近播放」tab 与常听榜读取裁剪后的 history；
+   * 筛选器不设"上次播放"档。
    */
   historyDays: number;
   /** 只存覆盖项：没写的动作走 `DEFAULT_SHORTCUTS`（改默认值不冲用户自定义） */
   shortcuts: Partial<Record<ShortcutAction, string>>;
   /**
-   * 输出偏好（"我想要什么"）。设备实际给了什么在诊断页的 `audioMode` 里，
-   * 两者刻意分开：请求独占而设备拒绝时，这里仍是 `exclusive`。
+   * 输出偏好（请求值）。设备实际给出的模式见诊断页 `audioMode`，两者分开：请求
+   * 独占而设备拒绝时，本字段仍为 `exclusive`。
    */
   output: DesiredOutput;
   /**
-   * 直播页「最近打开」（docs/52 §7.3）。上限 20，按 URL 去重、最新在前。
+   * 直播页「最近打开」（docs/52 §7.3）：上限 20，按 URL 去重，最新在前。
    *
-   * 为什么放设置 KV 而不是建表：20 条记录 + 一张表 + 增删查命令 + IPC 类型，
-   * 换来的只是"记得上次开过哪几个台"。KV 已经存在、已经落盘、已经有迁移，
-   * 这个量级不值得再开一条数据链。
+   * 存于设置 KV 而非独立表：记录量级为 20 条，建表需额外的增删查命令与 IPC 类型；
+   * KV 已具备落盘与迁移能力。
    */
   liveRecent: LiveRecentEntry[];
 }
@@ -230,40 +209,40 @@ export interface LiveRecentEntry {
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   ambient: 'aurora',
-  // 100% = 设计原稿；高分屏用户自己往上调，不替他们做决定
+  // 100% = 设计原稿；高分屏可自行上调
   uiScale: 100,
-  // 默认跟随系统缩放（Windows 惯例）；想按 100% 渲染的用户自己开
+  // 默认跟随系统缩放（Windows 惯例）；按 100% 物理密度渲染需显式开启
   disableSystemScale: false,
   normalizeVolume: false,
-  // 总闸默认开：关掉等于把这次重做的效果全废掉，不是"更省"的同义词。
-  // 真不支持的机器由 capability 探测兜底（探测失败照样能正常用）
+  // 总闸默认开：关闭会使全部 WebGL 效果失效，它不是性能选项。
+  // 不支持的机器由 capability 探测兜底（探测失败仍可正常使用）
   glEffects: true,
   // 背景/页面频谱默认关：不订阅 tap，保持最简出口路径
   bgSpectrum: false,
   npSpectrum: false,
-  // 默认镜像曲线：T4h 用户拍板的首发形态
+  // 默认镜像曲线（首发形态）
   spectrumStyle: 'mirror',
-  // 背景默认仍是山形：它是长期存在的那一层，不因为新增形态就替用户换掉
+  // 背景默认山形：常驻图层，不因新增形态而改变既有观感
   bgSpectrumStyle: 'ridge',
-  // 平衡档：柔雾（无光）与锐光之间的中点，有一点光效但不刺眼
+  // 平衡档：柔雾（无光）与锐光之间的中点，有光效但不刺眼
   ridgeGlow: 'balanced',
   mediaKeys: true,
-  // 启动就出声容易吓到人，默认关闭；想开的人在设置里开
+  // 默认关：启动即出声需由用户显式开启
   autoplayOnStart: false,
-  // 进度记忆默认开：这是播放器的通行行为
+  // 进度记忆默认开：播放器的通行行为
   rememberPosition: true,
-  // 默认开：否则整晚放歌会让电脑睡不着
+  // 默认开：否则长时间播放时系统会休眠
   preventSleep: true,
-  // 默认关：关窗即退出是既有行为，不制造意外
+  // 默认关：关窗即退出是既有行为
   closeToTray: false,
   // 30 秒：外部改标签/搬文件能在半分钟内体现，而一次增量扫描只有几十毫秒
   refreshSeconds: 30,
-  // 90 天：轻量用户一年也不会堆到哪儿去，重度用户也有明确的"还在听"语义
+  // 90 天：兼顾轻量用户与"还在听"的语义
   historyDays: 90,
   shortcuts: {},
-  // 共享 + 200ms + 事件驱动：最不容易出事的组合。独占要用户主动开，
-  // 因为它会锁住设备（别的程序放不出声）。
+  // 共享 + 200ms + 事件驱动：最稳妥的组合。独占需用户主动开启，
+  // 它会锁住设备（其他程序无法出声）。
   output: { mode: 'shared', bufferMs: 200, clock: 'auto', releaseOnPause: true },
-  // 空表起步：没开过直播的机器不该看到一条假记录
+  // 空表起步：未打开过直播的机器不应出现记录
   liveRecent: [],
 };

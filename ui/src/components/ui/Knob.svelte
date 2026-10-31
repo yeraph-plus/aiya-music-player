@@ -160,8 +160,8 @@
     cursor: default;
   }
 
-  /* 拖拽反馈（发布前 UI 审查 P2-6）：dragging 状态此前只用于逻辑，
-     旋钮外观零变化——对比 Slider thumb hover 即 scale。拖动中值弧加粗。 */
+  /* 拖拽反馈：拖动状态下加粗值弧。仅用 dragging 控制逻辑而不改变外观时，操作
+     缺少视觉回应（Slider 的 thumb 在悬停时即 scale，此处与之对齐） */
   .knob.dragging .value {
     stroke-width: 7;
   }

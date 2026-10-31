@@ -64,13 +64,13 @@
       : { title: '专辑' },
   );
 
-  /* 次要统计描述（2026-10-28 二次修订）：只报总数，撤销「500 / 共 xxx」
-     截断式。截断说明不再有文本位——分页器本身就是可见边界 */
+  /* 次要统计描述：只报总数，不做「500 / 共 xxx」的截断说明——分页器本身
+     就是可见边界，无需再用文本解释 */
   const meta = $derived(
     rows === null ? '' : `共 ${total} ${mode === 'artists' ? '位艺人' : '张专辑'}`,
   );
 
-  /* ---------------- 前端分页（2026-10-28） ----------------
+  /* ---------------- 前端分页 ----------------
    * 后端 facets 命令冻结（一次 ≤500 条 + total，无 offset），分页是对
    * 已拉取数据的纯展示切片。搜索/过滤变化时回第 1 页。 */
   const PAGE_SIZE = 60;
@@ -142,7 +142,7 @@
         {/if}
       {/each}
     </div>
-    <!-- 底部分页（2026-10-28）：随页面滚动，滚到内容末尾才出现 -->
+    <!-- 底部分页：随页面滚动，滚到内容末尾才出现 -->
     <Pagination page={safePage} pageCount={pageCount} onchange={onPageChange} />
   {:else if search.trim()}
     <EmptyState title="没有匹配的结果" hint="换个关键词，或清除过滤条件">
@@ -172,7 +172,7 @@
     flex-direction: column;
     gap: var(--space-4);
     height: 100%;
-    /* 滚动容器是页面根（2026-10-28：分页器随内容滚，宫格不再自滚）。
+    /* 滚动容器是页面根：分页器随内容滚，宫格不自滚。
        底部 24px 与分页器上方的间隙（gap 12 + padding-top 12）严格等高 */
     overflow-y: auto;
     padding-bottom: 24px;
@@ -209,7 +209,7 @@
   }
 
   /* 卡片是横排形状，宫格里两行文本对齐。
-     2026-10-28：宫格不自滚——滚动交给页面根，分页器在内容末尾 */
+     宫格不自滚——滚动交给页面根，分页器在内容末尾 */
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));

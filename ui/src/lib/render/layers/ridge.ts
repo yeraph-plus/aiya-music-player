@@ -1,17 +1,16 @@
 /**
- * 山形频谱图层（docs/46 §3.2，P2）—— 用 WebGL 重绘原来的背景山形，并加边缘光晕。
+ * 山形频谱图层（docs/46 §3.2）：以 WebGL 绘制背景山形并叠加边缘光晕。
  *
- * 为什么要重画而不是给 Canvas 2D 加 `shadowBlur`：`shadowBlur` 是逐像素高斯，
- * 在 160×90 的 buffer 上做还行，一到全分辨率就是灾难；而这个形状的"光晕"根本
- * 不需要卷积 —— 每个像素到脊线的**垂直距离**在 fragment 里就有，hâlo 直接是
- * 距离的指数衰减。一次 pass、无离屏、无模糊核，且能同时给出描边 + 内层光 +
- * 外层弥散三种半径。
+ * 不对 Canvas 2D 使用 `shadowBlur`：它是逐像素高斯，在 160×90 的 buffer 上
+ * 尚可接受，全分辨率下开销过高。该形状的光晕无需卷积——每个像素到脊线的
+ * 垂直距离在 fragment 中即可获得，光晕即为该距离的指数衰减。因此只需一次
+ * pass，无离屏缓冲与模糊核，并可同时输出描边、内层光与外层弥散三种半径。
  *
- * 与原实现的关系（**数值规则一字不改**，见 `ridge-curve.ts`）：
+ * 数值规则与 `ridge-curve.ts` 保持一致：
  * - 时间平滑 0.3/帧、`v^1.2` 伽马、近山 0.82 全幅、远山倒序 0.5 幅
- * - 竖直渐变填充（顶部实、底边透明）：这里用 `grad = vUv.y` 复现
- * - 唯一的改变是**光栅器**：折线 + 中点二次贝塞尔 → Catmull-Rom 256 点，
- *   以及 blur → 解析光晕
+ * - 竖直渐变填充（顶部实、底边透明），此处用 `grad = vUv.y` 复现
+ * - 与 Canvas 2D 实现的差异仅在于光栅器：折线与中点二次贝塞尔改为
+ *   Catmull-Rom 256 点，blur 改为解析光晕
  */
 
 import { DataUtils, DataTexture, HalfFloatType, LinearFilter, Mesh, OrthographicCamera, PlaneGeometry, RedFormat, Scene, ShaderMaterial, Color, CustomBlending, OneFactor, OneMinusSrcAlphaFactor, AddEquation } from 'three';
@@ -70,10 +69,10 @@ const FRAG = /* glsl */ `
     float hN = texture2D(uRamp, vec2(vUv.x, 0.25)).r;
     float hF = texture2D(uRamp, vec2(vUv.x, 0.75)).r;
 
-    // d > 0 必须在**脊线下方**（山体从底边升起，原 Canvas 2D 是
-    // moveTo(0,H) → 曲线 → lineTo(W,H)）。写成 vUv.y - h 会把山体填到
-    // 脊线以上，整片上半屏被实色盖住——看起来就是"背景太亮"。
-    // 注意：这段在模板字符串里，注释中不要用反引号
+    // d > 0 必须对应脊线下方（山体自底边升起，Canvas 2D 实现为
+    // moveTo(0,H) → 曲线 → lineTo(W,H)）。写成 vUv.y - h 会把山体填到脊线
+    // 以上，上半屏被实色覆盖，表现为背景整体过亮。
+    // 注意：本段位于模板字符串内，注释中不可使用反引号
     float dN = (hN - vUv.y) * uHeightPx;
     float dF = (hF - vUv.y) * uHeightPx;
 
@@ -102,14 +101,12 @@ interface GlowPreset {
 }
 
 /**
- * 三档光晕（docs/46 §3.2）。单位是"像素"：`K` 越大衰减越快。
+ * 三档光晕（docs/46 §3.2）。单位为像素，`K` 越大衰减越快。
  *
- * 2026-10-30 第二轮调参（用户："取消现在的强度，在柔雾和平衡之间取中间，
- * 有一点光效即可"）：
- * - `soft` 纯填充、三层光**全部归零** —— 这是"完全无光"，作为参照点
- * - `balanced` 取两者的中点（rim 0.03 / glow 0.025 / halo 0.015）：
- *   脊线处多出约 7% 的亮度，只在 1–3px 内衰减，整屏几乎测不出变化
- * - `neon` 保留强档（脊线清晰、近场光明显），给喜欢锐利观感的人
+ * - `soft` 纯填充，三层光晕全部归零，作为无光参照
+ * - `balanced` 取两者中点（rim 0.03 / glow 0.025 / halo 0.015）：脊线处亮度
+ *   增加约 7%，衰减范围仅 1–3px，整屏差异不可测
+ * - `neon` 强档（脊线清晰、近场光明显），对应偏好锐利观感的情形
  */
 const PRESETS: Record<RidgeGlow, GlowPreset> = {
   soft: { bodyNear: 0.30, bodyFar: 0.24, rim: 0, rimK: 0.30, glow: 0, glowK: 0.030, halo: 0, haloK: 0.006 },
@@ -131,12 +128,12 @@ export class RidgeLayer implements GlLayer {
   private readonly material: ShaderMaterial;
   private readonly texture: DataTexture;
   /**
-   * 256×2 的半精度浮点：R 通道存高度。
+   * 256×2 的半精度浮点纹理：R 通道存高度。
    *
-   * **不能用 8bit**（2026-10-30 实测）：量化到 1/255 在 800px 高的画布上
-   * 是 3px 的台阶，台阶侧壁是竖直的、只有 1.5px 抗锯齿 —— 低频带剧烈起伏时
-   * 会排出一列"垂直色带"。half-float 的 10 位尾数足够平滑，而且 R16F 在
-   * WebGL2 里**原生可线性过滤**（R32F 需要 `OES_texture_float_linear`）。
+   * 不能使用 8bit：量化到 1/255 在 800px 高的画布上形成 3px 台阶，台阶侧壁
+   * 竖直且仅有 1.5px 抗锯齿，低频带剧烈起伏时会排列出垂直色带。half-float
+   * 的 10 位尾数足以平滑，且 R16F 在 WebGL2 中可原生线性过滤（R32F 需要
+   * `OES_texture_float_linear` 扩展）。
    */
   private readonly heights = new Uint16Array(POINTS * 2);
   private readonly curve = new RidgeCurve({ bandCount: BANDS, points: POINTS });
@@ -233,8 +230,8 @@ export class RidgeLayer implements GlLayer {
   }
 
   /**
-   * 播放/暂停：暂停时山形要落回底边（"拉平"），不能凝固在上一帧的起伏上。
-   * 与 `RippleLayer.setPaused` 同一语义。
+   * 播放与暂停：暂停时山形落回底边，不停留在暂停瞬间的起伏上。
+   * 与 `RippleLayer.setPaused` 语义一致。
    */
   setPaused(paused: boolean): void {
     this.paused = paused;
@@ -243,12 +240,12 @@ export class RidgeLayer implements GlLayer {
   /**
    * 高度 → half-float 纹理。
    *
-   * 选 R16F 而不是 R32F：R32F 在 WebGL2 里**不可线性过滤**（要
-   * `OES_texture_float_linear`），而山脊必须靠线性过滤才不会显出 256 段折线；
-   * R16F 是 core 保证可过滤的。10 位尾数在 0–1 高度上的步进约 0.001
-   * （800px 上 0.8px），已经完全看不见量化。
+   * 选 R16F 而非 R32F：R32F 在 WebGL2 中不可线性过滤（需
+   * `OES_texture_float_linear`），而脊线必须依赖线性过滤才不会呈现 256 段折线；
+   * R16F 为 core 保证可过滤的格式。10 位尾数在 0–1 高度上的步进约 0.001
+   * （800px 上约 0.8px），量化误差不可见。
    *
-   * `DataUtils.toHalfFloat` 一次 256×2 次调用，成本可以忽略（每帧 <0.05ms）。
+   * `DataUtils.toHalfFloat` 需 256×2 次调用，每帧成本低于 0.05ms。
    */
   private upload(): void {
     const { near, far } = this.curve;

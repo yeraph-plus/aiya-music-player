@@ -33,18 +33,18 @@
   import { ui } from '../stores/ui.svelte';
 
   /**
-   * 浮层宿主：轻提示 + 两个右键菜单 + 五个对话框 + 设置面板。
+   * 浮层宿主：轻提示、两个右键菜单、五个对话框。
    *
-   * 为什么单独一个组件（批次 3）：这些全是**页面级浮层**，不参与主区布局
-   * —— 挂在 `AppShell` 里会被 `.app` 网格的 `overflow: hidden` 裁掉，
-   * 而挂在 `App` 里就是 140 行模板跟着 App 一起变胖。
+   * 独立组件的原因：这些均为页面级浮层，不参与主区布局。挂在 `AppShell`
+   * 内会被 `.app` 网格的 `overflow: hidden` 裁切；挂在 `App` 内则使 App 的
+   * 模板随浮层数量增长。
    *
-   * 它自己读 store、自己调 store 的动作，**不收任何 prop**：菜单项要的
-   * 上下文（当前视图、选择集）都在 store 里。唯一"取数"是 revealTrack
-   * （在系统文件管理器里定位），失败转成错误条。
+   * 组件自身读取 store 并调用 store 动作，不接收 prop：菜单所需的上下文
+   * （当前视图、选择集）均在 store 中。唯一的外部取数动作是 `revealTrack`，
+   * 失败时转为错误提示。
    */
 
-  /** 在资源管理器中定位；失败把 reason 显示成错误条（这是用户显式动作） */
+  /** 在系统文件管理器中定位文件；失败时把 reason 显示为错误提示（用户显式动作） */
   async function revealTrack(trackId: string | null | undefined): Promise<void> {
     if (!trackId) return;
     const result = await library.revealTrack(trackId);
@@ -60,9 +60,9 @@
         insertNext: () => {
           if (menu.track?.id) player.insertNext(menu.track.id);
         },
-        // 批量语义（docs/27 第 6 点）：动作对**整个选择集**生效——右键前
-        // LibraryView 已保证目标行在选择集里（不在就单选它），所以这里
-        // 统一走 selectionIds()，单选/多选同一条路径，不需要分支。
+        // 批量语义（docs/27 第 6 点）：动作作用于整个选择集。右键前 LibraryView
+        // 已确保目标行属于选择集（不属于则改为单选该行），因此统一调用
+        // selectionIds()，单选与多选走同一路径，无需分支。
         enqueue: () => {
           void (async () => {
             const ids = await list.selectionIds();
@@ -79,7 +79,7 @@
           })();
         },
         filterByArtist: () => {
-          // B4-3b 升级：从"列表 + 筛选 chip"改成直达艺人详情页（docs/24 §2 B4）
+          // 直达艺人详情页（docs/24 §2 B4）
           const id = menu.track?.artistId;
           if (!id) return;
           nav.go({ kind: 'artist', id });
@@ -91,8 +91,8 @@
         },
         reveal: () => void revealTrack(menu.track?.id),
         remove: () => {
-          // 歌单视图里是"从歌单移除"（按下标，倒序防位移），
-          // 曲库里是"从曲库移除"（按 ID 走确认对话框）
+          // 歌单视图为"从歌单移除"（按下标，倒序执行以避免位移），
+          // 曲库视图为"从曲库移除"（按 ID 走确认对话框）
           if (ui.view.kind === 'playlist') {
             void playlists.removeItemsAt(selection.sortedIndices());
           } else {
@@ -130,11 +130,11 @@
     );
   }
 
-  /* ---------------- 歌单统一模态框（创建/编辑同一个，2026-10-28 拍板） ----------------
+  /* ---------------- 歌单模态框：创建与编辑共用 ----------------
    *
-   * 以前是 createPlaylist / renamePlaylist 两个对话框，只差一个标题和初始值；
-   * 动态歌单进来后"编辑"要带上规则编辑器，两个壳必然合一个。规则草稿只在
-   * 打开那一刻从 playlist 快照，提交才写回（取消不落库），与筛选器同款。
+   * 创建与编辑只差标题与初始值；引入动态歌单后编辑还需携带规则编辑器，
+   * 两个壳合并为一个。规则草稿在打开时从 playlist 快照，提交时才写回
+   * （取消不落库），与筛选器一致。
    */
 
   /** 与 Rust smart.rs 同语义的兜底解析（坏 JSON 当空规则，不炸模态框） */
@@ -205,7 +205,8 @@
       : condOfMode(mode);
   }
 
-  /** 流派下拉选项：当前值不在曲库流派里时插到最前（旧规则值不静默丢失） */
+  /** 流派下拉选项：当前值不在曲库流派里时插到最前。
+   *  规则值若不在候选项中被丢弃，会静默改掉用户已保存的筛选条件。 */
   function genreOptions(current: string): string[] {
     if (!current) return editGenres;
     return editGenres.includes(current) ? editGenres : [current, ...editGenres];
@@ -219,9 +220,9 @@
     const isSmart = editKind === 'smart';
     let rule = editRule;
     if (isSmart) {
-      // 排序归歌单视图的列头（2026-10-28 拍板），规则里的 sort/direction
-      // 只是兼容字段，统一写稳定的 title/asc。空值条件（数字清空/文本留白）
-      // 整体跳过——清空数字是"删掉这个条件"，不是"填 0"
+      // 排序由歌单视图的列头决定；规则中的 sort/direction 仅为兼容字段，
+      // 统一写入稳定的 title/asc。空值条件（数字清空、文本留白）整体跳过：
+      // 清空数字表示删除该条件，不是填入 0
       rule = {
         ...editRule,
         sort: 'title',
@@ -251,15 +252,17 @@
     }
   }
 
-  /* ---------------- 筛选器模态框（docs/27 第 2/3 点 + 2026-10-28 多轮修订） ----------------
+  /* ---------------- 筛选器模态框（docs/27 第 2/3 点） ----------------
    *
-   * 五轮拍板：① 筛选器**不复刻**动态歌单的「+ 添加条件」动态行——那是
-   * 规则引擎的编辑形态，筛选是临时意图，用固定字段表单（每字段一行，
-   * 留空 = 不过滤）。② 控件全部走 kit（Select/Field），原生 select 的
-   * 弹出列表不受 CSS 管，深色主题里是刺眼的原生亮色条。③ 入库时间是
-   * **日期区间**而非预设档。④ 播放次数不是筛选字段（常听统计已有
-   * 「最近播放」入口）；字段与动态歌单同键，组装的 conds 走同一条后端
-   * 解析，只是不落库。
+   * 形态约定：
+   * ① 筛选器不复刻动态歌单的「+ 添加条件」动态行——那是规则引擎的编辑形态；
+   *    筛选表达临时意图，使用固定字段表单（每字段一行，留空即不过滤）。
+   * ② 控件统一使用 kit（Select / Field）：原生 select 的弹出列表不受 CSS 控制，
+   *    深色主题下呈原生亮色。
+   * ③ 入库时间使用日期区间，而非预设档位。
+   * ④ 播放次数不作为筛选字段（常听统计已有「最近播放」入口）。
+   *
+   * 字段键与动态歌单相同，组装的 conds 走同一条后端解析路径，但不落库。
    */
 
   /** 入库时间区间草稿（YYYY-MM-DD；空串 = 不限，应用才写回，取消不落库） */
@@ -278,7 +281,7 @@
     if (d?.kind !== 'trackFilter') return;
     const f = list.timeFilter;
     // 已生效条件回填到对应字段（modeOfCond 把 field+op 归回侧别；旧 UI 写出
-    // 的条件都能落位，不会静默丢档）
+    // 的条件均可落位，不会被静默丢弃）
     draftAddedFrom = f.addedFrom ?? '';
     draftAddedTo = f.addedTo ?? '';
     draftGenre = draftArtist = draftAlbum = '';
@@ -396,13 +399,13 @@
 {#if overlay.dialog?.kind === 'playlistEdit'}
   {@const editing = overlay.dialog.playlist}
   <!--
-    歌单创建/编辑同一个模态框（2026-10-28 拍板，同日二轮修订）。
-    类型开关只在创建时出现（后端不支持手动↔智能转换）；手动歌单编辑 =
-    只改名称，动态歌单编辑 = 名称 + 规则。条件行是「模式 select + 动态值
-    控件」两列；排序/上限都已退役（2026-10-30 物化：入库按标题排、视图里
-    可拖拽重排，刷新只追加），编辑器只剩条件行。输入框 text 在
-    对话框打开时初始化（见 script 里的 effect），否则歌单列表刷新会覆盖
-    用户正在输的字。
+    歌单创建与编辑共用此模态框。
+
+    类型开关仅在创建时出现（后端不支持手动与智能歌单互相转换）。编辑时：
+    手动歌单只改名称，动态歌单为名称 + 规则。条件行为「模式 select + 动态值
+    控件」两列；排序与上限已移除（入库按标题排序，视图内可拖拽重排，刷新只
+    追加），编辑器仅保留条件行。名称输入框在对话框打开时初始化（见 script 中
+    的 effect），否则歌单列表刷新会覆盖正在输入的内容。
   -->
   <Dialog
     title={editing ? '编辑播放列表' : '新建播放列表'}
@@ -522,12 +525,11 @@
   </Dialog>
 {:else if overlay.dialog?.kind === 'trackFilter'}
   <!--
-    筛选器（docs/27 第 2/3 点 + 2026-10-28 五轮拍板）：**固定字段表单**，
-    每个可筛字段一行、留空即不过滤——不复刻动态歌单的「+ 添加条件」动态
-    行。入库时间是日期区间（本地时区，上界含当天）；字段与动态歌单同键，
-    组装的 conds 走同一条后端解析、只在本次查询生效、不落库；播放次数
-    不是筛选字段（常听统计已有「最近播放」入口）。控件全走 kit：
-    Select（原生下拉列表不受 CSS 管）/ Field。
+    筛选器（docs/27 第 2/3 点）：固定字段表单，每个可筛字段一行，留空即不过滤，
+    不复刻动态歌单的「+ 添加条件」动态行。入库时间为日期区间（本地时区，上界
+    含当天）。字段与动态歌单同键，组装的 conds 走同一条后端解析，仅在本次查询
+    生效且不落库。播放次数不是筛选字段（常听统计已有「最近播放」入口）。
+    控件统一使用 kit：Select（原生下拉列表不受 CSS 控制）与 Field。
   -->
   <Dialog
     title="筛选曲目"
@@ -622,11 +624,12 @@
   </Dialog>
 {:else if overlay.dialog?.kind === 'addToPlaylist'}
   <!--
-    极简歌单选择器（docs/25 用户反馈）：无大标题、无关闭键、无底部按钮——
-    顶部只留一行**次要文本**说明用途，主体就一份歌单列表，**点行即添加
-    并关闭**；没有歌单就一行空态文案。关闭走 Esc / 点遮罩。
-    不用 Menu：选歌单是"看得到每个歌单有几首"的浏览行为，菜单是
-    "我已经知道要点哪一项"的快捷路径，混用两头不像。
+    极简歌单选择器：无大标题、无关闭键、无底部按钮。顶部仅一行次要文本说明
+    用途，主体为歌单列表，点击行即添加并关闭；无歌单时显示一行空态文案。
+    关闭走 Esc 或点击遮罩。
+
+    不使用 Menu：选择歌单属于需要看到各歌单曲目数的浏览行为，而菜单面向
+    "已知要点哪一项"的快捷路径，两者交互模型不同。
   -->
   <Dialog
     label="添加到播放列表"
@@ -635,8 +638,7 @@
     onclose={() => overlay.closeDialog()}
   >
     <div class="pick-list">
-      <!-- 物化模型（2026-10-30）后动态歌单与手动歌单能力一致，可手动加歌，
-           不再按 kind 过滤 -->
+      <!-- 动态歌单与手动歌单能力一致（可手动加歌），不按 kind 过滤 -->
       {#each playlists.items as playlist (playlist.id)}
         <button class="pick-row" onclick={() => submitAddTo(playlist.id)}>
           <Cover src={playlist.artworkId ? artworkUrl(playlist.artworkId, 96) : null} size="sm" />
@@ -651,8 +653,7 @@
 {/if}
 
 <style>
-  /* 输入对话框与歌单选择器的主体（原 PromptDialog / PlaylistPicker 的 scoped 样式，
-     B6 删壳后随内联迁来） */
+  /* 输入对话框与歌单选择器的主体样式（随内联模板一并迁入，原为独立组件的 scoped 样式） */
   .prompt-body {
     padding: 14px 16px 2px;
   }
