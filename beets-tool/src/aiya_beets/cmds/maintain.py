@@ -155,13 +155,43 @@ def update_library(req_id, pretend: bool, gen: int) -> None:
       3. 逐字段比 diff，有变化才 `store(fields=...)`
     第 2 条尤其重要：不做 mtime 预筛的话，万首库每次 update 都要把每个文件
     重新读一遍标签，和"什么都没变"的用户预期完全相反。
+
+    判定 1 的删除有两道护栏（发布前审查 P1-5）：beets CLI 的删除有交互确认，
+    协议这边是单向非交互、确认不了。可移动盘/网络盘没挂载时 exists 对全部
+    条目返回假，点一次"刷新标签"就把整库行清零（文件还在，rg_track_gain、
+    匹配过的标签、与播放器读模型的关联全丢）——库根不可访问、或缺失占比
+    >20% 时整批拒绝执行；pretend 是只读报告，不需要护栏。
     """
     from beets.util import syspath
+
+    from ..protocol import E_CONFIG, ProtocolError
 
     session = f"update_{req_id:02d}"
     lib = open_library()
     items = list(lib.items())
     total = len(items)
+
+    if not pretend and total > 0:
+        root = configured_directory()
+        if not root or not os.path.isdir(root):
+            raise ProtocolError(
+                E_CONFIG, "update",
+                f"库根目录不可访问（盘没挂载？）：{root or '(未配置)'}。"
+                "为防整库误删，本次刷新已取消；接好存储后再试。",
+            )
+        # 预检缺失占比：每条目多一次 exists（NTFS 元数据缓存后毫秒级），
+        # 换"存储没挂载就清库"不可能发生，值。乘 5 避免浮点除法。
+        missing_now = sum(
+            1 for it in items if not it.path or not os.path.exists(syspath(it.path))
+        )
+        if missing_now * 5 > total:
+            raise ProtocolError(
+                E_CONFIG, "update",
+                f"缺失 {missing_now}/{total} 条（超过 20%），疑似存储未挂载。"
+                "为防整库误删，本次刷新已取消；可用 pretend 预览缺失清单，"
+                "确认后用 beet 命令行（beet update）走有确认的清除。",
+            )
+
     emit({"type": "progress", "session": session, "stage": "update",
            "current": 0, "total": total, "path": None})
 
