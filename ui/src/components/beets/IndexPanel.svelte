@@ -13,17 +13,17 @@
   import { events, ipc } from '../../lib/ipc';
 
   /**
-   * 索引子页：**索引库 → 查询 → 存为歌单**。
+   * 分析子页：**分析库 → 查询 → 存为歌单**。
    *
-   * ## 为什么"建索引"和"查询"必须在同一页
+   * ## 为什么"建分析库"和"查询"必须在同一页
    *
-   * 索引空着的时候，任何筛选都是 0 命中——那不是条件写错了，是索引还没建。
-   * 把建索引挪到别的页（比如安装页），用户会在这一页对着 0 结果猜自己哪里写错。
-   * 所以它们是同一件事的两半，且索引卡放在查询**之上**。
+   * 分析库空着的时候，任何筛选都是 0 命中——那不是条件写错了，是分析库还没建。
+   * 把建库挪到别的页（比如安装页），用户会在这一页对着 0 结果猜自己哪里写错。
+   * 所以它们是同一件事的两半，且分析卡放在查询**之上**。
    *
    * ## 只入库，不分析
    *
-   * 这里跑的是 `index_import`：把曲库根整批登记进索引库（`directory` = 曲库根，
+   * 这里跑的是 `index_import`：把曲库根整批登记进分析库（`directory` = 曲库根，
    * `import.write/copy/move: no` 全钉死的只读镜像）。数值分析（bpm / 情绪）是
    * 另一条命令，要等 xtractor 接线——绑在一起的代价是"分析器没装好时连库都不建"，
    * 实测过一次，整页灰。
@@ -36,19 +36,19 @@
   let indexError = $state<string | null>(null);
   let stopIndex: (() => void) | null = null;
   /**
-   * 这一轮索引会话是不是**本面板发起的**。
+   * 这一轮分析会话是不是**本面板发起的**。
    *
-   * 宿主在整理完成（`apply` 终态）时会自己补一次索引，走的是同一个
+   * 宿主在整理完成（`apply` 终态）时会自己补一次分析，走的是同一个
    * `beets:index` 通道，而且补的只是落点目录（1 s 级别）。用户没点过按钮，
    * 就不该看到「正在入库」的文案浮在上面，也不该把按钮锁住。
    *
    * 但**终态必须照常处理**：计数和查询目录要刷新——否则用户整理完切回这一页，
-   * 看到的是旧的「索引库 N 条」，而查询结果还是整理前那批。订阅因此是常驻的
+   * 看到的是旧的「分析库 N 条」，而查询结果还是整理前那批。订阅因此是常驻的
    * （挂载时一次，不是每次点按钮时临时建）。
    */
   let localRun = false;
 
-  /** 索引库现在几条：`total` 是应用 limit 之前的真实命中数，拿它当条目数。 */
+  /** 分析库现在几条：`total` 是应用 limit 之前的真实命中数，拿它当条目数。 */
   async function loadIndexCount() {
     try {
       indexItems = (await ipc.beets.query({ limit: 1 })).total;
@@ -77,7 +77,7 @@
         endIndex();
         indexNote = null;
       }
-      // 不管是本面板发起还是宿主补的，索引都比刚才多了东西
+      // 不管是本面板发起还是宿主补的，分析库都比刚才多了东西
       void loadIndexCount();
       void q.loadCatalog();
     } else if (e.type === 'cancelled' || e.type === 'error' || e.type === 'sessionFailed') {
@@ -127,13 +127,13 @@
 </script>
 
 <div class="beets-page">
-  <!-- ---------------- 曲库索引（查询的前置条件） ---------------- -->
+  <!-- ---------------- 曲库分析（查询的前置条件） ---------------- -->
   <section class="beets-panel">
     <div class="beets-panel-head">
-      <strong>曲库索引</strong>
+      <strong>曲库分析</strong>
       <span class="beets-dim">
-        beets 对着曲库根做<b>只读</b>分析（不写标签、不搬文件），索引库是曲库的镜像。
-        查询读的就是它——索引空着的时候筛选一定 0 命中。
+        beets 对着曲库根做<b>只读</b>分析（不写标签、不搬文件），分析库是曲库的镜像。
+        查询读的就是它——分析库空着的时候筛选一定 0 命中。
       </span>
     </div>
     <div class="beets-row">
@@ -141,9 +141,9 @@
         <span>曲库 <b>{tracksTotal}</b> 首</span>
       {/if}
       {#if indexItems !== null}
-        <span>索引库 <b>{indexItems}</b> 条</span>
+        <span>分析库 <b>{indexItems}</b> 条</span>
       {:else}
-        <span class="beets-dim">索引库状态未知</span>
+        <span class="beets-dim">分析库状态未知</span>
       {/if}
       <Button
         size="sm"
@@ -153,18 +153,18 @@
         onclick={() => void startIndex()}
       >
         {#snippet icon()}<ListFilter size={14} />{/snippet}
-        {indexItems === 0 ? '建立索引' : '重建索引'}
+        {indexItems === 0 ? '建立分析库' : '重建分析库'}
       </Button>
       {#if indexNote}<span class="beets-dim">{indexNote}</span>{/if}
       {#if indexError}<span class="beets-danger">{indexError}</span>{/if}
     </div>
     {#if indexItems === 0 && !indexRun}
       <p class="beets-dim">
-        索引库还是空的，下面的查询不会有结果。第一次要把曲库通读一遍，几万首需要一段时间。
+        分析库还是空的，下面的查询不会有结果。第一次要把曲库通读一遍，几万首需要一段时间。
       </p>
     {:else if indexItems !== null && tracksTotal !== null && indexItems < tracksTotal}
       <p class="beets-dim">
-        索引库比曲库少 {tracksTotal - indexItems} 首：曲库新增的文件还没登记，重建一次就好。
+        分析库比曲库少 {tracksTotal - indexItems} 首：曲库新增的文件还没登记，重建一次就好。
       </p>
     {/if}
   </section>
@@ -249,7 +249,7 @@
         <div class="rules-actions">
           <Button size="sm" onclick={() => q.addRule()}>+ 添加条件</Button>
           {#if q.rules.length === 0}
-            <span class="beets-dim">不加条件 = 整个索引库</span>
+            <span class="beets-dim">不加条件 = 整个分析库</span>
           {/if}
         </div>
       </div>
@@ -315,7 +315,7 @@
     {#if !q.ran}
       <EmptyState
         title="还没有查询"
-        hint="设好条件点「查询」。索引库里有什么，取决于曲库根下有多少文件被登记过。"
+        hint="设好条件点「查询」。分析库里有什么，取决于曲库根下有多少文件被登记过。"
         fill
       >
         {#snippet icon()}<ListFilter size={26} />{/snippet}

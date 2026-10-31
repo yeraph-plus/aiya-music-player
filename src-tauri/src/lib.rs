@@ -1423,9 +1423,8 @@ async fn beets_python_probe() -> Result<dto::beets::BeetsPythonProbe, dto::ApiEr
 
 /// 内嵌插件表：不依赖已安装组件就能拿到的静态目录（docs/51 §1）。
 ///
-/// 与 `beets_plugin_catalog` 的分工：这条回答"有哪些插件、各自要装什么"
-/// （编译期内嵌 JSON，永远可用）；那条回答"装了之后哪些真的 ready"
-/// （要起 sidecar，未安装时不可用）。
+/// 回答"有哪些插件、各自要装什么"（编译期内嵌 JSON，永远可用）。
+/// 装没装、缺不缺依赖的三态看 `beets_status` 的 pluginHealth。
 #[tauri::command]
 async fn beets_plugin_table() -> Result<Vec<dto::beets::BeetsPluginItem>, dto::ApiError> {
     tauri::async_runtime::spawn_blocking(beets::plugin_table)
@@ -1604,31 +1603,6 @@ async fn beets_fields(app: AppHandle) -> Result<dto::beets::BeetsFieldCatalog, d
         .await
         .map_err(dto::ApiError::internal)?
         .map_err(map_beets_start)
-}
-
-/// 插件市场目录（docs/40 §3 白名单）：三态 + 来源档，一次性短进程查询。
-#[tauri::command]
-async fn beets_plugin_catalog(
-    app: AppHandle,
-) -> Result<Vec<dto::beets::BeetsMarketItem>, dto::ApiError> {
-    tauri::async_runtime::spawn_blocking(move || beets::plugin_catalog(&app))
-        .await
-        .map_err(dto::ApiError::internal)?
-        .map_err(map_beets_start)
-}
-
-/// 安装一个白名单插件（仅 pypi 档有意义）。事件流走 `beets:maintenance`
-/// （pluginProgress → pluginDone），与维护四件套共用同一会话槽。
-#[tauri::command]
-async fn beets_plugin_install(
-    app: AppHandle,
-    name: String,
-) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    tauri::async_runtime::spawn_blocking(move || beets::start_plugin_install(app, name))
-        .await
-        .map_err(dto::ApiError::internal)?
-        .map_err(map_beets_start)?;
-    Ok(dto::beets::JobStarted { started: true })
 }
 
 /* ---------------- 索引增强（docs/45 §5.4） ---------------- */
@@ -4832,11 +4806,9 @@ pub fn run() {
             beets_move,
             beets_query,
             beets_fields,
-            beets_plugin_catalog,
             beets_plugin_table,
             beets_python_probe,
             beets_uninstall,
-            beets_plugin_install,
             enrichment_worklist,
             beets_enrich_start,
             beets_index_import,

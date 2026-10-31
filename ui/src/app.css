@@ -14,7 +14,7 @@
 @import './styles/player.css';
 @import './styles/overlays.css';
 @import './styles/pages.css';
-/* 整理库页拆成三个子页后共用的面板词汇（beets- 前缀，只服务那一页） */
+/* Beets 页拆成三个子页后共用的面板词汇（beets- 前缀，只服务那一页） */
 @import './styles/beets.css';
 
 /* Tailwind v4：**只引 theme + utilities，不引 preflight**

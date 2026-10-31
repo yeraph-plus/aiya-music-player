@@ -108,8 +108,8 @@ test('一级路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => 
     // docs/28：专辑/艺人升侧栏一级项（曲库 tab 撤掉）
     { via: 'nav', text: '专辑', title: '专辑' },
     { via: 'nav', text: '艺人', title: '艺人' },
-    // docs/48：beets 整理库独立成页
-    { via: 'nav', text: '整理库', title: '整理库' },
+    // docs/48：beets 独立成页
+    { via: 'nav', text: 'Beets', title: 'Beets' },
     // docs/52 §7.4：FM 电台占位页换成直播页（路由 radio → live）。标题也从
     // 「FM 电台」改成「直播」——侧栏文字与页内 h1 必须一致，否则这条断言
     // 会变成"文字对上了但点的是另一页"。
@@ -169,14 +169,14 @@ async function openLibrarySettings(page: Page): Promise<void> {
   await expect(page.locator('.main h1')).toHaveText('设置');
 }
 
-test('2026-10-30：侧栏底部工具组只剩「整理库 / 设置」两项', async ({ page }) => {
+test('2026-10-30：侧栏底部工具组只剩「Beets / 设置」两项', async ({ page }) => {
   await page.goto('/');
   // 「扫描入库」那条路走完了：docs/29 批 A 升成一级页 → docs/48 拆走 beets →
   // 只剩一条目录卡片 → 并入设置页「曲库」组。席位留着就是死链接。
   await expect(page.locator('.sidebar .nav-item', { hasText: '扫描入库' })).toHaveCount(0);
   const footer = page.locator('.sidebar .sidebar-footer .nav-item');
   await expect(footer).toHaveCount(2);
-  await expect(footer.nth(0)).toHaveText('整理库');
+  await expect(footer.nth(0)).toHaveText('Beets');
   await expect(footer.nth(1)).toHaveText('设置');
 });
 
@@ -335,33 +335,35 @@ test('设置页「曲库」组：统计卡 + 曲库卡片；beets 段与诊断�
   await expect(page.getByRole('button', { name: '清空播放历史' })).toBeVisible();
 });
 
-test('docs/48：整理库是侧栏独立的一页（可达 + 高亮恰好一个）', async ({ page }) => {
+test('docs/48：Beets 是侧栏独立的一页（可达 + 高亮恰好一个）', async ({ page }) => {
   await page.goto('/');
-  await page.locator('.sidebar .nav-item', { hasText: '整理库' }).click();
-  await expect(page.locator('.main h1')).toHaveText('整理库');
-  expect(await activeSidebar(page)).toEqual(['整理库']);
+  await page.locator('.sidebar .nav-item', { hasText: 'Beets' }).click();
+  await expect(page.locator('.main h1')).toHaveText('Beets');
+  expect(await activeSidebar(page)).toEqual(['Beets']);
   // 装了组件就有查询区——这一页的主体就是查询
   await expect(page.getByRole('button', { name: '查询' })).toBeVisible();
 });
 
-test('docs/48：未装 beets 时整理库页只给安装引导，不出查询区', async ({ page }) => {
+test('docs/48：未装 beets 时 Beets 页只给两条安装路线，不出查询区', async ({ page }) => {
   // `?beets=absent` 让 mock 的 beets_status 报 found:false。
   // 这条路径以前只有肉眼验过（mock 里 found 恒 true）。
   await page.goto('/?beets=absent');
-  await page.locator('.sidebar .nav-item', { hasText: '整理库' }).click();
+  await page.locator('.sidebar .nav-item', { hasText: 'Beets' }).click();
 
   const main = page.locator('.main');
-  await expect(main).toContainText('整理库未启用');
-  // 两条路径并排（docs/51 §4）：差别的全部就是"有没有本机 Python"
+  await expect(main).toContainText('未安装 Beets 分析工具');
+  // 两张平级卡、各占一行（docs/51 §4）：预配置环境常驻；本机安装只差"有没有 Python"
   await expect(main.getByRole('button', { name: /下载并安装/ })).toBeVisible();
-  await expect(main).toContainText('本机 Python');
-  // mock 的 Python 探测报"找不到" → 那条只给"重新检测"，不给安装按钮
-  // （免得用户点了才发现没有 Python）
+  await expect(main.locator('section.beets-panel').filter({ hasText: '预配置环境' })).toHaveCount(1);
+  // mock 的 Python 探测报"找不到" → 本机安装卡整个不出现（2026-10-31 两分支：
+  // 检测到 Python 才渲染本机安装路线），只留一行说明 + 重新检测
+  await expect(main).toContainText('未检测到本机 Python');
   await expect(main.getByRole('button', { name: /重新检测/ })).toBeVisible();
+  await expect(main.locator('section.beets-panel').filter({ hasText: '本机安装' })).toHaveCount(0);
   await expect(main.getByRole('button', { name: /安装（\d+ 个插件）/ })).toHaveCount(0);
 
-  // 没装就没有查询入口。导入面板 / 维护四件套 / 插件市场都没搬过来
-  // （docs/33 的原则：不该出现的整块不要出现，不是"禁用"）
+  // 没装就没有查询入口。导入面板 / 维护四件套都不在；插件市场的后端实现
+  // 已整体回收（2026-10-31）——插件只走勾选表一路，不该有第二个入口
   await expect(main.getByRole('button', { name: '查询' })).toHaveCount(0);
   await expect(main.getByRole('heading', { name: '导入新文件夹' })).toHaveCount(0);
   await expect(main.locator('.maint-fold')).toHaveCount(0);
@@ -370,7 +372,7 @@ test('docs/48：未装 beets 时整理库页只给安装引导，不出查询区
 
 test('docs/51：安装页给出插件勾选与卸载入口（卸载只删组件）', async ({ page }) => {
   await page.goto('/');
-  await page.locator('.sidebar .nav-item', { hasText: '整理库' }).click();
+  await page.locator('.sidebar .nav-item', { hasText: 'Beets' }).click();
   await page.locator('.main .text-tab', { hasText: '安装' }).click();
 
   const main = page.locator('.main');
@@ -378,7 +380,8 @@ test('docs/51：安装页给出插件勾选与卸载入口（卸载只删组件�
   // 所以勾选清单现在就应该在——否则用户没法在安装前决定要什么
   await expect(main.locator('.pick input[type="checkbox"]')).toHaveCount(4);
   await expect(main).toContainText('beautifulsoup4>=4.12,<5');
-  await expect(main).toContainText('另下 fpcalc');
+  // 依赖"另下"提示已删：脚本自己下载（docs/53），装前不再罗列缺什么
+  await expect(main).not.toContainText('另下');
 
   // 卸载是两段式：先「卸载组件」，点了才出「确认卸载」。
   // 破坏性操作不该一次点击就执行
@@ -386,12 +389,12 @@ test('docs/51：安装页给出插件勾选与卸载入口（卸载只删组件�
   await main.getByRole('button', { name: '卸载组件' }).click();
   await expect(main.getByRole('button', { name: '确认卸载' })).toBeVisible();
   // 文案必须写明数据不动——这是卸载唯一容易误解的地方
-  await expect(main).toContainText('整理库与分析库不动');
+  await expect(main).toContainText('曲库与分析库');
 });
 
 test('docs/48：查询 → 未入库行不可选 → 全选存为歌单', async ({ page }) => {
   await page.goto('/');
-  await page.locator('.sidebar .nav-item', { hasText: '整理库' }).click();
+  await page.locator('.sidebar .nav-item', { hasText: 'Beets' }).click();
 
   // 不加条件 = 全库。mock 在末尾挂了一条"只在整理库里有"的条目，
   // 用来演"未入库"这一行——那条分支否则只有真机能看见
@@ -414,27 +417,27 @@ test('docs/48：查询 → 未入库行不可选 → 全选存为歌单', async 
   await page.getByRole('button', { name: '存为歌单' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
-  await dialog.locator('input[type="text"]').fill('整理库精选');
+  await dialog.locator('input[type="text"]').fill('Beets 精选');
   await dialog.getByRole('button', { name: '保存' }).click();
 
   await expect(page.locator('.k-toast')).toContainText('已存为歌单');
-  await expect(page.locator('.sidebar .playlist-item', { hasText: '整理库精选' })).toHaveCount(1);
+  await expect(page.locator('.sidebar .playlist-item', { hasText: 'Beets 精选' })).toHaveCount(1);
   // 存完清空选择、按钮回到禁用（防重复点出一份一样的）
   await expect(page.getByRole('button', { name: '存为歌单' })).toBeDisabled();
 });
 
-test('docs/49：整理库拆成 安装/索引/整理 三个子页，各自只放自己的东西', async ({ page }) => {
+test('docs/49：Beets 拆成 安装/分析/整理 三个子页，各自只放自己的东西', async ({ page }) => {
   await page.goto('/');
-  await page.locator('.sidebar .nav-item', { hasText: '整理库' }).click();
+  await page.locator('.sidebar .nav-item', { hasText: 'Beets' }).click();
 
   const main = page.locator('.main');
   const tabs = main.locator('.text-tab');
   await expect(tabs).toHaveCount(3);
   await expect(tabs.nth(0)).toHaveText('安装');
-  await expect(tabs.nth(1)).toHaveText('索引');
+  await expect(tabs.nth(1)).toHaveText('分析');
   await expect(tabs.nth(2)).toHaveText('整理');
 
-  // 默认停在「索引」：装好的人占多数，每次先看安装说明是无用的
+  // 默认停在「分析」：装好的人占多数，每次先看安装说明是无用的
   // TextTabs 的当前项语义是 aria-current（比类字符串稳，类名是样式的事）
   await expect(tabs.nth(1)).toHaveAttribute('aria-current', 'true');
   await expect(main.getByRole('button', { name: '查询' })).toBeVisible();
@@ -455,7 +458,7 @@ test('docs/49：整理库拆成 安装/索引/整理 三个子页，各自只放
 
 test('docs/49：整理链路 待整理目录 → 预览 → 应用所选 → 汇总', async ({ page }) => {
   await page.goto('/');
-  await page.locator('.sidebar .nav-item', { hasText: '整理库' }).click();
+  await page.locator('.sidebar .nav-item', { hasText: 'Beets' }).click();
   await page.locator('.main .text-tab', { hasText: '整理' }).click();
 
   const main = page.locator('.main');

@@ -32,7 +32,6 @@ import type {
   ArtistFacet,
   ArtistPage,
   BeetsConfig,
-  BeetsMarketItem,
   BeetsPluginItem,
   BeetsPythonProbe,
   BeetsFieldCatalog,
@@ -829,19 +828,6 @@ export class MockBackend {
   }
 
   /**
-   * 插件市场目录（docs/40 §3 白名单）。预览里放 3 项覆盖三种状态：
-   * builtin ready / pypi ready / pypi 缺依赖——「安装」按钮只在第三种出现。
-   * 内存态：装完翻绿，和真后端的复检语义一致。
-   */
-  private market: BeetsMarketItem[] = [
-    { name: 'replaygain', note: '播放音量自动拉齐', source: 'builtin', packages: [], state: 'ready', enabled: false, missing: [] },
-    { name: 'lyrics', note: '歌词抓取（LRC 字段可直供）', source: 'pypi:beautifulsoup4', packages: ['beautifulsoup4>=4.12,<5'], state: 'ready', enabled: false, missing: [] },
-    // fetchart 只要 requests，而 requests 随 beets 装 —— packages 为空，
-    // 所以 source 是 builtin 而不是 pypi（docs/51 §1 的口径）
-    { name: 'fetchart', note: '封面抓取（本地缺图时补）', source: 'builtin', packages: [], state: 'missing_deps', enabled: false, missing: ['requests'] },
-  ];
-
-  /**
    * 索引增强（docs/45）：预览环境按曲目数派生出"算过一部分"的状态。
    *
    * 为什么不做成随机：卡片要显示的是"还剩多少要算"，随机数会让每次刷新
@@ -1063,16 +1049,12 @@ export class MockBackend {
     };
   }
 
-  async beetsPluginCatalog(): Promise<BeetsMarketItem[]> {
-    return this.market.map((m) => ({ ...m }));
-  }
-
   /**
    * 内嵌插件表（docs/51 §1）：预览环境给一份精简版。
    *
-   * 真宿主读的是编译期 `include_str!` 的 `plugins.json`；这里手写四条，
-   * 刻意覆盖四种形态（要额外包 / 不需要包 / 需外部二进制 / 免配置包预置），
-   * 好让安装页的勾选清单、包名标签、"另下 ffmpeg"标签都被渲染到。
+   * 真宿主读的是编译期 `include_str!` 的 `plugins.json`（全量 14 条）；这里
+   * 手写四条，刻意覆盖四种形态（要额外包 / 不需要包 / 需外部二进制 / 免配置
+   * 包预置），好让安装页的勾选清单、包名标签都被渲染到。
    */
   async beetsPluginTable(): Promise<BeetsPluginItem[]> {
     return [
@@ -1160,7 +1142,7 @@ export class MockBackend {
       removed: true,
       files: 3765,
       bytes: 83518898,
-      message: '组件已卸载（预览模式模拟）；整理库与分析库未改动',
+      message: '组件已卸载（预览模式模拟）；你的 beets 曲库与分析库未改动',
     });
     emit({
       type: 'finished',
@@ -1185,21 +1167,6 @@ export class MockBackend {
         errorMessage: '浏览器预览不含 beets 工具',
       },
     });
-    return { started: true };
-  }
-
-  async beetsPluginInstall(name: string): Promise<{ started: boolean }> {
-    const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:maintenance', e);
-    const item = this.market.find((m) => m.name === name);
-    if (!item) return { started: true };
-    emit({ type: 'pluginProgress', session: 'plug_01', stage: 'pluginInstall', message: `安装 ${item.source.replace(/^pypi:/, '')}` });
-    await new Promise((r) => setTimeout(r, 400));
-    emit({ type: 'pluginProgress', session: 'plug_01', stage: 'pluginInstall', message: 'Running setup.py install for beautifulsoup4' });
-    await new Promise((r) => setTimeout(r, 400));
-    // 复检翻绿：pip 退出码 0 不等于可用，mock 也保持"装完必须复检"的口径
-    item.state = 'ready';
-    item.missing = [];
-    emit({ type: 'pluginDone', session: 'plug_01', stage: 'pluginInstall', name, report: this.market.map((m) => ({ ...m })) });
     return { started: true };
   }
 

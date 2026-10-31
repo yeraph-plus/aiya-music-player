@@ -25,6 +25,8 @@
     label: string;
     /** 可选计数，如「常听 12」 */
     count?: number;
+    /** 置灰失效：不可点（beets 未安装时的分析/整理） */
+    disabled?: boolean;
   }
 
   interface Props {

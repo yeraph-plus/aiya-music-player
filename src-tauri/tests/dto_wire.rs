@@ -467,23 +467,6 @@ fn small_result_dtos_keep_their_exact_keys() {
         serde_json::to_value(aiya_lib::dto::beets::CancelRequested { requested: false }).unwrap();
     assert_eq!(keys(&req), sorted(&["requested"]));
 
-    // 市场目录项：键名必须与工具侧 market_report() 逐字对齐（source 是
-    // `builtin`/`pypi:<包名>` 字符串，不在 Rust 侧拆字段）
-    let item = serde_json::to_value(aiya_lib::dto::beets::BeetsMarketItem {
-        name: "lyrics".into(),
-        note: "歌词抓取".into(),
-        source: "pypi:beautifulsoup4".into(),
-        packages: vec!["beautifulsoup4>=4.12,<5".into()],
-        state: "missing_deps".into(),
-        enabled: false,
-        missing: vec!["bs4".into()],
-    })
-    .unwrap();
-    assert_eq!(
-        keys(&item),
-        sorted(&["name", "note", "source", "packages", "state", "enabled", "missing"])
-    );
-
     // 插件表条目：键名必须与 `beets-tool/.../data/plugins.json` 逐字对齐。
     // 这份 JSON 被 Rust（include_str!）、Python（三方）、打包脚本共读，
     // 改一个键名就会让前端拿到 undefined —— 而 undefined 不会报错。

@@ -54,7 +54,7 @@ if (!isCheck) {
     source: 'beets-tool/protocol/v2.schema.json',
     protocolVersion,
     toolVersion,
-    tag: `beets-v${toolVersion}`,
+    tag: `beets-portable-v${toolVersion}`,
     sha256: srcHash,
     note: '字节副本；改协议请改真源后跑 npm run proto:sync，并在 diff 里看变化',
   };

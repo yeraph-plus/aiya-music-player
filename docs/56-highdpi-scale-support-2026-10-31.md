@@ -1,7 +1,7 @@
 # 56 · 高分屏缩放支持（改动记录）
 
 - 日期：2026-10-31
-- 性质：改动记录（调研过程见 git 历史中的 56/57 研究版，本文只留结论与落地）
+- 性质：改动记录
 - 关联：docs/57（Windows 桌面 + Web 版分支方案）
 
 ## 0 · 背景
@@ -24,7 +24,7 @@
 
 关键决策：
 
-- **rem 而非 CSS zoom / transform**：rem 是三引擎通用的文字重排方案，不糊、canvas 天然不受影响（渲染层已按 dpr 处理）；CSS zoom 在老 WebKitGTK 不可依赖（前瞻），transform 是位图放大，否决。
+- **rem 而非 CSS zoom / transform**：rem 是文字重排方案，不糊、canvas 天然不受影响（渲染层已按 dpr 处理）；CSS zoom 跨引擎支持不齐，transform 是位图放大，均否决。
 - **zoom 补偿而非 `--force-device-scale-factor`**：后者要建窗前注入（改了重启），且 `additionalBrowserArgs` 会整体替换 wry 默认参数；zoom 是运行时操作，即时、可逆。
 - **zoom 由 `apply_scale_policy` 独占管理**：将来若开 `zoomHotkeysEnabled` 让用户手调缩放，要先改造成记忆用户值，否则每次跨屏被重置。
 - **不替用户做决定**：两旋钮默认值 = 现状（100% / 跟随系统）。

@@ -21,11 +21,11 @@ use ts_rs::TS;
 #[serde(rename_all = "camelCase")]
 pub struct BeetsStatus {
     pub found: bool,
-    /// 工具的启动程序（`aiya-beets.exe`，或源码树里的解释器）。
+    /// 工具的启动程序（A 轨道是 `aiya-beets.exe`，B 轨道是便携包里的解释器）。
     pub interpreter: Option<String>,
     /// 启动参数（如 `-m aiya_beets`）。单文件入口时为空。
     pub script_path: Option<String>,
-    /// 入口是从哪找到的：env / settings / path / dev。
+    /// 入口是从哪找到的：env / settings / path。
     ///
     /// 排障第一个问题永远是"为什么用的是这个"，让发现层直接回答，
     /// 而不是让用户去翻日志。
@@ -95,36 +95,11 @@ pub struct BeetsPluginSummary {
     pub unavailable: u32,
 }
 
-/// 插件市场目录项（docs/40 §3 白名单版）。
-///
-/// 形状与工具侧 `market_report()` 逐字对齐（name/note/source/state/enabled/
-/// missing）。`source` 是 `builtin` 或 `pypi:<包名>`——UI 只对 pypi 档且非
-/// ready 的项给「安装」按钮；builtin 档随 beets 内置，启停归 config，
-/// 目录报告里恒为 false。
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-#[serde(rename_all = "camelCase")]
-pub struct BeetsMarketItem {
-    pub name: String,
-    pub note: String,
-    /// `builtin` | `pypi:<包名>`
-    pub source: String,
-    /// 这个插件要装的 pip 包（空 = 不需要额外包）。新版工具才有，
-    /// 旧工具缺这个键时要能解析（`default`），否则整条目录静默变 None。
-    #[serde(default)]
-    pub packages: Vec<String>,
-    /// `ready` | `missing_deps` | `unavailable`
-    pub state: String,
-    pub enabled: bool,
-    /// 缺什么（Python 包名或外部命令名）；`ready` 时为空。
-    pub missing: Vec<String>,
-}
-
 /// 插件表里的一条（**编译期内嵌**，不需要装过组件就能拿到）。
 ///
 /// 来源是 `beets-tool/src/aiya_beets/data/plugins.json`，与工具侧、打包脚本、
-/// 安装器读的是同一份字节（docs/51 §1）。装了组件之后 UI 仍可以用
-/// `beets_plugin_catalog` 拿三态；这条命令只回答"有哪些插件、各自要装什么"。
+/// 安装器读的是同一份字节（docs/51 §1）。装没装、缺不缺依赖的三态由
+/// `beets_status` 的 pluginHealth 给出，不在这里。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]

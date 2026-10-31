@@ -4,8 +4,8 @@
  * 插件表里的一条（**编译期内嵌**，不需要装过组件就能拿到）。
  *
  * 来源是 `beets-tool/src/aiya_beets/data/plugins.json`，与工具侧、打包脚本、
- * 安装器读的是同一份字节（docs/51 §1）。装了组件之后 UI 仍可以用
- * `beets_plugin_catalog` 拿三态；这条命令只回答"有哪些插件、各自要装什么"。
+ * 安装器读的是同一份字节（docs/51 §1）。装没装、缺不缺依赖的三态由
+ * `beets_status` 的 pluginHealth 给出，不在这里。
  */
 export type BeetsPluginItem = { name: string, title: string, note: string, 
 /**

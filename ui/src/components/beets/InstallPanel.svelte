@@ -6,21 +6,18 @@
   import type { BeetsInstallTrack } from '../../lib/ipc';
 
   /**
-   * 安装子页：整理组件装没装、装的是哪一版、能不能干活。
+   * 安装子页：Beets 装没装、装的是哪一版、能不能干活。
    *
-   * 这一页回答的是**与曲库无关**的前置问题（组件、Python、协议指纹、插件依赖）。
-   * 以前它和查询面板挤在同一屏，结果是"没装"的时候整页都是灰按钮，用户看不出
-   * 哪一步出了问题。
+   * 未安装时是**两张平级卡、各占一行**（2026-10-31 用户拍板，不卡片套卡片）：
+   * - **预配置环境**（主推）：下载约 34MB，自带解释器 + 固定的基础插件清单，
+   *   不需要任何前置；
+   * - **本机安装**：只在探测到系统 Python 时出现——用本机 Python 建 venv，
+   *   插件按勾选表装（只有这条路能改插件清单），支持 ffmpeg 等外部工具的
+   *   高级功能；缺的依赖与工具脚本自己下载（docs/53）。
    *
-   * ## 两条路径（docs/51 §4）
-   *
-   * 差别只有一个问题：**机器上有没有 Python**。
-   * - 免配置包：下载约 34MB，自带解释器 + 预置插件，不需要任何前置；
-   * - 本机 Python：只下约 100KB 安装器，在本机建 venv，插件由用户勾。
-   *
-   * 所以这一页把两条路并排摆在"未安装"状态下，各自带自己的前置条件与代价。
-   * 只说"选一个"是不够的——选错的人会在几分钟后卡在"找不到 Python"上，
-   * 那时他已经不记得自己点的是哪个按钮。
+   * 状态说明是一行裸文本，不进卡；依赖自检与"另下 X"提示已删：装之前替用户
+   * 操心缺什么，不如让安装脚本自己说清楚。
+   * 已安装态只剩三块：组件状态、重装/换插件、卸载。
    */
 
   const found = $derived(ui.beets?.found === true);
@@ -50,7 +47,7 @@
   }
 
   function trackText(track: BeetsInstallTrack): string {
-    return track === 'bundle' ? '免配置包' : '本机 Python';
+    return track === 'bundle' ? '预配置环境' : '本机安装';
   }
 
   /** 入口来源（docs/33 §6.1）：排障第一个问题是"为什么用的是这个" */
@@ -62,18 +59,10 @@
         return '设置里记录的路径';
       case 'path':
         return '系统 PATH';
-      case 'dev':
-        return '源码树（开发模式）';
       default:
         return source ?? '未知';
     }
   }
-
-  const healthLabel: Record<string, string> = {
-    ready: '可用',
-    missing_deps: '缺依赖',
-    unavailable: '不可用',
-  };
 </script>
 
 {#snippet progressLine()}
@@ -109,10 +98,6 @@
             {#if p.packages.length > 0}
               <span class="pick-tag">{p.packages.join(' ')}</span>
             {/if}
-            {#if p.exe.length > 0}
-              <!-- 不再是"自备"：安装时按 docs/53 自动下载（ffmpeg 约 30MB 下载） -->
-              <span class="pick-tag warn">另下 {p.exe.join(' / ')}</span>
-            {/if}
           </label>
           <span class="pick-note">{p.note}</span>
         </li>
@@ -124,105 +109,92 @@
 <div class="beets-page">
   {#if ui.beets === null}
     <section class="beets-panel">
-      <p class="beets-dim">正在检测整理组件…</p>
+      <p class="beets-dim">正在检测 Beets…</p>
     </section>
   {:else if !found}
+    {#if ui.beets.errorCode === 'E_PROTOCOL_MISMATCH'}
+      <!-- 版本不匹配要在安装页说清原因；未安装则页头 meta 已说明，这里不再重复一行 -->
+      <p class="install-note beets-danger">
+        Beets 与播放器的协议不一致：{ui.beets.errorMessage ?? 'schema 指纹比对失败'}。
+        曲库与配置不受影响，用下面任一方式重装即可。
+      </p>
+    {/if}
+    {@render progressLine()}
+
     <section class="beets-panel">
       <div class="beets-panel-head">
-        {#if ui.beets.errorCode === 'E_PROTOCOL_MISMATCH'}
-          <strong>整理组件版本不匹配</strong>
-          <span class="beets-dim">
-            {ui.beets.errorMessage ?? '重装或升级即可，曲库与配置不受影响'}
-          </span>
-        {:else}
-          <strong>整理库未启用</strong>
-          <span class="beets-dim">
-            不影响播放。装上之后才能索引曲库、按标签/评分/插件字段（如 bpm、情绪）
-            查询，以及把新文件按「艺人/专辑」整理进曲库。
-          </span>
-        {/if}
+        <strong>预配置环境</strong>
+        <span class="beets-dim">
+          下载约 34MB 便携版配置包，提供了 
+          {#if bundled.length > 0}{bundled.map((p) => p.title).join(' / ')}{:else}基础功能{/if} 
+          插件，如果需要使用更多 beets 功能，系统需要 Python 环境支持。
+        </span>
       </div>
+      <div class="beets-gate">
+        <Button
+          variant="primary"
+          size="sm"
+          loading={install.running && install.track === 'bundle'}
+          disabled={install.running}
+          onclick={() => void ui.installBeets('bundle')}
+          title="下载并安装"
+        >
+          {#snippet icon()}<Package size={14} />{/snippet}
+          下载并安装
+        </Button>
+      </div>
+    </section>
 
-      <!-- 两条路径并排：差别只有"有没有 Python" -->
-      <div class="tracks">
-        <article class="track">
-          <h4>
-            免配置包
-            <span class="beets-badge accent">不需要 Python</span>
-          </h4>
-          <p class="beets-dim">
-            下载约 34MB，自带解释器，并已预置
-            {#if bundled.length > 0}{bundled.map((p) => p.title).join(' / ')}{:else}常用插件{/if}。
-            解压即用，换台机器也不用重装 Python。
+    <!-- 本机安装：只有这条路能改插件清单；没探测到 Python 就不渲染这张卡 -->
+    {#if python?.found === true}
+      <section class="beets-panel">
+        <div class="beets-panel-head">
+          <strong>
+            本机安装
+            <span class="beets-badge ok">当前 Python 版本：{python.version}</span>
+          </strong>
+          <span class="beets-dim">
+            执行安装脚本，使用本机 Python 隔离环境。插件按需勾选，支持 ffmpeg 等更多功能插件，依赖与工具脚本自动下载。
+          </span>
+        </div>
+        {#if !python.supported}
+          <p class="beets-danger">
+            Python {python.version} 不在支持窗口（3.10–3.14），建议改用预配置环境。
           </p>
+        {/if}
+        <p class="beets-path mono" title={python.path ?? ''}>
+          {python.path}
+          <span class="beets-dim">（来自 {python.source}）</span>
+        </p>
+        {@render pluginPicker('勾选要启用的插件')}
+        <div class="beets-gate">
           <Button
             variant="primary"
             size="sm"
-            loading={install.running && install.track === 'bundle'}
+            loading={install.running && install.track === 'installer'}
             disabled={install.running}
-            onclick={() => void ui.installBeets('bundle')}
-            title="下载自带运行时的免配置包，不需要系统 Python"
+            onclick={() => void ui.installBeets('installer', chosen)}
+            title="按需勾选安装插件"
           >
-            {#snippet icon()}<Package size={14} />{/snippet}
-            下载并安装
+            {#snippet icon()}<Download size={14} />{/snippet}
+            安装（{chosen.length} 个插件）
           </Button>
-        </article>
-
-        <article class="track">
-          <h4>
-            本机 Python
-            <span class="beets-badge" class:warn={python?.found && !python.supported}>
-              {#if python === null}检测中…{:else if python.found}已找到 {python.version}{:else}未找到{/if}
-            </span>
-          </h4>
-          <p class="beets-dim">
-            只下载约 100KB 安装器，用本机的 Python 建一个隔离环境（不污染全局），
-            插件由你勾。
-          </p>
-
-          {#if python === null}
-            <p class="beets-dim">正在检测本机 Python…</p>
-          {:else if !python.found}
-            <p class="beets-dim">{python.reason ?? '没有找到可用的 Python。'}</p>
-            <Button size="sm" onclick={() => void ui.probeBeetsPython()} title="再检测一次">
-              {#snippet icon()}<RefreshCw size={13} />{/snippet}
-              重新检测
-            </Button>
-          {:else}
-            {#if !python.supported}
-              <p class="beets-danger">
-                Python {python.version} 不在支持窗口（3.10–3.14），装了也可能跑不起来。
-                建议改用左边的免配置包。
-              </p>
-            {/if}
-            <p class="beets-path mono" title={python.path ?? ''}>
-              {python.path}
-              <span class="beets-dim">（来自 {python.source}）</span>
-            </p>
-            <Button
-              variant="primary"
-              size="sm"
-              loading={install.running && install.track === 'installer'}
-              disabled={install.running}
-              onclick={() => void ui.installBeets('installer', chosen)}
-              title="用本机 Python 建环境并安装勾选的插件"
-            >
-              {#snippet icon()}<Download size={14} />{/snippet}
-              安装（{chosen.length} 个插件）
-            </Button>
-          {/if}
-        </article>
-      </div>
-
-      {@render pluginPicker('勾选要启用的插件（装了不启用等于白装）')}
-      {@render progressLine()}
-    </section>
+        </div>
+      </section>
+    {:else if python !== null}
+      <p class="beets-dim install-note">
+        未检测到本机 Python（{python.reason ?? '系统里没有 python'}），本机安装不可用。
+        <Button variant="link" size="sm" onclick={() => void ui.probeBeetsPython()}>
+          重新检测
+        </Button>
+      </p>
+    {/if}
   {:else}
     {#if mismatch}
       <section class="beets-panel">
         <div class="beets-panel-head">
           <strong class="warn-title">
-            <TriangleAlert size={15} /> 整理组件与播放器的协议契约不一致
+            <TriangleAlert size={15} /> Beets 与播放器的协议契约不一致
           </strong>
           <span class="beets-dim">
             schema 指纹比对失败，查询会读到对不上的形状，因此整页停用。重装整理组件，
@@ -238,7 +210,7 @@
             onclick={() => void ui.installBeets('installer', chosen)}
           >
             {#snippet icon()}<Download size={14} />{/snippet}
-            重装（本机 Python）
+            重装（本机安装）
           </Button>
           <Button
             size="sm"
@@ -247,7 +219,7 @@
             onclick={() => void ui.installBeets('bundle')}
           >
             {#snippet icon()}<Package size={14} />{/snippet}
-            重装（免配置包）
+            重装（预配置环境）
           </Button>
         </div>
         {@render progressLine()}
@@ -258,7 +230,7 @@
       <div class="beets-panel-head">
         <strong>组件状态</strong>
         <span class="beets-dim">
-          这些是工具自报的事实（docs/33 M2 之后宿主不再自己探测）。入口一栏用来回答
+          这些是工具自报的事实。入口一栏用来回答
           「为什么用的是这个」——同时装了两份时它是唯一能看出差别的线索。
         </span>
       </div>
@@ -314,44 +286,7 @@
 
     <section class="beets-panel">
       <div class="beets-panel-head">
-        <strong>插件</strong>
-        <span class="beets-dim">
-          「配置里写了」不等于「能干活」——缺 Python 依赖的插件依然会出现在插件列表里，
-          但它给不出字段。这里报的是实测三态。
-        </span>
-      </div>
-      {#if ui.beets.pluginHealth && ui.beets.pluginHealth.length > 0}
-        <ul class="plugins">
-          {#each ui.beets.pluginHealth as p (p.name)}
-            <li class="plugin" class:disabled={!p.enabled}>
-              <span class="plugin-name">{p.name}</span>
-              <span class="beets-badge" class:accent={p.state === 'ready'} class:warn={p.state === 'missing_deps'}>
-                {healthLabel[p.state] ?? p.state}
-              </span>
-              {#if p.missing.length > 0}
-                <span class="beets-dim">缺 {p.missing.join(' / ')}</span>
-              {/if}
-              {#if !p.enabled}
-                <span class="beets-dim">（配置里未启用）</span>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <p class="beets-dim">没有插件自检结果（老版本工具不报这一项）。</p>
-      {/if}
-      {#if ui.beets.pluginSummary}
-        <p class="beets-dim">
-          {ui.beets.pluginSummary.ready} 个可用{#if ui.beets.pluginSummary.missingDeps} · {ui.beets
-              .pluginSummary.missingDeps} 个缺依赖{/if}
-        </p>
-      {/if}
-      {@render pluginPicker('换装时可改勾选：勾上的会装依赖，并写进配置的启用清单。')}
-    </section>
-
-    <section class="beets-panel">
-      <div class="beets-panel-head">
-        <strong>重装 / 换路径</strong>
+        <strong>重装 / 换插件</strong>
         <span class="beets-dim">
           重装不碰曲库，也不删你的 beets 库；只是把工具本身重新铺一遍。
         </span>
@@ -364,7 +299,7 @@
           onclick={() => void ui.installBeets('installer', chosen)}
         >
           {#snippet icon()}<Download size={14} />{/snippet}
-          本机 Python{python?.found ? `（${python.version}）` : '（未找到）'}
+          本机安装{python?.found ? `（Python ${python.version}）` : '（未找到 Python）'}
         </Button>
         <Button
           size="sm"
@@ -373,9 +308,10 @@
           onclick={() => void ui.installBeets('bundle')}
         >
           {#snippet icon()}<Package size={14} />{/snippet}
-          免配置包
+          预配置环境
         </Button>
       </div>
+      {@render pluginPicker('换装时可改勾选：勾上的会装依赖，并写进配置的启用清单。')}
       {@render progressLine()}
     </section>
 
@@ -383,7 +319,7 @@
       <div class="beets-panel-head">
         <strong>卸载组件</strong>
         <span class="beets-dim">
-          只删安装目录（虚拟环境 / 套件包 / 下载缓存）。整理库与分析库<b>不动</b>——
+          只删安装目录（预配置环境 / 虚拟环境 / 下载缓存）。你的 beets 曲库与分析库<b>不动</b>——
           它们是你的数据，要清理请用各自的入口。
         </span>
       </div>
@@ -418,37 +354,9 @@
 </div>
 
 <style>
-  /* 两条路径并排：窄屏时自动堆叠（不写死列数，靠 minmax 断开） */
-  .tracks {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 10px;
-  }
-
-  .track {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    align-items: flex-start;
-    padding: 10px 12px;
-    border: 1px solid var(--line-1);
-    border-radius: 8px;
-    background: var(--surface-2);
-  }
-
-  .track h4 {
-    display: flex;
-    align-items: center;
-    gap: 6px;
+  /* 状态行：裸文本不进卡，与两张安装卡同列间距 */
+  .install-note {
     margin: 0;
-    font-size: var(--fs-base);
-    font-weight: 600;
-  }
-
-  .track p {
-    margin: 0;
-    font-size: var(--fs-base);
-    line-height: 1.55;
   }
 
   .beets-path {
@@ -506,11 +414,6 @@
     color: var(--text-3);
   }
 
-  .pick-tag.warn {
-    color: var(--warn);
-    border-color: color-mix(in srgb, var(--warn) 40%, transparent);
-  }
-
   .pick-note {
     padding-left: 20px;
     font-size: var(--fs-sm);
@@ -554,32 +457,5 @@
     align-items: center;
     gap: 6px;
     color: var(--warn);
-  }
-
-  .plugins {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .plugin {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    font-size: var(--fs-base);
-  }
-
-  /* 未启用的插件压暗但保留——它解释了"为什么某个字段查不到" */
-  .plugin.disabled {
-    opacity: 0.6;
-  }
-
-  .plugin-name {
-    font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-    font-size: var(--fs-sm);
   }
 </style>

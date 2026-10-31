@@ -279,11 +279,6 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return mock.beetsMaintenance('move', a.pretend === true);
     case 'beets_reveal':
       return { revealed: false, reason: '浏览器预览模式不可用' };
-    // ---- 插件市场（docs/40 §3 白名单）：目录 + 安装事件流演练 ----
-    case 'beets_plugin_catalog':
-      return mock.beetsPluginCatalog();
-    case 'beets_plugin_install':
-      return mock.beetsPluginInstall(String(a.name ?? ''));
     case 'beets_query':
       return mock.beetsQuery({
         limit: a.limit as number | undefined,

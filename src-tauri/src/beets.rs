@@ -26,9 +26,9 @@ pub use crate::dto::beets::BeetsStatus;
 
 /// 工具入口：程序 + 参数。
 ///
-/// 为什么是「程序 + 参数」而不是单个可执行路径：源码树里跑是
-/// `<venv>/python.exe -m aiya_beets`，装好的包是 `aiya-beets.exe`。
-/// 统一成这个形状后，三种形态共用同一套代码。
+/// 为什么是「程序 + 参数」而不是单个可执行路径：便携包里跑是
+/// `<bundle>/python.exe -m aiya_beets`，A 轨道装好的包是 `aiya-beets.exe`。
+/// 统一成这个形状后，两种形态共用同一套代码。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolEntry {
     pub program: String,
@@ -44,9 +44,6 @@ pub enum EntrySource {
     Settings,
     /// PATH 上的 `aiya-beets`
     Path,
-    /// 仓库源码树（仅 debug 构建）
-    #[cfg(debug_assertions)]
-    Dev,
 }
 
 impl EntrySource {
@@ -55,8 +52,6 @@ impl EntrySource {
             EntrySource::Env => "env",
             EntrySource::Settings => "settings",
             EntrySource::Path => "path",
-            #[cfg(debug_assertions)]
-            EntrySource::Dev => "dev",
         }
     }
 }
@@ -386,7 +381,8 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 /// 按优先级找工具入口（docs/33 §6.1）。
 ///
 /// 顺序理由：显式指定永远第一 → 安装器写下的路径最可靠 → PATH 说明用户
-/// 自己装过（pip install）→ 源码树只在开发机上存在。
+/// 自己装过（pip install）。开发机的仓库 venv **不在**候选里（2026-10-31
+/// 拍板：不维护第二套环境）——开发机上要跑 beets 功能，与用户一样走安装流。
 ///
 /// **刻意没有"猜 venv 布局"这一条**：A 轨道的入口是安装器**写进设置**的，
 /// 不是探测出来的。播放器不知道 venv 长什么样（P1 禁止），它只记住"入口在哪"。
@@ -421,22 +417,6 @@ pub fn discover(app: &tauri::AppHandle) -> Option<(ToolEntry, EntrySource)> {
         ));
     }
 
-    // 开发便利：仓库里就有源码 + dev 环境。仅 debug 构建，release 不编译这段。
-    #[cfg(debug_assertions)]
-    {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        let py = repo.join("beets-tool/.venv/Scripts/python.exe");
-        if py.is_file() && repo.join("beets-tool/src/aiya_beets").is_dir() {
-            return Some((
-                ToolEntry {
-                    program: py.to_string_lossy().into_owned(),
-                    args: vec!["-m".into(), "aiya_beets".into()],
-                },
-                EntrySource::Dev,
-            ));
-        }
-    }
-
     None
 }
 
@@ -459,21 +439,8 @@ pub fn discover(app: &tauri::AppHandle) -> Option<(ToolEntry, EntrySource)> {
 /// 却查不到"。现在两侧都钉死：宿主显式覆盖（`env()` 优先于继承值），
 /// 工具侧再在两者不等时 fail-fast。
 fn tool_env(app: &tauri::AppHandle, profile: Profile) -> Vec<(String, String)> {
-    // 源码树形态需要 PYTHONPATH 才 import 得到包
-    #[cfg(debug_assertions)]
-    let dev_src = {
-        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../beets-tool/src");
-        if src.is_dir() {
-            Some(src)
-        } else {
-            None
-        }
-    };
-    #[cfg(not(debug_assertions))]
-    let dev_src: Option<PathBuf> = None;
-
     let (root, dest) = roots_for_tools(app);
-    env_pairs(&profile.home(app), root, dest, dev_src, profile)
+    env_pairs(&profile.home(app), root, dest, profile)
 }
 
 /// `tool_env` 的纯函数部分：给定事实 → 环境键值对（可单测，不需要 AppHandle）。
@@ -485,7 +452,6 @@ fn env_pairs(
     home: &std::path::Path,
     root: Option<String>,
     dest: Option<String>,
-    dev_src: Option<PathBuf>,
     profile: Profile,
 ) -> Vec<(String, String)> {
     let home_str = home.to_string_lossy().into_owned();
@@ -503,9 +469,6 @@ fn env_pairs(
     }
     if let Some(dest) = dest {
         env.push(("AIYA_BEETS_DEST".to_string(), dest));
-    }
-    if let Some(src) = dev_src {
-        env.push(("PYTHONPATH".to_string(), src.to_string_lossy().into_owned()));
     }
     env
 }
@@ -778,22 +741,24 @@ impl InstallTrack {
 /// 也让两条轨道的下载路径能在本地用 `python -m http.server` 真实走一遍
 /// （`AIYA_BEETS_RELEASE_BASE=http://127.0.0.1:8000`）。
 ///
-/// 指向**浮动 tag `beets-latest`**（docs/51 §3.4）。
+/// 指向**固定下载通道 tag `beets-portable`**（docs/51 §3.4；2026-10-31 由
+/// `beets-latest` 更名——beets 包手动发布、每次更新都要整套实测，不该自称
+/// latest；版本 release 与通道一律 prerelease，仓库 "Latest" 永远只落在播放器上）。
 ///
 /// 为什么不再用 `releases/latest/download`：那是"最近创建的 release"，而 beets
 /// 与播放器是两个独立发布节奏。beets 单独发一版，latest 就指过去；之后发播放器
 /// release（不带 beets 资产），这里又 404。两边互相踩。
 ///
 /// `release-beets.yml` 每次发布都会把同样两个资产 `--clobber` 到
-/// `beets-latest` 这个 prerelease 上，所以这里的 URL 永久稳定，与播放器发布
+/// `beets-portable` 这个 prerelease 上，所以这里的 URL 永久稳定，与播放器发布
 /// 完全解耦。用浮动 tag 而不是查 GitHub API：零限流、零 JSON 解析、出问题时
 /// `git ls-remote --tags` 就能看见。
 ///
 /// 下载失败会给"下到了什么"的明确错误（见 `verify_asset`），而不是静默卡住。
 const RELEASE_BASE: &str =
-    "https://github.com/yeraph-plus/aiya-music-player/releases/download/beets-latest";
+    "https://github.com/yeraph-plus/aiya-music-player/releases/download/beets-portable";
 const INSTALLER_ASSET: &str = "aiya-beets-installer.pyz";
-const BUNDLE_ASSET: &str = "aiya-beets-bundle-win-x64.zip";
+const BUNDLE_ASSET: &str = "aiya-beets-portable-win-x64.zip";
 
 /// 发布物根地址：`AIYA_BEETS_RELEASE_BASE` > 默认常量。
 ///
@@ -820,7 +785,7 @@ fn install_root(app: &tauri::AppHandle) -> PathBuf {
 enum AssetKind {
     /// A 轨道：`aiya-beets-installer.pyz`
     Installer,
-    /// B 轨道：`aiya-beets-bundle-win-x64.zip`
+    /// B 轨道：`aiya-beets-portable-win-x64.zip`
     Bundle,
 }
 
@@ -907,7 +872,7 @@ fn verify_asset(path: &std::path::Path, kind: AssetKind) -> Result<usize, String
 /// "是个 zip"。发布通道随包附 `SHA256SUMS`（release-beets.yml 生成、随两个
 /// 资产一起上传），下载后逐行比对。它防的是**传输与落盘完整性**（截断、代理
 /// 篡改、404 页、拿错资产），不防 GitHub 仓库本身被入侵——那要把哈希钉进
-/// 宿主二进制，但 beets 与播放器是两个发布节奏（浮动通道 beets-latest），
+/// 宿主二进制，但 beets 与播放器是两个发布节奏（固定下载通道 beets-portable），
 /// 钉死等于每次 beets 发版都要重发播放器。取舍写在这里，别当它是完备的
 /// 供应链防线；真要镜像源，先给入口再留分支（release_base 的注释同理）。
 fn verify_checksum(path: &std::path::Path, asset: &str, base: &str) -> Result<(), String> {
@@ -1544,7 +1509,7 @@ fn extract_safely<R: std::io::Read + std::io::Seek>(
     Ok(())
 }
 
-/// 记下入口，下次 `discover` 直接命中（设置优先于 PATH 与源码树）。
+/// 记下入口，下次 `discover` 直接命中（设置优先于 PATH）。
 fn remember_entry(app: &tauri::AppHandle, entry: &ToolEntry) -> Result<(), String> {
     let program = entry.program.clone();
     let args = entry.args.join(" ");
@@ -1647,7 +1612,7 @@ pub fn start_install(
             })();
             match result {
                 Ok(entry) => {
-                    // 记不住也不算彻底失败：PATH 与源码树仍可能命中，
+                    // 记不住也不算彻底失败：PATH 入口仍可能命中，
                     // 只是下次启动要多一次探测。如实报给 UI。
                     if let Err(e) = remember_entry(&app, &entry) {
                         emit(serde_json::json!({ "type": "warning", "message": e }));
@@ -1827,12 +1792,12 @@ fn uninstall_now(app: &tauri::AppHandle, emit: &dyn Fn(serde_json::Value)) -> Re
     let root = install_root(app);
     if !root.exists() {
         // 幂等：没有安装目录就算成功。但要提醒"当前入口可能来自别处"，
-        // 否则开发机上点卸载会毫无反应、还报成功。
+        // 否则 PATH/环境变量入口的机器上点卸载会毫无反应、还报成功。
         if let Some((_, source)) = discover(app) {
             emit(serde_json::json!({
                 "type": "warning",
                 "message": format!(
-                    "没有安装目录可删；当前组件来自 {}（源码树/环境变量），卸载不动它",
+                    "没有安装目录可删；当前组件来自 {}（PATH/环境变量），卸载不动它",
                     source.as_str()
                 ),
             }));
@@ -2353,36 +2318,6 @@ pub fn plugin_table() -> Result<Vec<crate::dto::beets::BeetsPluginItem>, String>
     Ok(doc.plugins)
 }
 
-/// 插件市场目录：一次性短进程查询（与 status 探测同款开销，~1s）。
-///
-/// 目录 = 工具侧白名单 + 三态复检。UI 只在 beets 可用时才展示这一区，
-/// 所以这里拿不到入口时直接报错由命令层分类即可。
-pub fn plugin_catalog(
-    app: &tauri::AppHandle,
-) -> Result<Vec<crate::dto::beets::BeetsMarketItem>, String> {
-    let (entry, _source) = discover(app).ok_or_else(|| NOT_INSTALLED.to_string())?;
-    let launcher = launcher_for(app, &entry, Profile::Workbench);
-    let rows = aiya_beets_client::session::query_plugin_catalog(&launcher, Duration::from_secs(20))
-        .map_err(|e| e.to_string())?;
-    rows.into_iter()
-        .map(|row| {
-            serde_json::from_value(row).map_err(|e| format!("目录项形状不对（协议漂移？）: {e}"))
-        })
-        .collect()
-}
-
-/// 安装一个白名单插件。事件流走 `beets:maintenance`（pluginProgress →
-/// pluginDone 终态），**复用维护会话槽**：装插件和整理库操作都会在
-/// serve 进程里跑，同一时刻只能有一个，分开两个槽会让两个 pip 并发
-/// 写同一个 site-packages。装完不触发读模型对账（插件不改自有库）。
-pub fn start_plugin_install(app: tauri::AppHandle, name: String) -> Result<(), String> {
-    start_maintenance(
-        app,
-        serde_json::json!({ "id": 1, "cmd": "plugin_install", "name": name }),
-        None,
-    )
-}
-
 /// 按 path_formats 整理文件（`pretend` = 只出清单不搬文件）。
 /// `directory` 是校验值：与 config.yaml 的 directory 不一致会被 sidecar 拒绝。
 pub fn start_move(
@@ -2425,7 +2360,7 @@ mod tests {
     #[test]
     fn env_pins_beetsdir_to_home() {
         let home = std::path::Path::new(r"D:\data\beets-index");
-        let env = env_pairs(home, None, None, None, Profile::Index);
+        let env = env_pairs(home, None, None, Profile::Index);
         let get = |k: &str| {
             env.iter()
                 .find(|(key, _)| key == k)
@@ -2449,7 +2384,6 @@ mod tests {
             home,
             Some("/music".to_string()),
             Some("/music/整理".to_string()),
-            None,
             Profile::Index,
         );
         let get = |k: &str| {
@@ -2504,15 +2438,9 @@ mod tests {
     }
 
     #[test]
-    fn env_passes_scan_root_and_dev_src() {
+    fn env_passes_scan_root() {
         let home = std::path::Path::new("/tmp/beets");
-        let env = env_pairs(
-            home,
-            Some("/music".to_string()),
-            None,
-            Some(PathBuf::from("/repo/beets-tool/src")),
-            Profile::Workbench,
-        );
+        let env = env_pairs(home, Some("/music".to_string()), None, Profile::Workbench);
         let get = |k: &str| {
             env.iter()
                 .find(|(key, _)| key == k)
@@ -2520,7 +2448,6 @@ mod tests {
                 .unwrap_or("")
         };
         assert_eq!(get("AIYA_BEETS_SCAN_ROOT"), "/music");
-        assert_eq!(get("PYTHONPATH"), "/repo/beets-tool/src");
     }
 
     /// **P0 的回归防线**：profile 必须由宿主显式下发。
@@ -2532,7 +2459,7 @@ mod tests {
     #[test]
     fn env_always_states_profile() {
         for (profile, want) in [(Profile::Workbench, "workbench"), (Profile::Index, "index")] {
-            let env = env_pairs(std::path::Path::new("/tmp/x"), None, None, None, profile);
+            let env = env_pairs(std::path::Path::new("/tmp/x"), None, None, profile);
             let got = env
                 .iter()
                 .find(|(k, _)| k == "AIYA_BEETS_PROFILE")
@@ -2978,7 +2905,7 @@ mod tests {
             program: "C:/x/aiya-beets.exe".into(),
             args: vec!["serve".into()],
         };
-        let st = busy_status(&entry, EntrySource::Dev);
+        let st = busy_status(&entry, EntrySource::Path);
         assert!(st.found, "忙碌时必须仍报 found，否则 UI 会当成未安装");
         assert_eq!(st.error_code.as_deref(), Some("E_BEETS_BUSY"));
         assert_eq!(st.interpreter.as_deref(), Some("C:/x/aiya-beets.exe"));
@@ -3033,39 +2960,6 @@ mod tests {
         assert_eq!(silent.error_code.as_deref(), Some("E_PROTOCOL_MISMATCH"));
     }
 
-    /// dev venv 存在时（本仓库），probe 能找到 beets 2.14.x。
-    #[cfg(debug_assertions)]
-    #[test]
-    fn probe_finds_dev_venv_beets() {
-        let venv = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../beets-tool/.venv/Scripts/python.exe");
-        if !venv.exists() {
-            return; // CI/其他机器没有 venv 就跳过
-        }
-        let status = status_via(&venv.to_string_lossy(), &["-m", "aiya_beets"]);
-        assert!(
-            status.found,
-            "dev 环境应命中工具: {:?}",
-            status.error_message
-        );
-        assert!(status
-            .beets_version
-            .as_deref()
-            .unwrap_or_default()
-            .starts_with("2.14"));
-        assert!(status.plugins.is_some());
-        // 能力三态必须报上来（这是 M2 的验收点之一：lyrics 缺 bs4 要能看见）
-        let health = status.plugin_health.expect("工具必须自报插件三态");
-        assert!(
-            health.iter().any(|p| p.state == "ready"),
-            "至少有一个 ready 插件"
-        );
-        assert!(
-            health.iter().any(|p| p.name == "lyrics"),
-            "lyrics 应在清单里"
-        );
-    }
-
     /// 用指定入口跑一次 status（测试用；生产走 `probe`，那里入口来自 `discover`）。
     ///
     /// `AIYA_BEETS_HOME` 不设 = 走 beets 自己的默认位置，不碰应用的 app_data。
@@ -3092,12 +2986,12 @@ mod tests {
         };
         let tool = StdioTool::new(launcher);
         match tool.status(Duration::from_secs(20)) {
-            Ok(report) => status_from(&entry, EntrySource::Dev, report),
+            Ok(report) => status_from(&entry, EntrySource::Env, report),
             Err(e) => absent(
                 "E_SPAWN",
                 Some(e.to_string()),
                 Some(&entry),
-                Some(EntrySource::Dev),
+                Some(EntrySource::Env),
             ),
         }
     }

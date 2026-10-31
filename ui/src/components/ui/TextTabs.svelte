@@ -11,6 +11,8 @@
    *   而不是 tabpanel 的显隐，tab 角色模型在这里不成立——Toolbar 与
    *   SettingsPanel 的既有注释论证过，LibraryView 归队）。
    * · 外观两档：`pill`（内容工具条）/ `underline`（页面级分组）。
+ * · `disabled` 置灰失效（beets 未安装时的分析/整理 tab）：不可点，但位置还在
+ *   ——用户看得见"还有这两页"，只是现在进不去。
    * · `count` 是可选角标（工具条的曲目数）；`title` 透传（曲库 tab 的
    *   "再点一次切换顺序"提示）。
    */
@@ -19,6 +21,8 @@
     label: string;
     count?: number;
     title?: string;
+    /** 置灰失效：不可点（beets 未安装时的分析/整理） */
+    disabled?: boolean;
   }
 
   interface Props {
@@ -42,6 +46,7 @@
       class:on={value === tab.id}
       aria-current={value === tab.id ? 'true' : undefined}
       title={tab.title}
+      disabled={tab.disabled}
       onclick={() => onchange(tab.id)}
     >
       {tab.label}
@@ -117,5 +122,16 @@
     color: var(--text-3);
     font-size: var(--fs-xs);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* 置灰失效：压暗 + 不响应 hover 抬色（disabled 按钮不触发 click，但 :hover 仍会算） */
+  .text-tab:disabled {
+    opacity: var(--disabled-opacity);
+    cursor: default;
+  }
+
+  .text-tab:disabled:hover {
+    color: var(--text-2);
+    background: transparent;
   }
 </style>

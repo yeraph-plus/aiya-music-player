@@ -309,13 +309,13 @@ class BeetsQueryStore {
     this.saveError = null;
   }
 
-  /** 建议名：优先用条件里第一个有值的字段，否则叫"整理库查询" */
+  /** 建议名：优先用条件里第一个有值的字段，否则叫"Beets 查询" */
   private suggestName(): string {
     if (this.mode === 'rules') {
       const first = this.rules.find((r) => r.value.trim());
       if (first) return `${first.field} ${OP_LABELS[first.op] ?? first.op} ${first.value.trim()}`;
     }
-    return '整理库查询';
+    return 'Beets 查询';
   }
 
   /**

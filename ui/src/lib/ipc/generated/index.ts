@@ -14,7 +14,6 @@ export * from './AudioSource';
 export * from './BeetsConfig';
 export * from './BeetsField';
 export * from './BeetsFieldCatalog';
-export * from './BeetsMarketItem';
 export * from './BeetsPluginHealth';
 export * from './BeetsPluginItem';
 export * from './BeetsPluginSummary';

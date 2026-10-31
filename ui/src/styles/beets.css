@@ -1,6 +1,6 @@
-/* 整理库（beets）页的共享词汇。
+/* Beets 页的共享词汇。
  *
- * 2026-10-30：这一页拆成 安装 / 索引 / 整理 三个子页之后，`.panel` /
+ * 2026-10-30：这一页拆成 安装 / 分析 / 整理 三个子页之后，`.panel` /
  * `.panel-head` / `.dim` 这套形状被三处同时需要。留在各自的 `<style>` 里
  * 等于把同一段 CSS 抄三遍（以前 ImportPanel + BeetsSection 就是这么腐化的：
  * 两处 panel 的内边距差 2px，肉眼看不出来但会让人觉得"哪里不对"）。
@@ -106,7 +106,7 @@
   color: var(--warn);
 }
 
-.beets-badge.accent {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
+.beets-badge.ok {
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+  color: var(--ok);
 }

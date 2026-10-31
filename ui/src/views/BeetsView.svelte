@@ -11,7 +11,7 @@
   import { ui } from '../stores/ui.svelte';
 
   /**
-   * 整理库（beets）页的壳：**安装 / 索引 / 整理 三个子页**。
+   * Beets 页的壳：**安装 / 分析 / 整理 三个子页**。
    *
    * ## 为什么分页（2026-10-30 用户拍板）
    *
@@ -28,25 +28,28 @@
    * 索引页与整理页都需要"组件可用"这个前提。各自写一遍门 = 两份措辞不同的
    * 同一句话；放在壳里只写一次，且子页可以假设前提成立。
    *
-   * 门不是"禁用 tab"：tab 永远可点（用户要能看见那一页在讲什么），点进去看到
-   * 的是一句人话 + 一个「去安装」按钮。
+ * 门不是"禁用 tab"的反面——2026-10-31 用户拍板：**未安装（含探测中）时另外
+ * 两个 tab 直接置灰失效**（两个入口都通向同一句"先安装"，不如不给点）。
+ * 协议不符时 tab 不禁用：组件在但读出来的形状不对，用户需要看见解释，
+ * 仍走下面的 EmptyState + 「去安装」。
    */
-
-  const TABS = [
-    { id: 'install', label: '安装' },
-    { id: 'index', label: '索引' },
-    { id: 'organize', label: '整理' },
-  ];
 
   const found = $derived(ui.beets?.found === true);
   /** 协议指纹对不上 = 装的组件与播放器不是同一版 schema，读出来的形状无意义 */
   const schemaMismatch = $derived(found && ui.beets?.schemaMatched === false);
   const ready = $derived(found && !schemaMismatch);
 
+  /** 未安装（含探测中）时只有安装页可进；协议不符不禁用——壳内 EmptyState 负责解释 */
+  const tabs = $derived([
+    { id: 'install', label: '安装' },
+    { id: 'index', label: '分析', disabled: !found },
+    { id: 'organize', label: '整理', disabled: !found },
+  ]);
+
   const headerMeta = $derived.by(() => {
-    if (ui.beets === null) return '正在检测整理组件…';
-    if (!found) return '未启用（不影响播放）';
-    if (schemaMismatch) return '组件版本不匹配';
+    if (ui.beets === null) return '正在检测 Beets…';
+    if (!found) return '未安装 Beets 分析工具，请先安装';
+    if (schemaMismatch) return 'Beets 版本不匹配';
     return [`beets ${ui.beets.beetsVersion ?? '未知版本'}`, '曲库只读分析 + 新文件整理'].join(' · ');
   });
 
@@ -69,10 +72,10 @@
 </script>
 
 <div class="page-scroll beets-page">
-  <Header title="整理库" big meta={headerMeta} />
+  <Header title="Beets" big meta={headerMeta} />
 
   <Toolbar
-    tabs={TABS}
+    tabs={tabs}
     active={ui.beetsTab}
     ontab={(id) => {
       ui.beetsTabTouched = true;
@@ -85,10 +88,10 @@
   {:else if !ready}
     <section class="gate-panel">
       <EmptyState
-        title={schemaMismatch ? '组件与播放器版本不一致' : '整理组件未启用'}
+        title={schemaMismatch ? 'Beets 与播放器版本不一致' : 'Beets 未安装'}
         hint={schemaMismatch
-          ? 'schema 指纹比对失败。索引与整理都依赖同一份协议，装错了版本读出来的形状会对不上，所以先停在这里。'
-          : '这一页要做的事都要 beets 组件在场。装上之后曲库与配置都不受影响，播放也照常。'}
+          ? 'schema 指纹比对失败。分析与整理都依赖同一份协议，装错了版本读出来的形状会对不上，所以先停在这里。'
+          : '这一页要做的事都要 Beets 分析工具在场。请先到「安装」页装好再回来。'}
         fill
       >
         {#snippet icon()}<Wrench size={26} />{/snippet}

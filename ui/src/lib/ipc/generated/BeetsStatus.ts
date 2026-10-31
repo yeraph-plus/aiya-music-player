@@ -11,7 +11,7 @@ import type { BeetsPluginSummary } from "./BeetsPluginSummary";
  */
 export type BeetsStatus = { found: boolean, 
 /**
- * 工具的启动程序（`aiya-beets.exe`，或源码树里的解释器）。
+ * 工具的启动程序（A 轨道是 `aiya-beets.exe`，B 轨道是便携包里的解释器）。
  */
 interpreter: string | null, 
 /**
@@ -19,7 +19,7 @@ interpreter: string | null,
  */
 scriptPath: string | null, 
 /**
- * 入口是从哪找到的：env / settings / path / dev。
+ * 入口是从哪找到的：env / settings / path。
  *
  * 排障第一个问题永远是"为什么用的是这个"，让发现层直接回答，
  * 而不是让用户去翻日志。

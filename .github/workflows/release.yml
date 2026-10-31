@@ -10,10 +10,10 @@
 #                "v* tag 或 dispatch"，上传条件写成"只在 tag 上"。
 #
 # ## beets 侧已经拆走（2026-10-30，docs/51 §3.3）
-# 原先这里也打 `aiya-beets-installer.pyz` 与 `aiya-beets-bundle-win-x64.zip`，
-# 现在归 `.github/workflows/release-beets.yml`：手动触发、独立 tag（`beets-v*`），
-# 发布时同时写到浮动通道 `beets-latest`。宿主常量已指向
-# `releases/download/beets-latest/<asset>`，两个发布节奏不再互相踩。
+# 原先这里也打 `aiya-beets-installer.pyz` 与 `aiya-beets-portable-win-x64.zip`，
+# 现在归 `.github/workflows/release-beets.yml`：手动触发、独立 tag
+# （`beets-portable-v*`），发布时同时写到固定下载通道 `beets-portable`。宿主常量
+# 已指向 `releases/download/beets-portable/<asset>`，两个发布节奏不再互相踩。
 # 所以**本文件不再产出任何 beets 文件**，assets 名也不在这里维护。
 #
 # ## 签名：**决定不做**（2026-10-27）

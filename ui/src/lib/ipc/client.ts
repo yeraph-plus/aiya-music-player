@@ -22,7 +22,6 @@ import type {
   AppInfo,
   ArtistPage,
   BeetsFieldCatalog,
-  BeetsMarketItem,
   BeetsPluginItem,
   BeetsPythonProbe,
   BeetsQueryPage,
@@ -405,9 +404,7 @@ export const ipc = {
 
     /**
      * 内嵌插件表：**不需要装过组件**就能拿到的静态目录（docs/51 §4.2）。
-     *
-     * 与 `pluginCatalog()` 的分工：这条回答"有哪些插件、各自要装什么"；
-     * 那条（要起 sidecar）回答"装上之后哪些真的 ready"。
+     * 装没装、缺不缺依赖的三态看 `status()` 的 pluginHealth。
      */
     pluginTable: () => call<BeetsPluginItem[]>('beets_plugin_table'),
 
@@ -450,14 +447,6 @@ export const ipc = {
      * 自有库，没有 trackId 可用。
      */
     reveal: (path: string) => call<RevealResult>('beets_reveal', { path }),
-    /** 插件市场目录（白名单 + 三态 + 来源档）。一次性短进程查询，~1s。 */
-    pluginCatalog: () => call<BeetsMarketItem[]>('beets_plugin_catalog'),
-    /**
-     * 安装白名单插件（仅 `pypi:<包名>` 档有意义；builtin 档随 beets 内置）。
-     * 进度走 `beets:maintenance`（pluginProgress → pluginDone 终态），
-     * 与维护四件套共用会话槽——装插件时其他维护任务会被拒。
-     */
-    pluginInstall: (name: string) => call<JobStarted>('beets_plugin_install', { name }),
 
     /*
      * ---- 查询页（docs/47）：读 **beets 库**，产物是「存为歌单」 ----
