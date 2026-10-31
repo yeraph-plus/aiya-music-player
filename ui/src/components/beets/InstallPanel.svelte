@@ -50,6 +50,16 @@
     return track === 'bundle' ? '预配置环境' : '本机安装';
   }
 
+  /** 安装阶段徽章文本：宿主发的 stage 词 → 人话；未知词原样显示 */
+  const stageText: Record<string, string> = {
+    prepare: '准备',
+    download: '下载',
+    install: '安装',
+    unpack: '解压',
+    bin: '外置工具',
+  };
+  const stageLabel = (s: string): string => stageText[s] ?? s;
+
   /** 入口来源（docs/33 §6.1）：排障第一个问题是"为什么用的是这个" */
   function entryText(source: string | null | undefined): string {
     switch (source) {
@@ -73,10 +83,13 @@
   {/if}
 {/snippet}
 
-<!-- 卡内安装状态：只报自己这一轨，跟在按钮正下方（下载/校验/解压阶段与报错都落在动作位上） -->
+<!-- 卡内安装状态：只报自己这一轨，跟在按钮正下方——阶段是徽章，消息是文本 -->
 {#snippet trackStatus(track: BeetsInstallTrack)}
   {#if install.running && install.track === track}
-    <p class="track-status">{install.stage} · {install.message}</p>
+    <p class="track-status">
+      <span class="beets-badge">{stageLabel(install.stage)}</span>
+      <span>{install.message}</span>
+    </p>
   {:else if install.error && install.track === track}
     <p class="track-status track-status-error">{install.error}</p>
   {/if}
@@ -369,8 +382,11 @@
     margin: 0;
   }
 
-  /* 卡内安装状态：跟在按钮正下方；报错换警示色（scoped 类避免被基类压掉） */
+  /* 卡内安装状态：阶段徽章 + 消息文本，跟在按钮正下方；报错换警示色 */
   .track-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     margin: 0;
     font-size: var(--fs-sm);
     color: var(--text-3);
