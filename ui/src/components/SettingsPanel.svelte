@@ -10,7 +10,8 @@
     ThemeMode,
   } from '../lib/settings';
   import { AMBIENT_SCHEMES, BG_SPECTRUM_STYLES, RIDGE_GLOWS, SPECTRUM_STYLES } from '../lib/settings';
-  import TextTabs from './ui/TextTabs.svelte';
+  import StatBlock from './ui/StatBlock.svelte';
+import TextTabs from './ui/TextTabs.svelte';
   import {
     SHORTCUT_ACTIONS,
     SHORTCUT_LABELS,
@@ -297,35 +298,28 @@
            自己的体积，后者是音乐文件加起来多大 -->
       {#if stats}
         <div class="lib-stats">
-          <div class="stat-card">
-            <span class="stat-icon"><ListMusic size={17} /></span>
-            <div class="stat-text"><b>{stats.tracks}</b><span>曲目</span></div>
-          </div>
-          <div class="stat-card">
-            <span class="stat-icon"><Disc3 size={17} /></span>
-            <div class="stat-text"><b>{stats.albums}</b><span>专辑</span></div>
-          </div>
-          <div class="stat-card">
-            <span class="stat-icon"><Mic2 size={17} /></span>
-            <div class="stat-text"><b>{stats.artists}</b><span>艺人</span></div>
-          </div>
-          <div class="stat-card">
-            <span class="stat-icon"><Clock3 size={17} /></span>
-            <div class="stat-text"><b>{formatDurationLong(stats.totalDurationMs)}</b><span>总时长</span></div>
-          </div>
-          <div class="stat-card">
-            <span class="stat-icon"><HardDrive size={17} /></span>
-            <div class="stat-text"><b>{formatBytes(stats.totalBytes)}</b><span>文件容量</span></div>
-          </div>
-          <div class="stat-card">
-            <span class="stat-icon"><Database size={17} /></span>
-            <div class="stat-text"><b>{formatBytes(stats.dbBytes)}</b><span>索引大小</span></div>
-          </div>
+          <StatBlock layout="row" value={stats.tracks} label="曲目">
+            {#snippet icon()}<ListMusic size={17} />{/snippet}
+          </StatBlock>
+          <StatBlock layout="row" value={stats.albums} label="专辑">
+            {#snippet icon()}<Disc3 size={17} />{/snippet}
+          </StatBlock>
+          <StatBlock layout="row" value={stats.artists} label="艺人">
+            {#snippet icon()}<Mic2 size={17} />{/snippet}
+          </StatBlock>
+          <StatBlock layout="row" value={formatDurationLong(stats.totalDurationMs)} label="总时长">
+            {#snippet icon()}<Clock3 size={17} />{/snippet}
+          </StatBlock>
+          <StatBlock layout="row" value={formatBytes(stats.totalBytes)} label="文件容量">
+            {#snippet icon()}<HardDrive size={17} />{/snippet}
+          </StatBlock>
+          <StatBlock layout="row" value={formatBytes(stats.dbBytes)} label="索引大小">
+            {#snippet icon()}<Database size={17} />{/snippet}
+          </StatBlock>
           {#if stats.missingLocations > 0}
-            <div class="stat-card warn">
-              <span class="stat-icon"><TriangleAlert size={17} /></span>
-              <div class="stat-text"><b>{stats.missingLocations}</b><span>位置缺失</span></div>
-            </div>
+            <StatBlock layout="row" tone="warn" value={stats.missingLocations} label="位置缺失">
+              {#snippet icon()}<TriangleAlert size={17} />{/snippet}
+            </StatBlock>
           {/if}
         </div>
       {/if}
@@ -815,54 +809,6 @@
      这里包一层才能给 scoped 规则） */
   .lib-bleed {
     margin: 0 -17px;
-  }
-
-  .stat-card {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 18px 12px 14px;
-    background: var(--surface-2);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    min-width: 118px;
-  }
-
-  .stat-icon {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
-    border-radius: 9px;
-    background: color-mix(in srgb, var(--accent) 14%, transparent);
-    color: var(--accent-text);
-  }
-
-  .stat-card.warn .stat-icon {
-    background: color-mix(in srgb, var(--warn) 16%, transparent);
-    color: var(--warn);
-  }
-
-  .stat-text {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    min-width: 0;
-  }
-
-  .stat-text b {
-    font-size: var(--fs-2xl);
-    font-weight: 400; /* 用户拍板：数字不加粗，靠字号本身立住 */
-    line-height: 1.15;
-    color: var(--text-1);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .stat-text span {
-    font-size: var(--fs-sm);
-    color: var(--text-2);
   }
 
   /* 数据目录路径：等宽 + 超长省略（悬停 title 给全路径） */

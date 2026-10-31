@@ -120,7 +120,7 @@
   }
 
   :global(.k-slider[data-disabled]) {
-    opacity: 0.45;
+    opacity: var(--disabled-opacity);
     cursor: default;
   }
 

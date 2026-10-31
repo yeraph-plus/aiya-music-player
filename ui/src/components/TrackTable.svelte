@@ -20,6 +20,7 @@
   import { artworkUrl } from '../lib/artwork';
   import { formatDay, formatPlays, formatTime } from '../lib/format';
   import { player } from '../stores/player.svelte';
+  import Cover from './ui/Cover.svelte';
   import EmptyState from './ui/EmptyState.svelte';
 
   interface Props {
@@ -98,9 +99,9 @@
       </span>
       <span class="cover-slot">
         {#if track.artworkId}
-          <img class="cover" src={artworkUrl(track.artworkId, 96) ?? ''} alt="" loading="lazy" />
+          <Cover size="row" src={artworkUrl(track.artworkId, 96)} alt="" />
         {:else}
-          <span class="cover placeholder">♪</span>
+          <Cover size="row" alt="" />
         {/if}
         <button
           class="play-btn"

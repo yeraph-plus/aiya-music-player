@@ -45,20 +45,6 @@
   color: var(--text-2);
 }
 
-.progress {
-  flex: 1;
-  height: 3px;
-  border-radius: 999px;
-  background: var(--surface-hover);
-  overflow: hidden;
-}
-
-.progress > i {
-  display: block;
-  height: 100%;
-  background: var(--accent);
-  transition: width 120ms linear;
-}
 
 /* 错误条样式已随 kit InlineError 组件化（B6），此处不再有全局 .error */
 

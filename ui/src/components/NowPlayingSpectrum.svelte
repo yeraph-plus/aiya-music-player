@@ -1,6 +1,7 @@
 <script lang="ts">
   import { themeColor } from '../lib/accent';
   import { subscribeRender } from '../lib/render/scheduler';
+  import { reducedMotion } from '../lib/motion.svelte';
   import type { SpectrumStyle } from '../lib/settings';
   import type { SpectrumSource } from '../lib/spectrum-source';
 
@@ -48,9 +49,6 @@
    * 维度，DPR 变化（拖到不同缩放比的显示器）也一并跟上。
    */
   let canvas = $state<HTMLCanvasElement | null>(null);
-
-  const reducedMotion =
-    typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   /** 时间平滑后的显示值（48 带） */
   let display: Float32Array | null = null;
@@ -372,7 +370,7 @@
   // style / paused 故意不进依赖：形态或播放态变化只影响画笔，不重启订阅
   // （tap 是引用计数的全局开关，重订阅会让频谱断一帧）。
   $effect(() => {
-    if (!source || reducedMotion) return;
+    if (!source || reducedMotion.value) return;
     // canvas 是 $state（bind:this），首帧可能还没绑定——赋值后 effect 会重跑
     const target = canvas;
     if (!target) return;

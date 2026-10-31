@@ -115,6 +115,7 @@
 <div
   class="knob"
   class:disabled
+  class:dragging
   role="slider"
   tabindex={disabled ? -1 : 0}
   aria-label={label}
@@ -155,8 +156,14 @@
   }
 
   .knob.disabled {
-    opacity: 0.45;
+    opacity: var(--disabled-opacity);
     cursor: default;
+  }
+
+  /* 拖拽反馈（发布前 UI 审查 P2-6）：dragging 状态此前只用于逻辑，
+     旋钮外观零变化——对比 Slider thumb hover 即 scale。拖动中值弧加粗。 */
+  .knob.dragging .value {
+    stroke-width: 7;
   }
 
   svg {

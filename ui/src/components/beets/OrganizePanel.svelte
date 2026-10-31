@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Folder, FolderOpen, Inbox, Play, RotateCcw, X } from '@lucide/svelte';
+  import Chip from '../ui/Chip.svelte';
+  import { Check, Folder, FolderOpen, Inbox, Play, RotateCcw, TriangleAlert, X } from '@lucide/svelte';
   import Button from '../ui/Button.svelte';
   import Select from '../ui/Select.svelte';
   import type { AlbumPreview, CandidatePreview, EvidenceTier } from '../../lib/beets';
@@ -252,15 +253,13 @@
       <div class="root-chips">
         <span class="beets-dim">或直接用曲库目录：</span>
         {#each library.roots as root (root)}
-          <button
-            class="root-chip"
-            class:on={beetsConfig.targetRoot === root}
+          <Chip
+            label={shortenPath(root)}
+            on={beetsConfig.targetRoot === root}
             disabled={busy}
             title={root}
             onclick={() => void setTarget(root)}
-          >
-            {shortenPath(root)}
-          </button>
+          />
         {/each}
       </div>
     {/if}
@@ -405,11 +404,11 @@
 
       {#if sess.results[album.id]}
         <div class="apply-result" class:has-failed={sess.results[album.id].failed.length > 0}>
-          ✓ 已写入 {sess.results[album.id].written} 首
+          <Check size={12} strokeWidth={2.4} aria-hidden="true" /> 已写入 {sess.results[album.id].written} 首
           {#if sess.results[album.id].moved}· 文件已按动作处理{/if}
           {#each sess.results[album.id].failed as f (f.path)}
             <div class="fail-line" class:conflict={f.code === 'conflict' || f.code === 'blankIdentity'}>
-              {f.code === 'conflict' ? '⚠ 目标冲突' : f.code === 'blankIdentity' ? '⚠ 身份空白' : '✗'}
+              {#if f.code === 'conflict'}<TriangleAlert size={12} strokeWidth={2.4} aria-hidden="true" /> 目标冲突{:else if f.code === 'blankIdentity'}<TriangleAlert size={12} strokeWidth={2.4} aria-hidden="true" /> 身份空白{:else}<X size={12} strokeWidth={2.4} aria-hidden="true" />{/if}
               {shortenPath(f.path)}：{f.message}
             </div>
           {/each}
@@ -493,28 +492,15 @@
     flex-wrap: wrap;
   }
 
-  .root-chip {
-    padding: 2px 9px;
-    border-radius: 999px;
-    border: 1px solid var(--line);
-    background: var(--surface-input);
-    color: var(--text-2);
-    font-size: var(--fs-sm);
-    cursor: pointer;
+  /* 长路径上限：Chip 自身不裁文本，目录 chip 限宽后省略（视觉与旧 .root-chip 一致） */
+  .root-chips :global(.k-chip),
+  .root-chips :global(.k-chip-main) {
     max-width: 260px;
+  }
+
+  .root-chips :global(.k-chip-main) {
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .root-chip:hover:not(:disabled) {
-    border-color: var(--accent);
-    color: var(--text-1);
-  }
-
-  .root-chip.on {
-    border-color: var(--accent);
-    color: var(--accent);
   }
 
   .apply-bar {

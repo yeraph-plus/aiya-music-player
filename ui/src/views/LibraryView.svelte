@@ -2,6 +2,7 @@
   import { ArrowDown, ArrowUp } from '@lucide/svelte';
   import Icon from '../components/Icon.svelte';
   import TextTabs from '../components/ui/TextTabs.svelte';
+import Progress from '../components/ui/Progress.svelte';
   import Header from '../components/content/Header.svelte';
   import Button from '../components/ui/Button.svelte';
   import Card from '../components/ui/Card.svelte';
@@ -259,9 +260,7 @@
   <!-- 扫描时的环境指示（八轮拍板）：只报进度不带按钮——全应用唯一的
        取消入口在「扫描入库」页的执行状态卡，别再造第二份取消 -->
   <div class="scan-bar">
-    <div class="progress">
-      <i style={`width:${progress.total ? Math.min(100, Math.round((progress.scanned / progress.total) * 100)) : 8}%`}></i>
-    </div>
+    <Progress value={progress.total ? Math.min(100, Math.round((progress.scanned / progress.total) * 100)) : 8} label="扫描进度" />
     <span>
       {progress.phase === 'walking'
         ? '正在遍历目录…（到设置 → 曲库可取消）'

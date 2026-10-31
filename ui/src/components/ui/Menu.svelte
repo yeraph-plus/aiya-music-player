@@ -155,7 +155,7 @@
   }
 
   :global(.k-menu-item[data-disabled]) {
-    opacity: 0.35;
+    opacity: var(--disabled-opacity);
   }
 
   :global(.k-menu-item.danger) {

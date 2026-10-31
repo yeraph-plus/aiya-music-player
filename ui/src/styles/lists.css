@@ -142,7 +142,7 @@
   padding: 0;
   border: none;
   border-radius: 6px;
-  background: rgb(0 0 0 / 0.45);
+  background: var(--scrim-cover);
   color: #fff;
   cursor: pointer;
 }
@@ -152,7 +152,7 @@
 }
 
 .row .play-btn:hover {
-  background: rgb(0 0 0 / 0.62);
+  background: color-mix(in srgb, var(--scrim-cover) 70%, black);
   color: #fff;
 }
 
@@ -219,35 +219,6 @@
 
 .k-box:disabled {
   opacity: 0.4;
-}
-
-.cover {
-  width: 38px;
-  height: 38px;
-  border-radius: 6px;
-  object-fit: cover;
-  background: var(--surface-cover);
-  display: block;
-}
-
-.cover.sm {
-  width: 30px;
-  height: 30px;
-  border-radius: 5px;
-}
-
-.cover.lg {
-  width: 48px;
-  height: 48px;
-  border-radius: 8px;
-}
-
-.cover.placeholder {
-  display: grid;
-  place-items: center;
-  color: var(--text-3);
-  font-size: var(--fs-lg);
-  flex: none;
 }
 
 .cell {

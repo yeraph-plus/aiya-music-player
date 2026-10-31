@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { fade, fly } from 'svelte/transition';
+  import { reducedMotion } from '../../lib/motion.svelte';
 
   interface Props {
     open: boolean;
@@ -34,9 +35,6 @@
   let panel = $state<HTMLElement | null>(null);
   let lastFocused: HTMLElement | null = null;
 
-  const reducedMotion =
-    typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-
   $effect(() => {
     if (!open) return;
     lastFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -63,7 +61,7 @@
     <!-- 遮罩：点了就是"我要回去"，比找关闭键近 -->
     <div
       class="sd-backdrop"
-      transition:fade={{ duration: reducedMotion ? 0 : 150 }}
+      transition:fade={{ duration: reducedMotion.value ? 0 : 150 }}
       onclick={onclose}
       aria-hidden="true"
     ></div>
@@ -76,7 +74,7 @@
       role="dialog"
       aria-label={label}
       tabindex="-1"
-      transition:fly={{ x: 440, duration: reducedMotion ? 0 : 240 }}
+      transition:fly={{ x: 440, duration: reducedMotion.value ? 0 : 240 }}
     >
       {@render children()}
     </div>

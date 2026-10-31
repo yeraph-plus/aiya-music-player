@@ -7,6 +7,7 @@
   import { RidgeLayer } from '../lib/render/layers/ridge';
   import { RippleLayer } from '../lib/render/layers/ripple';
   import { subscribeRender } from '../lib/render/scheduler';
+  import { reducedMotion } from '../lib/motion.svelte';
   import type { BgSpectrumStyle, RidgeGlow } from '../lib/settings';
   import type { SpectrumSource } from '../lib/spectrum-source';
 
@@ -75,11 +76,8 @@
    */
   let canvas = $state<HTMLCanvasElement | null>(null);
 
-  const reducedMotion =
-    typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-
   /** tap 是否该开着（数据源 + 开关 + 非 reduced-motion） */
-  const tapOn = $derived(Boolean(source) && enabled && !reducedMotion);
+  const tapOn = $derived(Boolean(source) && enabled && !reducedMotion.value);
 
   /**
    * GL 舞台是否该建。
@@ -91,7 +89,7 @@
    * 只看 `enabled`（已含 `glEffects` 闸门）不要求 `source`：流动渐变不需要
    * 频谱数据，tap 失败时背景仍该是活的。
    */
-  const glActive = $derived(enabled && !reducedMotion && detectCapability().tier >= 2);
+  const glActive = $derived(enabled && !reducedMotion.value && detectCapability().tier >= 2);
 
   /** 频谱层走 GL（需要数据源）；否则山形走 2D 兜底 */
   const specGl = $derived(glActive && Boolean(source));

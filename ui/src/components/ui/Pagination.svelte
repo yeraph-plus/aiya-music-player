@@ -95,7 +95,7 @@
   }
 
   :global(.k-pag button:disabled) {
-    opacity: 0.35;
+    opacity: var(--disabled-opacity);
     cursor: default;
   }
 

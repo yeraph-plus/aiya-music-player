@@ -52,7 +52,7 @@
   }
 
   :global(.k-switch:disabled) {
-    opacity: 0.45;
+    opacity: var(--disabled-opacity);
     cursor: default;
   }
 

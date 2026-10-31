@@ -142,6 +142,7 @@
       ids={player.queueIds}
       transient={player.queueTransient}
       index={playerState?.index ?? null}
+      playing={playerState?.status === 'playing'}
       onplay={(index) => void playQueueAt(index)}
       onremove={(index) => player.removeAt(index)}
       onmove={(from, to) => player.move(from, to)}

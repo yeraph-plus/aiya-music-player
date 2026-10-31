@@ -14,7 +14,7 @@
    * onmove(from, to)；拖拽激活后的残留 click 被吞掉，避免误选中。
    */
   import { tick } from 'svelte';
-  import { Play } from '@lucide/svelte';
+  import { ChevronDown, ChevronUp, Play } from '@lucide/svelte';
   import type { TrackRow } from '../lib/ipc';
   import type { TrackSort } from '../lib/query';
   import { artworkUrl } from '../lib/artwork';
@@ -24,6 +24,7 @@
   // 别名导入：组件已有 `selection` prop（选择集 ReadonlySet），同名会遮蔽 store
   import { selection as selectionStore } from '../stores/selection.svelte';
   import Button from './ui/Button.svelte';
+import Cover from './ui/Cover.svelte';
 import CheckCell from './ui/CheckCell.svelte';
   import ListToolbar from './ListToolbar.svelte';
   import { formatTime, highlight } from '../lib/format';
@@ -304,6 +305,15 @@ import CheckCell from './ui/CheckCell.svelte';
     role="grid"
     aria-rowcount={total}
   >
+    {#snippet sortArrow(field: 'title' | 'artist' | 'album')}
+      {#if sort === field && canSort}
+        {#if direction === 'asc'}
+          <ChevronUp size={11} strokeWidth={2.4} aria-hidden="true" />
+        {:else}
+          <ChevronDown size={11} strokeWidth={2.4} aria-hidden="true" />
+        {/if}
+      {/if}
+    {/snippet}
     <div class="grid-head" role="row">
       {#if batchMode}
         <CheckCell
@@ -318,13 +328,13 @@ import CheckCell from './ui/CheckCell.svelte';
       <span class="idx">#</span>
       <span></span>
       <button class="sort-head" class:on={sort === 'title'} onclick={() => canSort && onsort('title')} disabled={!canSort}>
-        标题{sort === 'title' && canSort ? (direction === 'asc' ? ' ↑' : ' ↓') : ''}
+        标题{@render sortArrow('title')}
       </button>
       <button class="sort-head" class:on={sort === 'artist'} onclick={() => canSort && onsort('artist')} disabled={!canSort}>
-        歌手{sort === 'artist' && canSort ? (direction === 'asc' ? ' ↑' : ' ↓') : ''}
+        歌手{@render sortArrow('artist')}
       </button>
       <button class="sort-head" class:on={sort === 'album'} onclick={() => canSort && onsort('album')} disabled={!canSort}>
-        专辑{sort === 'album' && canSort ? (direction === 'asc' ? ' ↑' : ' ↓') : ''}
+        专辑{@render sortArrow('album')}
       </button>
       <span class="num">时长</span>
     </div>
@@ -401,9 +411,9 @@ import CheckCell from './ui/CheckCell.svelte';
                  行 hover 时以半透明底叠在封面中央 -->
             <span class="cover-slot">
               {#if row.track.artworkId}
-                <img class="cover" src={artworkUrl(row.track.artworkId, 96) ?? ''} alt="" loading="lazy" />
+                <Cover size="row" src={artworkUrl(row.track.artworkId, 96)} alt="" />
               {:else}
-                <span class="cover placeholder">♪</span>
+                <Cover size="row" alt="" />
               {/if}
               <button
                 class="play-btn"
@@ -457,7 +467,7 @@ import CheckCell from './ui/CheckCell.svelte';
           <div class="row failed" role="row">
             {#if batchMode}<span class="k-check"></span>{/if}
             <span class="idx">{row.index + 1}</span>
-            <span class="cover-slot"><span class="cover placeholder">!</span></span>
+            <span class="cover-slot"><Cover size="row" glyph="!" alt="" /></span>
             <span class="cell">{row.error}</span>
             <span class="cell"></span>
             <span class="cell"></span>
@@ -467,7 +477,7 @@ import CheckCell from './ui/CheckCell.svelte';
           <div class="row skeleton" role="row" aria-busy="true">
             {#if batchMode}<span class="k-check"></span>{/if}
             <span class="idx">{row.index + 1}</span>
-            <span class="cover-slot"><span class="cover placeholder"></span></span>
+            <span class="cover-slot"><Cover size="row" glyph="" alt="" /></span>
             <span class="cell shimmer"></span>
             <span class="cell"></span>
             <span class="cell"></span>

@@ -3,6 +3,7 @@
   import { FolderOpen, RefreshCw, ScanSearch } from '@lucide/svelte';
   import Button from './ui/Button.svelte';
   import IconButton from './ui/IconButton.svelte';
+  import Progress from './ui/Progress.svelte';
   import Icon from './Icon.svelte';
   import { errorMessage } from '../lib/errors';
   import { history } from '../stores/history.svelte';
@@ -299,9 +300,7 @@
           </span>
           <Button variant="link" onclick={() => scan.cancel()}>取消任务</Button>
         </div>
-        <div class="progress">
-          <i style={`width:${progress.total ? Math.min(100, Math.round((progress.scanned / progress.total) * 100)) : 8}%`}></i>
-        </div>
+        <Progress value={progress.total ? Math.min(100, Math.round((progress.scanned / progress.total) * 100)) : 8} label="曲库索引进度" size="md" />
         <div class="task-detail">
           {#if progress.phase === 'walking'}
             正在遍历目录…

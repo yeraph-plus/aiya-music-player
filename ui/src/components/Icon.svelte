@@ -33,6 +33,11 @@
    * 只保留实际用到的 20 个。历史上有、现在没有的（search/clock/flame/list/
    * settings/lyrics/check/more/spectrum）已删 —— 需要时一行就够，留着没人用的
    * 映射只会让人以为功能还在。
+   *
+   * 直连 lucide 的约定（发布前 UI 审查 P2-2）：本表 stroke=1.8、默认 size=16；
+   * 组件里直连 `@lucide/svelte` 时沿用这两档（特殊强调 2.4 只给排序/开合箭头），
+   * 尺寸用 12/14/16 三档——不要再出现 15 种离散值。文本字符（↑ ▶ ✓）不当
+   * 图标用：字体渲染粗细/基线随系统走，与 lucide 不同栅格。
    */
   const ICONS = {
     play: Play,

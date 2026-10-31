@@ -235,7 +235,9 @@
   }
 
   .tb-search:focus-within {
-    border-color: var(--line-strong);
+    /* 对齐 Field/Select 的焦点语言（accent）：此前只到 line-strong，
+       同屏三种输入框两种焦点色（发布前 UI 审查 P2-7） */
+    border-color: var(--accent);
   }
 
   .tb-search-icon {

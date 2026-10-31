@@ -122,7 +122,8 @@ test('播放链路：双击行播放 → 播放条与队列激活行', async ({ 
   await page.locator('footer').getByRole('button', { name: /播放队列/ }).click();
   const active = page.locator('.queue-panel .queue-row.active');
   await expect(active).toHaveCount(1);
-  await expect(active.locator('.q-index')).toHaveText('▶');
+  // ▶ 已换成与列表一致的声条（ playing 时跳动，静态也有三根条）
+  await expect(active.locator('.q-index .bars')).toHaveCount(1);
 });
 
 test('曲库 tab：最近添加/最近播放切换（2026-10-28 自推荐页迁来）', async ({ page }) => {

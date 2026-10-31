@@ -28,11 +28,13 @@ import Button from './ui/Button.svelte';
     onremove: (index: number) => void;
     onmove: (from: number, to: number) => void;
     onclear: () => void;
+    /** 播放中与否：决定当前行的声条是否跳动 */
+    playing: boolean;
     /** 关闭（头部的 × 键；Esc/外点由外层 SideDrawer 处理，不走这里） */
     onclose: () => void;
   }
 
-  let { ids, index, transient, onplay, onremove, onmove, onclear, onclose }: Props = $props();
+  let { ids, index, transient, playing, onplay, onremove, onmove, onclear, onclose }: Props = $props();
 
   /** id → 临时项。通常是空 Map（队列全是库内曲目时） */
   const transientById = $derived(new Map(transient.map((ref) => [ref.id, ref])));
@@ -228,7 +230,15 @@ import Button from './ui/Button.svelte';
           }}
         >
           <span class="q-grip" aria-hidden="true"><Icon name="grip" size={13} /></span>
-          <span class="q-index">{row.index === index ? '▶' : row.index + 1}</span>
+          <span class="q-index" role="cell">
+            {#if row.index === index}
+              <span class="bars" class:animated={playing === true} aria-label="正在播放">
+                <i></i><i></i><i></i>
+              </span>
+            {:else}
+              {row.index + 1}
+            {/if}
+          </span>
           <Cover src={row.track?.artworkId ? artworkUrl(row.track.artworkId, 96) : null} size="sm" alt="" />
           {#if row.transient}
             <!--

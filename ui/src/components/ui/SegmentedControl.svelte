@@ -102,7 +102,7 @@
   }
 
   :global(.k-seg-item[disabled]) {
-    opacity: 0.4;
+    opacity: var(--disabled-opacity);
     cursor: default;
   }
 

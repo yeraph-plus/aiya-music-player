@@ -147,7 +147,7 @@
   }
 
   .k-field-input:disabled {
-    opacity: 0.55;
+    opacity: var(--disabled-opacity);
     cursor: default;
   }
 

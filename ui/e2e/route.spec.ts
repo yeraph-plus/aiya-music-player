@@ -296,12 +296,12 @@ test('设置页「曲库」组：统计卡 + 曲库卡片；beets 段与诊断�
 
   // 六张统计卡（曲目/专辑/艺人/总时长/文件容量/索引大小；位置缺失为 0 时不出现）。
   // 2026-10-30 补第六项：五项时 3 × 2 的第二行右边空一块，看着像布局没做完。
-  const cards = page.locator('#settings-library .stat-card');
+  const cards = page.locator('#settings-library .k-stat.row');
   await expect(cards).toHaveCount(6);
   await expect(cards.first()).toContainText('曲目');
   // 文件容量 ≠ 索引大小：前者是音乐文件加起来多大，后者是 SQLite 自己的体积
-  await expect(page.locator('#settings-library .stat-card', { hasText: '文件容量' })).toHaveCount(1);
-  await expect(page.locator('#settings-library .stat-card', { hasText: '索引大小' })).toHaveCount(1);
+  await expect(page.locator('#settings-library .k-stat.row', { hasText: '文件容量' })).toHaveCount(1);
+  await expect(page.locator('#settings-library .k-stat.row', { hasText: '索引大小' })).toHaveCount(1);
 
   // 整页六个 tab（曲库/外观/播放/系统/快捷键/关于）——2026-10-30 曲库提到第一位
   await expect(page.locator('.text-tabs .text-tab')).toHaveCount(6);
