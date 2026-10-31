@@ -157,8 +157,15 @@ def validate(doc: dict) -> list[str]:
         if name in bin_names:
             errs.append(f"{name}: 二进制名重复")
         bin_names.append(name)
-        if not str(item.get("target", "")).endswith(".exe"):
-            errs.append(f"{name}: target 必须是 bin/ 下的 .exe 文件名，实际 {item.get('target')!r}")
+        # 两种合法形状：命令二进制（bin/ 下平铺 .exe/.dll）与 SVM 模型工件
+        # （models/ 下一层 .history——Gaia 模型不是可执行文件，落 bin/models/）
+        tgt = str(item.get("target", ""))
+        ok_target = (tgt.endswith(".exe") or tgt.endswith(".dll")
+                     or (tgt.startswith("models/") and tgt.endswith(".history")
+                         and tgt.count("/") == 1))
+        if not ok_target:
+            errs.append(f"{name}: target 必须是 bin/ 下的 .exe/.dll 或 models/ 下的 "
+                        f".history，实际 {item.get('target')!r}")
         if not _is_sha256(item.get("sha256")):
             errs.append(f"{name}: sha256 必须是 64 位十六进制")
         if not isinstance(item.get("size"), int) or item["size"] <= 0:
@@ -314,7 +321,12 @@ def main() -> int:
     assert plugins.binaries_for(["replaygain"]) == ["ffmpeg"], "replaygain 只要 ffmpeg"
     assert plugins.binaries_for(["replaygain", "convert"]) == ["ffmpeg"], "必须去重"
     assert plugins.binaries_for(["lyrics"]) == [], "纯 Python 插件不涉及外部工具"
-    assert plugins.binaries_for(["xtractor"]) == ["streaming_extractor_music"]
+    # xtractor：提取器 + 运行时依赖 + 12 件 SVM 模型（成员集合，顺序随声明）
+    xt_exe = next(p["exe"] for p in DOC["plugins"] if p["name"] == "xtractor")
+    want_xt = {b["name"] for b in DOC["binaries"] if b["name"] in xt_exe}
+    assert sorted(plugins.binaries_for(["xtractor"])) == sorted(want_xt), (
+        "xtractor 的外部件必须是 exe 清单全集"
+    )
     try:
         plugins.binaries_for(["nope"])
     except KeyError:
@@ -325,19 +337,24 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         saved = os.environ.get("AIYA_BEETS_BIN_DIR")
         os.environ["AIYA_BEETS_BIN_DIR"] = tmp
+        xt_bin = next(b for b in DOC["binaries"] if b["name"] == "streaming_extractor_music")
         try:
             assert plugins.missing_binaries(["streaming_extractor_music"]), "空目录应该算缺"
             # 缺工具时：需要它的被剔掉，纯 Python 的照留（beets 会因此整体起不来）
             assert plugins.usable_plugins(["xtractor", "lyrics"]) == ["lyrics"], (
                 "缺外部工具的插件必须被剔除，纯 Python 的照留"
             )
-            Path(tmp, "streaming_extractor_music.exe").write_bytes(b"x")
+            for b in DOC["binaries"]:
+                if b["name"] in xt_exe:
+                    p = Path(tmp, *b["target"].split("/"))
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_bytes(b"x")
             assert plugins.exe_path("streaming_extractor_music") is not None, "bin/ 里有了就要认"
             assert plugins.missing_binaries(["streaming_extractor_music"]) == []
             assert plugins.usable_plugins(["xtractor", "lyrics"]) == ["xtractor", "lyrics"], (
                 "补齐之后必须自动恢复，顺序不变"
             )
-            Path(tmp, "streaming_extractor_music.exe").unlink()
+            Path(tmp, *xt_bin["target"].split("/")).unlink()
             assert plugins.usable_plugins(["xtractor"]) == [], "缺工具时不该留下 xtractor"
         finally:
             if saved is None:
@@ -375,13 +392,17 @@ def main() -> int:
                          "sha256": "0" * 64, "member": "ghost.exe"},
              "size": 1, "sha256": "0" * 64, "license": "MIT", "vendor": "x"}
         ),
-        # docs/54：bundle 的两头都要对得上
+        # docs/54：bundle 的两头都要对得上（按名定位——binaries 顺序会随条目增删变）
         "bundle 插件的工具没随包发": lambda d: d["binaries"][
             next(i for i, x in enumerate(d["binaries"])
                  if x["name"] == "streaming_extractor_music")
         ].update({"bundle": False}),
-        "bundle 二进制没人用": lambda d: d["binaries"][0].update({"bundle": True}),
-        "bundle 标志写成了字符串": lambda d: d["binaries"][1].update({"bundle": "true"}),
+        "bundle 二进制没人用": lambda d: next(
+            b for b in d["binaries"] if b["name"] == "ffmpeg"
+        ).update({"bundle": True}),
+        "bundle 标志写成了字符串": lambda d: next(
+            b for b in d["binaries"] if b["name"] == "streaming_extractor_music"
+        ).update({"bundle": "true"}),
     }
     for label, mutate in cases.items():
         got = broken(mutate)

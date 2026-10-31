@@ -446,25 +446,46 @@ try:
             else:
                 os.environ["AIYA_BEETS_BIN_DIR"] = prev_bin
 
-        # ---- 12. xtractor 的提取档位（docs/54 §3）----
+        # ---- 12. xtractor 的提取档位（docs/54 §3；2026-10-31 起换 Gaia 构建）----
         #
-        # 守的是"配好了、跑完了、字段全空"：我们下发的 win-i686 提取器没编 Gaia2，
-        # `highlevel.compute` 一开就 `GaiaTransform not found` + 退出 1，**连 json
-        # 都不产出**——所有字段空着，而配置看起来完全正常（docs/50 §2.5）。
-        full = cfg.render_config(Path(HOME_IDX), SCAN_ROOT, None, cfg.PROFILE_INDEX)
-        assert "extractor_profile:" in full, full
-        assert "        highlevel:\n            compute: 0" in full, (
-            f"档位必须是嵌套的 highlevel.compute: 0（扁点号键 confuse 查不到）：\n{full}"
-        )
-        assert "svm_models" not in full, "不要写我们根本没有的模型路径"
-        # 正向：这份文本要能过闸（顺便证明嵌套解析读得到 compute）
-        cfg.verify_config(full, cfg.PROFILE_INDEX, Path(HOME_IDX), SCAN_ROOT)
-        # 负向两连：打开 highlevel / 整条丢键，都必须变红
-        must_gate(full.replace("compute: 0", "compute: 1"), HOME_IDX,
-                  "highlevel 被打开（提取器会整体退出 1）", SCAN_ROOT)
-        must_gate(full.replace("        highlevel:\n            compute: 0\n", ""),
-                  HOME_IDX, "highlevel.compute 整条缺失", SCAN_ROOT)
-        print("[12] 提取档位 OK（highlevel.compute 钉 0 / 打开或缺失都变红）")
+        # 守两件事：highlevel 必须开（关掉 = danceability/mood 永远是空字段）、
+        # svm_models 必须逐件实存（模型没下齐时提取器静默跳过 = 同样的"字段全空"）。
+        # 旧世界（AB win-i686 没编 Gaia2、必须钉 compute: 0）见 git 历史。
+        bin_tmp12 = tempfile.mkdtemp(prefix="cfg12-bin-")
+        prev_bin12 = os.environ.get("AIYA_BEETS_BIN_DIR")
+        os.environ["AIYA_BEETS_BIN_DIR"] = bin_tmp12
+        try:
+            Path(bin_tmp12, "streaming_extractor_music.exe").write_bytes(b"x")
+            model_paths = []
+            for name in cfg.XTRACTOR_MODEL_FILES:
+                p = Path(bin_tmp12, "models", f"{name}.history")
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(b"x")
+                model_paths.append(str(p))
+
+            full = cfg.render_config(Path(HOME_IDX), SCAN_ROOT, None, cfg.PROFILE_INDEX)
+            assert "extractor_profile:" in full, full
+            assert "        highlevel:\n            compute: 1" in full, (
+                f"档位必须是嵌套的 highlevel.compute: 1（扁点号键 confuse 查不到）：\n{full}"
+            )
+            assert full.count(".history") == len(cfg.XTRACTOR_MODEL_FILES), (
+                f"svm_models 必须逐件列出 {len(cfg.XTRACTOR_MODEL_FILES)} 个模型：\n{full}"
+            )
+            # 正向：这份文本要能过闸（顺便证明嵌套解析读得到 compute 与模型清单）
+            cfg.verify_config(full, cfg.PROFILE_INDEX, Path(HOME_IDX), SCAN_ROOT)
+            # 负向三连：关掉 highlevel / 丢掉模型清单 / 删一个模型文件，都必须变红
+            must_gate(full.replace("compute: 1", "compute: 0"), HOME_IDX,
+                      "highlevel 被关掉（danceability/mood 会是空字段）", SCAN_ROOT)
+            must_gate(full.replace("        svm_models:\n", ""), HOME_IDX,
+                      "svm_models 整条缺失", SCAN_ROOT)
+            os.remove(model_paths[0])
+            must_gate(full, HOME_IDX, "svm_models 指向的模型不存在", SCAN_ROOT)
+            print("[12] 提取档位 OK（compute 钉 1 / svm_models 逐件实存，缺失都变红）")
+        finally:
+            if prev_bin12 is None:
+                os.environ.pop("AIYA_BEETS_BIN_DIR", None)
+            else:
+                os.environ["AIYA_BEETS_BIN_DIR"] = prev_bin12
     finally:
         for k, v in saved.items():
             if v is None:

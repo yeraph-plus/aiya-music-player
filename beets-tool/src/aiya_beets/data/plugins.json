@@ -18,6 +18,44 @@
   },
   "binaries": [
     {
+      "name": "qt5core",
+      "target": "Qt5Core.dll",
+      "bundle": true,
+      "why": "Gaia 构建非静态链接：Qt5Core 必须与提取器同目录，缺它 spawn 起不来",
+      "carrier": {
+        "kind": "zip",
+        "url": "https://github.com/brendanerofeev/essentia/releases/download/gaia-win64-2/essentia-gaia-win64.zip",
+        "size": 13424829,
+        "sha256": "3937f00997233b4d5f0751b2d7f4b7361116a19744c3d7839aaf6ccac23dc93f",
+        "member": "Qt5Core.dll"
+      },
+      "size": 6130176,
+      "sha256": "71b73ad1b986c1a5c176d41e75d672f122dd5a88232c993bd481a80bff10cc2c",
+      "probe": [],
+      "probeAllowFail": true,
+      "license": "LGPL-3.0-or-later",
+      "vendor": "Qt5 Core（The Qt Company），随社区构建原样分发"
+    },
+    {
+      "name": "streaming_extractor_music",
+      "target": "streaming_extractor_music.exe",
+      "bundle": true,
+      "why": "xtractor 调它算 bpm / danceability / mood（python 绑定在 Windows 上没有发行版）；Gaia/SVM 需要社区构建——AB 官方 win-i686 没编 Gaia2，配模型必炸（docs/50 §2.5）",
+      "carrier": {
+        "kind": "zip",
+        "url": "https://github.com/brendanerofeev/essentia/releases/download/gaia-win64-2/essentia-gaia-win64.zip",
+        "size": 13424829,
+        "sha256": "3937f00997233b4d5f0751b2d7f4b7361116a19744c3d7839aaf6ccac23dc93f",
+        "member": "streaming_extractor_music.exe"
+      },
+      "size": 12096512,
+      "sha256": "3567cd0e236ad21d0eb4e0e4d277f2c13ff217f43212b8f86463459d6ac34d23",
+      "probe": [],
+      "probeAllowFail": true,
+      "license": "AGPL-3.0-or-later",
+      "vendor": "Essentia music extractor，带 Gaia/SVM（社区构建 brendanerofeev/essentia gaia-win64-2，源起 regorxxx 的 Actions 构建，commit 14dce99b）"
+    },
+    {
       "name": "ffmpeg",
       "target": "ffmpeg.exe",
       "bundle": false,
@@ -31,29 +69,12 @@
       },
       "size": 87638016,
       "sha256": "2ce797a0f88d7f067180338fb227f7b1928ea727bd9a4d7a1d022f7c52af71a3",
-      "probe": ["-version"],
+      "probe": [
+        "-version"
+      ],
       "probeAllowFail": false,
       "license": "GPL-3.0-or-later",
       "vendor": "ffmpeg 7.1 essentials (gyan.dev)，经 PyPI imageio-ffmpeg 0.7.0 分发"
-    },
-    {
-      "name": "streaming_extractor_music",
-      "target": "streaming_extractor_music.exe",
-      "bundle": true,
-      "why": "xtractor 调它算 bpm / danceability / 响度（python 绑定在 Windows 上没有发行版）",
-      "carrier": {
-        "kind": "zip",
-        "url": "https://data.metabrainz.org/pub/musicbrainz/acousticbrainz/extractors/essentia-extractor-v2.1_beta2-1-ge3940c0-win-i686.zip",
-        "size": 5539511,
-        "sha256": "eb4e64e4334ae5c63962fdc6b8bdfbdb53ba11e4705373feeb89503c08ee2688",
-        "member": "streaming_extractor_music.exe"
-      },
-      "size": 20701667,
-      "sha256": "1d8e52b9730ca744a288552919be75637a01b154fc3b591fd4259a15779de680",
-      "probe": [],
-      "probeAllowFail": true,
-      "license": "AGPL-3.0-or-later",
-      "vendor": "Essentia 2.1_beta2 win-i686（AcousticBrainz 停服后由 MetaBrainz 留存）"
     },
     {
       "name": "fpcalc",
@@ -69,10 +90,240 @@
       },
       "size": 4148224,
       "sha256": "1fff0e00387ae96eb461f9913511e3adfd4f634cf80c67c761fc88f69027251e",
-      "probe": ["-version"],
+      "probe": [
+        "-version"
+      ],
       "probeAllowFail": false,
       "license": "LGPL-2.1-or-later",
       "vendor": "chromaprint-fpcalc 1.6.2 (acoustid)"
+    },
+    {
+      "name": "svm-danceability",
+      "target": "models/danceability.history",
+      "bundle": true,
+      "why": "highlevel.danceability 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "carrier": {
+        "kind": "zip",
+        "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
+        "size": 17753458,
+        "sha256": "312067548931436b48abad98dc663c0f7dcb7ddcdcf01b38db347e266bb2d9e3",
+        "member": "danceability.history"
+      },
+      "size": 1569112,
+      "sha256": "fab3fcb7e533a2338f0adc1da4c866f1e53ff19881fafc0560adf7ea98b29c42",
+      "probe": [],
+      "probeAllowFail": true,
+      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+    },
+    {
+      "name": "svm-gender",
+      "target": "models/gender.history",
+      "bundle": true,
+      "why": "highlevel.gender 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "carrier": {
+        "kind": "zip",
+        "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
+        "size": 17753458,
+        "sha256": "312067548931436b48abad98dc663c0f7dcb7ddcdcf01b38db347e266bb2d9e3",
+        "member": "gender.history"
+      },
+      "size": 16248616,
+      "sha256": "ed4a05f24333268ac455a9cdcb63d7d92090d384d28cd24e2ec82a70c12263be",
+      "probe": [],
+      "probeAllowFail": true,
+      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+    },
+    {
+      "name": "svm-genre_rosamerica",
+      "target": "models/genre_rosamerica.history",
+      "bundle": true,
+      "why": "highlevel.genre_rosamerica 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "carrier": {
+        "kind": "zip",
+        "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
+        "size": 17753458,
+        "sha256": "312067548931436b48abad98dc663c0f7dcb7ddcdcf01b38db347e266bb2d9e3",
+        "member": "genre_rosamerica.history"
+      },
+      "size": 2152456,
+      "sha256": "e87288b6a42d039ffd5a68094e2d9e87a36be0ec3d4d264c1e2438af454a19de",
+      "probe": [],
+      "probeAllowFail": true,
+      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+    },
+    {
+      "name": "svm-mood_acoustic",
+      "target": "models/mood_acoustic.history",
+      "bundle": true,
+      "why": "highlevel.mood_acoustic 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "carrier": {
+        "kind": "zip",
+        "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
+        "size": 17753458,
+        "sha256": "312067548931436b48abad98dc663c0f7dcb7ddcdcf01b38db347e266bb2d9e3",
+        "member": "mood_acoustic.history"
+      },
+      "size": 1072791,
+      "sha256": "ca1e999443270fde95fbf2a11ec83fafc372b2d4efe3a558873cf2eea46644ca",
+      "probe": [],
+      "probeAllowFail": true,
+      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+    },
+    {
+      "name": "svm-mood_aggressive",
+      "target": "models/mood_aggressive.history",
+      "bundle": true,
+      "why": "highlevel.mood_aggressive 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "carrier": {
+        "kind": "zip",
+        "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
+        "size": 17753458,
+        "sha256": "312067548931436b48abad98dc663c0f7dcb7ddcdcf01b38db347e266bb2d9e3",
+        "member": "mood_aggressive.history"
+      },
+      "size": 1275926,
+      "sha256": "289990d094dfbe08bed411467e7d3a89b3ceff80ee4ee2d1df23f45cecc264a5",
+      "probe": [],
+      "probeAllowFail": true,
+      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+    },
+    {
+      "name": "svm-mood_electronic",
+      "target": "models/mood_electronic.history",
+      "bundle": true,
+      "why": "highlevel.mood_electronic 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "carrier": {
+        "kind": "zip",
+        "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
+        "size": 17753458,
+        "sha256": "312067548931436b48abad98dc663c0f7dcb7ddcdcf01b38db347e266bb2d9e3",
+        "member": "mood_electronic.history"
+      },
+      "size": 2795913,
+      "sha256": "274c681a2918314afd8cb316ac104ed8c3200118efe898e1e21e2bd3345267bf",
+      "probe": [],
+      "probeAllowFail": true,
+      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+    },
+    {
+      "name": "svm-mood_happy",
+      "target": "models/mood_happy.history",
+      "bundle": true,
+      "why": "highlevel.mood_happy 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "carrier": {
+        "kind": "zip",
+        "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
+        "size": 17753458,
+        "sha256": "312067548931436b48abad98dc663c0f7dcb7ddcdcf01b38db347e266bb2d9e3",
+        "member": "mood_happy.history"
+      },
+      "size": 911914,
+      "sha256": "1200c52d9c96a05096f39e2b918dc1922435301df726be2ae0a0dbfaae70c53f",
+      "probe": [],
+      "probeAllowFail": true,
+      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+    },
+    {
+      "name": "svm-mood_sad",
+      "target": "models/mood_sad.history",
+      "bundle": true,
+      "why": "highlevel.mood_sad 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "carrier": {
+        "kind": "zip",
+        "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
+        "size": 17753458,
+        "sha256": "312067548931436b48abad98dc663c0f7dcb7ddcdcf01b38db347e266bb2d9e3",
+        "member": "mood_sad.history"
+      },
+      "size": 1883367,
+      "sha256": "8416f84b5aa0201e6e3397ba8675255dd76d0c51ac76d210629233366c3b0531",
+      "probe": [],
+      "probeAllowFail": true,
+      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+    },
+    {
+      "name": "svm-mood_party",
+      "target": "models/mood_party.history",
+      "bundle": true,
+      "why": "highlevel.mood_party 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "carrier": {
+        "kind": "zip",
+        "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
+        "size": 17753458,
+        "sha256": "312067548931436b48abad98dc663c0f7dcb7ddcdcf01b38db347e266bb2d9e3",
+        "member": "mood_party.history"
+      },
+      "size": 1024025,
+      "sha256": "7160dde2cec8b08efed5f8d6d52d66af4f686ed241dae78caba88035683d0662",
+      "probe": [],
+      "probeAllowFail": true,
+      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+    },
+    {
+      "name": "svm-mood_relaxed",
+      "target": "models/mood_relaxed.history",
+      "bundle": true,
+      "why": "highlevel.mood_relaxed 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "carrier": {
+        "kind": "zip",
+        "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
+        "size": 17753458,
+        "sha256": "312067548931436b48abad98dc663c0f7dcb7ddcdcf01b38db347e266bb2d9e3",
+        "member": "mood_relaxed.history"
+      },
+      "size": 2081885,
+      "sha256": "16851cab57864227faffad961a8f19c2a85d2f12cd79d172def3e658d3c4ff54",
+      "probe": [],
+      "probeAllowFail": true,
+      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+    },
+    {
+      "name": "svm-voice_instrumental",
+      "target": "models/voice_instrumental.history",
+      "bundle": true,
+      "why": "highlevel.voice_instrumental 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "carrier": {
+        "kind": "zip",
+        "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
+        "size": 17753458,
+        "sha256": "312067548931436b48abad98dc663c0f7dcb7ddcdcf01b38db347e266bb2d9e3",
+        "member": "voice_instrumental.history"
+      },
+      "size": 6977989,
+      "sha256": "ac153e3c235f6b79e732083952d22ef3bc2c999d7a6672dd595b0a0a87e2b4e4",
+      "probe": [],
+      "probeAllowFail": true,
+      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+    },
+    {
+      "name": "svm-moods_mirex",
+      "target": "models/moods_mirex.history",
+      "bundle": true,
+      "why": "highlevel.moods_mirex 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "carrier": {
+        "kind": "zip",
+        "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
+        "size": 17753458,
+        "sha256": "312067548931436b48abad98dc663c0f7dcb7ddcdcf01b38db347e266bb2d9e3",
+        "member": "moods_mirex.history"
+      },
+      "size": 4324637,
+      "sha256": "c8991bdfa179e90dfde2d851a0400b16bebe01a450442f2212079809d60ff819",
+      "probe": [],
+      "probeAllowFail": true,
+      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     }
   ],
   "plugins": [
@@ -83,7 +334,9 @@
       "builtin": true,
       "packages": [],
       "imports": [],
-      "exe": ["ffmpeg"],
+      "exe": [
+        "ffmpeg"
+      ],
       "writes": true,
       "network": false,
       "bundle": false
@@ -93,8 +346,12 @@
       "title": "歌词抓取",
       "note": "抓取歌词，LRC 字段可直供",
       "builtin": true,
-      "packages": ["beautifulsoup4>=4.12,<5"],
-      "imports": ["bs4"],
+      "packages": [
+        "beautifulsoup4>=4.12,<5"
+      ],
+      "imports": [
+        "bs4"
+      ],
       "exe": [],
       "writes": false,
       "network": true,
@@ -106,7 +363,9 @@
       "note": "本地缺图时联网补封面（生成的 cover 落在专辑目录）",
       "builtin": true,
       "packages": [],
-      "imports": ["requests"],
+      "imports": [
+        "requests"
+      ],
       "exe": [],
       "writes": true,
       "network": true,
@@ -119,7 +378,9 @@
       "builtin": true,
       "packages": [],
       "imports": [],
-      "exe": ["ffmpeg"],
+      "exe": [
+        "ffmpeg"
+      ],
       "writes": true,
       "network": false,
       "bundle": false
@@ -190,7 +451,9 @@
       "note": "从 MusicBrainz 拉元数据补进库",
       "builtin": true,
       "packages": [],
-      "imports": ["requests"],
+      "imports": [
+        "requests"
+      ],
       "exe": [],
       "writes": false,
       "network": true,
@@ -201,9 +464,15 @@
       "title": "音频指纹",
       "note": "acoustid 指纹识别（需要 fpcalc）",
       "builtin": true,
-      "packages": ["pyacoustid>=1.3,<2"],
-      "imports": ["acoustid"],
-      "exe": ["fpcalc"],
+      "packages": [
+        "pyacoustid>=1.3,<2"
+      ],
+      "imports": [
+        "acoustid"
+      ],
+      "exe": [
+        "fpcalc"
+      ],
       "writes": false,
       "network": true,
       "bundle": false,
@@ -218,7 +487,9 @@
       "builtin": true,
       "packages": [],
       "imports": [],
-      "exe": ["ffmpeg"],
+      "exe": [
+        "ffmpeg"
+      ],
       "writes": true,
       "network": false,
       "bundle": false
@@ -226,11 +497,30 @@
     {
       "name": "xtractor",
       "title": "音频特征",
-      "note": "bpm / danceability / 响度（插件与 Essentia 提取器都随免配置包预置）",
+      "note": "bpm / danceability / mood 等（插件与 Essentia Gaia 构建 + SVM 模型都随免配置包预置）",
       "builtin": false,
-      "packages": ["beets-xtractor>=0.4.2,<0.5"],
-      "imports": ["beetsplug.xtractor"],
-      "exe": ["streaming_extractor_music"],
+      "packages": [
+        "beets-xtractor>=0.4.2,<0.5"
+      ],
+      "imports": [
+        "beetsplug.xtractor"
+      ],
+      "exe": [
+        "streaming_extractor_music",
+        "qt5core",
+        "svm-danceability",
+        "svm-gender",
+        "svm-genre_rosamerica",
+        "svm-mood_acoustic",
+        "svm-mood_aggressive",
+        "svm-mood_electronic",
+        "svm-mood_happy",
+        "svm-mood_sad",
+        "svm-mood_party",
+        "svm-mood_relaxed",
+        "svm-voice_instrumental",
+        "svm-moods_mirex"
+      ],
       "writes": true,
       "network": false,
       "bundle": true,
@@ -334,8 +624,12 @@
       "title": "Discogs 源",
       "note": "Discogs 元数据源（电子乐强项）；需在 beets config 里配自己的 API token",
       "builtin": true,
-      "packages": ["discogs-client>=2.3,<3"],
-      "imports": ["discogs_client"],
+      "packages": [
+        "discogs-client>=2.3,<3"
+      ],
+      "imports": [
+        "discogs_client"
+      ],
       "exe": [],
       "writes": false,
       "network": true,
@@ -346,8 +640,12 @@
       "title": "Beatport 源",
       "note": "Beatport 元数据源（舞曲/电子）；上游 OAuth 接口历史上不稳，失效可换社区 beets-beatport4",
       "builtin": true,
-      "packages": ["requests-oauthlib>=1.3,<3"],
-      "imports": ["requests_oauthlib"],
+      "packages": [
+        "requests-oauthlib>=1.3,<3"
+      ],
+      "imports": [
+        "requests_oauthlib"
+      ],
       "exe": [],
       "writes": false,
       "network": true,
@@ -370,9 +668,15 @@
       "title": "多副本管理",
       "note": "管理主库之外的镜像副本（FLAC 主库 + MP3 拷贝等）；转码档要用 ffmpeg",
       "builtin": false,
-      "packages": ["beets-alternatives>=0.14,<1"],
-      "imports": ["beetsplug.alternatives"],
-      "exe": ["ffmpeg"],
+      "packages": [
+        "beets-alternatives>=0.14,<1"
+      ],
+      "imports": [
+        "beetsplug.alternatives"
+      ],
+      "exe": [
+        "ffmpeg"
+      ],
       "writes": true,
       "network": false,
       "bundle": false

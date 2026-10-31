@@ -382,8 +382,10 @@ def install_one(
 
     blob = fetch_blob(spec, carrier, say)
 
-    # 先写 .part 再 replace：中途失败不会留下一个"看着在、其实半截"的 exe
+    # 先写 .part 再 replace：中途失败不会留下一个"看着在、其实半截"的 exe。
+    # target 带子目录（SVM 模型落 bin/models/）时父目录也要补出来。
     staged = local / (spec.target + ".part")
+    staged.parent.mkdir(parents=True, exist_ok=True)
     staged.write_bytes(blob)
     final = local / spec.target
     os.replace(staged, final)
@@ -392,7 +394,7 @@ def install_one(
     except OSError:
         pass
 
-    ok, version = probe(final, spec)
+    ok, version = _probe_ok(final, spec)
     if not ok:
         final.unlink(missing_ok=True)
         raise BinError(f"{name}：落盘后跑不起来（{version or '无输出'}）")
@@ -400,17 +402,28 @@ def install_one(
     return {"name": name, "path": str(final), "version": version, "bytes": len(blob)}
 
 
+def _probe_ok(path: Path, spec: BinarySpec) -> tuple[bool, str | None]:
+    """落盘体检：.exe 跑一次 probe 参数；DLL / 模型等非可执行文件没法"跑一次"
+    ——完整性由下载侧的 sha256 钉扎保证，文件在即算就绪。"""
+    if not spec.target.lower().endswith(".exe"):
+        return True, None
+    return probe(path, spec)
+
+
 def ensure(names: list[str], on_progress=None, carriers: dict[str, Path] | None = None) -> list[dict]:
     """把这批二进制补齐（已有的跳过）。返回每个的实际结果。"""
     say = on_progress or (lambda _m: None)
     done: list[dict] = []
+    # 共享载体的预下载缓存（12 件模型同一个 zip——逐条目下载 = 12×17MB 慢源），
+    # 惰性填充：只给真正要装的条目碰网络。
+    cache = dict(carriers or {})
     for name in names:
         spec = plugins.binary(name)
         if spec is None:
             raise KeyError(name)
         present = installed_path(spec)
         if present is not None:
-            ok, version = probe(present, spec)
+            ok, version = _probe_ok(present, spec)
             if ok:
                 say(f"{name}：已就绪，跳过")
                 done.append(
@@ -421,7 +434,12 @@ def ensure(names: list[str], on_progress=None, carriers: dict[str, Path] | None 
             # 在但跑不起来（缺 DLL / 被杀软拦 / 半截文件）→ 当没有，重下
             say(f"{name}：现有文件跑不起来，重新下载")
             present.unlink(missing_ok=True)
-        done.append(install_one(name, (carriers or {}).get(name), say))
+        if spec.url not in cache:
+            local = Path(tempfile.gettempdir()) / f"aiya-carrier-{spec.carrier_sha256[:16]}.zip"
+            if not (local.is_file() and local.stat().st_size == spec.carrier_size):
+                _download(spec.url, local, spec.carrier_size)
+            cache[spec.url] = local
+        done.append(install_one(name, cache.get(spec.url), say))
     return done
 
 
@@ -431,9 +449,27 @@ def stage(names: list[str], dest: Path, on_progress=None, carriers: dict[str, Pa
     与 `ensure` 的区别只有两点：落点由调用方给（包里的 `bin/`），以及**不跳过**
     ——打包要的是"每次都用当前 pin 的载体重新验一遍"，跳过会让一个上一次构建
     残留的旧 exe quiet 地进包。
+
+    同一次 stage 里多个条目共用一个载体时（提取器 + Qt5Core、12 件模型同
+    两个 zip），载体只下载一次：12 件模型各拉一遍 17MB 是把慢源转嫁给每次构建。
     """
     say = on_progress or (lambda _m: None)
-    return [install_one(name, (carriers or {}).get(name), say, dest=dest) for name in names]
+    cache = dict(carriers or {})
+    # 先把去重后的载体各下载一次：同一 zip 会被多个条目共用（提取器 + Qt5Core
+    # 同一个 zip、12 件模型同一个 zip）——逐条目下载是把慢源转嫁给每次构建/安装。
+    for name in names:
+        spec = plugins.binary(name)
+        if spec is None or spec.url in cache:
+            continue
+        local = Path(tempfile.gettempdir()) / f"aiya-carrier-{spec.carrier_sha256[:16]}.zip"
+        if not (local.is_file() and local.stat().st_size == spec.carrier_size):
+            _download(spec.url, local, spec.carrier_size)
+        cache[spec.url] = local
+    rows: list[dict] = []
+    for name in names:
+        spec = plugins.binary(name)
+        rows.append(install_one(name, cache.get(spec.url) if spec else None, say, dest=dest))
+    return rows
 
 
 # ---------------------------------------------------------------- CLI

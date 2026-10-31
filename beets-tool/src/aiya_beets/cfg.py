@@ -96,16 +96,39 @@ INDEX_IMPORT_KEYS: tuple[tuple[str, str], ...] = (
     ("duplicate_action", "keep"),  # 默认 ask 会吞掉同标签同长的第二个文件
 )
 
-# xtractor 的提取档位（docs/54 §3）。**必须钉成"不算 highlevel"**：
-# 我们下发的是 AcousticBrainz 那版 **win-i686** 提取器，它没编 Gaia2 ——
-# 配了 svm_models 会 `Identifier 'GaiaTransform' not found in registry`
-# 然后**退出 1 且一个 json 都不产出**（docs/50 §2.5 实测）。插件自己那份
-# `config_default.yml` 默认 `highlevel.compute: 1` + 一个占位模型路径，
-# 所以不钉就永远是"跑完了、字段全空"。
-XTRACTOR_PROFILE: dict[str, object] = {
-    "outputFormat": "json",
-    "highlevel": {"compute": 0},
-}
+# xtractor 的提取档位（docs/54 §3）。2026-10-31 起提取器换成**带 Gaia/SVM 的
+# 社区 x64 构建**（brendanerofeev/essentia gaia-win64-2，源起 regorxxx 的
+# Actions 构建），highlevel 打开——danceability / mood 等 SVM 特征由此产出；
+# svm_models 指向与提取器同级的 models/ 目录（12 件 .history，随包/随装分发，
+# 渲染时解析成绝对路径——模型不是可执行文件，走 binaries 表的 models/ 子路径）。
+#
+# 旧事实存档（为什么这里曾是 compute: 0）：AB 官方 win-i686 构建没编 Gaia2，
+# 配了 svm_models 会 `Identifier 'GaiaTransform' not found in registry` 然后
+# 退出 1 且一个 json 都不产出（docs/50 §2.5 实测）——那版二进制下这里必须钉 0。
+XTRACTOR_MODEL_FILES: tuple[str, ...] = (
+    "danceability", "gender", "genre_rosamerica", "mood_acoustic",
+    "mood_aggressive", "mood_electronic", "mood_happy", "mood_sad",
+    "mood_party", "mood_relaxed", "voice_instrumental", "moods_mirex",
+)
+
+
+def xtractor_profile(exe: str | Path) -> dict[str, object]:
+    """提取档位：highlevel 全开，模型按提取器同级的 models/ 解析成绝对路径。
+
+    12 件的清单与 binaries 表的 `svm-*` 条目一一对应（models/<名>.history），
+    缺哪件在配置门禁（_validate_index）里会响，不在这里吞。
+    """
+    base = Path(exe).parent
+    return {
+        "outputFormat": "json",
+        "highlevel": {
+            "compute": 1,
+            "svm_models": [
+                yaml_path(base / "models" / f"{name}.history")
+                for name in XTRACTOR_MODEL_FILES
+            ],
+        },
+    }
 
 
 class ConfigError(Exception):
@@ -384,12 +407,14 @@ def _sync_plugins(text: str, names: list[str]) -> str:
 
 
 def _render_tree(rows: list[tuple[str, object]], indent: int) -> list[str]:
-    """按 4 空格层级渲染 `key: value`（`dict` 值就往下嵌一层）。
+    """按 4 空格层级渲染 `key: value`（`dict` 值往下嵌一层，`list` 值出 `- 项`）。
 
     为什么需要层级：xtractor 的 `extractor_profile.highlevel.compute` 是 confuse
     的**真嵌套**键。写成点号扁键（`extractor_profile.highlevel.compute: 0`）是
     查不到的——confuse 把 `config['a.b']` 拆成两层去找，而 YAML 里那是一个
     字面 key（这条在验证脚本里踩过：插件报 `Key 'extractor_profile' is not defined`）。
+    列表：`svm_models` 是 essentia 配置里的真 YAML 数组，repr 一行串会让
+    反斜杠翻倍、提取器拿到的是坏路径。
     """
     out: list[str] = []
     pad = " " * indent
@@ -397,6 +422,10 @@ def _render_tree(rows: list[tuple[str, object]], indent: int) -> list[str]:
         if isinstance(value, dict):
             out.append(f"{pad}{key}:")
             out += _render_tree(list(value.items()), indent + 4)
+        elif isinstance(value, (list, tuple)):
+            out.append(f"{pad}{key}:")
+            for item in value:
+                out.append(f"{pad}    - {item}")
         else:
             out.append(f"{pad}{key}: {value}")
     return out
@@ -429,7 +458,7 @@ def _render_index(home: Path, plugins: list[str] | None, root: str | None) -> st
             found = exe_path("streaming_extractor_music")
             if found:
                 rows.append(("essentia_extractor", yaml_path(found)))
-            rows.append(("extractor_profile", XTRACTOR_PROFILE))
+                rows.append(("extractor_profile", xtractor_profile(found)))
         if not rows:
             continue
         lines.append(f"{name}:")
@@ -450,6 +479,8 @@ def _parse(text: str) -> dict[str, object]:
     """
     root: dict[str, object] = {}
     stack: list[tuple[int, dict[str, object]]] = [(-1, root)]
+    # 刚由"空值键"建出的子 dict 与其键：下一行若是 `- 项`，说明它其实是个列表
+    fresh: tuple[dict[str, object], str] | None = None
     for raw in text.splitlines():
         line = raw.rstrip()
         if not line.strip() or line.lstrip().startswith("#"):
@@ -458,6 +489,17 @@ def _parse(text: str) -> dict[str, object]:
         indent = len(line) - len(stripped)
         if indent % 4:
             raise ConfigGateError(f"缩进不是 4 的倍数（无法识别的配置行）：{raw!r}")
+        if stripped.startswith("- "):
+            # 列表项：渲染器只在"空值键"之下产出这种行——把那个键换成列表
+            if fresh is None:
+                raise ConfigGateError(f"无法识别的配置行（列表项位置不对）：{raw!r}")
+            outer, key = fresh
+            if not isinstance(outer.get(key), list):
+                outer[key] = [stripped[2:].strip()]
+            else:
+                outer[key].append(stripped[2:].strip())
+            continue
+        fresh = None
         key, _, value = stripped.partition(":")
         key, value = key.strip(), value.strip()
         if not key:
@@ -469,10 +511,12 @@ def _parse(text: str) -> dict[str, object]:
         parent = stack[-1][1]
         if value:
             parent[key] = value
+            fresh = None
         else:
             child: dict[str, object] = {}
             parent[key] = child
             stack.append((indent, child))
+            fresh = (parent, key)
     return root
 
 
@@ -587,17 +631,32 @@ def verify_config(
                 f"xtractor.essentia_extractor 必须指向 {found}，实际是 {got or '（缺失）'}"
                 "（默认值是占位符，插件会拿它去 spawn 一个不存在的程序）"
             )
-        # 提取档位：highlevel 必须关掉（docs/54 §3）。开着的话 win-i686 那版
-        # 提取器会 `GaiaTransform not found` 退出 1，一个 json 都不产出——
-        # 症状是"跑了，字段全空"，而配置看起来完全正常。
+        # 提取档位：Gaia 构建下 highlevel 必须开着 + svm_models 逐件实存。
+        # （旧提取器时代的反向闸门见 git 历史：那版没编 Gaia2，开着必炸——
+        # 症状是 `GaiaTransform not found` 退出 1，一个 json 都不产出。）
         profile = section.get("extractor_profile") if isinstance(section, dict) else None
         high = profile.get("highlevel") if isinstance(profile, dict) else None
         compute = high.get("compute") if isinstance(high, dict) else None
-        if compute != "0":
+        if compute != "1":
             raise ConfigGateError(
-                "xtractor.extractor_profile.highlevel.compute 必须是 0"
-                f"（实际 {compute or '（缺失）'}）：我们下发的提取器没编 Gaia2，"
-                "算 highlevel 会整体退出 1 且不产出任何结果"
+                "xtractor.extractor_profile.highlevel.compute 必须是 1"
+                f"（实际 {compute or '（缺失）'}）：Gaia 构建下关掉它，"
+                "danceability/mood 永远是空字段"
+            )
+        models = high.get("svm_models") if isinstance(high, dict) else None
+        if not isinstance(models, list) or len(models) != len(XTRACTOR_MODEL_FILES):
+            raise ConfigGateError(
+                "xtractor.extractor_profile.highlevel.svm_models 必须是"
+                f" {len(XTRACTOR_MODEL_FILES)} 件模型的绝对路径清单"
+            )
+        missing = [
+            m for m in models
+            if not os.path.isfile(str(m).strip("'\""))
+        ]
+        if missing:
+            raise ConfigGateError(
+                "svm_models 指向的模型不存在："
+                f"{', '.join(os.path.basename(str(m)) for m in missing)}（bins 未补齐？）"
             )
 
 
