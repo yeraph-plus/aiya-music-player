@@ -39,6 +39,8 @@ ts-rs.workspace = true
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 # 安装物下载（A/B 两轨道的 release 拉取）
 ureq.workspace = true
+# 下载物 sha256 校验（verify_checksum，SHA256SUMS 清单比对）
+sha2.workspace = true
 souvlaki = "0.8"
 tauri-plugin-single-instance = "2"
 [dev-dependencies]

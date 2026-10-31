@@ -115,6 +115,19 @@ jobs:
             Write-Host ("{0}  {1:N0} KB" -f $f, ($len / 1KB))
           }
 
+      # 宿主下载发布物后会比对 sha256（beets.rs verify_checksum，发布前审查
+      # P1-6）：清单缺失时宿主拒绝安装。标准 sha256sum 两空格格式（二进制模式），
+      # 宿主按行尾文件名精确匹配。
+      - name: 生成 SHA256SUMS
+        run: |
+          $files = @("aiya-beets-installer.pyz", "aiya-beets-bundle-win-x64.zip")
+          $lines = foreach ($f in $files) {
+            $h = (Get-FileHash -Algorithm SHA256 "beets-tool/dist/$f").Hash.ToLower()
+            "$h  $f"
+          }
+          $lines | Set-Content -Path "beets-tool/dist/SHA256SUMS" -Encoding ascii
+          Get-Content "beets-tool/dist/SHA256SUMS"
+
       # "免配置"是可验证的：解开包，用**包里的**解释器 import 预置插件的模块，
       # 再按宿主真实的布局（{data_root}\beets-tool\bundle）让它自己找 bin/ 里的
       # 外置工具——xtractor 能不能用，取决于这一步（docs/54）。
@@ -169,6 +182,7 @@ jobs:
           path: |
             beets-tool/dist/aiya-beets-installer.pyz
             beets-tool/dist/aiya-beets-bundle-win-x64.zip
+            beets-tool/dist/SHA256SUMS
           retention-days: 14
 
       # ---------------------------------------------------------------
@@ -181,7 +195,8 @@ jobs:
         run: |
           $files = @(
             "beets-tool/dist/aiya-beets-installer.pyz",
-            "beets-tool/dist/aiya-beets-bundle-win-x64.zip"
+            "beets-tool/dist/aiya-beets-bundle-win-x64.zip",
+            "beets-tool/dist/SHA256SUMS"
           )
           $version = "${{ inputs.version }}"
           if (-not $version) { $version = ("${{ github.ref_name }}" -replace '^beets-v', '') }

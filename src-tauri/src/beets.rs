@@ -901,10 +901,76 @@ fn verify_asset(path: &std::path::Path, kind: AssetKind) -> Result<usize, String
     }
 }
 
+/// 下载物的 sha256 校验（发布前审查 P1-6）。
+///
+/// `.pyz` 下载完要交给本机 Python 执行，是全链路里权限最高的工件，不能只验
+/// "是个 zip"。发布通道随包附 `SHA256SUMS`（release-beets.yml 生成、随两个
+/// 资产一起上传），下载后逐行比对。它防的是**传输与落盘完整性**（截断、代理
+/// 篡改、404 页、拿错资产），不防 GitHub 仓库本身被入侵——那要把哈希钉进
+/// 宿主二进制，但 beets 与播放器是两个发布节奏（浮动通道 beets-latest），
+/// 钉死等于每次 beets 发版都要重发播放器。取舍写在这里，别当它是完备的
+/// 供应链防线；真要镜像源，先给入口再留分支（release_base 的注释同理）。
+fn verify_checksum(path: &std::path::Path, asset: &str, base: &str) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read as _;
+
+    let sums_url = format!("{base}/SHA256SUMS");
+    let mut sums = String::new();
+    let resp = ureq::get(&sums_url)
+        .timeout(std::time::Duration::from_secs(30))
+        .call()
+        .map_err(|e| {
+            format!(
+                "下载 SHA256SUMS 失败（{sums_url}）：{e}\n\
+                 ——发布通道没有校验清单时不允许安装。可手动下载两个发布物后，\
+                 用 AIYA_BEETS_INSTALLER / AIYA_BEETS_BUNDLE 指向本地文件"
+            )
+        })?;
+    resp.into_reader()
+        .take(1 << 20) // 清单就几行，1 MiB 上限防呆
+        .read_to_string(&mut sums)
+        .map_err(|e| format!("读取 SHA256SUMS 失败：{e}"))?;
+
+    let expected = sums
+        .lines()
+        .filter_map(|line| {
+            // sha256sum 标准格式：`<64 位十六进制>␣␣<文件名>`（两空格 = 二进制模式）
+            let (hash, name) = line.split_once("  ")?;
+            let hash = hash.trim();
+            (hash.len() == 64 && name.trim() == asset).then(|| hash.to_ascii_lowercase())
+        })
+        .next()
+        .ok_or_else(|| format!("SHA256SUMS 里没有 {asset}（发布物与清单不配套）"))?;
+
+    let mut file = std::fs::File::open(path).map_err(|e| format!("打开下载物失败：{e}"))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("读取下载物失败：{e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected {
+        // 校验不过的东西不能留给下一次安装误用
+        let _ = std::fs::remove_file(path);
+        return Err(format!(
+            "{asset} 的 sha256 与发布清单不符（实际 {actual}，期望 {expected}）——\
+             下载可能被截断或篡改，已删除；请重试或改用本地文件安装"
+        ));
+    }
+    Ok(())
+}
+
 /// 取安装物：环境变量指本地文件优先，否则下载到临时目录。
 ///
 /// 两个来源都过 [`verify_asset`]：本地文件同样可能是半截下载
 /// （浏览器中断、解压工具写了一半），而"形状不对"的错误在这里说最清楚。
+/// 下载来源额外过 [`verify_checksum`]（本地文件是用户自己指的，没有清单可比）。
 fn fetch_asset(
     env_key: &str,
     asset: &str,
@@ -934,6 +1000,7 @@ fn fetch_asset(
     download_to(&url, &dest)
         .map_err(|e| format!("{e}\n——若组件尚未发布，可手动下载后设置 {env_key} 指向该文件"))?;
     verify_asset(&dest, kind)?;
+    verify_checksum(&dest, asset, &base)?;
     Ok(dest)
 }
 
@@ -1487,6 +1554,16 @@ fn remember_entry(app: &tauri::AppHandle, entry: &ToolEntry) -> Result<(), Strin
     })
 }
 
+/// 安装互斥的 panic 兜底（同 refresh 的 FlagGuard 教训）：
+/// 任一退出路径（含 unwind）都必须复位，否则之后所有安装报 busy。
+struct InstallGuard<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for InstallGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// 安装（异步）：立刻返回，进度走 `beets:install`，结束时补一条 finished。
 ///
 /// `plugins` 是用户在 UI 里勾的**启用清单**：安装器据此装额外依赖，
@@ -1496,15 +1573,40 @@ fn remember_entry(app: &tauri::AppHandle, entry: &ToolEntry) -> Result<(), Strin
 ///
 /// finished 带**重新探测后的 status**：UI 不用再单独发一次查询，
 /// 也不会出现"装完了但状态块还是旧值"这种中间态。
+///
+/// 并发互斥（发布前审查 P1-1）：同一时刻只允许一条安装线程。安装线程往
+/// `beets_install_child` 这个单槽里塞句柄，两条线程并发时第二个会顶掉第一个
+/// ——收尾 kill/wait 错对象、误报"被退出中断"，pip 被中途杀还可能留半个
+/// venv。占位失败直接返回错误，UI 以 error 事件呈现。
 pub fn start_install(
     app: tauri::AppHandle,
     track: String,
     plugins: Vec<String>,
 ) -> Result<(), String> {
     let track = InstallTrack::parse(&track)?;
+    {
+        let state = app
+            .try_state::<crate::AppState>()
+            .ok_or_else(|| "应用状态未就绪，安装未启动".to_string())?;
+        if state
+            .beets_installing
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_err()
+        {
+            return Err("已有一次组件安装在进行中，等它结束（或失败）后再试".to_string());
+        }
+    }
     std::thread::Builder::new()
         .name("beets-install".into())
         .spawn(move || {
+            // 互斥占位在返回/panic 时由 Drop 复位
+            let install_state = app.state::<crate::AppState>();
+            let _guard = InstallGuard(&install_state.beets_installing);
             let emit = |v: serde_json::Value| {
                 let _ = app.emit("beets:install", v);
             };

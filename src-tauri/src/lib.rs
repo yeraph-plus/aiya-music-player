@@ -449,6 +449,12 @@ pub struct AppState {
     /// `RunEvent::Exit` 收尾处 kill+wait——安装器可能卡在 pip 阶段好几分钟，
     /// 不能让它在主进程退出后变孤儿）。
     beets_install_child: Mutex<Option<std::process::Child>>,
+    /// beets 安装互斥（发布前审查 P1-1）：安装线程往 `beets_install_child`
+    /// 这个**单槽**里塞句柄，两条安装线程并发时第二个会顶掉第一个——收尾时
+    /// kill/wait 错对象、误报"被退出中断"，pip 被中途杀还可能留半个 venv。
+    /// compare_exchange 占位，失败返回 busy；Drop 兜底复位（同 refresh 的
+    /// FlagGuard 教训：panic 路径不能把开关留死）。
+    beets_installing: AtomicBool,
     /// beets 模块自有的结论库（`{beets-index}/enrich.db`）。
     ///
     /// 懒打开：绝大多数用户从不点"分析"，为一个可能永不使用的 SQLite 文件
@@ -4388,6 +4394,7 @@ pub fn run() {
                 timings: Mutex::new(VecDeque::with_capacity(TIMING_LIMIT)),
                 settings: Mutex::new(settings0),
                 beets_install_child: Mutex::new(None),
+                beets_installing: AtomicBool::new(false),
                 enrich_store: std::sync::OnceLock::new(),
             });
 
@@ -4786,7 +4793,6 @@ pub fn run() {
             beets_index_import,
             enrichment_query,
             enrichment_gc,
-            library_genres,
             beets_reveal,
             library_list,
             library_albums,
@@ -4858,6 +4864,18 @@ pub fn run() {
             // 假 ERROR 日志 + 一个要等 8s 孤儿窗口才自退的多余进程。
             if let tauri::RunEvent::Exit = event {
                 if let Some(state) = app.try_state::<AppState>() {
+                    // 关窗退出也落最终进度（发布前审查 P1-2）：托盘/SMTC 退出走
+                    // quit_app 有 flush，点窗口 X 直达这里——此前依赖事件泵的
+                    // 5 秒节流，退出前最多丢 5 秒进度，同一次"退出"两种行为。
+                    {
+                        let actor = state
+                            .player
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if actor.state().queue_length > 0 {
+                            persist_queue_state_handle(&state, &actor);
+                        }
+                    }
                     // beets 安装子进程（A 轨道）：安装线程可能正卡在 pip 阶段，
                     // 退出时收尸 —— 槽被 take 走后安装线程自行报"被退出中断"。
                     if let Some(mut c) = state
