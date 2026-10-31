@@ -60,8 +60,15 @@ jobs:
 
       - name: 实测 highlevel（beta1 / beta5 各跑一次）
         shell: python
+        env:
+          # Windows runner 管道 stdout 按 cp1252 编码，中文 print 必炸（见
+          # release-beets.yml 头注的同一坑）；脚本内 reconfigure 双保险
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
         run: |
-          import glob, hashlib, json, math, os, struct, subprocess, wave
+          import sys
+          sys.stdout.reconfigure(encoding="utf-8")
+          import glob, json, math, os, struct, subprocess, wave
 
           exe = os.path.abspath("gaia/streaming_extractor_music.exe")
           wav = "probe.wav"
