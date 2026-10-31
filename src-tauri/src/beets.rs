@@ -757,8 +757,8 @@ impl InstallTrack {
 /// 下载失败会给"下到了什么"的明确错误（见 `verify_asset`），而不是静默卡住。
 const RELEASE_BASE: &str =
     "https://github.com/yeraph-plus/aiya-music-player/releases/download/beets-portable";
-const INSTALLER_ASSET: &str = "aiya-beets-installer.pyz";
-const BUNDLE_ASSET: &str = "aiya-beets-portable-win-x64.zip";
+const INSTALLER_ASSET: &str = "beets-installer.pyz";
+const BUNDLE_ASSET: &str = "beets-portable-win-x64.zip";
 
 /// 发布物根地址：`AIYA_BEETS_RELEASE_BASE` > 默认常量。
 ///
@@ -783,9 +783,9 @@ fn install_root(app: &tauri::AppHandle) -> PathBuf {
 /// 发布物的形状。两条轨道都是 zip 容器（`.pyz` 就是换了扩展名的 zip）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AssetKind {
-    /// A 轨道：`aiya-beets-installer.pyz`
+    /// A 轨道：`beets-installer.pyz`
     Installer,
-    /// B 轨道：`aiya-beets-portable-win-x64.zip`
+    /// B 轨道：`beets-portable-win-x64.zip`
     Bundle,
 }
 

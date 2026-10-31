@@ -1,10 +1,10 @@
 #!/usr/bin/env python
-"""构建 A 轨道发布物：`aiya-beets-installer.pyz`。
+"""构建 A 轨道发布物：`beets-installer.pyz`。
 
 ## 为什么用 `.pyz` 而不是 wheel
 
 A 轨道的用户场景是"本机已有 Python，但不想碰 pip"。`.pyz` 是一个可执行的
-zip（Python 内置支持），用户/播放器只要 `python aiya-beets-installer.pyz install
+zip（Python 内置支持），用户/播放器只要 `python beets-installer.pyz install
 --target <dir>` 就能装，不需要先 `pip install` 一个引导包。
 
 ## 为什么这个脚本是 Python 而不是 Node
@@ -49,7 +49,7 @@ def _force_utf8_stdio() -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="打包 aiya-beets 安装器（.pyz）")
-    ap.add_argument("--out", default=str(TOOL / "dist" / "aiya-beets-installer.pyz"))
+    ap.add_argument("--out", default=str(TOOL / "dist" / "beets-installer.pyz"))
     args = ap.parse_args()
 
     out = Path(args.out)

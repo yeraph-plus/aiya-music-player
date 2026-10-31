@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""构建 B 轨道发布物：`aiya-beets-portable-win-x64.zip`（便携套件包）。
+"""构建 B 轨道发布物：`beets-portable-win-x64.zip`（便携套件包）。
 
 ## 它解决什么
 
@@ -49,7 +49,7 @@ Python 官方的 embeddable 发行版用 `python3xx._pth` 列出搜索路径（�
 
 ## 输出
 
-    dist/aiya-beets-portable-win-x64.zip
+    dist/beets-portable-win-x64.zip
         python.exe  python3xx._pth  Lib/site-packages/{beets,aiya_beets,bs4,…}
         bin/streaming_extractor_music.exe
         manifest.json  LICENSE  THIRD-PARTY.md  LICENSES/AGPL-3.0.txt
@@ -355,7 +355,7 @@ def write_third_party(work: Path, staged: list[dict]) -> None:
     lines = [
         "# 随包发布的第三方二进制",
         "",
-        "本套件包（`aiya-beets-portable-win-x64.zip`）内含下列可执行程序。它们不是",
+        "本套件包（`beets-portable-win-x64.zip`）内含下列可执行程序。它们不是",
         "本项目源码，各自遵守原始许可；我们**原样转发，未做修改**。",
         "",
         "| 文件 | 来源 | 许可 | 本包内 sha256 |",
@@ -419,7 +419,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="打包 aiya-beets 免配置套件包")
     ap.add_argument("--runtime", default=str(RUNTIME_DEFAULT),
                     help="自带解释器目录（缺就自动下载官方 embeddable 并装依赖）")
-    ap.add_argument("--out", default=str(TOOL / "dist" / "aiya-beets-portable-win-x64.zip"))
+    ap.add_argument("--out", default=str(TOOL / "dist" / "beets-portable-win-x64.zip"))
     ap.add_argument("--work", default=str(TOOL / "dist" / "bundle"))
     ap.add_argument("--uv", default=None, help="uv 可执行文件（默认从 PATH 找）")
     ap.add_argument("--no-zip", action="store_true", help="只展开目录，不打包（调试用）")

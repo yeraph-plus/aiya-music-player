@@ -7,7 +7,7 @@
     import aiya_beets.cli
     aiya_beets.cli.main()
 
-返回值被丢掉 ⇒ **pyz 永远退出 0**。实测：`aiya-beets-installer.pyz bins --only nope`
+返回值被丢掉 ⇒ **pyz 永远退出 0**。实测：`beets-installer.pyz bins --only nope`
 打出「不认识的外部工具 nope」的错误帧，退出码却是 0；同一个调用走源码树
 （`python -m aiya_beets`）退出码是 2。
 

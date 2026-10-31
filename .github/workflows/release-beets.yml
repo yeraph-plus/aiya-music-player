@@ -103,8 +103,8 @@ jobs:
       - name: 校验产物名与体积
         run: |
           $expected = @{
-            "aiya-beets-installer.pyz"        = 20KB
-            "aiya-beets-portable-win-x64.zip" = 30MB
+            "beets-installer.pyz"        = 20KB
+            "beets-portable-win-x64.zip" = 30MB
           }
           foreach ($f in $expected.Keys) {
             $p = "beets-tool/dist/$f"
@@ -119,7 +119,7 @@ jobs:
       # 宿主按行尾文件名精确匹配。
       - name: 生成 SHA256SUMS
         run: |
-          $files = @("aiya-beets-installer.pyz", "aiya-beets-portable-win-x64.zip")
+          $files = @("beets-installer.pyz", "beets-portable-win-x64.zip")
           $lines = foreach ($f in $files) {
             $h = (Get-FileHash -Algorithm SHA256 "beets-tool/dist/$f").Hash.ToLower()
             "$h  $f"
@@ -135,7 +135,7 @@ jobs:
           $root = Join-Path $env:RUNNER_TEMP "aiya-check"
           Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
           $dst = Join-Path $root "beets-tool\bundle"
-          Expand-Archive -Path "beets-tool/dist/aiya-beets-portable-win-x64.zip" -DestinationPath $dst -Force
+          Expand-Archive -Path "beets-tool/dist/beets-portable-win-x64.zip" -DestinationPath $dst -Force
           $py = Join-Path $dst "python.exe"
           $m = Get-Content (Join-Path $dst "manifest.json") -Raw | ConvertFrom-Json
           $bins = ($m.binaries | ForEach-Object { $_.target }) -join ","
@@ -176,8 +176,8 @@ jobs:
         with:
           name: aiya-beets-win-x64
           path: |
-            beets-tool/dist/aiya-beets-installer.pyz
-            beets-tool/dist/aiya-beets-portable-win-x64.zip
+            beets-tool/dist/beets-installer.pyz
+            beets-tool/dist/beets-portable-win-x64.zip
             beets-tool/dist/SHA256SUMS
           retention-days: 14
 
@@ -192,8 +192,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $files = @(
-            "beets-tool/dist/aiya-beets-installer.pyz",
-            "beets-tool/dist/aiya-beets-portable-win-x64.zip",
+            "beets-tool/dist/beets-installer.pyz",
+            "beets-tool/dist/beets-portable-win-x64.zip",
             "beets-tool/dist/SHA256SUMS"
           )
           $tag = "beets-portable"
