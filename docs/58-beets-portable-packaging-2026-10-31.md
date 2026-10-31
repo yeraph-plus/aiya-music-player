@@ -81,9 +81,15 @@ beets 模块 = beets helper GUI。2026-11-01 单轨化（推翻本文件初稿�
 
 ## 6 · 本批遗留
 
-- **enrich 真实提取接线（批 5）**：`PROBE_FIELDS`（bpm/danceability/mood_*）
-  目前是 sha256 合成桩；模型与配置就位后，批 5 把提取 JSON 的 highlevel 映射进
-  flex attrs，桩才能退役。
+- ~~**enrich 真实提取接线（批 5）**~~ **已落地**（7b3ff4d，2026-11-01）：
+  `cmds/enrich.py` 的 xtractor 源改为直调提取器（`_extract_fields`：bpm ←
+  rhythm.bpm、average_loudness ← lowlevel、danceability/mood_* ← highlevel
+  正类概率、mood_mirex ← 簇标签），**没有**走 beets-xtractor 插件——插件把
+  `item.path` 当相对路径用的坑（docs/54 §2.4）对 enrich 不成立，因为 enrich
+  自己拼绝对路径、自己写 profile，monkeypatch 那套是给"借道 beet 子命令"准备的。
+  映射口径已在开发机实证（钉扎载体 + `_extract_fields` 全链路，键形零调整）；
+  CI 解包自检 + essentia_smoke 仍是发布闸门。未定语义：mood_mirex 簇标签的
+  展示口径、单曲耗时与包体增量（等真实数据）。
 - 本地打包验证因网络跳过（载体重试修复已入库）；CI 解包自检 + 冒烟是发布闸门，
   下一次 `beets-portable` 发布即完整验证。
 - **单轨化（2026-11-01）**：installer 轨（pyz/venv/Python 探测/版本窗口/

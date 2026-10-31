@@ -188,7 +188,8 @@ installed_path / inject_path / exe_path 都走它
 所以 `run()` 在 `AIYA_BEETS_PROFILE != index` 时直接拒绝。
 
 **为什么必须进程内**：补丁是 monkeypatch，spawn 出去的 `python -m beets` 看不到它
-（`enrich._run_import` 就是 spawn 形态）。将来批 5 接线也必须走进程内这条路。
+（`enrich._run_import` 就是 spawn 形态）。批 5 实接时绕开了这个约束——直调提取器、
+不走插件，见 docs/58 §6 的落地注记。
 
 ---
 
@@ -231,16 +232,18 @@ installed_path / inject_path / exe_path 都走它
 
 ---
 
-## 5. 仍未做
+## 5. 仍未做（2026-11-01 状态注记）
 
-1. **enrich 那条线还没接**（原批 5）：`cmds/enrich.py` 里 `SourceSpec("xtractor", False, …)`
-   仍是 `unwired`，所以应用里**没有任何按钮会去跑它**。本轮做的是"带上 + 能跑"，
-   不是"自动跑"。接的时候要注意：必须走进程内（§2.4），并且逐首的失败要能报出来。
+1. ~~**enrich 那条线还没接**（原批 5）~~ **已接**（7b3ff4d，2026-11-01）：`cmds/enrich.py`
+   的 xtractor 源已真跑。接法与本文预期的"走进程内（§2.4）"不同——**直调提取器**：
+   enrich 自己拼绝对路径、自己写 profile，不借道 beet 子命令，monkeypatch 与
+   相对路径坑都不适用。逐首失败按 `enrichItem.status=failed` 逐条报出。
 2. **工作台家不写 `essentia_extractor`**：`xtractor` 若在工作台家里被勾选，config 里只有
    `plugins: xtractor`，插件会拿占位符去 spawn。索引家是它唯一的正式位置，这一条
-   等批 5 再决定要不要也写一份。
-3. **highlevel 永远拿不到**：Gaia2 不支持 Windows，mood / gender / genre 那 12 个字段
-   在这条路上没有解（docs/50 §2.5）。bpm + danceability + beats_count + average_loudness 是上限。
+   **仍未决**（批 5 没碰它）。
+3. ~~**highlevel 永远拿不到**~~ **已被推翻**：AB win-i686 确实没编 Gaia2，但社区 Gaia
+   构建（regorxxx Actions → brendanerofeev release）补上了——见 docs/58 §5，
+   beta5 模型 exit 0、highlevel 全出。
 4. **AGPL 的"源码提供"**仍是务实做法（§1.6），不是法律意见；pip 包的许可文本没进包。
 5. `beets-xtractor` 自 2024 年起没更新，补丁是我们单方面打的——它哪天发新版改了取路径逻辑，
    补丁会变成"重复修"（`apply()` 检测 `_aiya_input_path_patch` 标记，但不会检测上游是否自己修好了）。

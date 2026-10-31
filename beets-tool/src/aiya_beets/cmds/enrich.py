@@ -75,7 +75,7 @@ class SourceSpec:
     """一个增强源。`implemented=False` 的在 `want` 里被拒，只在 `fields` 里露面。
 
     为什么未接线的源不能"跑一遍返回空"：宿主会把 `empty` 缓存成"该源对这个
-    文件不支持"，于是永远不会再试——批 5 接完线还得让用户手动清缓存。
+    文件不支持"，于是永远不会再试——等接线了还得让用户手动清缓存。
     宁可现在就拒绝，把"没接"和"没数据"分开。
     """
 
@@ -158,12 +158,14 @@ def _resolve_sources(want) -> list[SourceSpec]:
     """把请求里的 `want` 解析成源列表。未知/未接线一律拒绝，不静默忽略。"""
     known = {s.name: s for s in SOURCES}
     if not want:
-        # 缺省 = 该家当前**真能跑**的源。索引家此刻就是 probe（若开）。
+        # 缺省 = 已接线且开关打开的源。xtractor 的 bins 在不在**这里不判**：
+        # 就绪门在 enrich() 里，缺什么会带具体原因拒绝——比这里给一句笼统的
+        # "没装"更有用（UI 直接显示）。
         usable = [s for s in SOURCES if s.implemented and (s.name != "probe" or probe_enabled())]
         if not usable:
             raise ProtocolError(
                 E_INVALID_ARG, _STAGE,
-                "这个家没有可用的增强源：先装 beets 并在索引家开启插件（本版可用的真人源在批 5 接入）",
+                "这个家没有可用的增强源：先装 beets 并在索引家开启插件",
             )
         return usable
 
@@ -220,10 +222,10 @@ def index_import(req_id: int, root: str | None, gen: int) -> None:
     """**只读入库**：把曲库根整批登记进索引家，不做任何分析（docs/49 §3.8）。
 
     为什么单独一条命令，而不是"让 `enrich` 的 want 为空"：`enrich` 里
-    `want` 缺省的含义是"用这个家**当前能跑的源**"，与"我只要入库"是两件事。
+    `want` 缺省的含义是"用这个家**已接线的源**"，与"我只要入库"是两件事。
     合成一个之后，"分析器没装"和"import 失败"会共用一个错误码——而它们的
-    处置完全不同（前者等批 5，后者查文件权限）。实测：xtractor 未接线时整条
-    `enrich` 被拒，索引库因此永远是空的，筛选页 0 命中。
+    处置完全不同（前者补 bins，后者查文件权限）。实测：enrich 整条被拒的
+    阶段（接线前 / bins 未装时），索引库因此永远是空的，筛选页 0 命中。
 
     安全前提是配置里那三条 `import.write/copy/move: no`（cfg 硬钉 + 落盘后过闸）：
     这一步只让 beets 读文件、往**它自己的库**写行，不碰音频文件本身。
