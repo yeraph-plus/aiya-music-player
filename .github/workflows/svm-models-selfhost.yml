@@ -48,7 +48,7 @@ jobs:
           done
           cd out
           zip ../svm-models.zip ./*.history
-          sha256sum svm-models.zip ./*.history
+          sha256sum ../svm-models.zip ./*.history
 
       - name: 挂到固定 release（推新删旧语义：clobber 资产）
         env:
