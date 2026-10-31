@@ -46,7 +46,9 @@ jobs:
   release:
     name: 构建并发布
     runs-on: windows-latest
-    timeout-minutes: 60
+    # 门禁 test:all（全量 Rust 测试 + UI 构建）加进来后，纯构建时长翻倍不止；
+    # 60 分钟曾够 bundle+portable，现在留余量
+    timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
@@ -72,6 +74,23 @@ jobs:
       - name: 安装前端依赖
         if: startsWith(github.ref_name, 'v') || github.event_name == 'workflow_dispatch'
         run: npm ci --prefix ui
+
+      # 发布门禁（发布前审查 P1-9）：tag 可以打在任何 commit 上，PR/push 的
+      # 绿灯不跟着 tag 走——没有这一步，打错 tag 的安装包会直接公开。
+      # verify 全链在这里跑不动（e2e + 全部 smoke 翻倍时长），取"纯构建侧 +
+      # 契约"的最小集：Rust/UI 全部测试与类型检查、协议/类型镜像一致性。
+      # 功能冒烟（smoke:*）与 e2e 由 push CI 守；发布日的人工项见 docs/42。
+      - name: 发布门禁（test:all）
+        if: startsWith(github.ref_name, 'v') || github.event_name == 'workflow_dispatch'
+        run: npm run test:all
+
+      # 发布物必须来自干净树：门禁或构建如果改写了生成文件（gen:types、
+      # gen:notices 忘了跑），带着脏 diff 的产物不该被发出去。
+      - name: 断言工作树干净
+        if: startsWith(github.ref_name, 'v') || github.event_name == 'workflow_dispatch'
+        run: |
+          git status --porcelain
+          if (git status --porcelain) { throw "工作树不干净：生成物与仓库不同步（先跑 npm run gen:types / notices）" }
 
       - name: 构建 NSIS 安装包
         if: startsWith(github.ref_name, 'v') || github.event_name == 'workflow_dispatch'
