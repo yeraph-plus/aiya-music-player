@@ -121,12 +121,27 @@ def _ignore(_dir: str, names: list[str]) -> set[str]:
 
 
 # 自带解释器的版本：固定而不是"取最新"。发布物的可复现性优先于拿到 patch 更新。
-EMBED_VERSION = "3.14.0"
+# 2026-10-31 从 3.14.0 → 3.14.10：落后 10 个补丁版（通常含安全修复），且这个
+# 解释器随免配置包分发给用户。哈希与 python.org 官方发布页逐字节核对过。
+EMBED_VERSION = "3.14.10"
+# 下载物的 sha256 钉扎（发布前审查 P2-7）：urlretrieve 无任何完整性校验，
+# python.org 换版/被劫持会让发布物漂移。官方页 https://www.python.org/downloads/release/python-31410/
+EMBED_SHA256 = "90905e64a840557d8c1bc4f5b74db3d7ee85e3ffb217611cac1c7813acea4159"
 EMBED_URL = (
     f"https://www.python.org/ftp/python/{EMBED_VERSION}"
     f"/python-{EMBED_VERSION}-embed-amd64.zip"
 )
 RUNTIME_DEFAULT = TOOL / ".runtime" / f"python-{EMBED_VERSION}-embed-amd64"
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def ensure_runtime(runtime: Path) -> None:
@@ -148,6 +163,16 @@ def ensure_runtime(runtime: Path) -> None:
         tmp = runtime.parent / f"python-{EMBED_VERSION}-embed-amd64.zip"
         if not tmp.is_file():
             urllib.request.urlretrieve(EMBED_URL, tmp)
+        # 钉扎校验（EMBED_SHA256）：对不上就删，绝不带着来源不明的解释器进发布物。
+        # 已存在但哈希不符的旧缓存同样拒绝——文件名相同不代表内容相同。
+        actual = _sha256(tmp)
+        if actual != EMBED_SHA256:
+            tmp.unlink(missing_ok=True)
+            raise SystemExit(
+                f"embeddable 解释器 sha256 不符（实际 {actual}，期望 {EMBED_SHA256}）"
+                "——下载可能被篡改或版本被上游替换，已删除。"
+                "若确认要换版本：改 EMBED_VERSION 与 EMBED_SHA256（官方发布页核对）。",
+            )
         with zipfile.ZipFile(tmp) as zf:
             zf.extractall(runtime)
 
