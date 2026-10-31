@@ -39,6 +39,7 @@ sys.path.insert(0, TOOL_SRC)
 sys.path.insert(0, HERE)
 from _testmusic import resolve as _resolve_test_music  # noqa: E402
 from aiya_beets import protocol as P  # noqa: E402
+from aiya_beets.cmds.enrich import xtractor_ready  # noqa: E402
 
 SCHEMA = json.loads(open(SCHEMA_PATH, "rb").read().decode("utf-8"))
 
@@ -150,7 +151,11 @@ def classify(raw):
 
 PATHS = make_files()
 BEFORE = fingerprint(PATHS)
-print(f"[0] 环境就绪：{len(PATHS)} 个文件，库 {LIBDIR}")
+# 批 5 起 xtractor 是真源：`fields` 里恒报 ready（"器能不能跑"三态不探 bins），
+# 真正的就绪判定在 enrich 请求时才做。这里探一次，供 [5] 分支断言用——
+# 开发机 bins 齐 → 走成功路；干净机 → 走"未就绪"拒绝路。两条路都合法。
+XTR_OK, XTR_WHY = xtractor_ready()
+print(f"[0] 环境就绪：{len(PATHS)} 个文件，库 {LIBDIR}，xtractor 就绪={XTR_OK}")
 
 # ---------------- 场景 1：fields ----------------
 L1 = [json.dumps({"id": 1, "cmd": "fields"})]
@@ -167,7 +172,10 @@ assert "title" in names and "bpm" in names, f"内置字段缺失，只有 {sorte
 assert all(f["source"] in ("builtin", "flexible") for f in fields_data["fields"])
 src_states = {s["name"]: s["state"] for s in fields_data["sources"]}
 assert src_states["probe"] == "ready", src_states
-assert src_states["xtractor"] == "unwired", src_states
+# 批 5：xtractor 已接线，三态恒为 ready（缺 bins 不体现在这里，体现在
+# enrich 请求的"未就绪"拒绝上——见 [5]）。
+assert src_states["xtractor"] == "ready", src_states
+assert src_states["lastgenre"] == "unwired", src_states
 print(f"[1] fields OK：{len(names)} 个字段，源 {src_states}")
 
 # ---------------- 场景 2：enrich（首跑） ----------------
@@ -349,7 +357,10 @@ assert all(v is None for v in marks_after.values()), (
 )
 print(f"[4] force 幂等 OK：{done2['succeeded']} 条 ok / {done2['skipped']} 条 skipped")
 
-# ---------------- 场景 5：未知源 / 空路径 ----------------
+# ---------------- 场景 5：未知源 / 空路径 / xtractor 就绪门 ----------------
+# want=["xtractor"] 在批 5 后是**合法源名**：就绪（bins 齐）→ 真跑一遍提取并
+# 返回 ok；未就绪 → E_INVALID_ARG 且带原因。两种结果都合规，按机器实况分支——
+# 但无论哪条路，"静默当成功"和"静默当失败"都不许出现。
 L5 = [
     json.dumps({"id": 10, "cmd": "enrich", "paths": PATHS[:1], "want": ["no_such_source"]}),
     json.dumps({"id": 11, "cmd": "enrich", "paths": PATHS[:1], "want": ["xtractor"]}),
@@ -361,8 +372,12 @@ for raw in lines:
     kind, obj = classify(raw)
     if kind == "Response" and not obj["ok"]:
         codes[obj["id"]] = obj["error"]["code"]
-assert codes == {10: P.E_INVALID_ARG, 11: P.E_INVALID_ARG, 12: P.E_INVALID_ARG}, codes
-print(f"[5] 拒绝路径 OK：{codes}")
+if XTR_OK:
+    assert codes == {10: P.E_INVALID_ARG, 12: P.E_INVALID_ARG}, codes
+else:
+    # 拒绝信封已过 schema（classify 验过）；原因文本不再重复断言。
+    assert codes == {10: P.E_INVALID_ARG, 11: P.E_INVALID_ARG, 12: P.E_INVALID_ARG}, codes
+print(f"[5] 拒绝路径 OK：{codes}（xtractor 就绪={XTR_OK}）")
 
 # ---------------- 场景 6：文件一个字节都没动 ----------------
 assert fingerprint(PATHS) == BEFORE, "音频文件被改写了——违反\"索引家永不写文件\"的前提"

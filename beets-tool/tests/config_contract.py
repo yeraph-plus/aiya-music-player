@@ -55,6 +55,14 @@ BIN_DIR = os.path.join(WORK, "beets-tool", "bin")
 os.makedirs(BIN_DIR)
 ESSENTIA_STUB = os.path.join(BIN_DIR, "streaming_extractor_music.exe")
 Path(ESSENTIA_STUB).write_bytes(b"stub")
+# xtractor 的 exe 清单全集：提取器 + Qt5Core（Gaia 构建非静态链接）+ 12 件
+# SVM 模型（bin/models/ 子路径）。缺一件 usable_plugins 就会把 xtractor 剔掉，
+# 渲染里就没有 xtractor 段——所以这里一次性把清单造齐。
+Path(BIN_DIR, "Qt5Core.dll").write_bytes(b"stub")
+for _name in cfg.XTRACTOR_MODEL_FILES:
+    _mp = Path(BIN_DIR, "models", f"{_name}.history")
+    _mp.parent.mkdir(parents=True, exist_ok=True)
+    _mp.write_bytes(b"stub")
 # 子进程与进程内都从这里找 bin/：`AIYA_BEETS_HOME` 的上一级推出来的位置
 # 恰好就是 WORK/beets-tool/bin，但进程内测试没有设 HOME，所以显式指一次。
 os.environ.setdefault("AIYA_BEETS_BIN_DIR", BIN_DIR)
@@ -456,6 +464,9 @@ try:
         os.environ["AIYA_BEETS_BIN_DIR"] = bin_tmp12
         try:
             Path(bin_tmp12, "streaming_extractor_music.exe").write_bytes(b"x")
+            # Gaia 构建非静态链接：缺 Qt5Core.dll usable_plugins 就会剔掉 xtractor，
+            # 渲染里连 extractor_profile 段都没有——这里必须和模块级夹具一样造齐。
+            Path(bin_tmp12, "Qt5Core.dll").write_bytes(b"x")
             model_paths = []
             for name in cfg.XTRACTOR_MODEL_FILES:
                 p = Path(bin_tmp12, "models", f"{name}.history")

@@ -28,10 +28,14 @@ DB 会变成隐形迁移器。
 
 from __future__ import annotations
 
+import glob
 import hashlib
+import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 from ..beetslib import open_library
 from ..protocol import E_INVALID_ARG, ProtocolError
@@ -85,8 +89,8 @@ class SourceSpec:
 
 SOURCES: tuple[SourceSpec, ...] = (
     SourceSpec("probe", True, "自测源：按路径哈希造确定性字段，只在 AIYA_BEETS_ENRICH_PROBE=1 时可用"),
-    SourceSpec("xtractor", False, "音频特征（bpm/danceability/mood）；需要 beets-xtractor + Essentia 二进制（批 5）"),
-    SourceSpec("lastgenre", False, "流派推断（写 item.genre，不入文件）；需要联网（批 5）"),
+    SourceSpec("xtractor", True, "音频特征（bpm/danceability/mood 等）；Essentia Gaia 构建与 12 件 SVM 模型随便携包分发"),
+    SourceSpec("lastgenre", False, "流派推断（写 item.genre，不入文件）；需要联网（独立来源，尚未接线）"),
 )
 
 # probe 声明的字段：与 xtractor 真实字段同名同形（docs/45 §3.2），
@@ -111,6 +115,27 @@ _MOODS = (
 
 def probe_enabled() -> bool:
     return os.environ.get(PROBE_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+def xtractor_ready() -> tuple[bool, str]:
+    """提取器与 12 件 SVM 模型是否就位（都不依赖 beets-xtractor 插件本体）。
+
+    就绪判定与配置门禁同口径：提取器在 bin_dirs 里、模型与它同级的 models/
+    逐件在盘。缺什么就把原话带回去，UI 直接显示。
+    """
+    from .. import cfg, plugins
+
+    exe = plugins.exe_path("streaming_extractor_music")
+    if exe is None:
+        return False, "没有 Essentia 提取器（便携包自带；散装可用 aiya-beets bins 补齐）"
+    models_dir = os.path.join(os.path.dirname(exe), "models")
+    have = len(glob.glob(os.path.join(models_dir, "*.history")))
+    if have < len(cfg.XTRACTOR_MODEL_FILES):
+        return False, (
+            f"SVM 模型不全（{have}/{len(cfg.XTRACTOR_MODEL_FILES)}）："
+            "重新下载便携包，或 aiya-beets bins 补齐"
+        )
+    return True, exe
 
 
 def source_table() -> list[dict]:
@@ -372,6 +397,76 @@ def _apply_probe(item) -> tuple[str, dict]:
     return ("ok" if got else "empty"), got
 
 
+def _extract_fields(path: str, exe: str, profile: str, out_json: str) -> dict:
+    """跑一次提取器并把 JSON 映射成 enrich 字段（批 5 的核心映射）。
+
+    映射口径（Essentia/AB 标准输出形制，CI 冒烟日志为首个实证点）：
+    - bpm ← rhythm.bpm；average_loudness ← lowlevel.average_loudness
+    - danceability ← highlevel.danceability.all["danceable"]（正类概率 0..1）
+    - mood_* ← highlevel.mood_*.all[正类]（7 件二类模型的正类概率）
+    - mood_mirex ← highlevel.moods_mirex.value（五簇的簇标签字符串）
+
+    键缺失不是错误：形状对不上的字段就地省略，由 status=empty 呈现——
+    映射层对模型输出的未知扩展保持透明。
+    """
+    r = subprocess.run(
+        [exe, path, out_json, profile],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=300, **_NO_WINDOW,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"提取器退出码 {r.returncode}：{(r.stderr or r.stdout or '').strip()[-300:]}"
+        )
+    with open(out_json, encoding="utf-8") as f:
+        j = json.load(f)
+    hl = j.get("highlevel") or {}
+    low = j.get("lowlevel") or {}
+    rhythm = j.get("rhythm") or {}
+
+    out: dict = {}
+    if isinstance(rhythm.get("bpm"), (int, float)):
+        out["bpm"] = round(float(rhythm["bpm"]), 2)
+    if isinstance(low.get("average_loudness"), (int, float)):
+        out["average_loudness"] = round(float(low["average_loudness"]), 4)
+
+    def positive(model: str, cls: str) -> float | None:
+        allp = (hl.get(model) or {}).get("all")
+        if isinstance(allp, dict) and isinstance(allp.get(cls), (int, float)):
+            return round(float(allp[cls]), 4)
+        return None
+
+    d = positive("danceability", "danceable")
+    if d is not None:
+        out["danceability"] = d
+    mm = (hl.get("moods_mirex") or {}).get("value")
+    if mm:
+        out["mood_mirex"] = str(mm)
+    for name in _MOOD_CLASSES:
+        v = positive(name, name[len("mood_"):])
+        if v is not None:
+            out[name] = v
+    return out
+
+
+def _apply_xtractor(item, exe: str, profile: str, work: str) -> tuple[str, dict]:
+    """真实源：提取 → 写 flexible 字段 → 回读（回读口径与自测源一致）。"""
+    src = item.path.decode("utf-8", "replace")
+    tag = hashlib.md5(src.encode("utf-8")).hexdigest()
+    out_json = os.path.join(work, f"{tag}.json")
+    fields = _extract_fields(src, exe, profile, out_json)
+    os.remove(out_json)
+    for k, v in fields.items():
+        item[k] = v
+    item.store()
+    got = {}
+    for k in PROBE_FIELDS:
+        v = item.get(k)
+        if v is not None:
+            got[k] = v
+    return ("ok" if got else "empty"), got
+
+
 def enrich(req_id: int, paths: list[str], want, force: bool, gen: int) -> None:
     """三段式主体：逐 (文件, 源) 发 `enrichItem`，最后 `enrichDone`。
 
@@ -394,6 +489,24 @@ def enrich(req_id: int, paths: list[str], want, force: bool, gen: int) -> None:
 
     # 心跳先发一条：后面补登是子进程，可能长时间没有输出。
     _progress(0)
+
+    # xtractor 源的会话级准备：profile 只写一次（svm_models 指向提取器同级的
+    # models/），提取输出落在同一个临时目录，整场结束统一清理。
+    from .. import cfg
+
+    exe = None
+    profile = None
+    work = tempfile.mkdtemp(prefix="enrich-xtr-")
+    if any(spec.name == "xtractor" for spec in sources):
+        ok, exe_or_why = xtractor_ready()
+        if not ok:
+            raise ProtocolError(E_INVALID_ARG, _STAGE, f"增强源 xtractor 未就绪：{exe_or_why}")
+        exe = exe_or_why
+        profile = os.path.join(work, "profile.yaml")
+        with open(profile, "w", encoding="utf-8", newline="\n") as f:
+            f.write("highlevel:\n  compute: 1\n  svm_models:\n")
+            for name in cfg.XTRACTOR_MODEL_FILES:
+                f.write(f"    - {os.path.join(os.path.dirname(exe), 'models', f'{name}.history')}\n")
 
     lib = open_library()
     if force:
@@ -430,6 +543,9 @@ def enrich(req_id: int, paths: list[str], want, force: bool, gen: int) -> None:
                 if spec.name == "probe":
                     status, fields = _apply_probe(item)
                     message = None
+                elif spec.name == "xtractor":
+                    status, fields = _apply_xtractor(item, exe, profile, work)
+                    message = None
                 else:  # pragma: no cover —— 未接线的源在 _resolve_sources 就被拒了
                     status, fields, message = "skipped", {}, f"源 {spec.name} 未接线"
             except Exception as e:  # noqa: BLE001 —— 单文件失败要逐条报，不能中断整批
@@ -460,3 +576,4 @@ def enrich(req_id: int, paths: list[str], want, force: bool, gen: int) -> None:
         "failed": counts["failed"], "skipped": counts["skipped"],
         "sources": ran,
     })
+    shutil.rmtree(work, ignore_errors=True)
