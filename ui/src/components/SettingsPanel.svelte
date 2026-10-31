@@ -9,7 +9,14 @@
     SpectrumStyle,
     ThemeMode,
   } from '../lib/settings';
-  import { AMBIENT_SCHEMES, BG_SPECTRUM_STYLES, RIDGE_GLOWS, SPECTRUM_STYLES } from '../lib/settings';
+  import {
+    AMBIENT_SCHEMES,
+    BG_SPECTRUM_STYLES,
+    RIDGE_GLOWS,
+    SPECTRUM_STYLES,
+    UI_SCALE_OPTIONS,
+    normalizeUiScale,
+  } from '../lib/settings';
   import StatBlock from './ui/StatBlock.svelte';
 import TextTabs from './ui/TextTabs.svelte';
   import {
@@ -363,6 +370,21 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row">
           <div>
+            <div class="setting-title">界面缩放</div>
+            <div class="setting-hint">
+              整体放大文字与间距，适配高分屏可读性；100% 即设计原稿，切换即时生效
+            </div>
+          </div>
+          <SegmentedControl
+            label="界面缩放"
+            value={String(settings.uiScale)}
+            options={UI_SCALE_OPTIONS}
+            onchange={(value) => apply({ uiScale: normalizeUiScale(value) })}
+          />
+        </div>
+
+        <div class="setting-row">
+          <div>
             <div class="setting-title">全局 3D 效果</div>
             <div class="setting-hint">
               总开关：关闭后所有三维频谱与流动背景停用，只留静态渐变；下面的频谱项随之失效
@@ -581,6 +603,21 @@ import TextTabs from './ui/TextTabs.svelte';
 
     <section class="settings-section" bind:this={sectionEls.system}>
       <h3 class="group-title">系统</h3>
+      <div class="setting-row">
+          <div>
+            <div class="setting-title">禁用系统缩放</div>
+            <div class="setting-hint">
+              按 100% 渲染，忽略 Windows 的显示缩放（125%/150% 等）：文字变小、一屏内容变多，且重排渲染不会模糊。
+              与「外观 → 界面缩放」叠加生效，改后立即应用、无需重启
+            </div>
+          </div>
+          <Switch
+            label="禁用系统缩放"
+            checked={settings.disableSystemScale}
+            onchange={(checked) => apply({ disableSystemScale: checked })}
+          />
+        </div>
+
       <div class="setting-row">
           <div>
             <div class="setting-title">关闭窗口时最小化到托盘</div>

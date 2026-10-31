@@ -38,6 +38,29 @@ export const AMBIENT_SCHEMES: Array<{ value: AmbientScheme; label: string }> = [
 ];
 
 /**
+ * 界面缩放档位（docs/56）：整体缩放文字与间距，适配高分屏可读性。
+ *
+ * 实现是 `html` 内联 font-size（1rem = 16px × 档位），tokens.css 的尺寸轴
+ * 全部以 rem 计，所以档位切换是**全局整倍缩放**——相对设计不变，不是
+ * 2026-10-30 移除的那种"密度档"（那是改行高不改字号，两码事）。
+ * 白名单收口：档位外的值（手改配置出现 87.5 之类）一律落回 100。
+ */
+export const UI_SCALES = [90, 100, 110, 125, 150] as const;
+export type UiScale = (typeof UI_SCALES)[number];
+
+/** 设置页分段控件直接消费的选项（value 是 string，回调里 normalizeUiScale 收口） */
+export const UI_SCALE_OPTIONS: Array<{ value: string; label: string }> = UI_SCALES.map(
+  (scale) => ({ value: String(scale), label: `${scale}%` }),
+);
+
+export function normalizeUiScale(value: unknown): UiScale {
+  const n = typeof value === 'number' ? value : Number(value);
+  const found = (UI_SCALES as ReadonlyArray<number>).find((scale) => scale === n);
+  // UI_SCALES 以 100 起兜底；find 命中时 n 就是档位之一
+  return (found ?? 100) as UiScale;
+}
+
+/**
  * 频谱风格（2026-10-26 起）：**正在播放页**可视化的形态（docs/26 §3）。
  *
  * 取代旧 `spectrumEngine`（compact/pro）——它的唯一消费方（SpectrumPanel
@@ -108,6 +131,15 @@ export interface AppSettings {
   theme: ThemeMode;
   /** 主题颜色：固定渐变背景 + 配套强调色，成套切换（切换即换视觉身份） */
   ambient: AmbientScheme;
+  /** 界面缩放档位（百分比，见 `UI_SCALES`）；`html` 内联 font-size 随它走（docs/56） */
+  uiScale: UiScale;
+  /**
+   * 禁用系统缩放（docs/56）：开启后 Rust 侧把 webview zoom 补偿为 1/scale，
+   * 内容按 100% 物理密度渲染（高分屏上字变小、一屏内容变多、无位图模糊），
+   * 即时生效无需重启。与「界面缩放」正交且相乘：环境倍率（本开关）×
+   * 用户倍率（界面缩放）。zoom 由 Rust 的 apply_scale_policy 独占管理。
+   */
+  disableSystemScale: boolean;
   /** 按 ReplayGain 调整音量（近似实现：换算到音量系数） */
   normalizeVolume: boolean;
   /**
@@ -198,6 +230,10 @@ export interface LiveRecentEntry {
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   ambient: 'aurora',
+  // 100% = 设计原稿；高分屏用户自己往上调，不替他们做决定
+  uiScale: 100,
+  // 默认跟随系统缩放（Windows 惯例）；想按 100% 渲染的用户自己开
+  disableSystemScale: false,
   normalizeVolume: false,
   // 总闸默认开：关掉等于把这次重做的效果全废掉，不是"更省"的同义词。
   // 真不支持的机器由 capability 探测兜底（探测失败照样能正常用）

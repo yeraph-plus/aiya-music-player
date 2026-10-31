@@ -4,6 +4,7 @@ import './app.css';
 import { mount } from 'svelte';
 import App from './App.svelte';
 import { applyLook, readLook } from './lib/look';
+import { startDpiDiagnostics } from './lib/dpi-diagnostics';
 
 /**
  * 浏览器预览（ui/ 目录下 `npm run dev`）的装配点：没有 Tauri 运行时就把假后端
@@ -46,6 +47,8 @@ if (!target) throw new Error('#app not found');
  * 镜像 → `__AIYA_LOOK__` → 默认深色。
  */
 applyLook(readLook());
+// 高分屏分诊日志（docs/56）：dpr 是否等于系统缩放，一眼定位"文字过小"的类别
+startDpiDiagnostics();
 
 const app = mount(App, { target });
 

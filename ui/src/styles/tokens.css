@@ -79,18 +79,22 @@
     radial-gradient(1000px 820px at 55% 115%, rgba(84, 48, 190, 0.42), transparent 62%),
     linear-gradient(168deg, #0c111e 0%, #0e1626 55%, #0a0e19 100%);
 
-  /* ---------------- 尺寸 ---------------- */
-  --space-1: 4px;
-  --space-2: 6px;
-  --space-3: 8px;
-  --space-4: 12px;
-  --space-5: 16px;
-  --space-6: 22px; /* 页面横向节奏（page gutter），业务样式统一取这里 */
-  --radius-xs: 4px;
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 10px;
-  --radius-xl: 14px; /* 模态/抽屉面板（此前 14/16 两种裸值） */
+  /* ---------------- 尺寸 ----------------
+   * 尺寸轴（间距/圆角/布局尺寸/字阶）自 docs/56 起以 rem 计：
+   * 1rem = 16px × 界面缩放档（设置 → 外观 → 界面缩放），100% 档与旧 px 值
+   * **逐一相等**，历史视觉零变化。刻意留在 px 的：阴影/模糊（深度线索，不随
+   * 缩放走）、--radius-pill（"够大"语义）、组件内联的 1px 发丝线与位移量。 */
+  --space-1: 0.25rem;
+  --space-2: 0.375rem;
+  --space-3: 0.5rem;
+  --space-4: 0.75rem;
+  --space-5: 1rem;
+  --space-6: 1.375rem; /* 页面横向节奏（page gutter），业务样式统一取这里 */
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.625rem;
+  --radius-xl: 0.875rem; /* 模态/抽屉面板（此前 14/16 两种裸值） */
   --radius-pill: 999px;
 
   /* 阴影阶梯（发布前 UI 审查 P2-3）：11 种一次性几何收敛为 5 档 + 2 个方向
@@ -129,11 +133,11 @@
   --z-toast: 65;
   --z-tooltip: 70;
 
-  --control-h: 32px; /* 按钮/输入框的默认高 */
-  --row-h: 52px; /* 列表行高：JS 从 CSS 读同一个值（lib/look.ts） */
-  --titlebar-h: 54px;
-  --sidebar-w: 216px;
-  --player-h: 92px;
+  --control-h: 2rem; /* 按钮/输入框的默认高 */
+  --row-h: 3.25rem; /* 列表行高：JS 从 CSS 读同一个值（lib/look.ts，探针测量） */
+  --titlebar-h: 3.375rem;
+  --sidebar-w: 13.5rem;
+  --player-h: 5.75rem;
 
   /* ---------------- 字体与动效 ---------------- */
   --font-ui:
@@ -143,17 +147,18 @@
   /* 字阶（发布前 UI 审查 P1-1 重定档）：此前声明 6 档、实际 ~18 档 160 处裸值。
    * 收敛为 10 档。base 12.5→12：全仓 12px×39 是现实主力，原 12.5 的 21 处
    * （全是 kit 组件）随档下移 0.5px；lg 15→14（原 var 用户 0）；xl 22→17
-   * （唯一 var 用户 StatBlock 是死件），22 归 2xl；19/21 归 xl/2xl。 */
-  --fs-2xs: 10px;
-  --fs-xs: 10.5px;
-  --fs-sm: 11.5px;
-  --fs-base: 12px;
-  --fs-md: 13px;
-  --fs-lg: 14px;
-  --fs-xl: 17px;
-  --fs-2xl: 21px;
-  --fs-display: 26px;
-  --fs-hero: 30px;
+   * （唯一 var 用户 StatBlock 是死件），22 归 2xl；19/21 归 xl/2xl。
+   * 2026-10-31（docs/56）改 rem，注释保留原 px 值供对照。 */
+  --fs-2xs: 0.625rem; /* 10px */
+  --fs-xs: 0.65625rem; /* 10.5px */
+  --fs-sm: 0.71875rem; /* 11.5px */
+  --fs-base: 0.75rem; /* 12px */
+  --fs-md: 0.8125rem; /* 13px */
+  --fs-lg: 0.875rem; /* 14px */
+  --fs-xl: 1.0625rem; /* 17px */
+  --fs-2xl: 1.3125rem; /* 21px */
+  --fs-display: 1.625rem; /* 26px */
+  --fs-hero: 1.875rem; /* 30px */
   --dur-fast: 120ms;
   --dur-base: 180ms;
   --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
@@ -300,4 +305,6 @@ html[data-theme='light'][data-ambient='mono'] {
 
 /* 尺寸只有一套（2026-10-30 移除列表密度设置）。
  * 之前按 `html[data-density]` 分三档，用户反馈"紧凑/宽松"没有实际价值：
- * 行高本身就是设计决策，不该让用户去猜哪档更好看。 */
+ * 行高本身就是设计决策，不该让用户去猜哪档更好看。
+ * 注意区分：界面缩放（docs/56，`html` 内联 font-size）是**全局整倍缩放**，
+ * 解决的是高分屏可读性，不是密度档位的复活——所有尺寸一起动，相对设计不变。 */

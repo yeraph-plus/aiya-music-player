@@ -60,16 +60,19 @@
     );
   }
 
-  // 主题/主题颜色：写在 <html> 的 data 属性上，CSS 变量随之切换，无需重建组件。
+  // 主题/主题颜色/界面缩放：前两者写在 <html> 的 data 属性上，缩放写内联
+  // font-size，CSS 变量随之切换，无需重建组件。
   // 同时写一份 localStorage 镜像，供下次启动首帧使用（否则浅色主题会先闪一帧深色）。
   $effect(() => {
     const look = {
       theme: ui.settings.theme,
       ambient: ui.settings.ambient,
+      uiScale: ui.settings.uiScale,
     };
     applyLook(look);
     writeLook(look);
-    // 行高只有 CSS 一处定义，这里把它的当前值同步给虚拟列表
+    // 行高只有 CSS 一处定义，这里把它的当前值同步给虚拟列表。
+    // 缩放档变化也会走到这里：--row-h 是 rem，行高跟着档位变，列表要重新对齐。
     ui.rowHeight = readRowHeight();
   });
 

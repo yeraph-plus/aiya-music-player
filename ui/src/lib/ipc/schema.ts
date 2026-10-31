@@ -19,6 +19,10 @@ export const settingsSchema = z
     theme: z.enum(['dark', 'light']).optional(),
     /** 主题颜色（2026-10-26 起取代 accentFromArtwork；旧字段不再写） */
     ambient: z.enum(['aurora', 'ember', 'meadow', 'dusk', 'mono']).optional(),
+    /** 界面缩放档位（docs/56）：只验数值，档位白名单收口在 mergeSettings */
+    uiScale: z.number().optional(),
+    /** 禁用系统缩放（docs/56）：Rust 侧 apply_scale_policy 消费 */
+    disableSystemScale: z.boolean().optional(),
     normalizeVolume: z.boolean().optional(),
     /** 2026-10-30 前的单开关：**只读不写**，`mergeSettings` 用它派生两个新键后丢弃 */
     spectrum: z.boolean().optional(),

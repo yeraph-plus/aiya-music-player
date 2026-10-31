@@ -11,7 +11,7 @@ declare global {
      * 的注释与 docs/18 §9 遗留项）；浏览器预览下也不存在。
      * 保留声明是为了宿主补注入时零改动。
      */
-    __AIYA_LOOK__?: { theme: ThemeMode; ambient?: AmbientScheme };
+    __AIYA_LOOK__?: { theme: ThemeMode; ambient?: AmbientScheme; uiScale?: number };
   }
 }
 

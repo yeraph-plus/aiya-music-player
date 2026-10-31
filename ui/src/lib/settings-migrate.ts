@@ -21,6 +21,7 @@ import {
   BG_SPECTRUM_STYLES,
   RIDGE_GLOWS,
   SPECTRUM_STYLES,
+  normalizeUiScale,
   type AppSettings,
 } from './settings';
 
@@ -83,6 +84,10 @@ export function mergeSettings(raw: unknown): AppSettings {
   if (!BG_SPECTRUM_STYLE_VALUES.has(String(merged.bgSpectrumStyle))) {
     merged.bgSpectrumStyle = DEFAULT_SETTINGS.bgSpectrumStyle;
   }
+
+  // 界面缩放档位（docs/56）：数值白名单收口。手改配置里出现 87.5 这类值时
+  // 落回 100，不让未知档位流进 look/DOM（档位语义见 settings.ts 的 UI_SCALES）。
+  merged.uiScale = normalizeUiScale(merged.uiScale);
 
   // 「最近打开」是新键：老配置里没有它（`...DEFAULT_SETTINGS` 兜成空表），
   // 这里只负责挡住被手改成别的形状的值——`AppSettings` 说是数组，运行期

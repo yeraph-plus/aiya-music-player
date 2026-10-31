@@ -823,6 +823,41 @@ fn app_set_ui_state(app_state: State<'_, AppState>, state: Json) -> Result<(), d
         .map_err(dto::ApiError::from)
 }
 
+/// 「禁用系统缩放」策略（docs/56）：开启时把 webview zoom 补偿为 1/scale，
+/// 内容回到 100% 物理密度（dpr≈1——高分屏上等价于按 100% 渲染：字变小、
+/// 视野变大、无位图模糊）；关闭时恢复 zoom=1。WebView2 里 zoom 与设备缩放
+/// 相乘，所以这是纯运行时操作：即时生效、可逆，跨屏由 ScaleFactorChanged
+/// 携带的新 scale 重算。
+///
+/// 刻意不用 `--force-device-scale-factor`：它要在建窗前注入（改了要重启），
+/// 且 `additionalBrowserArgs` 会整体替换 wry 默认参数（docs/56 §1）。
+/// zoom 由本策略**独占**管理——将来若开 zoomHotkeysEnabled 让用户手调缩放，
+/// 这里要先改成记忆用户值，否则每次跨屏都会被重置。
+fn apply_scale_policy(app: &AppHandle, scale_hint: Option<f64>) {
+    let disable = app
+        .try_state::<AppState>()
+        .map(|state| state.setting_flag("disableSystemScale", false))
+        .unwrap_or(false);
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    let zoom = if disable {
+        // scale_hint 是 ScaleFactorChanged 事件携带的新值（此刻
+        // win.scale_factor() 可能还是旧屏的）；启动/开关路径传 None 读当前值
+        let scale = scale_hint
+            .filter(|s| *s > f64::EPSILON)
+            .or_else(|| win.scale_factor().ok())
+            .filter(|s| *s > f64::EPSILON)
+            .unwrap_or(1.0);
+        1.0 / scale
+    } else {
+        1.0
+    };
+    if let Err(e) = win.set_zoom(zoom) {
+        tracing::warn!(zoom, error = %e, "界面缩放策略应用失败");
+    }
+}
+
 #[tauri::command]
 fn app_get_settings(state: State<'_, AppState>) -> Result<Json, dto::ApiError> {
     let default: Json = serde_json::from_str(DEFAULT_SETTINGS).expect("valid default");
@@ -846,6 +881,7 @@ fn app_set_settings(
     let prev_output = state.setting_output();
     let want_normalize = settings.get("normalizeVolume").and_then(Value::as_bool);
     let prev_normalize = state.setting_flag("normalizeVolume", false);
+    let prev_disable_os_scale = state.setting_flag("disableSystemScale", false);
 
     // 落库失败直接返回错误：缓存不能先刷（否则"缓存新、库里旧"，
     // 下次启动会莫名回退），副作用也不该执行。
@@ -861,6 +897,11 @@ fn app_set_settings(
         .map_err(dto::ApiError::from)?;
     // 落库成功才刷新缓存：写失败时缓存保持旧值，与实际生效行为一致
     state.refresh_settings(&settings);
+
+    // 「禁用系统缩放」开关变化：立即重算 webview zoom（docs/56），不等重启
+    if state.setting_flag("disableSystemScale", false) != prev_disable_os_scale {
+        apply_scale_policy(&app, None);
+    }
 
     // 落库成功后 setting_output() 读的就是新值，直接比对
     let next_output = state.setting_output();
@@ -4301,6 +4342,11 @@ pub fn run() {
                     let _ = window.hide();
                 }
             }
+            // 跨屏拖动/系统缩放变更（WM_DPICHANGED）：按策略用**事件携带的新
+            // scale** 重算 zoom——此刻 win.scale_factor() 可能还是旧屏的值。
+            if let tauri::WindowEvent::ScaleFactorChanged { scale_factor, .. } = event {
+                apply_scale_policy(window.app_handle(), Some(*scale_factor));
+            }
         })
         // P1（docs/38）：必须是 asynchronous 版本——同步 handler 在主线程执行，
         // 未命中缩略图缓存时 DB 往返 + 读原图 + Lanczos3 缩放（30–80ms/张）
@@ -4397,6 +4443,9 @@ pub fn run() {
                 beets_installing: AtomicBool::new(false),
                 enrich_store: std::sync::OnceLock::new(),
             });
+
+            // 「禁用系统缩放」开机对齐（docs/56）：窗口已建、设置缓存已灌好
+            apply_scale_policy(app.handle(), None);
 
             // 一次性迁移：把 settings 表里的 `beets.*` 旧键搬到模块自己的
             // `settings.json`（docs/47）。搬完就删键——留着的话它还躺在应用的

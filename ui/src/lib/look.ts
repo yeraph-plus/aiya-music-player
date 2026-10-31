@@ -15,18 +15,20 @@
  * 所以 Tauri 下这条分支目前不生效；保留是为了将来若真的在 `index.html`
  * 里预置时这里零改动。预览模式下 mock 会写它。
  */
-import type { AmbientScheme, ThemeMode } from './settings';
+import { normalizeUiScale, type AmbientScheme, type ThemeMode, type UiScale } from './settings';
 
 export interface Look {
   theme: ThemeMode;
   /** 主题颜色：切 `html[data-ambient]`，CSS 渐变与强调色成套换 */
   ambient: AmbientScheme;
+  /** 界面缩放档位（docs/56）：随主题一起走首帧镜像；readLook 已收口，恒为合法档位 */
+  uiScale: UiScale;
 }
 
 const KEY = 'aiya.look';
 
 /** 兜底值必须与 `DEFAULT_SETTINGS` 一致：镜像缺失时首帧就是默认外观 */
-const FALLBACK: Look = { theme: 'dark', ambient: 'aurora' };
+const FALLBACK: Look = { theme: 'dark', ambient: 'aurora', uiScale: 100 };
 
 const AMBIENTS: ReadonlySet<string> = new Set(['aurora', 'ember', 'meadow', 'dusk', 'mono']);
 
@@ -50,10 +52,11 @@ export function readLook(): Look {
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<Look>;
       if (isTheme(parsed.theme)) {
-        // ambient 是后加字段：镜像里没有就落默认（不为此判镜像无效）
+        // ambient / uiScale 是后加字段：镜像里没有就落默认（不为此判镜像无效）
         return {
           theme: parsed.theme,
           ambient: isAmbient(parsed.ambient) ? parsed.ambient : FALLBACK.ambient,
+          uiScale: normalizeUiScale(parsed.uiScale),
         };
       }
     }
@@ -66,6 +69,7 @@ export function readLook(): Look {
     return {
       theme: injected.theme,
       ambient: isAmbient(injected.ambient) ? injected.ambient : FALLBACK.ambient,
+      uiScale: normalizeUiScale(injected.uiScale),
     };
   }
   return FALLBACK;
@@ -79,7 +83,7 @@ export function writeLook(look: Look): void {
   try {
     localStorage.setItem(
       KEY,
-      JSON.stringify({ theme: look.theme, ambient: look.ambient }),
+      JSON.stringify({ theme: look.theme, ambient: look.ambient, uiScale: look.uiScale }),
     );
   } catch {
     /* 配额满/存储禁用：只影响下次首帧 */
@@ -93,16 +97,30 @@ export function writeLook(look: Look): void {
  * （算可见区间、拖拽落点），于是这里读一次。不要在组件里写死 52 ——
  * 改了 CSS 忘改 JS 的症状是列表越滚越偏，不报错。
  *
+ * 不能 parseFloat `getComputedStyle().getPropertyValue()`：自定义属性的
+ * 计算值**不换算单位**，`--row-h` 改 rem（docs/56）后只会原样拿到
+ * "3.25rem"，parseFloat 得 3.25，列表静默错位。改为探针测量：让引擎把
+ * `var(--row-h)` 解析成真实 px，界面缩放后自动返回缩放值（可能是小数，
+ * 不要 round——行高与虚拟列表的步长必须同源，round 会逐行积累 0.x px 漂移）。
+ *
  * 密度设置已移除（2026-10-30）：只有一套行高，`--row-h` 不再按属性分档。
  */
 export function readRowHeight(): number {
-  const raw = getComputedStyle(document.documentElement).getPropertyValue('--row-h').trim();
-  const px = Number.parseFloat(raw);
-  return Number.isFinite(px) ? px : 52;
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;height:var(--row-h)';
+  document.body.appendChild(probe);
+  const px = probe.getBoundingClientRect().height;
+  probe.remove();
+  return Number.isFinite(px) && px > 0 ? px : 52;
 }
 
-/** 把外观写到 `<html>`（CSS 变量按 `[data-theme]` / `[data-ambient]` 切换） */
+/**
+ * 把外观写到 `<html>`（CSS 变量按 `[data-theme]` / `[data-ambient]` 切换；
+ * 界面缩放走 `html` 内联 font-size，tokens.css 的 rem 尺寸轴整体跟随）。
+ * 100 档也照写 16px：与"没设过"完全同值，省一条分支。
+ */
 export function applyLook(look: Look): void {
   document.documentElement.dataset.theme = look.theme;
   document.documentElement.dataset.ambient = look.ambient;
+  document.documentElement.style.fontSize = `${(16 * look.uiScale) / 100}px`;
 }
