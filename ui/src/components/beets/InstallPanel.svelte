@@ -3,32 +3,27 @@
   import { Download, Package, RefreshCw, Trash2, TriangleAlert } from '@lucide/svelte';
   import Button from '../ui/Button.svelte';
   import { ui } from '../../stores/ui.svelte';
-  import type { BeetsInstallTrack } from '../../lib/ipc';
 
   /**
-   * 安装子页：Beets 装没装、装的是哪一版、能不能干活。
+   * 安装子页：Beets 装没装、装的是哪一版、能不能干活（单轨，docs/58）。
    *
-   * 未安装时是**两张平级卡、各占一行**（2026-10-31 用户拍板，不卡片套卡片）：
-   * - **预配置环境**（主推）：下载约 34MB，自带解释器 + 固定的基础插件清单，
-   *   不需要任何前置；
-   * - **本机安装**：只在探测到系统 Python 时出现——用本机 Python 建 venv，
-   *   插件按勾选表装（只有这条路能改插件清单），支持 ffmpeg 等外部工具的
-   *   高级功能；缺的依赖与工具脚本自己下载（docs/53）。
+   * 唯一的分发物是**预配置环境**（便携包）：自带解释器、pip 与预置插件
+   * （内置可用的四件 + 分析器全家桶），下载 → 校验 → 解压全自动。
    *
-   * 状态说明是一行裸文本，不进卡；依赖自检与"另下 X"提示已删：装之前替用户
-   * 操心缺什么，不如让安装脚本自己说清楚。
-   * 已安装态 = **一张状态卡，能力面随轨道**（installTrack 由宿主按入口形状
-   * 推导）：bundle 只有重新下载与删除（播放器直连操作）；installer 才有
-   * 换插件与卸载（脚本过闸 + 宿主执行）。
+   * 未安装 = 一张卡一个按钮；已安装 = 一张状态卡三个动作：
+   * - **更新**：重新下载并解压（Rust 直连）；
+   * - **换插件**：包内解释器重跑 `install --plugins <勾选>`——pip 装/卸、
+   *   外部工具补齐、配置同步全在脚本侧（宿主只做操作桥）；
+   * - **删除组件**：组件目录整体移除（Rust 直删，两段确认）。
+   *
+   * 依赖自检与"另下 X"提示已删：装之前替用户操心缺什么，不如让安装脚本
+   * 自己说清楚。
    */
 
   const found = $derived(ui.beets?.found === true);
   const mismatch = $derived(found && ui.beets?.schemaMatched === false);
-  /** 安装轨道（宿主按入口形状推导）：决定装后状态卡的能力面 */
-  const track = $derived(ui.beets?.installTrack === 'bundle' ? 'bundle' : 'installer');
   const install = $derived(ui.beetsInstall);
   const uninstall = $derived(ui.beetsUninstall);
-  const python = $derived(ui.beetsPython);
   const table = $derived(ui.beetsPlugins);
   const bundled = $derived(table.filter((p) => p.bundle));
 
@@ -38,9 +33,8 @@
   let confirming = $state(false);
 
   onMount(() => {
-    // 两条都不依赖"已装组件"：内嵌表在二进制里，Python 探测只看系统
+    // 内嵌插件表在二进制里，不依赖"已装组件"
     void ui.loadBeetsPlugins();
-    void ui.probeBeetsPython();
   });
 
   function toggle(name: string): void {
@@ -57,8 +51,10 @@
     install: '安装',
     unpack: '解压',
     bin: '外置工具',
+    pip: 'pip',
   };
   const stageLabel = (s: string): string => stageText[s] ?? s;
+
   /** 入口来源（docs/33 §6.1）：排障第一个问题是"为什么用的是这个" */
   function entryText(source: string | null | undefined): string {
     switch (source) {
@@ -74,14 +70,14 @@
   }
 </script>
 
-<!-- 卡内安装状态：只报自己这一轨，跟在按钮正下方——阶段是徽章，消息是文本 -->
-{#snippet trackStatus(track: BeetsInstallTrack)}
-  {#if install.running && install.track === track}
+<!-- 卡内安装状态：跟在按钮正下方——阶段是徽章，消息是文本 -->
+{#snippet status()}
+  {#if install.running}
     <p class="track-status">
       <span class="beets-badge">{stageLabel(install.stage)}</span>
       <span>{install.message}</span>
     </p>
-  {:else if install.error && install.track === track}
+  {:else if install.error}
     <p class="track-status track-status-error">{install.error}</p>
   {/if}
 {/snippet}
@@ -129,7 +125,7 @@
       <!-- 版本不匹配要在安装页说清原因；未安装则页头 meta 已说明，这里不再重复一行 -->
       <p class="install-note beets-danger">
         Beets 与播放器的协议不一致：{ui.beets.errorMessage ?? 'schema 指纹比对失败'}。
-        曲库与配置不受影响，用下面任一方式重装即可。
+        曲库与配置不受影响，重新下载安装即可。
       </p>
     {/if}
 
@@ -137,72 +133,26 @@
       <div class="beets-panel-head">
         <strong>预配置环境</strong>
         <span class="beets-dim">
-          下载约 34MB 便携版配置包，提供了 
-          {#if bundled.length > 0}{bundled.map((p) => p.title).join(' / ')}{:else}基础功能{/if} 
-          插件，如果需要使用更多 beets 功能，系统需要 Python 环境支持。
+          下载约 75MB 便携包，自带解释器、pip 与
+          {#if bundled.length > 0}{bundled.map((p) => p.title).join(' / ')}{:else}基础功能{/if}
+          插件（含分析器与模型），下载、校验、解压自动完成，不需要本机 Python。
         </span>
       </div>
       <div class="beets-gate">
         <Button
           variant="primary"
           size="sm"
-          loading={install.running && install.track === 'bundle'}
+          loading={install.running}
           disabled={install.running}
-          onclick={() => void ui.installBeets('bundle')}
+          onclick={() => void ui.installBeets()}
           title="下载并安装"
         >
           {#snippet icon()}<Package size={14} />{/snippet}
           下载并安装
         </Button>
       </div>
-      {@render trackStatus('bundle')}
+      {@render status()}
     </section>
-
-    <!-- 本机安装：只有这条路能改插件清单；没探测到 Python 就不渲染这张卡 -->
-    {#if python?.found === true}
-      <section class="beets-panel">
-        <div class="beets-panel-head">
-          <strong>
-            本机安装
-            <span class="beets-badge ok">当前 Python 版本：{python.version}</span>
-          </strong>
-          <span class="beets-dim">
-            执行安装脚本，使用本机 Python 隔离环境。插件按需勾选，支持 ffmpeg 等更多功能插件，依赖与工具脚本自动下载。
-          </span>
-        </div>
-        {#if !python.supported}
-          <p class="beets-danger">
-            Python {python.version} 不在支持窗口（3.10–3.14），建议改用预配置环境。
-          </p>
-        {/if}
-        <p class="beets-path mono" title={python.path ?? ''}>
-          {python.path}
-          <span class="beets-dim">（来自 {python.source}）</span>
-        </p>
-        {@render pluginPicker('勾选要启用的插件')}
-        <div class="beets-gate">
-          <Button
-            variant="primary"
-            size="sm"
-            loading={install.running && install.track === 'installer'}
-            disabled={install.running}
-            onclick={() => void ui.installBeets('installer', chosen)}
-            title="按需勾选安装插件"
-          >
-            {#snippet icon()}<Download size={14} />{/snippet}
-            安装（{chosen.length} 个插件）
-          </Button>
-        </div>
-        {@render trackStatus('installer')}
-      </section>
-    {:else if python !== null}
-      <p class="beets-dim install-note">
-        未检测到本机 Python（{python.reason ?? '系统里没有 python'}），本机安装不可用。
-        <Button variant="link" size="sm" onclick={() => void ui.probeBeetsPython()}>
-          重新检测
-        </Button>
-      </p>
-    {/if}
   {:else}
     {#if mismatch}
       <section class="beets-panel">
@@ -211,58 +161,34 @@
             <TriangleAlert size={15} /> Beets 与播放器的协议契约不一致
           </strong>
           <span class="beets-dim">
-            schema 指纹比对失败，查询会读到对不上的形状，因此整页停用。按当前安装方式重装，
+            schema 指纹比对失败，查询会读到对不上的形状，因此整页停用。重新下载安装，
             或升级播放器后重试。
           </span>
         </div>
         <div class="beets-gate">
-          {#if track === 'bundle'}
-            <Button
-              variant="primary"
-              size="sm"
-              loading={install.running && install.track === 'bundle'}
-              disabled={install.running}
-              onclick={() => void ui.installBeets('bundle')}
-            >
-              {#snippet icon()}<Package size={14} />{/snippet}
-              重装（预配置环境）
-            </Button>
-          {:else}
-            <Button
-              variant="primary"
-              size="sm"
-              loading={install.running && install.track === 'installer'}
-              disabled={install.running || !(python?.found ?? false)}
-              onclick={() => void ui.installBeets('installer', chosen)}
-            >
-              {#snippet icon()}<Download size={14} />{/snippet}
-              重装（本机安装）
-            </Button>
-          {/if}
+          <Button
+            variant="primary"
+            size="sm"
+            loading={install.running}
+            disabled={install.running}
+            onclick={() => void ui.installBeets()}
+          >
+            {#snippet icon()}<Package size={14} />{/snippet}
+            重新下载安装
+          </Button>
         </div>
-        {@render trackStatus('bundle')}
-        {@render trackStatus('installer')}
+        {@render status()}
       </section>
     {/if}
 
-    <!-- 装后状态卡：一张卡，能力面随安装轨道走——
-         bundle 只有重下载与删除（都是播放器直连操作，不经 Python）；
-         installer 才有换插件，卸载由脚本过闸、宿主执行 -->
+    <!-- 装后状态卡：一张卡，更新 / 换插件 / 删除三个动作 -->
     <section class="beets-panel">
       <div class="beets-panel-head">
-        {#if track === 'bundle'}
-          <strong>预配置环境</strong>
-          <span class="beets-dim">
-            自带解释器与固定插件清单。更新 = 重新下载；删除 = 组件目录整体移除——
-            两个动作都是播放器直连操作，不经过 Python。
-          </span>
-        {:else}
-          <strong>本机安装</strong>
-          <span class="beets-dim">
-            本机 Python 建的隔离环境。换插件 = 重跑安装脚本；卸载先由脚本过闸算账，
-            再由播放器执行删除（运行中的解释器删不掉自己）。
-          </span>
-        {/if}
+        <strong>预配置环境</strong>
+        <span class="beets-dim">
+          自带解释器与 pip。更新 = 重新下载；换插件 = 包内重跑安装脚本
+          （pip 装/卸与外部工具自动处理）；删除 = 组件目录整体移除。
+        </span>
       </div>
       <div class="beets-row">
         <span>beets <b>{ui.beets.beetsVersion ?? '未知版本'}</b></span>
@@ -271,9 +197,6 @@
         {/if}
         {#if ui.beets.protocolVersion !== null && ui.beets.protocolVersion !== undefined}
           <span>协议 <b>v{ui.beets.protocolVersion}</b></span>
-        {/if}
-        {#if ui.beets.pythonSupported === false}
-          <span class="beets-badge warn">Python 版本不在支持窗口</span>
         {/if}
         {#if ui.beets.libraryLock === 'held'}
           <span class="beets-badge warn" title="另一个进程在写库，查询可能读到旧数据">
@@ -313,34 +236,33 @@
         </tbody>
       </table>
 
-      {#if track !== 'bundle'}
-        {@render pluginPicker('换插件时改勾选：勾上的会装依赖，并写进配置的启用清单。')}
-        <div class="beets-gate">
-          <Button
-            size="sm"
-            loading={install.running && install.track === 'installer'}
-            disabled={install.running || !(python?.found ?? false)}
-            onclick={() => void ui.installBeets('installer', chosen)}
-          >
-            {#snippet icon()}<Download size={14} />{/snippet}
-            换插件并重装{python?.found ? `（Python ${python.version}）` : '（未找到 Python）'}
-          </Button>
-        </div>
-        {@render trackStatus('installer')}
-      {:else}
-        <div class="beets-gate">
-          <Button
-            size="sm"
-            loading={install.running && install.track === 'bundle'}
-            disabled={install.running}
-            onclick={() => void ui.installBeets('bundle')}
-          >
-            {#snippet icon()}<Package size={14} />{/snippet}
-            重新下载并安装（更新到通道最新）
-          </Button>
-        </div>
-        {@render trackStatus('bundle')}
-      {/if}
+      {@render pluginPicker('换插件时改勾选：确认后包内重跑安装脚本，pip 装/卸自动完成。')}
+      <div class="beets-gate">
+        <Button
+          size="sm"
+          loading={install.running}
+          disabled={install.running}
+          onclick={() => void ui.setBeetsPlugins(chosen)}
+          title="在包内环境按勾选变更插件"
+        >
+          {#snippet icon()}<Download size={14} />{/snippet}
+          换插件（{chosen.length} 个插件）
+        </Button>
+      </div>
+      {@render status()}
+
+      <div class="beets-gate">
+        <Button
+          size="sm"
+          loading={install.running}
+          disabled={install.running}
+          onclick={() => void ui.installBeets()}
+          title="重新下载并解压，更新到通道最新"
+        >
+          {#snippet icon()}<Package size={14} />{/snippet}
+          重新下载并安装（更新到通道最新）
+        </Button>
+      </div>
 
       <div class="beets-gate">
         {#if confirming}
@@ -355,18 +277,18 @@
             }}
           >
             {#snippet icon()}<Trash2 size={14} />{/snippet}
-            {track === 'bundle' ? '确认删除' : '确认卸载'}
+            确认删除
           </Button>
           <Button size="sm" disabled={uninstall.running} onclick={() => (confirming = false)}>取消</Button>
         {:else}
           <Button size="sm" disabled={uninstall.running} onclick={() => (confirming = true)}>
             {#snippet icon()}<Trash2 size={14} />{/snippet}
-            {track === 'bundle' ? '删除组件' : '卸载组件'}
+            删除组件
           </Button>
         {/if}
       </div>
       <p class="install-note">
-        {track === 'bundle' ? '删除' : '卸载'}只动组件目录（预配置环境 / 虚拟环境 / 下载缓存），
+        删除只动组件目录（预配置环境与下载缓存），
         你的 beets 曲库与分析库<b>不动</b>——它们是你的数据，要清理请用各自的入口。
       </p>
       {@render uninstallLine()}
@@ -375,7 +297,7 @@
 </div>
 
 <style>
-  /* 状态行：裸文本不进卡，与两张安装卡同列间距 */
+  /* 状态行：裸文本不进卡，与安装卡同列间距 */
   .install-note {
     margin: 0;
   }
@@ -392,13 +314,6 @@
 
   .track-status-error {
     color: var(--danger);
-  }
-
-  .beets-path {
-    font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-    font-size: var(--fs-sm);
-    color: var(--text-3);
-    word-break: break-all;
   }
 
   /* 勾选清单：每项一行，勾选框 + 名字 + 中文名 + 标签 */

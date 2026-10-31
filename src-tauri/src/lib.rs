@@ -1391,33 +1391,31 @@ fn refresh_state(state: State<'_, AppState>) -> Result<dto::RefreshState, dto::A
 
 /// 安装 beets 侧组件（docs/33 §6.2 两条轨道 / docs/51 §4）。
 ///
-/// `track` = `installer`（路径 B：本机 Python 建 venv，可勾选插件）/
-/// `bundle`（路径 A：免配置套件包，预置插件，不需要本机 Python）。
-/// 播放器只做「下载 → 展开/装依赖 → 记下入口 → 跑一次 status」，不碰 Python 工具链。
+/// 安装/更新便携包（单轨）。播放器只做「下载 → 校验 → 展开 → 记下入口 →
+/// 跑一次 status」，不碰 Python 工具链、不探测系统 Python。
 /// 进度走 `beets:install` 事件，结束时推一条 `finished` 带新 status。
 ///
-/// `plugins` 是勾选的**启用**清单（只有 installer 轨道有意义）：安装器据此装
-/// 额外依赖，宿主把它写进 `settings.plugins`，工具侧渲染 config 时照它启用。
+/// `plugins` 是预置之外的启用清单：装完写进 `settings.plugins`，
+/// 工具侧渲染 config 时照它启用。
 #[tauri::command]
 async fn beets_install(
     app: AppHandle,
-    track: Option<String>,
     plugins: Option<Vec<String>>,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    beets::start_install(app, track.unwrap_or_default(), plugins.unwrap_or_default())
+    beets::start_install(app, plugins.unwrap_or_default())
         .map(|_| dto::beets::JobStarted { started: true })
         .map_err(dto::ApiError::internal)
 }
 
-/// 本机 Python 探测（路径 B 的前置条件）。
-///
-/// 探测顺序：Windows 的 `py -0p` → PATH 上的 `python` / `python3`。
-/// 只试后两个会把"装了 Python 但没写 PATH"的机器判成没装（python.org 的
-/// 安装包默认就是这样）。找不到时 `reason` 里带一句人话，UI 直接用。
+/// 换插件（操作桥）：spawn 包内解释器跑 `install --plugins <新> --previous <旧>`，
+/// pip 装/卸、外部工具补齐、配置同步全在脚本侧。进度与安装同通道。
 #[tauri::command]
-async fn beets_python_probe() -> Result<dto::beets::BeetsPythonProbe, dto::ApiError> {
-    tauri::async_runtime::spawn_blocking(beets::python_probe_payload)
-        .await
+async fn beets_plugins_set(
+    app: AppHandle,
+    plugins: Option<Vec<String>>,
+) -> Result<dto::beets::JobStarted, dto::ApiError> {
+    beets::start_plugins_set(app, plugins.unwrap_or_default())
+        .map(|_| dto::beets::JobStarted { started: true })
         .map_err(dto::ApiError::internal)
 }
 
@@ -4800,6 +4798,7 @@ pub fn run() {
             beets_inbox_imported_add,
             refresh_state,
             beets_install,
+            beets_plugins_set,
             beets_adopt,
             beets_update,
             beets_duplicates,
@@ -4807,7 +4806,6 @@ pub fn run() {
             beets_query,
             beets_fields,
             beets_plugin_table,
-            beets_python_probe,
             beets_uninstall,
             enrichment_worklist,
             beets_enrich_start,

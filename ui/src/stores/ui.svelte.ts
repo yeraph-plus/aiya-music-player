@@ -2,7 +2,7 @@ import type { BeetsStatus, Diagnostics } from '../lib/ipc';
 import type { TrackSort } from '../lib/query';
 import type { AppSettings } from '../lib/settings';
 import { DEFAULT_SETTINGS } from '../lib/settings';
-import { ipc, events, type BeetsInstallTrack, type BeetsPluginItem, type BeetsPythonProbe, type DynamicJson } from '../lib/ipc';
+import { ipc, events, type BeetsPluginItem, type DynamicJson } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
 import { devValidate, uiStateSchema, type UiState } from '../lib/ipc/schema';
 // 合并/迁移逻辑是纯函数（可单独验证），store 只负责在引导与写回时调它
@@ -528,9 +528,8 @@ class UiStore {
    * 放在 ui store 而不是组件里：进度来自事件流，而"组件不直接 listen"是
    * docs/17 §4 的硬约定（多个组件同时开时事件会被订阅多次）。
    */
-  beetsInstall = $state<{ running: boolean; track: BeetsInstallTrack; stage: string; message: string; error: string | null }>({
+  beetsInstall = $state<{ running: boolean; stage: string; message: string; error: string | null }>({
     running: false,
-    track: 'installer',
     stage: '',
     message: '',
     error: null,
@@ -544,7 +543,6 @@ class UiStore {
    */
   beetsPlugins = $state<BeetsPluginItem[]>([]);
   /** 本机 Python 探测结果（`null` = 还没探测过） */
-  beetsPython = $state<BeetsPythonProbe | null>(null);
   /**
    * 卸载进度。与安装分开一个状态：两者终态事件不同
    * （install 以 `finished` 收尾，uninstall 以 `done` 收尾），混在一起会让
@@ -564,7 +562,7 @@ class UiStore {
       const message = typeof e.message === 'string' ? e.message : '';
       if (type === 'finished') {
         // 终态带 status：装没装成以 probe 为准，不以退出码为准
-        this.beetsInstall = { running: false, track: this.beetsInstall.track, stage: 'done', message: '', error: null };
+        this.beetsInstall = { running: false, stage: 'done', message: '', error: null };
         this.beetsUninstall = { ...this.beetsUninstall, running: false };
         const status = readBeetsStatus(e.status);
         if (status) this.beets = status;
@@ -587,39 +585,51 @@ class UiStore {
       if (type === 'error') {
         this.beetsInstall = {
           running: false,
-          track: this.beetsInstall.track,
           stage,
           message,
           error: message || '安装失败',
         };
         return;
       }
-      this.beetsInstall = { running: true, track: this.beetsInstall.track, stage, message, error: null };
+      this.beetsInstall = { running: true, stage, message, error: null };
     });
   }
 
   /**
-   * 触发安装（docs/33 §6.2 / docs/51 §4）。
+   * 安装/更新便携包（单轨，docs/58）。
    *
-   * 两条路径的差别是**要不要本机 Python**：
-   * - `bundle`：免配置包，自带解释器 + 预置插件，解压即用；
-   * - `installer`：下载 `.pyz`，用本机 Python 建 venv，装用户勾选的插件。
-   *
-   * `plugins` 只对 installer 有意义（bundle 已预置）。传了也不做预判，
-   * 失败原样抛给按钮旁的文字——用户机器状况是我们猜不到的。
+   * `plugins` 是预置之外的启用清单：装完写进 settings，工具侧渲染 config 照它
+   * 启用。失败原样抛给按钮旁的文字——用户机器状况是我们猜不到的。
    */
-  async installBeets(track: BeetsInstallTrack = 'installer', plugins: string[] = []): Promise<void> {
+  async installBeets(plugins: string[] = []): Promise<void> {
     this.beetsInstall = {
       running: true,
-      track,
       stage: 'download',
       message: '正在准备…',
       error: null,
     };
     try {
-      await ipc.beets.install(track, plugins);
+      await ipc.beets.install(plugins);
     } catch (e) {
-      this.beetsInstall = { running: false, track, stage: '', message: '', error: errorMessage(e) };
+      this.beetsInstall = { running: false, stage: '', message: '', error: errorMessage(e) };
+    }
+  }
+
+  /**
+   * 换插件（操作桥）：spawn 包内解释器跑 `install --plugins <新> --previous <旧>`。
+   * pip 装/卸、外部工具补齐、配置同步全在脚本侧；进度与安装同通道。
+   */
+  async setBeetsPlugins(plugins: string[] = []): Promise<void> {
+    this.beetsInstall = {
+      running: true,
+      stage: 'pip',
+      message: '正在准备…',
+      error: null,
+    };
+    try {
+      await ipc.beets.pluginsSet(plugins);
+    } catch (e) {
+      this.beetsInstall = { running: false, stage: '', message: '', error: errorMessage(e) };
     }
   }
 
@@ -634,16 +644,6 @@ class UiStore {
       this.beetsPlugins = await ipc.beets.pluginTable();
     } catch (e) {
       console.warn('beets.pluginTable failed:', errorMessage(e));
-    }
-  }
-
-  /** 探测本机 Python（路径 B 的前置）。失败置 null，由界面说"探测不了"。 */
-  async probeBeetsPython(): Promise<void> {
-    try {
-      this.beetsPython = await ipc.beets.pythonProbe();
-    } catch (e) {
-      console.warn('beets.pythonProbe failed:', errorMessage(e));
-      this.beetsPython = null;
     }
   }
 
@@ -710,11 +710,9 @@ function readBeetsStatus(raw: unknown): BeetsStatus | null {
     interpreter: str(o.interpreter),
     scriptPath: str(o.scriptPath),
     entrySource: str(o.entrySource),
-    installTrack: str(o.installTrack),
     protocolVersion: num(o.protocolVersion),
     beetsVersion: str(o.beetsVersion),
     pythonVersion: str(o.pythonVersion),
-    pythonSupported: bool(o.pythonSupported),
     libraryPath: str(o.libraryPath),
     libraryExists: bool(o.libraryExists),
     libraryDirectory: str(o.libraryDirectory),

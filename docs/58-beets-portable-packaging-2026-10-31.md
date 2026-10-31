@@ -4,18 +4,22 @@
 > 字节从哪来（含全部 sha256 钉扎）、Gaia/SVM 模型的来龙去脉、CI 自检清单。
 > 排障从这篇开始，不用再翻散落的 workflow 与脚本注释。
 
-## 1 · 定位与两轨
+## 1 · 定位与单轨
 
-beets 模块 = beets helper GUI。发布物两条轨道，能力面从安装到卸载完全分开：
+beets 模块 = beets helper GUI。2026-11-01 单轨化（推翻本文件初稿的"两轨"设计）：
+**应用只构造、只使用便携包环境**——不探测系统 Python、不建 venv、没有 `.pyz`
+安装器；`install.py` 从"A 轨安装器"改造为**包内环境管理器**（随包分发，宿主
+操作桥用包内解释器 spawn），原先"做了一半的插件市场"由此闭环：
 
-| | 预配置环境（bundle，普通用户） | 本机安装（installer，高级用户） |
-|---|---|---|
-| 载体 | `beets-portable-win-x64.zip`（自带解释器） | `beets-installer.pyz`（~100KB 引导器） |
-| 用户侧前置 | 无 | 系统 Python（3.10–3.14） |
-| 安装动作 | 播放器直连 HTTP 下载 + 校验 + 解压（Rust） | 脚本建 venv、按勾选装插件（Python） |
-| 插件 | 固定清单（lyrics/fetchart/mbsync/xtractor），不可改 | 勾选表任意组合，可换插件重装 |
-| 移除 | 「删除组件」= 目录整体移除（Rust 直删） | 「卸载组件」= 脚本过四道闸算账，宿主执行删除 |
-| 数据 | `beets/` 与 `beets-index/` 两个家（用户数据）**永不**随组件删除 | 同左 |
+- 安装 = 下载便携包 → 校验 → 解压（Rust 直连）
+- 换插件 = 包内解释器跑 `install --plugins <新> --previous <旧>`——pip 装/卸
+  做差量、外部工具按表补齐、workbench 配置 plugins 行同步（脚本侧全责；
+  共享依赖不误删，beets 本体永远不动）
+- 删除 = 组件目录整体移除（脚本过四道闸算账，宿主执行删除）
+- 预置插件 = 内置可用的 lyrics/fetchart/mbsync + 分析器全家桶
+  （xtractor + Essentia + 12 件模型）——分析器用户自下费劲，这是便携包
+  存在的核心理由
+- 数据：`beets/` 与 `beets-index/` 两个家（用户数据）**永不**随组件删除
 
 ## 2 · 通道模型（推新删旧）
 
@@ -82,3 +86,7 @@ beets 模块 = beets helper GUI。发布物两条轨道，能力面从安装到�
   flex attrs，桩才能退役。
 - 本地打包验证因网络跳过（载体重试修复已入库）；CI 解包自检 + 冒烟是发布闸门，
   下一次 `beets-portable` 发布即完整验证。
+- **单轨化（2026-11-01）**：installer 轨（pyz/venv/Python 探测/版本窗口/
+  InstallTrack）整体退役；换插件 = 包内重跑 `install --plugins`，差量卸载以
+  settings.json 前后清单为准。`pythonSupported`/`installTrack` 字段与
+  `BeetsPythonProbe` DTO 一并退役。

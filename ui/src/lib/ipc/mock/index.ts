@@ -209,11 +209,9 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
         scriptPath: null,
         entrySource: 'settings',
         // 预览桩按"本机安装"演：装后状态卡的换插件/卸载分支靠它渲染
-        installTrack: 'installer',
         protocolVersion: 2,
         beetsVersion: '2.14.1 (preview)',
         pythonVersion: '3.14 (preview)',
-        pythonSupported: true,
         libraryPath: 'D:/MUSIC_Player/test-music/.beets/library.db',
         libraryExists: true,
         libraryDirectory: 'D:/MUSIC_Player/test-music',
@@ -255,19 +253,16 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return null; // 浏览器里没有资源管理器
     case 'beets_inbox_imported_add':
       return mock.beetsInboxImportedAdd(a.paths as string[]);
-    // 安装工具同理：预览环境不装东西，但要把事件流的形状演一遍，
-    // 好让 UI 的进度/终态渲染在浏览器里也能验证。两条路径都演练到。
+    // 安装/换插件同理：预览环境不装东西，但要把事件流的形状演一遍，
+    // 好让 UI 的进度/终态渲染在浏览器里也能验证。
     case 'beets_install':
-      return mock.beetsInstall(
-        a.track === 'bundle' ? 'bundle' : 'installer',
-        Array.isArray(a.plugins) ? (a.plugins as string[]) : [],
-      );
+      return mock.beetsInstall(Array.isArray(a.plugins) ? (a.plugins as string[]) : []);
+    case 'beets_plugins_set':
+      return mock.beetsPluginsSet(Array.isArray(a.plugins) ? (a.plugins as string[]) : []);
     // 内嵌插件表与 Python 探测都不依赖已装组件，mock 里也要答得出
     // （否则安装页的勾选清单在预览里永远是空的）
     case 'beets_plugin_table':
       return mock.beetsPluginTable();
-    case 'beets_python_probe':
-      return mock.beetsPythonProbe();
     case 'beets_uninstall':
       return mock.beetsUninstall();
     // ---- 批 D：曲库维护四件套（事件流演练，见 MockBackend.beetsMaintenance）----

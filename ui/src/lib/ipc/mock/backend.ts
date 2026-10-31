@@ -33,7 +33,6 @@ import type {
   ArtistPage,
   BeetsConfig,
   BeetsPluginItem,
-  BeetsPythonProbe,
   BeetsFieldCatalog,
   BeetsQueryPage,
   Diagnostics,
@@ -551,28 +550,17 @@ export class MockBackend {
    * 执行到，比假装成功有用。两条轨道给不同的 stage 文案——真实运行时两者
    * 的步骤本来就不一样（A 建 venv / B 下载解压）。
    */
-  async beetsInstall(
-    track: 'installer' | 'bundle' = 'installer',
-    plugins: string[] = [],
-  ): Promise<{ started: boolean }> {
+  async beetsInstall(plugins: string[] = []): Promise<{ started: boolean }> {
     const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:install', e);
-    if (track === 'bundle') {
-      emit({ type: 'progress', stage: 'download', message: '下载套件包（预览模式模拟）' });
-      await new Promise((r) => setTimeout(r, 250));
-      emit({ type: 'progress', stage: 'extract', message: '解压到工具目录（预览模式模拟）' });
-      await new Promise((r) => setTimeout(r, 250));
-      emit({ type: 'error', stage: 'download', message: '浏览器预览不会真的下载套件包，这里是模拟失败' });
-    } else {
-      emit({
-        type: 'progress',
-        stage: 'download',
-        message: `下载安装器（预览模式模拟；勾选 ${plugins.length} 个插件）`,
-      });
-      await new Promise((r) => setTimeout(r, 250));
-      emit({ type: 'progress', stage: 'venv', message: '创建虚拟环境（预览模式模拟）' });
-      await new Promise((r) => setTimeout(r, 250));
-      emit({ type: 'error', stage: 'venv', message: '浏览器预览没有系统 Python，这里是模拟失败' });
-    }
+    emit({
+      type: 'progress',
+      stage: 'download',
+      message: `下载便携包（预览模式模拟；勾选 ${plugins.length} 个插件）`,
+    });
+    await new Promise((r) => setTimeout(r, 250));
+    emit({ type: 'progress', stage: 'unpack', message: '解压到工具目录（预览模式模拟）' });
+    await new Promise((r) => setTimeout(r, 250));
+    emit({ type: 'error', stage: 'download', message: '浏览器预览不会真的下载套件包，这里是模拟失败' });
     emit({
       type: 'finished',
       status: {
@@ -580,11 +568,44 @@ export class MockBackend {
         interpreter: null,
         scriptPath: null,
         entrySource: null,
-        installTrack: null,
         protocolVersion: null,
         beetsVersion: null,
         pythonVersion: null,
-        pythonSupported: null,
+        libraryPath: null,
+        libraryExists: null,
+        libraryDirectory: null,
+        plugins: null,
+        pluginHealth: null,
+        pluginSummary: null,
+        configDir: null,
+        dataHome: null,
+        errorCode: 'E_TOOL_NOT_FOUND',
+        errorMessage: '浏览器预览不含 beets 工具',
+      },
+    });
+    return { started: true };
+  }
+
+  /** 换插件（操作桥）：事件流形状与真后端一致（pip 帧 → error，预览不真装）。 */
+  async beetsPluginsSet(plugins: string[] = []): Promise<{ started: boolean }> {
+    const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:install', e);
+    emit({
+      type: 'progress',
+      stage: 'pip',
+      message: `pip 变更（预览模式模拟；目标 ${plugins.length} 个插件）`,
+    });
+    await new Promise((r) => setTimeout(r, 250));
+    emit({ type: 'error', stage: 'pip', message: '浏览器预览不会真的跑 pip，这里是模拟失败' });
+    emit({
+      type: 'finished',
+      status: {
+        found: false,
+        interpreter: null,
+        scriptPath: null,
+        entrySource: null,
+        protocolVersion: null,
+        beetsVersion: null,
+        pythonVersion: null,
         libraryPath: null,
         libraryExists: null,
         libraryDirectory: null,
@@ -1121,17 +1142,6 @@ export class MockBackend {
    * 不做成假成功：安装页要根据这个结果决定按钮可不可点，
    * mock 说找得到而真机找不到，是最难查的那种"预览里好好的"。
    */
-  async beetsPythonProbe(): Promise<BeetsPythonProbe> {
-    return {
-      found: false,
-      path: null,
-      version: null,
-      supported: false,
-      source: null,
-      reason: '浏览器预览拿不到本机 Python；真应用会先试 py 启动器，再试 PATH 上的 python',
-    };
-  }
-
   /** 卸载组件：事件流形状与真后端一致（progress → done → finished）。 */
   async beetsUninstall(): Promise<{ started: boolean }> {
     const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:install', e);
@@ -1152,11 +1162,9 @@ export class MockBackend {
         interpreter: null,
         scriptPath: null,
         entrySource: null,
-        installTrack: null,
         protocolVersion: null,
         beetsVersion: null,
         pythonVersion: null,
-        pythonSupported: null,
         libraryPath: null,
         libraryExists: null,
         libraryDirectory: null,

@@ -514,21 +514,6 @@ fn version_mismatch(got: Option<u32>) -> Option<String> {
     }
 }
 
-/// 从入口形状推导安装轨道（`bundle` / `installer`）。
-///
-/// 推导而不是另存一份状态：bundle 的入口永远是 `bundle\python.exe`，A 轨道
-/// 永远在 `venv\Scripts\` 里，两个形状不会撞；入口没了它也就没了。PATH/
-/// 环境变量的自装入口归到 `installer`——同样有 Python 环境，卸载走同一套
-/// "脚本过闸 + 宿主执行"，没有安装目录时自然落进幂等分支。
-fn install_track_of(entry: &ToolEntry) -> &'static str {
-    let p = entry.program.to_ascii_lowercase();
-    if p.contains("\\bundle\\") || p.contains("/bundle/") {
-        "bundle"
-    } else {
-        "installer"
-    }
-}
-
 /// 协议报告 → UI 契约。
 ///
 /// 两边字段名不同是刻意的：crate 用中性词（`tool_version` / `runtime_version` /
@@ -543,11 +528,9 @@ fn status_from(entry: &ToolEntry, source: EntrySource, report: StatusReport) -> 
         interpreter: Some(entry.program.clone()),
         script_path: (!entry.args.is_empty()).then(|| entry.args.join(" ")),
         entry_source: Some(source.as_str().into()),
-        install_track: Some(install_track_of(entry).to_string()),
         protocol_version: report.protocol_version,
         beets_version: report.tool_version,
         python_version: report.runtime_version,
-        python_supported: report.runtime_supported,
         library_path: report.library_path,
         library_exists: report.library_exists,
         library_directory: report.library_root,
@@ -610,11 +593,9 @@ fn absent(
         interpreter: entry.map(|e| e.program.clone()),
         script_path: entry.and_then(|e| (!e.args.is_empty()).then(|| e.args.join(" "))),
         entry_source: source.map(|s| s.as_str().to_string()),
-        install_track: entry.map(install_track_of).map(str::to_string),
         protocol_version: None,
         beets_version: None,
         python_version: None,
-        python_supported: None,
         library_path: None,
         library_exists: None,
         library_directory: None,
@@ -678,11 +659,9 @@ fn busy_status(entry: &ToolEntry, source: EntrySource) -> BeetsStatus {
         interpreter: Some(entry.program.clone()),
         script_path: (!entry.args.is_empty()).then(|| entry.args.join(" ")),
         entry_source: Some(source.as_str().to_string()),
-        install_track: Some(install_track_of(entry).to_string()),
         protocol_version: None,
         beets_version: None,
         python_version: None,
-        python_supported: None,
         library_path: None,
         library_exists: None,
         library_directory: None,
@@ -723,40 +702,22 @@ pub fn probe(app: &tauri::AppHandle) -> BeetsStatus {
     }
 }
 
-/* ---------------- 安装：两条轨道（docs/33 §6.2） ----------------
+/* ---------------- 安装：单轨（便携包） ----------------
  *
  * 播放器只做四件事：下载 → 展开 → 记下入口 → 跑一次 status 验证。
- * 它**不建 venv、不装 pip 包、不碰 Python 工具链**——那些全在工具侧的
- * 安装器里（A 轨道），或干脆不需要（B 轨道自带解释器）。
+ * 它**不建 venv、不装 pip 包、不碰 Python 工具链、不探测系统 Python**——
+ * 唯一的分发物是便携包（自带解释器与 pip）。换插件同样不出这套动作：
+ * 操作桥 spawn 包内解释器跑 `install --plugins …`（见 run_env_manager）。
  *
  * 成功判据刻意不是"退出码 0"，而是"装完 probe 得到 found"。退出码可能骗人：
  * pip 装到一半也能 0，套件包解压成功也可能缺 DLL。
  */
 
-/// 安装轨道。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InstallTrack {
-    /// A：本机已有 Python → 跑 `.pyz` 安装器建 venv
-    Installer,
-    /// B：免安装套件包（自带解释器，可重定位）
-    Bundle,
-}
-
-impl InstallTrack {
-    pub fn parse(raw: &str) -> Result<Self, String> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "" | "auto" | "installer" | "a" => Ok(InstallTrack::Installer),
-            "bundle" | "b" => Ok(InstallTrack::Bundle),
-            other => Err(format!("未知安装轨道：{other}（可用：installer / bundle）")),
-        }
-    }
-}
-
 /// 发布物的默认位置。
 ///
 /// 优先级见 [`release_base`]：环境变量 > 设置 > 这里。做成可配置而不是硬编码，
 /// 是因为"发布到哪"是**发布流程**的事，不该逼着播放器改代码再发版；
-/// 也让两条轨道的下载路径能在本地用 `python -m http.server` 真实走一遍
+/// 也让下载路径能在本地用 `python -m http.server` 真实走一遍
 /// （`AIYA_BEETS_RELEASE_BASE=http://127.0.0.1:8000`）。
 ///
 /// 指向**固定下载通道 tag `beets-portable`**（docs/51 §3.4；2026-10-31 由
@@ -775,7 +736,6 @@ impl InstallTrack {
 /// 下载失败会给"下到了什么"的明确错误（见 `verify_asset`），而不是静默卡住。
 const RELEASE_BASE: &str =
     "https://github.com/yeraph-plus/aiya-music-player/releases/download/beets-portable";
-const INSTALLER_ASSET: &str = "beets-installer.pyz";
 const BUNDLE_ASSET: &str = "beets-portable-win-x64.zip";
 
 /// 发布物根地址：`AIYA_BEETS_RELEASE_BASE` > 默认常量。
@@ -798,20 +758,17 @@ fn install_root(app: &tauri::AppHandle) -> PathBuf {
     crate::paths::data_root(app).join("beets-tool")
 }
 
-/// 发布物的形状。两条轨道都是 zip 容器（`.pyz` 就是换了扩展名的 zip）。
+/// 发布物的形状：zip 容器。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AssetKind {
-    /// A 轨道：`beets-installer.pyz`
-    Installer,
-    /// B 轨道：`beets-portable-win-x64.zip`
+    /// 便携包：`beets-portable-win-x64.zip`
     Bundle,
 }
 
 impl AssetKind {
     fn label(self) -> &'static str {
         match self {
-            AssetKind::Installer => "安装器（.pyz）",
-            AssetKind::Bundle => "套件包（.zip）",
+            AssetKind::Bundle => "便携包（.zip）",
         }
     }
 }
@@ -987,152 +944,6 @@ fn fetch_asset(
     Ok(dest)
 }
 
-/// 一个可用的本机 Python。
-#[derive(Debug, Clone)]
-pub struct PythonInfo {
-    /// 绝对路径（`py -0p` 给的就是绝对路径；PATH 命中的也换成绝对路径）
-    pub program: String,
-    /// `3.12.4`
-    pub version: String,
-    /// `py-launcher` | `python` | `python3`
-    pub source: &'static str,
-}
-
-/// 工具侧的支持窗口（`beets-tool/src/aiya_beets/env.py` 的 PYTHON_MIN/MAX）。
-/// 只用于"能不能装"的判断与提示；装完到底行不行，安装器自己会验。
-const PYTHON_MIN: (u32, u32) = (3, 10);
-const PYTHON_MAX_EXCLUSIVE: (u32, u32) = (3, 15);
-
-fn version_ok(v: &str) -> bool {
-    let mut it = v.split('.').filter_map(|x| x.parse::<u32>().ok());
-    match (it.next(), it.next()) {
-        (Some(maj), Some(min)) => (maj, min) >= PYTHON_MIN && (maj, min) < PYTHON_MAX_EXCLUSIVE,
-        _ => false,
-    }
-}
-
-/// 问一个解释器：版本 + 真实可执行路径。失败返回 None。
-fn ask_python(program: &str) -> Option<(String, String)> {
-    let mut cmd = std::process::Command::new(program);
-    // 一行一个值，省得解析多行输出（sys.executable 在 Windows 上可能含空格）
-    cmd.arg("-c")
-        .arg("import sys;print(sys.version.split()[0]);print(sys.executable)")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
-    // Python 是控制台程序：不加这个，点「安装组件」时先闪一个黑框
-    crate::proc::no_window(&mut cmd);
-    let out = cmd.output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut lines = text.lines().map(str::trim).filter(|s| !s.is_empty());
-    let version = lines.next()?.to_string();
-    let path = lines.next()?.to_string();
-    if version.is_empty() || path.is_empty() {
-        return None;
-    }
-    Some((version, path))
-}
-
-/// Windows 的 py launcher 列出的解释器（`py -0p`）。
-///
-/// 为什么要单独试它：Windows 上 python.org 的安装包默认**不写 PATH**，只装
-/// `py.exe`。只试 `python`/`python3` 会把"装了 Python"的机器判成"没有 Python"
-/// （本机实测：`py -0p` 能列出 `3.14 * C:\Python314\python.exe`，而 PATH 上的
-/// `python` 是另一个 3.13）。
-fn py_launcher_paths() -> Vec<String> {
-    if !cfg!(windows) {
-        return Vec::new();
-    }
-    let mut cmd = std::process::Command::new("py");
-    cmd.arg("-0p")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
-    crate::proc::no_window(&mut cmd);
-    let Ok(out) = cmd.output() else {
-        return Vec::new();
-    };
-    if !out.status.success() {
-        return Vec::new();
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    // 每行形如：` -V:3.14 *        C:\Python314\python.exe`
-    text.lines()
-        .filter_map(|line| {
-            let path = line.split_whitespace().last()?;
-            let lower = path.to_ascii_lowercase();
-            if lower.ends_with("python.exe") || lower.ends_with("pythonw.exe") {
-                Some(path.to_string())
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-/// 探测本机 Python：py launcher 优先，再 PATH。
-///
-/// 返回值里 `source` 只用于 UI 说明（"我们是从 py 启动器找到的"），
-/// 不参与决策。**优先支持窗口内**的版本：装了 3.14 与 3.7 两台解释器时，
-/// 取 3.7 会让安装器跑一半报语法错。
-pub fn probe_python() -> Option<PythonInfo> {
-    let mut fallback: Option<PythonInfo> = None;
-    let candidates: Vec<(String, &'static str)> = py_launcher_paths()
-        .into_iter()
-        .map(|p| (p, "py-launcher"))
-        .chain(["python", "python3"].iter().map(|p| ((*p).to_string(), *p)))
-        .collect();
-    for (program, source) in candidates {
-        let Some((version, path)) = ask_python(&program) else {
-            continue;
-        };
-        let info = PythonInfo {
-            program: path,
-            version,
-            source,
-        };
-        if version_ok(&info.version) {
-            return Some(info);
-        }
-        if fallback.is_none() {
-            fallback = Some(info);
-        }
-    }
-    fallback
-}
-
-/// 给 UI 的探测结果（不吞细节：找不到要说清试过什么）。
-pub fn python_probe_payload() -> crate::dto::beets::BeetsPythonProbe {
-    use crate::dto::beets::BeetsPythonProbe;
-    match probe_python() {
-        Some(info) => BeetsPythonProbe {
-            found: true,
-            supported: version_ok(&info.version),
-            path: Some(info.program),
-            version: Some(info.version),
-            source: Some(info.source.to_string()),
-            reason: None,
-        },
-        None => BeetsPythonProbe {
-            found: false,
-            path: None,
-            version: None,
-            supported: false,
-            source: None,
-            reason: Some(if cfg!(windows) {
-                "没有找到 Python（试过 py 启动器、python、python3）。\
-                 可以不装 Python，直接用「免配置包」这条路径"
-                    .into()
-            } else {
-                "没有找到 python/python3".into()
-            }),
-        },
-    }
-}
-
 /// 安装器整体超时：pip 冷装（解析依赖 + 下载）正常几分钟内，
 /// 20 分钟还没完就是卡死了。
 const INSTALL_OVERALL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
@@ -1148,56 +959,44 @@ const INSTALL_LINE_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const BIN_LINE_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const BIN_OVERALL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
-fn install_via_installer(
+/// 包内环境管理器（操作桥）：spawn 包内解释器跑
+/// `install --plugins <新清单> --previous <旧清单>`，帧逐行透传。
+///
+/// 这是"换插件"的执行体：pip 装/卸、bins 补外部工具、配置同步全在脚本侧
+/// （install.py），宿主只负责拉起进程、转事件、看门狗收尸。两级超时与
+/// 安装器时代同款（pip 冷装几分钟；行间空闲 60s = 卡死）。
+fn run_env_manager(
     app: &tauri::AppHandle,
-    pyz: &std::path::Path,
+    entry: &ToolEntry,
     plugins: &[String],
+    previous: &[String],
     emit: &dyn Fn(serde_json::Value),
-) -> Result<ToolEntry, String> {
-    let python = probe_python().ok_or_else(|| {
-        "本机没有可用的 Python。改用「免配置包」这条路径，或先安装 Python 3.10+".to_string()
-    })?;
-    if !version_ok(&python.version) {
-        emit(serde_json::json!({
-            "type": "warning",
-            "message": format!(
-                "本机 Python {} 不在支持窗口（>=3.10 <3.15），仍尝试安装", python.version
-            ),
-        }));
-    }
-    let target = install_root(app).join("venv");
-    emit(serde_json::json!({
-        "type": "progress", "stage": "install",
-        "message": format!("用 Python {}（{}）安装组件到 {}",
-                           python.version, python.program, target.display()),
-    }));
-
-    let mut cmd = std::process::Command::new(&python.program);
-    cmd.arg(pyz).arg("install").arg("--target").arg(&target);
-    // 勾选为空就不传这个参数：安装器的语义是"省略 = 只装 beets 基础"，
-    // 传空串会让它解析出一个空名字。
-    if !plugins.is_empty() {
-        cmd.arg("--plugins").arg(plugins.join(","));
+) -> Result<(), String> {
+    let mut cmd = std::process::Command::new(&entry.program);
+    cmd.args(&entry.args)
+        .args(["install", "--plugins", &plugins.join(",")]);
+    // 旧清单为空（首次安装/没勾过）就不传：脚本语义是"缺省 = 无差量卸载"。
+    if !previous.is_empty() {
+        cmd.arg("--previous").arg(&previous.join(","));
     }
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .envs(tool_env(app, Profile::Workbench));
-    // 安装要跑几十秒，黑框会一直杵在那儿——比一闪而过更难看
+    // 要跑几十秒，黑框会一直杵在那儿——比一闪而过更难看
     crate::proc::no_window(&mut cmd);
-    let mut child = cmd.spawn().map_err(|e| format!("启动安装器失败：{e}"))?;
+    let mut child = cmd.spawn().map_err(|e| format!("启动环境管理器失败：{e}"))?;
 
     let stdout = match child.stdout.take() {
         Some(s) => s,
         None => {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("安装器 stdout 未捕获".into());
+            return Err("环境管理器 stdout 未捕获".into());
         }
     };
     // 句柄唯一所有者是共享槽（AppState.beets_install_child）：本函数此后
-    // 经槽 wait/kill，应用退出（RunEvent::Exit）也经槽收尸 —— 此前安装
-    // 线程逐行阻塞读、无超时，主进程退出时安装器跟着变孤儿进程。
+    // 经槽 wait/kill，应用退出（RunEvent::Exit）也经槽收尸。
     let state = app
         .try_state::<crate::AppState>()
         .ok_or_else(|| "AppState 未就绪".to_string())?;
@@ -1217,10 +1016,6 @@ fn install_via_installer(
         INSTALL_OVERALL_TIMEOUT,
         emit,
     );
-    // 收尾统一经槽：pump 只读流，wait/kill 在这边。槽被 Exit 收尾拿走
-    // （take 后为 None）= 应用正在退出，子进程已被 kill+wait，安装就此放弃。
-    // pump 是 Err（读线程起不来）时状态未知，保守 kill —— 没人读输出会让
-    // 安装器卡死在管道缓冲上。
     let code = {
         let mut slot = state
             .beets_install_child
@@ -1231,45 +1026,26 @@ fn install_via_installer(
                 if pump.as_ref().map(|p| p.timed_out).unwrap_or(true) {
                     let _ = c.kill();
                 }
-                let code = c.wait().map_err(|e| format!("等待安装器退出失败：{e}"))?;
+                let code = c.wait().map_err(|e| format!("等待环境管理器退出失败：{e}"))?;
                 slot.take(); // 已收尸，退出路径不必再管
                 Ok(code)
             }
             None => Err("安装被应用退出中断".to_string()),
         }
     }?;
-    let pump = pump.map_err(|e| format!("读安装器输出失败：{e}"))?;
+    let pump = pump.map_err(|e| format!("读环境管理器输出失败：{e}"))?;
     if pump.timed_out {
         return Err(format!(
-            "安装器超时未完成（行间空闲 >{INSTALL_LINE_IDLE_TIMEOUT:.0?} 或整体 >{INSTALL_OVERALL_TIMEOUT:.0?}），已终止"
+            "环境管理器超时未完成（行间空闲 >{INSTALL_LINE_IDLE_TIMEOUT:.0?} 或整体 >{INSTALL_OVERALL_TIMEOUT:.0?}），已终止"
         ));
     }
     if !code.success() || !pump.saw_done {
         return Err(format!(
-            "安装器未成功完成（退出码 {}）",
+            "环境管理器未成功完成（退出码 {}）",
             code.code().unwrap_or(-1)
         ));
     }
-
-    // 入口：venv 里的 aiya-beets 脚本。
-    // 这是**安装器的产物约定**，不是探测：安装器把它装在这个位置，
-    // 我们就记这个位置（见 docs/33 §6.2 A 轨道）。
-    let exe = target.join("Scripts").join("aiya-beets.exe");
-    if exe.is_file() {
-        return Ok(ToolEntry {
-            program: exe.to_string_lossy().into_owned(),
-            args: Vec::new(),
-        });
-    }
-    // 退一步：用 venv 解释器跑模块（Scripts 里没有 console script 的旧式安装）
-    let py = target.join("Scripts").join("python.exe");
-    if py.is_file() {
-        return Ok(ToolEntry {
-            program: py.to_string_lossy().into_owned(),
-            args: vec!["-m".into(), "aiya_beets".into()],
-        });
-    }
-    Err(format!("安装完成但找不到入口（{}）", target.display()))
+    Ok(())
 }
 
 /// B 轨道：展开套件包到 `{app_data}/beets-tool/bundle`。
@@ -1561,12 +1337,7 @@ impl Drop for InstallGuard<'_> {
 /// `beets_install_child` 这个单槽里塞句柄，两条线程并发时第二个会顶掉第一个
 /// ——收尾 kill/wait 错对象、误报"被退出中断"，pip 被中途杀还可能留半个
 /// venv。占位失败直接返回错误，UI 以 error 事件呈现。
-pub fn start_install(
-    app: tauri::AppHandle,
-    track: String,
-    plugins: Vec<String>,
-) -> Result<(), String> {
-    let track = InstallTrack::parse(&track)?;
+pub fn start_install(app: tauri::AppHandle, plugins: Vec<String>) -> Result<(), String> {
     {
         let state = app
             .try_state::<crate::AppState>()
@@ -1594,27 +1365,8 @@ pub fn start_install(
                 let _ = app.emit("beets:install", v);
             };
             let result = (|| -> Result<ToolEntry, String> {
-                let (env_key, asset, kind) = match track {
-                    InstallTrack::Installer => (
-                        "AIYA_BEETS_INSTALLER",
-                        INSTALLER_ASSET,
-                        AssetKind::Installer,
-                    ),
-                    InstallTrack::Bundle => ("AIYA_BEETS_BUNDLE", BUNDLE_ASSET, AssetKind::Bundle),
-                };
-                let path = fetch_asset(env_key, asset, kind, &emit)?;
-                let entry = match track {
-                    InstallTrack::Installer => install_via_installer(&app, &path, &plugins, &emit)?,
-                    InstallTrack::Bundle => {
-                        if !plugins.is_empty() {
-                            emit(serde_json::json!({
-                                "type": "warning",
-                                "message": "免配置包已预置插件，这次的勾选不生效",
-                            }));
-                        }
-                        install_via_bundle(&app, &path, &emit)?
-                    }
-                };
+                let path = fetch_asset("AIYA_BEETS_BUNDLE", BUNDLE_ASSET, AssetKind::Bundle, &emit)?;
+                let entry = install_via_bundle(&app, &path, &emit)?;
                 // 外置工具（docs/53）：两个轨道都跑，但缺的东西不一样 —— B 轨道
                 // 自带 Essentia 提取器（docs/54），`exe_path` 会在包内 `bundle/bin`
                 // 里找到它；A 轨道没有，得现下。清单由**工具侧按插件名**自己算，
@@ -1655,6 +1407,63 @@ pub fn start_install(
         })
         .map(|_| ())
         .map_err(|e| format!("起安装线程失败：{e}"))
+}
+
+/// 换插件（操作桥）：把新清单写进 settings，再 spawn 包内解释器跑
+/// `install --plugins <新> --previous <旧>`——pip 装/卸的差量、外部工具补齐、
+/// 配置同步全在脚本侧，宿主只拉起进程、转事件、收尸。
+///
+/// 与安装共用同一把互斥（beets_installing）与同一个事件通道（beets:install）：
+/// pip 改 site-packages 与解压套件包都不能并发，UI 也共用同一块进度区。
+pub fn start_plugins_set(app: tauri::AppHandle, plugins: Vec<String>) -> Result<(), String> {
+    {
+        let state = app
+            .try_state::<crate::AppState>()
+            .ok_or_else(|| "应用状态未就绪，操作未启动".to_string())?;
+        if state
+            .beets_installing
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_err()
+        {
+            return Err("已有一次组件安装在进行中，等它结束（或失败）后再试".to_string());
+        }
+    }
+    std::thread::Builder::new()
+        .name("beets-plugins-set".into())
+        .spawn(move || {
+            let install_state = app.state::<crate::AppState>();
+            let _guard = InstallGuard(&install_state.beets_installing);
+            let emit = |v: serde_json::Value| {
+                let _ = app.emit("beets:install", v);
+            };
+            let result = (|| -> Result<(), String> {
+                // 旧清单要在改写 settings 之前取——它是差量卸载的依据
+                let previous = load_settings(&app).plugins.clone().unwrap_or_default();
+                let want = plugins.clone();
+                update_settings(&app, move |s| {
+                    s.plugins = Some(want);
+                })?;
+                let (entry, _) = discover(&app)
+                    .ok_or_else(|| NOT_INSTALLED.to_string())?;
+                run_env_manager(&app, &entry, &plugins, &previous, &emit)
+            })();
+            match result {
+                Ok(()) => {}
+                Err(message) => emit(serde_json::json!({ "type": "error", "message": message })),
+            }
+            let status = probe(&app);
+            let _ = app.emit(
+                "beets:install",
+                serde_json::json!({ "type": "finished", "status": status }),
+            );
+        })
+        .map(|_| ())
+        .map_err(|e| format!("起插件变更线程失败：{e}"))
 }
 
 /* ---------------- 卸载组件（docs/51 §2.2） ---------------- */
@@ -2603,21 +2412,6 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// Python 探测的形状自洽：找到就必须有路径与版本，找不到就必须有人话。
-    /// 不在测试里断言"一定找得到"——CI 与用户机器不一样，那种断言只会变成
-    /// 环境依赖的假红。
-    #[test]
-    fn python_probe_shape_is_consistent() {
-        let p = python_probe_payload();
-        if p.found {
-            assert!(p.path.is_some() && p.version.is_some());
-            assert!(p.reason.is_none());
-            assert_eq!(version_ok(p.version.as_deref().unwrap_or("")), p.supported);
-        } else {
-            assert!(p.reason.is_some(), "找不到 Python 时必须给一句人话");
-        }
-    }
-
     #[test]
     fn settings_roundtrip_and_corrupt_falls_back_to_default() {
         let dir = tmp_settings_dir("roundtrip");
@@ -2779,9 +2573,9 @@ mod tests {
     #[test]
     fn verify_rejects_empty_file() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("installer.pyz");
+        let p = dir.path().join("bundle.zip");
         std::fs::write(&p, b"").unwrap();
-        let err = verify_asset(&p, AssetKind::Installer).unwrap_err();
+        let err = verify_asset(&p, AssetKind::Bundle).unwrap_err();
         assert!(err.contains("空文件"), "{err}");
     }
 
@@ -2847,9 +2641,8 @@ mod tests {
         // BeetsStatus 只有 Deserialize；用 JSON 反序列化锚定输入形状
         let v = serde_json::json!({
             "found": true, "interpreter": "py", "scriptPath": "-m aiya_beets",
-            "entrySource": "settings", "installTrack": "installer",
+            "entrySource": "settings",
             "protocolVersion": 1, "beetsVersion": "2.14.1", "pythonVersion": "3.14.7",
-            "pythonSupported": true,
             "libraryPath": "l.db", "libraryExists": true,
             "libraryDirectory": "D:/Music",
             "plugins": ["musicbrainz"],
@@ -2868,8 +2661,6 @@ mod tests {
         assert_eq!(st.plugins, Some(vec!["musicbrainz".to_string()]));
         assert_eq!(st.entry_source.as_deref(), Some("settings"));
         // 装后状态卡按轨道出能力面：入口形状推导的结果要能过 IPC
-        assert_eq!(st.install_track.as_deref(), Some("installer"));
-        assert_eq!(st.python_supported, Some(true));
         assert_eq!(st.data_home.as_deref(), Some("d"));
         // v2：schema 比对结论 + 库锁三态原样透传
         assert!(st.schema_matched);
@@ -3064,13 +2855,8 @@ mod tests {
             "套件包自报的 beets 版本: {:?}",
             status.beets_version
         );
-        // 自带解释器 ⇒ 运行时版本必须自报，且被判定为支持
+        // 自带解释器 ⇒ 运行时版本必须自报
         assert!(status.python_version.is_some(), "自带解释器应自报版本");
-        assert_eq!(
-            status.python_supported,
-            Some(true),
-            "自带解释器应判定为支持"
-        );
     }
 
     /// 端到端：真 sidecar dump_items（dev venv + dev 隔离库，B2 冒烟留下的 3 条）

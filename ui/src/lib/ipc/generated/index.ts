@@ -17,7 +17,6 @@ export * from './BeetsFieldCatalog';
 export * from './BeetsPluginHealth';
 export * from './BeetsPluginItem';
 export * from './BeetsPluginSummary';
-export * from './BeetsPythonProbe';
 export * from './BeetsQueryHit';
 export * from './BeetsQueryPage';
 export * from './BeetsStatus';

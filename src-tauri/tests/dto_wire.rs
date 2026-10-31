@@ -501,21 +501,6 @@ fn small_result_dtos_keep_their_exact_keys() {
         ])
     );
 
-    // Python 探测结果：UI 直接用这份渲染"找到/没找到"
-    let probe = serde_json::to_value(aiya_lib::dto::beets::BeetsPythonProbe {
-        found: false,
-        path: None,
-        version: None,
-        supported: false,
-        source: None,
-        reason: Some("没有找到".into()),
-    })
-    .unwrap();
-    assert_eq!(
-        keys(&probe),
-        sorted(&["found", "path", "version", "supported", "source", "reason"])
-    );
-
     // beets 配置快照（docs/40 十三轮）：inbox / 输出根 / 排除表计数。
     // UI 的待整理目录行与输出根 radio 都吃这份——键名错位 = 又一个
     // "from_value 落空 UI 什么都不显示"
@@ -541,11 +526,9 @@ fn beets_status_protocol_version_is_number() {
         interpreter: Some("aiya-beets.exe".into()),
         script_path: None,
         entry_source: Some("settings".into()),
-        install_track: Some("installer".into()),
         protocol_version: Some(1),
         beets_version: Some("2.14.1".into()),
         python_version: None,
-        python_supported: Some(true),
         library_path: None,
         library_exists: Some(true),
         library_directory: Some("D:\\Music".into()),

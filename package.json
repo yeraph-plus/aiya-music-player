@@ -18,6 +18,7 @@
     "check": "npm --prefix ui run check",
     "check:deps": "node tools/dep-graph.mjs",
     "check:boundary": "node tools/check-boundary.mjs",
+    "check:style": "node tools/check-style.mjs",
     "check:ui-layers": "node tools/check-ui-layers.mjs",
     "check:fmt": "node tools/run.mjs cargo fmt --all -- --check",
     "check:clippy": "node tools/run.mjs cargo clippy --workspace --all-targets -- -D warnings",

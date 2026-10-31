@@ -30,19 +30,10 @@ pub struct BeetsStatus {
     /// 排障第一个问题永远是"为什么用的是这个"，让发现层直接回答，
     /// 而不是让用户去翻日志。
     pub entry_source: Option<String>,
-    /// 这次安装走的是哪条轨道：`bundle`（预配置环境）/ `installer`（本机安装）。
-    ///
-    /// 由入口形状推导（bundle 的入口是包内解释器，A 轨道的入口在 venv 里），
-    /// 不是另存的状态——与"装没装"同生命周期。UI 据此决定装后状态卡的
-    /// 能力面：bundle 只有重下载与删除（都是播放器直连操作），installer
-    /// 才有换插件与卸载（脚本过闸、宿主执行）。
-    pub install_track: Option<String>,
     #[ts(type = "number | null")]
     pub protocol_version: Option<u32>,
     pub beets_version: Option<String>,
     pub python_version: Option<String>,
-    /// 运行时是否在支持窗口内（工具自报；None = 老版本工具没报）。
-    pub python_supported: Option<bool>,
     pub library_path: Option<String>,
     pub library_exists: Option<bool>,
     /// 库根目录（**显式配置**的 `directory`；None = 没配过）。
@@ -139,24 +130,6 @@ pub struct BeetsPluginItem {
     /// 索引家默认启用（由 `profiles.index` 注入）
     #[serde(default)]
     pub index_default: bool,
-}
-
-/// 本机 Python 探测结果（路径 B 的前置条件）。
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-#[serde(rename_all = "camelCase")]
-pub struct BeetsPythonProbe {
-    pub found: bool,
-    /// 绝对路径（`py -0p` 给的就是绝对路径）
-    pub path: Option<String>,
-    /// `3.12.4` 这样的版本号
-    pub version: Option<String>,
-    /// 是否在工具侧的支持窗口内（>=3.10 <3.15）
-    pub supported: bool,
-    /// 探测来源：`py-launcher` | `python` | `python3`
-    pub source: Option<String>,
-    /// 找不到时的说明（给 UI 直接显示，不要让它自己编文案）
-    pub reason: Option<String>,
 }
 
 /// "任务已启动"（preview / apply / sync 三个命令共用）。

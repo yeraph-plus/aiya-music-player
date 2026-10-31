@@ -357,10 +357,9 @@ test('docs/48：未装 beets 时 Beets 页只给两条安装路线，不出查�
   await expect(main.locator('section.beets-panel').filter({ hasText: '预配置环境' })).toHaveCount(1);
   // mock 的 Python 探测报"找不到" → 本机安装卡整个不出现（2026-10-31 两分支：
   // 检测到 Python 才渲染本机安装路线），只留一行说明 + 重新检测
-  await expect(main).toContainText('未检测到本机 Python');
-  await expect(main.getByRole('button', { name: /重新检测/ })).toBeVisible();
-  await expect(main.locator('section.beets-panel').filter({ hasText: '本机安装' })).toHaveCount(0);
-  await expect(main.getByRole('button', { name: /安装（\d+ 个插件）/ })).toHaveCount(0);
+  // Python 探测整链退役：页面里不该再出现任何"本机安装"痕迹
+  await expect(main).not.toContainText('本机安装');
+  await expect(main).not.toContainText('重新检测');
 
   // 没装就没有查询入口。导入面板 / 维护四件套都不在；插件市场的后端实现
   // 已整体回收（2026-10-31）——插件只走勾选表一路，不该有第二个入口
@@ -386,8 +385,8 @@ test('docs/51：安装页给出插件勾选与卸载入口（卸载只删组件�
   // 卸载是两段式：先「卸载组件」，点了才出「确认卸载」。
   // 破坏性操作不该一次点击就执行
   await expect(main.getByRole('button', { name: '确认卸载' })).toHaveCount(0);
-  await main.getByRole('button', { name: '卸载组件' }).click();
-  await expect(main.getByRole('button', { name: '确认卸载' })).toBeVisible();
+  await main.getByRole('button', { name: '删除组件' }).click();
+  await expect(main.getByRole('button', { name: '确认删除' })).toBeVisible();
   // 文案必须写明数据不动——这是卸载唯一容易误解的地方
   await expect(main).toContainText('曲库与分析库');
 });
@@ -443,9 +442,9 @@ test('docs/49：Beets 拆成 安装/分析/整理 三个子页，各自只放自
   await expect(main.getByRole('button', { name: '查询' })).toBeVisible();
   await expect(main).not.toContainText('待整理目录');
 
-  // 安装页：装后状态卡随轨道（mock 桩 = 本机安装），且不该再出现查询区
+  // 安装页：装后状态卡（单轨 = 预配置环境），且不该再出现查询区
   await tabs.nth(0).click();
-  await expect(main).toContainText('本机安装');
+  await expect(main).toContainText('预配置环境');
   await expect(main).toContainText('入口来源');
   await expect(main.getByRole('button', { name: '查询' })).toHaveCount(0);
 

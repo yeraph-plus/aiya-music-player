@@ -23,7 +23,6 @@ import type {
   ArtistPage,
   BeetsFieldCatalog,
   BeetsPluginItem,
-  BeetsPythonProbe,
   BeetsQueryPage,
   BeetsConfig,
   BeetsStatus,
@@ -127,18 +126,6 @@ export type ApplyDecision = {
 
 /** 没有固定形状的载荷（设置/UI 状态）：由 zod 兜住，见 `schema.ts`。 */
 export type DynamicJson = Record<string, unknown>;
-
-/**
- * beets 工具的两条安装轨道（docs/33 §6.2）。
- *
- * - `installer`：`.pyz` 安装器，用**系统** Python 建 venv。体积小，但要求机器上
- *   有 3.10–3.14 的 Python。
- * - `bundle`：免安装套件包，自带解释器（约 34MB 下载 / 97MB 落盘），解压即用。
- *
- * 播放器对两者做同一件事：下载 → 展开 → 记入口 → 跑一次 status 验证。
- * 它**不判断**哪条更合适——那是用户的机器状况决定的。
- */
-export type BeetsInstallTrack = 'installer' | 'bundle';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
@@ -388,28 +375,25 @@ export const ipc = {
      * （无变化时手动也会发一条，好让界面有回应）。
      */
     /**
-     * 装 beets 工具到应用数据目录（docs/33 §6.2 两条轨道）。
+     * 安装/更新便携包（单轨，docs/58）。
      *
-     * 播放器只做「下载 → 展开 → 记入口 → 跑一次 status 验证」，成功判据是
+     * 播放器只做「下载 → 校验 → 展开 → 记入口 → 跑一次 status 验证」，成功判据是
      * probe 的 `found`，**不是**退出码。立刻返回「已启动」，进度走
      * `beets:install` 事件，最后一条是 `{type:"finished", status}`。
-     *
-     * `track` 缺省 = `installer`（体积小、优先试；机器没 Python 会明确报错，
-     * 再由用户改选 `bundle`）。
      */
-    install: (
-      track: BeetsInstallTrack = 'installer',
-      plugins: string[] = [],
-    ) => call<JobStarted>('beets_install', { track, plugins }),
+    install: (plugins: string[] = []) => call<JobStarted>('beets_install', { plugins }),
+
+    /**
+     * 换插件（操作桥）：spawn 包内解释器跑 `install --plugins <新> --previous <旧>`，
+     * pip 装/卸、外部工具补齐、配置同步全在脚本侧。进度与安装同通道。
+     */
+    pluginsSet: (plugins: string[] = []) => call<JobStarted>('beets_plugins_set', { plugins }),
 
     /**
      * 内嵌插件表：**不需要装过组件**就能拿到的静态目录（docs/51 §4.2）。
      * 装没装、缺不缺依赖的三态看 `status()` 的 pluginHealth。
      */
     pluginTable: () => call<BeetsPluginItem[]>('beets_plugin_table'),
-
-    /** 探测本机 Python：`py -0p` 优先，再 PATH。找不到时 `reason` 带人话。 */
-    pythonProbe: () => call<BeetsPythonProbe>('beets_python_probe'),
 
     /**
      * 卸载组件：只删安装目录（venv/套件/下载缓存），**不动**整理库与分析库。
