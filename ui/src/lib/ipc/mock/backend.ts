@@ -1670,17 +1670,59 @@ export class MockBackend {
     }
   }
 
-  /** 播放中的位置推进：暂停/空闲时定时器已清，不会走到这 */
+  /**
+   * 播放中的位置推进：暂停/空闲时定时器已清，不会走到这。
+   *
+   * 到曲尾按 repeat/shuffle 语义推进，对齐 actor（发布前审查 P1-8）：此前
+   * 是"当前曲目循环"，整专辑连播、随机切歌、队列播完停止这三条核心路径
+   * 在 e2e（全跑 mock）里永远走不到。自动连播先落 playQueue（paused + 归零）
+   * 再翻回 playing——同步块内连发两版状态，与真机"Eof → Load"的两拍一致。
+   */
   private tickPosition(): void {
     const duration = this.playerState.durationMs;
-    let position = this.playerState.positionMs + Math.round(100 * this.playerState.rate);
-    // 走到曲尾回到开头（预览不出声，循环推进只为让进度条/歌词时钟活着）
-    if (duration != null && duration > 0 && position >= duration) position = 0;
-    const secondBefore = Math.floor(this.playerState.positionMs / 1000);
-    this.playerState = { ...this.playerState, positionMs: position, updatedAtMs: Date.now() };
-    // 整秒才广播：10Hz 的内部推进不值得各层 rAF 都醒一次
-    if (Math.floor(position / 1000) !== secondBefore) {
-      this.emitter.emit('player:state', this.playerState);
+    const position = this.playerState.positionMs + Math.round(100 * this.playerState.rate);
+    if (duration == null || duration <= 0 || position < duration) {
+      const secondBefore = Math.floor(this.playerState.positionMs / 1000);
+      this.playerState = { ...this.playerState, positionMs: position, updatedAtMs: Date.now() };
+      // 整秒才广播：10Hz 的内部推进不值得各层 rAF 都醒一次
+      if (Math.floor(position / 1000) !== secondBefore) {
+        this.emitter.emit('player:state', this.playerState);
+      }
+      return;
+    }
+    // ---- 曲尾（直播无 duration，到不了这）----
+    if (this.playerState.repeat === 'one') {
+      this.playerState = { ...this.playerState, positionMs: 0, updatedAtMs: Date.now() };
+      return;
+    }
+    if (this.playerState.shuffle) {
+      const n = this.queueIds.length;
+      if (n <= 1) {
+        this.playerState = { ...this.playerState, positionMs: 0, updatedAtMs: Date.now() };
+        return;
+      }
+      // 随机挑一个非当前的下标：[0, n-1] 均匀采样后跳过当前
+      let pick = Math.floor(Math.random() * (n - 1));
+      const cur = this.playerState.index ?? 0;
+      if (pick >= cur) pick += 1;
+      this.playQueue(this.queueIds, pick);
+      this.playerState = { ...this.playerState, status: 'playing' };
+      this.emitPlayer();
+      return;
+    }
+    const next = (this.playerState.index ?? 0) + 1;
+    if (next < this.queueIds.length) {
+      this.playQueue(this.queueIds, next);
+      this.playerState = { ...this.playerState, status: 'playing' };
+      this.emitPlayer();
+    } else if (this.playerState.repeat === 'all') {
+      this.playQueue(this.queueIds, 0);
+      this.playerState = { ...this.playerState, status: 'playing' };
+      this.emitPlayer();
+    } else {
+      // 队列播完（repeat=off）：停在最后一首结尾、转 paused
+      this.playerState = { ...this.playerState, status: 'paused', positionMs: duration };
+      this.emitPlayer();
     }
   }
 
