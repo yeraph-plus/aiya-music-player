@@ -218,7 +218,10 @@ def install_deps(runtime: Path, extra: list[str], uv: str | None) -> None:
     """
     site = runtime / "Lib" / "site-packages"
     need_mods = plugins.imports_for(list(plugins.BUNDLE_PLUGINS))
-    if (site / "beets").is_dir() and not _importable(runtime, need_mods):
+    # pip 也在必装清单里：单轨化后"换插件"就是包内解释器跑 `python -m pip`，
+    # 包里没有 pip 模块，安装页的勾选就永远是死按钮。
+    if ((site / "beets").is_dir() and (site / "pip").is_dir()
+            and not _importable(runtime, need_mods)):
         print("依赖与预置插件已就位，跳过安装")
         return
 
@@ -242,14 +245,14 @@ def install_deps(runtime: Path, extra: list[str], uv: str | None) -> None:
             # --link-mode=copy：`--target` 默认会 hardlink 到 uv 缓存，跨盘时 uv 自己
             # 也会回落 copy（还打一条 warning）。发布物应当自包含，统一 copy 更省事。
             cmd = [uv, "pip", "install", "--python", str(runtime / "python.exe"),
-                   "--target", str(staging), "--link-mode=copy", "-r", str(req), *extra]
+                   "--target", str(staging), "--link-mode=copy", "-r", str(req), *extra, "pip"]
             print(f"安装依赖（uv）→ 合并进 {site}")
         else:
             # 没 uv 时回落 pip。功能一致，慢；开发者机器不一定装了 uv，
             # 但 CI 与正式发布必须走 uv（release-beets.yml 里有 setup-uv）。
             print("⚠ 没找到 uv，回落到 pip（CI 上不该走到这里）")
             cmd = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
-                   "--target", str(staging), "-r", str(req), *extra]
+                   "--target", str(staging), "-r", str(req), *extra, "pip"]
 
         code = subprocess.call(cmd, env=env)
         if code != 0:
@@ -488,7 +491,8 @@ def main() -> int:
     shutil.copyfile(lic, work / "LICENSE")
     write_third_party(work, staged)
 
-    # 自检：用**包里的**解释器跑，证明可执行（这一步在老机器上会抓出缺 DLL）
+    # 自检：用**包里的**解释器跑，证明可执行（这一步在老机器上会抓出缺 DLL）。
+    # pip 也在自检清单里：单轨化后"换插件"靠它（缺 pip = 安装页死按钮）。
     probe = subprocess.run(
         [str(work / "python.exe"), "-m", "aiya_beets", "version"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -498,8 +502,17 @@ def main() -> int:
     if probe.returncode != 0 or not probe.stdout.strip():
         print(f"套件包自检失败：{probe.stdout} {probe.stderr[:400]}", file=sys.stderr)
         return 1
+    pip = subprocess.run(
+        [str(work / "python.exe"), "-m", "pip", "--version"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+    )
+    if pip.returncode != 0:
+        print(f"包内 pip 自检失败：{pip.stderr[:400]}", file=sys.stderr)
+        return 1
     print(f"自检通过：{probe.stdout.strip()}（预置 {', '.join(plugin_names)}"
           + (f" + bin/{', bin/'.join(r['target'] for r in staged)}" if staged else "")
+          + f" + pip {pip.stdout.strip().split()[-1] if pip.stdout.strip() else ''}"
           + "）")
 
     if args.no_zip:

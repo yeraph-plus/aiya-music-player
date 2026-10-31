@@ -78,12 +78,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("doctor", help="人类可读的体检报告")
     sub.add_parser("version", help="打印版本号")
 
-    p_install = sub.add_parser("install", help="建 venv 并安装 beets（需要本机 Python）")
-    p_install.add_argument("--target", required=True)
-    p_install.add_argument("--from-wheels", default=None)
-    p_install.add_argument("--requirements", default=None)
-    p_install.add_argument("--plugins", default=None, help="要启用的插件名，逗号分隔；all = 全部")
-    p_install.add_argument("--dry-run", action="store_true", help="只打印安装计划")
+    p_install = sub.add_parser("install", help="在便携包内变更插件与配置（包内解释器运行）")
+    p_install.add_argument("--plugins", required=True,
+                           help="目标插件名，逗号分隔；all = 表内全部")
+    p_install.add_argument("--previous", default=None,
+                           help="变更前的启用清单（宿主传，用于差量卸载）")
+    p_install.add_argument("--dry-run", action="store_true", help="只打印变更计划")
 
     p_uninstall = sub.add_parser("uninstall", help="删除安装产物（数据不动）")
     p_uninstall.add_argument("--target", required=True)
@@ -121,13 +121,9 @@ def main(argv: list[str] | None = None) -> int:
     if ns.cmd == "install":
         from . import install
 
-        argv = ["--target", ns.target]
-        if ns.from_wheels:
-            argv += ["--from-wheels", ns.from_wheels]
-        if ns.requirements:
-            argv += ["--requirements", ns.requirements]
-        if ns.plugins:
-            argv += ["--plugins", ns.plugins]
+        argv = ["--plugins", ns.plugins]
+        if ns.previous:
+            argv += ["--previous", ns.previous]
         if ns.dry_run:
             argv.append("--dry-run")
         return install.main(argv)
