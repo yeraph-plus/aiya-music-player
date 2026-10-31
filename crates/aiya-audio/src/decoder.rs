@@ -413,6 +413,13 @@ impl SymphoniaStream {
     }
 
     fn seek_ms(&mut self, ms: u64) -> Result<(), AudioError> {
+        // 探包缓存作废：它缓存的是位置 0 的样本，而 next_packet 会无条件先还
+        // 它（发生在 seek_target 丢包逻辑之前）——不清掉的话，带 start_ms 的
+        // 装载会先把歌曲开头一小段真实播出来再跳到起点（FLAC ~85ms，WAV 最坏
+        // ~1.4s），启动恢复/断点续播必现"先放歌头"。丢包到目标由
+        // seek_target_ms 的既有逻辑负责。发布前审查 P1-3。
+        self.first_packet = None;
+        self.first_served = false;
         // Time 的整数 From 是"秒"；毫秒要用 new(seconds, frac)
         let target = Time::new(ms / 1000, (ms % 1000) as f64 / 1000.0);
         // 先重置解码器（trait 文档要求：seek 之后解码器状态无效）。不重置时

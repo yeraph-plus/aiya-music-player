@@ -926,7 +926,10 @@ fn play_file(
     let mut volume: f32 = initial_volume;
     // 当前实际增益 = 音量 × 淡入淡出系数，逐样本向目标逼近。
     // 跨 chunk 保持，否则每块首样本都会重新跳变，斜坡等于没做。
-    let mut gain_now: f32 = 1.0;
+    // 初值必须是 initial_volume 而不是 1.0：目标 = 音量 × declick(=1)，从
+    // 1.0 出发会让每曲开头按"全音量渐弱到设定音量"起播（音量低时明显可闻，
+    // 静音时先漏出最多一整块的音乐）。发布前审查 P1-1。
+    let mut gain_now: f32 = initial_volume;
     // 淡入淡出目标（1 = 正常，0 = 静音）。播放控制靠它做 declick：
     // 暂停/seek/停止都是"波形突然截断"，不做淡出就是可闻的咔哒。
     let mut declick_target: f32 = 1.0;
@@ -1029,10 +1032,20 @@ fn play_file(
                     });
                 }
                 Ok(EngineCommand::Seek(ms)) => {
-                    // 淡出后执行：直接 seek 会把正在响的波形从中间切断
-                    pending_seek = Some(ms);
-                    declick_target = 0.0;
-                    last_write = std::time::Instant::now();
+                    // 直播流不可 seek：直接回报当前位置，不启动淡出。若淡出后
+                    // 才在动作分支里丢弃 seek，declick_target 会留在 0——此后
+                    // 目标增益恒为 0，状态照走但永久无声（发布前审查 P1-2）。
+                    if !decoder.seekable() {
+                        send(EngineEvent::Position {
+                            token,
+                            position_ms: decoder.position_ms(),
+                        });
+                    } else {
+                        // 淡出后执行：直接 seek 会把正在响的波形从中间切断
+                        pending_seek = Some(ms);
+                        declick_target = 0.0;
+                        last_write = std::time::Instant::now();
+                    }
                 }
                 Ok(EngineCommand::SetVolume(v)) => volume = v.clamp(0.0, 1.0),
                 Ok(EngineCommand::SetRate(r)) => rate = r.clamp(0.5, 2.0),
@@ -1164,8 +1177,12 @@ fn play_file(
                 declick_target = 1.0; // 新流淡入
             }
             if let Some(ms) = pending_seek.take() {
-                // 直播流不可 seek：整个动作丢弃（out 不能停在 stopped 态不重启）
+                // 直播流不可 seek：整个动作丢弃（out 不能停在 stopped 态不重启）。
+                // 命令入口已拦住不可 seek 的流；这里兜 seekable 中途变化的情况
+                // （HLS 窗口滑动等），必须把增益目标恢复回 1——否则 declick
+                // 停在 0，静音到切曲。
                 if !decoder.seekable() {
+                    declick_target = 1.0;
                     send(EngineEvent::Position {
                         token,
                         position_ms: decoder.position_ms(),
@@ -1390,7 +1407,17 @@ fn play_file(
             let diff = target - gain_now;
             let max_delta = ramp_step * out_frames as f32;
             let delta = diff.clamp(-max_delta, max_delta);
-            let step = delta / out_frames as f32;
+            // 斜坡在 min(需要帧数, 本块帧数) 内走完，不摊满整块：共享模式一块
+            // 就是整个设备缓冲（~200ms），摊满会把 20ms 的 declick 拉成 200ms，
+            // 按暂停要等整块写完才真正静音。步长按 ramp_step 封顶帧数推导，
+            // 块内超出 span 的样本由 resample_take 按 vol_end 钳住——线性式
+            // 会越过目标（fade-down 会翻相位）。
+            let span = (delta.abs() / ramp_step)
+                .ceil()
+                .max(1.0)
+                .min(out_frames as f32);
+            let step = delta / span;
+            let vol_end = gain_now + delta;
             // tap 开关在这里读一次并传下去：关闭时连"重采样输出的单声道混算"
             // 都跳过——此前只有 push_mono 内部查开关，resample_take 的混算
             // 无条件执行，两条路径不一致，"关闭零开销"名不副实。
@@ -1403,6 +1430,7 @@ fn play_file(
                 out_frames,
                 gain_now,
                 step,
+                vol_end,
                 &mut eq,
                 &mut out_f32,
                 &mut tap_mono,
@@ -2363,6 +2391,7 @@ fn resample_take(
     out_frames: usize,
     vol_start: f32,
     vol_step: f32,
+    vol_end: f32,
     eq: &mut crate::eq::Eq,
     out: &mut Vec<f32>,
     mono_out: &mut Vec<f32>,
@@ -2397,9 +2426,17 @@ fn resample_take(
             mono_out.push(frame.iter().sum::<f32>() * inv_ch);
         }
     }
-    // 音量斜坡：逐样本乘（在 EQ 之后，见函数头注释）
+    // 音量斜坡：逐样本乘（在 EQ 之后，见函数头注释）。斜坡 span 小于块长时
+    // （20ms 语义，见调用方的 span 推导），span 之后的样本必须钳在 vol_end——
+    // 线性式会一路越过目标，fade-down 会翻相位。
+    let (lo, hi) = if vol_end >= vol_start {
+        (vol_start, vol_end)
+    } else {
+        (vol_end, vol_start)
+    };
     for (i, s) in out.iter_mut().enumerate() {
-        *s *= vol_start + vol_step * (i / channels) as f32;
+        let g = (vol_start + vol_step * (i / channels) as f32).clamp(lo, hi);
+        *s *= g;
     }
 }
 
@@ -2459,6 +2496,7 @@ mod tests {
             frames,
             vol,
             0.0,
+            vol,
             &mut eq,
             &mut out,
             &mut Vec::new(),
@@ -2532,6 +2570,7 @@ mod tests {
             4,
             0.0,
             0.25,
+            1.0,
             &mut eq,
             &mut out,
             &mut Vec::new(),
@@ -2557,12 +2596,41 @@ mod tests {
             2,
             1.0,
             0.25,
+            1.5,
             &mut eq,
             &mut out,
             &mut Vec::new(),
             true,
         );
         assert!((out[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn volume_ramp_never_overshoots_target() {
+        // span < 块长（20ms 斜坡在大块里提前到位）：span 之后的样本必须钳在
+        // vol_end——线性式会一路越过目标，fade-down 会翻相位（P1-1 配套）
+        let pool = [1.0f32; 8];
+        let mut out = Vec::new();
+        let mut eq = crate::eq::Eq::new(crate::eq::EqParams::default(), 48_000, 1);
+        resample_take(
+            &pool,
+            0.0,
+            1.0,
+            1,
+            8,
+            1.0,
+            -0.25,
+            0.0,
+            &mut eq,
+            &mut out,
+            &mut Vec::new(),
+            true,
+        );
+        // 1.0 → 0.0，每样本最多动 0.25；第 5 帧起钳在 0，绝不出现负增益
+        let expect = [1.0, 0.75, 0.5, 0.25, 0.0, 0.0, 0.0, 0.0];
+        for (i, (v, e)) in out.iter().zip(expect).enumerate() {
+            assert!((v - e).abs() < 1e-6, "frame {i}: {v} != {e}");
+        }
     }
 
     #[test]
@@ -2574,7 +2642,7 @@ mod tests {
         let mut mono = Vec::new();
         let mut eq = crate::eq::Eq::new(crate::eq::EqParams::default(), 48_000, 1);
         resample_take(
-            &pool, 0.0, 1.0, 1, 4, 1.0, 0.0, &mut eq, &mut out, &mut mono, false,
+            &pool, 0.0, 1.0, 1, 4, 1.0, 0.0, 1.0, &mut eq, &mut out, &mut mono, false,
         );
         assert!(mono.is_empty(), "tap 关闭时不得做单声道混算");
         assert_eq!(out, vec![1.0, 1.0, 1.0, 1.0], "音频输出不受 tap 开关影响");
