@@ -481,7 +481,52 @@ fn upsert(
         )?;
     }
 
-    let tid = ids::track_id(&t.path);
+    // 行身份（主键）：更新已有行时用**行上的真实 id**——它可能是 relocate
+    // 保留下来的旧路径派生 id；用 `track_id(当前路径)` 重算会撞别的行的 PK，
+    // 而 ON CONFLICT(path_lower) 不覆盖 PK 冲突，整批会失败。
+    // 新文件按路径派生；若该 id 已被一条 path_lower 不同的行占用（典型场景：
+    // 旧路径的文件被 relocate 走后，同路径又来了一个**不同的**新文件——恢复
+    // 备份、重抓轨、改名回来，都是现实操作），换盐派生。新文件本就没有历史
+    // 引用，换 id 无副作用；被 relocate 的行继续持有原 id，引用不断。
+    // 发布前审查 P1-4：此前该场景每次扫描都 UNIQUE 失败，文件永远进不了库。
+    let tid = if let Some((row_id, _, _, _)) = &existing {
+        row_id.clone()
+    } else {
+        let base = ids::track_id(&t.path);
+        let taken: Option<String> = conn
+            .query_row(
+                "SELECT path_lower FROM tracks WHERE id = ?1",
+                rusqlite::params![base],
+                |r| r.get(0),
+            )
+            .ok();
+        match taken {
+            None => base,
+            // 占用者就是本路径：理论不可达（existing.is_none() 意味着
+            // path_lower 无行），兜底不猜
+            Some(other) if other == path_lower => base,
+            Some(_) => {
+                let salted = ids::track_id(&format!("{}|{}", t.path, t.size_bytes));
+                let salt_taken: Option<String> = conn
+                    .query_row(
+                        "SELECT path_lower FROM tracks WHERE id = ?1",
+                        rusqlite::params![salted],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                match salt_taken {
+                    None => salted,
+                    // 盐后再撞（uuid5 下可忽略）：再叠 mtime 兜一层
+                    Some(_) => ids::track_id(&format!(
+                        "{}|{}|{}",
+                        t.path,
+                        t.size_bytes,
+                        t.mtime.unwrap_or(0)
+                    )),
+                }
+            }
+        }
+    };
     let title_norm = norm(&t.title);
 
     // 封面：图已由解析线程落盘（artwork::stage），这里只登记一行（artwork::link）。
@@ -1679,6 +1724,51 @@ mod tests {
             )
             .unwrap();
         assert_eq!(refs, 1, "歌单引用仍然指向改了名的同一行");
+    }
+
+    /// relocate 之后旧路径来了一个**不同的**新文件（恢复备份/重抓轨/改名
+    /// 回来）：按路径派生的 id 会与被 relocate 行（保留旧 id）撞主键。此前
+    /// 直接 UNIQUE 失败且此后每次扫描都失败（永远进不了库）；修复后应换盐
+    /// 入库，被 relocate 行不受影响。发布前审查 P1-4 回归。
+    #[test]
+    fn new_file_at_relocated_away_path_still_imports() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write_test_mp3(dir.path(), "a.mp3", "第一版", "歌手");
+        let mut conn = open_in_memory().unwrap();
+        let r1 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        assert_eq!(r1.imported, 1, "errors={:?}", r1.errors);
+        let tid: String = conn
+            .query_row("SELECT id FROM tracks", [], |r| r.get(0))
+            .unwrap();
+
+        std::fs::rename(&a, dir.path().join("b.mp3")).unwrap();
+        let r2 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        assert_eq!(r2.imported, 0, "改名不得生成新行：{:?}", r2.errors);
+        assert!(r2.errors.is_empty(), "{:?}", r2.errors);
+
+        // 旧路径再来一个不同标签的文件（内容不同 → 大小不同）
+        let _a2 = write_test_mp3(
+            dir.path(),
+            "a.mp3",
+            "第二版完全不同的标签内容到此为止",
+            "另一位歌手",
+        );
+        let r3 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        assert_eq!(r3.imported, 1, "新文件必须能入库：{:?}", r3.errors);
+        assert_eq!(r3.failed, 0, "不得出现永久 failed：{:?}", r3.errors);
+
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 2, "两行：relocate 行 + 新文件行");
+        let relocated: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tracks WHERE id = ?1 AND path LIKE '%b.mp3'",
+                [&tid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(relocated, 1, "被 relocate 的行身份（主键）不变");
     }
 
     /// (mtime, size) 相同的候选有多条（比如两份同尺寸拷贝）时不得猜：
