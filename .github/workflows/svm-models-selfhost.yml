@@ -53,6 +53,8 @@ jobs:
       - name: 挂到固定 release（推新删旧语义：clobber 资产）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 工作流没有 checkout 步骤，gh 拿不到仓库上下文——显式指
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release view "svm-models-$VERSION" 2>/dev/null || \
             gh release create "svm-models-$VERSION" --prerelease \
