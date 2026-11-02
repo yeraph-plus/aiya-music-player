@@ -417,7 +417,7 @@ import TextTabs from './ui/TextTabs.svelte';
             <div class="setting-title">背景频谱形态</div>
             <div class="setting-hint">
               {gl
-                ? '山形：底部一团起伏的环境光；波纹：一层层等深线铺满下半屏，与「正在播放」页的形态各自独立'
+                ? '山形：底部一团起伏的环境光；波纹：层层截面铺满下半屏的水面，与「正在播放」页的形态各自独立'
                 : '已随「全局 3D 效果」关闭'}
             </div>
           </div>
@@ -469,7 +469,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <div>
             <div class="setting-title">频谱形态</div>
             <div class="setting-hint">
-              「正在播放」页的频谱形状：镜像曲线沿中线对称，径向环形绕圆一周，中轴波纹是居中的一条曲线，切换即时生效
+              「正在播放」页的频谱形状：镜像沿中线对称，环带绕圆一周，残影留余波轨迹，波纹山谷交替，切换即时生效
             </div>
           </div>
           <SegmentedControl

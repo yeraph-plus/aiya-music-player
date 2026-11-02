@@ -74,9 +74,9 @@ export function normalizeUiScale(value: unknown): UiScale {
  *
  * 取值：`mirror` 镜像、`radial` 环带、`ripple` 残影（中轴单线 + 反馈式残影
  * 缓冲）、`wave` 波纹（频谱曲线逐带交替成山与谷，振幅跨中线上下两段）。
- * `ripple` 在页内只画一条居中曲线：等深线地形形态（多层等深线铺满下半屏）
+ * `ripple` 在页内只画一条居中曲线：深度切片的水面形态（多层截面铺满下半屏）
  * 与背景层 `bgSpectrumStyle = 'ripple'` 重复，且页内只覆盖内容区，水面会在
- * 画布边缘断开，因此地形仅用于背景。
+ * 画布边缘断开，因此水面仅用于背景。
  *
  * 旧取值 `'off'`（与 `npSpectrum = false` 语义重复）由 `mergeSettings` 消化：
  * 落默认形态，不写回磁盘。
@@ -117,7 +117,7 @@ export const RIDGE_GLOWS: Array<{ value: RidgeGlow; label: string }> = [
  * 页内试形态而改动背景。
  *
  * - `ridge` 山形：闭合填充的环境光，边界柔和（默认）
- * - `ripple` 波纹：等深线层叠铺向下半屏，结构感强
+ * - `ripple` 波纹：同一波场的深度切片铺向下半屏，结构感强
  */
 export type BgSpectrumStyle = 'ridge' | 'ripple';
 
