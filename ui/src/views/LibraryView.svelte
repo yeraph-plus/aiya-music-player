@@ -22,7 +22,7 @@ import Progress from '../components/ui/Progress.svelte';
   import { ui } from '../stores/ui.svelte';
 
   /**
-   * 曲库主区（docs/28 收窄）：只负责**曲库 / 歌单 / 搜索**三个列表页。
+   * 曲库主区：只负责**曲库 / 歌单 / 搜索**三个列表页。
    * 专辑/艺人详情页拆去了 AlbumView/ArtistView（参数路由直达），
    * 最近播放/常听单页退役（常听收进推荐页 top-15）。
    * 列表接线在 TrackListPanel——这里只剩头部、筛选 chip 与搜索聚合段。
@@ -74,7 +74,7 @@ import Progress from '../components/ui/Progress.svelte';
     };
   });
 
-  /* ---------------- 搜索结果页（B4-3c） ---------------- */
+  /* 搜索结果页（B4-3c） */
 
   const isSearchPage = $derived(ui.page === 'search');
 
@@ -100,7 +100,7 @@ import Progress from '../components/ui/Progress.svelte';
   const canSort = $derived(view.kind === 'library' && ui.libraryTab === 'all');
 
   /**
-   * 搜索页的聚合段：曲目列表之外再给专辑/艺人两段（docs/24 §3.2 路由表
+   * 搜索页的聚合段：曲目列表之外再给专辑/艺人两段（路由表
    * "分段：曲目 / 专辑 / 艺人"）。独立 200ms 防抖——曲目查询的 120ms 防抖
    * 在 list store 里，两边互不依赖；聚合是毫秒级，防的只是连打刷 IPC。
    * 空词不拉（空搜索页显示提示，不是全库）。
@@ -133,7 +133,7 @@ import Progress from '../components/ui/Progress.svelte';
   );
 
   /**
-   * 时间筛选 chip（docs/27）：筛选器模态框应用后在这里给一个可清除的入口。
+   * 时间筛选 chip：筛选器模态框应用后在这里给一个可清除的入口。
    * 只在曲库页显示——艺人/专辑"筛选"已升级为详情页路由（B4-3b），
    * 详情页拆出后曲库页只剩时间筛选这一种可清除状态。
    */
@@ -144,12 +144,8 @@ import Progress from '../components/ui/Progress.svelte';
   );
 </script>
 
-<!--
-  根容器：搜索页整页滚动。卡片段换行后可能很高，若仍由 .list 内部独扛滚动，
-  卡片段会把列表压到没法用（flex 收缩，滚动"失效"）。
-  非搜索页 display 行为与直接挂在 .main 下完全一致（list 内部滚）；
-  搜索页整页滚，列表区保底高度不被挤没（见 .lib-root.scroll）。
--->
+<!-- 根容器：搜索页整页滚动。卡片段换行后可能很高，若仍由 .list 内部独扛滚动，卡片段会把列表压到没法用（flex 收缩，滚动"失效"）。非搜索页 display 行为与直接挂在
+.main 下完全一致（list 内部滚）；搜索页整页滚，列表区保底高度不被挤没（见 .lib-root.scroll）。 -->
 <div class="lib-root" class:scroll={isSearchPage}>
 <div class="page-pad">
   <Header
@@ -162,10 +158,8 @@ import Progress from '../components/ui/Progress.svelte';
   >
     {#snippet actions()}
       {#if ui.page === 'library'}
-        <!-- tab 索引：小标题形态贴着大标题，当前项高亮。只在曲库页给——
-             搜索页复用 library view，但三个 tab 在那里是"同库换排序"，
-             语义不成立。语义归 TextTabs（nav + aria-current）：套完整的
-             tablist/tab 角色而没有 tabpanel，会让读屏软件等待一个不存在的面板。 -->
+        <!-- tab 索引：小标题形态贴着大标题，当前项高亮。只在曲库页给—— 搜索页复用 library view，但三个 tab 在那里是"同库换排序"，语义不成立。语义归 TextTabs（nav +
+        aria-current）：套完整的 tablist/tab 角色而没有 tabpanel，会让读屏软件等待一个不存在的面板。 -->
         <TextTabs
           items={LIB_TABS.map((t) => ({
             id: t.key,
@@ -241,7 +235,7 @@ import Progress from '../components/ui/Progress.svelte';
   </Header>
 
   <!--
-    docs/28：曲库页的第一层 tab（全部曲目/专辑/艺人）与分隔线撤掉——
+    曲库页的第一层 tab（全部曲目/专辑/艺人）与分隔线撤掉
     专辑/艺人升侧栏一级项后 tab 只剩"自己指自己"，chips 行在无筛选时
     整条不渲染（Toolbar 的行为），不留孤立的分隔线。
   -->
@@ -336,9 +330,7 @@ import Progress from '../components/ui/Progress.svelte';
           {/snippet}
         </EmptyState>
       {:else if view.kind === 'library' && ui.libraryTab === 'recent' && (library.stats?.tracks ?? 0) > 0}
-        <!-- 「最近播放」空 ≠ 空库：库里有歌只是还没播过，"添加曲库"文案
-             会把用户引去重扫。库真空时才走下面的"曲库还是空的" ——
-             那才是该给的动作 -->
+        <!-- 「最近播放」空 ≠ 空库：库里有歌只是还没播过，"添加曲库"文案会把用户引去重扫。库真空时才走下面的"曲库还是空的" —— 那才是该给的动作 -->
         <EmptyState title="还没有播放记录" hint="双击任意曲目开始播放，听过的会出现在这里">
           {#snippet action()}
             <Button onclick={() => list.openLibraryTab('all')}>先看全部曲目</Button>

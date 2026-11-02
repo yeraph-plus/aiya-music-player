@@ -19,7 +19,7 @@
    * 顶栏：唯一横贯全宽的全局栏。
    *
    * 一行四项：应用名、返回上一页、搜索框、窗口三键。
-   * 搜索置于此处而非页面内（docs/24 §3.1）：搜索属全局能力，页面级容器会随滚动
+   * 搜索置于此处而非页面内：搜索属全局能力，页面级容器会随滚动
    * 移出视野、随路由卸载，而搜索需常驻。本层不设可扩展的页面级父栏，避免其成为
    * 归属不明的控件的默认去处。
    *
@@ -49,13 +49,8 @@
   });
 </script>
 
-<!--
-  `data-tauri-drag-region="deep"` = 整个子树可拖（tauri 2.12.5 `drag.js` 的三种取值
-  之一：`deep` 子树 / 裸属性仅自身 / `false` 禁用）。可点元素（`button`/`input`/
-  `select`/`textarea`/带 `tabindex≠-1` 的元素、交互 role）在**没有**该属性时会阻断
-  冒泡路径上的拖拽 —— 所以按钮天然不拖，不需要给每个按钮做例外。
-  双击标题栏由 tauri 内置走 `internal_toggle_maximize`。
--->
+<!-- `data-tauri-drag-region="deep"` = 整个子树可拖（tauri 2.12.5 `drag.js` 的三种取值之一：`deep` 子树 / 裸属性仅自身 / `false` 禁用）。可点元素（`button`/`input`/ `select`/`textarea`/带
+`tabindex≠-1` 的元素、交互 role）在**没有**该属性时会阻断冒泡路径上的拖拽 —— 所以按钮天然不拖，不需要给每个按钮做例外。双击标题栏由 tauri 内置走 `internal_toggle_maximize`。 -->
 <header class="titlebar" data-tauri-drag-region="deep">
   <div class="tb-brand">
     <span class="tb-mark">A</span>
@@ -63,27 +58,16 @@
     <span class="tb-sub">MUSIC</span>
   </div>
 
-  <!--
-    返回键用 `IconButton`（kit），**不套 Tooltip**：`IconButton` 的 `label` 同时产出
-    `aria-label` 与原生 `title`，再叠一层 Tooltip 会先弹原生再弹自己的（见 `ui/Tooltip.svelte`
-    的分工约定：两者不并存）。要 styled 提示的地方用裸 `<button>` + Tooltip（窗控三个就是这样）。
-  -->
+  <!-- 返回键用 `IconButton`（kit），**不套 Tooltip**：`IconButton` 的 `label` 同时产出 `aria-label` 与原生 `title`，再叠一层 Tooltip 会先弹原生再弹自己的（见
+  `ui/Tooltip.svelte` 的分工约定：两者不并存）。要 styled 提示的地方用裸 `<button>` + Tooltip（窗控三个就是这样）。 -->
   <div class="tb-back">
     <IconButton label="返回上一页" disabled={!nav.canGoBack} onclick={() => nav.back()}>
       <ChevronLeft size={17} />
     </IconButton>
   </div>
 
-  <!--
-    搜索框不使用 `Field`：`data-tauri-drag-region="false"` 须挂在胶囊容器这层 div，
-    而 `Field` 的内层盒子由组件自身渲染，kit 不向内部 DOM 透传任意属性（开放该
-    能力等于放弃封装）。此外它属于窗口 chrome 而非表单字段：无标签、30px 高、
-    999 圆角，复用表单零件的统一性不足以让 kit 为此增加属性透传。
-
-    `data-tauri-drag-region="false"` 为必需：胶囊容器是 div（非可点元素），顶栏为
-    深度拖拽区，缺少该属性时点击输入框左右内边距会触发窗口拖动。
-    反向陷阱：给这里的任何元素加 `tabindex="0"` 也会让整条拖拽区静默失效。
-  -->
+  <!-- 搜索框不使用 `Field`：`data-tauri-drag-region="false"` 须挂在胶囊容器这层 div，而 `Field` 的内层盒子由组件自身渲染，kit 不向内部 DOM 透传任意属性（开放该能力等于放弃封装）。此外它属于窗口 chrome 而非表单字段：无标签、30px 高、999 圆角，复用表单零件的统一性不足以让 kit
+  为此增加属性透传。`data-tauri-drag-region="false"` 为必需：胶囊容器是 div（非可点元素），顶栏为深度拖拽区，缺少该属性时点击输入框左右内边距会触发窗口拖动。反向陷阱：给这里的任何元素加 `tabindex="0"` 也会让整条拖拽区静默失效。 -->
   <div class="tb-search" data-tauri-drag-region="false">
     <span class="tb-search-icon"><Search size={14} /></span>
     <input
@@ -159,16 +143,16 @@
     /* 半透明 95%（接近不透明）：应用级背景从下层透出。底色取 surface-2，
      * 播放条取 surface-3，同档不同阶，叠放后产生轻微色差。
      * 不使用 backdrop-filter：顶栏属持久壳层，覆盖在动画频谱 canvas 之上时
-     * 每帧都需对整条重新模糊（docs/25 §5）。
+     * 每帧都需对整条重新模糊。
      * 不设边线：与主区的分隔由底色阶差承担。 */
     background: color-mix(in srgb, var(--surface-2) 95%, transparent);
     user-select: none;
   }
 
-  /* ---------------- 品牌 ---------------- */
+  /* 品牌 */
 
   /*
-   * 品牌区定宽 = 侧栏宽（docs/25 §2）：右缘正好压在侧栏分隔线的延长线上，
+   * 品牌区定宽 = 侧栏宽：右缘正好压在侧栏分隔线的延长线上
    * 左内距 = 侧栏容器 10px + 导航项内距 9px，品牌标记与导航文字同一条竖线起排。
    */
   .tb-brand {
@@ -205,7 +189,7 @@
     letter-spacing: 0.22em;
   }
 
-  /* ---------------- 返回 ---------------- */
+  /* 返回 */
 
   /*
    * 左缘 = 侧栏宽 + 22px：与 .page-scroll / .page-pad 的内容左边距同一条竖线。
@@ -218,7 +202,7 @@
     margin-left: 14px;
   }
 
-  /* ---------------- 搜索 ---------------- */
+  /* 搜索 */
 
   .tb-search {
     flex: 0 1 360px;
@@ -286,13 +270,10 @@
     align-self: stretch;
   }
 
-  /* ---------------- 窗口控制 ---------------- */
+  /* 窗口控制 */
 
-  /*
-   * 三键做成**普通按钮**而不是通高热区：与返回键同用 IconButton 的 30px 方块
-   * 节奏（radius-md + hover 底色），不再 `align-self: stretch` 撑满整条 54px
-   * 顶栏——通高块在浅色主题下 hover 时像把整条栏切成三段，视觉上过重。
-   */
+  /* 三键做成**普通按钮**而不是通高热区：与返回键同用 IconButton 的 30px 方块节奏（radius-md + hover 底色），不再 `align-self:
+     stretch` 撑满整条 54px 顶栏——通高块在浅色主题下 hover 时像把整条栏切成三段，视觉上过重。 */
   .window-controls {
     flex: none;
     display: flex;

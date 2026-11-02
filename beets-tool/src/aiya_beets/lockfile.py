@@ -34,7 +34,7 @@ from .protocol import E_LIBRARY_BUSY, ProtocolError
 LOCKED_CMDS = frozenset({
     "apply_import", "adopt_library", "update_library", "move_items", "dump_items",
     # enrich 会 remove + import，是索引家库的写者（音频文件不动）：不拿锁就会
-    # 和同进程外的 beet 命令行撞单写者（docs/45 §7 风险 1）。
+    # 和同进程外的 beet 命令行撞单写者。
     "enrich",
 })
 

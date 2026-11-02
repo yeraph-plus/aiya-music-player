@@ -138,7 +138,6 @@ fn all_ui_calls() -> Vec<UiCall> {
 /// Rust 侧注册的命令名（`generate_handler!` 宏调用里的标识符）
 ///
 /// 用 `rfind` 而不是 `find`：注册表是 `lib.rs` **末尾**的唯一一处真实调用，而
-/// `find` 会锚到第一个匹配 —— 2026-10-27 就踩过一次：往文件头注释里写了一句
 /// 带方括号的宏调用示例，解析结果直接变成 0 条命令，两个测试一起红。
 fn parse_registered(src: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();

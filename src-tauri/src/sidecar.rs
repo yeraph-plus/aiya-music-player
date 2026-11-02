@@ -111,7 +111,7 @@ impl SidecarHandle {
         let (host_exe, locate_err) = Self::locate_host_exe();
         let pipe_base = format!("aiya-audio-{}", std::process::id());
         let (cmd_tx, cmd_rx) = mpsc::channel::<aiya_audio::EngineCommand>();
-        // 事件有界队列：Position 可丢旧帧（ADR-0002），其余不丢
+        // 事件有界队列：Position 可丢旧帧，其余不丢
         let (ev_tx, ev_rx) = mpsc::sync_channel::<aiya_audio::EngineEvent>(512);
         let track = Arc::new(Mutex::new(TrackState {
             volume: 1.0,
@@ -126,11 +126,8 @@ impl SidecarHandle {
             shutting_down: AtomicBool::new(false),
         });
 
-        // 首连失败走启动降级而不是 Err：此前 setup 直接失败 = release 下
-        // （windows_subsystem，无控制台无窗口）panic 静默消失，用户双击后
-        // "什么都不发生"。现在应用照常起，先给 UI 一条音频错误事件，再交给
-        // 看门狗按代重试——杀软扫未签名 exe 拖慢冷启动的场景几十秒内自愈，
-        // sidecar 文件缺失时每轮重试留痕，文件就位后自动恢复。
+        // 首连失败走启动降级而不是 Err：此前 setup 直接失败 = release 下 （windows_subsystem，无控制台无窗口）panic 静默消失，用户双击后 "什么都不发生"。现在应用照常起，先给 UI
+        // 一条音频错误事件，再交给看门狗按代重试——杀软扫未签名 exe 拖慢冷启动的场景几十秒内自愈，sidecar 文件缺失时每轮重试留痕，文件就位后自动恢复。
         let gen = 0;
         match locate_err {
             Some(e) => degrade_launch(&ev_tx, e),
@@ -138,9 +135,7 @@ impl SidecarHandle {
                 let t_connect = Instant::now();
                 match connect_once(&host_exe, &pipe_base, gen, &shared) {
                     Ok(conn) => {
-                        // spawn → 握手完成。冷启动慢（杀软扫未签名 exe）时这个数
-                        // 会到十几秒，而看门狗从握手那一刻开始计时，两者叠加才会
-                        // 出现"刚起来就被杀"。
+                        // spawn → 握手完成。冷启动慢（杀软扫未签名 exe）时这个数会到十几秒，而看门狗从握手那一刻开始计时，两者叠加才会出现"刚起来就被杀"。
                         tracing::info!(
                             elapsed_ms = t_connect.elapsed().as_millis() as u64,
                             "sidecar 首次握手完成"
@@ -250,10 +245,8 @@ fn connect_once(
     generation: u64,
     shared: &Arc<Shared>,
 ) -> Result<Connection, String> {
-    // spawn 前查：关闭流程开始后看门狗不该再起新进程。
-    // 看门狗循环头查过一次 shutting_down，但从查到 spawn 之间隔了
-    // 判死/kill/换代几步 —— 关闭恰好插进来时，这里不拦就会留下无人收尸的
-    // 孤儿 sidecar（shutdown 已经跑完、看门狗线程随后退出）。
+    // spawn 前查：关闭流程开始后看门狗不该再起新进程。看门狗循环头查过一次 shutting_down，但从查到 spawn 之间隔了判死/kill/换代几步 ——
+    // 关闭恰好插进来时，这里不拦就会留下无人收尸的孤儿 sidecar（shutdown 已经跑完、看门狗线程随后退出）。
     if shared.shutting_down.load(Ordering::SeqCst) {
         return Err("正在关闭：跳过 sidecar 重连".into());
     }
@@ -265,17 +258,15 @@ fn connect_once(
         // 此前被 Stdio::null() 丢掉，崩溃/设备失败完全没有痕迹
         .stderr(crate::logging::sidecar_stderr());
 
-    // 不给子进程分配控制台：audio-host 是控制台子系统程序（为了 --selftest
-    // 能正常输出，见那个 crate 顶部注释），被 GUI 主进程拉起时 Windows 会给它
-    // 新建一个黑窗。这个标志是父进程侧的闸门，子进程自己改 subsystem 管不到。
+    // 不给子进程分配控制台：audio-host 是控制台子系统程序（为了 --selftest 能正常输出，见那个 crate 顶部注释），被 GUI 主进程拉起时
+    // Windows 会给它新建一个黑窗。这个标志是父进程侧的闸门，子进程自己改 subsystem 管不到。
     crate::proc::no_window(&mut cmd);
 
     let child = cmd.spawn().map_err(|e| format!("启动 sidecar 失败：{e}"))?;
     *lock(&shared.child) = Some(child);
 
-    // spawn 后再查：与 shutdown() 的窄竞态（检查在前、spawn 在后）兜底。
-    // 命中就立即收尸返回 —— shutdown 的等待循环/最终 kill 只认 shared.child
-    // 槽里的进程，槽被这里 take 走之后没人管它。
+    // spawn 后再查：与 shutdown() 的窄竞态（检查在前、spawn 在后）兜底。命中就立即收尸返回 —— shutdown 的等待循环/最终
+    // kill 只认 shared.child 槽里的进程，槽被这里 take 走之后没人管它。
     if shared.shutting_down.load(Ordering::SeqCst) {
         if let Some(mut c) = lock(&shared.child).take() {
             let _ = c.kill();
@@ -374,11 +365,8 @@ fn spawn_reader(
             loop {
                 line.clear();
                 match reader.read_line(&mut line) {
-                    // 管道断开：本代终结。
-                    //
-                    // 这里必须留一行日志：读线程退出后**不再有人刷新 alive**，
-                    // 看门狗会在 5s 后把"读线程偷偷退了"报成"心跳超时"并 kill。
-                    // 此前这条 break 是静默的，一旦发生就只能看着一句假的超时日志猜。
+                    // 管道断开：本代终结。这里必须留一行日志：读线程退出后**不再有人刷新 alive**，看门狗会在 5s 后把"读线程偷偷退了"报成"心跳超时"并
+                    // kill。此前这条 break 是静默的，一旦发生就只能看着一句假的超时日志猜。
                     Ok(0) => {
                         tracing::warn!(generation, "sidecar 管道 EOF，本代读取结束");
                         break;
@@ -417,10 +405,8 @@ fn spawn_reader(
                                 _ => {}
                             }
                         }
-                        // 有界队列：满了丢 Position（ADR 允许丢位置帧）；其余事件
-                        // （Eof/StateChanged/Error）阻塞等空位——P2：此前 Full
-                        // 静默丢任意事件，丢 Eof 会让播放器卡在播放态不切曲。
-                        // 泵 25ms 一轮 drain，阻塞窗口极短。
+                        // 有界队列：满了丢 Position（ADR 允许丢位置帧）；其余事件 （Eof/StateChanged/Error）阻塞等空位——P2：此前 Full
+                        // 静默丢任意事件，丢 Eof 会让播放器卡在播放态不切曲。泵 25ms 一轮 drain，阻塞窗口极短。
                         match ev_tx.try_send(evt) {
                             Ok(()) => {}
                             Err(mpsc::TrySendError::Full(restage)) => {
@@ -492,10 +478,8 @@ fn spawn_watchdog(
                 WATCHDOG_TIMEOUT_MS
             );
 
-            // 先分清"死了"还是"卡住"——两者的处置一样（只能重启），但归因完全不同：
-            // 已退出 = 崩溃/自杀，去查 panic 与 sidecar.log 末尾；
-            // 仍存活 = 循环卡住（管道写阻塞、线程被系统饿死），去查"心跳迟到"。
-            // 没有这一位，事后只能看到一句"心跳超时"，猜不出是哪种。
+            // 先分清"死了"还是"卡住"——两者的处置一样（只能重启），但归因完全不同：已退出 = 崩溃/自杀，去查 panic 与 sidecar.log 末尾；仍存活 =
+            // 循环卡住（管道写阻塞、线程被系统饿死），去查"心跳迟到"。没有这一位，事后只能看到一句"心跳超时"，猜不出是哪种。
             {
                 let mut child = lock(&shared.child);
                 let state = match child.as_mut() {

@@ -83,8 +83,8 @@ class BeetsSessionStore {
     events.beetsImport((evt) => this.onEvent(evt as unknown as BeetsImportEvent));
   }
 
-  /* ---------------- 命令 ----------------
-   * 组件只调这四个方法、只读上面的快照，不再自己 invoke（docs/18 §4.1）。
+  /* 命令
+   * 组件只调这四个方法、只读上面的快照，不再自己 invoke。
    * 失败统一写 `lastError` + `phase='failed'`，不抛：会话组件没有 catch 的位置，
    * 而错误就该显示在面板里（那里已经有一块"需要 beets 2.14+"的提示区）。
    */
@@ -115,10 +115,8 @@ class BeetsSessionStore {
   async preview(paths: string[]): Promise<boolean> {
     this.ensureListening();
     this.lastError = null;
-    // 阶段在**命令返回之前**就置上：点下去那一刻按钮就该锁住。
-    // 反过来（等 await 回来再置）有两个坑：真宿主里那几十毫秒用户能重复点；
-    // 而副作用快的后端（浏览器预览的 mock 会把整轮事件在命令返回前发完）
-    // 会让终态事件先到、这里再把阶段写回 previewing——**永远卡在匹配中**。
+    // 阶段在**命令返回之前**就置上：点下去那一刻按钮就该锁住。反过来（等 await 回来再置）有两个坑：真宿主里那几十毫秒用户能重复点；而副作用快的后端（浏览器预览的 mock
+    // 会把整轮事件在命令返回前发完）会让终态事件先到、这里再把阶段写回 previewing——**永远卡在匹配中**。
     this.phase = 'previewing';
     try {
       await ipc.beets.preview(paths);
@@ -131,7 +129,7 @@ class BeetsSessionStore {
   }
 
   /**
-   * 整理入库（docs/40 十三轮）：对待整理目录跑预览。排除表（已导入过的
+   * 整理入库：对待整理目录跑预览。排除表（已导入过的
    * inbox 源文件）由宿主在 start_preview 里注入 options，这里不感知。
    */
   async previewInbox(inbox: string): Promise<void> {
@@ -203,7 +201,7 @@ class BeetsSessionStore {
     switch (evt.type) {
       case 'album': {
         this.albums = [...this.albums, evt.album];
-        // 默认选择：只有 strong 才默认选第一个候选（docs/08 §4.1 低置信度不默认勾选）
+        // 默认选择：只有 strong 才默认选第一个候选
         const strong = evt.album.candidates[0];
         this.picked = {
           ...this.picked,
@@ -232,7 +230,7 @@ class BeetsSessionStore {
       case 'applyDone': {
         this.applySummary = { applied: evt.applied, skipped: evt.skipped, failed: evt.failed, moved: evt.moved, resumedSkipped: evt.resumedSkipped };
         this.resumedSkipped = evt.resumedSkipped ?? null;
-        // docs/40 十三轮：把成功应用的源路径记进排除表（inbox copy 模式防重复
+        // 把成功应用的源路径记进排除表（inbox copy 模式防重复
         // 导入——原件留在待整理目录，不排除的话下次整理会再导一遍）。排除表
         // 本体在宿主 settings 里，preview 时由宿主注入 options.excludePaths。
         const okPaths = this.lastDecisions
@@ -252,10 +250,8 @@ class BeetsSessionStore {
         break;
       }
       case 'cancelled':
-        // 取消收尾：已完成的部分保留，归 idle 解锁按钮。
-        // v2：断点已在（完成的 decision 有 checkpoint），提供续跑——
-        // **只对应用阶段**（stage=writing）：预览阶段的取消不能把上一批
-        // 已完成的 decisions 误报成"可续跑"（checkpoint 会全跳过，白转一圈）。
+        // 取消收尾：已完成的部分保留，归 idle 解锁按钮。v2：断点已在（完成的 decision 有 checkpoint），提供续跑——
+        // 只对应用阶段**（stage=writing）：预览阶段的取消不能把上一批已完成的 decisions 误报成"可续跑"（checkpoint 会全跳过，白转一圈）。
         this.errors = [...this.errors, { path: 'cancel', message: '已取消（已完成的部分保留）' }];
         this.canResume = evt.stage === 'writing' && this.lastDecisions.length > 0;
         this.settle();

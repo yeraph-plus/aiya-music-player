@@ -52,7 +52,7 @@ pub use output::{
 };
 pub use refresh::{RefreshSnapshot, RefreshState};
 
-// 拖放分类结果（docs/52 §5.2）。形状定义跟着分类器走（`src/drop.rs`，纯函数 +
+// 拖放分类结果。形状定义跟着分类器走（`src/drop.rs`，纯函数 +
 // 单测在那里），这里只做出口——命令签名与 ts-rs 都从 `dto::` 拿，与其余 DTO 一致。
 pub use crate::drop::{DroppedItem, DroppedKind};
 
@@ -175,7 +175,7 @@ impl From<aiya_data::DbError> for ApiError {
     }
 }
 
-/* ---------------- 最近错误台账（诊断页） ---------------- */
+/* 最近错误台账（诊断页） */
 
 /// 环形容量。UI 文案写的是"最多保留 30 条"，改这里要同步改那句。
 const RECENT_ERROR_LIMIT: usize = 30;

@@ -93,11 +93,11 @@ SOURCES: tuple[SourceSpec, ...] = (
     SourceSpec("lastgenre", False, "流派推断（写 item.genre，不入文件）；需要联网（独立来源，尚未接线）"),
 )
 
-# probe 声明的字段：与 xtractor 真实字段同名同形（docs/45 §3.2），
+# probe 声明的字段：与 xtractor 真实字段同名同形
 # 这样宿主那一侧的映射代码可以在假源上先把链路跑通。
 #
 # **7 个 mood_* 概率必须一起给**：宿主拿它们做 argmax 得到单列 `mood_label`
-# （docs/45 §5.1）。只给 `mood_mirex` 的话，宿主那半边（提升列、按情绪筛选）
+# 只给 `mood_mirex` 的话，宿主那半边（提升列、按情绪筛选）
 # 在假源上永远是空的——不是"没数据"，是"假源没喂到该喂的地方"，批 4 的
 # 情绪筛选就没法在没有 Essentia 的机器上验。
 _MOOD_CLASSES = (
@@ -158,9 +158,8 @@ def _resolve_sources(want) -> list[SourceSpec]:
     """把请求里的 `want` 解析成源列表。未知/未接线一律拒绝，不静默忽略。"""
     known = {s.name: s for s in SOURCES}
     if not want:
-        # 缺省 = 已接线且开关打开的源。xtractor 的 bins 在不在**这里不判**：
-        # 就绪门在 enrich() 里，缺什么会带具体原因拒绝——比这里给一句笼统的
-        # "没装"更有用（UI 直接显示）。
+        # 缺省 = 已接线且开关打开的源。xtractor 的 bins 在不在**这里不判**：就绪门在 enrich()
+        # 里，缺什么会带具体原因拒绝——比这里给一句笼统的 "没装"更有用（UI 直接显示）。
         usable = [s for s in SOURCES if s.implemented and (s.name != "probe" or probe_enabled())]
         if not usable:
             raise ProtocolError(
@@ -559,13 +558,8 @@ def enrich(req_id: int, paths: list[str], want, force: bool, gen: int) -> None:
                 "fields": fields, "message": message,
             })
 
-        # 进度按 5 首节流，最后一首必发。
-        #
-        # 为什么不是每首都发：一个文件有 N 个源就会发 N 条 `enrichItem`，
-        # 再叠一条 `progress` 等于把管道流量翻倍，而宿主那边每条都要过一遍
-        # 事件线程（管道只有 64 KB，反压的代价是"工具看起来卡住"）。
-        # 为什么不是只发终态：400 首要跑十几秒到几分钟，进度条停在 0/N
-        # 与"卡死"在用户眼里没有区别。
+        # 进度按 5 首节流，最后一首必发。为什么不是每首都发：一个文件有 N 个源就会发 N 条 `enrichItem`，再叠一条 `progress` 等于把管道流量翻倍，而宿主那边每条都要过一遍事件线程（管道只有 64
+        # KB，反压的代价是"工具看起来卡住"）。为什么不是只发终态：400 首要跑十几秒到几分钟，进度条停在 0/N 与"卡死"在用户眼里没有区别。
         if (i + 1) % PROGRESS_EVERY == 0 or i + 1 == total:
             _progress(i + 1)
 

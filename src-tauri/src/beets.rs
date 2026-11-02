@@ -22,7 +22,7 @@ use tauri::{Emitter, Manager};
 /// 这里 `pub use` 回来，本文件其余调用点不用改。
 pub use crate::dto::beets::BeetsStatus;
 
-/* ---------------- 发现（docs/33 §6.1） ---------------- */
+/* 发现 */
 
 /// 工具入口：程序 + 参数。
 ///
@@ -119,7 +119,7 @@ pub fn enrich_db(app: &tauri::AppHandle) -> PathBuf {
     index_home(app).join("enrich.db")
 }
 
-/* ---------------- 模块自有配置：不在应用 settings 表里 ---------------- */
+/* 模块自有配置：不在应用 settings 表里 */
 
 /// beets 模块自己的配置，落在 `{data_home}/settings.json`。
 ///
@@ -260,7 +260,6 @@ pub fn config_view(app: &tauri::AppHandle, roots: &[String]) -> crate::dto::beet
 ///
 /// 落点合法性走 [`pick_dest`]，与 `beets_set_target` 的校验、`tool_env` 的
 /// 下发**同一套判据**。这三处曾经各写一遍，放宽子目录时漏掉其中一处就会
-/// 出现"界面显示 A、实际写到 B"——2026-10-30 真的发生了（`config_view_of`
 /// 还留着严格相等，UI 显示曲库根而 `tool_env` 已经下发子目录）。
 fn config_view_of(s: &Settings, roots: &[String]) -> crate::dto::beets::BeetsConfig {
     let target = trimmed(s.target_root.clone());
@@ -299,9 +298,7 @@ pub fn adopt_legacy_settings(app: &tauri::AppHandle, legacy: Settings) -> bool {
 /// * 落点 = 勾选值（若它仍是某个扫描根）否则退回第一个扫描根——与"勾选框出现
 ///   之前"的行为一致（docs/40 十三轮），老配置零迁移。
 fn roots_for_tools(app: &tauri::AppHandle) -> (Option<String>, Option<String>) {
-    // 勾选值来自**本模块自己的配置**，扫描根来自**应用**（用户事实）。
-    // 两者分开取：配置和应用库各有各的写者，混在一次读里会让"谁的目录算数"
-    // 这个问题有两个答案。
+    // 勾选值来自**本模块自己的配置**，扫描根来自**应用**（用户事实）。两者分开取：配置和应用库各有各的写者，混在一次读里会让"谁的目录算数" 这个问题有两个答案。
     let target = trimmed(load_settings(app).target_root);
     app.try_state::<crate::AppState>()
         .and_then(|st| st.db().send(|conn| Ok(crate::read_roots(conn))).ok())
@@ -381,7 +378,6 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 /// 按优先级找工具入口（docs/33 §6.1）。
 ///
 /// 顺序理由：显式指定永远第一 → 安装器写下的路径最可靠 → PATH 说明用户
-/// 自己装过（pip install）。开发机的仓库 venv **不在**候选里（2026-10-31
 /// 拍板：不维护第二套环境）——开发机上要跑 beets 功能，与用户一样走安装流。
 ///
 /// **刻意没有"猜 venv 布局"这一条**：A 轨道的入口是安装器**写进设置**的，
@@ -648,7 +644,6 @@ fn query_sidecar(
 ///
 /// 不能复用 [`absent`]：那条会把 `found` 置 false，UI 于是显示「未安装 beets」
 /// 并把用户踹到安装页——而真相是"你刚点的预览/整理还在跑"。
-/// 2026-10-30 真机撞到的就是这个：预览在联网匹配（MusicBrainz 单请求 6 s，
 /// 一张专辑要发很多次），期间页面自己跳去了安装页，看起来像组件凭空没了。
 ///
 /// `schema_matched` 保持 false（没拿到报告就谈不上契约匹配），UI 因此会禁用
@@ -702,16 +697,8 @@ pub fn probe(app: &tauri::AppHandle) -> BeetsStatus {
     }
 }
 
-/* ---------------- 安装：单轨（便携包） ----------------
- *
- * 播放器只做四件事：下载 → 展开 → 记下入口 → 跑一次 status 验证。
- * 它**不建 venv、不装 pip 包、不碰 Python 工具链、不探测系统 Python**——
- * 唯一的分发物是便携包（自带解释器与 pip）。换插件同样不出这套动作：
- * 操作桥 spawn 包内解释器跑 `install --plugins …`（见 run_env_manager）。
- *
- * 成功判据刻意不是"退出码 0"，而是"装完 probe 得到 found"。退出码可能骗人：
- * pip 装到一半也能 0，套件包解压成功也可能缺 DLL。
- */
+/* 安装：单轨（便携包）播放器只做四件事：下载 → 展开 → 记下入口 → 跑一次 status 验证。它**不建 venv、不装 pip 包、不碰 Python 工具链、不探测系统 Python**—— 唯一的分发物是便携包（自带解释器与 pip）。换插件同样不出这套动作：操作桥 spawn 包内解释器跑
+`install --plugins …`（见 run_env_manager）。成功判据刻意不是"退出码 0"，而是"装完 probe 得到 found"。退出码可能骗人：pip 装到一半也能 0，套件包解压成功也可能缺 DLL。 */
 
 /// 发布物的默认位置。
 ///
@@ -720,7 +707,6 @@ pub fn probe(app: &tauri::AppHandle) -> BeetsStatus {
 /// 也让下载路径能在本地用 `python -m http.server` 真实走一遍
 /// （`AIYA_BEETS_RELEASE_BASE=http://127.0.0.1:8000`）。
 ///
-/// 指向**固定下载通道 tag `beets-portable`**（docs/51 §3.4；2026-10-31 由
 /// `beets-latest` 更名——beets 包手动发布、每次更新都要整套实测，不该自称
 /// latest；版本 release 与通道一律 prerelease，仓库 "Latest" 永远只落在播放器上）。
 ///
@@ -740,7 +726,6 @@ const BUNDLE_ASSET: &str = "beets-portable-win-x64.zip";
 
 /// 发布物根地址：`AIYA_BEETS_RELEASE_BASE` > 默认常量。
 ///
-/// 曾经还有一层「设置 `beets.releaseBase`」，2026-10-27 删掉了：那个键在设置页、
 /// schema、mock 里都没有入口，也就是**写了没人能设**——三层优先级实际只有两层
 /// 生效，剩下一层是死分支。真要支持镜像源，顺序是先给入口再留分支，反过来等于
 /// 没做。眼下环境变量这一层够用：CI 与本地演练都用它指过去。
@@ -985,7 +970,9 @@ fn run_env_manager(
         .envs(tool_env(app, Profile::Workbench));
     // 要跑几十秒，黑框会一直杵在那儿——比一闪而过更难看
     crate::proc::no_window(&mut cmd);
-    let mut child = cmd.spawn().map_err(|e| format!("启动环境管理器失败：{e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("启动环境管理器失败：{e}"))?;
 
     let stdout = match child.stdout.take() {
         Some(s) => s,
@@ -1026,7 +1013,9 @@ fn run_env_manager(
                 if pump.as_ref().map(|p| p.timed_out).unwrap_or(true) {
                     let _ = c.kill();
                 }
-                let code = c.wait().map_err(|e| format!("等待环境管理器退出失败：{e}"))?;
+                let code = c
+                    .wait()
+                    .map_err(|e| format!("等待环境管理器退出失败：{e}"))?;
                 slot.take(); // 已收尸，退出路径不必再管
                 Ok(code)
             }
@@ -1261,9 +1250,8 @@ fn extract_safely<R: std::io::Read + std::io::Seek>(
         let mut entry = zip
             .by_index(i)
             .map_err(|e| format!("读取套件包条目失败：{e}"))?;
-        // zip 9 起 `name()` 返回 Result：条目名可能是非法编码（CP437 之外的
-        // 未标注原始字节），旧版默默替换成 lossy 字符串——那会让路径校验
-        // 对着"替换后的名字"做判断，与真实落盘名不符。宁可在这里失败。
+        // zip 9 起 `name()` 返回 Result：条目名可能是非法编码（CP437 之外的未标注原始字节），旧版默默替换成 lossy
+        // 字符串——那会让路径校验对着"替换后的名字"做判断，与真实落盘名不符。宁可在这里失败。
         let name = entry
             .name()
             .map_err(|e| format!("读取套件包条目名失败：{e}"))?
@@ -1365,10 +1353,11 @@ pub fn start_install(app: tauri::AppHandle, plugins: Vec<String>) -> Result<(), 
                 let _ = app.emit("beets:install", v);
             };
             let result = (|| -> Result<ToolEntry, String> {
-                let path = fetch_asset("AIYA_BEETS_BUNDLE", BUNDLE_ASSET, AssetKind::Bundle, &emit)?;
+                let path =
+                    fetch_asset("AIYA_BEETS_BUNDLE", BUNDLE_ASSET, AssetKind::Bundle, &emit)?;
                 let entry = install_via_bundle(&app, &path, &emit)?;
-                // 外置工具（docs/53）：两个轨道都跑，但缺的东西不一样 —— B 轨道
-                // 自带 Essentia 提取器（docs/54），`exe_path` 会在包内 `bundle/bin`
+                // 外置工具：两个轨道都跑，但缺的东西不一样 —— B 轨道
+                // 自带 Essentia 提取器，`exe_path` 会在包内 `bundle/bin`
                 // 里找到它；A 轨道没有，得现下。清单由**工具侧按插件名**自己算，
                 // 已经就位的会跳过，所以"包里带了"不会变成"再下一次 20MB"。
                 // 为什么非做不可：缺 ffmpeg 时 replaygain 会让 beets 整个 CLI
@@ -1448,8 +1437,7 @@ pub fn start_plugins_set(app: tauri::AppHandle, plugins: Vec<String>) -> Result<
                 update_settings(&app, move |s| {
                     s.plugins = Some(want);
                 })?;
-                let (entry, _) = discover(&app)
-                    .ok_or_else(|| NOT_INSTALLED.to_string())?;
+                let (entry, _) = discover(&app).ok_or_else(|| NOT_INSTALLED.to_string())?;
                 run_env_manager(&app, &entry, &plugins, &previous, &emit)
             })();
             match result {
@@ -1466,7 +1454,7 @@ pub fn start_plugins_set(app: tauri::AppHandle, plugins: Vec<String>) -> Result<
         .map_err(|e| format!("起插件变更线程失败：{e}"))
 }
 
-/* ---------------- 卸载组件（docs/51 §2.2） ---------------- */
+/* 卸载组件 */
 
 /// 统计目录的文件数与字节数（先算账再删——删完就没法报了）。
 ///
@@ -1588,7 +1576,6 @@ fn extract_message(v: &serde_json::Value) -> Option<String> {
 
 /// 卸载：删 `{data_root}/beets-tool`（venv / bundle / 下载缓存），清设置里的入口。
 ///
-/// ## 为什么只删这一层（2026-10-30 拍板）
 ///
 /// 卸载是**安装的反向操作**：安装往里放了 venv 解释器、beets 本体、pip 依赖、
 /// 插件，全在 `beets-tool/` 里，删它就等于全部撤回。
@@ -1677,7 +1664,7 @@ fn uninstall_now(app: &tauri::AppHandle, emit: &dyn Fn(serde_json::Value)) -> Re
     Ok(())
 }
 
-/* ---------------- B1/B2：导入会话（事件流转发） ---------------- */
+/* B1/B2：导入会话（事件流转发） */
 
 /// 取工具入口并造一个可直接起进程的 tool。
 ///
@@ -1692,7 +1679,7 @@ fn tool_or_err(app: &tauri::AppHandle) -> Result<StdioTool, String> {
     )))
 }
 
-/* ---------------- B3：会话槽 + 取消 ---------------- */
+/* B3：会话槽 + 取消 */
 
 /// 取消当前会话：写 cancel 行 → 关 stdin（对面收尾后 EOF 退出）。
 ///
@@ -1750,7 +1737,7 @@ pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), St
     let tool = tool_or_err(&app)?;
 
     // 排除表是**播放器侧事实**（哪些 inbox 源文件已成功导入过），在这里注入
-    // 进协议预留的 options 对象（docs/40 十三轮）：待整理目录固定后，copy 应用的
+    // 进协议预留的 options 对象：待整理目录固定后，copy 应用的
     // 原件一直留在 inbox，不排除的话下次整理会把同一批文件再导一遍。UI 不用
     // 搬运这份数据，preview 命令签名保持不变。
     let exclude: Vec<String> = load_settings(&app).inbox_imported;
@@ -1800,9 +1787,8 @@ pub fn start_apply(
 ) -> Result<(), String> {
     let tool = tool_or_err(&app)?;
 
-    // 整理写入的落点。apply 结束后要按它补一次索引 —— 见下面 on_exit 的说明。
-    // 在**发命令前**取：落点是被 `apply` 正在使用的那个（`tool_env` 同一个来源），
-    // 结束后再取可能已经被用户改掉，补索引就会扫错目录。
+    // 整理写入的落点。apply 结束后要按它补一次索引 —— 见下面 on_exit 的说明。在**发命令前**取：落点是被 `apply`
+    // 正在使用的那个（`tool_env` 同一个来源），结束后再取可能已经被用户改掉，补索引就会扫错目录。
     let dest = roots_for_tools(&app).1;
 
     // on_exit 里拿一份 AppHandle（会话线程要能独立跑，不能借用 &app）
@@ -1820,9 +1806,9 @@ pub fn start_apply(
         "已有 beets 导入任务在执行（可先取消）",
         Box::new(move || {
             if let Some(params) = refresh {
-                // 自闭环（docs/08 §5）：工具刚写完库就是最新权威。
+                // 自闭环：工具刚写完库就是最新权威。
                 // 走完整刷新管线而不是只 dump+sync —— apply 会写标签改 mtime，
-                // 扫描段正好把这些文件的 mtime/size 与标签一起还原（docs/33 §7）。
+                // 扫描段正好把这些文件的 mtime/size 与标签一起还原。
                 crate::refresh::spawn(&exit_app, params, crate::refresh::Trigger::Action);
             }
             // 上面那条只管**应用曲库**（扫描器是它自己的，unchanged 预筛让整库
@@ -1916,7 +1902,7 @@ pub fn start_duplicates(app: tauri::AppHandle, keys: Vec<String>) -> Result<(), 
     )
 }
 
-/* ---------------- 索引增强（docs/45 §5.4） ---------------- */
+/* 索引增强 */
 
 /// 起一次索引增强会话：事件走 `beets:enrich`，`enrichItem` 由宿主边收边落库。
 ///
@@ -2026,7 +2012,7 @@ pub fn start_index_import(app: tauri::AppHandle, root: Option<String>) -> Result
     )
 }
 
-/* ---------------- 查询页（docs/47）：读 beets 库，转成歌单 ---------------- */
+/* 查询页：读 beets 库，转成歌单 */
 
 /// 「组件没装」的统一文案。放在一处：三个调用点各写一句时，改一次要改三处，
 /// 而漏改的那处会让 UI 的"安装指引"分支认不出来（`map_beets_start` 靠关键词
@@ -2095,7 +2081,7 @@ pub fn field_catalog(
     serde_json::from_value(data).map_err(|e| format!("字段清单形状不对（协议漂移？）: {e}"))
 }
 
-/* ---------------- 插件市场（docs/40 §3 白名单版） ---------------- */
+/* 插件市场 */
 
 /// 插件表的**编译期内嵌**副本（唯一事实源是工具侧那个 JSON，docs/51 §1）。
 ///
@@ -2179,7 +2165,7 @@ pub fn available(app: &tauri::AppHandle) -> bool {
 mod tests {
     use super::*;
 
-    /* ---------------- 环境：两家的家必须同步（docs/45 §6.3） ---------------- */
+    /* 环境：两家的家必须同步 */
 
     /// `BEETSDIR` 必须与 `AIYA_BEETS_HOME` 同值：工具侧按后者定位锁/登记簿，
     /// beets 只认前者。两者分家时症状是"索引跑完了却查不到"，所以这条不是
@@ -2223,7 +2209,7 @@ mod tests {
         assert_eq!(get("AIYA_BEETS_DEST"), "/music/整理");
     }
 
-    /* ---------------- 落点口径：与 beets_set_target 同一条判据 ---------------- */
+    /* 落点口径：与 beets_set_target 同一条判据 */
 
     /// 子目录落点必须**真的生效**，不能静默回退成曲库根。
     ///
@@ -2340,7 +2326,7 @@ mod tests {
         }
     }
 
-    /* ---------------- 模块自有配置（docs/47） ---------------- */
+    /* 模块自有配置 */
     fn tmp_settings_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("aiya-beets-cfg-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -2371,7 +2357,7 @@ mod tests {
             1,
             "索引家默认启用的插件数变了，确认是否有意"
         );
-        // 免配置包预置的插件：带外部命令的，那个命令必须**也随包发**（docs/54）。
+        // 免配置包预置的插件：带外部命令的，那个命令必须**也随包发**。
         // 以前这里的断言是"预置插件不许带 exe"（那会儿三个二进制都不进包）；
         // Essentia 随包发之后规则变成"要带就带全"——否则装完的包里 xtractor
         // 会被渲染侧剔掉（缺工具），用户看到的是"预置了但用不了"。
@@ -2385,7 +2371,7 @@ mod tests {
                 );
             }
         }
-        // 默认启用的插件同样不许依赖"用户机现下"的外部二进制（docs/53 拍板）：
+        // 默认启用的插件同样不许依赖"用户机现下"的外部二进制：
         // 否则"默认安装"就等于强迫每个用户多下 87MB 的 ffmpeg，而绝大多数人不需要。
         for r in rows.iter().filter(|r| r.default) {
             assert!(r.exe.is_empty(), "{} 默认启用却需要外部命令", r.name);
@@ -2476,7 +2462,6 @@ mod tests {
 
     /// 子目录落点必须**显示成生效值**，否则界面说"落到曲库根"、实际写到子目录。
     ///
-    /// 2026-10-30 的真实事故：`beets_set_target` 放宽到子目录、`roots_for_tools`
     /// 也改了，但 `config_view_of` 还留着严格相等 —— UI 显示 `D:\CkMsr\Music`，
     /// 而工具拿到的 `AIYA_BEETS_DEST` 是 `D:\CkMsr\Music\_整理测试`。
     #[test]
@@ -2495,7 +2480,7 @@ mod tests {
         );
     }
 
-    /* ---------------- 安装轨道（docs/33 §6.2） ---------------- */
+    /* 安装轨道 */
 
     /// 造一个最小 zip（内存里拼，不落盘）。
     fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
@@ -2666,7 +2651,7 @@ mod tests {
         assert!(st.schema_matched);
         assert_eq!(st.library_lock.as_deref(), Some("free"));
         assert!(st.library_lock_holder.is_none());
-        // 三态是 docs/31 P0-1 的修法：不能只报"配置里开着"，要报"能不能干活"
+        // 三态是 的修法：不能只报"配置里开着"，要报"能不能干活"
         let health = st.plugin_health.expect("pluginHealth 必须解析");
         assert_eq!(health[0].state, "missing_deps");
         assert_eq!(health[0].missing, vec!["bs4".to_string()]);
@@ -2706,7 +2691,6 @@ mod tests {
 
     /// 忙碌（会话槽被占）**不是**不可用：`found` 必须留 true。
     ///
-    /// 守的是一个真机 bug（2026-10-30）：预览在联网匹配时，`beets_status`
     /// 撞上会话槽返回 Busy，`probe` 把它统一翻成 `E_BEETS_UNREACHABLE`，
     /// 于是 `found=false` → 整理库页自行跳到"未安装"的安装页。用户看到的
     /// 是"组件凭空消失"，实际只是他自己刚点的预览还在跑。
@@ -2925,7 +2909,7 @@ mod tests {
         }
     }
 
-    /* ---------------- 卸载：计划解析（docs/55） ---------------- */
+    /* 卸载：计划解析 */
 
     /// `last_frame` 取**最后一条**匹配的帧。
     ///

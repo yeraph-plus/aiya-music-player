@@ -75,7 +75,7 @@ pub fn normalize_source(raw: Option<String>) -> Result<String, String> {
     Ok(s.to_string())
 }
 
-/* ---------------- 存储与快照 ---------------- */
+/* 存储与快照 */
 
 fn store_of(app: &tauri::AppHandle) -> Result<Arc<Store>, String> {
     app.try_state::<crate::AppState>()
@@ -102,7 +102,7 @@ fn arena_of(app: &tauri::AppHandle) -> Result<Arena, String> {
     ))
 }
 
-/* ---------------- 读：清单与统计 ---------------- */
+/* 读：清单与统计 */
 
 /// 一张卡需要的全部数字 + 清单预览。
 pub fn worklist(
@@ -206,7 +206,7 @@ pub fn gc(app: &tauri::AppHandle, source: &str, keep_days: u32) -> Result<Enrich
     })
 }
 
-/* ---------------- 写：会话期间的行缓冲与落库 ---------------- */
+/* 写：会话期间的行缓冲与落库 */
 
 /// 会话期间的累计计数（落库线程写、收尾时读一次）。
 #[derive(Debug, Default)]

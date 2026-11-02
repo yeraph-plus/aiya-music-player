@@ -8,7 +8,7 @@ import { errorMessage } from '../lib/errors';
 /**
  * 播放器 store：状态订阅、队列快照、命令封装、频谱数据源。
  *
- * 与 v1 的三处结构差异（ADR-0006 / docs/18 §4.2）：
+ * 与 v1 的三处结构差异：
  * 1. **没有 AudioSink，也没有 `<audio>` 元素**。音频在 Rust sidecar 出声，
  *    UI 侧不存在音频图；旧代码里那条 `player:command` → `AudioSink.apply()`
  *    的路已经退化成 no-op 垫片，这里连同 `<audio>` 挂载点一起删掉。
@@ -27,7 +27,7 @@ class PlayerStore {
    * 队列里的**临时项**（拖入的文件 / 直播流）的展示字段。
    *
    * 库内曲目的元数据由 `library_tracks` 按可见区间批量取；临时项查库必然
-   * 查不到，只能由快照自己带（`QueueSnapshot.transient`，docs/52 §7.2）。
+   * 查不到，只能由快照自己带（`QueueSnapshot.transient`）。
    * 通常是空数组——队列全是库内曲目时它一直是空的。
    */
   queueTransient = $state<TrackRef[]>([]);
@@ -108,11 +108,8 @@ class PlayerStore {
     }
   }
 
-  /* ---------------- 命令 ----------------
-   * 返回值故意丢弃：状态一律以 `player:state` 事件为准，
-   * 命令的返回只是"后端已执行"的回执，两边都写会造成状态抖动。
-   * 失败只记 warn（播放/暂停按不动不会让应用崩，但要能在日志里看到）。
-   */
+  /* 命令返回值故意丢弃：状态一律以 `player:state` 事件为准，命令的返回只是"后端已执行"的回执，两边都写会造成状态抖动。失败只记
+     warn（播放/暂停按不动不会让应用崩，但要能在日志里看到）。 */
 
   private fail(op: string, e: unknown): void {
     console.warn(`player.${op} failed:`, errorMessage(e));
@@ -185,7 +182,7 @@ class PlayerStore {
    * 播放模式（用户心智里的"一个键"）：列表循环 / 单曲循环 / 随机 / 顺序。
    *
    * 后端没有"模式"这个字段——它是 repeat + shuffle 两个正交开关的组合。
-   * UI 侧组合成单键循环（docs/25 §6）：随机 = shuffle:true + repeat:'all'
+   * UI 侧组合成单键循环：随机 = shuffle:true + repeat:'all'
    * （随机播完一轮还想循环）；顺序 = repeat:'off' + shuffle:false。
    * 两条命令并发下发，状态以 player:state 事件为准。
    */

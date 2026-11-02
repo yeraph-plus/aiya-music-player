@@ -33,10 +33,8 @@ os.environ["AIYA_BEETS_HOME"] = HOME  # 主进程与子进程必须指向同一�
 ENV = dict(os.environ, AIYA_BEETS_HOME=HOME, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
 ENV.pop("BEETSDIR", None)  # 锁路径只认 AIYA_BEETS_HOME，别让外部 BEETSDIR 干扰
 
-# 持有者进程：acquire 后睡 30s（等主进程做完断言，由主进程树杀）。
-# 注意 uv 建的 venv，python.exe 是 trampoline——真身是它派生的子进程，
-# 所以持有者自己上报 pid（holder 文件里的就是它），主进程按它断言；
-# "杀"也要用 taskkill /T 树杀，只 kill trampoline 会留下真身继续持锁。
+# 持有者进程：acquire 后睡 30s（等主进程做完断言，由主进程树杀）。注意 uv 建的 venv，python.exe 是 trampoline——真身是它派生的子进程，所以持有者自己上报
+# pid（holder 文件里的就是它），主进程按它断言；"杀"也要用 taskkill /T 树杀，只 kill trampoline 会留下真身继续持锁。
 HOLDER = (
     "import sys, time;"
     "sys.path.insert(0, r'" + TOOL_SRC + "');"
@@ -61,11 +59,11 @@ def kill_tree(proc) -> None:
 
 
 try:
-    # ---- 1. 无锁文件：probe = free ----
+    # 1. 无锁文件：probe = free
     state, holder = lockfile.probe()
     assert state == "free", (state, holder)
 
-    # ---- 2. 真进程持锁：acquire 被拒、holder 可读、probe = held ----
+    # 2. 真进程持锁：acquire 被拒、holder 可读、probe = held
     proc = subprocess.Popen(
         [PYTHON, "-c", HOLDER],
         stdout=subprocess.PIPE, text=True, encoding="utf-8", env=ENV,
@@ -85,7 +83,7 @@ try:
             assert "正被占用" in e.message, e.message
         print(f"[1] 跨进程互斥 OK（holder={holder}）")
 
-        # ---- 3. 杀掉持有者（模拟崩溃）：锁立即释放，无需任何清理 ----
+        # 3. 杀掉持有者（模拟崩溃）：锁立即释放，无需任何清理
         kill_tree(proc)
         deadline = time.time() + 5
         while time.time() < deadline:
@@ -99,7 +97,7 @@ try:
         assert state == "held" and holder, (state, holder)
         print(f"[2] 进程死亡自动释放 OK（本进程接管，holder={holder}）")
 
-        # ---- 4. 同进程续持：acquire 幂等（契约测试一条进程跑多条请求的形态）----
+        # 4. 同进程续持：acquire 幂等（契约测试一条进程跑多条请求的形态）
         lockfile.acquire("update_library")  # 不得抛
         print("[3] 同进程续持 OK")
     finally:

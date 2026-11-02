@@ -7,11 +7,10 @@ import type { TrackAudio } from './ipc/generated/TrackAudio';
  * 后端只负责给出事实（codec / 采样率 / 位深 / 码率 / 三态 lossless）。
  * 放在前端是因为换文案、换阈值（Hi-Res 门槛）不该动编译 Rust。
  *
- * 2026-10-25 批次 4：从已删除的 `@aiya/contracts` 包搬来，入参类型由旧的
  * `AudioFormat` 换成 Rust 生成的 `TrackAudio`（两者字段一一对应）。
  */
 
-/* ---------------- 速率 ---------------- */
+/* 速率 */
 
 export const AUDIO_RATE_MIN = 0.5;
 export const AUDIO_RATE_MAX = 2;
@@ -40,7 +39,7 @@ export function stepRate(rate: number, delta: number): number {
   return clampRate(clampRate(rate) + delta);
 }
 
-/* ---------------- 格式徽章 ---------------- */
+/* 格式徽章 */
 
 /**
  * codec / container → 徽章文字。
@@ -101,7 +100,6 @@ export function formatSampleRate(hz: number): string {
  * **`bitrate` 的单位是 kbps，不是 bps**（Lofty 的 `audio_bitrate()` 文档写明
  * `(kbps)`，beets 的 `bitrate` 字段文档也写 "in kilobits per second"）。
  * 这里曾经写过 `/ 1000`，于是 320 kbps 的 MP3 显示成 "0 kbps"、
- * 48k/32bit 的 WAV 显示成 "3 kbps" —— 2026-10-25 实测发现。
  */
 export function formatAudioSpec(audio: TrackAudio | null | undefined): string | null {
   if (!audio) return null;

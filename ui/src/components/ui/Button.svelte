@@ -9,7 +9,7 @@
    *
    * 不使用 `bits-ui/button`：`Button.Root` 为 builder 模式，产出裸 `<button>`
    * 加 `data-state`，样式仍需自行实现；而按钮的复杂度集中在样式变体矩阵，
-   * 行为（按下、禁用）由浏览器原生提供。判断线见 docs/24 §4.5。
+   * 行为（按下、禁用）由浏览器原生提供。判断线。
    *
    * 类名使用 `k-` 前缀而非 `.btn`：需与全局 CSS 共存，两者同名时规则优先级
    * 取决于 scoped 哈希，难以定位冲突来源。
@@ -140,11 +140,8 @@
     border-color: color-mix(in srgb, var(--danger) 48%, transparent);
   }
 
-  /*
-   * 链接按钮：行内 accent 链接状动作的唯一形状。剥掉按钮盒（高/内距/边框/
-   * 底色归零），键盘焦点环来自 base.css 的全局 :focus-visible——若各自实现，
-   * 这类动作极易漏掉焦点环。
-   */
+  /* 链接按钮：行内 accent 链接状动作的唯一形状。剥掉按钮盒（高/内距/边框/ 底色归零），键盘焦点环来自 base.css 的全局
+     :focus-visible——若各自实现，这类动作极易漏掉焦点环。 */
   .k-btn.link {
     height: auto;
     padding: 0 2px;

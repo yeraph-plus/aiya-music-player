@@ -12,7 +12,6 @@ import type { PlaylistSummary, TrackRow } from '../lib/ipc';
  */
 export type Dialog =
   /**
-   * 歌单创建/编辑**同一个模态框**（2026-10-28 拍板）：`playlist` 缺省 = 创建，
    * 给了 = 编辑（手动歌单改名称、动态歌单改名称+规则）。
    * `seedIds` 是"新建并加入所选曲目"的入参快照。
    */
@@ -30,7 +29,7 @@ export interface TrackMenu {
   index: number;
   track: TrackRow | null;
   /**
-   * 多选语义（docs/27）：右键的行在当前选择集里且选择集 >1 行时为真——
+   * 多选语义：右键的行在当前选择集里且选择集 >1 行时为真
    * 菜单隐藏「播放/下一首播放/在文件夹中显示/查看艺人/查看专辑」这类
    * 单行专属项，批量项对整个选择集生效。
    */
@@ -60,7 +59,6 @@ class OverlayStore {
 
   /**
    * 两个菜单**互斥**：右键曲目行之后再去右键侧栏歌单，不该两个都挂在屏幕上
-   * （2026-10-25 真窗口验证时看到过两个 `.context-menu` 同时存在）。
    */
   openTrackMenu(
     x: number,

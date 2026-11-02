@@ -221,9 +221,8 @@ fn consume_loop(
 
     loop {
         if !enabled.load(Ordering::Relaxed) {
-            // 清环（tail 追平 head）：只能在消费者线程做——tail 的单写者
-            // 不变量（set_enabled 不再碰 tail）；禁用期间生产端不推新样本，
-            // 这里把禁用前在途的残留排掉，避免重开后出旧帧。
+            // 清环（tail 追平 head）：只能在消费者线程做——tail 的单写者不变量（set_enabled 不再碰
+            // tail）；禁用期间生产端不推新样本，这里把禁用前在途的残留排掉，避免重开后出旧帧。
             let head = ring.head.load(Ordering::Acquire);
             ring.tail.store(head, Ordering::Release);
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -412,10 +411,8 @@ mod tests {
 
     #[test]
     fn sample_rate_shifts_bin_mapping() {
-        // 分带边界按 Hz 定义、bin 换算按采样率——低频带够宽，错标定不显。
-        // 用 96kHz 源 + 15kHz 正弦放大差异：正确标定 bin=15000*2048/96000=320
-        // → 落第 45 带；若误用 48k 标定，45 带去看 bin 581-671，能量在
-        // bin 320（对应误标 7500Hz）→ 落第 41 带。
+        // 分带边界按 Hz 定义、bin 换算按采样率——低频带够宽，错标定不显。用 96kHz 源 + 15kHz 正弦放大差异：正确标定 bin=15000*2048/96000=320 → 落第 45
+        // 带；若误用 48k 标定，45 带去看 bin 581-671，能量在 bin 320（对应误标 7500Hz）→ 落第 41 带。
         let sr = 96_000.0f32;
         let freq = 15_000.0f32;
         let samples: Vec<f32> = (0..FFT_SIZE)

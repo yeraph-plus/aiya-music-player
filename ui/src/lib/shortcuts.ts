@@ -1,7 +1,6 @@
 /**
  * 快捷键的清单、默认键位与解析/匹配逻辑。
  *
- * 2026-10-25 批次 4：合并自已删除的 `@aiya/contracts`（原来的 `shortcuts.ts`
  * 解码 + `domain.ts` 的常量），三块放在一起是因为"改一个键位"经常同时动
  * 清单、默认值和展示文案。
  *
@@ -12,7 +11,7 @@
  * 纯函数、不碰 DOM —— 渲染层拿它做按键匹配，设置页拿它做冲突检测。
  */
 
-/* ---------------- 动作清单与默认键位 ---------------- */
+/* 动作清单与默认键位 */
 
 export const SHORTCUT_ACTIONS = [
   'playPause',
@@ -94,7 +93,7 @@ export const SHORTCUT_LABELS: Record<ShortcutAction, string> = {
   openSettings: '打开设置',
 };
 
-/* ---------------- 解析与匹配 ---------------- */
+/* 解析与匹配 */
 
 export interface KeyEventLike {
   key: string;
@@ -237,7 +236,6 @@ export function findConflicts<T extends string>(
  * 展示用：把 'Ctrl+Shift+Q' 排成 'Ctrl + Shift + Q'。
  *
  * 旧注释说排成 `Ctrl ⇧ Q` 这类紧凑形式，实际实现是全写 + " + " 分隔
- * （2026-10-25 核对后改注释，代码行为未变 —— 设置页两列布局宽度足够）。
  */
 export function formatBinding(binding: string): string {
   const parsed = parseBinding(binding);

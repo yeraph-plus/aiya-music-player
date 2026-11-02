@@ -5,14 +5,14 @@
   import IconButton from './ui/IconButton.svelte';
 
   /**
-   * 曲目列表工具条（docs/27）：挂在 TrackList 顶部（不随列表滚动）。
+   * 曲目列表工具条：挂在 TrackList 顶部（不随列表滚动）。
    *
    * 左组是动作，**全部内置**，替代旧悬浮 BatchBar；右组是列表自身的
    * 两个模式件：筛选器（开模态框）与批量操作开关（控制勾选列显隐）。
    * 批量动作对「当前选择集」生效——批量关着时也可以单击选中一行再用，
    * 所以按钮的禁用条件只看 `count`，不看开关。
    *
-   * docs/28 图标化：筛选器与批量操作收成**纯图标按钮**（语义由 aria-label
+   * 筛选器与批量操作收成**纯图标按钮**（语义由 aria-label
    * 与 title 承担），右组两个常驻控件不再各占一截文字宽度；筛选生效时
    * 图标从 Funnel 换成 FunnelPlus 并点主色，扫一眼就知道筛着东西。
    */
@@ -83,7 +83,7 @@
   <span class="lt-space"></span>
 
   {#if canLocate}
-    <!-- 定位到正在播放：纯手动触发（docs/27 右组模式件同款图标键）。
+    <!-- 定位到正在播放：纯手动触发。
          不做自动跟随——播放中列表被反复拽回播放行是修掉的老 bug。 -->
     <IconButton label="定位到正在播放" size="sm" onclick={onlocate}>
       <LocateFixed size={15} />

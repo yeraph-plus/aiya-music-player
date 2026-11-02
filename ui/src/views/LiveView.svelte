@@ -11,7 +11,7 @@
   import { ui } from '../stores/ui.svelte';
 
   /**
-   * 直播页（docs/52 §7.3，原「FM 电台」占位页）。
+   * 直播页（原「FM 电台」占位页）。
    *
    * 只做三件事，**不做台站库**：
    * 1. 打开一个流（地址框 / 本地播放列表 / 拖文件进来，最后一条入口在壳层）；
@@ -123,10 +123,7 @@
     <Button variant="ghost" disabled={busy} onclick={() => void pickFile()}>打开文件…</Button>
   </div>
 
-  <!--
-    大画面：回答"现在在听什么台"。没在播时也不空着——空态里放的是
-    "入口在哪"，比一句"未在播放"有用。
-  -->
+  <!-- 大画面：回答"现在在听什么台"。没在播时也不空着——空态里放的是 "入口在哪"，比一句"未在播放"有用。 -->
   <section class="live-stage" class:on={isStream && phase.tone === 'on'}>
     {#if isStream}
       <span class="stage-badge" class:on={phase.tone === 'on'} class:wait={phase.tone === 'wait'}>
@@ -196,7 +193,7 @@
     color: var(--text-2);
   }
 
-  /* ---------------- 地址框 ---------------- */
+  /* 地址框 */
 
   .live-form {
     display: flex;
@@ -223,12 +220,9 @@
     border-color: transparent;
   }
 
-  /* ---------------- 大画面 ---------------- */
+  /* 大画面 */
 
-  /*
-   * 亮/暗两套主题都靠 CSS 变量走，不写死颜色。底色是一层极淡的放射渐变：
-   * 直播是"有东西在流动"的场景，一块死平的卡片会让人以为页面没加载完。
-   */
+  /* 亮/暗两套主题都靠 CSS 变量走，不写死颜色。底色是一层极淡的放射渐变：直播是"有东西在流动"的场景，一块死平的卡片会让人以为页面没加载完。 */
   .live-stage {
     display: grid;
     justify-items: center;
@@ -320,7 +314,7 @@
     background: currentColor;
   }
 
-  /* ---------------- 最近打开 ---------------- */
+  /* 最近打开 */
 
   .recent-head {
     display: flex;

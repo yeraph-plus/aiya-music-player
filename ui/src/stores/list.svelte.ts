@@ -43,9 +43,8 @@ class ListStore {
     pageSize: PAGE_SIZE,
     maxPages: 24,
     fetchPage: async (offset, limit) => {
-      // parseTrackQuery：offset 模式的查询带 offset 覆盖，直接展开会被
-      // 判别联合的 cursor 分支拒绝。
-      // 失败直接抛：TrackWindow 自己会把列表切到「重试」态。
+      // parseTrackQuery：offset 模式的查询带 offset 覆盖，直接展开会被判别联合的 cursor
+      // 分支拒绝。失败直接抛：TrackWindow 自己会把列表切到「重试」态。
       const page = await library.list(parseTrackQuery({ ...this.query(), offset, limit }));
       return { items: page.items, total: page.total };
     },
@@ -74,7 +73,7 @@ class ListStore {
   }
 
   /**
-   * 时间筛选（筛选器模态框，docs/27）：档位存这里，查询时换算毫秒——
+   * 时间筛选（筛选器模态框）：档位存这里，查询时换算毫秒
    * 「7 天内」这类相对档随时间自然滚动，不需要用户重设。
    */
   timeFilter = $state<TrackTimeFilter>({ ...DEFAULT_TIME_FILTER });
@@ -87,10 +86,8 @@ class ListStore {
    * 排序与筛选直接搬 ui store。
    */
   query(): TrackQuery {
-    // 曲库页 tab（2026-10-28）：「最近播放」换 source（后端按播放时间倒序，
-    // sort 字段被忽略）；「最近添加」保持 library source、由 sort=added 表达。
-    // 只在曲库页生效——搜索页/专辑/艺人详情页同走 LIBRARY_VIEW，
-    // 但它们不该继承 tab 语义（tab 是曲库页的子状态）。
+    // sort 字段被忽略）；「最近添加」保持 library source、由 sort=added 表达。只在曲库页生效——搜索页/专辑/艺人详情页同走
+    // LIBRARY_VIEW，但它们不该继承 tab 语义（tab 是曲库页的子状态）。
     const baseSource = sourceOf(ui.view);
     const source =
       ui.page === 'library' && ui.libraryTab === 'recent' ? { kind: 'recent' as const } : baseSource;
@@ -158,7 +155,7 @@ class ListStore {
     }
   }
 
-  /* ---------------- 搜索 / 排序 / 筛选（改查询 = 重载） ---------------- */
+  /* 搜索 / 排序 / 筛选（改查询 = 重载） */
 
   /**
    * 搜索输入。**防抖在 store 里**：TitleBar 的搜索框每敲一个字符都调一次
@@ -208,9 +205,9 @@ class ListStore {
     return timeFilterActive(this.timeFilter);
   }
 
-  /* ---------------- 批量操作（选择集 → 命令） ----------------
+  /* 批量操作（选择集 → 命令）
    *
-   * docs/27：批量动作 UI 归列表工具条（TrackList 顶部的 ListToolbar），
+   * 批量动作 UI 归列表工具条（TrackList 顶部的 ListToolbar）
    * 选择集 → ID 的换算仍是本 store 的职责（下标 → ID 要走当前视图查询）。
    */
 
@@ -267,7 +264,7 @@ class ListStore {
     return index >= 0 ? index : null;
   }
 
-  /* ---------------- 视图切换（切视图 = 换查询 + 重载 + 存状态） ---------------- */
+  /* 视图切换（切视图 = 换查询 + 重载 + 存状态） */
 
   /**
    * 切到内置视图。**同一个视图再点一次 = 重新拉**（用户手滑点错了想刷新，
@@ -286,8 +283,6 @@ class ListStore {
    * `sort` 用于"最近添加 → 查看全部"这类**带排序语义的入口**：以前它只能
    * 打开「全部曲目」，排序用的是上一次留下的字段，用户看到的并不是最近
    * 添加的顺序。同一个页面再点一次仍然重新拉（手滑点错了想刷新）。
-   * （docs/28：原 openBuiltinView 的 recent/mostPlayed 分支随单页退役删除，
-   * 两个来源改以查询形式活在推荐页，不再是一级路由。）
    */
   openLibrary(
     sort?: { field: TrackSort; direction: 'asc' | 'desc' },
@@ -303,9 +298,7 @@ class ListStore {
   }
 
   /**
-   * 曲库页 tab 切换（2026-10-28）。**同一个 tab 再点一次**：
    * added/recent = 翻转该 tab 的正倒序（与列头"点同字段反向"同语义，
-   * 2026-10-30）；all 维持"再点一次 = 重新拉"。
    *
    * 排序的进出账：进「最近添加」时把当前排序存起来、换成 added desc
    * （该 tab 的语义顺序）；进「最近播放」存排序、换 recent 语义的 desc

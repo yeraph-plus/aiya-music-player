@@ -134,7 +134,7 @@ def validate(doc: dict) -> list[str]:
                 f"（实测 xtractor 的 write 默认 yes，会静默改音频）"
             )
 
-    # ---- binaries 段（docs/53）：外部二进制的载体与校验值 ----
+    # binaries 段：外部二进制的载体与校验值
     bins = doc.get("binaries")
     if not isinstance(bins, list) or not bins:
         errs.append("binaries 必须是非空数组（三个外部工具都在这儿声明）")
@@ -215,7 +215,7 @@ def validate(doc: dict) -> list[str]:
         ):
             errs.append(f"{name}: 没有任何插件用到它（要么补插件，要么从表里删掉）")
 
-    # ---- bundle 与外部二进制的关系（docs/54）----
+    # bundle 与外部二进制的关系
     # "免配置包里预置了 xtractor" 只有在它那个 20MB 的提取器也随包发时才算数：
     # 否则渲染配置时 `usable_plugins` 会把它剔掉，包看着有、用起来没有。
     bundle_bins = {
@@ -298,9 +298,8 @@ def main() -> int:
         raise AssertionError("未知插件名必须抛 KeyError，不能静默跳过")
     print("[4] packages_for OK（去重 / 空清单 / 未知名字抛错）")
 
-    # [5] bundle 与外部二进制：带着的插件，它的工具也得随包发（docs/54）
+    # [5] bundle 与外部二进制：带着的插件，它的工具也得随包发
     #
-    # 这一条以前写的是"bundle 插件不许带 exe"（那会儿三个二进制都不进包）。
     # 现在 Essentia 随包发，规则反过来：**要带就带全**，不许出现"插件在包里、
     # 工具靠用户机现下"的组合——那种包在断网机器上等于没预置。
     from_exe = {
@@ -317,7 +316,7 @@ def main() -> int:
     print(f"[5] bundle 组合 OK：插件 {'/'.join(plugins.BUNDLE_PLUGINS)}；"
           f"随包 exe {'/'.join(plugins.BUNDLE_BINARIES)}")
 
-    # [5b] 外部二进制的解析：谁要什么、缺了算谁头上（docs/53）
+    # [5b] 外部二进制的解析：谁要什么、缺了算谁头上
     assert plugins.binaries_for(["replaygain"]) == ["ffmpeg"], "replaygain 只要 ffmpeg"
     assert plugins.binaries_for(["replaygain", "convert"]) == ["ffmpeg"], "必须去重"
     assert plugins.binaries_for(["lyrics"]) == [], "纯 Python 插件不涉及外部工具"
@@ -379,7 +378,7 @@ def main() -> int:
             next(i for i, x in enumerate(d["plugins"]) if x["name"] == "lyrics")
         ].update({"exe": ["fpcalc"]}),
         "打错一个键": lambda d: d["plugins"][0].update({"nmae": "x"}),
-        # docs/53：exe 引用与载体声明两边都得钉住
+        # exe 引用与载体声明两边都得钉住
         "exe 引用不存在的二进制": lambda d: d["plugins"][0].update({"exe": ["nofmpeg"]}),
         "载体地址不是 https": lambda d: d["binaries"][0]["carrier"].update(
             {"url": "http://example.com/x.zip"}
@@ -392,7 +391,7 @@ def main() -> int:
                          "sha256": "0" * 64, "member": "ghost.exe"},
              "size": 1, "sha256": "0" * 64, "license": "MIT", "vendor": "x"}
         ),
-        # docs/54：bundle 的两头都要对得上（按名定位——binaries 顺序会随条目增删变）
+        # bundle 的两头都要对得上（按名定位——binaries 顺序会随条目增删变）
         "bundle 插件的工具没随包发": lambda d: d["binaries"][
             next(i for i, x in enumerate(d["binaries"])
                  if x["name"] == "streaming_extractor_music")

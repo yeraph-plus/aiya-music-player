@@ -90,12 +90,11 @@ impl PlayerActor {
         }
     }
 
-    /* ---------------- 对外查询 ---------------- */
+    /* 对外查询 */
 
     pub fn state(&self) -> PlayerState {
-        // 空队列 → index/cursor 都是 None（不用 -1 哨兵，见 PlayerState 注释）。
-        // 队列非空时 order 与 queue 同步重建，order[cursor] 必然存在；
-        // 仍用 get() 防御而不是 unwrap，让"不可能"只降级成 null 而不是 panic。
+        // 空队列 → index/cursor 都是 None（不用 -1 哨兵，见 PlayerState 注释）。队列非空时 order 与 queue 同步重建，order[cursor]
+        // 必然存在；仍用 get() 防御而不是 unwrap，让"不可能"只降级成 null 而不是 panic。
         let has_queue = !self.queue.is_empty();
         let index = if has_queue {
             self.order.get(self.cursor).copied()
@@ -249,7 +248,7 @@ impl PlayerActor {
         self.queue.clone()
     }
 
-    /* ---------------- 内部工具 ---------------- */
+    /* 内部工具 */
 
     fn current_track(&self) -> Option<&TrackRef> {
         self.order.get(self.cursor).and_then(|&i| self.queue.get(i))
@@ -325,7 +324,7 @@ impl PlayerActor {
         if let Some(track) = track {
             let token = self.next_token();
             self.pending_load = Some((token, track.path.clone(), start_ms, autoplay));
-            // 音源类别在产生处判定（docs/22 G3）：http(s) 路径 = 网络流。
+            // 音源类别在产生处判定：http(s) 路径 = 网络流。
             // 用 `is_stream_path`（大小写不敏感）而不是手写前缀比较：引擎那边
             // 就是 `eq_ignore_ascii_case`，两处不一致时 `HTTP://` 会一边当流
             // 打开、另一边标成 File（进度条可拖，一拖报错）。
@@ -363,14 +362,14 @@ impl PlayerActor {
         self.disconnecting = false;
     }
 
-    /* ---------------- 命令归约 ---------------- */
+    /* 命令归约 */
 
     pub fn reduce(&mut self, cmd: PlayerCommand) {
         match cmd {
             PlayerCommand::TogglePause => match self.status {
                 PlaybackStatus::Playing => {
                     self.status = PlaybackStatus::Paused;
-                    // 直播语义（docs/52 §10 用户拍板）：**暂停 = 断开**。
+                    // 直播语义：**暂停 = 断开**。
                     // 直播没有"位置"，留着连接只会攒一段延迟——回来听到的是
                     // 30 秒前而不是现在，还得自己追。所以这里真的停引擎（丢掉
                     // HlsStream 连预取线程一起退出），用户按播放时重连。
@@ -421,9 +420,8 @@ impl PlayerActor {
                 if self.position_ms > 3_000 && self.current_track().is_some() {
                     self.instruct_load(autoplay, 0);
                 } else if self.shuffle {
-                    // 随机模式：历史栈优先——随机排列下"order 里的上一首"不是
-                    // 用户来的那条路。跳过已失效的队列下标；栈空才回退沿 order
-                    // 后退的老行为（非随机模式完全不走这条分支）。
+                    // 随机模式：历史栈优先——随机排列下"order 里的上一首"不是用户来的那条路。跳过已失效的队列下标；栈空才回退沿
+                    // order 后退的老行为（非随机模式完全不走这条分支）。
                     match self.history.pop(self.queue.len()) {
                         Some(qi) => {
                             self.cursor = self
@@ -483,11 +481,8 @@ impl PlayerActor {
                     let n = self.queue.len();
                     if n == 0 {
                         self.go_idle();
-                        // order 必须跟着 queue 一起清（2026-10-28 闪退修复）：
-                        // 只清 queue 的话 order 里还留着旧下标，宿主随后调
-                        // queue_snapshot() 时 self.queue[i] 对空 vec 取下标直接
-                        // panic——且命令跑在 WebView2 回调里（cannot unwind），
-                        // panic = 整个应用 abort。
+                        // 只清 queue 的话 order 里还留着旧下标，宿主随后调 queue_snapshot() 时 self.queue[i] 对空 vec 取下标直接
+                        // panic——且命令跑在 WebView2 回调里（cannot unwind），panic = 整个应用 abort。
                         self.order.clear();
                         self.cursor = 0;
                         self.position_ms = 0;
@@ -535,8 +530,7 @@ impl PlayerActor {
                 }
                 QueueOp::Remove { indices } => {
                     let was_playing = self.status == PlaybackStatus::Playing;
-                    // indices 是**播放顺序里的位置**（UI 拿到的是 queue_snapshot().ids
-                    // 的下标）。此前当成 queue 下标用：洗牌时删错歌，且
+                    // indices 是**播放顺序里的位置**（UI 拿到的是 queue_snapshot().ids 的下标）。此前当成 queue 下标用：洗牌时删错歌，且
                     // rebuild_order(None) 会把整队重洗 —— 删一首就打乱全部顺序。
                     let mut positions: Vec<usize> = indices
                         .into_iter()
@@ -614,7 +608,7 @@ impl PlayerActor {
 
             PlayerCommand::Loaded { token, duration_ms } => {
                 if token == self.token {
-                    // 0 = 直播流没有总时长（docs/22 G3）：对 UI 呈现 None
+                    // 0 = 直播流没有总时长：对 UI 呈现 None
                     // 而不是 Some(0)——进度条按 source=stream 显示"直播中"
                     self.duration_ms = if duration_ms == 0 {
                         None
@@ -716,9 +710,8 @@ impl PlayerActor {
     /// 随机位置。当前曲与已播前缀的 order 位置不动——Append 不再整队重洗。
     fn append_shuffled(&mut self, first_new: usize) {
         let mut x = self.shuffle_seed() | 1;
-        // 空队列（无当前曲）没有"已播前缀"可让，但首曲仍按 keep 语义钉在
-        // order[0]——与 ToggleShuffle/hydrate 的"当前曲在 order 头部"不变量
-        // 一致。否则后续随机插入可能落到首曲前面，cursor 跟着漂到 1。
+        // 空队列（无当前曲）没有"已播前缀"可让，但首曲仍按 keep 语义钉在 order[0]——与 ToggleShuffle/hydrate 的"当前曲在
+        // order 头部"不变量一致。否则后续随机插入可能落到首曲前面，cursor 跟着漂到 1。
         let pinned = self.order.is_empty();
         if pinned {
             self.order.push(first_new);
@@ -939,7 +932,6 @@ mod tests {
         assert_eq!(s.status, PlaybackStatus::Idle);
         assert_eq!(s.source, AudioSource::File, "队列空了，source 必须复位");
 
-        // 回归（2026-10-28 闪退）：清空后 order 必须同步清掉——否则
         // queue_snapshot() 里 self.queue[i] 对空 vec 取下标直接 panic，
         // 且 panic 发生在 WebView2 回调（cannot unwind）= 整个应用闪退。
         let snap = p.queue_snapshot();
@@ -1183,7 +1175,7 @@ mod tests {
         assert!(autoplay);
     }
 
-    /* ---------------- 洗牌中的 Append（不整队重洗） ---------------- */
+    /* 洗牌中的 Append（不整队重洗） */
 
     /// 洗牌中 Append：已有曲目的相对顺序不动，新曲只出现在未播区段
     /// （cursor 之后）。老实现每次 Append 都全量 Fisher-Yates，删一首不重洗
@@ -1253,7 +1245,7 @@ mod tests {
         );
     }
 
-    /* ---------------- 随机模式的播放历史 ---------------- */
+    /* 随机模式的播放历史 */
 
     /// 随机连播 3 首 → Prev 回到上一首 → Prev 再回到上上首 → Next 前进行为正常。
     #[test]
@@ -1402,7 +1394,7 @@ mod tests {
         assert!(p.history.is_empty());
     }
 
-    /* ---------------- Loading 期间的暂停 ---------------- */
+    /* Loading 期间的暂停 */
 
     #[test]
     fn pause_during_loading_lands_paused() {
@@ -1493,7 +1485,7 @@ mod tests {
         );
     }
 
-    /* ---------------- 洗牌种子熵 ---------------- */
+    /* 洗牌种子熵 */
 
     /// 种子掺入进程级自增熵：同毫秒内连续两次取种子必不相同
     /// （老实现只用 now_ms，同毫秒两次重排产生相同排列）。
@@ -1523,7 +1515,7 @@ mod tests {
         assert_ne!(first, second, "同毫秒两次重排不应得到相同排列");
     }
 
-    /* ---------------- hydrate 的洗牌策略 ---------------- */
+    /* hydrate 的洗牌策略 */
 
     /// hydrate 开洗牌与 ToggleShuffle 同策略：当前曲钉到 order 位 0
     /// （此前 hydrate 用 rebuild_order(None)，当前曲落在随机位置）。
@@ -1628,7 +1620,7 @@ mod tests {
         assert_eq!(p.state().status, PlaybackStatus::Idle);
     }
 
-    /* ---------------- ReplayGain 归一化 ---------------- */
+    /* ReplayGain 归一化 */
 
     /// 装一首带 gain_db 的曲目并让它成为 current
     fn actor_with_gain(gain_db: Option<f64>) -> PlayerActor {

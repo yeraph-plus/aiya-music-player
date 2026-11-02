@@ -70,7 +70,6 @@ class PlaylistsStore {
   }
 
   /**
-   * 保存动态歌单规则（2026-10-30 物化模型）：后端做**替换重算**——清空现有
    * 曲目、按新规则重新入库，所见即所得。若正在看它则重载列表。
    */
   async setRule(playlist: PlaylistSummary, rule: SmartRule): Promise<boolean> {
@@ -116,7 +115,6 @@ class PlaylistsStore {
    * 删除。若当前正在看它，退回曲库 —— 否则用户会盯着一个不存在的歌单
    * 看空列表（`refresh` 里也有兜底，但那里不负责重载列表）。
    *
-   * **必须先把"是否正在看它"存成布尔**（2026-10-25 实测踩到）：
    * `refresh` 内部发现当前歌单不在新列表里时会自己把 `ui.view` 改成
    * `LIBRARY_VIEW`。之后再判断 `ui.view.kind === 'playlist'` 恒为假 →
    * reload 被跳过 → 侧栏已经切回「全部曲目」，主区却还停在空态。
@@ -225,7 +223,7 @@ class PlaylistsStore {
   }
 
   /**
-   * 歌单内批量删（docs/27：工具条/右键对选择集生效）。**按下标从大到小删**：
+   * 歌单内批量删。**按下标从大到小删**：
    * removeAt 按位置删，先删后面的不会让前面未删的下标位移；
    * 全部删完只 refresh/reload 一次（逐个调 removeItemAt 会 O(n) 次重载）。
    *

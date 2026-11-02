@@ -12,7 +12,7 @@
   import { ui } from '../stores/ui.svelte';
 
   /**
-   * 艺人详情页（docs/28 拆出）：与 AlbumView 同构——路由参数
+   * 艺人详情页：与 AlbumView 同构——路由参数
    * （`ui.artistId`）直接可寻址，曲目列表 = 曲库查询 + artistId 筛选，
    * 列表接线共用 TrackListPanel。
    *
@@ -62,10 +62,7 @@
   </Header>
 </div>
 
-<!--
-  艺人页把"歌手"列链接废掉（disableArtistLink）：点了指向的是当前页，
-  nav 视为刷新，只会白丢一次滚动位置。专辑列保持可点。
--->
+<!-- 艺人页把"歌手"列链接废掉（disableArtistLink）：点了指向的是当前页，nav 视为刷新，只会白丢一次滚动位置。专辑列保持可点。 -->
 <TrackListPanel canSort={true} removeLabel="从曲库中删除" showFilter={false} disableArtistLink={true}>
   {#snippet empty()}
     <EmptyState title="这位艺人没有曲目" hint="曲目可能已被移出曲库">

@@ -1,9 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * E2E 冒烟（2026-10-26 按新壳体重写）。
  *
- * **选择器原则：认语义与稳定类名，不认版式类名。**
+ * 选择器原则：认语义与稳定类名，不认版式类名。
  * 上一版 4 条全红，就是钉在了重构前的版式上：
  * - `.main .list .row` → 首页改表格后那段是 `.tt-row`（`.list` 只在曲库/歌单页）
  * - `'设置与诊断'` → 现在就叫「设置」
@@ -52,7 +51,6 @@ test('启动装配：顶栏四件 + 仪表盘三级 + 播放条空态', async ({
   // 宽 TitleBar：搜索框在位、返回键此时无历史所以 disabled
   await expect(page.locator('.titlebar .tb-search input')).toBeVisible();
   await expect(page.getByRole('button', { name: '返回上一页' })).toBeDisabled();
-  // 推荐页是仪表盘（2026-10-28）：无页标题，歌单行 / 常听榜两级；
   // 三项统计入口二次修订撤销（侧栏已有一级导航），只剩缺失警告位
   await expect(page.locator('.main h1')).toHaveCount(0);
   await expect(page.locator('.main .playlist-row .playlist-card').first()).toBeVisible();
@@ -61,11 +59,9 @@ test('启动装配：顶栏四件 + 仪表盘三级 + 播放条空态', async ({
   await expect(page.locator('.main .list')).toHaveCount(0);
   await expect(page.locator('footer')).toContainText('未在播放');
   // 歌单摘要的加载链路：boot → playlists.refresh() → library.playlists → 侧栏。
-  // 2026-10-26 这条数据从 ui store 挪到 library（避免 list/scan 与 playlists 成环），
   // 断言在这里是为了「挪完还接得上」——mock 种子固定 4 张。
   await expect(page.locator('.sidebar .playlist-item')).toHaveCount(4);
-  // docs/25 §5 T4c/T4d：背景四层是全应用的——推荐页也有背景渐变层；
-  // 频谱 mock 下默认关，所以环境层不在。2026-10-28 用户拍板全页面统一
+  // 背景四层是全应用的——推荐页也有背景渐变层；
   // 沉浸档：可读性遮罩 veil 整层删除（不再有 .ambient-veil），断言其缺席。
   await expect(page.locator('.ambient-art')).toHaveCount(1);
   await expect(page.locator('.ambient-veil')).toHaveCount(0);
@@ -85,7 +81,7 @@ test('歌单：侧栏点开 → 标题与列表来自该歌单', async ({ page }
 
 test('导航链：曲库 → 侧栏切专辑宫格（docs/28 一级项）→ 详情 → 逐级返回', async ({ page }) => {
   await openLibrary(page);
-  // docs/28：曲库页第一层 tab 已撤（连同分隔线），专辑/艺人从侧栏进
+  // 曲库页第一层 tab 已撤（连同分隔线），专辑/艺人从侧栏进
   await expect(page.locator('.main .content-toolbar .text-tab')).toHaveCount(0);
 
   await page.locator('.sidebar .nav-item', { hasText: '专辑' }).click();
@@ -112,7 +108,6 @@ test('导航链：曲库 → 侧栏切专辑宫格（docs/28 一级项）→ 详
 test('播放链路：双击行播放 → 播放条与队列激活行', async ({ page }) => {
   await openLibrary(page);
   // B4-1 交互语义：单击=选中，双击=播放。双击**标题单元格**——行几何中心
-  // 落在歌手/专辑跳转链接上，链接会吃掉第一下单击去导航（2026-10-28 实测）
   await firstRow(page).locator('.cell.title').dblclick();
   // 播放条出歌名与时长（mock 的 playTracks → 状态广播 → store → 渲染）
   await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
@@ -138,7 +133,6 @@ test('曲库 tab：最近添加/最近播放切换（2026-10-28 自推荐页迁�
   await expect(page.locator('.text-tab.on')).toHaveText('最近添加');
   await firstRow(page).waitFor({ state: 'visible' });
 
-  // 同 tab 二次点击 = 翻转正倒序（2026-10-30）：首行必须变化
   const addedDescFirst = await firstRow(page).textContent();
   await tabs.filter({ hasText: '最近添加' }).click();
   await expect(firstRow(page)).not.toHaveText(addedDescFirst ?? '', { timeout: 5_000 });
@@ -164,11 +158,9 @@ test('曲库 tab：最近添加/最近播放切换（2026-10-28 自推荐页迁�
 test('设置页：单页平铺 + tab 跳转定位 + 主题切换生效', async ({ page }) => {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
-  // 2026-10-28 三次修订：改回单页平铺——大标题固定「设置」，tab 只做跳转
   await expect(page.locator('.main h1')).toHaveText('设置');
   await expect(page.locator('.main .ch-kicker')).toHaveCount(0);
 
-  // 六个 tab（2026-10-30：曲库组由「扫描入库」页并入，并提到第一位），
   // 初始高亮第一组；六个区块全部渲染（含小标题）。
   // 语义是"滚动到某个区块"而不是"切换面板"→ nav + aria-current（同 content/Toolbar）
   const tabs = page.locator('.text-tabs .text-tab');
@@ -200,30 +192,27 @@ test('正在播放页：起播后两栏沉浸布局 + 背景四层接住真实�
   await firstRow(page).locator('.cell.title').dblclick();
   await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
 
-  // docs/25 §6：正在播放页唯一入口 = 播放条左侧歌曲区域（侧栏席位已撤）
+  // 正在播放页唯一入口 = 播放条左侧歌曲区域（侧栏席位已撤）
   await page.locator('footer .now').click();
 
-  // docs/25 §4 两栏改版：信息列跟着播放态走（标题换成真歌名），歌词容器在右
+  // 信息列跟着播放态走（标题换成真歌名），歌词容器在右
   await expect(page.locator('.np-info h1')).not.toHaveText('未在播放');
   await expect(page.locator('.np-info .audio-spec')).toBeVisible();
   await expect(page.locator('.lyrics-panel')).toBeVisible();
 
-  // docs/25 §5 背景四层：背景层常在；沉浸档（正在播放页）遮罩撤销（T4d）——
+  // 背景层常在；沉浸档（正在播放页）遮罩撤销（T4d）
   // 频谱环境光不被压暗
   await expect(page.locator('.ambient-art')).toBeVisible();
   await expect(page.locator('.ambient-veil')).toHaveCount(0);
-  // 2026-10-30 修：这条断言原先盯 `.ambient-spectrum`，而 docs/46 之后那个
-  // canvas 只在 **WebGL 不可用的 2D 兜底**路径上才存在，正常机器上恒为空——
-  // 断言"为 0"是真的，只是它什么都没验。正在播放页的频谱现在是页内
+  // canvas 只在 **WebGL 不可用的 2D 兜底**路径上才存在，正常机器上恒为空—— 断言"为 0"是真的，只是它什么都没验。正在播放页的频谱现在是页内
   // `<canvas class="np-spectrum">`，由「正在播放页频谱」开关派生。
   await expect(page.locator('.np-spectrum')).toHaveCount(0); // mock 默认关
 
-  // 侧栏在这一页整体退出（docs/46 §5.2），所以要去设置得先退出去；
+  // 侧栏在这一页整体退出，所以要去设置得先退出去；
   // Esc 就是那一页的退路（keyboard.ts 里显式给的语义）。
-  // 2026-10-30 修：这条用例以前直接点侧栏「设置」，从 docs/46 之后稳定超时。
   await page.keyboard.press('Escape');
   await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
-  // 开关名也是 docs/46 改的：原来一个「频谱可视化」，现在拆成背景/正在播放页两个
+  // 开关名也是 改的：原来一个「频谱可视化」，现在拆成背景/正在播放页两个
   await page.getByRole('switch', { name: '正在播放页频谱' }).click();
   await page.locator('footer .now').click();
   await expect(page.locator('.np-spectrum')).toHaveCount(1);

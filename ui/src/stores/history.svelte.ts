@@ -7,7 +7,7 @@ import { ui } from './ui.svelte';
  * 播放历史编排。
  *
  * 只有一个写操作（清空）。读操作不走这里：最近播放/常听作为**查询来源**
- * （`lib/ipc/client.ts` 的 TrackSource）由推荐页直接拉，docs/28 起两个
+ * （`lib/ipc/client.ts` 的 TrackSource）由推荐页直接拉， 起两个
  * 单页退役后这里也不再把"清空"和某个列表视图的刷新绑在一起。
  *
  * 单独建文件而不是塞进 `library`：`clear` 要刷新统计与诊断，
@@ -30,7 +30,7 @@ class HistoryStore {
     }
     notify.showToast('播放历史已清空');
     await library.loadStats();
-    // 设置页的「关于」诊断块里也展示历史相关数字，开着就一起刷（docs/29 批 A）
+    // 设置页的「关于」诊断块里也展示历史相关数字，开着就一起刷
     if (ui.page === 'settings') await ui.refreshDiagnostics();
   }
 }

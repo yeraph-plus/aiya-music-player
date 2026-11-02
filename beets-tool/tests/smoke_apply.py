@@ -114,7 +114,7 @@ def fresh_src(dirname):
     return out
 
 
-# ---- 场景 1：apply 只写标签，文件不移动 ----
+# 场景 1：apply 只写标签，文件不移动
 src1 = fresh_src("src1")
 events, rc = run_apply([decision("apply", src1, "冒烟A", title_prefix="A曲目")])
 types = [e["type"] for e in events]
@@ -128,7 +128,7 @@ assert len(items) == 3, len(items)
 assert all(it.path.decode("utf-8", "replace").lower().startswith(os.path.join(WORK, "src1").lower()) for it in items), "文件应留在原地"
 print("[1] 只写标签 OK（文件未移动）")
 
-# ---- 场景 2：apply_copy —— 复制进库，源保留 ----
+# 场景 2：apply_copy —— 复制进库，源保留
 events, rc = run_apply([decision("apply_copy", src1, "冒烟A", title_prefix="A曲目")])
 applied = [e for e in events if e["type"] == "applied"][0]
 assert applied["moved"] is True, applied
@@ -141,7 +141,7 @@ assert all(p.lower().startswith(LIBDIR.lower()) for p in new_paths), new_paths
 assert all(os.path.exists(p) for p in new_paths), "库内文件应存在"
 print("[2] 复制进库 OK:", new_paths[0])
 
-# ---- 场景 3：目标冲突 —— 不覆盖不改名 ----
+# 场景 3：目标冲突 —— 不覆盖不改名
 src3 = fresh_src("src3")
 # 先 copy 一次拿到真实 dest
 events, rc = run_apply([decision("apply_copy", src3, "冒烟C", title_prefix="C曲目")])
@@ -167,7 +167,7 @@ for d in dests:
 assert os.path.exists(src3[0]), "冲突时源文件不应被动"
 print("[3] 目标冲突不覆盖 OK")
 
-# ---- 场景 4：apply_move —— 移动进库，源消失 ----
+# 场景 4：apply_move —— 移动进库，源消失
 src4 = fresh_src("src4")
 events, rc = run_apply([decision("apply_move", src4, "冒烟D", title_prefix="D曲目")])
 applied = [e for e in events if e["type"] == "applied"][0]
@@ -181,11 +181,8 @@ assert all(os.listdir(os.path.dirname(p)) for p in d_paths), "库内文件应存
 assert not os.path.exists(src4[0]), ""
 print("[4] 移动进库 OK")
 
-# ---- 场景 5：取消 —— 覆盖"已入队未派发"与"执行中"两个窗口 ----
-# 12 组决策（36 个文件）让 apply 有足够的执行时间；cancel 紧跟请求行写入，
-# 命中哪个窗口取决于线程调度，但**两个窗口都必须收尾成 cancelled**。
-# 旧断言 `"cancelled" in ev or "applyDone" in ev` 恰好把 P1-7（取消被
-# CANCEL.clear() 抹掉、全量照跑）放过去，所以这里改成排他断言。
+# 场景 5：取消 —— 覆盖"已入队未派发"与"执行中"两个窗口 12 组决策（36 个文件）让 apply 有足够的执行时间；cancel 紧跟请求行写入，命中哪个窗口取决于线程调度，但**两个窗口都必须收尾成 cancelled**。旧断言
+# `"cancelled" in ev or "applyDone" in ev` 恰好把 P1-7（取消被 CANCEL.clear() 抹掉、全量照跑）放过去，所以这里改成排他断言。
 src5_groups = [fresh_src(f"src5_{i:02d}") for i in range(12)]
 decisions5 = [
     decision("apply", paths, f"冒烟E{i:02d}", title_prefix=f"E{i:02d}曲目")
@@ -218,9 +215,8 @@ assert terminal[0] == "cancelled", f"取消后不能出现 applyDone（全量照
 assert proc.returncode == 0, proc.returncode
 print("[5] 取消 OK:", ev_types)
 
-# ---- 场景 6：断点续跑（v2）—— move 中断后重跑不再报"源文件不存在" ----
-# 这是 v2 之前没有任何恢复路径的洞：move 完成的 decision，其源文件已不在
-# decisions 给的路径上，不带 resume 的重跑对它必然逐文件报错。
+# 场景 6：断点续跑（v2）—— move 中断后重跑不再报"源文件不存在" 这是 v2 之前没有任何恢复路径的洞：move 完成的
+# decision，其源文件已不在 decisions 给的路径上，不带 resume 的重跑对它必然逐文件报错。
 src6a = fresh_src("src6a")   # decision A：已完成（模拟在 B 之前被打断）
 src6b = fresh_src("src6b")   # decision B：还没轮到
 decA = decision("apply_move", src6a, "冒烟F甲", title_prefix="F甲曲目")
@@ -248,7 +244,7 @@ assert len(f_items) == 6, len(f_items)
 assert all(os.path.exists(it.path.decode("utf-8", "replace")) for it in f_items)
 print("[6] 断点续跑 OK：resumedSkipped=1，剩余决策正常执行，6 首全部在库")
 
-# ---- 场景 7：纯写标签的续跑——已完成的 decision 不重写（mtime 不变）----
+# 场景 7：纯写标签的续跑——已完成的 decision 不重写（mtime 不变）
 src7 = fresh_src("src7")
 dec7 = decision("apply", src7, "冒烟G", title_prefix="G曲目")
 events, rc = run_apply([dec7], req_id=14)
@@ -261,6 +257,6 @@ after = {p: os.path.getmtime(p) for p in src7}
 assert before == after, f"续跑重写了已完成文件：{before} -> {after}"
 print("[7] 续跑不重写 OK（mtime 未变）")
 
-# ---- 清理 ----
+# 清理
 shutil.rmtree(WORK, ignore_errors=True)
 print("ALL PASS")

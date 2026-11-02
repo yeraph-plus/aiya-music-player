@@ -163,9 +163,7 @@ impl Fetcher for HybridFetcher {
     }
 
     fn sleep(&mut self, d: Duration) {
-        // 分片睡眠（每片 ≤100ms，总时长不变）：退避/轮询睡在音频线程上，
-        // 分片让长睡不再是一个不可打断的原语——进程挂起恢复、调试器中断
-        // 响应更快，将来要在片间插取消检查也有了缝。
+        // 分片睡眠（每片 ≤100ms，总时长不变）：退避/轮询睡在音频线程上，分片让长睡不再是一个不可打断的原语——进程挂起恢复、调试器中断响应更快，将来要在片间插取消检查也有了缝。
         const SLICE: Duration = Duration::from_millis(100);
         let mut left = d;
         while !left.is_zero() {
@@ -176,7 +174,7 @@ impl Fetcher for HybridFetcher {
     }
 }
 
-/* ---------------- playlist 解析（纯函数） ---------------- */
+/* playlist 解析（纯函数） */
 
 #[derive(Debug, Clone)]
 struct RawSegment {
@@ -253,8 +251,8 @@ fn parse_media_playlist(text: &str, base: &Url) -> Result<ParsedMedia, AudioErro
             continue; // 其余标签（VERSION/DISCONTINUITY/PROGRAM-DATE-TIME…）忽略
         }
 
-        // ---- URI 行 = 一个段 ----
-        // 段格式**不在这里判**（docs/52 §3.2）：靠扩展名判会漏掉带查询串的
+        // URI 行 = 一个段
+        // 段格式**不在这里判**：靠扩展名判会漏掉带查询串的
         // 段名（实测 `..._6570.ts?nimblesessionid=...`），而且 TS 现在支持了。
         // 判定推迟到打开段时的内容嗅探，报错时机才和真实原因对齐。
         let resolved = base
@@ -296,7 +294,7 @@ fn extract_master_variant(text: &str) -> Option<String> {
     None
 }
 
-/* ---------------- 段调度器 ---------------- */
+/* 段调度器 */
 
 /// live 模式的轮询间隔。engine 阻塞在 `next_packet` 里时不响应 Stop/NewLoad，
 /// 所以这个间隔就是"按停止没反应"的**健康路径**延迟（生病路径见
@@ -747,9 +745,8 @@ impl HlsStream {
         self.target_duration_ms = parsed.target_duration_ms;
         let mut appended = false;
         for seg in parsed.segments {
-            // 判新旧：有 MEDIA-SEQUENCE 就比序号（**URI 可能被服务端滚动复用**，
-            // 只比 URI 会把新段当成旧段 → 永远不会再有内容，静默卡死）；
-            // 没序号（老式不滑动的 playlist）才退回 URI 去重。
+            // 判新旧：有 MEDIA-SEQUENCE 就比序号（**URI 可能被服务端滚动复用**，只比 URI 会把新段当成旧段 →
+            // 永远不会再有内容，静默卡死）；没序号（老式不滑动的 playlist）才退回 URI 去重。
             let is_new = match (seg.seq, self.last_seq) {
                 (Some(s), Some(last)) => s > last,
                 _ => !self.played.contains(&seg.uri),
@@ -902,9 +899,8 @@ impl HlsStream {
                             Ok(appended) => {
                                 self.clear_outage();
                                 if !appended && self.pending.is_empty() {
-                                    // 没有新段：可能是正常轮询窗口，也可能是服务端
-                                    // 已经不更新了（甚至 URI 复用被判成旧段）。
-                                    // 前者小睡，后者必须报错——否则就是永远静默轮询。
+                                    // 没有新段：可能是正常轮询窗口，也可能是服务端已经不更新了（甚至 URI
+                                    // 复用被判成旧段）。前者小睡，后者必须报错——否则就是永远静默轮询。
                                     if self.stall_elapsed() >= self.stall_budget() {
                                         return Err(AudioError::Io(std::io::Error::other(
                                             format!(
@@ -969,7 +965,7 @@ impl HlsStream {
     }
 }
 
-/* ---------------- 单测：解析矩阵 + 调度状态机（mock，不出网） ---------------- */
+/* 单测：解析矩阵 + 调度状态机（mock，不出网） */
 
 #[cfg(test)]
 mod tests {
@@ -995,15 +991,13 @@ mod tests {
             h[2] = 0x40 | (freq_idx << 2) | ((channels >> 2) & 1);
             h[3] = ((channels & 3) << 6) | ((frame_len >> 11) & 3) as u8;
             h[4] = ((frame_len >> 3) & 0xFF) as u8;
-            // buffer_fullness 11 位全 1（=VBR）：高 5 位进 B5、低 6 位进 B6。
-            // 别写成 (0x7FF >> 6) & 0x1F —— 左边已经是 0x1F，那个 & 是空操作，
-            // clippy::eq_op 默认 deny，会让 --all-targets 编译失败。
+            // buffer_fullness 11 位全 1（=VBR）：高 5 位进 B5、低 6 位进 B6。别写成 (0x7FF >> 6) & 0x1F —— 左边已经是 0x1F，那个
+            // & 是空操作，clippy::eq_op 默认 deny，会让 --all-targets 编译失败。
             h[5] = (((frame_len & 7) << 5) | 0x1F) as u8;
             h[6] = 0x3F << 2; // buffer_fullness 低 6 位 <<2 | raw_data_blocks-1 = 0
             out.extend_from_slice(&h);
-            // 全 0 负载 = AAC 元素 id 000（SCE）+ 全零 ICS → 解码出静音帧。
-            // 别用 0xAB 之类：前 3 位凑成 101 = PCE，symphonia 直接报
-            // Unsupported（fatal），调度测试就被解码器挡住了。
+            // 全 0 负载 = AAC 元素 id 000（SCE）+ 全零 ICS → 解码出静音帧。别用 0xAB 之类：前 3 位凑成 101 =
+            // PCE，symphonia 直接报 Unsupported（fatal），调度测试就被解码器挡住了。
             out.extend_from_slice(&[0x00; 32]);
         }
         out
@@ -1097,7 +1091,7 @@ mod tests {
         try_open(fetcher).expect("流应能打开")
     }
 
-    /* ---- 解析矩阵 ---- */
+    /* 解析矩阵 */
 
     #[test]
     fn vod_playlist_parses_with_durations_and_endlist() {
@@ -1235,7 +1229,7 @@ mod tests {
         assert!(!s.seekable());
     }
 
-    /* ---- 调度状态机 ---- */
+    /* 调度状态机 */
 
     /// 两段 VOD（合法 ADTS 头 + 垃圾负载）：应顺序消费两段后 EOF，
     /// 采样率来自 ADTS 头（index 4 = 44100Hz，双声道）。
@@ -1628,7 +1622,7 @@ mod tests {
         assert!(e.to_string().contains("停止更新"), "报错要说清是停滞：{e}");
     }
 
-    /* ---- 审查修复回归 ---- */
+    /* 审查修复回归 */
 
     /// P1 锁：engine 阻塞在 `next_packet` 里时不处理任何命令，"生病路径"的
     /// 最坏阻塞必须保持小（上界推导见 [`OUTAGE_BUDGET`] 注释）。有人想把

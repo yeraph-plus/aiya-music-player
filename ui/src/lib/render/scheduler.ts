@@ -1,10 +1,10 @@
 /**
- * 逐帧绘制调度器：全应用一个 rAF（docs/46 §7）。
+ * 逐帧绘制调度器：全应用一个 rAF。
  *
  * 统一调度而非各自调度的原因：
  * 1. 在 `draw()` 内再次调用 `requestAnimationFrame(draw)` 会使调度数按 2^n 增长，
  *    数秒内回调占满主线程，界面完全无响应（点击失效）。单页面单循环已接近上限，
- *    叠加背景层与页面层后必然发生（docs/26 实测）。
+ *    叠加背景层与页面层后必然发生。
  * 2. 多个 canvas 各自 rAF 时，同一帧被拆成多次独立渲染事务，合成器需合并多个
  *    dirty region；统一调度后同帧绘制连续提交，脏区一次合并。
  * 3. 后台与隐藏状态只需一处判断即可整体停摆，无需每个组件各写一遍。
@@ -50,7 +50,7 @@ function pump(now: number): void {
  * 订阅逐帧回调，返回退订函数。
  *
  * 注意 tick 里**不要**再调 `requestAnimationFrame`——调度器已经保证每帧一次，
- * 再排就是 docs/26 那个 2^n 事故的复现路径。
+ * 再排就是 那个 2^n 事故的复现路径。
  */
 export function subscribeRender(tick: RenderTick): () => void {
   ticks.add(tick);

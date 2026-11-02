@@ -1,9 +1,8 @@
 /* base.css — 元素默认（**唯一的 reset**）：box-sizing、body、按钮/输入、滚动条、焦点与动效偏好。
  * 四区席位在 layout.css，变量在 tokens.css —— 这个文件不该出现 grid-template 或 --var 定义。 */
 
-/* ---------------- 元素默认 ----------------
+/* 元素默认
  * 两段合在这里：
- *   ① 从 tokens.css 搬来的（2026-10-26）。tokens.css 头部写着"设计变量"，
  *      却装着 `*{box-sizing}` 与 body/button/input 的 reset —— 换皮时按注释
  *      找变量的人一定会漏掉这几条。
  *   ② Tailwind preflight 曾经代劳、同日移除后必须自补的几条（见 app.css）。
@@ -23,7 +22,7 @@
   box-sizing: border-box;
 }
 
-/* docs/19 §5：body 的 user-select:none 不许扩散到"用户可能要复制"的内容。
+/* body 的 user-select:none 不许扩散到"用户可能要复制"的内容。
  * B6 巡检发现的缺口——此前一个例外都没有，歌词/路径/错误详情全都选不中。
  * `.selectable` 挂在容器上整块放开；歌词逐行放开足够（点行是 seek，拖选是复制，
  * 两种手势在行内不冲突）。 */
@@ -76,14 +75,8 @@ input {
   color: inherit;
 }
 
-/* ---------------- select 元素默认 ----------------
- * Chromium 里给 select 设 background/color **不会**去掉原生控件外观——
- * 边框和高亮仍是浏览器画的（浅色主题下尤其刺眼，2026-10-28 用户实测）。
- * 必须 appearance:none + 自画箭头才有"配套外观"。箭头用内联 SVG（中性灰
- * #999 在深浅两套主题上都可读；data-URI 用不了 CSS 变量，不值得为此
- * 造一条 token）。下拉弹层本身跟随 :root 的 color-scheme，不在这里管。
- * ImportPanel 的候选/模式 select、OverlayHost 的规则编辑器 select 都吃
- * 这条默认；组件里只覆写 padding/字号。 */
+/* select 元素默认 Chromium 里给 select 设 background/color **不会**去掉原生控件外观—— 必须 appearance:none + 自画箭头才有"配套外观"。箭头用内联 SVG（中性灰 #999 在深浅两套主题上都可读；data-URI 用不了 CSS
+   变量，不值得为此造一条 token）。下拉弹层本身跟随 :root 的 color-scheme，不在这里管。ImportPanel 的候选/模式 select、OverlayHost 的规则编辑器 select 都吃这条默认；组件里只覆写 padding/字号。 */
 select {
   font: inherit;
   color: var(--text-1);
@@ -107,12 +100,8 @@ select:focus-visible {
   outline-offset: 1px;
 }
 
-/*
- * 全局键盘焦点环（发布前 UI 审查 P0-2）：Button/IconButton/Chip/Card/.link 族
- * 等高频交互件此前裸奔 UA 默认焦点环，与 Switch/Slider/Select 的自画 accent
- * 环视觉分裂。`:where()` 特异性为 0——各组件自带的焦点样式可以照常覆盖；
- * 已经自画环的（select 上方这条、Switch、Slider、PlayerBar .now）不受影响。
- */
+/* 全局键盘焦点环（发布前 UI 审查 P0-2）：Button/IconButton/Chip/Card/.link 族等高频交互件此前裸奔 UA 默认焦点环，与 Switch/Slider/Select 的自画 accent
+   环视觉分裂。`:where()` 特异性为 0——各组件自带的焦点样式可以照常覆盖；已经自画环的（select 上方这条、Switch、Slider、PlayerBar .now）不受影响。 */
 :where(button, [role='button'], a, [role='tab']):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -149,10 +138,8 @@ canvas {
   display: block;
 }
 
-/* 实心图标：播放条上的 播放/暂停/上一首/下一首/队列 在旧手绘版里就是 fill 的
- * 实心形状，而 lucide 全是描边图形。只翻转 fill、保留 stroke —— skip-back 的
- * 竖条是零面积 path（`M3 20V4`），去掉描边就整条消失。
- * 只能放全局：`Icon.svelte` 的 scoped 样式够不到子组件渲染出来的 <svg>。 */
+/* 实心图标：播放条上的 播放/暂停/上一首/下一首/队列 在旧手绘版里就是 fill 的实心形状，而 lucide 全是描边图形。只翻转 fill、保留 stroke —— skip-back 的竖条是零面积
+   path（`M3 20V4`），去掉描边就整条消失。只能放全局：`Icon.svelte` 的 scoped 样式够不到子组件渲染出来的 <svg>。 */
 .icon-solid {
   fill: currentColor;
 }

@@ -6,7 +6,7 @@
  * - UI 代码里没有 `if (preview)` 分支，`client.ts` / `events.ts` 完全不知道
  *   自己头顶上是真宿主还是一坨假数据。
  *
- * 派发表是**一对一**的：命令名与 Rust 侧 snake_case 完全一致（docs/17 §3），
+ * 派发表是**一对一**的：命令名与 Rust 侧 snake_case 完全一致
  * 漏一条就在预览里表现为"这个按钮报 internal"——比默默返回 undefined 好排查。
  */
 import type { ApplyDecision, DynamicJson, QueueInsertMode, ScanOptions, SelectionIdsQuery, TrackQueryInput } from '../client';
@@ -33,7 +33,7 @@ function mockError(cmd: string): ApiError {
  */
 function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): unknown {
   switch (cmd) {
-    /* ---------------- library ---------------- */
+    /* library */
     case 'library_list':
       return mock.libraryList(a.query as TrackQueryInput | undefined);
     case 'library_tracks':
@@ -77,7 +77,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     case 'library_genres':
       return ['流行', '民谣', '电子', '摇滚', '原声'];
 
-    /* ---------------- playlist ---------------- */
+    /* playlist */
     case 'playlist_list':
       return mock.playlistList();
     case 'playlist_detail':
@@ -111,7 +111,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     case 'playlist_export':
       return mock.playlistExport(a.id as string, a.path as string);
 
-    /* ---------------- player ---------------- */
+    /* player */
     case 'player_state':
       return mock.playerStateNow();
     case 'player_queue':
@@ -152,7 +152,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     case 'player_clear':
       return mock.clear();
 
-    /* ---------------- 直播 / 拖放（docs/52） ---------------- */
+    /* 直播 / 拖放 */
     case 'classify_paths':
       return mock.classifyPaths(a.paths as string[]);
     case 'player_open_paths':
@@ -162,7 +162,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     case 'live_pick_playlist':
       return mock.livePickPlaylist();
 
-    /* ---------------- lyrics / history ---------------- */
+    /* lyrics / history */
     case 'lyrics_get':
       return mock.lyricsGet(a.trackId as string);
     case 'history_stats':
@@ -170,7 +170,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     case 'history_clear':
       return mock.historyClear();
 
-    /* ---------------- app ---------------- */
+    /* app */
     case 'app_info':
       return mock.appInfo();
     case 'app_diagnostics':
@@ -195,15 +195,11 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     case 'player_get_eq':
       return mock.getEq();
 
-    /* ---------------- beets ---------------- */
+    /* beets */
     case 'beets_status':
       return {
-        // 预览环境默认**假装 beets 存在**：否则「曲库维护」四个按钮全是禁用态，
-        // 事件流渲染在浏览器里永远走不到（e2e 只能断言空态）。真后端有没有
-        // beets 由探测决定，这里纯粹是给 UI 演练用的桩。
-        // `?beets=absent` 把它翻成 false，用来演练"没装"这条路径。
-        // 下面那些版本字段在 found:false 时 UI 根本不读（未装态只渲染一行说明
-        // 加两个安装按钮），所以保留原值；要连它们一起伪造反而会掩盖真契约差异。
+        // 预览环境默认**假装 beets 存在**：否则「曲库维护」四个按钮全是禁用态，事件流渲染在浏览器里永远走不到（e2e 只能断言空态）。真后端有没有 beets 由探测决定，这里纯粹是给 UI 演练用的桩。`?beets=absent` 把它翻成
+        // false，用来演练"没装"这条路径。下面那些版本字段在 found:false 时 UI 根本不读（未装态只渲染一行说明加两个安装按钮），所以保留原值；要连它们一起伪造反而会掩盖真契约差异。
         found: mock.beetsFound,
         interpreter: 'preview',
         scriptPath: null,
@@ -216,7 +212,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
         libraryExists: true,
         libraryDirectory: 'D:/MUSIC_Player/test-music',
         plugins: ['replaygain', 'lyrics', 'duplicates'],
-        // 三态自检：与真工具同形状（含"配置里开着但依赖没装"这一态，docs/31 P0-1）
+        // 三态自检：与真工具同形状（含"配置里开着但依赖没装"这一态）
         pluginHealth: [
           { name: 'replaygain', state: 'ready', enabled: true, missing: [], note: '响度归一化，需要 ffmpeg' },
           { name: 'lyrics', state: 'missing_deps', enabled: true, missing: ['bs4'], note: '歌词抓取' },
@@ -242,7 +238,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return { intervalSecs: 30, focused: true, last: null };
     case 'beets_cancel':
       return { requested: false };
-    // ---- beets 配置（docs/40 十三轮）：inbox / 输出根 / 排除表 ----
+    // beets 配置：inbox / 输出根 / 排除表
     case 'beets_config_get':
       return mock.beetsConfigGet();
     case 'beets_set_inbox':
@@ -265,7 +261,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return mock.beetsPluginTable();
     case 'beets_uninstall':
       return mock.beetsUninstall();
-    // ---- 批 D：曲库维护四件套（事件流演练，见 MockBackend.beetsMaintenance）----
+    // 批 D：曲库维护四件套（事件流演练，见 MockBackend.beetsMaintenance）
     case 'beets_adopt':
       return mock.beetsMaintenance('adopt', false);
     case 'beets_update':
@@ -284,7 +280,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     case 'beets_fields':
       return mock.beetsFields();
 
-    /* ---------------- 索引增强（docs/45）：只读预览 ---------------- */
+    /* 索引增强：只读预览 */
     case 'enrichment_worklist':
       return mock.enrichmentWorklist(a.source as string | undefined, a.includeEmpty === true);
     case 'enrichment_query':

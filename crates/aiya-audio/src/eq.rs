@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn bypass_all_zero_matches_disabled_bit_exact() {
-        // docs/24 B5b 验收：EQ 全 0 dB 时输出与关 EQ 逐样本一致（旁路证明）
+        // EQ 全 0 dB 时输出与关 EQ 逐样本一致（旁路证明）
         let src = sine(1000.0, 48_000, 2, 4096);
         let mut off = Eq::new(EqParams::default(), 48_000, 2);
         let mut on = Eq::new(
@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn preset_switching_stays_bounded() {
-        // docs/24 B5b 验收：20 次连切预设无爆音——输出不得出现 NaN 或越界尖峰
+        // 20 次连切预设无爆音——输出不得出现 NaN 或越界尖峰
         let presets: [EqParams; 5] = [
             EqParams {
                 bands: [6.0; 10],
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn bass_knob_amplifies_low_shelf_region() {
-        // docs/39：低音旋钮 +6 dB → 50 Hz 正弦应约 2×（架子在转折频率以下
+        // 低音旋钮 +6 dB → 50 Hz 正弦应约 2×（架子在转折频率以下
         // 平台增益），1 kHz 中频应近似不动（与图示段正交）
         let params = EqParams {
             bass_db: 6.0,
@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn treble_knob_amplifies_high_shelf_region() {
-        // docs/39：高音旋钮 +6 dB → 10 kHz 正弦应约 2×（7.5 kHz 架子以上
+        // 高音旋钮 +6 dB → 10 kHz 正弦应约 2×（7.5 kHz 架子以上
         // 平台增益），500 Hz 应近似不动
         let params = EqParams {
             treble_db: 6.0,

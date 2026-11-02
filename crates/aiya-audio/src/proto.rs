@@ -229,7 +229,7 @@ mod tests {
         );
 
         // v6 形状：EQ 整体下发 + 生效值回报（camelCase 字段，bands 是数组）。
-        // docs/39：加 bassDb/trebleDb（serde default，旧持久化行可解析）
+        // 加 bassDb/trebleDb（serde default，旧持久化行可解析）
         let eq = encode_line(&HostToSidecar::Cmd(EngineCommand::SetEq(
             crate::eq::EqParams {
                 bands: [6.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 3.0],

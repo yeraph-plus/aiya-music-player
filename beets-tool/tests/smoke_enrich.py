@@ -64,12 +64,8 @@ def check(name, obj, label):
     VALIDATED[name] = VALIDATED.get(name, 0) + 1
 
 
-# ---------------- 隔离环境 ----------------
-# 刻意走**真的 index 家**（AIYA_BEETS_PROFILE=index）而不是手写一份 config.yaml：
-# 索引家的模板里钉着 `write/copy/move: no` 和 `duplicate_action: keep`，后者
-# 正是"同标签同长的第二个文件能不能进库"的开关——手写配置很容易漏，而漏了
-# 之后症状是"只导进去 1/6 个文件"，看起来像路径 bug。用真模板等于顺带验了
-# "批 1 的模板足够支撑批 2 的流程"。
+# 隔离环境刻意走**真的 index 家**（AIYA_BEETS_PROFILE=index）而不是手写一份 config.yaml：索引家的模板里钉着 `write/copy/move: no` 和 `duplicate_action:
+# keep`，后者正是"同标签同长的第二个文件能不能进库"的开关——手写配置很容易漏，而漏了之后症状是"只导进去 1/6 个文件"，看起来像路径 bug。用真模板等于顺带验了 "批 1 的模板足够支撑批 2 的流程"。
 SRC_WAV = _resolve_test_music(3)
 WORK = tempfile.mkdtemp(prefix="aiya-enrich-")
 HOME = os.path.join(WORK, "home")
@@ -151,13 +147,12 @@ def classify(raw):
 
 PATHS = make_files()
 BEFORE = fingerprint(PATHS)
-# 批 5 起 xtractor 是真源：`fields` 里恒报 ready（"器能不能跑"三态不探 bins），
-# 真正的就绪判定在 enrich 请求时才做。这里探一次，供 [5] 分支断言用——
-# 开发机 bins 齐 → 走成功路；干净机 → 走"未就绪"拒绝路。两条路都合法。
+# 批 5 起 xtractor 是真源：`fields` 里恒报 ready（"器能不能跑"三态不探 bins），真正的就绪判定在 enrich 请求时才做。这里探一次，供
+# [5] 分支断言用—— 开发机 bins 齐 → 走成功路；干净机 → 走"未就绪"拒绝路。两条路都合法。
 XTR_OK, XTR_WHY = xtractor_ready()
 print(f"[0] 环境就绪：{len(PATHS)} 个文件，库 {LIBDIR}，xtractor 就绪={XTR_OK}")
 
-# ---------------- 场景 1：fields ----------------
+# 场景 1：fields
 L1 = [json.dumps({"id": 1, "cmd": "fields"})]
 lines, _ = run(L1)
 resps = {}
@@ -178,7 +173,7 @@ assert src_states["xtractor"] == "ready", src_states
 assert src_states["lastgenre"] == "unwired", src_states
 print(f"[1] fields OK：{len(names)} 个字段，源 {src_states}")
 
-# ---------------- 场景 2：enrich（首跑） ----------------
+# 场景 2：enrich（首跑）
 L2 = [json.dumps({"id": 2, "cmd": "enrich", "paths": PATHS, "want": ["probe"]})]
 lines, _ = run(L2)
 items, done, progs = [], None, []
@@ -212,7 +207,7 @@ assert all(i["fields"] for i in items), "ok 却没有任何字段"
 bpm_by_path = {p: i["fields"]["bpm"] for p, i in first.items()}
 print(f"[2] enrich OK：{done['total']} 条 ok，bpm 样本 {list(bpm_by_path.values())[:3]}")
 
-# 7 个 mood_* 概率：宿主拿它们 argmax 出单列 mood_label（docs/45 §5.1）。
+# 7 个 mood_* 概率：宿主拿它们 argmax 出单列 mood_label。
 # 假源少喂这一类，宿主那半边（提升列/按情绪筛）就永远测不到。
 MOODS = ("mood_happy", "mood_sad", "mood_relaxed", "mood_aggressive",
          "mood_party", "mood_acoustic", "mood_electronic")
@@ -224,7 +219,7 @@ for p, it in first.items():
     assert top > 1.0 / len(MOODS), f"{p} 的分布太平，argmax 无意义：{top}"
 print(f"[2b] 情绪概率 OK：{len(MOODS)} 类齐备，argmax 必胜出")
 
-# ---------------- 场景 3：query（结构化规则 / raw / 边界） ----------------
+# 场景 3：query（结构化规则 / raw / 边界）
 lo = min(bpm_by_path.values())
 L3 = [
     json.dumps({"id": 3, "cmd": "query", "fields": ["title", "bpm"],
@@ -234,7 +229,7 @@ L3 = [
                 "rules": [{"field": "bpm", "op": "range", "value": [0, 400]}]}),
     # 同样的范围换成 beets 原生语法：`danceability` 是**未注册类型的 flexible
     # 字段**，beets 把它当字符串，`0..1` 静默 0 命中。这条断言把"为什么数值
-    # 筛选用结构化规则"钉在测试里（docs/45 §3.3）。
+    # 筛选用结构化规则"钉在测试里。
     # 反例证据：同样写法换成 `bpm`（内置 Integer 列）就会全命中——差别不在
     # beets 的查询能力，只在"这个字段有没有类型"。
     json.dumps({"id": 5, "cmd": "query", "raw": "danceability:0..1"}),
@@ -270,7 +265,7 @@ assert resps[8]["total"] == len(PATHS) and resps[8]["truncated"] is True, resps[
 assert len(resps[8]["items"]) == 2, "limit 没生效"
 print(f"[3] query OK：结构化 {resps[3]['total']} / raw 命中 {resps[5]['total']} / 错误码 {codes}")
 
-# ---------------- 场景 4：force 重跑（幂等）+ 不存在的路径 ----------------
+# 场景 4：force 重跑（幂等）+ 不存在的路径
 # "清旧真的执行了"怎么证明？实测出的事实：
 #   · 不删行直接重导 → beets 保留原有 flexible 属性（只换 rowid），所以
 #     "id 变了"证明不了任何事；
@@ -357,10 +352,8 @@ assert all(v is None for v in marks_after.values()), (
 )
 print(f"[4] force 幂等 OK：{done2['succeeded']} 条 ok / {done2['skipped']} 条 skipped")
 
-# ---------------- 场景 5：未知源 / 空路径 / xtractor 就绪门 ----------------
-# want=["xtractor"] 在批 5 后是**合法源名**：就绪（bins 齐）→ 真跑一遍提取并
-# 返回 ok；未就绪 → E_INVALID_ARG 且带原因。两种结果都合规，按机器实况分支——
-# 但无论哪条路，"静默当成功"和"静默当失败"都不许出现。
+# 场景 5：未知源 / 空路径 / xtractor 就绪门 want=["xtractor"] 在批 5 后是**合法源名**：就绪（bins 齐）→ 真跑一遍提取并返回 ok；未就绪 →
+# E_INVALID_ARG 且带原因。两种结果都合规，按机器实况分支—— 但无论哪条路，"静默当成功"和"静默当失败"都不许出现。
 L5 = [
     json.dumps({"id": 10, "cmd": "enrich", "paths": PATHS[:1], "want": ["no_such_source"]}),
     json.dumps({"id": 11, "cmd": "enrich", "paths": PATHS[:1], "want": ["xtractor"]}),
@@ -379,11 +372,11 @@ else:
     assert codes == {10: P.E_INVALID_ARG, 11: P.E_INVALID_ARG, 12: P.E_INVALID_ARG}, codes
 print(f"[5] 拒绝路径 OK：{codes}（xtractor 就绪={XTR_OK}）")
 
-# ---------------- 场景 6：文件一个字节都没动 ----------------
+# 场景 6：文件一个字节都没动
 assert fingerprint(PATHS) == BEFORE, "音频文件被改写了——违反\"索引家永不写文件\"的前提"
 print("[6] 文件未改动 OK")
 
-# ---------------- 场景 7：冷启动（全新的家，第一条就是 enrich） ----------------
+# 场景 7：冷启动（全新的家，第一条就是 enrich）
 COLD = make_files(n_dirs=1, per_dir=2, root=os.path.join(WORK, "coldmusic"))
 lines, err = run_cold([json.dumps({"id": 20, "cmd": "enrich", "paths": COLD, "want": ["probe"]})])
 kinds = []

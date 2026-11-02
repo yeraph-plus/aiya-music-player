@@ -5,7 +5,6 @@
 //! 所有命令都是 `Result<T, dto::ApiError>`：成功返回**裸载荷**（形状定义在
 //! [`dto`]，由 ts-rs 生成到 `ui/src/lib/ipc/generated/`），失败时 Tauri 把
 //! `ApiError` 序列化后直接 reject。`{ok,data}` 信封已经不存在了 —— 旧 UI 那层
-//! 翻译（`ui/src/compat/`）已于 2026-10-25 批次 4 删除，UI 侧只剩
 //! `ui/src/lib/ipc/client.ts` 一层（docs/17 §3.1）。
 //!
 //! **命令数别在这里写死**：这段注释先后写过 53/54/55，实际已到 62 —— 唯一的事实源
@@ -15,7 +14,6 @@
 //! 会锚到第一个匹配，注释里写一次就会让解析结果变成 0 条。）
 //!
 //! 历史：`player_report` 是 v1 `<audio>` 出口的回报通道，引擎搬到 Rust 后前端
-//! 从没调用过、后端 `let _ = &state` 空转，2026-10-25 整条删除；
 //! `playlist_import`/`playlist_export` 于 docs/22 G2 加入。
 
 use std::borrow::Cow;
@@ -47,7 +45,7 @@ mod smtc;
 
 use pump::{PumpCore, PumpEffect};
 
-/* ---------------- 命令返回形状约定 ---------------- */
+/* 命令返回形状约定 */
 
 /// 动态 JSON 的别名：用于 settings / ui_state 这类**没有固定形状**的载荷。
 ///
@@ -90,7 +88,6 @@ mod lib_tests {
     }
 
     /// 前缀清除的完整语义：只删该目录下、不误伤兄弟目录（Music Backup）、
-    /// 外键级联清掉歌单项/队列项/历史（2026-10-28"目录移除不掉"缺陷的回归锚）。
     #[test]
     fn prefix_prune_deletes_only_under_root_with_cascade() {
         let mut conn = aiya_data::db::open_in_memory().expect("内存库");
@@ -308,7 +305,7 @@ mod lib_tests {
         }
     }
 
-    /* ---------------- 保留周期钳制 ---------------- */
+    /* 保留周期钳制 */
 
     /// historyDays 极端值不得让裁剪下限回绕（P2）：release 下
     /// `days * 86_400` 溢出回绕成负数时，cutoff 落到未来，一次裁剪
@@ -332,12 +329,11 @@ mod lib_tests {
         );
     }
 
-    /* ---------------- 动态歌单摘要统计 ---------------- */
+    /* 动态歌单摘要统计 */
 
     /// 零匹配是动态歌单的常态（规则先建、曲目后进）：摘要读取不得因
     /// 封面子查询空结果集而报 QueryReturnedNoRows——此前它把"创建成功
     /// 但摘要失败"炸成整个命令的内部错误，歌单建了 UI 却不刷新
-    /// （2026-10-29 动态歌单回归：'米哈'/'崩坏'两条都是这么"消失"的）。
     #[test]
     fn smart_summary_survives_zero_matches() {
         let mut conn = aiya_data::db::open_in_memory().expect("内存库");
@@ -381,7 +377,7 @@ mod lib_tests {
     }
 }
 
-/* ---------------- 应用状态 ---------------- */
+/* 应用状态 */
 
 /// 引擎回报的输出状态快照。
 ///
@@ -653,7 +649,7 @@ fn fatal_dialog(message: &str) {
     tracing::error!(%message, "启动失败");
 }
 
-/* ---------------- 工具：settings 表读写 ---------------- */
+/* 工具：settings 表读写 */
 
 fn setting_get(conn: &rusqlite::Connection, key: &str) -> Option<Value> {
     conn.query_row(
@@ -704,7 +700,7 @@ const DEFAULT_SETTINGS: &str = r#"{
   "shortcuts": {}
 }"#;
 
-/* ---------------- app 命令 ---------------- */
+/* app 命令 */
 
 #[tauri::command]
 fn app_info(state: State<'_, AppState>) -> Result<dto::AppInfo, dto::ApiError> {
@@ -873,11 +869,8 @@ fn app_set_settings(
     state: State<'_, AppState>,
     settings: Json,
 ) -> Result<Json, dto::ApiError> {
-    // "改完立即生效"的项在这里做 diff：只写库不通知引擎的话，用户切了独占要等
-    // 下次换曲才生效，体感是"设置没反应"。
-    //
-    // 输出配置**整体比对**：模式/时钟/缓冲是一组参数，分别下发会多重建一次流
-    // （每次重建都要丢掉设备缓冲里几十毫秒的音频），而且中间态没有意义。
+    // "改完立即生效"的项在这里做
+    // diff：只写库不通知引擎的话，用户切了独占要等下次换曲才生效，体感是"设置没反应"。输出配置**整体比对**：模式/时钟/缓冲是一组参数，分别下发会多重建一次流 （每次重建都要丢掉设备缓冲里几十毫秒的音频），而且中间态没有意义。
     let prev_output = state.setting_output();
     let want_normalize = settings.get("normalizeVolume").and_then(Value::as_bool);
     let prev_normalize = state.setting_flag("normalizeVolume", false);
@@ -898,7 +891,7 @@ fn app_set_settings(
     // 落库成功才刷新缓存：写失败时缓存保持旧值，与实际生效行为一致
     state.refresh_settings(&settings);
 
-    // 「禁用系统缩放」开关变化：立即重算 webview zoom（docs/56），不等重启
+    // 「禁用系统缩放」开关变化：立即重算 webview zoom，不等重启
     if state.setting_flag("disableSystemScale", false) != prev_disable_os_scale {
         apply_scale_policy(&app, None);
     }
@@ -926,9 +919,8 @@ fn app_set_settings(
     // 结果它还在 30 秒一刷"，得重启才生效）。
     refresh::wake_settings(&app);
 
-    // 保留周期（historyDays）变更：立即按新周期裁剪一次，不等下次写历史。
-    // 无差别跑（而不是 diff 旧值）——缓存此刻已是新值，diff 要再开一次库；
-    // 空裁剪 0 行删除，代价可忽略。
+    // 保留周期（historyDays）变更：立即按新周期裁剪一次，不等下次写历史。无差别跑（而不是 diff
+    // 旧值）——缓存此刻已是新值，diff 要再开一次库；空裁剪 0 行删除，代价可忽略。
     if settings
         .get("historyDays")
         .and_then(Value::as_i64)
@@ -1059,7 +1051,7 @@ fn app_open_data_dir(state: State<'_, AppState>) -> Result<(), dto::ApiError> {
     Ok(())
 }
 
-/* ---------------- library 命令 ---------------- */
+/* library 命令 */
 
 /// beets 环境状态（设置页诊断区）。低频查询，每次现查（探测 + 一次 status 往返）。
 /// P1：非 async 命令在主线程执行——probe 逐候选解释器尝试最多 ~30s，
@@ -1127,7 +1119,7 @@ fn beets_cancel() -> Result<dto::beets::CancelRequested, dto::ApiError> {
     })
 }
 
-/* ---------------- beets 配置：待整理目录与整理输出根（docs/40 十三轮） ----------------
+/* beets 配置：待整理目录与整理输出根
  *
  * 用户拍板的入库模型：待整理目录（inbox，用户自选的外部目录）→ beets 整理 →
  * 唯一勾选的整理输出根（曲库目录之一）。三个约束都来自拍板：
@@ -1343,7 +1335,7 @@ mod beets_config_tests {
         assert!(path_conflicts_with_roots("  ", &roots()));
     }
 
-    /* ---- 整理落点（docs/49 §4）：在内即可，不必相等 ---- */
+    /* 整理落点：在内即可，不必相等 */
 
     #[test]
     fn target_accepts_root_and_subdirectory() {
@@ -1433,7 +1425,6 @@ async fn beets_plugin_table() -> Result<Vec<dto::beets::BeetsPluginItem>, dto::A
 
 /// 卸载组件：只删安装目录（venv / bundle / 缓存），**不动**整理库与分析库。
 ///
-/// 数据由应用自己的清理入口管（2026-10-30 拍板：卸载 = 安装的反向操作）。
 /// 进度复用 `beets:install` 事件流，结束时补 `finished` 带新 status。
 #[tauri::command]
 async fn beets_uninstall(app: AppHandle) -> Result<dto::beets::JobStarted, dto::ApiError> {
@@ -1467,7 +1458,7 @@ fn beets_reveal(path: String) -> Result<dto::library::RevealResult, dto::ApiErro
     })
 }
 
-/* ---------------- 批 D：beets 曲库维护 ---------------- */
+/* 批 D：beets 曲库维护 */
 
 /// 维护任务启动失败的错误分类。
 ///
@@ -1603,7 +1594,7 @@ async fn beets_fields(app: AppHandle) -> Result<dto::beets::BeetsFieldCatalog, d
         .map_err(map_beets_start)
 }
 
-/* ---------------- 索引增强（docs/45 §5.4） ---------------- */
+/* 索引增强 */
 
 /// 曲库索引卡的数据源：一次聚合计数 + 清单前若干条。
 ///
@@ -1742,7 +1733,7 @@ async fn library_list(
     // 埋点要用的元信息必须在 `q` 被 move 进闭包之前取出
     let source = source_label(&q.source);
     let cursor = q.cursor.clone();
-    // P2（docs/38）：此命令曾是同步——Tauri 2 的同步命令跑在主线程，每页
+    // P2：此命令曾是同步——Tauri 2 的同步命令跑在主线程，每页
     // 都要在主线程干等 DB 线程回包（5 万行深页 10–35ms），快速滚动时多页
     // 请求在主线程排成连续冻结段。改 async + spawn_blocking：等待发生在
     // tokio 池，主线程全程空闲。DbHandle 是克隆型句柄（db.rs §161）。
@@ -1790,9 +1781,8 @@ fn library_tracks(
         .send(move |conn| {
             let mut out = Vec::with_capacity(ids.len());
             for id in &ids {
-                // 列顺序必须与 `aiya_data::repo::row_to_track` 一致（0..=16），
-                // 音频规格接在后面（17..=22）。此前这里是手拼 17 个字段的 json!，
-                // 列一改就静默错位。
+                // 列顺序必须与 `aiya_data::repo::row_to_track`
+                // 一致（0..=16），音频规格接在后面（17..=22）。此前这里是手拼 17 个字段的 json!，列一改就静默错位。
                 let row = conn.query_row(
                     "SELECT t.id, t.title, t.artist_id, ar.name, t.album_id, al.title, al_ar.name,
                             t.duration_ms, t.track_no, t.disc_no, t.year, t.added_at, t.artwork_id,
@@ -1863,8 +1853,7 @@ fn library_stats(state: State<'_, AppState>) -> Result<dto::LibraryStats, dto::A
                 ),
                 total_duration_ms: count("SELECT COALESCE(SUM(duration_ms),0) FROM tracks"),
                 // 文件容量：曲目文件字节之和（DB 存 unix 秒、size 是扫描时的
-                // meta.len()）。离线曲目仍按入库时的大小计入——它回答的是
-                // "这个库装了多少音乐"，不是"现在盘上还剩多少"。
+                // meta.len()）。离线曲目仍按入库时的大小计入——它回答的是 "这个库装了多少音乐"，不是"现在盘上还剩多少"。
                 total_bytes: count("SELECT COALESCE(SUM(size_bytes),0) FROM tracks"),
                 db_bytes,
                 schema_version: conn
@@ -1883,7 +1872,7 @@ async fn library_albums(
     state: State<'_, AppState>,
     search: Option<String>,
 ) -> Result<aiya_data::facets::AlbumPage, dto::ApiError> {
-    // P2（docs/38）：与 library_list 同理——宫格滚动/搜索每键一次，
+    // P2：与 library_list 同理——宫格滚动/搜索每键一次
     // 不能占主线程等 DB。GROUP BY 本身个位数毫秒，卸载是零成本保险。
     let db = state.db().clone();
     let page = tauri::async_runtime::spawn_blocking(move || {
@@ -1901,7 +1890,7 @@ async fn library_artists(
     state: State<'_, AppState>,
     search: Option<String>,
 ) -> Result<aiya_data::facets::ArtistPage, dto::ApiError> {
-    // P2（docs/38）：与 library_albums 同理。
+    // P2：与 library_albums 同理。
     let db = state.db().clone();
     let page = tauri::async_runtime::spawn_blocking(move || {
         db.send(move |conn| aiya_data::facets::list_artists(conn, search.as_deref()))
@@ -1946,7 +1935,7 @@ async fn library_scan_body(
         return Err(dto::ApiError::busy("已有扫描在进行"));
     }
 
-    // 根列表优先级（docs/29 批 A，多目录并集单库）：
+    // 根列表优先级：
     // 显式 options.roots > 设置里的根。
     //
     // 设置那份解析交给 `refresh::roots_from_settings` 统一做：手动扫描与
@@ -2372,10 +2361,8 @@ fn library_ids_for_selection(
     state
         .db()
         .send(move |conn| {
-            // 批量取全量 ID 统一走 collect_track_ids：它按来源选择推进方式
-            // （library=游标 / 歌单等=offset）。此前这里只写 `q.cursor`，而 UI
-            // 传进来的 query 恒为 offset 模式 → cursor 被忽略 → 每轮同一页 →
-            // 死循环占死 DB 线程，任何一次多选批量操作都会冻死整个 App。
+            // 批量取全量 ID 统一走 collect_track_ids：它按来源选择推进方式 （library=游标 / 歌单等=offset）。此前这里只写 `q.cursor`，而 UI 传进来的 query 恒为
+            // offset 模式 → cursor 被忽略 → 每轮同一页 → 死循环占死 DB 线程，任何一次多选批量操作都会冻死整个 App。
             let collected = repo::collect_track_ids(conn, &query, ID_COLLECT_CAP)?;
             if collected.truncated {
                 tracing::warn!(cap = ID_COLLECT_CAP, "选区 ID 收集达到上限，已截断");
@@ -2411,7 +2398,7 @@ fn library_remove_tracks(
         .map_err(dto::ApiError::from)
 }
 
-/* ---------------- 路径解析：另一个库的路径 → 本库曲目 id ---------------- */
+/* 路径解析：另一个库的路径 → 本库曲目 id */
 
 /// 一批文件路径逐条解析成曲目 id（`null` = 曲库里没有这个文件）。
 ///
@@ -2437,7 +2424,7 @@ fn tracks_resolve_paths(
         .map_err(dto::ApiError::from)
 }
 
-/* ---------------- playlist 命令 ---------------- */
+/* playlist 命令 */
 
 /// 摘要查询：行字段 + 3 个聚合子查询（曲目数 / 总时长 / 首个有封面的曲目）。
 /// 顺序由 `sort_position`（0002 迁移新增）承载 —— 侧栏拖动排序要能持久化，
@@ -2445,7 +2432,6 @@ fn tracks_resolve_paths(
 ///
 /// 动态歌单（0003）：末两列带出 kind / rule_json，聚合子查询的结果由
 /// 歌单摘要查询：末两列带出 kind / rule_json，聚合子查询按 playlist_items
-/// 统计（曲目数 / 总时长 / 首个有封面曲目）。动态歌单物化后（2026-10-30）
 /// 与手动歌单走完全相同的统计口径。
 const PLAYLIST_SELECT: &str = "SELECT p.id, p.name, p.created_at, p.updated_at, p.sort_position, p.kind, p.rule_json,
        (SELECT COUNT(*) FROM playlist_items pi JOIN tracks t ON t.id = pi.track_id
@@ -2551,7 +2537,7 @@ fn playlist_create(
     // 歌单 id 由名字派生（同名即同一歌单，重复创建不重复建行）
     let pid = ids::playlist_id(&name);
     let now = now_secs();
-    // 带 rule = 动态歌单（docs/40 §1）：规则入库前编译校验；track_ids 忽略
+    // 带 rule = 动态歌单：规则入库前编译校验；track_ids 忽略
     // （动态歌单不物化曲目，UI 也不会同时给）
     if let Some(rule) = rule {
         playlist_write(&state, move |conn| {
@@ -2675,7 +2661,6 @@ fn playlist_add_tracks(
     id: String,
     track_ids: Vec<String>,
 ) -> Result<dto::playlist::PlaylistAddResult, dto::ApiError> {
-    // 2026-10-30 语义：加歌一律首行插入（最后入库的在最前），不再有 append/next 分档
     let now = now_secs();
     playlist_write(&state, move |conn| {
         let Some(outcome) = playlist_repo::add_tracks(conn, &id, &track_ids, now)? else {
@@ -2737,7 +2722,7 @@ fn playlist_clear(
     })
 }
 
-/* ---------------- m3u / m3u8 导入导出（docs/22 G2） ---------------- */
+/* m3u / m3u8 导入导出 */
 
 /// 导入 m3u/m3u8 为歌单。`path = None` 时弹系统文件选择框（UI 默认路径），
 /// `Some(path)` 直接导入（测试与恢复用）。歌单名 = 文件名去扩展名，
@@ -2809,9 +2794,8 @@ async fn playlist_import(
             }
         })?;
 
-    // 匹配：path_lower 精确对账（对账键与扫描器一致，见 0003 迁移）。
-    // 斜杠方向都收：m3u 里常见的 "D:/m/a.flac" 与扫描落库的 "D:\m\a.flac"
-    // 是同一个文件，失败在斜杠上等于白匹配。
+    // 匹配：path_lower 精确对账（对账键与扫描器一致，见 0003 迁移）。斜杠方向都收：m3u 里常见的 "D:/m/a.flac"
+    // 与扫描落库的 "D:\m\a.flac" 是同一个文件，失败在斜杠上等于白匹配。
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| dto::ApiError::internal("app state 不可用"))?;
@@ -2859,8 +2843,7 @@ async fn playlist_import(
                 }
             }
             if matched_ids.is_empty() {
-                // 一条都没匹配上：这是**正常结果**不是库错误（早期版本借
-                // DbError::Custom 的文案再 contains 判回来，等于自己造了个
+                // 一条都没匹配上：这是**正常结果**不是库错误（早期版本借 DbError::Custom 的文案再 contains 判回来，等于自己造了个
                 // "解析文案"的反模式）。不建空歌单，清单原样带回去让 UI 说话。
                 return Ok(dto::playlist::PlaylistImportResult {
                     playlist: None,
@@ -2979,7 +2962,7 @@ async fn playlist_export(
     Ok(dto::playlist::PlaylistExportResult { path, count })
 }
 
-/* ---------------- player：PlayerActor + 引擎适配（P2 真实现） ---------------- */
+/* player：PlayerActor + 引擎适配（P2 真实现） */
 
 /// 把引擎/Actor 的状态推给 UI。所有状态变化都经此出口。
 fn emit_player_state(app: &AppHandle, state: &aiya_player::PlayerState) {
@@ -3057,7 +3040,7 @@ fn smtc_notify(app: &AppHandle, state: &aiya_player::PlayerState) {
     });
 }
 
-/* ---------------- 队列持久化 ---------------- */
+/* 队列持久化 */
 
 /// 从 Actor 快照持久化状态行（节流落库 / 退出 flush 用）。
 ///
@@ -3099,7 +3082,7 @@ struct QueueFullPersist {
     items: Vec<aiya_data::QueueItem>,
 }
 
-/* ---------------- 多态队列：TrackRef ⇄ QueueItem（docs/52 §6） ---------------- */
+/* 多态队列：TrackRef ⇄ QueueItem */
 
 /// 临时项（`file:` / `stream:`）落库时要留在 `payload` 里的字段。
 ///
@@ -3163,7 +3146,7 @@ fn queue_full_persist_snapshot(
     QueueFullPersist {
         p: queue_persist_from_actor(actor, state.setting_flag("rememberPosition", true)),
         // 从 refs 而不是 ids 构造：临时项的标题/路径只在 `TrackRef` 上，
-        // 拿 ids 回查库对它们永远是空（docs/52 §6.3）
+        // 拿 ids 回查库对它们永远是空
         items: actor.queue_refs().iter().map(queue_item_from_ref).collect(),
     }
 }
@@ -3207,9 +3190,8 @@ fn drive_and_emit(state: &State<'_, AppState>, app: &AppHandle) -> aiya_player::
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let acted = apply_engine_intents(state, &mut actor);
-    // 门控 acted：只有真的下发了引擎意图（切歌/停止）才全量落库。
-    // 锁内只取数据，写库在锁外（save_queue_full 全量重写走单 worker，
-    // player 锁内等它会把命令/泵/SMTC 全拖住）。
+    // 门控 acted：只有真的下发了引擎意图（切歌/停止）才全量落库。锁内只取数据，写库在锁外（save_queue_full 全量重写走单
+    // worker，player 锁内等它会把命令/泵/SMTC 全拖住）。
     let persist = acted.then(|| queue_full_persist_snapshot(state, &actor));
     let snapshot = actor.state();
     drop(actor);
@@ -3475,7 +3457,7 @@ fn cmd_toggle(state: &AppState, app: &AppHandle) -> aiya_player::PlayerState {
         (s.status, s.source)
     };
     use aiya_player::PlaybackStatus as PS;
-    // 直播流（docs/52 §10）：暂停 = 断开、播放 = 重连，**都不走 Pause/Resume**。
+    // 直播流：暂停 = 断开、播放 = 重连，**都不走 Pause/Resume**。
     // 这两个意图由 Actor 转成 pending_stop / pending_load，和其余引擎意图同一
     // 出口下发——在这里直接发 Pause 会把流留在连着的状态（暂停 30 秒回来听到的
     // 是 30 秒前），直接发 Resume 则根本没有流可放。
@@ -3654,9 +3636,8 @@ fn player_set_repeat(
             .player
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // `cycle` 是契约（contracts/ipc.ts）里的"轮转"语义：UI 只发 cycle，
-        // 由后端按 顺序 → 列表 → 单曲 推进。此前 `_ => Off` 把 cycle 打成
-        // Off 且 Off 幂等 —— 循环按钮永远停在"顺序播放"。
+        // `cycle` 是契约（contracts/ipc.ts）里的"轮转"语义：UI 只发 cycle，由后端按 顺序 → 列表 → 单曲 推进。此前 `_ =>
+        // Off` 把 cycle 打成 Off 且 Off 幂等 —— 循环按钮永远停在"顺序播放"。
         let mode = match repeat.as_str() {
             "cycle" => match actor.state().repeat {
                 aiya_player::RepeatMode::Off => aiya_player::RepeatMode::All,
@@ -3809,7 +3790,7 @@ fn player_clear(
     Ok(drive_and_emit(&state, &app))
 }
 
-/* ---------------- 拖放 / 直播（docs/52 §5、§7.3） ---------------- */
+/* 拖放 / 直播 */
 
 /// 拖入条目的可播形态（分类之后的中间态）。
 enum DropCandidate {
@@ -3846,7 +3827,6 @@ fn expand_dropped(paths: &[String], skipped: &mut Vec<String>) -> Vec<DropCandid
                     Err(e) => skipped.push(format!("{}（{e}）", item.label)),
                 }
             }
-            // 目录**不识别**（用户 2026-10-31 拍板）：一次误拖不该触发递归扫描
             dto::DroppedKind::Directory => {
                 skipped.push(format!("{}（文件夹不展开，走设置 → 曲库导入）", item.label))
             }
@@ -4049,7 +4029,7 @@ async fn live_pick_playlist(app: AppHandle) -> Result<Option<String>, dto::ApiEr
 /// mostPlayed 列表永远是空的）。
 fn record_history(state: &AppState, track_id: &str, seconds_played: u64) {
     // 临时项（拖入的本地文件 / 直播流）不在 `tracks` 表里：history.track_id 是
-    // `NOT NULL REFERENCES tracks(id)`，写进去整笔事务会外键失败（docs/52 §6.1）。
+    // `NOT NULL REFERENCES tracks(id)`，写进去整笔事务会外键失败。
     // 历史是"曲目"语义，这类条目不记账——不需要改表，一个闸门就够。
     if track_id.starts_with(aiya_player::FILE_ID_PREFIX)
         || track_id.starts_with(aiya_player::STREAM_ID_PREFIX)
@@ -4172,7 +4152,7 @@ fn history_clear(
     Ok(dto::history::HistoryCleared { cleared: true })
 }
 
-/* ---------------- aiya-artwork 协议 ---------------- */
+/* aiya-artwork 协议 */
 
 /// 处理 `http://aiya-artwork.localhost/artwork/<id>?size=N`。
 /// 流程：查 artworks 表 → 读原图 →（需要且可缩放时）生成缩略图缓存 → 响应。
@@ -4276,28 +4256,26 @@ fn make_thumb(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
     Some(out.into_inner())
 }
 
-/* ---------------- 装配 ---------------- */
+/* 装配 */
 
 /// 便携版环境准备（`main` 在建任何窗口之前调用，见 `paths::prepare_portable_env`）。
 pub use paths::prepare_portable_env;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 应用身份必须在**任何 UI 出现之前**设置（微软对 AppUserModelID 的硬要求）：
-    // 窗口一旦建出来，壳层就已经按"没有身份"缓存过这条会话了，之后再设不生效。
-    // 放在这里而不是 setup 里，是因为 config 里的窗口在 Builder 构建时就创建了。
+    // 应用身份必须在**任何 UI 出现之前**设置（微软对 AppUserModelID
+    // 的硬要求）：窗口一旦建出来，壳层就已经按"没有身份"缓存过这条会话了，之后再设不生效。放在这里而不是 setup 里，是因为 config 里的窗口在 Builder 构建时就创建了。
     app_id::install();
     tauri::Builder::default()
-        // 单实例必须最先注册：二次启动唤起已有窗口（docs/05 §7 验收）
+        // 单实例必须最先注册：二次启动唤起已有窗口
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main_window(app);
         }))
         .plugin(tauri_plugin_dialog::init())
-        // 关窗行为按 closeToTray 设置（P2：此前一律 prevent_close+hide，
-        // 设置默认 false 时用户想关窗退出也退不了——设置项完全没接线）。
-        // 开启设置 → 隐藏到托盘（播放不中断）；默认 → 正常关闭退出。
+        // 关窗行为按 closeToTray 设置（P2：此前一律 prevent_close+hide，设置默认 false
+        // 时用户想关窗退出也退不了——设置项完全没接线）。开启设置 → 隐藏到托盘（播放不中断）；默认 → 正常关闭退出。
         .on_window_event(|window, event| {
-            // 切回窗口 = "用户刚在资源管理器/mp3tag 改完回来"（docs/33 §7.2）。
+            // 切回窗口 = "用户刚在资源管理器/mp3tag 改完回来"。
             // 失焦时定时器暂停，聚焦时立刻补一次 —— 两者共用同一个标志。
             if let tauri::WindowEvent::Focused(focused) = event {
                 refresh::set_focused(window.app_handle(), *focused);
@@ -4320,7 +4298,7 @@ pub fn run() {
                 apply_scale_policy(window.app_handle(), Some(*scale_factor));
             }
         })
-        // P1（docs/38）：必须是 asynchronous 版本——同步 handler 在主线程执行，
+        // P1：必须是 asynchronous 版本——同步 handler 在主线程执行
         // 未命中缩略图缓存时 DB 往返 + 读原图 + Lanczos3 缩放（30–80ms/张）
         // 全阻塞主线程，首次滚动长列表每张新封面卡一下。改为：handler 只在
         // 主线程做"收包转交"，整个 artwork_protocol 在阻塞池跑完再经
@@ -4342,9 +4320,8 @@ pub fn run() {
             app_id::log_outcome();
 
             let db_path = default_db_path(app.handle());
-            // 库文件损坏已在 aiya_data::open 内部 quarantine + 重建；走到这个
-            // Err 的只剩真 IO 故障（磁盘满/权限）。必须弹原生错误框：release
-            // 无控制台、此刻也没有窗口，不弹 = 用户双击后"什么都不发生"。
+            // 库文件损坏已在 aiya_data::open 内部 quarantine + 重建；走到这个 Err 的只剩真 IO
+            // 故障（磁盘满/权限）。必须弹原生错误框：release 无控制台、此刻也没有窗口，不弹 = 用户双击后"什么都不发生"。
             let db = aiya_data::open(&db_path).map_err(|e| -> Box<dyn std::error::Error> {
                 tracing::error!(error = %e, db = %db_path.display(), "数据库打开失败");
                 fatal_dialog(&format!(
@@ -4416,11 +4393,11 @@ pub fn run() {
                 enrich_store: std::sync::OnceLock::new(),
             });
 
-            // 「禁用系统缩放」开机对齐（docs/56）：窗口已建、设置缓存已灌好
+            // 「禁用系统缩放」开机对齐：窗口已建、设置缓存已灌好
             apply_scale_policy(app.handle(), None);
 
             // 一次性迁移：把 settings 表里的 `beets.*` 旧键搬到模块自己的
-            // `settings.json`（docs/47）。搬完就删键——留着的话它还躺在应用的
+            // `settings.json`。搬完就删键——留着的话它还躺在应用的
             // "设置"里，等于解耦只做了一半。
             //
             // 只在 `settings.json` 不存在时执行（`adopt_legacy_settings` 判的）：
@@ -4461,14 +4438,13 @@ pub fn run() {
                 }
             }
 
-            // 曲库刷新管线（docs/33 §7）：定时 30 s + 窗口聚焦。
+            // 曲库刷新管线：定时 30 s + 窗口聚焦。
             // 起在这里而不是首次用到时：定时器要的是"一直在跑"，用户不该为了
             // "外部改完标签能自动发现"先去点一次什么按钮。
             refresh::start_scheduler(app.handle().clone(), refresh_params);
 
-            // 输出配置先下发：引擎未装载时只记录，首曲 Load 就用上。
-            // 设备拒绝独占会回落共享、缓冲太深会自愈降级，两者都通过 AudioMode
-            // 事件把原因带回 UI（"设置没生效"必须可解释）。
+            // 输出配置先下发：引擎未装载时只记录，首曲 Load 就用上。设备拒绝独占会回落共享、缓冲太深会自愈降级，两者都通过
+            // AudioMode 事件把原因带回 UI（"设置没生效"必须可解释）。
             {
                 let st = app.state::<AppState>();
                 engine_send(&st, aiya_audio::EngineCommand::SetOutputConfig(st.setting_output()));
@@ -4501,9 +4477,8 @@ pub fn run() {
                 }
             }
 
-            // 启动恢复：queue_state + queue_items → Actor hydrate → 引擎装载。
-            // 默认恢复成"暂停"（用户点播放才出声）；`autoplayOnStart` 打开则立即续播。
-            // `rememberPosition` 关闭时起点强制 0（进度不跨会话记忆）。
+            // 启动恢复：queue_state + queue_items → Actor hydrate →
+            // 引擎装载。默认恢复成"暂停"（用户点播放才出声）；`autoplayOnStart` 打开则立即续播。`rememberPosition` 关闭时起点强制 0（进度不跨会话记忆）。
             if let Some(state) = app.try_state::<AppState>() {
                 let remember_position = state.setting_flag("rememberPosition", true);
                 let autoplay_on_start = state.setting_flag("autoplayOnStart", false);
@@ -4513,7 +4488,7 @@ pub fn run() {
                 > = state.db().send(|conn| aiya_data::load_queue(conn));
                 if let Ok(Some((p, items))) = loaded {
                     if !items.is_empty() {
-                        // 多态恢复（docs/52 §6.3）：库内曲目查库、临时项读 payload
+                        // 多态恢复：库内曲目查库、临时项读 payload
                         let (tracks, current_id) =
                             build_queue_refs(&state, &items, p.current_index);
                         if !tracks.is_empty() {
@@ -4542,13 +4517,11 @@ pub fn run() {
                                 start_ms,
                                 current_id.as_deref(),
                             );
-                            // 恢复装载：起点（hydrate 传入的 position_ms）与
-                            // 倍速必须一起下发 —— 此前 `let _ = start_ms`
-                            // 直接丢弃，UI 显示 30:00、出声从 0 开始。
+                            // 恢复装载：起点（hydrate 传入的 position_ms）与倍速必须一起下发 —— 此前 `let _ =
+                            // start_ms` 直接丢弃，UI 显示 30:00、出声从 0 开始。
                             apply_engine_intents(&state, &mut actor);
-                            // autoplayOnStart：hydrate 出的是 Paused（引擎已收到
-                            // Load + Pause），这里补一条 Resume 并翻转状态。
-                            // 只对"有当前曲且处于暂停"生效，避免空队列时误播。
+                            // autoplayOnStart：hydrate 出的是 Paused（引擎已收到 Load + Pause），这里补一条 Resume
+                            // 并翻转状态。只对"有当前曲且处于暂停"生效，避免空队列时误播。
                             let status_now = actor.state().status;
                             if autoplay_on_start
                                 && status_now == aiya_player::PlaybackStatus::Paused
@@ -4605,10 +4578,8 @@ pub fn run() {
                 }
             }
 
-            // P1：防休眠是 per-thread API（SetThreadExecutionState），此前在
-            // tokio 泵任务里维护——任务可能跨 worker 迁移，标志设在 A 线程、
-            // 清除跑到 B 线程，旧线程上的 ES_SYSTEM_REQUIRED 无人清除
-            // （退出播放后系统仍不睡）。移到永不迁移的专用 std::thread。
+            // P1：防休眠是 per-thread API（SetThreadExecutionState），此前在 tokio 泵任务里维护——任务可能跨 worker 迁移，标志设在 A 线程、清除跑到 B
+            // 线程，旧线程上的 ES_SYSTEM_REQUIRED 无人清除 （退出播放后系统仍不睡）。移到永不迁移的专用 std::thread。
             let prevent_sleep_flag = Arc::new(AtomicBool::new(false));
             {
                 let flag = Arc::clone(&prevent_sleep_flag);
@@ -4663,18 +4634,16 @@ pub fn run() {
                     if events.is_empty() {
                         continue;
                     }
-                    // 归约 + 旁路动作全在 PumpCore 里（可注入时钟与引擎出口，
-                    // 事件序列有单元测试锁定）。锁只在归约期间持有，
-                    // emit 是同步 IPC 序列化，一律放到锁外。
+                    // 归约 + 旁路动作全在 PumpCore
+                    // 里（可注入时钟与引擎出口，事件序列有单元测试锁定）。锁只在归约期间持有，emit 是同步 IPC 序列化，一律放到锁外。
                     let (effects, persist) = {
                         let mut actor = engine
                             .player
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         let mut sent: Vec<aiya_audio::EngineCommand> = Vec::new();
-                        // 门控用 acted（本批是否真下发了引擎意图）：Position 节流
-                        // 也置 EmitState，但队列结构没变 —— 此前用 EmitState 门控，
-                        // 播放中每 500ms 全量 DELETE+重写一次 queue_items。
+                        // 门控用 acted（本批是否真下发了引擎意图）：Position 节流也置 EmitState，但队列结构没变 —— 此前用 EmitState
+                        // 门控，播放中每 500ms 全量 DELETE+重写一次 queue_items。
                         let (effects, acted) =
                             core.ingest(events, &mut actor, now_ms_u64(), &mut |cmd| {
                                 sent.push(cmd)
@@ -4712,9 +4681,8 @@ pub fn run() {
                                 format,
                                 reason,
                             } => {
-                                // 回落/自愈/设备更换：更新诊断状态并转发 UI。
-                                // 这是"降级信息"不是错误，所以走独立事件，
-                                // 不混进 player:state 的 error 字段。
+                                // 回落/自愈/设备更换：更新诊断状态并转发 UI。这是"降级信息"不是错误，所以走独立事件，不混进
+                                // player:state 的 error 字段。
                                 let note = reason.unwrap_or_default();
                                 {
                                     let mut st = engine
@@ -4875,17 +4843,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("AIYA: Tauri 初始化失败")
         .run(|app, event| {
-            // 退出前主动收 sidecar。
-            //
-            // 不在这里收会怎样：进程退出时 AppState 的 Drop 不保证跑到，
-            // 看门狗线程在最后几秒里看到 alive 不再刷新 → 判"心跳超时" →
-            // **再起一个 sidecar**（generation+1）。用户每次关窗都留一条
-            // 假 ERROR 日志 + 一个要等 8s 孤儿窗口才自退的多余进程。
+            // 退出前主动收 sidecar。不在这里收会怎样：进程退出时 AppState 的 Drop 不保证跑到，看门狗线程在最后几秒里看到 alive 不再刷新 → 判"心跳超时" → 再起一个
+            // sidecar**（generation+1）。用户每次关窗都留一条假 ERROR 日志 + 一个要等 8s 孤儿窗口才自退的多余进程。
             if let tauri::RunEvent::Exit = event {
                 if let Some(state) = app.try_state::<AppState>() {
-                    // 关窗退出也落最终进度（发布前审查 P1-2）：托盘/SMTC 退出走
-                    // quit_app 有 flush，点窗口 X 直达这里——此前依赖事件泵的
-                    // 5 秒节流，退出前最多丢 5 秒进度，同一次"退出"两种行为。
+                    // 关窗退出也落最终进度（发布前审查 P1-2）：托盘/SMTC 退出走 quit_app 有 flush，点窗口 X
+                    // 直达这里——此前依赖事件泵的 5 秒节流，退出前最多丢 5 秒进度，同一次"退出"两种行为。
                     {
                         let actor = state
                             .player

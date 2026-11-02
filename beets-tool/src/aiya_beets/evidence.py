@@ -94,7 +94,7 @@ def _compute(match) -> tuple[str, list[str]]:
     if not pairs:
         return SIMILARITY, ["无逐曲对齐数据"]
 
-    # ---- recordingId：全部对齐曲的嵌入 Recording ID 与候选一致 ----
+    # recordingId：全部对齐曲的嵌入 Recording ID 与候选一致
     rec_total = rec_hit = 0
     for item, info in pairs:
         item_mb = item.get("mb_trackid")
@@ -108,7 +108,7 @@ def _compute(match) -> tuple[str, list[str]]:
             f"嵌入的 MusicBrainz Recording ID 与候选完全一致（{rec_hit}/{rec_total} 首）"
         ]
 
-    # ---- metadataSlot：双源印证 + 精确碟轨位置 + 时长容差，全部对齐曲满足 ----
+    # metadataSlot：双源印证 + 精确碟轨位置 + 时长容差，全部对齐曲满足
     slot_ok = True
     for item, info in pairs:
         info_title = norm_title(getattr(info, "title", None))
@@ -138,7 +138,7 @@ def _compute(match) -> tuple[str, list[str]]:
             f"原始文件名与嵌入标签双重印证（{len(pairs)} 首），碟轨位置与时长全部对上"
         ]
 
-    # ---- releaseGroup：候选锚定 Release Group ID（专辑级身份，ADR 0002） ----
+    # releaseGroup：候选锚定 Release Group ID（专辑级身份，ADR 0002）
     rg = getattr(getattr(match, "info", None), "releasegroup_id", None)
     if rg:
         rg = str(rg)

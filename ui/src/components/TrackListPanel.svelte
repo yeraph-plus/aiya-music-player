@@ -16,10 +16,10 @@
   import { ui } from '../stores/ui.svelte';
 
   /**
-   * 列表区（docs/28）：全部 store 接线集中于此，供 LibraryView（曲库 / 歌单 /
+   * 列表区：全部 store 接线集中于此，供 LibraryView（曲库 / 歌单 /
    * 搜索）与 AlbumView / ArtistView（详情页）共用。
    *
-   * 独立组件的原因：docs/27 将批量动作接入列表组件后，LibraryView 的列表标签
+   * 独立组件的原因： 将批量动作接入列表组件后，LibraryView 的列表标签
    * 带有 25 个 prop 与 6 个 handler；详情页原样复制会形成 3 × 250 行的重复
    * 接线，漏接一个 prop 的症状是某个页面的批量按钮无响应。接线集中于此后，
    * 页面只声明差异：排序可用性、删除按钮文案、筛选器有无与空态。
@@ -46,7 +46,7 @@
      */
     dragSort?: (from: number, to: number) => void;
     /**
-     * 详情页把自己的列链接废掉（docs/28）：专辑页上"查看专辑"指向的就是
+     * 详情页把自己的列链接废掉：专辑页上"查看专辑"指向的就是
      * 当前页，nav 会当成"刷新"重拉列表——滚动位置凭空丢一次，还让人以为
      * 点错了。艺人页同理禁歌手列。
      */
@@ -104,7 +104,7 @@
   }
 
   /**
-   * 批量操作开关（docs/27 第 2 点）：关 = 隐藏勾选列，同时清掉选择集——
+   * 批量操作开关：关 = 隐藏勾选列，同时清掉选择集
    * 勾选列都看不见了还留着选择会让人以为操作会落到那几行上。
    */
   function setBatchMode(on: boolean): void {
@@ -179,7 +179,7 @@
     oncheckall: () => selection.toggleAll(list.total),
     onmenu: (event: MouseEvent, index: number, track: Parameters<typeof overlay.openTrackMenu>[3]) => {
       // 右键的行不在选择集里 → 先单选它（handleSelect 裸点语义），
-      // 在选择集里则整组保留；菜单按 multi 对整组生效（docs/27 第 6 点）
+      // 在选择集里则整组保留；菜单按 multi 对整组生效
       if (!selection.selection.has(index)) handleSelect(index, event);
       overlay.openTrackMenu(event.clientX, event.clientY, index, track, selection.size > 1);
     },

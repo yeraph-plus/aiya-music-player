@@ -15,7 +15,7 @@
   let { open, onclose, label, children }: Props = $props();
 
   /**
-   * 从窗口右缘滑出的悬浮抽屉（docs/25 §6）。
+   * 从窗口右缘滑出的悬浮抽屉。
    *
    * 不使用 bits-ui Popover：气泡的定位由 floating-ui 在每次打开时测量计算，触发键
    * 位于窗口边缘时还需碰撞翻转，开合瞬间位置存在可见抖动。抽屉的几何是确定的
@@ -110,9 +110,8 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    /* 不透明：抽屉属内容密集的旁路界面，半透明时下层运动的频谱会使队列行难以
-     * 阅读。使用 surface-4——token 表中面向"下方有列表运动的浮层"的最实一档
-     * （97/98%，视觉上等同不透明），菜单同样使用该档。 */
+    /* 不透明：抽屉属内容密集的旁路界面，半透明时下层运动的频谱会使队列行难以阅读。使用 surface-4——token
+       表中面向"下方有列表运动的浮层"的最实一档 （97/98%，视觉上等同不透明），菜单同样使用该档。 */
     background: var(--surface-4);
     border: 1px solid var(--line);
     border-radius: 14px;

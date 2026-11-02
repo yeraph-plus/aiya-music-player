@@ -177,7 +177,7 @@ fn quarantine(path: &Path, version: i64) -> DbResult<()> {
 }
 
 fn configure(conn: &Connection) -> DbResult<()> {
-    // docs/02 §5.1 的启动 PRAGMA；WAL 让读不阻塞写，NORMAL 在掉电时最多丢最后事务
+    // 的启动 PRAGMA；WAL 让读不阻塞写，NORMAL 在掉电时最多丢最后事务
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -187,11 +187,8 @@ fn configure(conn: &Connection) -> DbResult<()> {
 
 fn migrate(conn: &Connection) -> DbResult<()> {
     let mut version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    // 版本超前的库不会走到这里（open_checked 已把它留底改名后重建空库）；
-    // 迁移按序补跑：每个迁移连同 PRAGMA user_version 一起包在一个事务里
-    // （CREATE...ALTER 原子）。user_version 必须与 DDL 同事务写入 —— 否则
-    // 两步之间崩溃会导致重放迁移报 already exists。BEGIN IMMEDIATE 拿写锁，
-    // 防止两个连接同时首跑迁移的竞态。
+    // 版本超前的库不会走到这里（open_checked 已把它留底改名后重建空库）；迁移按序补跑：每个迁移连同 PRAGMA user_version 一起包在一个事务里 （CREATE...ALTER 原子）。user_version 必须与
+    // DDL 同事务写入 —— 否则两步之间崩溃会导致重放迁移报 already exists。BEGIN IMMEDIATE 拿写锁，防止两个连接同时首跑迁移的竞态。
     for (i, sql) in MIGRATIONS.iter().enumerate() {
         let v = (i + 1) as i64;
         if version < v {
@@ -206,9 +203,8 @@ fn migrate(conn: &Connection) -> DbResult<()> {
 
 fn run_worker(mut conn: Connection, rx: Receiver<Job>) {
     while let Ok(job) = rx.recv() {
-        // panic 隔离：单个闭包 panic 不允许杀死 worker 线程
-        //（否则后续所有 send 永久 Closed）。错误信封在 send() 的闭包内
-        // 通过 catch_unwind 构造；这里再兜一层防御未捕获路径。
+        // panic 隔离：单个闭包 panic 不允许杀死 worker 线程 （否则后续所有 send 永久 Closed）。错误信封在 send()
+        // 的闭包内通过 catch_unwind 构造；这里再兜一层防御未捕获路径。
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&mut conn)));
     }
     // channel 关闭（所有 handle drop）：正常退出路径
@@ -354,12 +350,8 @@ mod tests {
                 .unwrap();
             assert_eq!(idx, 1, "{table} 的 {col} 缺失");
         }
-        // 0009 的解耦防线：**应用库里不许出现 beets 的表**。
-        //
-        // 这条断言比它看起来重要。批 3 把 `track_enrichment` 建在这里，于是
-        // 应用的数据模型里有一条"因为装了 beets 才有"的表——备份、回滚、第三方
-        // 读库都得理解一条与它无关的记录。结论库现在在 `{beets-index}/enrich.db`
-        // （`aiya-beets-store` 自己建表）。谁哪天想"顺手在这儿建一张"，会先撞上它。
+        // 0009 的解耦防线：**应用库里不许出现 beets 的表**。这条断言比它看起来重要。批 3 把 `track_enrichment` 建在这里，于是应用的数据模型里有一条"因为装了 beets
+        // 才有"的表——备份、回滚、第三方读库都得理解一条与它无关的记录。结论库现在在 `{beets-index}/enrich.db` （`aiya-beets-store` 自己建表）。谁哪天想"顺手在这儿建一张"，会先撞上它。
         let beets_tables: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE '%beets%'

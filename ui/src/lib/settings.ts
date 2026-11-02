@@ -34,7 +34,7 @@ export const AMBIENT_SCHEMES: Array<{ value: AmbientScheme; label: string }> = [
 ];
 
 /**
- * 界面缩放档位（docs/56）：整体缩放文字与间距。
+ * 界面缩放档位：整体缩放文字与间距。
  *
  * 实现为 `html` 内联 font-size（1rem = 16px × 档位），tokens.css 的尺寸轴以 rem
  * 计，因此切换档位是全局整倍缩放，相对比例不变。与行高类密度档不同：后者改行高
@@ -56,7 +56,7 @@ export function normalizeUiScale(value: unknown): UiScale {
 }
 
 /**
- * 正在播放页的频谱形态（docs/26 §3）。
+ * 正在播放页的频谱形态。
  *
  * 取值：`mirror` 镜像曲线、`radial` 径向环形、`ripple` 中轴波纹。`ripple` 在页内
  * 只画一条居中曲线：地形形态（多层等深线铺满下半屏）与背景层
@@ -65,7 +65,7 @@ export function normalizeUiScale(value: unknown): UiScale {
  *
  * 旧取值 `'off'` 与 `'wave'` 由 `mergeSettings` 消化：`'off'`（与
  * `npSpectrum = false` 语义重复）落默认形态，`'wave'` 映射到 `'ripple'`，均不写回
- * 磁盘（docs/46 §6）。
+ * 磁盘。
  */
 export type SpectrumStyle = 'mirror' | 'radial' | 'ripple';
 
@@ -77,7 +77,7 @@ export const SPECTRUM_STYLES: Array<{ value: SpectrumStyle; label: string }> = [
 ];
 
 /**
- * 背景频谱光效档位（docs/46 §3.2）。
+ * 背景频谱光效档位。
  *
  * 审美开关，非性能开关：三档只改 shader 的衰减与线宽系数，开销差异可忽略。
  * "柔雾"（形状不可辨的光）与"锐光"（脊线清晰）互斥，故不固定单档。
@@ -95,7 +95,7 @@ export const RIDGE_GLOWS: Array<{ value: RidgeGlow; label: string }> = [
 ];
 
 /**
- * 背景频谱形态（docs/46）。
+ * 背景频谱形态。
  *
  * 与页内 `spectrumStyle` 分开：背景是常驻氛围（淡、范围大、可长时间观看），页内
  * 是一次性聚焦的视觉（可更亮更密），两者最优形态不同。共用一个键会迫使用户为了
@@ -118,7 +118,7 @@ export interface AppSettings {
   /** 界面缩放档位（百分比，见 `UI_SCALES`）；`html` 内联 font-size 随它走（docs/56） */
   uiScale: UiScale;
   /**
-   * 禁用系统缩放（docs/56）：开启后 Rust 侧把 webview zoom 补偿为 1/scale，内容
+   * 禁用系统缩放：开启后 Rust 侧把 webview zoom 补偿为 1/scale，内容
    * 按 100% 物理密度渲染（高分屏上字号更小、单屏内容更多、无位图缩放模糊），即时
    * 生效。与环境倍率（本开关）正交并相乘：环境倍率 × 界面缩放。zoom 由 Rust 的
    * `apply_scale_policy` 独占管理。
@@ -127,7 +127,7 @@ export interface AppSettings {
   /** 按 ReplayGain 调整音量（近似实现：换算到音量系数） */
   normalizeVolume: boolean;
   /**
-   * 全局 3D / WebGL 效果总闸（docs/46 §6.2）。
+   * 全局 3D / WebGL 效果总闸。
    *
    * 能力闸门，非收藏夹：关闭时所有 WebGL 图层不渲染、不创建上下文，背景退回静态
    * CSS 渐变；`bgSpectrum` / `npSpectrum` 保留取值但一律无效。毛玻璃
@@ -191,7 +191,7 @@ export interface AppSettings {
    */
   output: DesiredOutput;
   /**
-   * 直播页「最近打开」（docs/52 §7.3）：上限 20，按 URL 去重，最新在前。
+   * 直播页「最近打开」：上限 20，按 URL 去重，最新在前。
    *
    * 存于设置 KV 而非独立表：记录量级为 20 条，建表需额外的增删查命令与 IPC 类型；
    * KV 已具备落盘与迁移能力。

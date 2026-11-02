@@ -124,9 +124,8 @@ def install_plugin(req_id: int, name: str, emit, cancel_gen, gen: int) -> None:
             protocol.E_INTERNAL, "pluginInstall", f"启动安装器失败: {e}"
         ) from e
 
-    # v2 积弊修复：取消必须能杀掉 pip。旧实现阻塞在 `for line in proc.stdout`
-    # 上，cancel 检查排在 proc.wait() 之后——卡死的 pip 让"取消"永远无效。
-    # 现在输出走泵线程 + 队列，主循环 0.5s 轮询一次取消代数，到点 kill+wait。
+    # v2 积弊修复：取消必须能杀掉 pip。旧实现阻塞在 `for line in proc.stdout` 上，cancel 检查排在 proc.wait() 之后——卡死的 pip
+    # 让"取消"永远无效。现在输出走泵线程 + 队列，主循环 0.5s 轮询一次取消代数，到点 kill+wait。
     assert proc.stdout is not None
     lines: "queue.Queue[str | None]" = queue.Queue()
 

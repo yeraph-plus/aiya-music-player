@@ -6,7 +6,7 @@
   /**
    * 页内工具条零件：tab 组、筛选 chip、右侧次级动作。
    *
-   * 承担两类入口（docs/24 §3.1）：曲库的三个内置视图切换（全部曲目 / 最近播放 /
+   * 承担两类入口：曲库的三个内置视图切换（全部曲目 / 最近播放 /
    * 常听），以及设置页的分组跳转 chip。两者都需要一个不占用标题区的导航位，
    * 且只在特定视图存在，因此独立于标题。
    *
@@ -41,11 +41,8 @@
 </script>
 
 {#if tabs?.length || filters?.length || end}
-  <!--
-    语义用 nav + aria-current 而不是 role="tablist"/"tab"：设置页的 chip 是
-    「滚动到某个区块」而不是「切换面板」，硬套 tab 角色会让读屏软件期待一个
-    tabpanel。两者视觉同构、语义都是"当前项"，aria-current 正好覆盖两种。
-  -->
+  <!-- 语义用 nav + aria-current 而不是 role="tablist"/"tab"：设置页的 chip 是「滚动到某个区块」而不是「切换面板」，硬套 tab
+  角色会让读屏软件期待一个 tabpanel。两者视觉同构、语义都是"当前项"，aria-current 正好覆盖两种。 -->
   <div class="content-toolbar">
     {#if tabs?.length}
       <TextTabs
@@ -76,7 +73,7 @@
     min-width: 0;
   }
 
-  /* 分隔线只跟 tab 走（docs/28）：tab 行是页面级分区，值得一条线；
+  /* 分隔线只跟 tab 走：tab 行是页面级分区，值得一条线；
      chips/次级动作的残行不值得——曲库页撤掉 tab 后只剩时间筛选 chip，
      不该再拖一条孤立的分隔线 */
   .content-toolbar:has(:global(.text-tabs)) {

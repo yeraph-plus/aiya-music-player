@@ -276,7 +276,6 @@ mod tests {
     }
 
     /// 实体封面回填：多数票胜出（并列取 id 小者稳定）、曲目全部无封面时清 NULL
-    /// （ albums/artists.artwork_id 此前从不写入，2026-10-30 起由此函数维护）。
     #[test]
     fn refresh_entity_artwork_picks_majority_and_clears_stale() {
         let conn = open_in_memory().unwrap();

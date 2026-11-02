@@ -6,7 +6,7 @@ import { rangeSelection, SELECTION_CAP } from './selection';
  * 两个实现共用这里的分流与上限规则：
  * - **下标版**（主列表/歌单）：`stores/selection.svelte.ts` + `lib/selection.ts`
  *   纯函数 —— 选择集存视图下标，批量操作时由主进程换算 ID（虚拟列表拿不到
- *   全量 ID，ADR-020）。
+ *   全量 ID）。
  * - **ID 版**（首页紧凑表）：本文件的 `applyIdSelection` —— 选择集直接存
  *   曲目 ID（三段各自是独立查询，下标跨段无意义）。
  *

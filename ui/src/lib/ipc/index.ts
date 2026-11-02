@@ -6,7 +6,7 @@
  * schema、事件订阅。
  *
  * 所有命令都是 `Result<T, ApiError>`，返回值类型全部来自 Rust。
- * 参数里的 query / settings 仍是动态形状——理由见 docs/17 §3.2。
+ * 参数里的 query / settings 仍是动态形状——理由。
  */
 export * from './generated';
 

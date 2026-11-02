@@ -1,5 +1,5 @@
 /**
- * 高分屏缩放诊断（docs/56）：往控制台打一行缩放链路的关键值。
+ * 高分屏缩放诊断：往控制台打一行缩放链路的关键值。
  *
  * 为什么要有它：「高分屏文字过小」类反馈的第一道分诊——
  * - dpr ≈ 系统缩放（150% 屏上 1.5）→ 缩放链路正常，问题在字号设计（界面缩放
@@ -31,7 +31,7 @@ async function report(): Promise<void> {
     // 这行让两种"字小"在日志里可直接区分——是档位问题还是缩放被禁用了
     const zoom = (window.devicePixelRatio / scale).toFixed(2);
     // logical = 物理 / 缩放：与 tauri.conf.json 的 1280×800 对得上说明没有
-    // 物理/逻辑混用（docs/56 的回归哨兵）
+    // 物理/逻辑混用
     console.info(
       `[dpi] ${describeViewport()} scale=${scale} zoom≈${zoom} inner=${inner.width}x${inner.height}(physical) ` +
         `logical=${Math.round(inner.width / scale)}x${Math.round(inner.height / scale)}`,

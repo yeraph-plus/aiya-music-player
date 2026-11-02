@@ -1,6 +1,6 @@
 /* lists.css — 曲目列表：外壳/工具条、表头、行、虚拟滚动占位、选中/播放中/拖拽态。 */
 
-/* ---------------- 列表外壳（docs/27） ---------------- */
+/* 列表外壳 */
 
 /*
  * TrackList 的根。工具条不随列表滚动，`.list` 仍是虚拟滚动的 scroller。
@@ -20,16 +20,15 @@
   overflow-y: auto;
   overflow-x: hidden;
   min-height: 0;
-  /* 行盒与页面标题/按钮容器同宽（2026-10-28 用户反馈）：左 22px 直接对齐；
-     右 12px + 10px 滚动条槽（scrollbar-gutter 恒定保留，滚动条画在槽里）
-     = 22px——有无滚动条几何都不变，行盒不再比头部宽出一段 */
+  /* 行盒与页面标题/按钮容器同宽：左 22px 直接对齐；右 12px + 10px 滚动条槽（scrollbar-gutter
+     恒定保留，滚动条画在槽里）= 22px——有无滚动条几何都不变，行盒不再比头部宽出一段 */
   padding: 0 12px 12px 22px;
   scrollbar-gutter: stable;
   position: relative;
 }
 
 /* 列序：[勾选] / # / 封面 / 标题 / 歌手 / 专辑 / 时长。
- * 入库时间与次数列已撤（docs/27 第 3 点）：入库时间等可筛选字段
+ * 入库时间与次数列已撤：入库时间等可筛选字段
  * 移入工具条的筛选器模态框；次数只在首页预览表（TrackTable）显示。 */
 .grid-head,
 .row {
@@ -54,10 +53,8 @@
   top: 0;
   z-index: var(--z-sticky);
   height: 30px;
-  /* 2026-10-28 用户反馈：原来的 surface-head 深色横条太突兀。改与页面
-     同源的半透明磨砂——滚过时只隐约压住行内容，不再是一根实色条。
-     半透明底滚过亮封面时有效亮度抬升，表头字用 text-2（而非弱档
-     text-3）保对比度——底色不能回退（用户拍板），字色补齐（P1-2）。 */
+  /* 原来的 surface-head
+     深色横条太突兀。改与页面同源的半透明磨砂——滚过时只隐约压住行内容，不再是一根实色条。半透明底滚过亮封面时有效亮度抬升，表头字用 text-2（而非弱档 text-3）保对比度——底色不能回退（用户拍板），字色补齐（P1-2）。 */
   background: color-mix(in srgb, var(--surface-1) 62%, transparent);
   backdrop-filter: blur(var(--blur-head));
   color: var(--text-2);
@@ -69,17 +66,14 @@
   height: var(--row-h);
   border-radius: 8px;
   cursor: default;
-  /* 2026-10-28 用户反馈：行与行贴在一起，多选时分不清边界。
-     2px 透明底边框制造视觉间隙——footprint 不变（border-box），
-     虚拟滚动的行高算术一行都不用改；background-clip 让 hover/
-     选中/播放中底色不画进边框区，间隙才是真的"空" */
+  /* 行与行贴在一起，多选时分不清边界。2px 透明底边框制造视觉间隙——footprint
+     不变（border-box），虚拟滚动的行高算术一行都不用改；background-clip 让 hover/ 选中/播放中底色不画进边框区，间隙才是真的"空" */
   border-bottom: 2px solid transparent;
   background-clip: padding-box;
 }
 
-/* 行状态一律用 background-color 而非 background 简写：简写会把 .row 上的
-   background-clip: padding-box 重置回 border-box，底色重新画进那 2px 透明
-   边框——间隙就在多选时消失（2026-10-28 用户报"行间距没做"的真因） */
+/* 行状态一律用 background-color 而非 background 简写：简写会把 .row 上的 background-clip: padding-box 重置回
+   border-box，底色重新画进那 2px 透明边框——间隙就在多选时消失 */
 .row:not(.skeleton):not(.failed):hover {
   background-color: var(--surface-hover);
 }
@@ -120,7 +114,7 @@
   gap: 4px;
 }
 
-/* ---------------- 封面悬浮播放键（docs/27 第 4 点） ----------------
+/* 封面悬浮播放键
  *
  * 单击=选中（B4-1）之后，行内保留一个直接起播的入口：**叠在封面上**，
  * 行 hover 时出现（半透明压暗底 + 白色三角），不再是 # 列里换序号。
@@ -156,10 +150,9 @@
   color: #fff;
 }
 
-/* ---------------- 歌手/专辑跳转链接（docs/27 第 7 点） ----------------
+/* 歌手/专辑跳转链接
  *
  * 详情页直达入口直接长在单元格里，不再绕右键菜单。按钮样式压平成文字，
- * hover 只提亮到 accent——2026-10-28 用户拍板全局去掉 hover 下划线，
  * 可点性由指针形状与提亮承担。
  */
 .link-cell {
@@ -181,13 +174,8 @@
   color: var(--accent-text);
 }
 
-/* ---------------- 多选勾选格 ----------------
- *
- * 结构在 `components/ui/CheckCell.svelte`（包装层点击 + 键盘 Space/Enter
- * 防护的唯一实现）；这里只有外观。bits-ui 的 `Checkbox.Root` 渲染成
- * `<button role="checkbox" data-state=...>`，尺寸与配色由 `.k-box` 定，
- * 主列表与首页表格共用。
- */
+/* 多选勾选格结构在 `components/ui/CheckCell.svelte`（包装层点击 + 键盘 Space/Enter 防护的唯一实现）；这里只有外观。bits-ui 的 `Checkbox.Root` 渲染成
+   `<button role="checkbox" data-state=...>`，尺寸与配色由 `.k-box` 定，主列表与首页表格共用。 */
 .k-check {
   display: flex;
   align-items: center;
@@ -326,7 +314,7 @@
 }
 
 
-/* ---------------- reduced-motion（发布前 UI 审查 P1-1） ---------------- */
+/* reduced-motion（发布前 UI 审查 P1-1） */
 /* 列表级循环动画此前没跟 kit 的降级惯例（ui/Skeleton.svelte 已有同款）：
    声条动画属性是 height（逐帧布局）且播放全程常驻，shimmer 骨架常驻列表首屏。 */
 @media (prefers-reduced-motion: reduce) {

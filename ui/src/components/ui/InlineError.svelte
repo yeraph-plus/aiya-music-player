@@ -1,14 +1,14 @@
 <script lang="ts">
   import Button from './Button.svelte';
   /**
-   * 行内错误条（kit 第 16 件，docs/24 §6 零件表 20）。
+   * 行内错误条（kit 第 16 件， 零件表 20）。
    *
    * 「错误分两类」的呈现落点：
    * - **可重试**：给一个动作按钮（如「跳到下一首」「重试」），用户能自救；
    * - **阻断**：只给「关闭」，用户需要去别处处理（扫盘、查 beets）。
    * 区分方式不是颜色或图标，而是**有没有动作可点**——`action` 传了就渲染按钮。
    *
-   * `aria-live="assertive"` 只用在这里：错误是真阻断（docs/19 §5），
+   * `aria-live="assertive"` 只用在这里：错误是真阻断
    * 播放状态之类的 10Hz 更新绝不挂这个属性。
    */
   interface Props {
@@ -21,7 +21,7 @@
 </script>
 
 <div class="k-inline-error" role="alert" aria-live="assertive">
-  <!-- 错误详情是用户可能要贴给别人的内容，放开选择（docs/19 §5） -->
+  <!-- 错误详情是用户可能要贴给别人的内容，放开选择 -->
   <span class="msg selectable">{message}</span>
   {#if action}
     <Button variant="link" onclick={action.onclick}>{action.label}</Button>

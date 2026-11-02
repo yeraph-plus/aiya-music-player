@@ -88,7 +88,7 @@
     color: var(--danger);
   }
 
-  /* ---- row（设置页统计卡）---- */
+  /* row（设置页统计卡） */
   .k-stat.row {
     flex-direction: row;
     align-items: center;

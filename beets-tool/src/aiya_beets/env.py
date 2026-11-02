@@ -78,16 +78,15 @@ def status_payload() -> dict:
         "pythonSupported": runtime_supported(),
         "libraryPath": str(lib_path),
         "libraryExists": _exists(lib_path),
-        # 库根目录：**只认 config.yaml 原文**（None = 没显式配过）。
-        # 不用 config['directory'] 是因为它恒返回内置默认 ~/Music，
-        # UI 拿它显示"整理到 C:\Users\x\Music"会直接误导用户。
+        # 库根目录：**只认 config.yaml 原文**（None = 没显式配过）。不用 config['directory'] 是因为它恒返回内置默认
+        # ~/Music，UI 拿它显示"整理到 C:\Users\x\Music"会直接误导用户。
         "libraryDirectory": configured_directory(),
         "plugins": plugins,
         "pluginHealth": caps,
         "pluginSummary": summary(caps),
         "configDir": str(beets_config.config_dir()),
         "dataHome": str(cfg.data_home()),
-        # v2：库锁三态（docs/41 §3.3）。宿主只展示不决策——单写者仍由
+        # v2：库锁三态。宿主只展示不决策——单写者仍由
         # 宿主的会话槽保证，这里暴露的是它管不到的残余（双实例/外部 beet）。
         "libraryLock": lock_state,
         "libraryLockHolder": lock_holder,

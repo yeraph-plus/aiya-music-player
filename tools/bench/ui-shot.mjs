@@ -41,7 +41,7 @@ if (await settingsBtn.count()) {
   await page.waitForTimeout(700);
   await shot('p0-settings');
 
-  // 关掉「全局 3D 效果」：下面四项应当置灰（docs/46 §6.4）
+  // 关掉「全局 3D 效果」：下面四项应当置灰
   const glSwitch = page.getByRole('switch', { name: '全局 3D 效果' });
   if (await glSwitch.count()) {
     await glSwitch.click();

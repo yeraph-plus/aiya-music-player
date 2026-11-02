@@ -84,7 +84,7 @@ def beets_items():
     return lib, list(lib.items())
 
 
-# ---- 准备素材：3 个 wav，其中两个同标题（查重用）----
+# 准备素材：3 个 wav，其中两个同标题（查重用）
 from mutagen.id3 import TIT2, TPE1
 from mutagen.wave import WAVE
 
@@ -101,7 +101,7 @@ for i, p in enumerate(SRC_WAV):
     tags.save()
     SRC.append(dst)
 
-# ---- 场景 1：adopt 把文件按现状登记进 beets 库（幂等）----
+# 场景 1：adopt 把文件按现状登记进 beets 库（幂等）
 events, rc = run([{"id": 1, "cmd": "adopt_library", "paths": [SRCDIR]}])
 done = of(events, "adoptDone")
 assert done, events
@@ -117,7 +117,7 @@ done = of(events, "adoptDone")[0]
 assert done["added"] == 0 and done["skipped"] == 3, done
 print("[1b] adopt 幂等 OK: skipped=3")
 
-# ---- 场景 2：update —— mtime 驱动、pretend 不写库 ----
+# 场景 2：update —— mtime 驱动、pretend 不写库
 # mtime 没变 → 全部 unchanged（证明预筛生效，不是"每次全量重读"）
 events, rc = run([{"id": 2, "cmd": "update_library", "pretend": True}])
 done = of(events, "updateDone")[0]
@@ -148,7 +148,7 @@ _lib, items = beets_items()
 assert {it.title for it in items} == {"曲目A", "曲目B改"}, {it.title for it in items}
 print("[2c] update 应用 OK: 库内 title 已更新")
 
-# ---- 场景 3：find_duplicates —— 只读，按 title 分组 ----
+# 场景 3：find_duplicates —— 只读，按 title 分组
 events, rc = run([{"id": 5, "cmd": "find_duplicates", "keys": ["title"]}])
 done = of(events, "duplicatesDone")[0]
 groups = of(events, "duplicateGroup")
@@ -173,7 +173,7 @@ for it, t in zip(sorted(items, key=lambda x: x.id), ["曲目A", "曲目C", "曲�
     it.store()
 print("[3b] 空 key 跳过 OK: groups=0")
 
-# ---- 场景 4：move —— 库根只认 config，宿主传的只作校验 ----
+# 场景 4：move —— 库根只认 config，宿主传的只作校验
 # 4a 不一致的库根必须拒绝（宁可报错，也不要在错位置搬 1800 个文件）
 events, rc = run([{"id": 7, "cmd": "move_items", "directory": MOVEDIR, "pretend": True}])
 failed = [e for e in events if e.get("type") == "sessionFailed"]
@@ -232,7 +232,7 @@ print("[4f] ~ 展开 OK:", msg[:60])
 with open(os.path.join(BEETSDIR, "config.yaml"), "w", encoding="utf-8") as f:
     f.write(f"directory: {LIBDIR}\nimport://n    copy: no\n")
 
-# ---- 场景 5：目标冲突 —— 不改名、不覆盖（beets 自己会静默改成 name.1.ext）----
+# 场景 5：目标冲突 —— 不改名、不覆盖（beets 自己会静默改成 name.1.ext）
 _lib, items = beets_items()
 victim = sorted(items, key=lambda x: x.id)[2]
 victim.title = "曲目C"  # 与 id2 的目标路径同名
@@ -247,7 +247,7 @@ assert os.path.getsize(existing) == sentinel_size, "目标文件被覆盖了"
 assert os.path.exists(victim.path.decode("utf-8")), "冲突时源文件不该被动"
 print("[5] 冲突不覆盖 OK:", done["errors"][0]["message"][:40])
 
-# ---- 场景 6：确认作用域 —— 只动 beets 库，没碰别的东西 ----
+# 场景 6：确认作用域 —— 只动 beets 库，没碰别的东西
 _lib, items = beets_items()
 assert len(items) == 3, len(items)
 print("[6] 库内仍是 3 条，未被维护操作污染")

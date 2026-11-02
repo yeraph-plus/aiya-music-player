@@ -125,7 +125,7 @@ fn main() {
     let mut engine = Engine::spawn().expect("engine spawn");
     let mut token = 1u64;
 
-    // ---------- 1. 共享 + 事件 ----------
+    // 1. 共享 + 事件
     println!("[1] 共享 / 事件 / 自动缓冲");
     engine.send(EngineCommand::SetOutputConfig(cfg(
         ModePref::Shared,
@@ -147,7 +147,7 @@ fn main() {
     assert!(m.reason.is_none(), "共享模式不该有降级原因：{:?}", m.reason);
     assert_sound(delta, 1200, "共享/事件");
 
-    // ---------- 2. 共享 + 轮询 ----------
+    // 2. 共享 + 轮询
     println!("[2] 共享 / 轮询");
     engine.send(EngineCommand::SetOutputConfig(cfg(
         ModePref::Shared,
@@ -161,7 +161,7 @@ fn main() {
     assert_eq!(m.mode, "shared");
     assert_sound(delta, 1200, "共享/轮询");
 
-    // ---------- 3. 独占 + 事件（自动缓冲）----------
+    // 3. 独占 + 事件（自动缓冲）
     println!("[3] 独占 / 事件 / 自动缓冲");
     token += 1;
     engine.send(EngineCommand::SetOutputConfig(cfg(
@@ -199,7 +199,7 @@ fn main() {
     assert_eq!(m2.mode, m.mode, "换曲后模式变了：{} → {}", m.mode, m2.mode);
     assert_sound(delta2, 1500, "独占/事件（换曲后）");
 
-    // ---------- 4. 独占 + 轮询 + 深缓冲 ----------
+    // 4. 独占 + 轮询 + 深缓冲
     println!("[4] 独占 / 轮询 / 200ms 缓冲");
     engine.send(EngineCommand::SetOutputConfig(cfg(
         ModePref::Exclusive,
@@ -238,7 +238,7 @@ fn main() {
     }
     assert_sound(delta, 1500, "独占/轮询");
 
-    // ---------- 5. 暂停（淡出 + 释放设备）与 Resume ----------
+    // 5. 暂停（淡出 + 释放设备）与 Resume
     println!("[5] 暂停 / 恢复");
     engine.send(EngineCommand::Pause);
     // 淡出 20ms + 设备缓冲排空（≤200ms）后再观察：之前允许写入（那正是淡出）
@@ -256,14 +256,14 @@ fn main() {
     println!("  Resume 后 AudioMode={:?}", m.as_ref().map(|x| &x.mode));
     assert_sound(delta, 1200, "恢复");
 
-    // ---------- 6. seek 不中断 ----------
+    // 6. seek 不中断
     println!("[6] seek");
     engine.send(EngineCommand::Seek(10_000));
     let (_, err, delta) = drain(&engine, 1000);
     assert!(err.is_none(), "seek 不该报错：{err:?}");
     assert_sound(delta, 1000, "seek 后");
 
-    // ---------- 7. 独占必须（设备不支持时必须报错，不能偷偷回落）----------
+    // 7. 独占必须（设备不支持时必须报错，不能偷偷回落）
     println!("[7] 独占（必须）/ 事件");
     engine.send(EngineCommand::SetOutputConfig(cfg(
         ModePref::ExclusiveRequired,
@@ -303,7 +303,7 @@ fn main() {
         (None, None) => panic!("既没有 Error 也没有 AudioMode，用户无从判断"),
     }
 
-    // ---------- 8. null（不打开设备）----------
+    // 8. null（不打开设备）
     println!("[8] null 输出");
     token += 1;
     engine.send(EngineCommand::SetOutputConfig(cfg(
@@ -325,7 +325,7 @@ fn main() {
     // null 也按真实时间推进（这是它"位置照常走"的证据）
     assert_sound(delta, 1500, "null");
 
-    // ---------- 9. null → 共享（切回来要能重新出声）----------
+    // 9. null → 共享（切回来要能重新出声）
     println!("[9] null → 共享");
     token += 1;
     engine.send(EngineCommand::SetOutputConfig(cfg(

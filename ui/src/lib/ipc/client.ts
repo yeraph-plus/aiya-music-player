@@ -1,5 +1,5 @@
 /**
- * 新 IPC 客户端（docs/17）：**类型来自 Rust**，错误是结构化对象。
+ * 新 IPC 客户端：**类型来自 Rust**，错误是结构化对象。
  *
  * 命令返回 `Result<T, ApiError>`，失败时宿主直接 **reject**，
  * 这里把 reject 值归一化成 `ApiError`（它不是 `Error` 实例，没有 stack）。
@@ -9,7 +9,7 @@
  * 浏览器预览时被 `lib/ipc/mock` 整体替换）—— 所以这个文件里没有任何
  * "是不是预览环境"的分支。
  *
- * 参数侧的约定（docs/17 §3.2）：`query` / `settings` / `options` / `decisions`
+ * 参数侧的约定：`query` / `settings` / `options` / `decisions`
  * 这类复合对象在 Rust 侧收 `Json` 再手动解析，所以这里用结构类型而不是
  * 生成的 DTO —— 生成物只覆盖**返回值**。原因：参数反序列化失败发生在命令体
  * 之前，用强类型参数会让"参数不合法"变成 Tauri 自己的一句话 reject，
@@ -108,7 +108,7 @@ export type SelectionIdsQuery = {
 export type QueueInsertMode = { mode: 'next' | 'end' };
 
 /**
- * 扫描选项（docs/29 批 A）：不传 `roots` 时后端按 settings `library.roots`
+ * 扫描选项：不传 `roots` 时后端按 settings `library.roots`
  * （数组，多目录并集单库）→ 旧 `library.root` → 系统 Music 目录取。
  */
 export type ScanOptions = { roots?: string[] };
@@ -175,7 +175,7 @@ export const ipc = {
   },
 
   /**
-   * 自动刷新管线（docs/33 §7）。
+   * 自动刷新管线。
    *
    * 只有查询：触发是宿主自己的事（定时 30 s / 窗口聚焦 / 命令收尾），
    * 宿主不会替用户"点按钮"。手动立即刷新走 `beets.sync`。
@@ -231,7 +231,7 @@ export const ipc = {
     resolvePaths: (paths: string[]) =>
       call<(string | null)[]>('tracks_resolve_paths', { paths }),
     /**
-     * 专辑/艺人聚合浏览（docs/24 §3.2 决策 2）。只含**实际有曲目**的条目，
+     * 专辑/艺人聚合浏览。只含**实际有曲目**的条目
      * 一次性返回前 500（后端 `FACET_LIMIT`），无游标；按名称排序。
      * 空白/缺省 `search` = 不过滤。
      */
@@ -253,7 +253,6 @@ export const ipc = {
     remove: (id: string) => call<PlaylistDeleted>('playlist_delete', { id }),
     /** 侧栏拖动排序；返回排好序的完整列表（省一次 roundtrip） */
     reorder: (from: number, to: number) => call<PlaylistSummary[]>('playlist_reorder', { from, to }),
-    // 2026-10-30 语义：加歌一律首行插入（最后入库的在最前），无 append/next 分档
     addTracks: (id: string, trackIds: string[]) =>
       call<PlaylistAddResult>('playlist_add_tracks', { id, trackIds }),
     /** 刷新动态歌单：重跑规则只追加新命中；返回本次新增数与刷新后总数 */
@@ -292,7 +291,7 @@ export const ipc = {
     playQuery: (query: TrackQueryInput, startIndex?: number) =>
       call<PlayerState>('player_play_query', { query, startIndex }),
     /**
-     * 拖入 / 选中一批文件：替换队列并播放第一项（docs/52 §5.3）。
+     * 拖入 / 选中一批文件：替换队列并播放第一项。
      * 音频、`m3u8` 清单、老式 `m3u` 歌单都从这一个口进；不进曲库。
      */
     openPaths: (paths: string[]) => call<OpenPathsReceipt>('player_open_paths', { paths }),
@@ -328,7 +327,7 @@ export const ipc = {
   },
 
   /**
-   * 直播 / 拖放（docs/52）。
+   * 直播 / 拖放。
    *
    * `classify` 是**唯一分类器**的后端出口：UI 不自己写扩展名 if-else ——
    * 两边各写一份必然漂移（`is_http_url` 大小写不一致就是这么来的）。
@@ -375,7 +374,7 @@ export const ipc = {
      * （无变化时手动也会发一条，好让界面有回应）。
      */
     /**
-     * 安装/更新便携包（单轨，docs/58）。
+     * 安装/更新便携包（单轨）。
      *
      * 播放器只做「下载 → 校验 → 展开 → 记入口 → 跑一次 status 验证」，成功判据是
      * probe 的 `found`，**不是**退出码。立刻返回「已启动」，进度走
@@ -390,7 +389,7 @@ export const ipc = {
     pluginsSet: (plugins: string[] = []) => call<JobStarted>('beets_plugins_set', { plugins }),
 
     /**
-     * 内嵌插件表：**不需要装过组件**就能拿到的静态目录（docs/51 §4.2）。
+     * 内嵌插件表：**不需要装过组件**就能拿到的静态目录。
      * 装没装、缺不缺依赖的三态看 `status()` 的 pluginHealth。
      */
     pluginTable: () => call<BeetsPluginItem[]>('beets_plugin_table'),
@@ -402,7 +401,7 @@ export const ipc = {
     uninstall: () => call<JobStarted>('beets_uninstall'),
 
     /*
-     * ---- 批 D：曲库维护四件套 ----
+     * 批 D：曲库维护四件套
      * 四条都是**异步**的：立刻返回「已启动」，进度/结果走 `beets:maintenance`。
      */
     /**
@@ -433,7 +432,7 @@ export const ipc = {
     reveal: (path: string) => call<RevealResult>('beets_reveal', { path }),
 
     /*
-     * ---- 查询页（docs/47）：读 **beets 库**，产物是「存为歌单」 ----
+     * 查询页：读 **beets 库**，产物是「存为歌单」
      * 与 `enrichment.query` 的分工：这里查的是用户自己的 beets 库（字段取决于
      * 他装了哪些插件），那边查的是索引增强的结论库（字段固定）。
      */
@@ -477,7 +476,7 @@ export const ipc = {
   },
 
   /**
-   * 索引增强（docs/45）：beets 侧分析出的数值特征（bpm / 舞曲性 / 情绪）
+   * 索引增强：beets 侧分析出的数值特征（bpm / 舞曲性 / 情绪）
    * 落在宿主自己的关联表里，这里只读它，**不触发任何分析**。
    *
    * 没装组件时 `available=false`：历史结论照样能查，但没有新的可算——

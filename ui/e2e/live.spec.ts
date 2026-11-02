@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * 直播流在播放条上的三态（docs/52 §7.1）。
+ * 直播流在播放条上的三态。
  *
  * 起点用 `?live=<url>` 把 mock 直接摆到"正在播一个直播流"（main.ts 里那个
  * query 参数的来由写在 `installMock` 的注释里）。断言的是**契约字段驱动的

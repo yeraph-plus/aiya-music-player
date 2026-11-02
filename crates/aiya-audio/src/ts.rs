@@ -189,10 +189,8 @@ fn parse_pmt(payload: &[u8], st: &mut TsState) -> Result<(), AudioError> {
     if sec.len() < 12 {
         return Ok(());
     }
-    // 表头 12 字节：table_id(1) + section_length(2) + program_number(2)
-    //   + version(1) + section_number(1) + last_section_number(1) + PCR_PID(2)
-    //    + program_info_length(2)
-    // 长度字段都是 12 位：高字节低 4 位有效（高 4 位是保留位，按规范为 0b1111）
+    // 表头 12 字节：table_id(1) + section_length(2) + program_number(2) + version(1) + section_number(1) + last_section_number(1) +
+    // PCR_PID(2) + program_info_length(2) 长度字段都是 12 位：高字节低 4 位有效（高 4 位是保留位，按规范为 0b1111）
     let program_info_len = (((sec[10] & 0x0F) as usize) << 8) | sec[11] as usize;
     let end = sec.len();
     let mut i = 12 + program_info_len;
@@ -317,7 +315,7 @@ pub(crate) mod tests {
         out
     }
 
-    /* ---------------- 最小 TS 封装器（反向工具，只给测试用） ---------------- */
+    /* 最小 TS 封装器（反向工具，只给测试用） */
 
     const PID_PMT: u16 = 0x1000;
     const PID_AUDIO: u16 = 0x0101;
@@ -410,7 +408,7 @@ pub(crate) mod tests {
         out
     }
 
-    /* ---------------- 断言 ---------------- */
+    /* 断言 */
 
     #[test]
     fn roundtrip_adts_through_ts_is_byte_identical() {

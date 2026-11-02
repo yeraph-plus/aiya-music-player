@@ -4,7 +4,6 @@
  *
  * 为什么需要它：store 之间有一条隐性契约 —— **依赖只许自上而下**。
  * `library`（只依赖 ipc）← `list`/`scan` ← `playlists` ← 视图。
- * 2026-10-26 把歌单摘要从 `ui` 挪到 `library`，就是因为想挪进 `playlists`
  * 会让 `list/scan → playlists → list` 成环。当时用手写脚本验的，这里有
  * 固化版：改完 store 跑一次，条件反射。
  *

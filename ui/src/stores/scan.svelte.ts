@@ -12,12 +12,12 @@ import { list } from './list.svelte';
  * ipc），而这里要串 4 个 store。放进去就得让 `library` import `list`，
  * 而 `list` 已经 import `library` —— 直接成环。
  *
- * 判断依据（沿用 docs/18 §8.2）：**能只用自己那层实现的留在原 store，
+ * 判断依据（沿用）：**能只用自己那层实现的留在原 store
  * 需要编排别的 store 的往上提一层**。扫描要"扫完让列表重载"，所以在这。
  */
 class ScanStore {
   /**
-   * 自动刷新管线的状态（docs/33 §7）。
+   * 自动刷新管线的状态。
    *
    * 为什么不放 `library` store：拉它要 `ipc.refresh.state()`（那是 library 的
    * 地盘），但**消费**它的地方要串"重拉列表"，所以跟 `afterScan` 待在一起。
@@ -26,7 +26,6 @@ class ScanStore {
   refresh = $state<RefreshState | null>(null);
 
   /**
-   * 最近一次扫描动作的错误（2026-10-28 拍板：报错内置到「执行状态」卡片，
    * 不再走全局 toast——错误和它的上下文（进度/上次结果）应该在同一个
    * 视线里。展示与清除都在设置页「曲库」组的曲库卡片里）。
    */

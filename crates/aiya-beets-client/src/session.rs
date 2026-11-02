@@ -198,9 +198,7 @@ pub fn spawn_session(
     launcher: &Launcher,
     request: &Value,
 ) -> Result<(Child, SessionStdin), ToolError> {
-    // 握手声明：告诉对面"我说的是 vN"。放在 client 里而不是让宿主每个请求
-    // 自己拼——版本是协议层的事实，宿主不该重复知道。
-    // 调用方显式给了就尊重它（测试要造版本不符的会话）。
+    // 握手声明：告诉对面"我说的是 vN"。放在 client 里而不是让宿主每个请求自己拼——版本是协议层的事实，宿主不该重复知道。调用方显式给了就尊重它（测试要造版本不符的会话）。
     let mut request = request.clone();
     if let Some(obj) = request.as_object_mut() {
         obj.entry("clientProtocol")
@@ -574,7 +572,6 @@ pub fn request_data(
 /// `pub` 是为了让 `tests/proto_mirror.rs` 拿它与镜像 schema 里的 `type`
 /// 常量集合比对——改名而忘了改这里，症状是"会话永远不结束"，很难现场定位。
 ///
-/// 2026-10-31 补：adoptDone/updateDone/duplicatesDone/moveDone/dumpDone/indexDone。
 /// 此前只有导入链的终态在这张表里，维护四件套 + dump + 索引入库成功后客户端
 /// 等不到终态，会话空转到 600 s 看门狗误杀——期间会话槽占死、on_exit 对账
 /// （整理后修正库路径的唯一时机）被推迟（发布前审查 P0-1）。

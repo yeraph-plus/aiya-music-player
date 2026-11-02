@@ -5,7 +5,7 @@ import { library } from './library.svelte';
 import { notify } from './notify.svelte';
 
 /**
- * beets 查询页的状态与动作（docs/48）。
+ * beets 查询页的状态与动作。
  *
  * ## 这一层为什么不放在组件里
  *
@@ -73,7 +73,7 @@ function isNumeric(kind: string): boolean {
 }
 
 class BeetsQueryStore {
-  /* ---------------- 字段目录 ---------------- */
+  /* 字段目录 */
 
   catalog = $state<BeetsFieldCatalog | null>(null);
   catalogError = $state<string | null>(null);
@@ -110,7 +110,7 @@ class BeetsQueryStore {
     }
   }
 
-  /* ---------------- 查询条件 ---------------- */
+  /* 查询条件 */
 
   mode = $state<QueryMode>('rules');
   rules = $state<QueryRule[]>([]);
@@ -165,7 +165,7 @@ class BeetsQueryStore {
     return [...BASE_FIELDS, ...Array.from(new Set(extra))];
   }
 
-  /* ---------------- 结果 ---------------- */
+  /* 结果 */
 
   rows = $state<ResultRow[]>([]);
   total = $state(0);
@@ -243,7 +243,7 @@ class BeetsQueryStore {
     }
   }
 
-  /* ---------------- 选择 ---------------- */
+  /* 选择 */
 
   /** 选中的 `path` 集合。用 path 当键：`hit.id` 只在同一个 beets 库里成立 */
   selected = $state<Set<string>>(new Set());
@@ -286,7 +286,7 @@ class BeetsQueryStore {
     this.selected = new Set();
   }
 
-  /* ---------------- 存为歌单 ---------------- */
+  /* 存为歌单 */
 
   saveOpen = $state(false);
   saveName = $state('');

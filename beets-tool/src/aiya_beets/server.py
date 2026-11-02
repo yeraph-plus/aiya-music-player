@@ -35,10 +35,8 @@ def handle(req: dict, gen: int) -> dict | None:
     cmd = req.get("cmd")
     req_id = int(req.get("id") or 0)
 
-    # ---- v2：幂等重放 / 登记（在锁与执行之前）----
-    # 重放不触碰库、不加锁：它只是把上次的账本再念一遍。
-    # 次序必须是 重放 → 锁 → 登记 running：被锁拒绝的请求不该在登记簿里
-    # 留下 running 残留。
+    # v2：幂等重放 / 登记（在锁与执行之前）重放不触碰库、不加锁：它只是把上次的账本再念一遍。次序必须是 重放 → 锁 → 登记
+    # running：被锁拒绝的请求不该在登记簿里留下 running 残留。
     terminal = ops.TERMINAL_OF.get(cmd)
     request_id = req.get("requestId")
     if terminal is not None and request_id:
@@ -58,7 +56,7 @@ def handle(req: dict, gen: int) -> dict | None:
         # 无幂等键的变更命令照旧拿锁——单写者护栏不依赖 requestId
         lockfile.acquire(cmd)
 
-    # ---- 管理 ----
+    # 管理
     if cmd == "status":
         return protocol.ok_response(req_id, env.status_payload())
     if cmd == "ping":
@@ -68,7 +66,7 @@ def handle(req: dict, gen: int) -> dict | None:
     if cmd == "capabilities":
         return protocol.ok_response(req_id, env.capabilities_payload())
 
-    # ---- 导入 ----
+    # 导入
     if cmd == "preview_import":
         paths = req.get("paths") or []
         if not paths:
@@ -86,12 +84,12 @@ def handle(req: dict, gen: int) -> dict | None:
         importer.apply_import(req_id, decisions, bool(req.get("resume")), gen)
         return None
 
-    # ---- 对账 ----
+    # 对账
     if cmd == "dump_items":
         dump.dump_items(req_id, gen)
         return None
 
-    # ---- 索引增强与查询（docs/45 §4.2；写入方恒为宿主，这里只产数据） ----
+    # 索引增强与查询（写入方恒为宿主，这里只产数据）
     if cmd == "enrich":
         paths = req.get("paths") or []
         if not paths:
@@ -112,7 +110,7 @@ def handle(req: dict, gen: int) -> dict | None:
     if cmd == "fields":
         return protocol.ok_response(req_id, query.fields())
 
-    # ---- 曲库维护 ----
+    # 曲库维护
     if cmd == "adopt_library":
         paths = req.get("paths") or []
         if not paths:
@@ -132,7 +130,7 @@ def handle(req: dict, gen: int) -> dict | None:
                             bool(req.get("pretend")), gen)
         return None
 
-    # ---- 插件市场（docs/40 §3 拍板白名单版；协议纯加法） ----
+    # 插件市场（拍板白名单版；协议纯加法）
     if cmd == "plugin_catalog":
         return protocol.ok_response(req_id, {"catalog": market.catalog_payload()})
     if cmd == "plugin_install":
@@ -149,7 +147,7 @@ def handle(req: dict, gen: int) -> dict | None:
     )
 
 
-# 异常归类（docs/33 §4.5）：宿主对这两类的 UX 完全不同——
+# 异常归类：宿主对这两类的 UX 完全不同
 #   E_BEETS_ERROR  展示 beets 原文，用户可能自己能修（权限、库损坏、缺 ffmpeg）
 #   E_INTERNAL     我们自己的 bug，附 trace，让用户去反馈
 # 按异常模块归类而不是按消息文本：文本会变，模块名不会。
@@ -196,9 +194,8 @@ def serve() -> int:
     # 紧接着独占 stdout：下面任何 import/迁移/第三方 print 都不许进协议流
     open_protocol_stream()
 
-    # 配置准备已提前到 `cli.main`（apply_env 之后、import beets 之前）：
-    # 那里同时服务 status/capabilities/doctor，四条命令看到的是同一份事实。
-    # 这里不再补一次——index 家每次都会重渲染，重复调用只会制造两份时机。
+    # 配置准备已提前到 `cli.main`（apply_env 之后、import beets 之前）：那里同时服务
+    # status/capabilities/doctor，四条命令看到的是同一份事实。这里不再补一次——index 家每次都会重渲染，重复调用只会制造两份时机。
 
     try:
         import beets  # noqa: F401
@@ -210,12 +207,8 @@ def serve() -> int:
         _not_installed("beets import raised SystemExit")
         return 0
 
-    # cancel 必须在工作循环运行时也能被接收：后台线程持续读 stdin。
-    # cancel 在 reader 线程**立即递增取消代数**——此前 cancel 行与其他请求
-    # 一样进队列，而主循环正同步执行 preview/apply（网络匹配+写文件），
-    # req_q.get() 根本轮不到它，取消永远看不到。
-    # 队列元素是 (行, 入队时的取消代数)：排队期间被取消过的请求在派发时
-    # 就能识别出来（旧实现的 CANCEL.clear() 会把这个取消抹掉）。
+    # cancel 必须在工作循环运行时也能被接收：后台线程持续读 stdin。cancel 在 reader 线程**立即递增取消代数**——此前 cancel 行与其他请求一样进队列，而主循环正同步执行
+    # preview/apply（网络匹配+写文件），req_q.get() 根本轮不到它，取消永远看不到。队列元素是 (行, 入队时的取消代数)：排队期间被取消过的请求在派发时就能识别出来（旧实现的 CANCEL.clear() 会把这个取消抹掉）。
     req_q: queue.Queue = queue.Queue()
 
     def _read_stdin() -> None:
@@ -253,9 +246,8 @@ def serve() -> int:
                 emit({"type": "cancelAck"})
                 continue
             if not isinstance(req, dict):
-                # 合法 JSON 但不是对象：`[1,2]` / `"x"` / `42` 都到这里。
-                # 不先挡住的话 `req.get` 会抛 AttributeError 被归类成 E_INTERNAL，
-                # 而它其实是调用方拼错了请求——该报参数错。
+                # 合法 JSON 但不是对象：`[1,2]` / `"x"` / `42` 都到这里。不先挡住的话 `req.get` 会抛 AttributeError
+                # 被归类成 E_INTERNAL，而它其实是调用方拼错了请求——该报参数错。
                 write_line(protocol.error_response(
                     0, protocol.E_BAD_JSON, "parse", f"请求必须是 JSON 对象：{type(req).__name__}",
                 ))

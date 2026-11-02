@@ -37,9 +37,8 @@ pub enum SmtcUpdate {
 pub fn spawn(app: AppHandle, hwnd: isize) -> Option<Sender<SmtcUpdate>> {
     let (tx, rx) = std::sync::mpsc::channel::<SmtcUpdate>();
 
-    // P2：MediaControls 构造 + attach 全部移进专用线程——此前构造在主线程、
-    // 使用在专用线程，跨 COM apartment 依赖 WinRT agility，不保证可靠。
-    // 初始化结果经一次性 channel 回传，保持"失败返回 None"的对外语义。
+    // P2：MediaControls 构造 + attach 全部移进专用线程——此前构造在主线程、使用在专用线程，跨 COM apartment 依赖 WinRT
+    // agility，不保证可靠。初始化结果经一次性 channel 回传，保持"失败返回 None"的对外语义。
     let (init_tx, init_rx) = std::sync::mpsc::channel::<bool>();
     let thread_app = app.clone();
     let spawned = std::thread::Builder::new()
@@ -81,10 +80,8 @@ pub fn spawn(app: AppHandle, hwnd: isize) -> Option<Sender<SmtcUpdate>> {
                         cover_path,
                     } => {
                         let cover_url = cover_path.as_deref().and_then(cover_url);
-                        // debug 级（默认 info 看不到）：排查媒体浮层"没封面/不能拖"时
-                        // 用它确认三件事——封面路径拿到没有、缩略图通道是否启用、时长有没有值。
-                        // 0x800700A1 那类问题全部发生在这里之后，没有这行就无法区分
-                        // "没进缩略图分支"和"进了但失败"。
+                        // debug 级（默认 info
+                        // 看不到）：排查媒体浮层"没封面/不能拖"时用它确认三件事——封面路径拿到没有、缩略图通道是否启用、时长有没有值。0x800700A1 那类问题全部发生在这里之后，没有这行就无法区分 "没进缩略图分支"和"进了但失败"。
                         tracing::debug!(
                             thumb = cover_url.is_some(),
                             cover = cover_path
@@ -315,7 +312,7 @@ fn seek_relative(app: &AppHandle, delta_ms: i64) -> Result<(), String> {
     Ok(())
 }
 
-/* ---------------- 防休眠 ---------------- */
+/* 防休眠 */
 
 /// 播放中防系统睡眠。ES_CONTINUOUS 是 per-thread 状态：
 /// 在事件泵线程调用并保持，线程常驻所以状态持续有效。

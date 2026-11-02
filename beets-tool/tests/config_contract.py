@@ -49,15 +49,14 @@ SCAN_ROOT = os.path.join(WORK, "music")
 for d in (HOME_WB, HOME_IDX, SCAN_ROOT):
     os.makedirs(d)
 
-# 外部二进制目录（docs/53）：`{data_root}/beets-tool/bin`，两个家共用一份。
+# 外部二进制目录：`{data_root}/beets-tool/bin`，两个家共用一份。
 # 这里放一个**占位文件**就够——渲染/闸只问"在不在"，不跑 probe（那是 bins 的事）。
 BIN_DIR = os.path.join(WORK, "beets-tool", "bin")
 os.makedirs(BIN_DIR)
 ESSENTIA_STUB = os.path.join(BIN_DIR, "streaming_extractor_music.exe")
 Path(ESSENTIA_STUB).write_bytes(b"stub")
-# xtractor 的 exe 清单全集：提取器 + Qt5Core（Gaia 构建非静态链接）+ 12 件
-# SVM 模型（bin/models/ 子路径）。缺一件 usable_plugins 就会把 xtractor 剔掉，
-# 渲染里就没有 xtractor 段——所以这里一次性把清单造齐。
+# xtractor 的 exe 清单全集：提取器 + Qt5Core（Gaia 构建非静态链接）+ 12 件 SVM 模型（bin/models/ 子路径）。缺一件
+# usable_plugins 就会把 xtractor 剔掉，渲染里就没有 xtractor 段——所以这里一次性把清单造齐。
 Path(BIN_DIR, "Qt5Core.dll").write_bytes(b"stub")
 for _name in cfg.XTRACTOR_MODEL_FILES:
     _mp = Path(BIN_DIR, "models", f"{_name}.history")
@@ -115,7 +114,7 @@ def must_gate(text: str, home: str, why: str, root: str | None = None) -> None:
 
 
 try:
-    # ---- 1. 索引家模板 ----
+    # 1. 索引家模板
     text = cfg.render_config(Path(HOME_IDX), None, None, cfg.PROFILE_INDEX)
     before = dict(cfg.INDEX_IMPORT_KEYS)
     assert before["write"] == "no" and before["duplicate_action"] == "keep", before
@@ -132,14 +131,14 @@ try:
     # 没给曲库根 → 退回占位目录（唯一合法的退化形态）
     assert norm(cfg.scratch_dir(Path(HOME_IDX))) in norm(text), text
     cfg.verify_config(text, cfg.PROFILE_INDEX, Path(HOME_IDX))
-    # 给了曲库根 → directory 就是它（docs/49：索引家 = 曲库的只读镜像）
+    # 给了曲库根 → directory 就是它
     with_root = cfg.render_config(Path(HOME_IDX), SCAN_ROOT, None, cfg.PROFILE_INDEX)
     assert norm(SCAN_ROOT) in norm(with_root), "索引家必须对着曲库根分析"
     assert norm(cfg.scratch_dir(Path(HOME_IDX))) not in norm(with_root), with_root
     cfg.verify_config(with_root, cfg.PROFILE_INDEX, Path(HOME_IDX), SCAN_ROOT)
     print("[1] 索引家模板 + 自检通过（曲库根 / 占位目录两种形态都认）")
 
-    # ---- 2. 负向五连：每条都必须让闸变红 ----
+    # 2. 负向五连：每条都必须让闸变红
     idx_home = Path(HOME_IDX)
     must_gate(text.replace("    write: no", "    write: yes", 1), HOME_IDX,
               "import.write 被改成 yes")
@@ -167,7 +166,7 @@ try:
     cfg.verify_config("library: 'x'\n", cfg.PROFILE_WORKBENCH, idx_home)
     print("[2] 负向六连全部变红（闸不是装饰）")
 
-    # ---- 3. 白名单三元组 ----
+    # 3. 白名单三元组
     assert all(not spec.writes_files for spec in plugins.INDEX_PLUGINS), "索引家不该收写盘插件"
     assert plugins.find_index_plugin("embedart") is None
     fake = plugins.IndexPluginSpec("embedart", forced=(("write", "no"),), writes_files=True)
@@ -180,7 +179,7 @@ try:
         plugins.INDEX_PLUGINS = real
     print("[3] 白名单三元组生效（写盘插件被结构拒绝）")
 
-    # ---- 4. 环境：分家必拒，profile 不猜 ----
+    # 4. 环境：分家必拒，profile 不猜
     saved = {k: os.environ.get(k) for k in ("BEETSDIR", "AIYA_BEETS_HOME", "AIYA_BEETS_PROFILE")}
     try:
         for k in saved:
@@ -218,7 +217,7 @@ try:
                 os.environ[k] = v
     print("[4] 环境两态 OK（分家拒绝 / profile 不猜）")
 
-    # ---- 5. 自愈：外部把索引家配置改坏 → 下次启动重渲染 ----
+    # 5. 自愈：外部把索引家配置改坏 → 下次启动重渲染
     path = idx_home / "config.yaml"
     path.write_text(text.replace("    write: no", "    write: yes", 1), encoding="utf-8", newline="\n")
     cfg.ensure_config(idx_home, cfg.PROFILE_INDEX)
@@ -227,7 +226,7 @@ try:
     assert "    write: yes" not in healed, "坏配置没有被重写"
     print("[5] 索引家配置自愈 OK")
 
-    # ---- 5b. 口径变化 → 成对删库与增量状态（docs/49 §3.3）----
+    # 5b. 口径变化 → 成对删库与增量状态
     # 索引家的 directory 从占位目录改成曲库根时，旧记录（绝对路径）与新记录
     # （相对）的语义基准不同。用户拍板"干净重建"，所以这里盯两件事：
     # 变了必须删干净（含 state.pickle，只删库会让 -R 记忆仍在 → 全跳过）；没变
@@ -254,7 +253,7 @@ try:
     assert (idx_home / "state.pickle").read_bytes() == b"keep-me", "同口径不该重建"
     print("[5b] 索引库按口径重建 OK（变了成对删 / 没变一个字节都不动）")
 
-    # ---- 6. 两家 status：字段互不串 ----
+    # 6. 两家 status：字段互不串
     code_wb, wb, raw_wb = run_status(HOME_WB, "workbench", AIYA_BEETS_SCAN_ROOT=SCAN_ROOT)
     assert code_wb == 0 and wb, f"workbench status 失败：{raw_wb[:300]}"
     code_idx, idx, raw_idx = run_status(HOME_IDX, "index", AIYA_BEETS_SCAN_ROOT=SCAN_ROOT)
@@ -266,7 +265,7 @@ try:
     assert norm(idx["configDir"]) == norm(HOME_IDX), idx["configDir"]
     assert norm(wb["dataHome"]) == norm(HOME_WB), wb["dataHome"]
     assert norm(idx["dataHome"]) == norm(HOME_IDX), idx["dataHome"]
-    # 整理根：用户库 = 落点（这里是扫描根）；索引家 = **曲库根**（docs/49）
+    # 整理根：用户库 = 落点（这里是扫描根）；索引家 = **曲库根**
     assert norm(wb["libraryDirectory"]) == norm(SCAN_ROOT), wb["libraryDirectory"]
     assert norm(idx["libraryDirectory"]) == norm(SCAN_ROOT), idx["libraryDirectory"]
     # 索引家只开 xtractor；用户库不带 import 段（三行老形状，用户做主）
@@ -275,7 +274,7 @@ try:
     assert "import:" not in wb_cfg, f"用户库的配置不该被塞写盘开关：\n{wb_cfg}"
     print("[6] 两家 status 隔离 OK（库/配置/数据根/整理根四路都不串）")
 
-    # ---- 7. 两家锁：一边被占不影响另一边 ----
+    # 7. 两家锁：一边被占不影响另一边
     from aiya_beets import lockfile
 
     HOLDER = (
@@ -316,7 +315,7 @@ try:
             proc.wait()
     print("[7] 两家锁互不影响 OK")
 
-    # ---- 8. BEETSDIR 冲突：启动即一条 E_CONFIG，退出码 2 ----
+    # 8. BEETSDIR 冲突：启动即一条 E_CONFIG，退出码 2
     code, payload, raw = run_status(HOME_IDX, "index", BEETSDIR=HOME_WB)
     assert code == 2, f"冲突时必须非零退出并给出信封：code={code} raw={raw[:200]}"
     assert payload and payload.get("ok") is False, raw[:300]
@@ -324,7 +323,7 @@ try:
     assert "BEETSDIR" in payload["error"]["beets_message"], payload
     print("[8] BEETSDIR 冲突 fail-fast OK")
 
-    # ---- 9. workbench 的 directory 外科式同步（docs/49 §7.1）----
+    # 9. workbench 的 directory 外科式同步
     #
     # 守的是一个真机事故：第一次生成 config 时还没有曲库目录，`directory` 行
     # 被省略；此后永远不补 → beets 的 move/copy 用内置默认 ~/Music，
@@ -374,7 +373,7 @@ try:
         assert rest2 == USER_WB, "换落点不该动别的行"
         print("[9] workbench directory 外科式同步 OK")
 
-        # [10] settings.json 的插件清单驱动 config 的 plugins 行（docs/51 §4.2）
+        # [10] settings.json 的插件清单驱动 config 的 plugins 行
         #
         # 装了不启用等于白装：安装页勾 lyrics、安装器装了 bs4，而 config 里
         # 没有 lyrics，插件永远不会加载。所以这一行必须跟着 settings 走。
@@ -418,7 +417,7 @@ try:
         ), "空清单必须渲染成 plugins: []"
         print("[10] workbench plugins 外科式同步 OK（三向：选中 / 缺键 / 空数组）")
 
-        # ---- 11. 缺外部工具 → 不写进 plugins（docs/53 §1.1）----
+        # 11. 缺外部工具 → 不写进 plugins
         #
         # 守的是一个比"少个功能"严重得多的事实：`plugins: replaygain` 而 PATH 上
         # 没有 ffmpeg 时，beets 的**任何**子命令都起不来（实测
@@ -454,11 +453,8 @@ try:
             else:
                 os.environ["AIYA_BEETS_BIN_DIR"] = prev_bin
 
-        # ---- 12. xtractor 的提取档位（docs/54 §3；2026-10-31 起换 Gaia 构建）----
-        #
-        # 守两件事：highlevel 必须开（关掉 = danceability/mood 永远是空字段）、
-        # svm_models 必须逐件实存（模型没下齐时提取器静默跳过 = 同样的"字段全空"）。
-        # 旧世界（AB win-i686 没编 Gaia2、必须钉 compute: 0）见 git 历史。
+        # 守两件事：highlevel 必须开（关掉 = danceability/mood 永远是空字段）、svm_models 必须逐件实存（模型没下齐时提取器静默跳过 =
+        # 同样的"字段全空"）。旧世界（AB win-i686 没编 Gaia2、必须钉 compute: 0）见 git 历史。
         bin_tmp12 = tempfile.mkdtemp(prefix="cfg12-bin-")
         prev_bin12 = os.environ.get("AIYA_BEETS_BIN_DIR")
         os.environ["AIYA_BEETS_BIN_DIR"] = bin_tmp12

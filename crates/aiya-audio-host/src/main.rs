@@ -63,11 +63,8 @@ impl tracing_subscriber::fmt::time::FormatTime for LocalTime {
 }
 
 fn main() {
-    // 日志走 stderr：宿主把本进程 stderr 重定向到 {app_data}/logs/sidecar.log。
-    // fmt() 默认写 **stdout**，而宿主把 stdout 置了 Stdio::null() —— 之前所有
-    // sidecar 日志其实都被丢掉了（文件是 0 字节）。
-    //
-    // 时间戳用本地时区：否则与宿主日志差 8 小时，排查时得自己做时区换算。
+    // 日志走 stderr：宿主把本进程 stderr 重定向到 {app_data}/logs/sidecar.log。fmt() 默认写 **stdout**，而宿主把 stdout 置了 Stdio::null()
+    // —— 之前所有 sidecar 日志其实都被丢掉了（文件是 0 字节）。时间戳用本地时区：否则与宿主日志差 8 小时，排查时得自己做时区换算。
     let filter = tracing_subscriber::EnvFilter::try_from_env("AIYA_LOG")
         .or_else(|_| tracing_subscriber::EnvFilter::try_from_default_env())
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
@@ -173,7 +170,7 @@ fn run_session(
     let write_half = Arc::new(Mutex::new(BufWriter::new(write_half)));
     let mut line_reader = BufReader::new(read_half);
 
-    // ---- 握手：第一条必须是 Hello，版本不匹配 exit 2（不静默降级）----
+    // 握手：第一条必须是 Hello，版本不匹配 exit 2（不静默降级）
     let mut line = String::new();
     read_line(&mut line_reader, &mut line).map_err(|e| format!("等握手失败：{e}"))?;
     let hello: HostToSidecar =
@@ -193,13 +190,12 @@ fn run_session(
             protocol: PROTOCOL_VERSION,
         },
     )?;
-    // 握手成功 = 宿主确实活着：清掉上一轮会话遗留的孤儿退场窗口。不清的话
-    // 窗口"只生效一次"——本会话再次出错时死线早已过期，会跳过重连宽限直接
-    // 退场。此后若会话出错，serve_forever 的 Err 分支会重新起算 8s。
+    // 握手成功 =
+    // 宿主确实活着：清掉上一轮会话遗留的孤儿退场窗口。不清的话窗口"只生效一次"——本会话再次出错时死线早已过期，会跳过重连宽限直接退场。此后若会话出错，serve_forever 的 Err 分支会重新起算 8s。
     *orphan_deadline = None;
     tracing::info!(%protocol, "握手完成");
 
-    // ---- 心跳线程：从握手完成这一刻就开始跳 ----
+    // 心跳线程：从握手完成这一刻就开始跳
     //
     // 为什么不等引擎：Welcome 一发出去，host 的看门狗（5s）就开始计时。此前心跳
     // 写在主循环里，而主循环要等 Engine::spawn 与 reader 线程就绪才进——初始化
@@ -235,10 +231,8 @@ fn run_session(
         })
         .map_err(|e| format!("起心跳线程失败：{e}"))?;
 
-    // ---- 引擎 + 命令转发线程（reader 只解析入站消息并转交，engine 留主线程）----
-    //
-    // 这里到心跳循环之间的耗时不再影响存活判定（心跳已在上面独立跑）。
-    // 仍然计时：它是"第一声出声要等多久"的一部分，冷启动排查要用。
+    // 引擎 + 命令转发线程（reader 只解析入站消息并转交，engine
+    // 留主线程）这里到心跳循环之间的耗时不再影响存活判定（心跳已在上面独立跑）。仍然计时：它是"第一声出声要等多久"的一部分，冷启动排查要用。
     let t_engine = Instant::now();
     let mut engine = Engine::spawn().map_err(|e| format!("引擎启动失败：{e}"))?;
     tracing::info!(
@@ -278,7 +272,7 @@ fn run_session(
         })
         .map_err(|e| format!("起 reader 线程失败：{e}"))?;
 
-    // ---- 命令消费 + 事件写回循环（本线程；心跳已在独立线程）----
+    // 命令消费 + 事件写回循环（本线程；心跳已在独立线程）
     tracing::info!(
         elapsed_ms = t_engine.elapsed().as_millis() as u64,
         "命令循环就绪"
@@ -288,9 +282,8 @@ fn run_session(
     let session = (|| -> Result<SessionEnd, String> {
         let mut shutdown_seen = false;
         let end = loop {
-            // 1) 入站命令（排空）。reader 线程退出（EOF/读错误/超长行）后
-            //    cmd_tx 随之 drop：命令永远进不来而心跳还在写，host 会误以为
-            //    sidecar 活着 —— 必须立刻结束会话，走重连/退场流程。
+            // 1) 入站命令（排空）。reader 线程退出（EOF/读错误/超长行）后 cmd_tx 随之 drop：命令永远进不来而心跳还在写，host
+            // 会误以为 sidecar 活着 —— 必须立刻结束会话，走重连/退场流程。
             loop {
                 match cmd_rx.try_recv() {
                     Ok(msg) => match msg {

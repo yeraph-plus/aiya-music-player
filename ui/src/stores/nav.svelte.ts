@@ -5,7 +5,6 @@ import { isListPage, ui, type AppPage, type SettingsSection } from './ui.svelte'
 /**
  * 导航 store：**路由动作的唯一入口** + 返回栈。
  *
- * 为什么要有它（docs/24 §3.1，2026-10-26 壳体收口）：
  *
  * 1. 宽 TitleBar 上有「返回上一页」，而路由状态曾经是 `ui.page` /
  *    `ui.libraryDetail` / `ui.view` **三个字段**拼出来的。按钮若自己去猜
@@ -49,7 +48,7 @@ export type NavTarget =
   /** 首页仪表盘（歌单宫格 + 三段预览） */
   | { kind: 'dashboard' }
   /**
-   * 曲库列表页（docs/28：recent/mostPlayed 单页退役，内置视图只剩曲库；
+   * 曲库列表页（recent/mostPlayed 单页退役，内置视图只剩曲库；
    * 最近播放/常听以查询来源的形式活在推荐页，不再是一级路由）。
    */
   | {
@@ -107,7 +106,6 @@ class NavStore {
   /**
    * 去设置页的某一组。
    *
-   * 「位置缺失」告警原来指向扫描入库页（那一页 2026-10-30 并入设置页的
    * 「曲库」组）。只切路由的话人会落在「外观」组顶部——告警说"去曲库看"，
    * 落地却在别处，等于没送到。所以先挂一个一次性请求，由 `SettingsPanel`
    * 消费（滚过去 + 高亮那一组的 tab），再走正常的 `go`（压栈语义与
@@ -123,7 +121,6 @@ class NavStore {
    *
    * 不能直接用 `back()`：路由状态是**持久化**的（`app.uiState`），而返回栈
    * 不持久化。冷启动时若停在正在播放页，栈是空的、顶栏返回也是灰的，
-   * 那一页又藏起了侧栏 —— `back()` 无操作，用户就**出不去了**（2026-10-30
    * 实测一条死路）。所以栈空时落到首页兜底。
    *
    * **不压栈**：退出不是一个"可以再返回回去"的目的地。
@@ -154,7 +151,7 @@ class NavStore {
     list.clearSearch();
   }
 
-  /* ---------------- 内部 ---------------- */
+  /* 内部 */
 
   private snapshot(): RouteSnapshot {
     return {
@@ -240,8 +237,7 @@ class NavStore {
     // 只有落在列表页才重拉列表：正在播放/设置页看不到列表，
     // 白跑一次查询还会把错误条带出来
     if (isListPage(s.page)) void list.reload({ restore: true });
-    // 设置页展示诊断/beets 状态（docs/29 批 A 起共用一份数据；那页的「曲库」
-    // 组 2026-10-30 由「扫描入库」页并入，触发点只剩 settings 一个）
+    // 设置页展示诊断/beets 状态（起共用一份数据；那页的「曲库」
     if (s.page === 'settings') void ui.refreshDiagnostics();
     ui.scheduleUiSave();
   }

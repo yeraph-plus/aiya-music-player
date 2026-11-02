@@ -1,5 +1,5 @@
 /**
- * 错误呈现的唯一映射点（docs/18 §4.5）。
+ * 错误呈现的唯一映射点。
  *
  * 为什么不让组件各自 `e instanceof Error ? e.message : String(e)`：
  * 新契约的 reject 值是 `ApiError` **普通对象**（Tauri 序列化 `Err` 后直接 reject），

@@ -1,5 +1,5 @@
 /**
- * 验证 P1 流动渐变层（docs/46 §3.1）。
+ * 验证 P1 流动渐变层。
  *
  * 三轮，每轮都是"能不能自己证明自己错了"的否定式检查：
  *
@@ -94,7 +94,7 @@ async function pair(page, label) {
   return r;
 }
 
-// ---------------- A 正常路径 ----------------
+// A 正常路径
 console.log('\n== A 硬件 GL ==');
 {
   const { browser, page, errors } = await open();
@@ -132,7 +132,7 @@ console.log('\n== A 硬件 GL ==');
   await browser.close();
 }
 
-// ---------------- B reduced-motion ----------------
+// B reduced-motion
 console.log('\n== B prefers-reduced-motion: reduce ==');
 {
   const { browser, page, errors } = await open({ reducedMotion: 'reduce' });
@@ -146,7 +146,7 @@ console.log('\n== B prefers-reduced-motion: reduce ==');
   await browser.close();
 }
 
-// ---------------- C 软件光栅 ----------------
+// C 软件光栅
 console.log('\n== C 软件光栅（--disable-gpu） ==');
 {
   const { browser, page, errors } = await open({ args: ['--disable-gpu', '--use-angle=swiftshader'] });

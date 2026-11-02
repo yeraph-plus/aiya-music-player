@@ -1,16 +1,6 @@
 #!/usr/bin/env node
-// 打包前置：编出 aiya-audio-host 并放到 Tauri externalBin 认得的路径。
-//
-// 为什么需要这一步：
-// 1) sidecar 不是 aiya.exe 的依赖，`tauri build` 不会顺带编它；
-// 2) Tauri 的 externalBin 要求文件名带**目标三元组后缀**
-//    （`aiya-audio-host-x86_64-pc-windows-msvc.exe`），复制进安装目录时
-//    才会被剥成 `aiya-audio-host.exe` —— 宿主 `locate_host_exe()` 找的正是
-//    主程序同目录的这个名字；
-// 3) profile 必须与主程序一致（release），否则安装包里混进一个 debug 引擎，
-//    体积大 10 倍、性能也不对。
-//
-// 用法：node tools/build-sidecar.mjs [--release|--debug]
+// 打包前置：编出 aiya-audio-host 并放到 Tauri externalBin 认得的路径。为什么需要这一步：1) sidecar 不是 aiya.exe 的依赖，`tauri build` 不会顺带编它；2) Tauri 的 externalBin 要求文件名带**目标三元组后缀** （`aiya-audio-host-x86_64-pc-windows-msvc.exe`），复制进安装目录时才会被剥成
+// `aiya-audio-host.exe` —— 宿主 `locate_host_exe()` 找的正是主程序同目录的这个名字；3) profile 必须与主程序一致（release），否则安装包里混进一个 debug 引擎，体积大 10 倍、性能也不对。用法：node tools/build-sidecar.mjs [--release|--debug]
 
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
@@ -28,7 +18,7 @@ if (!(env.PATH || "").toLowerCase().includes(cargoBin.toLowerCase())) {
   env.PATH = `${cargoBin}${isWin ? ";" : ":"}${env.PATH || ""}`;
 }
 
-// panic 恢复策略（ADR-0002 守护链的一环）：sidecar 任何线程 panic 都必须
+// panic 恢复策略：sidecar 任何线程 panic 都必须
 // 升级成进程死亡。宿主看门狗只认心跳（5s 超时 → kill → 换代重连 → 恢复现场），
 // 认不出"引擎线程已 panic 但进程还活着"的僵尸——心跳照跳、声音永远静默。
 // panic=abort 让任意线程的 panic 直接 abort：心跳停 → 看门狗接管换代重建

@@ -17,7 +17,7 @@ use crate::smart::to_sql_value;
 
 type Binder = Box<dyn Fn(&mut Vec<Box<dyn ToSql>>) + Send>;
 
-/* ---------------- 文件事实（只读，供外部工具取快照） ---------------- */
+/* 文件事实（只读，供外部工具取快照） */
 
 /// 一个在线曲目在磁盘上的身份：路径 + 两条失效判据。
 ///
@@ -124,7 +124,7 @@ pub fn resolve_paths_aligned(conn: &Connection, paths: &[String]) -> DbResult<Ve
     Ok(keys.iter().map(|k| found.get(k).cloned()).collect())
 }
 
-/* ---------------- DTO ---------------- */
+/* DTO */
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
@@ -179,7 +179,7 @@ pub struct TrackPage {
     pub took_ms: u32,
 }
 
-/* ---------------- 查询参数 ---------------- */
+/* 查询参数 */
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -276,7 +276,7 @@ fn default_source() -> TrackSource {
     TrackSource::Library
 }
 
-/* ---------------- 游标（与 contracts/query.ts 同格式：base64url(JSON [value,id])） ---------------- */
+/* 游标（与 contracts/query.ts 同格式：base64url(JSON [value,id])） */
 
 fn encode_cursor(value: &Value, id: &str) -> DbResult<String> {
     let json = serde_json::to_string(&[value, &Value::from(id)])
@@ -300,7 +300,7 @@ fn decode_cursor(cursor: &str) -> DbResult<(Value, String)> {
     Ok((arr[0].clone(), id))
 }
 
-/* ---------------- SQL 构造 ---------------- */
+/* SQL 构造 */
 
 const SELECT_COLS: &str = "t.id, t.title, t.artist_id, ar.name, t.album_id, al.title, al_ar.name, \
      t.duration_ms, t.track_no, t.disc_no, t.year, t.added_at, t.artwork_id, \
@@ -332,7 +332,6 @@ const JOIN_AGG: &str =
 
 /// JOIN 与排序（playlist/recent/mostPlayed 不吃用户 sort 字段）。
 /// 例外：recent 吃 `direction`——曲库页「最近播放」tab 二次点击翻转正倒序
-/// （2026-10-30），sort 字段仍忽略；mostPlayed 的次键是最近播放时间
 /// （docs/28）：次数并列时"最近还在听"排前面——推荐页 top-15 的第 15 名
 /// 争夺战里，半年没听的那首先出去。
 fn join_and_order(q: &TrackWindowQuery) -> (&'static str, &'static str) {
@@ -446,8 +445,7 @@ fn build_where(
         }));
         where_clauses.push(clause.clone());
     }
-    // 歌单来源：JOIN_PLAYLIST 从 playlist_items 出发，必须按 playlist_id 过滤，
-    // 否则任何歌单都返回全部曲目（P0）。占位符顺序 = binder 推入顺序
+    // 歌单来源：JOIN_PLAYLIST 从 playlist_items 出发，必须按 playlist_id 过滤，否则任何歌单都返回全部曲目（P0）。占位符顺序 = binder 推入顺序
     // （search → artist → album → time → conds → playlist → cursor）。
     if let TrackSource::Playlist { playlist_id } = &q.source {
         let pid = playlist_id.clone();
@@ -573,7 +571,7 @@ pub fn row_to_track(r: &Row<'_>) -> rusqlite::Result<TrackRow> {
         track_no: r.get(8)?,
         disc_no: r.get(9)?,
         year: r.get(10)?,
-        // DB 存 unix 秒，DTO 一律毫秒（docs/17 §3.1）
+        // DB 存 unix 秒，DTO 一律毫秒
         added_at_ms: r.get::<_, i64>(11)? * 1000,
         artwork_id: r.get(12)?,
         play_count: r.get(13)?,
@@ -589,11 +587,11 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
     let started = Instant::now();
     let limit = q.limit.clamp(1, 500) as i64;
 
-    // ---------- 筛选器临时条件（与动态歌单同键，不落库）----------
+    // 筛选器临时条件（与动态歌单同键，不落库）
     let cond_clauses =
         crate::smart::conds_from_value(q.conds.as_ref().unwrap_or(&serde_json::Value::Null))?;
 
-    // ---------- 游标解析 ----------
+    // 游标解析
     let mut cursor_filter: Option<String> = None;
     let mut cursor_binders: Vec<Binder> = Vec::new();
     let mut offset: i64 = 0;
@@ -625,9 +623,8 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
 
     let page_limit = limit;
 
-    // ---------- COUNT（同 WHERE 但**不含游标谓词**）----------
-    // 此前 COUNT 复用了带游标条件的 head，于是 total 是"游标之后的剩余量"，
-    // 每翻一页递减 —— UI 拿它画滚动条/显示"N 首"会一路缩水。
+    // COUNT（同 WHERE 但**不含游标谓词**）此前 COUNT 复用了带游标条件的 head，于是 total
+    // 是"游标之后的剩余量"，每翻一页递减 —— UI 拿它画滚动条/显示"N 首"会一路缩水。
     let total: i64 = {
         let (count_sql, count_binders) = build_count(q, &cond_clauses);
         let mut stmt = conn.prepare(&count_sql)?;
@@ -640,8 +637,7 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
         raw
     };
 
-    // ---------- 页数据（limit+1 探测 next）----------
-    // 读满 limit+1 行才视为 has_more（多出的探测行丢弃）；不能用 total 取模判断
+    // 页数据（limit+1 探测 next）读满 limit+1 行才视为 has_more（多出的探测行丢弃）；不能用 total 取模判断
     // —— total 恰为 limit 整数倍时会多发一次空页。
     let (items, has_more): (Vec<TrackRow>, bool) = {
         let sql = format!("{head} LIMIT ? OFFSET ?");
@@ -662,7 +658,7 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
         (out, more)
     };
 
-    // ---------- next_cursor ----------
+    // next_cursor
     let next_cursor = if has_more && key_expr(q).is_some() {
         let last = items.last().expect("items nonempty when has_more");
         let value: Value = match q.sort {
@@ -1014,7 +1010,6 @@ mod tests {
         let conn = open_in_memory().unwrap();
         insert_fixtures(&conn);
         let mut q = q_library(Sort::Title, Mode::Offset, None, Some(0));
-        // recent 吃 direction（2026-10-30）：本测试的意图是"默认语义顺序"，
         // 显式给 Desc——q_library 缺省 Asc，不显式给会翻成最早优先
         q.direction = Direction::Desc;
 
@@ -1027,10 +1022,10 @@ mod tests {
         let page = list_tracks(&conn, &q).unwrap();
         assert_eq!(page.items[0].id, "t1");
         assert_eq!(page.items[0].play_count, 2);
-        // 600 是 DB 里的秒，DTO 一律毫秒（docs/17 §3.1）——这条断言同时锁住换算
+        // 600 是 DB 里的秒，DTO 一律毫秒——这条断言同时锁住换算
         assert_eq!(page.items[0].last_played_at_ms, Some(600_000));
 
-        // 次数并列时按最近播放优先（docs/28 次键）：t4 与 t2 都是 1 次，
+        // 次数并列时按最近播放优先：t4 与 t2 都是 1 次
         // t4 的最后播放（800s）晚于 t2（700s），所以 t4 排前面
         conn.execute_batch(
             "INSERT INTO tracks (id,title,title_norm,duration_ms,added_at,path,path_lower,size_bytes,mtime,play_count) VALUES
@@ -1047,7 +1042,6 @@ mod tests {
         );
     }
 
-    /// 曲库页「最近播放」tab 二次点击翻转正倒序（2026-10-30）：
     /// recent 来源的 ORDER BY 跟随 direction，t.id 作稳定次键。
     #[test]
     fn recent_direction_flips_order() {

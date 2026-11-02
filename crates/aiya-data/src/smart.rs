@@ -182,7 +182,7 @@ impl SmartPlan {
             .as_object()
             .ok_or_else(|| DbError::Custom("规则必须是 JSON 对象".into()))?;
         let mut clauses = Vec::new();
-        // all: 条件数组，全部 AND（docs/40 拍板：首期不做 OR/嵌套，UI 也只出"满足全部"）
+        // all: 条件数组，全部 AND（拍板：首期不做 OR/嵌套，UI 也只出"满足全部"）
         if let Some(all) = obj.get("all") {
             let arr = all
                 .as_array()
@@ -269,7 +269,6 @@ const JOIN_SMART: &str = "LEFT JOIN artists ar ON ar.id = t.artist_id \
      LEFT JOIN albums al ON al.id = t.album_id";
 
 /// 解析条件数组（`[{field,op,value}, ...]`）为 repo 可绑定的子句序列。
-/// 动态歌单的 `all` 与**列表筛选器的 conds**（2026-10-28：同一批字段键，
 /// 但筛选器不落库）共用这一套解析与类型校验。
 fn parse_conds(arr: &[Value]) -> DbResult<Vec<(String, Value)>> {
     let mut clauses = Vec::new();
@@ -321,9 +320,8 @@ pub fn conds_from_value(v: &Value) -> DbResult<Vec<(String, Value)>> {
 fn build_clause(field: Field, op: Op, value: &CondValue) -> (String, Value) {
     match (field, value) {
         (Field::Genre, CondValue::Text(s)) => match op {
-            // genre_norm 与值同走 norm（大小写/空白语义一致）；eq 用 = 精确匹配；
-            // contains 的 LIKE 值必须过 escape_like（repo/facets 同一套规则），
-            // 否则规则里写 "50%" 会匹配出全部曲目
+            // genre_norm 与值同走 norm（大小写/空白语义一致）；eq 用 = 精确匹配；contains 的 LIKE 值必须过
+            // escape_like（repo/facets 同一套规则），否则规则里写 "50%" 会匹配出全部曲目
             Op::Eq => ("t.genre_norm = ?".into(), Value::from(norm(s))),
             Op::Contains => (
                 "t.genre_norm LIKE ? ESCAPE '\\'".into(),
@@ -500,7 +498,6 @@ mod tests {
 
     #[test]
     fn sort_parse() {
-        // limit 已随"动态查询"退役（2026-10-30 物化，结果不再截断）：旧版本
         // rule_json 里残留的 limit 键被静默忽略（对象里只读 all/sort/direction），
         // 旧歌单照常解析；未知 sort 仍拒绝
         let p = plan(json!({ "sort": "title", "direction": "asc", "limit": 50 }));

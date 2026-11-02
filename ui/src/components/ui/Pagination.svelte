@@ -63,7 +63,7 @@
 <style>
   /*
    * bits-ui 组件的 class 不带 scoped 哈希 → 样式一律 :global(.k-*)。
-   * 与 Menu.svelte 同一条规矩（docs/24 §4.5）。
+   * 与 Menu.svelte 同一条规矩。
    */
   :global(.k-pag) {
     display: flex;

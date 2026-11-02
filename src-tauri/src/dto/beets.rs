@@ -171,7 +171,7 @@ pub struct BeetsConfig {
     pub imported_count: usize,
 }
 
-/* ---------------- beets 查询页（docs/47） ---------------- */
+/* beets 查询页 */
 
 /// 查询命中行。
 ///

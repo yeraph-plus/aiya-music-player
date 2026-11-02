@@ -16,7 +16,7 @@ import { readLook } from '../lib/look';
 import { notify } from './notify.svelte';
 
 /**
- * 一级路由：**12 个值**，每个值对应 `App.svelte` 的渲染分支（docs/24 §3.2；
+ * 一级路由：**12 个值**，每个值对应 `App.svelte` 的渲染分支（
  * `albums` / `artists` 共用一个宫格分支）。
  *
  * 列表页为 `library` / `playlist` / `album` / `artist` / `search`，共用
@@ -31,8 +31,7 @@ import { notify } from './notify.svelte';
  * 共享同一存储位；两者不会同时可见（不同路由值），语义不冲突。
  *
  * 已退役的路由名由 `restore()` 换算，来源见该函数的 `RETIRED_PAGES`：
- * `recent` / `mostPlayed`（docs/28）、`tools`（docs/48 §5）、`radio`
- * （docs/52 §7.4）。
+ * `recent` / `mostPlayed`、`tools`、`radio`
  */
 export type AppPage =
   | 'home'
@@ -83,7 +82,7 @@ export function isListPage(page: AppPage): boolean {
  * 本 store 只持有状态，不执行刷新：reload 与 TrackWindow 在 App，状态变更后由
  * App 触发一次 reload。
  *
- * 校验边界（docs/18 §4.3）：`app_get_settings` / `app_get_ui_state` 返回无 DTO 的
+ * 校验边界：`app_get_settings` / `app_get_ui_state` 返回无 DTO 的
  * 动态 JSON（旧配置缺字段是常态），经 zod 处理——开发期 `devValidate` 报形状不符，
  * 生产期只合并默认值。其余命令的返回值由 Rust 生成类型，不二次校验。
  */
@@ -95,7 +94,7 @@ class UiStore {
   /** EQ 抽屉（播放条 Popover）会话态开合，与队列抽屉互斥（docs/25 §1） */
   eqOpen = $state(false);
   /**
-   * 列表批量操作模式（docs/27）：开 = 显示勾选列，关 = 隐藏。
+   * 列表批量操作模式：开 = 显示勾选列，关 = 隐藏。
    * 会话态不持久化；Ctrl+点击行会自动开启（`lib/row-selection.ts`），
    * 关闭时由调用方清空选择集。
    */
@@ -130,9 +129,8 @@ class UiStore {
       case 'album':
       case 'artist':
       case 'search':
-        // 专辑/艺人详情页的曲目列表 = 曲库查询 + albumId/artistId 筛选，
-        // 搜索页 = 曲库查询 + search 过滤 —— 数据形状与曲库页完全相同
-        // （见类头注释"参数复用筛选字段"）
+        // 专辑/艺人详情页的曲目列表 = 曲库查询 + albumId/artistId 筛选，搜索页 = 曲库查询 + search 过滤 ——
+        // 数据形状与曲库页完全相同 （见类头注释"参数复用筛选字段"）
         return LIBRARY_VIEW;
       case 'playlist': {
         const id = this.playlistId ?? '';
@@ -160,7 +158,7 @@ class UiStore {
   albumId = $state<string | null>(null);
 
   /**
-   * 曲库页的 tab 索引：全部曲目 / 最近播放 / 最近添加（docs/28）。
+   * 曲库页的 tab 索引：全部曲目 / 最近播放 / 最近添加。
    *
    * 会话态，不持久化：重启回到「全部曲目」。仅在 `page === 'library'` 时参与
    * `list.query()` 的 source 换算；搜索页与详情页同走 `LIBRARY_VIEW`，不使用 tab。
@@ -168,8 +166,7 @@ class UiStore {
   libraryTab = $state<'all' | 'recent' | 'added'>('all');
 
   /**
-   * Beets 页的子页：安装 / 分析 / 整理（docs/51 §1）。未安装时后两个 tab 置灰
-   * （docs/48）。
+   * Beets 页的子页：安装 / 分析 / 整理。未安装时后两个 tab 置灰
    *
    * 跨导航保留：整理页是长流程（选目录 → 联网匹配 → 逐张专辑挑候选），中途转到
    * 曲库再返回时保持原 tab。
@@ -213,7 +210,7 @@ class UiStore {
     },
   };
 
-  /* ---------------- 视图状态持久化 ---------------- */
+  /* 视图状态持久化 */
 
   /**
    * 防抖写 UiState。
@@ -249,7 +246,7 @@ class UiStore {
   }
 
   /**
-   * 还原 UiState，兼容拆页之前的旧形状（docs/24 §3.2）。
+   * 还原 UiState，兼容拆页之前的旧形状。
    *
    * 旧形状：`page: 'home'|'nowPlaying'|'radio'|'settings'` + `libraryDetail` +
    * `view: 'library'|'recent'|'mostPlayed'|'playlist:xxx'`。旧文件中 `page` 为
@@ -264,9 +261,9 @@ class UiStore {
 
     // 退役路由换算表。未写入此表会导致强制转型把不存在的路由写进 `ui.page`：
     // 侧栏零高亮、整页落到 `App.svelte` 的 `{:else}` 分支，该脏值还会写回磁盘。
-    // - recent / mostPlayed：单页退役，语义并入曲库 tab（docs/28）
-    // - tools：扫描入库页并入设置页「曲库」组（docs/48 §5）
-    // - radio：改名 live，页面语义整体更换（docs/52 §7.4）
+    // recent / mostPlayed：单页退役，语义并入曲库 tab
+    // tools：扫描入库页并入设置页「曲库」组
+    // radio：改名 live，页面语义整体更换
     const RETIRED_PAGES: ReadonlyMap<string, AppPage> = new Map([
       ['recent', 'library'],
       ['mostPlayed', 'library'],
@@ -294,7 +291,7 @@ class UiStore {
     if (this.page === 'settings') void this.refreshDiagnostics();
   }
 
-  /* ---------------- 一级页面与队列抽屉 ---------------- */
+  /* 一级页面与队列抽屉 */
 
   openPage(page: AppPage): void {
     this.page = page;
@@ -401,7 +398,7 @@ class UiStore {
   /** 队列抽屉开合的**唯一入口**（`PlayerBar` 的 Popover 直接受控于它） */
   setQueue(open: boolean): void {
     this.queueOpen = open;
-    // EQ 抽屉与队列同侧同层，互斥（docs/25 §1）：一个开另一个关
+    // EQ 抽屉与队列同侧同层，互斥：一个开另一个关
     if (open) this.eqOpen = false;
   }
 
@@ -415,7 +412,7 @@ class UiStore {
     if (open) this.queueOpen = false;
   }
 
-  /* ---------------- 设置 ---------------- */
+  /* 设置 */
 
   /**
    * 必须 snapshot：settings 是 `$state`，其中的 `shortcuts` / `output` 是 Proxy。
@@ -473,10 +470,10 @@ class UiStore {
   }
 
   /**
-   * beets 运行时安装状态（docs/29 批 C）。
+   * beets 运行时安装状态。
    *
    * 放在 ui store 而不是组件里：进度来自事件流，而"组件不直接 listen"是
-   * docs/17 §4 的硬约定（多个组件同时开时事件会被订阅多次）。
+   * 的硬约定（多个组件同时开时事件会被订阅多次）。
    */
   beetsInstall = $state<{ running: boolean; stage: string; message: string; error: string | null }>({
     running: false,
@@ -486,7 +483,7 @@ class UiStore {
   });
 
   /**
-   * 内嵌插件表（docs/51 §1）：`[]` = 还没加载过。
+   * 内嵌插件表：`[]` = 还没加载过。
    *
    * 内嵌表在二进制里，"还没装"的时候也能给用户看清单，离线也可用；
    * 装没装、缺不缺依赖的三态由 `beets_status` 的 pluginHealth 另行给出。
@@ -518,7 +515,7 @@ class UiStore {
         return;
       }
       if (stage === 'uninstall') {
-        // 卸载与安装共用同一条事件流，只靠 stage 区分（docs/51 §2.2）。
+        // 卸载与安装共用同一条事件流，只靠 stage 区分。
         // `done` 是卸载的终态：带 removed / files / bytes / message。
         if (type === 'error') {
           this.beetsUninstall = { running: false, message: '', error: message || '卸载失败' };
@@ -545,7 +542,7 @@ class UiStore {
   }
 
   /**
-   * 安装/更新便携包（单轨，docs/58）。
+   * 安装/更新便携包（单轨）。
    *
    * `plugins` 是预置之外的启用清单：装完写进 settings，工具侧渲染 config 照它
    * 启用。失败原因原样透传到按钮旁的文字（本机环境差异无法预判）。
@@ -597,7 +594,7 @@ class UiStore {
   }
 
   /**
-   * 卸载组件（docs/51 §2.2）：只删安装目录，整理库与分析库不动。
+   * 卸载组件：只删安装目录，整理库与分析库不动。
    *
    * 进度走同一条 `beets:install` 事件流（`stage: uninstall`），终态后宿主会
    * 补一条 `finished` 带新 status，所以这里不需要再手动刷一次。
@@ -611,7 +608,7 @@ class UiStore {
     }
   }
 
-  /* ---------------- 启动引导 ---------------- */
+  /* 启动引导 */
 
   /** 首屏并发拉取：设置 / UiState。返回恢复出的 lastScrollTop。
    *

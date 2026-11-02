@@ -18,7 +18,7 @@
 @import './styles/beets.css';
 
 /* Tailwind v4：**只引 theme + utilities，不引 preflight**
- * （docs/24 决策 5：依赖与 vite 插件保留、入口裁剪）。
+ * 依赖与 vite 插件保留、入口裁剪。
  *
  * 两件实测出来的事：
  *

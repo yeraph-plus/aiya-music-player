@@ -84,9 +84,8 @@ fn q_page(conn: &Connection, offset: usize) -> std::time::Duration {
         conds: None,
         source: aiya_data::repo::TrackSource::Library,
         limit: 200,
-        // 深分页必须用 Offset 模式：Cursor 模式**根本不读 offset**，
-        // 之前这里写的是 Cursor(offset)，三次"深分页"测的其实都是首页，
-        // assert 全部自证通过（假绿）。
+        // 深分页必须用 Offset 模式：Cursor 模式**根本不读 offset**，之前这里写的是
+        // Cursor(offset)，三次"深分页"测的其实都是首页，assert 全部自证通过（假绿）。
         mode: aiya_data::repo::Mode::Offset,
         cursor: None,
         offset: Some(offset),
@@ -119,9 +118,8 @@ fn perf_50k_baseline() {
         println!("深分页 @{:>5}:     {:>8.1?}", off, t);
         worst = worst.max(t);
     }
-    // 游标模式（推荐路径，无 OFFSET 扫描）；cursor = base64url(JSON[value,id])。
-    // value/id 从库里**真实取**中位的 title_norm：之前手写成 `曲目049999`，
-    // 夹具并不保证那一行存在，测的是空页（items.len()==0 也照样通过）。
+    // 游标模式（推荐路径，无 OFFSET 扫描）；cursor = base64url(JSON[value,id])。value/id 从库里**真实取**中位的
+    // title_norm：之前手写成 `曲目049999`，夹具并不保证那一行存在，测的是空页（items.len()==0 也照样通过）。
     let mid_title_norm: String = conn
         .query_row(
             "SELECT title_norm FROM tracks ORDER BY title_norm ASC, id ASC LIMIT 1 OFFSET 25000",
@@ -193,10 +191,8 @@ fn perf_50k_baseline() {
         spage.total
     );
 
-    // 验收门槛（对照旧基线 cargo 侧口径）：
-    // * 首屏 / 游标续页走索引 seek，必须与旧基线同量级（旧基线深分页 2.3ms）；
-    // * offset 深分页天然 O(offset)（SQLite 要跳 49800 条索引项），只作为
-    //   "兜底路径"设宽门槛；UI 的曲库列表必须用 cursor 模式。
+    // 验收门槛（对照旧基线 cargo 侧口径）：首屏 / 游标续页走索引 seek，必须与旧基线同量级（旧基线深分页 2.3ms）；offset 深分页天然
+    // O(offset)（SQLite 要跳 49800 条索引项），只作为 "兜底路径"设宽门槛；UI 的曲库列表必须用 cursor 模式。
     assert!(t1.as_millis() < 60, "首屏 {}ms 过慢", t1.as_millis());
     assert!(
         worst.as_millis() < 100,

@@ -49,9 +49,8 @@
   let clearConfirm = $state(false);
   let clearing = $state(false);
 
-  /* 两个确认条是页面内联区块，不使用模态语义：无焦点圈禁与滚动锁的容器
-   * 不应声明 role="alertdialog"；取消键也不设 autofocus，非模态区块不夺取
-   * 焦点。出现时的播报由条内 role="alert" 的文本承担。 */
+  /* 两个确认条是页面内联区块，不使用模态语义：无焦点圈禁与滚动锁的容器不应声明 role="alertdialog"；取消键也不设
+     autofocus，非模态区块不夺取焦点。出现时的播报由条内 role="alert" 的文本承担。 */
 
   const stats = $derived(library.stats);
 
@@ -59,7 +58,7 @@
     void library.loadRoots();
   });
 
-  /* ---------------- 目录条目操作 ---------------- */
+  /* 目录条目操作 */
 
   /** 移除单个目录：先查影响面（曲目数），出确认条 */
   async function requestRemove(root: string): Promise<void> {
@@ -129,7 +128,7 @@
     await scan.pickRootAndScan();
   }
 
-  /* ---------------- 清空曲库 ---------------- */
+  /* 清空曲库 */
 
   async function doClear(): Promise<void> {
     clearing = true;
@@ -146,7 +145,7 @@
     }
   }
 
-  /* ---------------- 执行状态卡片 ---------------- */
+  /* 执行状态卡片 */
 
   /**
    * 阶段文案（两段式进度）。
@@ -261,7 +260,7 @@
           <li class="root-row">
             <span class="root-path" title={root}>{root}</span>
             <!-- beets 相关设置不在本组件：曲库页只管理应用自身的索引库，
-                 beets 的 config.yaml 由「整理库」页独立维护（docs/48） -->
+                 beets 的 config.yaml 由「整理库」页独立维护 -->
             <IconButton
               label={`移除目录 ${root}`}
               size="sm"
@@ -275,9 +274,7 @@
       </ul>
     {/if}
 
-    <!-- 执行状态并入本卡，以分隔线分区。进行中：阶段与任务名一行，取消按钮位于
-         该行右端；结束后只留一行统计。不设标题行——分隔线已表达分区，
-         「执行状态」四字不携带额外信息 -->
+    <!-- 执行状态并入本卡，以分隔线分区。进行中：阶段与任务名一行，取消按钮位于该行右端；结束后只留一行统计。不设标题行——分隔线已表达分区，「执行状态」四字不携带额外信息 -->
     <div class="status-block">
       {#if scan.lastError}
         <div class="tool-error" role="alert">{scan.lastError}</div>

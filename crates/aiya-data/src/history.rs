@@ -50,7 +50,6 @@ pub fn clear(conn: &mut Connection) -> DbResult<bool> {
 
 /// 按保留周期裁剪历史行（防表膨胀）。`cutoff_secs` 之前的行删除。
 ///
-/// 语义约定（2026-10-28 拍板）：history 表 = "保留周期内的播放记录"。
 /// **只删 history 行，不动 tracks 的统计列**——`play_count` 是累计
 /// 总次数（动态歌单的 playCount 条件用它，语义是"听过多少次"而非
 /// "周期内听过几次"），`last_played_at` 是"最后一次"，两者都没有

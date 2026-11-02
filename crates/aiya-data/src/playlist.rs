@@ -37,7 +37,6 @@ fn write_tx(conn: &mut Connection) -> DbResult<rusqlite::Transaction<'_>> {
 /// 与旧仓库一致：名称按字符截断到 80，避免把 UTF-8 多字节字符切成半个。
 pub const MAX_NAME_CHARS: usize = 80;
 
-/// 加歌位置语义（2026-10-30 硬迭代）：所有"添加到歌单"一律**首行插入**——
 /// 最后入库的内容在最前，歌单固定按入库倒序工作（新块整体顶到头部，
 /// 块内保持入参顺序）。旧的双模式（Append/Next）随本次迭代删除。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -104,7 +103,6 @@ pub fn create(
     Ok(outcome)
 }
 
-/// 建动态歌单（2026-10-30 硬迭代：物化模型）——曲目**入库**（playlist_items），
 /// 规则存 `rule_json` 供刷新/重算；与普通歌单能力完全相同（拖拽/删曲/混入）。
 /// 建单即按规则物化一次：命中的曲目按确定性顺序（title_norm、id）写入首部。
 /// 规则在入库前先编译一遍（`SmartPlan::from_value`）——写库时校验比读库时炸友好得多。
@@ -264,7 +262,6 @@ pub fn clear(conn: &mut Connection, playlist_id: &str, now: i64) -> DbResult<boo
     Ok(true)
 }
 
-/// 动态歌单的曲目列表此前是规则的投影（2026-10-30 硬迭代前）——加歌/删歌/
 /// 排序/清空都被 `ensure_manual` 拦下。物化模型后与普通歌单能力完全相同，
 /// 守卫删除；规则只影响"刷新/重算"两个动作，不影响手动修改。
 pub fn add_tracks(
@@ -357,7 +354,7 @@ pub fn reorder_playlists(conn: &mut Connection, from: i64, to: i64) -> DbResult<
     tx.commit().map_err(DbError::Sql)
 }
 
-/* ---------------- 内部：位置维护 ---------------- */
+/* 内部：位置维护 */
 
 fn touch(conn: &Connection, playlist_id: &str, now: i64) -> DbResult<()> {
     conn.execute(
@@ -391,7 +388,6 @@ fn rewrite_positions(conn: &Connection, item_ids: &[String]) -> DbResult<()> {
 ///
 /// 为什么过滤不存在的曲目而不是让外键报错：UI 的多选可能横跨一次重新扫描，
 /// 传进来的 ID 里混着刚被删掉的曲目；整批报错会让"加入 20 首成功 19 首"变成零。
-/// 首行插入（2026-10-30 语义）：去重 + 过滤已从库中删除的 ID 后，把新增块
 /// 整体顶到歌单最前（块内保持入参顺序）——最后入库的内容在最前，歌单固定
 /// 按入库倒序工作。先按"实际新增条数"整体后移旧行再插 0..n-1，顺序反了会
 /// position 撞车。
@@ -545,7 +541,6 @@ mod tests {
                 skipped: 3
             }
         );
-        // 首行插入：新块顶到最前（2026-10-30 语义）
         assert_eq!(order(&conn, "p1"), v(&["t3", "t1", "t2"]));
     }
 
@@ -569,7 +564,6 @@ mod tests {
         assert_eq!(positions(&conn, "p1"), vec![0, 1]);
     }
 
-    /// 双曲块首行插入：块内保持入参顺序、整块顶到最前（2026-10-30 语义）。
     #[test]
     fn add_tracks_inserts_block_at_head_in_input_order() {
         let mut conn = fixture();
@@ -702,8 +696,6 @@ mod tests {
         reorder_playlists(&mut conn, -1, 0).unwrap();
         assert!(exists(&conn, "a").unwrap());
     }
-
-    /* ---------------- 动态歌单物化（2026-10-30 硬迭代） ---------------- */
 
     fn smart_rule(album: &str) -> serde_json::Value {
         serde_json::json!({

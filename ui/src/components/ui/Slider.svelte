@@ -123,9 +123,8 @@
     cursor: default;
   }
 
-  /* 竖向（EQ 频段）：轨道竖画，宽度即厚度，高度由调用方指定。
-     min-width 须归零：横向档的 min-width:40 会把 22px 的竖轨撑到 40px，导致
-     EQ 抽屉出现横向滚动 */
+  /* 竖向（EQ 频段）：轨道竖画，宽度即厚度，高度由调用方指定。min-width 须归零：横向档的 min-width:40 会把
+     22px 的竖轨撑到 40px，导致 EQ 抽屉出现横向滚动 */
   :global(.k-slider.vert) {
     width: 22px;
     min-width: 0;

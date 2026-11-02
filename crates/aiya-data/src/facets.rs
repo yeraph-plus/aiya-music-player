@@ -332,9 +332,8 @@ mod tests {
     fn distinct_genres_dedups_by_norm_and_skips_empty() {
         let conn = open_in_memory().unwrap();
         fixtures(&conn);
-        // 三个流派值：Pop/pop 同 norm 归一组；空串与 NULL 不出现。
-        // genre_norm 是普通列（不是生成列），UPDATE 必须两个一起写——
-        // beets_sync 写入时也是成对填的。
+        // 三个流派值：Pop/pop 同 norm 归一组；空串与 NULL 不出现。genre_norm 是普通列（不是生成列），UPDATE
+        // 必须两个一起写—— beets_sync 写入时也是成对填的。
         conn.execute(
             "UPDATE tracks SET genre='Pop', genre_norm='pop' WHERE id='t1'",
             [],

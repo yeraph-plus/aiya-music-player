@@ -1,5 +1,5 @@
 /**
- * 事件订阅（docs/17 §4）：**组件不直接 listen**，只在 store 层订阅。
+ * 事件订阅：**组件不直接 listen**，只在 store 层订阅。
  *
  * 载荷类型全部来自 Rust（`generated/`），除了两条动态增量事件：
  * `scan:progress` 与 `beets:import` —— 它们的形状会演化，走 zod（后续页面接
@@ -50,13 +50,13 @@ export const events = {
   beetsImport: (cb: (e: DynamicJson) => void) => sub<DynamicJson>('beets:import', cb),
 
   /**
-   * beets 运行时安装进度（docs/29 批 C）：progress / error / done / finished。
+   * beets 运行时安装进度：progress / error / done / finished。
    * `finished` 带 `status`（与 `beets_status` 同形），UI 直接用它刷新状态块。
    */
   beetsInstall: (cb: (e: DynamicJson) => void) => sub<DynamicJson>('beets:install', cb),
 
   /**
-   * beets 曲库维护（docs/29 批 D）：progress / moveItem / duplicateGroup /
+   * beets 曲库维护：progress / moveItem / duplicateGroup /
    * adoptDone / updateDone / duplicatesDone / moveDone / cancelled / sessionFailed。
    *
    * 与 `beets:import` **分通道**：导入面板在听那条，混在一起会让"导入进度"
@@ -66,7 +66,7 @@ export const events = {
   beetsMaintenance: (cb: (e: DynamicJson) => void) => sub<DynamicJson>('beets:maintenance', cb),
 
   /**
-   * beets 索引增强（docs/45）：`progress` → 若干 `enrichItem` →
+   * beets 索引增强：`progress` → 若干 `enrichItem` →
    * `enrichDone`（工具侧终态）→ `enrichPersisted`（宿主侧终态）。
    *
    * **两条终态不是冗余**：`enrichDone` 说"工具跑了什么"，`enrichPersisted`

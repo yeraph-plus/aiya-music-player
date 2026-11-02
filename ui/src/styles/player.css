@@ -1,6 +1,6 @@
 /* player.css — 播放相关：队列/歌词面板、播放条、批量操作条。 */
 
-/* ---------------- 队列 / 歌词面板 ---------------- */
+/* 队列 / 歌词面板 */
 
 .queue-panel,
 .lyrics-panel {
@@ -9,7 +9,7 @@
   border-left: 1px solid var(--line);
   background: var(--surface-2);
   /* T4c：backdrop-filter 摘除。队列抽屉开着时背景频谱在动，玻璃就是
-   * 每帧重模糊（docs/25 §5 方案 B 红线）；抽屉本体靠不透明底色区分层次。 */
+   * 每帧重模糊；抽屉本体靠不透明底色区分层次。 */
   display: grid;
   grid-template-rows: auto 1fr;
   min-height: 0;
@@ -115,7 +115,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 临时项的来源标记（`直播` / `文件`，docs/52 §7.2）。
+/* 临时项的来源标记（`直播` / `文件`）。
    一个小方标签而不是纯文字：它要回答的是"这一行不属于曲库"，
    与标题/艺人同字号会被当成艺人名的一部分读过去。 */
 .q-tag {
@@ -133,7 +133,7 @@
 
 /* 队列/歌词的空态已统一到 EmptyState.svelte（.k-empty） */
 
-/* docs/25 §6：抽屉壳是 SideDrawer（窗口左缘滑出，AppShell 宿主），
+/* 抽屉壳是 SideDrawer（窗口左缘滑出，AppShell 宿主）
    内容全出血铺满抽屉面板——几何由壳负责，这里只归零旧气泡形状。 */
 .queue-float {
   width: 100%;
@@ -149,10 +149,8 @@
   background: transparent;
 }
 
-/* EQ 抽屉体：铺满抽屉。内部尺寸（波段宽/轨道高/卡片）全部收进
-   EqPanel.svelte 自身——它只在抽屉里用，旧 popover 时代的
-   .eq-bands/.eq-band/.eq-track 覆盖已删（与组件作用域样式同优先级、
-   注入顺序靠后不生效，正是横滚 bug 的帮凶之一）。 */
+/* EQ 抽屉体：铺满抽屉。内部尺寸（波段宽/轨道高/卡片）全部收进 EqPanel.svelte 自身——它只在抽屉里用，旧 popover 时代的
+   .eq-bands/.eq-band/.eq-track 覆盖已删（与组件作用域样式同优先级、注入顺序靠后不生效，正是横滚 bug 的帮凶之一）。 */
 .eq-drawer-body {
   width: 100%;
   height: 100%;
@@ -182,9 +180,8 @@
   padding: 0 16px;
 }
 
-/* 上下各半容器高的空白占位：歌词（含首尾句）整体居中显示。
-   flex-basis 百分比由容器的确定高度算出，不用 JS 测量；
-   flex-shrink 0——歌词再长也不许压缩占位，多出的长度交给滚动。 */
+/* 上下各半容器高的空白占位：歌词（含首尾句）整体居中显示。flex-basis 百分比由容器的确定高度算出，不用 JS
+   测量；flex-shrink 0——歌词再长也不许压缩占位，多出的长度交给滚动。 */
 .lyrics-pad {
   flex: 0 0 50%;
 }

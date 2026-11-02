@@ -52,7 +52,6 @@ pub struct TrackAudio {
     /// 按位深分支会把 m4a 标成「44.1 kHz / 16 bit / 无损」。
     ///
     /// 由 [`TrackAudio::infer_lossless`] 在出口派生，不落库（理由见该函数）。
-    /// 2026-10-25 补：Tauri 重写时整个字段丢了，导致播放条徽章恒为「未知」。
     pub lossless: Option<bool>,
 }
 
@@ -254,7 +253,7 @@ pub fn is_stream_path(path: &str) -> bool {
             .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
 }
 
-/* ---------------- 临时项（能播但不进曲库，docs/52 §6） ---------------- */
+/* 临时项（能播但不进曲库） */
 
 /// 拖入的本地文件的 id 前缀。
 ///
@@ -544,7 +543,6 @@ mod tests {
 
     /// `lossless` 必须真的出现在 wire 上。
     ///
-    /// 这条断言存在的理由：2026-10-25 之前 `TrackAudio` 根本没有这个字段，
     /// 而 TS 侧把它当存在（先是必填、后来被改成可选），于是播放条的
     /// 无损/有损徽章恒显示「未知」，跨了一个多月没人发现——因为**没有任何
     /// 测试在检查 payload 里有这个键**。形状断言比修 bug 本身更重要。
@@ -577,7 +575,7 @@ mod tests {
     fn infer_lossless_covers_both_write_paths() {
         let f = TrackAudio::infer_lossless;
 
-        // --- 只扫描（codec=NULL，container=lofty FileType）---
+        // 只扫描（codec=NULL，container=lofty FileType）
         assert_eq!(f(None, Some("Flac")), Some(true), "FLAC 文件");
         assert_eq!(f(None, Some("Wav")), Some(true), "WAV 文件");
         assert_eq!(f(None, Some("Aiff")), Some(true), "AIFF 文件");
@@ -593,14 +591,14 @@ mod tests {
         assert_eq!(f(None, Some("Vorbis")), Some(false));
         assert_eq!(f(None, Some("Mpc")), Some(false), "Musepack 是有损");
 
-        // --- Mp4 必须拒答：ALAC 无损 / AAC 有损共用这个容器 ---
+        // Mp4 必须拒答：ALAC 无损 / AAC 有损共用这个容器
         assert_eq!(
             f(None, Some("Mp4")),
             None,
             "Mp4 里可能是 ALAC 也可能是 AAC，不猜"
         );
 
-        // --- 跑过 beets（codec=beets format）---
+        // 跑过 beets（codec=beets format）
         assert_eq!(f(Some("FLAC"), None), Some(true));
         assert_eq!(
             f(Some("ALAC"), None),
@@ -612,7 +610,7 @@ mod tests {
         assert_eq!(f(Some("MPEG 1 Layer 3"), None), Some(false), "标签里的长名");
         assert_eq!(f(Some("PCM"), Some("Mpeg")), Some(true), "codec 优先于容器");
 
-        // --- 认不出就 None，不许猜 ---
+        // 认不出就 None，不许猜
         assert_eq!(f(None, None), None);
         assert_eq!(f(Some(""), Some("  ")), None, "空白串等于没有");
         assert_eq!(f(Some("SomeNewCodec2027"), Some("Ogg")), None);

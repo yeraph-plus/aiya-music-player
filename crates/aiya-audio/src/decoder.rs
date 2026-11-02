@@ -119,7 +119,7 @@ impl DecodedStream {
     pub fn open_file(path: &Path) -> Result<Self, AudioError> {
         // 先按扩展名拦"注定放不出"的格式，再让 symphonia 去 probe。
         //
-        // 为什么必须有这一步（docs/22 D3 的另一半）：WMA/APE/WavPack/DSD 在
+        // 为什么必须有这一步：WMA/APE/WavPack/DSD 在
         // symphonia 0.5.x 里**连 demuxer 都没有**，probe 阶段就失败，落进
         // `Decode`（"文件坏了"）——用户看到的是 symphonia 原文，而不是
         // "WMA 不支持"。只有 Opus 这类"容器认、编码不认"的才走得到
@@ -239,7 +239,7 @@ impl SymphoniaStream {
         };
         let probed = symphonia::default::get_probe()
             .format(hint, mss, &opts, &MetadataOptions::default())
-            // probe 失败 = 容器不认识 / 文件损坏 → decodeFailed（docs/22 D3）
+            // probe 失败 = 容器不认识 / 文件损坏 → decodeFailed
             .map_err(|e| AudioError::Decode(e.to_string()))?;
 
         let format = probed.format;
@@ -273,7 +273,7 @@ impl SymphoniaStream {
         let decoder = symphonia::default::get_codecs()
             .make(&track.codec_params, &DecoderOptions::default())
             // probe 认识容器、但编码器没编进 features（Opus/WMA/APE/WavPack/DSD…）
-            // → 单独分类：用户该做的是换文件/转码，不是重试（docs/22 D3）
+            // → 单独分类：用户该做的是换文件/转码，不是重试
             .map_err(|e| match codec {
                 CODEC_TYPE_NULL => AudioError::Decode(e.to_string()),
                 _ => AudioError::CodecUnsupported {
@@ -281,10 +281,8 @@ impl SymphoniaStream {
                 },
             })?;
 
-        // 复用缓冲容量：P1——此前按 100ms 固定分配，但 FLAC 允许单包最大
-        // 65535 帧，容量不足时 copy_interleaved_ref 的 assert 直接 panic
-        // （引擎线程死亡、音频静默中断）。统一给到 65535 帧下限
-        // （2ch f32 ≈ 512KB，一次性分配可忽略），并尊重轨道声明的更大值。
+        // 复用缓冲容量：P1——此前按 100ms 固定分配，但 FLAC 允许单包最大 65535 帧，容量不足时 copy_interleaved_ref 的 assert 直接 panic
+        // （引擎线程死亡、音频静默中断）。统一给到 65535 帧下限 （2ch f32 ≈ 512KB，一次性分配可忽略），并尊重轨道声明的更大值。
         let max_frames = track
             .codec_params
             .max_frames_per_packet
@@ -310,9 +308,8 @@ impl SymphoniaStream {
             seek_target_ms: None,
             eof: false,
         };
-        // 探一包：拿到真实规格（ALAC/AAC 的通道数）并把这一包存起来还给它。
-        // engine 拿到流之后马上要 sample_rate/channels 去配输出，规格必须是
-        // 真的——错报成 2ch 会把单声道数据当立体声放（速度减半、噪声）。
+        // 探一包：拿到真实规格（ALAC/AAC 的通道数）并把这一包存起来还给它。engine 拿到流之后马上要 sample_rate/channels
+        // 去配输出，规格必须是真的——错报成 2ch 会把单声道数据当立体声放（速度减半、噪声）。
         stream.peek_first_packet()?;
         Ok(stream)
     }
@@ -347,12 +344,8 @@ impl SymphoniaStream {
                     }
                     match self.decoder.decode(&packet) {
                         Ok(decoded) => {
-                            // 真实规格以解码器为准（ALAC/AAC 的容器层没有通道数）。
-                            // 只在真的不一样时重建缓冲，正常格式零开销。
-                            //
-                            // 这里刻意**逐字段**写而不是调 `&mut self` 方法：
-                            // `decoded` 借着 `self.decoder`，方法调用会借用整个
-                            // self；逐字段写只借 self.sample_buf 等其余字段。
+                            // 真实规格以解码器为准（ALAC/AAC 的容器层没有通道数）。只在真的不一样时重建缓冲，正常格式零开销。这里刻意**逐字段**写而不是调 `&mut self` 方法：`decoded` 借着
+                            // `self.decoder`，方法调用会借用整个 self；逐字段写只借 self.sample_buf 等其余字段。
                             let spec = *decoded.spec();
                             if (spec.rate != self.sample_rate
                                 || spec.channels.count() != self.channels)
@@ -376,9 +369,8 @@ impl SymphoniaStream {
                             }
                             let rate = (self.sample_rate as u64).max(1);
                             let ts_ms = packet.ts().saturating_mul(1000) / rate;
-                            // seek 后的丢弃：落点之前的整包都不要（否则"拖到 5:00
-                            // 先听到 4:59"）。跨过目标的那个包整包输出——只早
-                            // 一包（几十毫秒），比切样本更省事也更不容易出错。
+                            // seek 后的丢弃：落点之前的整包都不要（否则"拖到 5:00 先听到
+                            // 4:59"）。跨过目标的那个包整包输出——只早一包（几十毫秒），比切样本更省事也更不容易出错。
                             if let Some(target) = self.seek_target_ms {
                                 let pkt_end_ms =
                                     ts_ms.saturating_add(packet.dur().saturating_mul(1000) / rate);
@@ -413,11 +405,8 @@ impl SymphoniaStream {
     }
 
     fn seek_ms(&mut self, ms: u64) -> Result<(), AudioError> {
-        // 探包缓存作废：它缓存的是位置 0 的样本，而 next_packet 会无条件先还
-        // 它（发生在 seek_target 丢包逻辑之前）——不清掉的话，带 start_ms 的
-        // 装载会先把歌曲开头一小段真实播出来再跳到起点（FLAC ~85ms，WAV 最坏
-        // ~1.4s），启动恢复/断点续播必现"先放歌头"。丢包到目标由
-        // seek_target_ms 的既有逻辑负责。发布前审查 P1-3。
+        // 探包缓存作废：它缓存的是位置 0 的样本，而 next_packet 会无条件先还它（发生在 seek_target 丢包逻辑之前）——不清掉的话，带 start_ms 的装载会先把歌曲开头一小段真实播出来再跳到起点（FLAC
+        // ~85ms，WAV 最坏 ~1.4s），启动恢复/断点续播必现"先放歌头"。丢包到目标由 seek_target_ms 的既有逻辑负责。发布前审查 P1-3。
         self.first_packet = None;
         self.first_served = false;
         // Time 的整数 From 是"秒"；毫秒要用 new(seconds, frac)
@@ -476,9 +465,8 @@ fn codec_display_name(codec: CodecType) -> String {
         | CODEC_TYPE_ADPCM_IMA_QT => "ADPCM".into(),
         CODEC_TYPE_PCM_ALAW => "A-law PCM".into(),
         CODEC_TYPE_PCM_MULAW => "μ-law PCM".into(),
-        // 兜底用 Display（它内部就是 `{:#x}`）而不是 Debug：数值形态与
-        // symphonia 源码里 `decl_codec_type` 的常量写法一致，诊断页拿着能
-        // 直接对回源码（Debug 会印成 `CodecType(4096)`，没法和源码对）。
+        // 兜底用 Display（它内部就是 `{:#x}`）而不是 Debug：数值形态与 symphonia 源码里 `decl_codec_type`
+        // 的常量写法一致，诊断页拿着能直接对回源码（Debug 会印成 `CodecType(4096)`，没法和源码对）。
         other => format!("未知编码 {other}"),
     }
 }
@@ -503,7 +491,7 @@ fn known_unsupported_ext(path: &Path) -> Option<&'static str> {
     })
 }
 
-/* ---------------- 扩展名口径（给"识别拖入的文件"用） ---------------- */
+/* 扩展名口径（给"识别拖入的文件"用） */
 
 /// 引擎（Symphonia 0.5 + 已开的 features）真的能解的扩展名。
 ///
@@ -548,7 +536,7 @@ mod tests {
 
     #[test]
     fn unsupported_codecs_have_readable_names() {
-        // 这些是"会被装进库但放不出"的高频格式（docs/21 格式矩阵），
+        // 这些是"会被装进库但放不出"的高频格式
         // 名字必须说人话——UI 横幅直接展示这条消息。
         assert_eq!(codec_display_name(CODEC_TYPE_OPUS), "Opus");
         assert_eq!(codec_display_name(CODEC_TYPE_WMA), "WMA");

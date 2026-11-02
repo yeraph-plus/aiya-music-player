@@ -4,7 +4,7 @@ import { errorMessage } from '../lib/errors';
 import { notify } from './notify.svelte';
 
 /**
- * EQ 状态（协议 v6，docs/24 B5b/B5a）。
+ * EQ 状态（协议 v6，/B5a）。
  *
  * 与后端的分工：
  * - **真相在引擎**：滑杆拖动 300ms 防抖后 `player.setEq`，**以返回值**（clamp 后
@@ -79,9 +79,8 @@ class EqStore {
   }
 
   private async apply(): Promise<void> {
-    // 快照发送时刻的值。响应**不整包回写**：往返期间（~300ms 防抖 + IPC）
-    // 用户可能已经改了别的段，整包覆盖会把最新输入冲掉，滑杆闪回旧值。
-    // 只回写 clamp 产生差异、且用户此后没再动过的字段。
+    // 快照发送时刻的值。响应**不整包回写**：往返期间（~300ms 防抖 +
+    // IPC）用户可能已经改了别的段，整包覆盖会把最新输入冲掉，滑杆闪回旧值。只回写 clamp 产生差异、且用户此后没再动过的字段。
     const sent = { bands: [...this.bands], bassDb: this.bass, trebleDb: this.treble, pregain: this.pregain };
     try {
       const applied = await ipc.player.setEq({

@@ -10,14 +10,8 @@ import json
 import sys
 import threading
 
-# 取消代数（generation），不是布尔标志。
-#
-# 为什么不能用一个 Event：宿主发 cancel 时可能"请求行已进管道、主循环还没派发"
-# —— 旧实现每次派发前 CANCEL.clear()，于是刚置的取消被下一条请求抹掉，取消
-# 静默失效（表现为点了取消还在写标签）。改成自增代数后：
-#   * 请求入队时记下当时的代数；派发时比较"当前代数是否变过"，
-#     变过就说明自己在排队期间被取消过 → 直接跳过；
-#   * 工作循环里同样比较代数，变过就收尾发 cancelled。
+# 取消代数（generation），不是布尔标志。为什么不能用一个 Event：宿主发 cancel 时可能"请求行已进管道、主循环还没派发" —— 旧实现每次派发前
+# CANCEL.clear()，于是刚置的取消被下一条请求抹掉，取消静默失效（表现为点了取消还在写标签）。改成自增代数后：请求入队时记下当时的代数；派发时比较"当前代数是否变过"，变过就说明自己在排队期间被取消过 → 直接跳过；工作循环里同样比较代数，变过就收尾发 cancelled。
 _CANCEL_GEN = 0
 _CANCEL_LOCK = threading.Lock()
 
@@ -71,9 +65,8 @@ def emit(evt: dict) -> None:
     """流式事件（进度/专辑/结果）——与响应不同，无 id，靠 type 区分。"""
     rec = _OP_RECORDER
     if rec is not None:
-        # v2 幂等登记簿：命令执行期间挂上的收集器在事件出口抄一份账
-        # （终态事件触发落账，见 ops.Recorder）。progress 不记（量大且
-        # 重放无意义）；cancelAck 来自 reader 线程但彼时 recorder 必为 None。
+        # v2 幂等登记簿：命令执行期间挂上的收集器在事件出口抄一份账 （终态事件触发落账，见 ops.Recorder）。progress
+        # 不记（量大且重放无意义）；cancelAck 来自 reader 线程但彼时 recorder 必为 None。
         rec.on_event(evt)
     write_line(evt)
 

@@ -75,15 +75,13 @@ impl BeetsTool for StdioTool {
         }
         let result = (|| {
             let (child, stdin) = session::spawn_session(&self.launcher, &request)?;
-            // acquire 返回本次会话的世代号：此后所有清理都带世代，旧 reader
-            // 的迟到 release 靠世代不匹配变成无害 no-op（否则它会偷走本会话
-            // 的 stdin 并清掉 busy 位，两个 beets 进程并发写同一 sqlite）。
+            // acquire 返回本次会话的世代号：此后所有清理都带世代，旧 reader 的迟到 release 靠世代不匹配变成无害 no-op（否则它会偷走本会话的
+            // stdin 并清掉 busy 位，两个 beets 进程并发写同一 sqlite）。
             let gen = session::acquire(stdin)?;
             session::spawn_reader(child, gen, sink, channel, on_exit)
         })();
         if result.is_err() {
-            // 走到这里的失败要么发生在 acquire 之前（槽必然还空着），要么
-            // spawn_reader 已在自己的错误路径里按世代清过槽——两种情况
+            // 走到这里的失败要么发生在 acquire 之前（槽必然还空着），要么 spawn_reader 已在自己的错误路径里按世代清过槽——两种情况
             // release_unacquired 都是安全的：只在槽空时把 busy 位还回去。
             session::release_unacquired();
         }

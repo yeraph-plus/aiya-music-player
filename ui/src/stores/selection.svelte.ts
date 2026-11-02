@@ -3,7 +3,7 @@ import { rangeSelection, selectAll, toggleSelection, SELECTION_CAP } from '../li
 /**
  * 列表选择 store：Shift/Ctrl/Ctrl+Shift 的选择集、锚点、焦点行。
  *
- * 选择集是"视图下标"而非曲目 ID（ADR-020）：跨排序/筛选的语义由
+ * 选择集是"视图下标"而非曲目 ID：跨排序/筛选的语义由
  * 调用方（App）在把下标换成 ID 时处理。数量上限的提示通过返回值
  * 交给调用方展示，store 不持 UI 文案。
  */

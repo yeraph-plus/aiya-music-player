@@ -96,15 +96,10 @@ INDEX_IMPORT_KEYS: tuple[tuple[str, str], ...] = (
     ("duplicate_action", "keep"),  # 默认 ask 会吞掉同标签同长的第二个文件
 )
 
-# xtractor 的提取档位（docs/54 §3）。2026-10-31 起提取器换成**带 Gaia/SVM 的
 # 社区 x64 构建**（brendanerofeev/essentia gaia-win64-2，源起 regorxxx 的
 # Actions 构建），highlevel 打开——danceability / mood 等 SVM 特征由此产出；
 # svm_models 指向与提取器同级的 models/ 目录（12 件 .history，随包/随装分发，
 # 渲染时解析成绝对路径——模型不是可执行文件，走 binaries 表的 models/ 子路径）。
-#
-# 旧事实存档（为什么这里曾是 compute: 0）：AB 官方 win-i686 构建没编 Gaia2，
-# 配了 svm_models 会 `Identifier 'GaiaTransform' not found in registry` 然后
-# 退出 1 且一个 json 都不产出（docs/50 §2.5 实测）——那版二进制下这里必须钉 0。
 XTRACTOR_MODEL_FILES: tuple[str, ...] = (
     "danceability", "gender", "genre_rosamerica", "mood_acoustic",
     "mood_aggressive", "mood_electronic", "mood_happy", "mood_sad",
@@ -435,7 +430,7 @@ def _render_index(home: Path, plugins: list[str] | None, root: str | None) -> st
     names = list(plugins) if plugins is not None else list(INDEX_DEFAULT_PLUGINS)
     # xtractor 要 Essentia 提取器；没有它写进 plugins 就是"假开"——
     # 每次 import 都吐一段 `PluginImportError: Could not import plugin xtractor`
-    # 然后照常跑（退出码 0，docs/50 §1.1 实测）。按环境过滤掉才是诚实的做法。
+    # 然后照常跑（退出码 0， 实测）。按环境过滤掉才是诚实的做法。
     names = _drop_unusable(names, "index")
     lines = [
         "# AIYA Music 索引库（DB1）：这是生成物，不要手改——改模板（cfg.render_config）。",
@@ -549,9 +544,8 @@ def verify_config(
     if not doc.get("library"):
         raise ConfigGateError("缺少 library（索引家必须有独立的库文件）")
 
-    # library 不能只判"非空"：写错路径时 beets 会**静默新建一个空库**，
-    # 症状是"索引跑完了，统计一直是 0"——而配置看起来完全合规。
-    # 期望值是 `{home}/library.db`；home 未知（自检时没传）就只校验目录部分。
+    # library 不能只判"非空"：写错路径时 beets 会**静默新建一个空库**，症状是"索引跑完了，统计一直是 0"——而配置看起来完全合规。期望值是
+    # `{home}/library.db`；home 未知（自检时没传）就只校验目录部分。
     got_lib = _norm(str(doc["library"]).strip("'\""))
     if home is not None:
         want_lib = _norm(str(Path(home) / "library.db"))
@@ -563,7 +557,7 @@ def verify_config(
     elif not got_lib.endswith("library.db"):
         raise ConfigGateError(f"library 必须是一个 .db 文件路径，实际是 {got_lib}")
 
-    # 分析对象：必须是**曲库根**（docs/49）；没给根时才是占位目录。
+    # 分析对象：必须是**曲库根**；没给根时才是占位目录。
     # 两种形态都要能分辨：指错时症状是"索引范围悄悄缩成某个子目录"，零报错。
     if not doc.get("directory"):
         raise ConfigGateError("缺少 directory（索引家必须写死分析对象，不能省）")
@@ -611,7 +605,7 @@ def verify_config(
             if got != want:
                 raise ConfigGateError(f"{name}.{key} = {got}，索引家要求 {want}")
 
-    # 外部依赖 (docs/53 §1.1)：写了却缺 exe 的插件会让 beets 任何命令都起不来。
+    # 外部依赖：写了却缺 exe 的插件会让 beets 任何命令都起不来。
     # 渲染侧已经剔过 —— 这条是"模板与过滤漂了"的兜底，不是主要防线。
     usable = usable_plugins(names)
     stuck = [n for n in names if n not in usable]
@@ -631,8 +625,7 @@ def verify_config(
                 f"xtractor.essentia_extractor 必须指向 {found}，实际是 {got or '（缺失）'}"
                 "（默认值是占位符，插件会拿它去 spawn 一个不存在的程序）"
             )
-        # 提取档位：Gaia 构建下 highlevel 必须开着 + svm_models 逐件实存。
-        # （旧提取器时代的反向闸门见 git 历史：那版没编 Gaia2，开着必炸——
+        # 提取档位：Gaia 构建下 highlevel 必须开着 + svm_models 逐件实存。（旧提取器时代的反向闸门见 git 历史：那版没编 Gaia2，开着必炸——
         # 症状是 `GaiaTransform not found` 退出 1，一个 json 都不产出。）
         profile = section.get("extractor_profile") if isinstance(section, dict) else None
         high = profile.get("highlevel") if isinstance(profile, dict) else None
@@ -667,7 +660,7 @@ def _index_names() -> str:
 LAYOUT_FILE = "layout.json"
 
 #: 索引家的库 + 增量状态。**成对删**：只删库会让 `-R` 的记忆仍在，
-#: 下次导入"全都导过了"直接跳过，症状是"索引恒空且零报错"（docs/45 实测）。
+# : 下次导入"全都导过了"直接跳过，症状是"索引恒空且零报错"。
 INDEX_STATE_FILES = ("library.db", "library.db-wal", "library.db-shm", "state.pickle")
 
 
@@ -725,9 +718,8 @@ def ensure_config(home: Path | None = None, prof: str | None = None) -> Path:
     if prof == PROFILE_INDEX:
         root = scan_root()
         if root is None:
-            # 只有退回占位目录时才需要造它：它代表"整理目标是这个空文件夹"，
-            # 不存在的话任何走 destination() 的路径（move/copy 的预演）都会现造。
-            # 曲库根则相反——绝不能替用户建目录（那是用户的音乐文件夹）。
+            # 只有退回占位目录时才需要造它：它代表"整理目标是这个空文件夹"，不存在的话任何走 destination() 的路径（move/copy
+            # 的预演）都会现造。曲库根则相反——绝不能替用户建目录（那是用户的音乐文件夹）。
             scratch_dir(base).mkdir(parents=True, exist_ok=True)
         want = index_layout(base, root)
         layout_path = base / LAYOUT_FILE
@@ -757,12 +749,8 @@ def ensure_config(home: Path | None = None, prof: str | None = None) -> Path:
             render_config(base, dest_root() or scan_root()), encoding="utf-8", newline="\n"
         )
     else:
-        # 已存在 → 只同步两行应用事实，其余逐字节保留。
-        # 为什么要同步 `directory`：第一次生成时可能还没有曲库目录（那行被省略），
-        # 此后用户配上了落点，若永不补，move/copy 会落进 beets 默认的 ~/Music。
-        # 为什么要同步 `plugins`：安装页勾选的插件装了依赖却没启用，等于白装。
-        # 但**只在用户选过时才同步**（settings.json 里没有这个键就不碰），
-        # 否则会每次启动把用户手改的 plugins 行回滚掉。
+        # 已存在 → 只同步两行应用事实，其余逐字节保留。为什么要同步 `directory`：第一次生成时可能还没有曲库目录（那行被省略），此后用户配上了落点，若永不补，move/copy 会落进 beets 默认的 ~/Music。为什么要同步
+        # `plugins`：安装页勾选的插件装了依赖却没启用，等于白装。但**只在用户选过时才同步**（settings.json 里没有这个键就不碰），否则会每次启动把用户手改的 plugins 行回滚掉。
         text = path.read_text(encoding="utf-8")
         want = text
         root = dest_root() or scan_root()
@@ -770,7 +758,7 @@ def ensure_config(home: Path | None = None, prof: str | None = None) -> Path:
             want = _sync_directory(want, root)
         chosen = settings_plugins(base)
         if chosen:
-            # 勾了但外部工具还没下载的，这一版先不启用（否则 beets 起不来，docs/53）。
+            # 勾了但外部工具还没下载的，这一版先不启用（否则 beets 起不来）。
             # settings.json 不改：等 bins 补齐后下一次启动自动恢复。
             want = _sync_plugins(want, _drop_unusable(chosen, "workbench"))
         if want != text:

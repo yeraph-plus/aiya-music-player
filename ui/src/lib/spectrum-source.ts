@@ -1,10 +1,10 @@
 import { events, ipc } from './ipc';
 
 /**
- * 频谱数据源接口 —— UI 只认这个接口，不认具体实现（ADR-037）。
+ * 频谱数据源接口 —— UI 只认这个接口，不认具体实现。
  *
  * 约定：调用方用 rAF 驱动，每帧调一次 `frame()` 取当前分带值（0–1）后绘制。
- * 30fps 的数据**不进 Svelte 响应式**（docs/18 §4.2）：`frame()` 返回同一个
+ * 30fps 的数据**不进 Svelte 响应式**：`frame` 返回同一个
  * Float32Array 实例就地覆盖，不做 `$state` 写入，否则整棵组件树每秒 30 次脏检查。
  */
 export interface SpectrumSource {
@@ -19,7 +19,7 @@ export interface SpectrumSource {
 }
 
 /**
- * 远程频谱源（ADR-0006：音频在 Rust sidecar）。
+ * 远程频谱源（音频在 Rust sidecar）。
  *
  * Rust 在 PCM 链内做 FFT → 48 对数分带 → u8[48]，经 `spectrum:frame` 推送；
  * 这里只做 0-255 → 0-1 的归一化，不碰任何音频节点。

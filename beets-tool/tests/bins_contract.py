@@ -48,7 +48,7 @@ def make_zip(path: str, members: dict) -> str:
 
 
 try:
-    # ---- 1. 体检形状 ----
+    # 1. 体检形状
     rows = bins.check()
     assert [r["name"] for r in rows] == ["ffmpeg", "streaming_extractor_music", "fpcalc"], rows
     for r in rows:
@@ -58,7 +58,7 @@ try:
         assert r["downloadBytes"] > 0 and r["bytes"] > 0, r
     print(f"[1] 体检形状 OK（{len(rows)} 项，全 missing）")
 
-    # ---- 2. 抽成员的三种命中数 ----
+    # 2. 抽成员的三种命中数
     spec = plugins.binary("fpcalc")
     assert spec is not None
     one = make_zip(os.path.join(WORK, "one.zip"), {spec.member: b"exe-bytes"})
@@ -92,7 +92,7 @@ try:
         raise AssertionError("只命中目录项时也必须报错")
     print("[2] 抽成员 OK（1 命中通过 / 0 与 2 命中报错 / 目录项不算）")
 
-    # ---- 3. 坏载体：报错且不留残骸 ----
+    # 3. 坏载体：报错且不留残骸
     junk = make_zip(os.path.join(WORK, "junk.zip"), {"whatever.exe": b"not-the-real-one"})
     try:
         bins.install_one("fpcalc", Path(junk))
@@ -104,7 +104,7 @@ try:
     assert not list(Path(BIN).glob("*.part")), "失败后不许留下 .part"
     print("[3] 坏载体被拒 OK（且 bin/ 没有残骸）")
 
-    # ---- 4. probe 的两种形状 ----
+    # 4. probe 的两种形状
     real = Path(sys.executable)  # 拿本机解释器冒充"能跑的 exe"
     good = plugins.BinarySpec(
         name="x", target="x.exe", url="https://e/x.zip", carrier_size=1,
@@ -130,7 +130,7 @@ try:
     assert ok3 and version3 is None, "允许失败的那类不该把用法提示当版本号"
     print("[4] probe OK（正常 / 缺 DLL 形状 / 用法提示）")
 
-    # ---- 5. PATH 注入 ----
+    # 5. PATH 注入
     before = os.environ.get("PATH", "")
     got = bins.inject_path()
     assert got is not None and str(got) == os.path.normpath(BIN) or str(got) == BIN, got
@@ -145,7 +145,7 @@ try:
     os.environ["PATH"] = before
     print("[5] PATH 注入 OK（前插 / 幂等 / 注入后 which 能找到）")
 
-    # ---- 6. 未知名字 ----
+    # 6. 未知名字
     for call in (lambda: bins.check(["nope"]), lambda: bins.install_one("nope")):
         try:
             call()
@@ -158,7 +158,7 @@ try:
         assert plugins.binary(spec.name) is spec or plugins.binary(spec.name) == spec
         assert spec.carrier_sha256 and spec.sha256, spec.name
     print(f"[6] 未知名字报错 OK；蓝图 {len(plugins.BINARIES)} 条都能查到")
-    # ---- 7. 免配置包自带 bin/ 也是一个查找来源（docs/54）----
+    # 7. 免配置包自带 bin/ 也是一个查找来源
     # 布局照宿主来：{data_root}/beets-tool/bin 与 {data_root}/beets-tool/bundle/bin
     root = Path(WORK, "root")
     pkg_bin = root / "beets-tool" / "bundle" / "bin"
@@ -201,7 +201,7 @@ try:
         else:
             os.environ["AIYA_BEETS_HOME"] = saved_home
 
-    # ---- 8. `dest` 落点：打包脚本要把 exe 塞进包内目录 ----
+    # 8. `dest` 落点：打包脚本要把 exe 塞进包内目录
     # 只验失败路径：坏载体下 dest 与 bin/ 都不许留残骸（"写错地方"在这里暴露）
     dest = Path(WORK, "workbin")
     try:
@@ -214,7 +214,7 @@ try:
     assert not (Path(BIN) / "fpcalc.exe").exists(), "给了 dest 就不该写到 bin/"
     print("[8] dest 落点 OK（失败不留残骸 / 不串到 bin/）")
 
-    # ---- 9. `--from-plugins`：宿主只报插件名，清单由这一侧算 ----
+    # 9. `--from-plugins`：宿主只报插件名，清单由这一侧算
     # 宿主不再自己从内嵌表算 exe 并集（那是第二份派生，两边分家的症状是
     # "装了插件却没下工具"，而缺 ffmpeg 会让 beets 任何子命令都起不来）。
     def run_cli(argv):

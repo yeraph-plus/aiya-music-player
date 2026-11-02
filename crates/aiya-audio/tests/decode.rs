@@ -106,7 +106,7 @@ fn wav_decode_positions_and_seek() {
     );
 }
 
-/* ---------------- 错误分类（docs/22 G1） ---------------- */
+/* 错误分类 */
 
 /// Ogg CRC32：多项式 0x04c11db7，初值 0，MSB 先行，无终值异或
 /// （与 symphonia-core checksum/crc32.rs 同参，已在本地源码核实）。
@@ -169,7 +169,7 @@ fn unsupported_codec_classified_as_codec_unsupported() {
     let path = dir.path().join("opus.ogg");
     write_test_ogg_opus(&path);
 
-    // features 里没有 opus（docs/22 D1 明确不做），probe 认识 OGG 容器、
+    // features 里没有 opus，probe 认识 OGG 容器
     // make() 阶段失败 → 必须报 codecUnsupported 且带可读格式名
     let err = DecodedStream::open_file(&path).unwrap_err();
     assert_eq!(
@@ -202,7 +202,7 @@ fn missing_file_classified_as_file_missing() {
     assert_eq!(err.kind(), AudioErrorKind::FileMissing);
 }
 
-/* ------------- 真文件 fixture：Vorbis / ALAC / AAC / MP3 / AIFF ------------- */
+/* 真文件 fixture：Vorbis / ALAC / AAC / MP3 / AIFF */
 
 /// fixture 的约定（与 gen_fixtures.py 顶部的常量一一对应）：
 /// 44.1kHz 单声道，0.6s，前 0.3s 是 1kHz 正弦（幅度 0.5），后 0.3s 静音。
@@ -344,9 +344,8 @@ fn all_fixtures_seek() {
             "{name} seek 到 100ms 后峰值只有 {tone_peak}"
         );
 
-        // 拖进静音段：必须安静。容差比 check_fixture 松，因为 seek 落点可能
-        // 落在窗函数过渡里，前一两包带一点余音属于正常（这也是我们不开
-        // "按 duration 硬裁"的同一个理由：边界本来就模糊）。
+        // 拖进静音段：必须安静。容差比 check_fixture 松，因为 seek
+        // 落点可能落在窗函数过渡里，前一两包带一点余音属于正常（这也是我们不开 "按 duration 硬裁"的同一个理由：边界本来就模糊）。
         dec.seek_ms(500).unwrap();
         let mut tail_peak = 0f32;
         for _ in 0..8 {

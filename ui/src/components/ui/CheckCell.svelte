@@ -27,9 +27,8 @@
     indeterminate = false,
     label,
     disabled = false,
-    // 不设默认值：role="cell" 要求存在 row 或 grid 祖先，IndexPanel 在 ul/li 内
-    // 使用时，默认值会产生非法 ARIA。表格调用方（TrackList / PlaylistList /
-    // TrackTable）显式传 'cell' 或 'columnheader'。
+    // 不设默认值：role="cell" 要求存在 row 或 grid 祖先，IndexPanel 在 ul/li 内使用时，默认值会产生非法 ARIA。表格调用方（TrackList /
+    // PlaylistList / TrackTable）显式传 'cell' 或 'columnheader'。
     role,
     ontoggle,
   }: Props = $props();

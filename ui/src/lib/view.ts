@@ -7,7 +7,6 @@ import type { TrackSource } from './query';
  * （TrackSource）与标题。把这一层抽出来的好处是列表、分页窗口、批量选择
  * 都不需要知道自己在看什么。
  *
- * 2026-10-26 docs/28：`recent` / `mostPlayed` 两个视图**退役**——单页从侧栏
  * 撤掉（常听收进推荐页 top-15，最近播放被筛选器取代），但两个 TrackSource
  * 查询本身保留（推荐页的两段预览还走它们，见 `lib/ipc/client.ts`）。
  * View（路由层概念）与 TrackSource（查询层概念）从此不再一一对应。

@@ -36,7 +36,6 @@ if (!page) {
 }
 
 // 正在播放页会盖住侧栏，先退出去才点得到"设置"。
-// 页内没有返回键（2026-10-30 撤了）：退出走播放条歌曲区那个开关（或顶栏返回）
 if (await page.locator('.app.np-open').count()) {
   await page.locator('.player .now').first().click();
   await page.waitForTimeout(600);

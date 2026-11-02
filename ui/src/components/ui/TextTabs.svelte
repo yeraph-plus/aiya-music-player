@@ -85,7 +85,7 @@
     color: var(--text-1);
   }
 
-  /* ---- pill（内容工具条）---- */
+  /* pill（内容工具条） */
   .pill .text-tab {
     display: inline-flex;
     align-items: center;
@@ -103,7 +103,7 @@
     background: var(--surface-active);
   }
 
-  /* ---- underline（页面级分组）---- */
+  /* underline（页面级分组） */
   .underline .text-tab {
     display: inline-flex;
     align-items: center;

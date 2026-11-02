@@ -189,7 +189,7 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/* ---------------- 导出渲染 ---------------- */
+/* 导出渲染 */
 
 /// 渲染输入：歌单内一首曲目的导出所需字段（DB JOIN 出来原样填）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -370,7 +370,7 @@ mod tests {
         assert_eq!(es[0].raw, "ok.mp3");
     }
 
-    /* ---------------- 渲染 ---------------- */
+    /* 渲染 */
 
     fn item(path: &str, artist: Option<&str>, title: &str, ms: i64) -> ExportItem {
         ExportItem {

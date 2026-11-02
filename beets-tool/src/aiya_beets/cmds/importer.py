@@ -163,7 +163,7 @@ def preview_import(req_id, paths: list[str], options: dict, gen: int) -> None:
 
 APPLY_FIELDS = DIFF_FIELDS
 
-# action → 文件操作（docs/08 §4.1：默认只写标签，移动/复制显式选择）。
+# action → 文件操作（默认只写标签，移动/复制显式选择）。
 # move/copy 用 beets 自己的 Item.move：按用户 path_formats 算目标路径、
 # 建目录、更新 item.path、MOVE 后清理空目录。
 FILE_ACTIONS = {}

@@ -60,9 +60,8 @@
     );
   }
 
-  // 主题/主题颜色/界面缩放：前两者写在 <html> 的 data 属性上，缩放写内联
-  // font-size，CSS 变量随之切换，无需重建组件。
-  // 同时写一份 localStorage 镜像，供下次启动首帧使用（否则浅色主题会先闪一帧深色）。
+  // 主题/主题颜色/界面缩放：前两者写在 <html> 的 data 属性上，缩放写内联 font-size，CSS 变量随之切换，无需重建组件。同时写一份
+  // localStorage 镜像，供下次启动首帧使用（否则浅色主题会先闪一帧深色）。
   $effect(() => {
     const look = {
       theme: ui.settings.theme,
@@ -105,7 +104,7 @@
     mediaSessionActions = ui.settings.mediaKeys;
 
     const disposeBoot = boot({ onState: (next) => mediaSession?.update(next) });
-    // 壳级拖放（docs/52 §5.2）：整窗都是落点，不分页面
+    // 壳级拖放：整窗都是落点，不分页面
     const disposeDrop = drop.attach();
 
     return () => {
@@ -121,18 +120,15 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<!--
-  `Tooltip.Provider` **只放这一处**：它统一 `delayDuration`，并让相邻 tooltip 之间
-  共享"刚从别的按钮移过来就不用再等"的计时。每个 Tooltip 自带一份的话，
-  鼠标横扫一排图标每次都要等满延迟。
--->
+<!-- `Tooltip.Provider` **只放这一处**：它统一 `delayDuration`，并让相邻 tooltip
+之间共享"刚从别的按钮移过来就不用再等"的计时。每个 Tooltip 自带一份的话，鼠标横扫一排图标每次都要等满延迟。 -->
 <Tooltip.Provider delayDuration={400} skipDelayDuration={300}>
   <AppShell>
     <!--
       一名一路由。拆页（B4-1）之前这里是 `page === 'home'` 外面再套一层
       `libraryDetail`，六个列表视图全靠一个 boolean 区分；现在列表页
       共用同一套列表查询，路由值直接决定渲染谁。
-      docs/28：专辑/艺人详情页有独立视图（含头部聚合数据），先于
+      专辑/艺人详情页有独立视图（含头部聚合数据），先于
       LibraryView 判断。
     -->
     {#if ui.page === 'home'}

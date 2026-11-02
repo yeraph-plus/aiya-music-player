@@ -12,7 +12,7 @@
   import { ui } from '../stores/ui.svelte';
 
   /**
-   * 专辑详情页（docs/28 拆出）：此前寄居 LibraryView，靠 `ui.page` 分支
+   * 专辑详情页：此前寄居 LibraryView，靠 `ui.page` 分支
    * 拼头部——现在页面各归各，路由参数（`ui.albumId`）直接可寻址，
    * 列表接线共用 TrackListPanel。
    *
@@ -40,7 +40,7 @@
     const al = album;
     const row = firstRow;
     // 名字回落链：聚合缓存 → 列表首行 → 通用文案。**绝不把路由参数（uuid）
-    // 渲染出来**——那是一串 v5 uuid（docs/28 真机回归）：聚合缓存加载慢或
+    // 渲染出来**——那是一串 v5 uuid：聚合缓存加载慢或
     // 失败时，首行的 album/artist 就是从 DB 读出的真名，和列表内容同源。
     const title = al?.title ?? row?.album ?? '专辑';
     // 封面回落链：聚合缓存的 artworkId → 首曲的 artworkId。扫描器给每条
@@ -78,10 +78,7 @@
   </Header>
 </div>
 
-<!--
-  专辑页把"专辑"列链接废掉（disableAlbumLink）：点了指向的是当前页，
-  nav 视为刷新，只会白丢一次滚动位置。歌手列保持可点——那是真正能走的路。
--->
+<!-- 专辑页把"专辑"列链接废掉（disableAlbumLink）：点了指向的是当前页，nav 视为刷新，只会白丢一次滚动位置。歌手列保持可点——那是真正能走的路。 -->
 <TrackListPanel canSort={true} removeLabel="从曲库中删除" showFilter={false} disableAlbumLink={true}>
   {#snippet empty()}
     <EmptyState title="这张专辑里没有曲目" hint="曲目可能已被移出曲库">

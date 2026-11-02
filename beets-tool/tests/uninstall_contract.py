@@ -69,7 +69,7 @@ def refused(code, frames, why=""):
 
 
 try:
-    # ---- 1. `--all` 正向：账目对得上 ----
+    # 1. `--all` 正向：账目对得上
     a = make_install(WORK, "beets-tool")
     code, frames = run(["--target", str(a), "--all", "--dry-run"])
     assert code == 0, frames
@@ -83,7 +83,7 @@ try:
     assert done["bytes"] == expected, f"字节数应是 {expected}：{done}"
     print(f"[1] `--all` 账目 OK（{done['files']} 个文件 / {done['bytes']} 字节）")
 
-    # ---- 2. `--all` 但形状不对 ----
+    # 2. `--all` 但形状不对
     plain = Path(WORK) / "随便一个目录"
     plain.mkdir()
     (plain / "歌曲.flac").write_bytes(b"x")
@@ -95,20 +95,20 @@ try:
     assert code == 0 and frames[-1]["files"] == 0, frames
     print("[2] `--all` 形状闸 OK（陌生目录拒绝；空壳 beets-tool 放行）")
 
-    # ---- 3. 不给 `--all`：只认 venv 形态 ----
+    # 3. 不给 `--all`：只认 venv 形态
     refused(*run(["--target", str(a), "--dry-run"]), "没有 pyvenv.cfg")
     code, frames = run(["--target", str(a / "venv"), "--dry-run"])
     assert code == 0 and frames[-1]["all"] is False, frames
     print("[3] 单 venv 语义 OK（整层不给 --all 会被拒；venv 本身放行）")
 
-    # ---- 4. 危险路径 ----
+    # 4. 危险路径
     for target in (Path("C:\\"), Path.home()):
         why = uninstall._dangerous(target)
         assert why, f"{target} 必须被拦下（实际放行）"
     assert uninstall._dangerous(Path(WORK) / "beets-tool") is None, "正常路径不该被拦"
     print("[4] 危险路径闸 OK（盘根 / 主目录拦下，正常路径放行）")
 
-    # ---- 5. 自身在目录内 ----
+    # 5. 自身在目录内
     assert uninstall._contains_self(Path(sys.executable).resolve().parent) is True, \
         "当前解释器所在目录应当被认出"
     assert uninstall._contains_self(Path(tempfile.gettempdir())) is False or \
@@ -123,11 +123,11 @@ try:
     )
     print("[5] 自身在目录内 OK（按当前解释器判定，不按目录里有没有 exe）")
 
-    # ---- 6. dry-run 不删 ----
+    # 6. dry-run 不删
     assert a.exists(), "dry-run 之后目录必须还在"
     print("[6] dry-run 非破坏 OK")
 
-    # ---- 7. 真删 ----
+    # 7. 真删
     victim = make_install(WORK, "victim")
     code, frames = run(["--target", str(victim), "--all"])
     assert code == 0, frames
@@ -135,7 +135,7 @@ try:
     assert not victim.exists(), "真删之后目录必须消失"
     print("[7] 真删 OK（removed=true，目录消失）")
 
-    # ---- 8. 幂等 ----
+    # 8. 幂等
     code, frames = run(["--target", str(victim), "--all"])
     assert code == 0, frames
     assert frames[-1]["removed"] is False and frames[-1]["files"] == 0, frames[-1]

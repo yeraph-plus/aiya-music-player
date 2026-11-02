@@ -30,7 +30,7 @@
   let { source, enabled, shape, glow, paused }: Props = $props();
 
   /**
-   * 全应用背景（docs/25 §5、docs/46）。
+   * 全应用背景。
    *
    * 全应用只有一套背景：正在播放页侧栏退出、主区铺满后，本层天然覆盖整个
    * 窗口，不为任何单页另绘第二层，因此本组件不需要知道当前路由。
@@ -40,11 +40,11 @@
    * 三层（第 4 层为界面布局本身，属四区席位）：
    * - 第 1 层 背景：固定 CSS 渐变（`--ambient-bg`，tokens.css 按
    *   `html[data-ambient]` 定义，设置页成套切换）。不跟随封面。
-   * - 第 2 层 流动渐变（docs/46 §3.1）：WebGL 上缓慢流动的彩色光雾，叠在第 1 层
+   * 第 2 层 流动渐变：WebGL 上缓慢流动的彩色光雾，叠在第 1 层
    *   之上做加色。`--ambient-bg` 仍是配色唯一来源，颜色由 `--accent` 派生。
    *   硬件 GL 不可用时整层不创建。
    * - 第 3 层 频谱环境光：形态由 `bgSpectrumStyle` 决定。`ridge` 山形
-   *   （docs/26）：48 带先做时间平滑，再重采样为平滑脊线并闭合到底边填充渐变，
+   *   48 带先做时间平滑，再重采样为平滑脊线并闭合到底边填充渐变
    *   分远山（低幅低透明）与近山（主形）两层。`ripple` 波纹：同一曲线作为水面
    *   截面，沿视线逐层绘制等深线铺满下半屏（画法见 `layers/ripple.ts`）。
    *
@@ -59,9 +59,9 @@
    *   加 `ctx.filter blur(14px)` 放大）。波纹不做 2D 兜底：22 层全窗口描边加
    *   shadowBlur 在软件光栅上开销最大，此类机器退回山形即可。
    *
-   * 绘制循环挂全应用单例调度器（`lib/render/scheduler`，docs/46 §7），本组件不
+   * 绘制循环挂全应用单例调度器（`lib/render/scheduler`），本组件不
    * 自行排 rAF。组件内多处 `requestAnimationFrame` 会使调度数按 2^n 增长，数秒
-   * 内占满主线程并导致界面无响应（docs/26 实测）。多图层场景需从结构上排除。
+   * 内占满主线程并导致界面无响应。多图层场景需从结构上排除。
    *
    * `prefers-reduced-motion: reduce` 时环境层不渲染，静态背景保留。
    */
@@ -131,13 +131,8 @@
     };
   });
 
-  // 频谱图层随"数据源 + 形态"挂载与卸载。
-  //
-  // 形态进入依赖数组，因此切换时整层重建：山形为闭合填充，波纹为线阵，几何结构
-  // 不同，无法像光效档位那样仅修改 uniform。重建在同一帧内完成（旧层 dispose 后
-  // 新层 `add`），舞台不重建，不产生黑帧。
-  //
-  // 光效档位不进入依赖：改档只修改 uniform，不重建图层。
+  // 频谱图层随"数据源 + 形态"挂载与卸载。形态进入依赖数组，因此切换时整层重建：山形为闭合填充，波纹为线阵，几何结构不同，无法像光效档位那样仅修改 uniform。重建在同一帧内完成（旧层
+  // dispose 后新层 `add`），舞台不重建，不产生黑帧。光效档位不进入依赖：改档只修改 uniform，不重建图层。
   $effect(() => {
     const current = stage;
     const src = specGl ? source : null;
@@ -235,9 +230,8 @@
     const height = cssH;
     // 尺寸为 0（布局尚未结算/页面切走）：本帧跳过，调度器下一帧还会来
     if (width === 0 || height === 0) return;
-    // 宽高各自比较：仅比较宽度时，窗口只纵向变化（最大化、分屏、拖动下沿）会使
-    // `height` 属性停留在旧值，浏览器将旧位图纵向拉伸。NowPlayingSpectrum 的 2D
-    // 兜底路径曾出现该缺陷（同一处遗漏）。
+    // 宽高各自比较：仅比较宽度时，窗口只纵向变化（最大化、分屏、拖动下沿）会使 `height`
+    // 属性停留在旧值，浏览器将旧位图纵向拉伸。NowPlayingSpectrum 的 2D 兜底路径曾出现该缺陷（同一处遗漏）。
     const bw = Math.round(width * dpr);
     const bh = Math.round(height * dpr);
     if (target.width !== bw || target.height !== bh) {
@@ -269,9 +263,8 @@
     if (!display || display.length !== n) display = new Float32Array(n);
     const eased: number[] = new Array(n);
     for (let i = 0; i < n; i += 1) {
-      // RemoteSpectrumSource.frame() 已归一化到 0–1（引擎 0–255 → /255），此处
-      // 不得再次除以 255：二次归一化会把带值压到约 0.4%，山形贴近底边成一条平线
-      // 暂停时目标值取 0：山形在约 90ms 内落回底边，不保留暂停前的起伏
+      // RemoteSpectrumSource.frame() 已归一化到 0–1（引擎 0–255 → /255），此处不得再次除以 255：二次归一化会把带值压到约
+      // 0.4%，山形贴近底边成一条平线暂停时目标值取 0：山形在约 90ms 内落回底边，不保留暂停前的起伏
       const v = paused ? 0 : Math.min(1, Math.max(0, bands[i] as number));
       display[i] = display[i] + (v - display[i]) * 0.3;
       // 轻微伽马压低持续偏热的低频带，山形重心回到中频

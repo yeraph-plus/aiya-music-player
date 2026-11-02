@@ -98,12 +98,11 @@ export function writeLook(look: Look): void {
  * 改了 CSS 忘改 JS 的症状是列表越滚越偏，不报错。
  *
  * 不能 parseFloat `getComputedStyle().getPropertyValue()`：自定义属性的
- * 计算值**不换算单位**，`--row-h` 改 rem（docs/56）后只会原样拿到
+ * 计算值**不换算单位**，`--row-h` 改 rem后只会原样拿到
  * "3.25rem"，parseFloat 得 3.25，列表静默错位。改为探针测量：让引擎把
  * `var(--row-h)` 解析成真实 px，界面缩放后自动返回缩放值（可能是小数，
  * 不要 round——行高与虚拟列表的步长必须同源，round 会逐行积累 0.x px 漂移）。
  *
- * 密度设置已移除（2026-10-30）：只有一套行高，`--row-h` 不再按属性分档。
  */
 export function readRowHeight(): number {
   const probe = document.createElement('div');

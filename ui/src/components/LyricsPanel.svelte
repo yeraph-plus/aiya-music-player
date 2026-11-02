@@ -19,14 +19,8 @@
   let scroller = $state<HTMLDivElement | null>(null);
   let userScrolledAt = 0;
 
-  /*
-   * 高亮位置自己走时钟，不等主进程的状态广播。
-   *
-   * 位置上报是 500ms 一次（进度条够用），直接拿它算高亮，每句歌词最多会晚
-   * 半秒才对上 —— 验收要求 < 200ms，靠上报频率是做不到的。
-   * 所以：每次收到新位置就重新"对时"，播放中再用 rAF 按真实时间外推，
-   * 误差落在一帧（~16ms）内；暂停时停表，不虚走。
-   */
+  /* 高亮位置自己走时钟，不等主进程的状态广播。位置上报是 500ms 一次（进度条够用），直接拿它算高亮，每句歌词最多会晚半秒才对上 —— 验收要求 <
+     200ms，靠上报频率是做不到的。所以：每次收到新位置就重新"对时"，播放中再用 rAF 按真实时间外推，误差落在一帧（~16ms）内；暂停时停表，不虚走。 */
   let clockMs = $state(0);
   let anchor = anchorAt(0, 0);
 
@@ -60,10 +54,8 @@
   const lines = $derived(lyrics?.lines ?? []);
   const activeIndex = $derived(findActiveLine(lines, clockMs));
 
-  // 用户手动滚过之后 2 秒内不抢滚动条。只认真实输入事件（滚轮/触摸/按下），
-  // 不认 scroll —— 程序化 smooth 滚动也会触发 scroll，会把跟随自己抑制掉。
-  // touch/pointer 挂 window 上（容器上的静态元素交互会报 a11y 警告），
-  // 但只在目标落在歌词容器内时生效；点歌词行按钮是"跳转"不是"翻走"，不抑制。
+  // 用户手动滚过之后 2 秒内不抢滚动条。只认真实输入事件（滚轮/触摸/按下），不认 scroll —— 程序化 smooth 滚动也会触发 scroll，会把跟随自己抑制掉。touch/pointer 挂
+  // window 上（容器上的静态元素交互会报 a11y 警告），但只在目标落在歌词容器内时生效；点歌词行按钮是"跳转"不是"翻走"，不抑制。
   function markUserScroll(event: Event): void {
     if (!scroller || !(event.target instanceof Node) || !scroller.contains(event.target)) return;
     if (event.target instanceof Element && event.target.closest('button')) return;
@@ -110,12 +102,11 @@
         hint="在同目录放一个同名的 .lrc 文件即可显示"
       />
     {:else}
-      <!-- 上下各设半高空白占位：激活行跟随滚动时会滚到容器中线，占位使第一句
-           之前与最后一句之后同样留出半屏余量，首尾句也能滚到中线。占位高度用
-           flex-basis 50% 由容器高度直接算出，无需 JS 测量。 -->
+      <!-- 上下各设半高空白占位：激活行跟随滚动时会滚到容器中线，占位使第一句之前与最后一句之后同样留出半屏余量，首尾句也能滚到中线。占位高度用
+      flex-basis 50% 由容器高度直接算出，无需 JS 测量。 -->
       <div class="lyrics-pad" aria-hidden="true"></div>
       {#if !lyrics.synced}
-        <!-- 纯文本歌词没有逐行 seek 语义，整块放开选择（docs/19 §5）；
+        <!-- 纯文本歌词没有逐行 seek 语义，整块放开选择；
              同步歌词的行是 button（点=seek），文本选择让位给点击手势 -->
         <div
           class="lyrics-lines plain selectable"
@@ -142,10 +133,8 @@
               }}
               title="跳到这一句"
             >
-              <!-- 当前句的衬底（正在播放页：压在频谱上的一团渐隐暗雾）。
-                   做成**这一行自己的子元素**而不是容器中心的伪元素：切句、
-                   用户滚动、smooth 滚动中它都跟着这一行走，永远对得准。
-                   样式在 pages.css（`--np-scrim` 定义在 tokens.css）。 -->
+              <!-- 当前句的衬底（正在播放页：压在频谱上的一团渐隐暗雾）。做成**这一行自己的子元素**而不是容器中心的伪元素：切句、用户滚动、smooth
+              滚动中它都跟着这一行走，永远对得准。样式在 pages.css（`--np-scrim` 定义在 tokens.css）。 -->
               {#if index === activeIndex}
                 <span class="lyric-halo" aria-hidden="true"></span>
               {/if}

@@ -119,7 +119,7 @@
       if (scene.includes('glass')) app.classList.add('glass');
       if (scene.includes('overlay')) app.classList.add('show-overlay');
 
-      /* ---------------- 假数据：48 带，随音乐起伏（与引擎无关，只求逐帧变化） ---------------- */
+      /* 假数据：48 带，随音乐起伏（与引擎无关，只求逐帧变化） */
       const bands = new Float32Array(BANDS);
       const display = new Float32Array(BANDS);
       function stepBands(nowMs) {
@@ -137,7 +137,7 @@
         }
       }
 
-      /* ---------------- 场景 1：现状管线（canvas 2D，160×90 buffer + blur 14 放大） ---------------- */
+      /* 场景 1：现状管线（canvas 2D，160×90 buffer + blur 14 放大） */
       const cv = document.getElementById('cv');
       let off = null;
       let octx = null;
@@ -178,16 +178,14 @@
         ctx.globalAlpha = 1;
       }
 
-      /* ---------------- 场景 2/3：three.js —— 流动渐变 + 山形 shader 光晕 ---------------- */
+      /* 场景 2/3：three.js —— 流动渐变 + 山形 shader 光晕 */
       const VERT = /* glsl */ `
         varying vec2 vUv;
         void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
       `;
 
-      /* 山形：把 48 带当 heightfield，逐像素算到脊线的垂直距离 →
-         填充 / 描边 / 两层指数光晕都在同一个 fragment 里出，无离屏、无 blur pass。
-         带值走 48×1 的 float 纹理（不是 uniform 数组）：GLSL ES 1.00 不允许
-         对 uniform 数组做动态索引，纹理采样没有这个限制，且每帧上传成本可忽略。 */
+      /* 山形：把 48 带当 heightfield，逐像素算到脊线的垂直距离 → 填充 / 描边 / 两层指数光晕都在同一个 fragment 里出，无离屏、无 blur pass。带值走 48×1 的 float
+         纹理（不是 uniform 数组）：GLSL ES 1.00 不允许对 uniform 数组做动态索引，纹理采样没有这个限制，且每帧上传成本可忽略。 */
       const FRAG_RIDGE = /* glsl */ `
         precision highp float;
         uniform sampler2D uBands;
@@ -324,7 +322,7 @@
         glCanvas.hidden = false;
       }
 
-      /* ---------------- 渲染循环 ---------------- */
+      /* 渲染循环 */
       const SCALE = 0.5; // 低分辨率渲染系数（现状 160×90 ≈ 0.12；这里给 shader 多一点精度）
       let ctx2d = null;
 
@@ -363,7 +361,7 @@
         requestAnimationFrame(loop);
       }
 
-      /* ---------------- 测量 ---------------- */
+      /* 测量 */
       function gpu() {
         try {
           const c = document.createElement('canvas').getContext('webgl2') || document.createElement('canvas').getContext('webgl');

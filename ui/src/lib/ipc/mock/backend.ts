@@ -1,11 +1,10 @@
 /**
- * 浏览器预览的假后端（docs/07 §5 第 1–2 步）。
+ * 浏览器预览的假后端。
  *
  * 目的：不接 Rust 也能渲染完整 UI、验证样式/布局/交互回归。
  * 实现是有意的"假"：数据在内存里生成（固定 seed，每次刷新都一样），
  * 设置/视图状态进 localStorage。**不是**模拟器——它不假装能出声。
  *
- * 2026-10-25 批次 4：从 `compat/mock.ts` 搬来并适配新契约：
  * - `Track` 换成生成的 `TrackRow`（列表）与 `TrackDetail`（补 audio spec），
  *   玩家状态里的 `current` 用 `TrackRef`（不含 playCount 等列表字段）；
  * - 补齐 Rust 侧新增的必填字段（`availability` / `walkErrors` / `cursor` /
@@ -64,7 +63,7 @@ import type {
   TrackRow,
 } from '../generated';
 
-/* ---------------- 事件总线 ---------------- */
+/* 事件总线 */
 
 type Listener = (payload: unknown) => void;
 
@@ -89,7 +88,7 @@ export class Emitter {
   }
 }
 
-/* ---------------- 确定性假数据 ---------------- */
+/* 确定性假数据 */
 
 const ARTIST_POOL: Array<{ name: string; albums: string[] }> = [
   { name: '周深', albums: ['深的深', '大鱼'] },
@@ -216,7 +215,6 @@ function buildLibrary(): TrackRow[] {
 /**
  * 歌单种子：摘要 + **内容**（playlistId → trackId[]）。
  *
- * 2026-10-25 之前只造摘要，歌单视图直接把全库按同一排序展示，拖动/移除只
  * 改计数不动内容 —— 版面能看，但"歌单语义"验不了。真实库是 playlist_items
  * 表，预览也建一份对应结构，代价只是一个 Map。
  */
@@ -251,7 +249,7 @@ function buildPlaylistSeed(tracks: TrackRow[]): {
   return { summaries, items };
 }
 
-/* ---------------- localStorage 小工具 ---------------- */
+/* localStorage 小工具 */
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
@@ -286,7 +284,7 @@ function decodeCursorId(cursor: string): string {
   return parsed.id;
 }
 
-/* ---------------- Mock 后端 ---------------- */
+/* Mock 后端 */
 
 export class MockBackend {
   readonly emitter = new Emitter();
@@ -350,7 +348,7 @@ export class MockBackend {
    */
   private timings: ListTiming[] = [];
 
-  /* ---------------- library ---------------- */
+  /* library */
 
   libraryList(rawQuery: TrackQuery | undefined): TrackPage {
     const started = performance.now();
@@ -429,7 +427,6 @@ export class MockBackend {
    * 预览里 `library_stats` 报多少个"位置缺失"。
    *
    * 默认 0（假库的文件都在）。要给首页那条"位置缺失"告警留一条能走的路——
-   * 它是全应用唯一还指向曲库维护的入口，2026-10-30 扫描入库页并入设置页之后
    * 这条路变成"设置 → 曲库"的一次性跳转，没有它就只能手验。`?missing=2` 打开。
    */
   missingLocations = 0;
@@ -445,9 +442,8 @@ export class MockBackend {
       locations: this.tracks.length,
       missingLocations: this.missingLocations,
       totalDurationMs: durationMs,
-      // 假库不记文件大小（TrackDetail 也不带 sizeBytes）：按 320kbps 折算了
-      // 一下——40 byte/ms。数值随曲库变化，截图里不会是一串 0，也不再需要
-      // 为这一个字段编一个固定常量。
+      // 假库不记文件大小（TrackDetail 也不带 sizeBytes）：按 320kbps 折算了一下——40
+      // byte/ms。数值随曲库变化，截图里不会是一串 0，也不再需要为这一个字段编一个固定常量。
       totalBytes: Math.round(durationMs * 40),
       // 索引体积原本固定 0：预览里"索引大小 0 B"看着像库里没东西（真实库
       // 绝不可能是 0）。按每首约 1.6KB 估一个随曲库增长的数。
@@ -542,7 +538,7 @@ export class MockBackend {
   }
 
   /**
-   * beets 工具安装（docs/33 §6.2 两条轨道）的事件流演练。
+   * beets 工具安装的事件流演练。
    *
    * 形状按真后端逐字对齐：`progress`（stage + message）→ `error` 或 `done`
    * → `finished`（带 status）。这里刻意走**失败**分支：浏览器预览既没有系统
@@ -759,7 +755,7 @@ export class MockBackend {
   }
 
   /**
-   * 曲库维护事件流演练（docs/29 批 D）。
+   * 曲库维护事件流演练。
    *
    * 为什么预览里要**假装成功**：这四条命令的核心是"事件流怎么画"，而浏览器
    * 里没有 beets。真后端的事件形状写在 `sidecar/beets_sidecar.py`，这里
@@ -850,7 +846,7 @@ export class MockBackend {
   }
 
   /**
-   * 索引增强（docs/45）：预览环境按曲目数派生出"算过一部分"的状态。
+   * 索引增强：预览环境按曲目数派生出"算过一部分"的状态。
    *
    * 为什么不做成随机：卡片要显示的是"还剩多少要算"，随机数会让每次刷新
    * 数字都变，e2e 无法断言。假数据必须确定性——这是预览后端的硬要求。
@@ -989,7 +985,7 @@ export class MockBackend {
   }
 
   /**
-   * beets 查询页（docs/47/48）的预览数据。
+   * beets 查询页的预览数据。
    *
    * 查询条件被刻意**不实现**：预览库里没有 beets 的 SQL，假装支持 rules/raw
    * 会让前端在预览环境点出"有结果"而真机上 0 命中——那种假绿比不实现更贵。
@@ -1072,7 +1068,7 @@ export class MockBackend {
   }
 
   /**
-   * 内嵌插件表（docs/51 §1）：预览环境给一份精简版。
+   * 内嵌插件表：预览环境给一份精简版。
    *
    * 真宿主读的是编译期 `include_str!` 的 `plugins.json`（全量 14 条）；这里
    * 手写四条，刻意覆盖四种形态（要额外包 / 不需要包 / 需外部二进制 / 免配置
@@ -1121,7 +1117,7 @@ export class MockBackend {
       },
       {
         name: 'xtractor',
-        // 不再是"自备"：插件（beets-xtractor）与 Essentia 提取器都随免配置包发（docs/54）
+        // 不再是"自备"：插件（beets-xtractor）与 Essentia 提取器都随免配置包发
         title: '音频特征',
         note: 'bpm / danceability / 响度（插件与 Essentia 提取器都随免配置包预置）',
         builtin: false,
@@ -1196,7 +1192,7 @@ export class MockBackend {
 
   async scan(): Promise<ScanResult> {
     const started = Date.now();
-    // 阶段顺序与真后端逐字对齐（docs/29 批 B 之后）：walking → parsing（解析与
+    // 阶段顺序与真后端逐字对齐：walking → parsing（解析与
     // 入库重叠）→ importing（解析全完、排队入库）→ done。
     // 旧版这里有一段 `artwork`：封面落盘并进解析 worker 之后它不再单独出现，
     // mock 留着会让"只在 mock 里才有"的状态白白多一个。
@@ -1271,7 +1267,7 @@ export class MockBackend {
     };
   }
 
-  /* ---------------- 扫描根列表（docs/29 批 A：多目录并集单库） ---------------- */
+  /* 扫描根列表 */
 
   private scanRoots: string[] = ['D:/MUSIC_Player/test-music'];
 
@@ -1304,7 +1300,7 @@ export class MockBackend {
     return { removed: 0 };
   }
 
-  /* ---------------- beets 配置（docs/49 §4）：inbox / 落点 / 排除表 ----------------
+  /* beets 配置：inbox / 落点 / 排除表
    * 与真后端同语义的校验：
    * - inbox 与任何曲库目录**任一方向**重叠都拒（在里面 → copy 的原件被扫；
    *   是父目录 → 预览把整个曲库再导一遍）；
@@ -1410,7 +1406,7 @@ export class MockBackend {
     return { removed };
   }
 
-  /* ---------------- playlists ---------------- */
+  /* playlists */
 
   playlistList(): PlaylistSummary[] {
     return this.playlists;
@@ -1436,7 +1432,6 @@ export class MockBackend {
       updatedAtMs: now,
       sortPosition: this.playlists.length,
     };
-    // 物化模型（2026-10-30）：动态歌单建单即按规则入库，与手动歌单同一张表
     this.playlistItems.set(summary.id, isSmart ? this.matchRule(rule) : [...(trackIds ?? [])]);
     this.playlists.push(summary);
     return this.syncPlaylist(summary.id) ?? summary;
@@ -1568,7 +1563,7 @@ export class MockBackend {
     return this.syncPlaylist(id);
   }
 
-  /* ---------------- m3u 导入导出（docs/22 G2） ---------------- */
+  /* m3u 导入导出 */
 
   /**
    * 预览不吃真文件：不传 `path` 就按"用户取消"回（浏览器没有系统文件选择器，
@@ -1599,7 +1594,7 @@ export class MockBackend {
     return { path, count };
   }
 
-  /* ---------------- lyrics / history ---------------- */
+  /* lyrics / history */
 
   lyricsGet(_trackId: string): Lyrics {
     void _trackId;
@@ -1629,7 +1624,7 @@ export class MockBackend {
     return { cleared: true };
   }
 
-  /* ---------------- player ---------------- */
+  /* player */
 
   private emitPlayer(): void {
     this.playerState = { ...this.playerState, updatedAtMs: Date.now() };
@@ -1667,7 +1662,7 @@ export class MockBackend {
       }
       return;
     }
-    // ---- 曲尾（直播无 duration，到不了这）----
+    // 曲尾（直播无 duration，到不了这）
     if (this.playerState.repeat === 'one') {
       this.playerState = { ...this.playerState, positionMs: 0, updatedAtMs: Date.now() };
       return;
@@ -1905,7 +1900,7 @@ export class MockBackend {
     return this.playerState;
   }
 
-  /* ---------------- 直播 / 拖放（docs/52） ---------------- */
+  /* 直播 / 拖放 */
 
   /**
    * 拖入条目的分类（预览版）。
@@ -1947,7 +1942,7 @@ export class MockBackend {
   }
 
   /**
-   * 拖入一批文件：替换队列并播第一项（docs/52 §5.3）。
+   * 拖入一批文件：替换队列并播第一项。
    *
    * 预览里只认两种结局：**音频直接开播**、其余全进 `skipped`。`.m3u` 展开是
    * 宿主的读盘活，浏览器里没有那份文件，一律报跳过——比假装展开成功诚实。
@@ -2027,7 +2022,7 @@ export class MockBackend {
     return this.playerState;
   }
 
-  /* ---------------- app ---------------- */
+  /* app */
 
   get initialLook(): { theme: ThemeMode } {
     return this.look;
@@ -2109,7 +2104,7 @@ export class MockBackend {
   }
 
   getEq(): EqSettings {
-    // 旧 localStorage 行可能没有 bassDb/trebleDb（docs/39 前的存量），兜底 0
+    // 旧 localStorage 行可能没有 bassDb/trebleDb，兜底 0
     const v = loadJson('aiya.eq', {
       enabled: false,
       bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -2155,7 +2150,7 @@ export class MockBackend {
     };
   }
 
-  /* ---------------- 查询实现 ---------------- */
+  /* 查询实现 */
 
   private filter(q: TrackQueryParsed): TrackRow[] {
     const needle = q.search?.trim().toLowerCase();
@@ -2166,7 +2161,7 @@ export class MockBackend {
       }
       if (q.artistId && t.artistId !== q.artistId) return false;
       if (q.albumId && t.albumId !== q.albumId) return false;
-      // 时间筛选（docs/27）：语义与 Rust repo.rs 逐字对齐——
+      // 时间筛选：语义与 Rust repo.rs 逐字对齐
       // from 含、to 开区间，毫秒比较
       if (q.addedFromMs !== undefined && t.addedAtMs < q.addedFromMs) return false;
       if (q.addedToMs !== undefined && t.addedAtMs >= q.addedToMs) return false;
@@ -2225,7 +2220,7 @@ export class MockBackend {
     }
     if (source.kind === 'mostPlayed') {
       // 与 Rust repo.rs join_and_order 逐字对齐：次数 desc → 最近播放 desc → id。
-      // docs/28：推荐页 top-15 的第 15 名争夺战里，并列次数下"最近还在听"的留下
+      // 推荐页 top-15 的第 15 名争夺战里，并列次数下"最近还在听"的留下
       return [...rows]
         .filter((t) => t.playCount > 0)
         .sort(

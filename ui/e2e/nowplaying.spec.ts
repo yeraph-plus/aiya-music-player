@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * 正在播放页两栏沉浸 + EQ/队列抽屉（docs/25 §6 起 SideDrawer 宿主）。
+ * 正在播放页两栏沉浸 + EQ/队列抽屉（起 SideDrawer 宿主）。
  *
  * 断言的是**行为契约**，不是版式：
  * - 正在播放入口：播放条歌曲区域（侧栏无席位）；
@@ -30,7 +30,7 @@ function firstRow(page: Page) {
 
 async function openNowPlaying(page: Page): Promise<void> {
   await page.goto('/');
-  // docs/25 §6：正在播放页唯一入口是播放条左侧歌曲区域（侧栏席位已撤）
+  // 正在播放页唯一入口是播放条左侧歌曲区域（侧栏席位已撤）
   await page.locator('footer .now').click();
   await expect(page.locator('.main h1')).toHaveText('未在播放');
 }
@@ -38,12 +38,12 @@ async function openNowPlaying(page: Page): Promise<void> {
 test('正在播放页两栏沉浸：左信息右歌词，卡片与切换条已拆', async ({ page }) => {
   await openNowPlaying(page);
 
-  // 左信息列 + 右歌词都在；EQ 在播放条抽屉（docs/25 §1），不在页面里
+  // 左信息列 + 右歌词都在；EQ 在播放条抽屉，不在页面里
   await expect(page.locator('.np-info')).toBeVisible();
   await expect(page.locator('.lyrics-panel')).toBeVisible();
   await expect(page.locator('.eq-panel')).toHaveCount(0);
 
-  // 去卡片化（docs/25 §4）：hero 卡片与 SegmentedControl 不复存在
+  // 去卡片化：hero 卡片与 SegmentedControl 不复存在
   await expect(page.locator('.now-playing-hero')).toHaveCount(0);
   await expect(page.locator('.now-playing-tabs')).toHaveCount(0);
 });
@@ -57,7 +57,6 @@ test('EQ 抽屉：从播放条进入，预设命中打 ✓；与队列抽屉互�
   await eqTrigger.click();
   const panel = page.locator('.eq-panel');
   await expect(panel).toBeVisible();
-  // 2026-10-28 三区制：只剩 10 段滑杆；低音/高音/前置增益三旋钮（三角布局）
   await expect(panel.locator('.k-slider')).toHaveCount(10);
   await expect(panel.locator('.knob[role="slider"]')).toHaveCount(3);
 
@@ -74,7 +73,7 @@ test('EQ 抽屉：从播放条进入，预设命中打 ✓；与队列抽屉互�
   // 启用后触发键打点语义：aria-label 更新
   await expect(eqTrigger).toHaveAttribute('aria-label', '均衡器（已启用）');
 
-  // 互斥：开队列 → EQ 抽屉被关掉（ui store 单向清理，docs/25 §1）
+  // 互斥：开队列 → EQ 抽屉被关掉（ui store 单向清理）
   const queueTrigger = page.locator('footer').getByRole('button', { name: /播放队列/ });
   await queueTrigger.click();
   await expect(page.locator('.queue-float')).toBeVisible();

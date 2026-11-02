@@ -64,9 +64,8 @@ from pathlib import Path
 from . import plugins
 from .plugins import BINARIES, BinarySpec
 
-# 单个下载物的上限。最大的那个是 ffmpeg 的轮子 31.2MB，留 8 倍余量。
-# 为什么要有：`.read()` 一直读到磁盘满；而地址写错（指到大文件）的代价由用户的
-# 磁盘承担（与宿主侧 `download_to` 的 ASSET_MAX_BYTES 同一个理由）。
+# 单个下载物的上限。最大的那个是 ffmpeg 的轮子 31.2MB，留 8 倍余量。为什么要有：`.read()`
+# 一直读到磁盘满；而地址写错（指到大文件）的代价由用户的磁盘承担（与宿主侧 `download_to` 的 ASSET_MAX_BYTES 同一个理由）。
 MAX_BYTES = 256 * 1024 * 1024
 
 TIMEOUT = 120
@@ -231,10 +230,8 @@ def probe(exe: Path, spec: BinarySpec) -> tuple[bool, str | None]:
     line = text.strip().splitlines()[0].strip() if text.strip() else None
     if got.returncode == 0:
         return True, line
-    # 允许失败的只有"无参调用会报用法"这一类（essentia）。但**必须**看到
-    # 它能打印点什么：0 字节输出 + 非 0 退出 = 缺 DLL 或被拦，不能算能用。
-    # 版本行给 None 而不是把 "Error: wrong number of arguments" 当版本号显示 ——
-    # 那是用法提示，不是版本。
+    # 允许失败的只有"无参调用会报用法"这一类（essentia）。但**必须**看到它能打印点什么：0 字节输出 + 非 0 退出 = 缺 DLL 或被拦，不能算能用。版本行给 None 而不是把
+    # "Error: wrong number of arguments" 当版本号显示 —— 那是用法提示，不是版本。
     if spec.probe_allow_fail and line and ("Usage" in text or "usage" in text):
         return True, None
     return False, line
@@ -507,10 +504,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     if args.from_plugins is not None:
-        # 宿主用这条：它只知道"用户勾了哪些插件"，不知道哪个插件要哪个 exe。
-        # 让宿主自己算就是第二份派生（`plugin_table` 的 `exe` 并集 vs 这里的
-        # `binaries_for`），两边一旦分家，症状是"装了插件却没下工具"——而缺
-        # ffmpeg 会让 beets 任何子命令都起不来。
+        # 宿主用这条：它只知道"用户勾了哪些插件"，不知道哪个插件要哪个 exe。让宿主自己算就是第二份派生（`plugin_table` 的 `exe` 并集 vs 这里的
+        # `binaries_for`），两边一旦分家，症状是"装了插件却没下工具"——而缺 ffmpeg 会让 beets 任何子命令都起不来。
         if args.only:
             emit({"type": "error", "stage": "prepare",
                   "message": "--only 与 --from-plugins 只能给一个"})

@@ -162,8 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         return 6
 
     # 5) 外部工具：新勾的插件要的 exe 按需下载（ffmpeg 等），落
-    #    {data_root}/beets-tool/bin（下载落点优先于包内自带，bin_dirs 决定）。
-    #    失败不回滚已装的包——"插件可用、工具没齐"可以点一次重试补齐。
+    # {data_root}/beets-tool/bin（下载落点优先于包内自带，bin_dirs 决定）。失败不回滚已装的包——"插件可用、工具没齐"可以点一次重试补齐。
     bin_rows: list[dict] = []
     if need_bins:
         emit({"type": "progress", "stage": "bin",
@@ -178,9 +177,8 @@ def main(argv: list[str] | None = None) -> int:
                   "message": f"插件包已装好，但外置工具没下下来：{e}"})
             return 7
 
-    # 6) 同步 workbench 配置的 plugins 行：宿主已把新清单写进 settings.json，
-    #    这里跑一次 ensure 让 config.yaml 跟上（含 _drop_unusable 剔除与门禁）。
-    #    同步失败不算全盘失败——下一次会话启动还会再同步。
+    # 6) 同步 workbench 配置的 plugins 行：宿主已把新清单写进 settings.json，这里跑一次 ensure 让 config.yaml 跟上（含
+    # _drop_unusable 剔除与门禁）。同步失败不算全盘失败——下一次会话启动还会再同步。
     try:
         cfg.ensure_config()
     except Exception as e:  # noqa: BLE001 —— 安装成功与配置同步是两件事

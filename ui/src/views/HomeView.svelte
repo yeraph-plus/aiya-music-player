@@ -134,9 +134,8 @@
     </div>
   </section>
 
-  <!-- 缺失警告：唯一保留的统计位，性质是告警而非导航，点击即去处理。
-       处理入口在设置页的「曲库」组，因此走 `nav.settingsAt` 而不是普通 `go` ——
-       落地要直接滚到那一组，不让人在设置页顶部自行寻找 -->
+  <!-- 缺失警告：唯一保留的统计位，性质是告警而非导航，点击即去处理。处理入口在设置页的「曲库」组，因此走 `nav.settingsAt`
+  而不是普通 `go` —— 落地要直接滚到那一组，不让人在设置页顶部自行寻找 -->
   {#if library.stats && library.stats.missingLocations > 0}
     <button class="stat-warn" onclick={() => nav.settingsAt('library')}>
       {library.stats.missingLocations} 个位置缺失，去「设置 → 曲库」查看

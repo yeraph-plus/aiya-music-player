@@ -203,12 +203,8 @@ impl Engine {
         let (ev_tx, ev_rx) = mpsc::sync_channel::<EngineEvent>(EVENT_CHANNEL_CAP);
         let written = Arc::new(AtomicU64::new(0));
         let written_worker = Arc::clone(&written);
-        // panic 兜底（第二级防线）：sidecar 正式构建带 panic=abort（见
-        // tools/build-sidecar.mjs），panic 直接杀进程、看门狗换代重建——那是
-        // 主防线。这里 catch_unwind 服务于 panic=abort 未生效的裸跑场景
-        // （示例/调试/有人绕过构建脚本）：接住 panic、经克隆的事件端发一条
-        // `internal` 错误（token=0，宿主按"装载前错误"上报），随后线程退出，
-        // 绝不让 worker 变成"通道挂着、事件永不再来"的僵尸。
+        // panic 兜底（第二级防线）：sidecar 正式构建带 panic=abort（见 tools/build-sidecar.mjs），panic 直接杀进程、看门狗换代重建——那是主防线。这里 catch_unwind 服务于 panic=abort 未生效的裸跑场景
+        // （示例/调试/有人绕过构建脚本）：接住 panic、经克隆的事件端发一条 `internal` 错误（token=0，宿主按"装载前错误"上报），随后线程退出，绝不让 worker 变成"通道挂着、事件永不再来"的僵尸。
         let ev_panic = ev_tx.clone();
         let worker = std::thread::Builder::new()
             .name("aiya-audio-engine".into())
@@ -258,9 +254,8 @@ impl Engine {
         match self.rx.try_recv() {
             Ok(e) => Some(e),
             Err(mpsc::TryRecvError::Empty) => None,
-            // 通道关闭 = worker 已退出（panic 兜底先报 Error 再退）。这里不
-            // panic、不刷日志：sidecar 下进程将随 panic=abort 死亡，轮询方
-            // 随之消失；裸跑下错误已随事件上送。前提同 EventTx 的注释。
+            // 通道关闭 = worker 已退出（panic 兜底先报 Error 再退）。这里不 panic、不刷日志：sidecar 下进程将随
+            // panic=abort 死亡，轮询方随之消失；裸跑下错误已随事件上送。前提同 EventTx 的注释。
             Err(mpsc::TryRecvError::Disconnected) => None,
         }
     }
@@ -271,9 +266,8 @@ impl Engine {
         let _ = self.watcher_stop.send(());
         if let Some(w) = self.worker.take() {
             if w.join().is_err() {
-                // join Err = worker 在 catch_unwind 之外 panic（理论不可达）。
-                // sidecar 下 panic=abort 根本到不了这里；留痕防"吞 join panic"
-                // 的旧病复发。
+                // join Err = worker 在 catch_unwind 之外 panic（理论不可达）。sidecar 下 panic=abort
+                // 根本到不了这里；留痕防"吞 join panic" 的旧病复发。
                 tracing::error!("engine worker join 失败（worker panic）");
             }
         }
@@ -398,9 +392,8 @@ fn render_loop(
             None
         });
 
-    // 变速跨曲目保持：在顶层循环外声明，EOF/Stop/错误回到顶层后不重置
-    // （P1：此前每轮 Load 周期重置 1.0，自然播完切下一曲后倍速静默丢失
-    // 且 UI 仍显示旧值；SetRate 只应被显式命令修改）
+    // 变速跨曲目保持：在顶层循环外声明，EOF/Stop/错误回到顶层后不重置 （P1：此前每轮 Load 周期重置
+    // 1.0，自然播完切下一曲后倍速静默丢失且 UI 仍显示旧值；SetRate 只应被显式命令修改）
     let mut pending_rate: f32 = 1.0;
     // 输出配置同理跨曲目保持（设置项，不随换曲回默认）
     let mut pending_cfg = OutputConfig::default();
@@ -412,9 +405,8 @@ fn render_loop(
     // 第一首歌音量就丢了；现在暂存，装载后由 play_* 的 initial_volume 应用。
     let mut pending_volume: f32 = 1.0;
     'outer: loop {
-        // 命令循环：等 Load 或 Shutdown（Load 前到的 SetVolume/SetRate/
-        // SetSpectrum/EQ/输出配置暂存生效；Seek 丢弃——没有可 seek 的曲目，
-        // 宿主恢复序列的起点在 Load::start_ms 里，播放中另发 Seek）
+        // 命令循环：等 Load 或 Shutdown（Load 前到的 SetVolume/SetRate/ SetSpectrum/EQ/输出配置暂存生效；Seek 丢弃——没有可
+        // seek 的曲目，宿主恢复序列的起点在 Load::start_ms 里，播放中另发 Seek）
         let (mut path, mut start_ms, mut token, mut load_paused) = loop {
             match cmd_rx.recv() {
                 Ok(EngineCommand::Load {
@@ -452,8 +444,7 @@ fn render_loop(
         // play_file 内部收到的新 Load 在这里续播（path 从 play_file 带回，
         // 不能在内部丢弃 —— 否则那条 Load 凭空消失，外层 recv() 永远等不到）。
         loop {
-            // null = 不碰任何音频设备：解码与时钟照常，只是不出声。
-            // 单独一条路径而不是给 Output 加变体：后者要把 40 多处 client
+            // null = 不碰任何音频设备：解码与时钟照常，只是不出声。单独一条路径而不是给 Output 加变体：后者要把 40 多处 client
             // 访问都改成 Option，代价远大于收益（而且两边的推进逻辑本来就不同）。
             let outcome = if pending_cfg.mode == ModePref::Null {
                 play_null(
@@ -571,7 +562,7 @@ fn open_source(path: &str) -> Result<DecodedStream, AudioError> {
 /// 同样的位置事件"，忙等只会白烧一个核。
 // 参数多不是"从某个结构体抄一遍"，而是 Load 命令 + 线程里累积的 pending_* 状态
 // （变速/输出配置/EQ/tap）在进入播放循环前的汇合点。打包成结构体只是把同一批字段
-// 挪个位置（调用点只有一处），不减少信息量——留作 docs/36 的重构项，这里先记账。
+// 挪个位置（调用点只有一处），不减少信息量——留作 的重构项，这里先记账。
 #[allow(clippy::too_many_arguments)]
 fn play_null(
     cmd_rx: &Receiver<EngineCommand>,
@@ -924,11 +915,8 @@ fn play_file(
     let mut decoder_eof = false;
 
     let mut volume: f32 = initial_volume;
-    // 当前实际增益 = 音量 × 淡入淡出系数，逐样本向目标逼近。
-    // 跨 chunk 保持，否则每块首样本都会重新跳变，斜坡等于没做。
-    // 初值必须是 initial_volume 而不是 1.0：目标 = 音量 × declick(=1)，从
-    // 1.0 出发会让每曲开头按"全音量渐弱到设定音量"起播（音量低时明显可闻，
-    // 静音时先漏出最多一整块的音乐）。发布前审查 P1-1。
+    // 当前实际增益 = 音量 × 淡入淡出系数，逐样本向目标逼近。跨 chunk 保持，否则每块首样本都会重新跳变，斜坡等于没做。初值必须是 initial_volume 而不是 1.0：目标 = 音量 ×
+    // declick(=1)，从 1.0 出发会让每曲开头按"全音量渐弱到设定音量"起播（音量低时明显可闻，静音时先漏出最多一整块的音乐）。发布前审查 P1-1。
     let mut gain_now: f32 = initial_volume;
     // 淡入淡出目标（1 = 正常，0 = 静音）。播放控制靠它做 declick：
     // 暂停/seek/停止都是"波形突然截断"，不做淡出就是可闻的咔哒。
@@ -967,12 +955,8 @@ fn play_file(
     let mut dumb_tries: u32 = 0;
 
     loop {
-        // 等引擎缓冲区消费事件。超时/错误都视为一次正常唤醒——绝不能把
-        // 超时当 Err 拆流（P0：暂停后 stop_stream 令事件停发，2s 超时曾走
-        // `?` 把流销毁，暂停期间所有命令石沉大海）。
-        //
-        // 淡出进行中必须用很短的等待：20ms 的斜坡等不起 2s 的事件超时，
-        // 否则按暂停后要过两秒才静音。
+        // 等引擎缓冲区消费事件。超时/错误都视为一次正常唤醒——绝不能把超时当 Err 拆流（P0：暂停后 stop_stream 令事件停发，2s 超时曾走 `?`
+        // 把流销毁，暂停期间所有命令石沉大海）。淡出进行中必须用很短的等待：20ms 的斜坡等不起 2s 的事件超时，否则按暂停后要过两秒才静音。
         let fading = (gain_now - declick_target).abs() > 0.002;
         let wait_ms: u32 = if paused {
             100
@@ -1000,12 +984,8 @@ fn play_file(
         loop {
             match cmd_rx.try_recv() {
                 Ok(EngineCommand::Pause) if !paused => {
-                    // 暂停 = 先淡出到静音再停止喂数据，流保持 running
-                    // （事件照常触发、命令循环存活）。不 stop_stream：停流后
-                    // WASAPI 引擎不再为该流处理传递，事件停发。
-                    //
-                    // 为什么淡出：直接把波形截断在任意非零样本上等于给耳机
-                    // 一个阶跃，就是那声"哒"。20ms 淡出完全听不出来。
+                    // 暂停 = 先淡出到静音再停止喂数据，流保持 running （事件照常触发、命令循环存活）。不 stop_stream：停流后 WASAPI
+                    // 引擎不再为该流处理传递，事件停发。为什么淡出：直接把波形截断在任意非零样本上等于给耳机一个阶跃，就是那声"哒"。20ms 淡出完全听不出来。
                     pending_pause = true;
                     declick_target = 0.0;
                     last_write = std::time::Instant::now();
@@ -1032,9 +1012,8 @@ fn play_file(
                     });
                 }
                 Ok(EngineCommand::Seek(ms)) => {
-                    // 直播流不可 seek：直接回报当前位置，不启动淡出。若淡出后
-                    // 才在动作分支里丢弃 seek，declick_target 会留在 0——此后
-                    // 目标增益恒为 0，状态照走但永久无声（发布前审查 P1-2）。
+                    // 直播流不可 seek：直接回报当前位置，不启动淡出。若淡出后才在动作分支里丢弃 seek，declick_target 会留在
+                    // 0——此后目标增益恒为 0，状态照走但永久无声（发布前审查 P1-2）。
                     if !decoder.seekable() {
                         send(EngineEvent::Position {
                             token,
@@ -1061,9 +1040,8 @@ fn play_file(
                     });
                 }
                 Ok(EngineCommand::SetOutputConfig(next)) if next.mode == ModePref::Null => {
-                    // 切到静音输出要走另一条渲染路径（play_null）：停流后把当前
-                    // 位置带回外层重新装载。位置取 play_position（扣掉池内未播
-                    // 样本），接上时不跳。
+                    // 切到静音输出要走另一条渲染路径（play_null）：停流后把当前位置带回外层重新装载。位置取
+                    // play_position（扣掉池内未播样本），接上时不跳。
                     let resume_ms = play_position(&decoder, &pool);
                     out.stop();
                     return Ok(LoadExit::NewLoad {
@@ -1095,10 +1073,8 @@ fn play_file(
                     }
                 }
                 Ok(EngineCommand::DeviceChanged) => {
-                    // 默认设备变更（watcher 探测）：复用 pending_switch 淡出
-                    // 切流路径——与用户改输出设置完全同一条逻辑（先淡出再重开），
-                    // 重开时 open_output 重新枚举默认设备，自然落到新设备。
-                    // 不当错误处理：旧设备可能还活着，只是不再是默认。
+                    // 默认设备变更（watcher 探测）：复用 pending_switch 淡出切流路径——与用户改输出设置完全同一条逻辑（先淡出再重开），重开时
+                    // open_output 重新枚举默认设备，自然落到新设备。不当错误处理：旧设备可能还活着，只是不再是默认。
                     pending_switch = true;
                     declick_target = 0.0;
                     pending_cfg_apply = Some(cfg);
@@ -1135,7 +1111,7 @@ fn play_file(
             }
         }
 
-        // ---- 淡出完成后的动作（顺序：暂停 / 切配置 / seek / 停止）----
+        // 淡出完成后的动作（顺序：暂停 / 切配置 / seek / 停止）
         if gain_now <= 0.002
             && (pending_pause || pending_seek.is_some() || pending_stop || pending_switch)
         {
@@ -1147,7 +1123,6 @@ fn play_file(
                     playing: false,
                 });
                 // 独占暂停把设备让出去：否则浏览器/会议软件拿不到声卡
-                // （docs/04 §6 的要求，此前没实现）。
                 if cfg.release_on_pause && out.is_live() && out.mode == OutputMode::Exclusive {
                     out.release();
                     tracing::debug!("独占暂停：已释放音频设备");
@@ -1177,10 +1152,8 @@ fn play_file(
                 declick_target = 1.0; // 新流淡入
             }
             if let Some(ms) = pending_seek.take() {
-                // 直播流不可 seek：整个动作丢弃（out 不能停在 stopped 态不重启）。
-                // 命令入口已拦住不可 seek 的流；这里兜 seekable 中途变化的情况
-                // （HLS 窗口滑动等），必须把增益目标恢复回 1——否则 declick
-                // 停在 0，静音到切曲。
+                // 直播流不可 seek：整个动作丢弃（out 不能停在 stopped 态不重启）。命令入口已拦住不可 seek 的流；这里兜 seekable 中途变化的情况
+                // （HLS 窗口滑动等），必须把增益目标恢复回 1——否则 declick 停在 0，静音到切曲。
                 if !decoder.seekable() {
                     declick_target = 1.0;
                     send(EngineEvent::Position {
@@ -1235,13 +1208,8 @@ fn play_file(
             return Err(e);
         }
 
-        // 设备错误恢复（唯一出口）：重建输出流后继续当前曲目。
-        // 位置天然连续（池与 decoder 状态都在本地）；已写入旧设备缓冲的
-        // 样本随重建丢失，最多回跳 200ms，可接受。
-        //
-        // 注意顺序：必须在 `if paused` 之前处理。此前 pause 分支先 continue，
-        // 暂停态下 seek 的 start_stream 失败（stream_err 置位）永不处理——
-        // 既不重建也不上报，UI 完全无感。
+        // 设备错误恢复（唯一出口）：重建输出流后继续当前曲目。位置天然连续（池与 decoder 状态都在本地）；已写入旧设备缓冲的样本随重建丢失，最多回跳 200ms，可接受。注意顺序：必须在 `if paused` 之前处理。此前 pause
+        // 分支先 continue，暂停态下 seek 的 start_stream 失败（stream_err 置位）永不处理—— 既不重建也不上报，UI 完全无感。
         if let Some(e) = stream_err.take() {
             if device_failures >= DEVICE_RECOVERY_ATTEMPTS {
                 tracing::error!(%e, attempts = device_failures, "设备恢复重试耗尽，放弃当前曲目");
@@ -1253,10 +1221,8 @@ fn play_file(
             match reopen_output(&mut out, &decoder, device_failures, &cfg) {
                 Ok(note) => {
                     device_failures += 1; // 写成功后归零；连续失败则退避递增
-                                          // 重开成功 = 一条新流：给满哑流观察窗（与 play_file 开局同
-                                          // 一待遇）。不重置的话，长时间退避期间的"无写入"会被
-                                          // DUMB_STREAM_MS 记在新流头上，刚活过来就被判哑、再进恢复
-                                          // 循环，直到重试耗尽——设备短暂抽风一次就升级成播放失败。
+                                          // 重开成功 = 一条新流：给满哑流观察窗（与 play_file 开局同一待遇）。不重置的话，长时间退避期间的"无写入"会被 DUMB_STREAM_MS
+                                          // 记在新流头上，刚活过来就被判哑、再进恢复循环，直到重试耗尽——设备短暂抽风一次就升级成播放失败。
                     last_write = std::time::Instant::now();
                     tracing::warn!(error = %e, attempt = device_failures, "输出设备失效，已重建（退避重试中）");
                     // 换设备后实际模式可能变（新设备不支持独占 / 反而支持）：
@@ -1328,9 +1294,8 @@ fn play_file(
         }
 
         if paused {
-            // 暂停时不喂数据。流还活着就顺手探一次设备存活（拔耳机/切默认
-            // 设备），失败即置 stream_err 走恢复路径；独占暂停已把设备让出去
-            // 时没有句柄可探——那是正常的静止态，不是故障。
+            // 暂停时不喂数据。流还活着就顺手探一次设备存活（拔耳机/切默认设备），失败即置 stream_err
+            // 走恢复路径；独占暂停已把设备让出去时没有句柄可探——那是正常的静止态，不是故障。
             if out.is_live() {
                 if let Err(e) = out.client.get_current_padding() {
                     stream_err = Some(wasapi_err(e));
@@ -1348,10 +1313,8 @@ fn play_file(
             }
         };
         let available = writable_frames(out.clock, out.mode, out.buffer_frames, padding);
-        // 每轮渲染心跳都上报位置（泵侧再做 500ms 节流；写满瞬间 available 不会为 0）
-        // 位置要扣掉设备缓冲里还没播的部分，否则进度条领先耳朵最多 200ms。
-        // 独占事件下 padding 恒等于 buffer，正好等于"在途一整个缓冲"的估值，
-        // 所以这条公式在两个模式下都成立（不必换成 IAudioClock，它比写入超前 5%）。
+        // 每轮渲染心跳都上报位置（泵侧再做 500ms 节流；写满瞬间 available 不会为 0）位置要扣掉设备缓冲里还没播的部分，否则进度条领先耳朵最多 200ms。独占事件下 padding 恒等于
+        // buffer，正好等于"在途一整个缓冲"的估值，所以这条公式在两个模式下都成立（不必换成 IAudioClock，它比写入超前 5%）。
         let position_now = |decoder: &DecodedStream, pool: &[f32], latency: u32| -> u64 {
             play_position(decoder, pool).saturating_sub(padding_ms(decoder, latency))
         };
@@ -1407,20 +1370,16 @@ fn play_file(
             let diff = target - gain_now;
             let max_delta = ramp_step * out_frames as f32;
             let delta = diff.clamp(-max_delta, max_delta);
-            // 斜坡在 min(需要帧数, 本块帧数) 内走完，不摊满整块：共享模式一块
-            // 就是整个设备缓冲（~200ms），摊满会把 20ms 的 declick 拉成 200ms，
-            // 按暂停要等整块写完才真正静音。步长按 ramp_step 封顶帧数推导，
-            // 块内超出 span 的样本由 resample_take 按 vol_end 钳住——线性式
-            // 会越过目标（fade-down 会翻相位）。
+            // 斜坡在 min(需要帧数, 本块帧数) 内走完，不摊满整块：共享模式一块就是整个设备缓冲（~200ms），摊满会把 20ms 的 declick 拉成 200ms，按暂停要等整块写完才真正静音。步长按 ramp_step
+            // 封顶帧数推导，块内超出 span 的样本由 resample_take 按 vol_end 钳住——线性式会越过目标（fade-down 会翻相位）。
             let span = (delta.abs() / ramp_step)
                 .ceil()
                 .max(1.0)
                 .min(out_frames as f32);
             let step = delta / span;
             let vol_end = gain_now + delta;
-            // tap 开关在这里读一次并传下去：关闭时连"重采样输出的单声道混算"
-            // 都跳过——此前只有 push_mono 内部查开关，resample_take 的混算
-            // 无条件执行，两条路径不一致，"关闭零开销"名不副实。
+            // tap 开关在这里读一次并传下去：关闭时连"重采样输出的单声道混算" 都跳过——此前只有 push_mono
+            // 内部查开关，resample_take 的混算无条件执行，两条路径不一致，"关闭零开销"名不副实。
             let tap_enabled = tap.is_enabled();
             resample_take(
                 &pool,
@@ -1463,9 +1422,8 @@ fn play_file(
             }
             frames_to_write -= out_frames;
 
-            // 4) 消费池：前移读取位置，drain 已消费帧。
-            //    tap 点：推**重采样后的输出帧**（未乘音量，低音量频谱仍可视），
-            //    单声道已在 resample_take 内混好 —— 与"实际出声内容"同速。
+            // 4) 消费池：前移读取位置，drain 已消费帧。tap 点：推**重采样后的输出帧**（未乘音量，低音量频谱仍可视），单声道已在
+            // resample_take 内混好 —— 与"实际出声内容"同速。
             pool_pos += out_frames as f64 * rate as f64;
             let consumed = pool_pos.floor() as usize;
             if consumed > 0 {
@@ -1534,10 +1492,8 @@ fn play_file(
                     | Ok(EngineCommand::SetVolume(_))
                     | Ok(EngineCommand::SetRate(_))
                     | Ok(EngineCommand::DeviceChanged) => {
-                        // 曲尾的这些指令无意义（马上换曲/停止），丢弃即可；
-                        // 换曲后宿主会重新下发音量/倍速（见 drive 序列）。
-                        // 设备迁移同理：EOF 后回命令循环，下一条 Load 的
-                        // open_output 自然落到新设备（watcher 已更新基线）。
+                        // 曲尾的这些指令无意义（马上换曲/停止），丢弃即可；换曲后宿主会重新下发音量/倍速（见 drive 序列）。设备迁移同理：EOF 后回命令循环，下一条
+                        // Load 的 open_output 自然落到新设备（watcher 已更新基线）。
                     }
                     Err(_) => {}
                 }
@@ -1552,10 +1508,8 @@ fn play_file(
                 } else {
                     match out.client.get_current_padding() {
                         Ok(0) => break,
-                        // P1：排空中 padding 查询失败 = 设备大概率已失效
-                        // （拔插/驱动复位）。此前 `unwrap_or(0)` 把 Err 抹成
-                        // "已排空"提前报 Eof——那首歌其实没放完。置
-                        // stream_err 走统一设备恢复出口，重建流后重新排空。
+                        // P1：排空中 padding 查询失败 = 设备大概率已失效 （拔插/驱动复位）。此前 `unwrap_or(0)` 把 Err 抹成 "已排空"提前报
+                        // Eof——那首歌其实没放完。置 stream_err 走统一设备恢复出口，重建流后重新排空。
                         Ok(_) => {}
                         Err(e) => {
                             stream_err = Some(wasapi_err(e));
@@ -2291,9 +2245,7 @@ enum SwitchOutcome {
 /// 撞 `AUDCLNT_E_DEVICE_IN_USE(0x8889000A)`（只 `stop_stream` 不够，实测仍失败，
 /// 必须 drop 掉句柄）。代价是新流建立期间有几十毫秒空档，由调用方的淡出盖住。
 fn switch_output(out: &mut Output, decoder: &DecodedStream, cfg: &OutputConfig) -> SwitchOutcome {
-    // 记下原配置用于退回：不能只记模式，时钟/缓冲也要回到原样。
-    // 流可能已被释放（独占暂停让出设备后用户改设置），这时没有"原配置"，
-    // 直接按新配置开——退回目标就是新配置本身。
+    // 记下原配置用于退回：不能只记模式，时钟/缓冲也要回到原样。流可能已被释放（独占暂停让出设备后用户改设置），这时没有"原配置"，直接按新配置开——退回目标就是新配置本身。
     let prev = match out.0.as_ref() {
         Some(i) => OutputConfig {
             mode: match i.mode {
@@ -2413,7 +2365,7 @@ fn resample_take(
             out.push(a + (b - a) * frac);
         }
     }
-    // EQ：整块就地滤波（bypass 时跳过，样本位级不动——docs/24 B5b 旁路证明）
+    // EQ：整块就地滤波（bypass 时跳过，样本位级不动—— 旁路证明）
     if !eq.is_bypass() {
         for frame in out.chunks_mut(channels) {
             eq.process_frame(frame);
@@ -2426,9 +2378,8 @@ fn resample_take(
             mono_out.push(frame.iter().sum::<f32>() * inv_ch);
         }
     }
-    // 音量斜坡：逐样本乘（在 EQ 之后，见函数头注释）。斜坡 span 小于块长时
-    // （20ms 语义，见调用方的 span 推导），span 之后的样本必须钳在 vol_end——
-    // 线性式会一路越过目标，fade-down 会翻相位。
+    // 音量斜坡：逐样本乘（在 EQ 之后，见函数头注释）。斜坡 span 小于块长时 （20ms 语义，见调用方的 span 推导），span
+    // 之后的样本必须钳在 vol_end—— 线性式会一路越过目标，fade-down 会翻相位。
     let (lo, hi) = if vol_end >= vol_start {
         (vol_start, vol_end)
     } else {
@@ -2662,7 +2613,7 @@ mod tests {
         assert!((s[0] - 2.0).abs() < 1e-6);
     }
 
-    // ---- encode_frames：独占降位深 ----
+    // encode_frames：独占降位深
 
     /// 读出 i16 交错样本。
     fn read_i16(bytes: &[u8]) -> Vec<i16> {
@@ -2790,7 +2741,7 @@ mod tests {
         );
     }
 
-    // ---- 输出配置 → 尝试序列 ----
+    // 输出配置 → 尝试序列
 
     #[test]
     fn explicit_buffer_is_respected_exactly() {
@@ -2883,7 +2834,7 @@ mod tests {
         assert!(!a.iter().any(|x| x.period_hns == ms_to_hns(50)));
     }
 
-    // ---- 配置匹配（避免无意义重建流）----
+    // 配置匹配（避免无意义重建流）
 
     fn fake_cfg() -> OutputConfig {
         OutputConfig::default()
@@ -2899,7 +2850,7 @@ mod tests {
         assert!(!matches_config(&out, &cfg));
     }
 
-    // ---- 配置解析：坏值不致命 ----
+    // 配置解析：坏值不致命
 
     #[test]
     fn config_parsing_never_kills_playback() {
@@ -2936,7 +2887,7 @@ mod tests {
         );
     }
 
-    // ---- http(s) scheme 判定（RFC 3986 大小写不敏感）----
+    // http(s) scheme 判定（RFC 3986 大小写不敏感）
 
     #[test]
     fn http_scheme_is_case_insensitive() {
@@ -2952,7 +2903,7 @@ mod tests {
         assert!(!is_http_url("http"));
     }
 
-    // ---- 设备 watcher：变更判定 ----
+    // 设备 watcher：变更判定
 
     #[test]
     fn device_watcher_baseline_then_change() {
@@ -2963,7 +2914,7 @@ mod tests {
         assert!(device_id_changed(&last, "dev-b"), "端点 id 变化才触发");
     }
 
-    // ---- DeviceChanged 的 wire 形状 ----
+    // DeviceChanged 的 wire 形状
 
     #[test]
     fn device_changed_is_engine_internal_but_wire_safe() {

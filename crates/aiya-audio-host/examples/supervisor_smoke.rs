@@ -119,12 +119,8 @@ fn run_client(pipe: &str, wav: &std::path::Path) -> bool {
         }
     }
 
-    // Ping → Pong。
-    //
-    // 心跳由**独立线程**每 1s 发，随时可能插在 Pong 前面（协议上 Pong 不保证是
-    // 下一条消息）。此前这条断言之所以一直绿，是因为心跳和 Pong 都由命令循环写，
-    // 而循环里 Pong 分支在心跳分支之前——断言其实依赖了实现顺序。现在按协议测：
-    // 3s 内等到 Pong 即通过，只跳过 Hb，其它消息仍算失败（别把真问题藏起来）。
+    // Ping → Pong。心跳由**独立线程**每 1s 发，随时可能插在 Pong 前面（协议上 Pong 不保证是下一条消息）。此前这条断言之所以一直绿，是因为心跳和 Pong 都由命令循环写，而循环里 Pong
+    // 分支在心跳分支之前——断言其实依赖了实现顺序。现在按协议测：3s 内等到 Pong 即通过，只跳过 Hb，其它消息仍算失败（别把真问题藏起来）。
     send(&mut writer, &HostToSidecar::Ping);
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut got_pong = false;

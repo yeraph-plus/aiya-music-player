@@ -221,7 +221,7 @@ fn vertical_smart_playlist_rule_query() {
     let mut db = aiya_data::open(&db_path).unwrap();
 
     // 1) 扫描：genre 直接来自文件标签（01/03 打 Rock，02 不打）——
-    //    曲库数据 100% 归扫描器（docs/43 §8-E 后不再有 beets 对账注入）
+    // 曲库数据 100% 归扫描器（-E 后不再有 beets 对账注入）
     db.send(move |conn| {
         scan_directory(conn, dir.path(), None, |_| {})
             .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
@@ -327,7 +327,6 @@ fn vertical_smart_playlist_rule_query() {
     assert_eq!(page.total, 1);
     assert_eq!(page.items[0].title, "Track B");
 
-    // 5) 物化模型（2026-10-30 硬迭代）：动态歌单与普通歌单能力相同——
     //    add_tracks 直接生效（首行插入）；手动歌单的 set_rule / refresh 明确报错
     db.send(|conn| {
         aiya_data::playlist::create(conn, "p_manual", "手动单", &[], 10)

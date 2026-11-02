@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 从 Rust 生成 TypeScript 类型（docs/17 §6：Rust 是唯一源）。
+// 从 Rust 生成 TypeScript 类型。
 //
 // 为什么用 `cargo test` 当生成器：ts-rs 的 `#[ts(export)]` 会为每个类型生成一个
 // `export_bindings_<type>` 测试，跑测试就是把文件写出来。好处是不用另建二进制、
@@ -9,7 +9,7 @@
 // "改了 Rust 忘了更新类型"会直接红，而不是等到运行期字段对不上。
 //
 // 注意：仓库目前**没有 CI**（`.github/` 不存在），这条门禁只在本地 `npm run verify`
-// 里跑。接入 CI 后应把 verify（含本检查）设为 PR 必过项 —— 见 docs/30 §3 P1-6。
+// 里跑。接入 CI 后应把 verify（含本检查）设为 PR 必过项 ——。
 //
 // 用法：node tools/gen-types.mjs [--check]
 //   --check  生成到临时目录并与现有文件比较，不写工作区（CI 用）

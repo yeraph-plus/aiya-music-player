@@ -1,5 +1,5 @@
 /**
- * beets 导入协议：预览与事件的前端形状（事件协议见 docs/08 §3.2）。
+ * beets 导入协议：预览与事件的前端形状（事件协议）。
  *
  * 这些结构没有生成类型：载荷由 Python sidecar 产出，Rust 宿主逐行转发 JSON、不做
  * 强类型转换。本文件是协议的手写镜像，`beets-session` 的 switch 分支按它取字段；
@@ -68,20 +68,20 @@ export type BeetsImportEvent =
   | { type: 'album'; session: string; album: AlbumPreview }
   | { type: 'albumError'; session: string; stage: string; path: string; beets_message: string }
   | { type: 'done'; session: string; albums: number }
-  /* ---- B2：应用阶段 ---- */
+  /* B2：应用阶段 */
   /** 单张专辑应用完成；failed 是逐曲失败明细（可重试），code=conflict 表示目标路径已存在，code=blankIdentity 表示合并后身份标签仍空白被拒绝写入 */
   | { type: 'applied'; session: string; albumId: string; written: number; moved: boolean; failed: Array<{ path: string; message: string; code?: string }> }
   /** resumedSkipped（v2）：resume 续跑时因断点已完成而跳过的专辑数 */
   | { type: 'applyDone'; session: string; applied: number; skipped: number; failed: number; moved: number; resumedSkipped?: number }
-  /* ---- B3：取消 ---- */
+  /* B3：取消 */
   /** 用户取消；session 收尾到最近的检查点为止（已完成的部分保留） */
   | { type: 'cancelled'; session: string; stage: string }
   /** sidecar 收到取消命令的回执 */
   | { type: 'cancelAck' }
-  /* ---- 曲库刷新终态（宿主扫描段；beets 对账不在本事件流，见 docs/43 §8-E） ---- */
+  /* 曲库刷新终态（宿主扫描段；beets 对账不在本事件流，-E） */
   /** 正在扫描全库（写库互斥被占），本次刷新让位（自动触发时不发此事件） */
   | { type: 'libraryRefreshSkipped'; reason: string }
-  /* ---- 自动刷新管线终态（docs/33 §7） ---- */
+  /* 自动刷新管线终态 */
   /**
    * 一次刷新完成（扫描 → 对齐 → 单 bump）。
    *

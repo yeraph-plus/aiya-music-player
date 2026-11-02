@@ -19,7 +19,7 @@ import Button from './ui/Button.svelte';
      *
      * 元数据不能靠 `library_tracks` 取——它们不在曲库里，查了必然空手而归，
      * 还会把 id 记进负缓存。标题与来源只能由快照自带的这一份给出
-     * （`QueueSnapshot.transient`，docs/52 §7.2）。
+     * （`QueueSnapshot.transient`）。
      */
     transient: TrackRef[];
     /** 当前播放位置（播放顺序下标）；空队列 = null（契约：不用 -1 哨兵） */
@@ -178,12 +178,8 @@ import Button from './ui/Button.svelte';
   }
 </script>
 
-<!--
-  职责边界：本组件只渲染内容。定位、Esc、外点关闭、焦点还原与 aria-expanded
-  由 PlayerBar 中队列键所用的 kit `Popover` 提供。自行处理这五件事需要在
-  `<svelte:window>` 上挂两套监听，并且要额外用 `closest('[data-queue-trigger]')`
-  阻止触发键的点击被自己派发的关闭逻辑吞掉。
--->
+<!-- 职责边界：本组件只渲染内容。定位、Esc、外点关闭、焦点还原与 aria-expanded 由 PlayerBar 中队列键所用的 kit `Popover` 提供。自行处理这五件事需要在
+`<svelte:window>` 上挂两套监听，并且要额外用 `closest('[data-queue-trigger]')` 阻止触发键的点击被自己派发的关闭逻辑吞掉。 -->
 <div class="queue-panel queue-float" aria-label="播放队列">
   <header>
     <strong>播放队列</strong>
@@ -242,7 +238,7 @@ import Button from './ui/Button.svelte';
           <Cover src={row.track?.artworkId ? artworkUrl(row.track.artworkId, 96) : null} size="sm" alt="" />
           {#if row.transient}
             <!--
-              临时项（docs/52 §7.2）：标题来自快照，副行是**来源标记 + 出处**。
+              临时项：标题来自快照，副行是**来源标记 + 出处**。
               这里刻意没有任何"跳到专辑/艺人"的入口——`artistId`/`albumId` 都是
               null，做成链接点下去只会得到一页空白。
             -->

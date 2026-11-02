@@ -1,13 +1,10 @@
 #!/usr/bin/env node
-// 注释文风门禁（规范来源：AGENTS.md §4，调研与改写对照：docs/59 §2、§4.4）。
-//
-// 职责：扫描代码注释行中的两类违例——
-//   1. 高精度禁词（误报率低的口语词）；
-//   2. 注释内日期戳（决策史写进交付物注释的主要信号）。
+// 注释文风门禁。三类违例：高精度禁词、注释内日期戳、注释内 docs 引用——
+// 引用单向化：历史与取舍查 ledger（docs 下的流水账目录），代码内不设路标。
 // 宽泛词（像、别、坑、必须）误报率高，不进自动门禁，由治理批次人工处理。
 //
 // 范围：Rust（crates/、src-tauri/）、前端（ui/src/、ui/e2e/，排除 generated/）、
-// 构建脚本（tools/*.mjs）。beets-tool 的 Python 侧不在本门禁范围。
+// 构建脚本（tools/*.mjs）。beets-tool 的 Python 侧由 tools/comment-gov 覆盖。
 //
 // 白名单：tools/check-style-allowlist.json（JSON 字符串数组）。
 //   条目格式："相对路径"（整文件豁免）或 "相对路径:行号"（单行豁免），
@@ -27,14 +24,17 @@ const ROOT = join(import.meta.dirname, '..');
 const SCAN_DIRS = ['crates', 'src-tauri', 'ui/src', 'ui/e2e', 'tools'];
 const SKIP_DIRS = new Set([
   'node_modules', 'dist', 'target', 'test-results',
-  'generated', 'binaries', 'gen',
+  'generated', 'binaries', 'gen', 'bindings',
 ]);
 const EXTS = new Set(['.rs', '.ts', '.svelte', '.mjs']);
 
-// 高精度禁词：口语词与拟人叙事，见 AGENTS.md §4.1 共同禁令。
+// 高精度禁词：口语词与拟人叙事（语域共同禁令）。
 const BANNED = /(人话|拍板|顺手|翻车|搞定|抽风|收尸)/g;
 // 注释内日期戳：交付物语域禁止历史叙事，日期是主要信号。
 const DATE = /(20\d{2}-\d{2}-\d{2})/g;
+// 注释内 docs 引用：引用单向化，代码内不设指向 docs 的路标。
+// docs/NN 已覆盖其 § 小节形式；裸 § 是 GPL 条款/源码定位等合法引用，不拦。
+const DOCREF = /(docs\/\d|notes\/|ADR-\d|AGENTS\.md)/g;
 
 const strict = process.argv.includes('--strict');
 
@@ -50,34 +50,40 @@ function listFiles(dir, out = []) {
   return out;
 }
 
-// 单行注释判定：返回该行是否属于注释（含块注释续行、svelte HTML 注释）。
+// 单行注释判定：返回 { isComment, isL2 }。isL2 = 契约层（rust ///、//! 与
+// 块注释内部，含 JSDoc）——其内的引用/日期归 L2 收口批（延后桶），不阻断。
 function makeCommentState(ext) {
   let inBlock = false;   // /* */
   let inHtml = false;    // <!-- -->
   return (line) => {
     const t = line.trimStart();
+    const enteredBlock = inBlock;
     if (inHtml) {
       if (t.includes('-->')) inHtml = false;
-      return true;
+      return { isComment: true, isL2: false };
     }
     if (inBlock) {
       if (t.includes('*/')) inBlock = false;
-      return true;
+      return { isComment: true, isL2: true };
     }
     if (t.startsWith('/*')) {
       // 单行块注释 /* ... */ 与多行开块都算注释；开块且未闭合则进入续行状态。
       if (!t.includes('*/')) inBlock = true;
-      return true;
+      return { isComment: true, isL2: true };
     }
     if (t.startsWith('<!--')) {
       if (!t.includes('-->')) inHtml = true;
-      return true;
+      return { isComment: true, isL2: false };
     }
-    if (t.startsWith('//')) return true; // 覆盖 rs 的 /// 与 //!、ts 的 //
+    if (t.startsWith('//')) {
+      // 覆盖 rs 的 /// 与 //!、ts 的 //；契约层单独标记
+      const isL2 = ext === '.rs' && (t.startsWith('///') || t.startsWith('//!'));
+      return { isComment: true, isL2 };
+    }
     if (ext === '.svelte' || ext === '.ts' || ext === '.mjs') {
-      if (t.startsWith('*')) return true; // 块注释对齐续行（无状态时的兜底）
+      if (t.startsWith('*')) return { isComment: true, isL2: true }; // 块注释续行兜底
     }
-    return false;
+    return { isComment: false, isL2: false };
   };
 }
 
@@ -98,22 +104,32 @@ for (const file of files) {
   const isComment = makeCommentState(ext);
   const lines = readFileSync(file, 'utf8').split(/\r?\n/);
   lines.forEach((line, i) => {
-    if (!isComment(line)) return;
+    const c = isComment(line);
+    if (!c.isComment) return;
     const rel = `${relPath}:${i + 1}`;
-    for (const re of [BANNED, DATE]) {
+    for (const re of [BANNED, DATE, DOCREF]) {
       re.lastIndex = 0;
       let m;
       while ((m = re.exec(line)) !== null) {
         if (allowed(relPath, i + 1)) break;
-        findings.push({ rel, tag: m[1], text: line.trim().slice(0, 90) });
+        // 分桶：非契约层的日期/引用 = 阻断；契约层 = L2 延后；
+        // 禁词 = 语域存量，report-only。
+        const kind = re === BANNED ? 'banned' : re === DATE ? 'date' : 'docref';
+        const bucket = kind === 'banned' ? 'report' : c.isL2 ? 'l2' : 'blocking';
+        findings.push({ rel, tag: m[1], kind, bucket, text: line.trim().slice(0, 90) });
       }
     }
   });
 }
 
 for (const f of findings) {
-  console.log(`${f.rel}  [${f.tag}]  ${f.text}`);
+  console.log(`${f.rel}  [${f.bucket}/${f.tag}]  ${f.text}`);
 }
-console.log(`\ncheck-style: ${findings.length} 处命中，扫描 ${files.length} 个文件` +
+const blocking = findings.filter((f) => f.bucket === 'blocking').length;
+const l2 = findings.filter((f) => f.bucket === 'l2').length;
+const report = findings.filter((f) => f.bucket === 'report').length;
+console.log(`\ncheck-style: 命中 ${findings.length}` +
+  `（阻断 ${blocking} / L2 延后 ${l2} / 语域 report ${report}），扫描 ${files.length} 个文件` +
   (strict ? '（strict）' : '（report-only，不影响退出码）'));
-process.exit(strict && findings.length > 0 ? 1 : 0);
+// 阻断桶：非契约层注释里的日期戳与 docs 引用；--strict 时退出码 1
+process.exit(strict && blocking > 0 ? 1 : 0);

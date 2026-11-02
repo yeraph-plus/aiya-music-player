@@ -26,7 +26,6 @@ import wave
 
 # 把 stdout/stderr 固定成 UTF-8：这三个脚本的 print 全是中文，而 Windows 上
 # **管道** stdout 默认按 locale 编码（英文系统就是 cp1252），第一个中文就
-# UnicodeEncodeError。2026-10-27 CI 第一次实跑就栽在这上面（本地是 UTF-8，
 # 复现方法：`PYTHONIOENCODING=cp1252 python beets-tool/tests/smoke_apply.py`）。
 # CI 里另设了 PYTHONUTF8 / PYTHONIOENCODING；这里兜一层，让本机任何 shell 都能跑。
 for _stream in (sys.stdout, sys.stderr):

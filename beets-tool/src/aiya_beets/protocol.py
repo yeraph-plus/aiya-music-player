@@ -17,21 +17,11 @@ from __future__ import annotations
 
 # 协议版本。**不兼容变更才 +1**：加可选字段不算、加新命令不算、改名算。
 #
-# v2（2026-10-29，docs/41 §6）：加法为主（requestId/resume/evidence/libraryLock/
-# E_LIBRARY_BUSY/resumedSkipped），拍板升版的理由是新字段在 v2 内定为 required
-# （生产端总是计算），版本协商边界兜住旧端；同时接线 schemaHash 运行时比对
-# （闭合 docs/35 P1-4）。此后回到增量规则。
-#
-# 为什么是 1 而不是沿用分包前的 3：分包之前两侧永远同版本一起发，
-# 那三个数字是同一份代码内部的迭代次数，从未作为对外契约存在过。
-# 冻结成 v1 是给"两个独立发布物"用的**第一版契约**——schema 文件名与
-# protocol.version 从此同步演进（现在是 v2），不给未来留"schema 叫 vN
-# 但版本号是 M"这种永久解释成本。
 PROTOCOL_VERSION = 2
 
 # 本服务端能接受的最低客户端版本。MIN_CLIENT = 2：旧播放器（v1 宿主）会被
 # E_PROTOCOL_MISMATCH 拒绝，message 里写明"请升级播放器"——不做降级协商
-# （docs/33 §4.4：一半功能能用的模糊状态比失败更难排查）。
+# 一半功能能用的模糊状态比失败更难排查。
 MIN_CLIENT = PROTOCOL_VERSION
 
 # schema 文件的字节指纹（`protocol/v2.schema.json`）。
@@ -42,7 +32,7 @@ MIN_CLIENT = PROTOCOL_VERSION
 # 改了 schema 忘了改这里？`tests/protocol_contract.py` 会红（它手上真有文件）。
 SCHEMA_SHA256 = "ef2232d596a0028bd58f9b7b99ba4cde53564822ac6ede8b6bd1f2756ca82ed4"
 
-# ---- 错误码（v1 冻结 10 个，v2 加 E_LIBRARY_BUSY）----
+# 错误码（v1 冻结 10 个，v2 加 E_LIBRARY_BUSY）
 #
 # 宿主按 code 分类给 UX，**不按 beets_message 文本匹配**——文本会随人改动。
 # 这张表是双向的：schema 里的枚举与本模块必须一字不差，
@@ -73,9 +63,8 @@ ERROR_CODES = frozenset({
     E_LIBRARY_BUSY,
 })
 
-# 有意**没有** E_CANCELLED：取消是正常路径，用 `cancelled` 事件表达，
-# 不是失败。把取消做成错误码会让宿主的两条路径（事件流 / 一次性应答）
-# 互相重叠，且 UI 要为一个"用户自己按的按钮"显示红色。
+# 有意**没有** E_CANCELLED：取消是正常路径，用 `cancelled` 事件表达，不是失败。把取消做成错误码会让宿主的两条路径（事件流
+# / 一次性应答）互相重叠，且 UI 要为一个"用户自己按的按钮"显示红色。
 
 
 class ProtocolError(Exception):

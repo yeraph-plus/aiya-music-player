@@ -19,6 +19,5 @@ bitrate: number | null, channels: number | null,
  * 按位深分支会把 m4a 标成「44.1 kHz / 16 bit / 无损」。
  *
  * 由 [`TrackAudio::infer_lossless`] 在出口派生，不落库（理由见该函数）。
- * 2026-10-25 补：Tauri 重写时整个字段丢了，导致播放条徽章恒为「未知」。
  */
 lossless: boolean | null, };

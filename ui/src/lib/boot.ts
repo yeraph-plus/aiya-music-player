@@ -41,15 +41,14 @@ export function boot(options: { onState: (state: PlayerState) => void }): () => 
   // 扫描进度：`done` 时由 scan store 统一收尾（统计/歌单/列表）
   cleanups.push(scan.watch());
 
-  // 自动刷新的终态（docs/33 §7）：有变化就重拉列表。
+  // 自动刷新的终态：有变化就重拉列表。
   // 与手动扫描共用同一条收尾路径 —— 两条链路的"扫完之后该做什么"必须一致，
   // 否则"自动刷新后专辑封面不见了"这种偏差很难查。
   cleanups.push(scan.watchAutoRefresh());
 
-  // beets 运行时安装进度（docs/29 批 C）：低频事件，但只该订阅一次
+  // beets 运行时安装进度：低频事件，但只该订阅一次
   cleanups.push(ui.watchBeetsInstall());
 
-  // 2026-10-30（docs/48）：`beets:maintenance` 的订阅随整理库维护四件套一起
   // 下线了——那四条命令没有 UI 入口了，没有人触发就没有事件。哪天真要恢复
   // （比如做"按整理库重排文件"），订阅要跟着一起回来，否则界面上会永远转圈。
 

@@ -13,7 +13,7 @@ AUDIO_EXTENSIONS = {
     ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".wav", ".aiff", ".alac",
 }
 
-# 当前标签 vs 候选：diff 展示字段（docs/08 §4.1）
+# 当前标签 vs 候选：diff 展示字段
 DIFF_FIELDS = ["title", "artist", "album", "albumartist", "year", "track", "disc", "genre"]
 
 

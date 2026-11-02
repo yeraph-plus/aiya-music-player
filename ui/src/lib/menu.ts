@@ -32,11 +32,11 @@ export interface TrackMenuActions {
 }
 
 /**
- * `multi` = 对整个选择集生效（docs/27）：右键的行在选择集里且不止一行。
+ * `multi` = 对整个选择集生效：右键的行在选择集里且不止一行。
  * 单行专属项（播放 / 下一首播放 / 查看艺人 / 查看专辑 / 在文件夹中显示）
  * 整体隐藏；批量项（加入队列 / 加入歌单 / 移除）与工具条同语义，保留。
  *
- * `self`（docs/28）：右键发生在哪个详情页上。专辑页的「查看专辑」指向的
+ * `self`：右键发生在哪个详情页上。专辑页的「查看专辑」指向的
  * 就是当前页（nav 视为刷新、白丢滚动位置），禁掉——列表列链接同一条规则。
  */
 export function trackMenuItems(
@@ -91,7 +91,6 @@ export function playlistMenuItems(
 ): MenuItem[] {
   return [
     { label: '播放', action: actions.play },
-    // 动态歌单的"重命名"入口同一个模态框带出规则编辑器（2026-10-28 统一模态框）
     { label: playlist.kind === 'smart' ? '编辑规则' : '重命名', action: actions.rename },
     { label: '上移', action: actions.moveUp, disabled: position.index <= 0 },
     {
@@ -99,7 +98,6 @@ export function playlistMenuItems(
       action: actions.moveDown,
       disabled: position.index < 0 || position.index >= position.total - 1,
     },
-    // 清空对所有歌单开放：物化模型（2026-10-30）后动态歌单与手动歌单能力
     // 一致（曲目是真实入库行，不再是规则的投影），清空后点「刷新规则」可重新追加
     { label: '清空', action: actions.clear, disabled: playlist.trackCount === 0 },
     { label: '删除', action: actions.remove, danger: true },

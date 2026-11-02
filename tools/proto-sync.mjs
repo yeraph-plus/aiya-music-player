@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 协议镜像同步 / 校验（docs/33 §4.4）。
+ * 协议镜像同步 / 校验。
  *
  * 真源在工具侧（`beets-tool/protocol/v2.schema.json`），播放器仓根镜像一份。
  * 镜像**必须是字节副本**，不是"我以为等价"的重排版本——重排会让 diff 看着
@@ -63,7 +63,7 @@ if (!isCheck) {
   process.exit(0);
 }
 
-/* ---------------- --check ---------------- */
+/* --check */
 const problems = [];
 
 let mirrorBytes;

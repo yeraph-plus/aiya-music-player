@@ -80,7 +80,7 @@ def check(name, obj, label=""):
     VALIDATED[name] = VALIDATED.get(name, 0) + 1
 
 
-# ---------------- 1. 自证：schema 指纹 ----------------
+# 1. 自证：schema 指纹
 digest = hashlib.sha256(SCHEMA_BYTES).hexdigest()
 assert digest == P.SCHEMA_SHA256, (
     "protocol.SCHEMA_SHA256 与 protocol/v2.schema.json 不一致——改了 schema 必须同步常量：\n"
@@ -89,7 +89,7 @@ assert digest == P.SCHEMA_SHA256, (
 )
 print("[1] schema 指纹自洽 OK:", digest[:12])
 
-# ---------------- 2. 双向：错误码集合 ----------------
+# 2. 双向：错误码集合
 schema_codes = set(SCHEMA["$defs"]["ErrorCode"]["enum"])
 assert schema_codes == P.ERROR_CODES, (
     "schema 的错误码枚举与 protocol.ERROR_CODES 不一致：\n"
@@ -99,7 +99,7 @@ assert schema_codes == P.ERROR_CODES, (
 assert len(schema_codes) == len(SCHEMA["$defs"]["ErrorCode"]["enum"]), "错误码枚举有重复项"
 print(f"[2] 错误码双向一致 OK：{len(schema_codes)} 个")
 
-# ---------------- 3. 实跑：真实流量 ----------------
+# 3. 实跑：真实流量
 SRC_WAV = _resolve_test_music(3)
 
 WORK = tempfile.mkdtemp(prefix="aiya-proto-")
@@ -160,7 +160,7 @@ def classify_line(raw):
     return "Event", obj
 
 
-# ---- 场景 1：管理三件 + 全部离线命令 ----
+# 场景 1：管理三件 + 全部离线命令
 src1 = fresh_src("src1")
 dup_a = fresh_src("dup_a")      # 同一批文件拷 twice：同一 title/artist → 查重必有组
 dup_b = fresh_src("dup_b")
@@ -187,37 +187,34 @@ def with_id(raw, req_id):
 
 
 reqs = [
-    # --- 管理三件 ---
+    # 管理三件
     json.dumps({"id": 1, "cmd": "status", "clientProtocol": P.PROTOCOL_VERSION}),
     json.dumps({"id": 2, "cmd": "ping"}),
     json.dumps({"id": 3, "cmd": "capabilities"}),
-    # --- 导入（写标签，不移动）---
+    # 导入（写标签，不移动）
     with_id(DEC("契约专辑", src1, [f"契约 {i:02d}" for i in range(1, len(src1) + 1)]), 4),
-    # --- 对账 ---
+    # 对账
     json.dumps({"id": 5, "cmd": "dump_items"}),
-    # --- 维护：update（预览，只报告不改库）---
+    # 维护：update（预览，只报告不改库）
     json.dumps({"id": 6, "cmd": "update_library", "pretend": True}),
-    # --- 维护：制造重复（两批同标题/歌手的曲目）→ 查重必有组 ---
-    # 为什么要先 apply 而不是 adopt：查重按 title+artist 分组，而**全空的组会被
-    # 跳过**（与 beets duplicates 的 not strict 分支一致），所以没标签的文件
-    # 天然查不出重复——这里必须把标签写进去。
+    # 维护：制造重复（两批同标题/歌手的曲目）→ 查重必有组为什么要先 apply 而不是 adopt：查重按 title+artist 分组，而**全空的组会被跳过**（与 beets
+    # duplicates 的 not strict 分支一致），所以没标签的文件天然查不出重复——这里必须把标签写进去。
     with_id(DEC("重复甲", dup_a, [f"重 {i:02d}" for i in range(1, len(dup_a) + 1)]), 7),
     with_id(DEC("重复乙", dup_b, [f"重 {i:02d}" for i in range(1, len(dup_b) + 1)]), 8),
     json.dumps({"id": 9, "cmd": "find_duplicates", "keys": ["title", "artist"]}),
-    # --- 维护：整理（传入根 ≠ 配置根 → 必须被拒）---
+    # 维护：整理（传入根 ≠ 配置根 → 必须被拒）
     json.dumps({"id": 10, "cmd": "move_items",
                 "directory": os.path.join(WORK, "别的地方"), "pretend": True}),
     json.dumps({"id": 11, "cmd": "move_items", "pretend": True}),
-    # --- 维护：adopt 真新增（as-is 入库，不需要标签）---
+    # 维护：adopt 真新增（as-is 入库，不需要标签）
     json.dumps({"id": 12, "cmd": "adopt_library",
                 "paths": [os.path.join(WORK, "adopt")]}),
-    # --- 三类错误 ---
+    # 三类错误
     json.dumps({"id": 13, "cmd": "bogus_cmd"}),
     '{"id": 14, "cmd": ',                       # 坏 JSON
     json.dumps({"id": 15, "cmd": "ping", "clientProtocol": 99}),
-    # 取消不能放在这一批里：cancel 在 **reader 线程**旁路处理（不等主循环），
-    # 一次灌多行时它会立刻把取消代数推高，把前面还在跑的会话全掐了。
-    # 取消的契约验证放在场景 2 单独一次会话里做。
+    # 取消不能放在这一批里：cancel 在 **reader
+    # 线程**旁路处理（不等主循环），一次灌多行时它会立刻把取消代数推高，把前面还在跑的会话全掐了。取消的契约验证放在场景 2 单独一次会话里做。
 ]
 
 lines, stderr = run(reqs)
@@ -262,7 +259,7 @@ kinds = [k for k in seen if k != "data"]
 print(f"[3] 离线全链路 OK：{sum(VALIDATED.values())} 条消息、"
       f"{len(kinds)} 种事件、错误码 {codes}")
 
-# ---- 场景 2：取消（终态必须是 cancelled 或 applyDone，不能两个都有）----
+# 场景 2：取消（终态必须是 cancelled 或 applyDone，不能两个都有）
 reqs2 = []
 for i in range(12):
     g = fresh_src(f"cancel_{i:02d}")
@@ -299,7 +296,7 @@ assert not multi, f"一个请求发了多个终态（事件流会重复收尾）
 cancelled = sum(1 for v in terminals.values() if v[0] == "cancelled")
 print(f"[4] 取消终态 OK：{len(terminals)} 个请求各一个终态，其中 {cancelled} 个被取消")
 
-# ---- 场景 2.5：v2 的幂等/断点/门禁（docs/41 §6）----
+# 场景 2.5：v2 的幂等/断点/门禁
 # 同一进程跑五条：重放、重放命中、键冲突、blankIdentity 门、searchIds 非法。
 # 取消代数不变（本批没有 cancel 行），锁由本进程首条变更命令持有直到退出
 # （同进程连续处理是契约测试的形态，lockfile.acquire 对它幂等）。
@@ -376,7 +373,7 @@ assert blank_apply_done["resumedSkipped"] == 0  # v2 必有字段（schema requi
 print(f"[4.5] v2 幂等/门禁 OK：重放 added={adopt_dones[1]['added']}、键冲突拒绝、"
       f"blankIdentity 拒写 {len(blank_applied['failed'])} 首、searchIds 拒绝")
 
-# ---- 场景 3（可选）：联网匹配的三种事件 ----
+# 场景 3（可选）：联网匹配的三种事件
 if os.environ.get("AIYA_BEETS_ONLINE") == "1":
     net = fresh_src("net")
     lines3, _ = run([json.dumps({"id": 40, "cmd": "preview_import", "paths": net})], timeout=600)

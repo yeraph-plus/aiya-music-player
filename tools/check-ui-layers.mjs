@@ -89,7 +89,7 @@ if (violations) {
 }
 console.log('UI 分层门禁通过：components/views/stores 未绕过 lib/');
 
-/* ---------------- z-index token 梯 ---------------- */
+/* z-index token 梯 */
 
 // 裸 z-index 一律违规；var(--z-*) 合法。tokens.css 是定义处（豁免）。
 // CSS 与 svelte <style> 都扫；注释行（/* */ 续行）跳过。

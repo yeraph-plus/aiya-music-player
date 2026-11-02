@@ -247,7 +247,7 @@ BINARIES: tuple[BinarySpec, ...] = tuple(
     for item in (catalog().get("binaries") or ())
 )
 
-# 随免配置包一起发布的二进制（`binaries[].bundle`，docs/54）。
+# 随免配置包一起发布的二进制（`binaries[].bundle`）。
 # 与 `BUNDLE_PLUGINS` 是两件事：一个是"包里有哪个 exe"，一个是"包里预装了哪个插件的
 # Python 依赖"。两者可以不一致，但**带 exe 的 bundle 插件必须落在 BINARIES 里**，
 # 否则包里的插件一启动就被渲染侧剔掉（契约测试盯着这条）。

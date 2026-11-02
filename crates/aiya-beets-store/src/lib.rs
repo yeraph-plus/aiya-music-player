@@ -120,7 +120,7 @@ pub fn argmax_mood(fields: &Value) -> Option<(String, f64)> {
     best.map(|(name, score)| (name.to_string(), score))
 }
 
-/* ---------------- 调用方给的快照 ---------------- */
+/* 调用方给的快照 */
 
 /// 一个文件在应用曲库里的身份。`size/mtime` 是判"结论是否过期"的唯一依据。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,7 +168,7 @@ impl Arena {
     }
 }
 
-/* ---------------- 写 ---------------- */
+/* 写 */
 
 /// 一条待落库的结论。
 #[derive(Debug, Clone, PartialEq)]
@@ -233,7 +233,7 @@ fn promoted(fields: &Value) -> Promoted {
     }
 }
 
-/* ---------------- 读 ---------------- */
+/* 读 */
 
 /// 一张卡需要的全部数字。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -283,7 +283,7 @@ pub struct Filter {
     pub limit: Option<usize>,
 }
 
-/* ---------------- 存储 ---------------- */
+/* 存储 */
 
 /// 独立文件上的增强结论表。内部一把 `Mutex`：落库线程与命令线程会同时进来，
 /// 而 SQLite 单连接不是线程安全的。争用极低（命令是毫秒级读），不值得为它

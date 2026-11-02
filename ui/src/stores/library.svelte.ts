@@ -116,7 +116,7 @@ class LibraryStore {
     return chosen?.path ?? null;
   }
 
-  /* ---------------- 扫描根列表（docs/29 批 A：多目录并集单库） ---------------- */
+  /* 扫描根列表 */
 
   roots = $state<string[]>([]);
 
@@ -210,7 +210,7 @@ class LibraryStore {
    * 清空播放历史。失败抛出（调用方要给用户看到"没清掉"）。
    *
    * 放在这里而不是单独建 `history` store：目前历史只有一个写操作，
-   * 真正的历史视图（播放次数榜）在批次 3 才落地，届时再按 docs/18 §2
+   * 真正的历史视图（播放次数榜）在批次 3 才落地，届时再按
    * 拆出 `history.svelte.ts` 一并接 `history.stats` —— 现在拆是空壳。
    */
   async clearHistory(): Promise<void> {

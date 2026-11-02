@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * 列表批量操作回归（docs/27 重写）：
+ * 列表批量操作回归：
  * 悬浮批量条已删，批量动作内置在 TrackList 顶部工具条（ListToolbar）。
  * 覆盖：Ctrl+点行自动进批量模式、工具条加入队列、批量开关与勾选列显隐、
  * 首页预览表为纯列表（无勾选）。
@@ -63,7 +63,7 @@ test('列表页：批量开关控制勾选列显隐；筛选器打开模态框',
   await openLibrary(page);
   const toolbar = page.locator('.list-toolbar');
 
-  // docs/28：批量开关收成纯图标按钮（aria-pressed 表达开关态）
+  // 批量开关收成纯图标按钮（aria-pressed 表达开关态）
   const batchToggle = toolbar.getByRole('button', { name: '批量操作' });
   await expect(batchToggle).toHaveAttribute('aria-pressed', 'false');
   await batchToggle.click();
@@ -82,7 +82,6 @@ test('列表页：批量开关控制勾选列显隐；筛选器打开模态框',
 
 test('首页：预览列表为纯列表（无勾选列），双击播放保留', async ({ page }) => {
   await page.goto('/');
-  // 2026-10-28：预览列表与主列表同外观（复用 .row 网格），包在 .preview-list 里
   const row = page.locator('.main .preview-list .row').first();
   await row.waitFor({ state: 'visible' });
 

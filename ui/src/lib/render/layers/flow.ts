@@ -1,5 +1,5 @@
 /**
- * 背景流动渐变（docs/46 §3.1）。
+ * 背景流动渐变。
  *
  * 作用：在固定 CSS 渐变之上叠一层缓慢漂移的彩色光雾，使背景保持动态而不
  * 干扰内容。不重绘配色方案——`--ambient-bg` 是配色资产的唯一来源，本层只
@@ -240,7 +240,7 @@ export class FlowLayer implements GlLayer {
     if (this.fieldDirty || nowMs - this.lastFieldAt >= FIELD_INTERVAL_MS) {
       this.lastFieldAt = nowMs;
       this.fieldDirty = false;
-      // 时间系数 0.06（docs/46 §3.1）：整场跑一轮约 100s，是"慢速"的量级
+      // 时间系数 0.06：整场跑一轮约 100s，是"慢速"的量级
       this.fieldMaterial.uniforms.uTime!.value = frame.time * 0.06;
 
       stage.renderer.setRenderTarget(this.target);

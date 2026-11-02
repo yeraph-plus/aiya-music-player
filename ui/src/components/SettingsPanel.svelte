@@ -138,7 +138,7 @@ import TextTabs from './ui/TextTabs.svelte';
   }
 
   /**
-   * 全局 3D 闸门（docs/46 §6.2）：关闭后 `bgSpectrum` / `npSpectrum` 的取值仍保留
+   * 全局 3D 闸门：关闭后 `bgSpectrum` / `npSpectrum` 的取值仍保留
    * 在设置中，但不参与渲染。相关行置灰而非隐藏：用户需要看见被关掉的是哪几项，
    * 隐藏会使这些设置看起来已被移除。
    */
@@ -256,10 +256,8 @@ import TextTabs from './ui/TextTabs.svelte';
       <!-- 大标题固定「设置」，右侧 tab 只做跳转定位 -->
       <Header title="设置" big>
         {#snippet actions()}
-          <!-- 语义用 nav + aria-current，而非 role="tablist"/"tab"（同 content/Toolbar）：
-               tab 只执行 scrollIntoView 跳转，六个区块平铺常驻，不构成"切换面板"；
-               套用 tab 角色会让读屏软件等待一个不存在的 tabpanel。
-               语义与外观统一由 TextTabs 提供。 -->
+          <!-- 语义用 nav + aria-current，而非 role="tablist"/"tab"（同 content/Toolbar）：tab 只执行 scrollIntoView
+          跳转，六个区块平铺常驻，不构成"切换面板"；套用 tab 角色会让读屏软件等待一个不存在的 tabpanel。语义与外观统一由 TextTabs 提供。 -->
           <TextTabs
             items={SECTIONS.map((s) => ({ id: s.id, label: s.label }))}
             value={active}
@@ -277,7 +275,7 @@ import TextTabs from './ui/TextTabs.svelte';
     <!--
       曲库组。
 
-      「扫描入库」独立页撤销的依据（docs/48）：beets 拆为独立「整理库」页之后，
+      「扫描入库」独立页撤销的依据：beets 拆为独立「整理库」页之后
       该页只剩导入曲库目录一件事，占用一个一级导航席位与一张卡片的体量不匹配。
       曲库目录属于配置项（与"播放记录保留多久"同性质），归设置页。
 
@@ -291,9 +289,8 @@ import TextTabs from './ui/TextTabs.svelte';
     <section class="settings-section" id="settings-library" bind:this={sectionEls.library}>
       <h3 class="group-title">曲库</h3>
 
-      <!-- 统计卡：图标 + 数值 + 标签。数值使用等宽数字（tabular-nums）以免更新时抖动；
-           图标用中性描边样式，不与数值争夺视觉权重。六项铺满 3×2 网格。
-           索引大小与文件容量是两个量：前者为 SQLite 索引自身体积，后者为音频文件总量 -->
+      <!-- 统计卡：图标 + 数值 + 标签。数值使用等宽数字（tabular-nums）以免更新时抖动；图标用中性描边样式，不与数值争夺视觉权重。六项铺满 3×2
+      网格。索引大小与文件容量是两个量：前者为 SQLite 索引自身体积，后者为音频文件总量 -->
       {#if stats}
         <div class="lib-stats">
           <StatBlock layout="row" value={stats.tracks} label="曲目">
@@ -322,9 +319,8 @@ import TextTabs from './ui/TextTabs.svelte';
         </div>
       {/if}
 
-      <!-- 16px 出血：统计卡与目录卡自带 16px 水平内边距，与内容列（720 居中）叠加后
-           卡内文字比下方设置行左缘多缩进 16px，整块显得比页面窄一圈。负 margin
-           抵消该差值，卡内文字回到与设置行相同的左缘。 -->
+      <!-- 16px 出血：统计卡与目录卡自带 16px 水平内边距，与内容列（720 居中）叠加后卡内文字比下方设置行左缘多缩进
+      16px，整块显得比页面窄一圈。负 margin 抵消该差值，卡内文字回到与设置行相同的左缘。 -->
       <div class="lib-bleed"><LibraryTools /></div>
     </section>
     <section class="settings-section" bind:this={sectionEls.appearance}>
@@ -683,10 +679,7 @@ import TextTabs from './ui/TextTabs.svelte';
     <section class="settings-section" bind:this={sectionEls.shortcuts}>
       <h3 class="group-title">快捷键</h3>
 
-      <!--
-        录制规则与恢复默认放在组首：用户在点击绑定键之前需要知道 Esc / Backspace
-        的行为。外框使其读作操作须知，而非列表末尾的附注。
-      -->
+      <!-- 录制规则与恢复默认放在组首：用户在点击绑定键之前需要知道 Esc / Backspace 的行为。外框使其读作操作须知，而非列表末尾的附注。 -->
       <div class="shortcut-foot">
         <span class="dim">Esc 取消录制，Backspace 清空绑定。↑/↓ 与 Enter 是列表导航，不占用快捷键。</span>
         <Button size="sm" onclick={() => apply({ shortcuts: {} })}>恢复默认</Button>
@@ -720,14 +713,8 @@ import TextTabs from './ui/TextTabs.svelte';
         </div>
       </section>
 
-    <!--
-      关于组：识别信息与排障。
-
-      布局与设置项一致（一行一项）。平台、Schema 版本、播放列表计数不展示：
-      属内部信息或恒为 0。不提供「重新读取」按钮：诊断随页面加载自动拉取。
-      「获取更新」为占位按钮，功能未提供，恒禁用。数据目录与「打开目录」
-      合为一行。
-    -->
+    <!-- 关于组：识别信息与排障。布局与设置项一致（一行一项）。平台、Schema 版本、播放列表计数不展示：属内部信息或恒为
+    0。不提供「重新读取」按钮：诊断随页面加载自动拉取。「获取更新」为占位按钮，功能未提供，恒禁用。数据目录与「打开目录」合为一行。 -->
     <section class="settings-section settings-about" bind:this={sectionEls.about}>
       <h3 class="group-title">关于</h3>
       <div class="setting-row">
@@ -767,12 +754,8 @@ import TextTabs from './ui/TextTabs.svelte';
         {/if}
       </div>
 
-      <!--
-        支持开发：独立区块置于「关于」末尾并居中，不配描述文案。
-        结构按多二维码并排预留：新增平台时在 .support-items 内并列一个
-        .support-item 即可。爱发电二维码使用静态图而非外链，因为打开外部
-        浏览器需要 shell open 能力，该基建随「获取更新」一并引入。
-      -->
+      <!-- 支持开发：独立区块置于「关于」末尾并居中，不配描述文案。结构按多二维码并排预留：新增平台时在 .support-items 内并列一个 .support-item
+      即可。爱发电二维码使用静态图而非外链，因为打开外部浏览器需要 shell open 能力，该基建随「获取更新」一并引入。 -->
       <div class="support-block">
         <div class="support-items">
           <figure class="support-item">
@@ -786,7 +769,7 @@ import TextTabs from './ui/TextTabs.svelte';
 </div>
 
 <style>
-  /* docs/19 §5：提示文案属于用户可能复制的文本，在全局 user-select:none 下豁免。
+  /* 提示文案属于用户可能复制的文本，在全局 user-select:none 下豁免。
      「关于」组的数据目录路径与错误详情同理，一并豁免（diag 样式本体在 overlays.css） */
   .setting-hint,
   .shortcut-foot .dim,
@@ -810,15 +793,8 @@ import TextTabs from './ui/TextTabs.svelte';
     margin-top: 4px;
   }
 
-  /* 统计卡：左侧为图标座（accent 弱底色圆角方块），右侧竖排数值与标签。
-
-     使用 grid 而非 flex-wrap：设置列宽 720，按内容宽度排列会折成 4 + 1，
-     「索引大小」单独占一行。等宽网格得到 3 + 2，各卡同宽且左缘对齐。
-     minmax(180px) 使窄窗口自动降为两列，无需额外断点。六项填满 3 × 2。
-
-     左右 -17px 为出血：卡片自带 1px 边框与 16px 内边距，与内容列叠加后卡内
-     文字比下方设置行多缩进 17px；负 margin 将卡片外缘推出，卡内文字与设置行
-     左缘对齐 */
+  /* 统计卡：左侧为图标座（accent 弱底色圆角方块），右侧竖排数值与标签。使用 grid 而非 flex-wrap：设置列宽 720，按内容宽度排列会折成 4 + 1，「索引大小」单独占一行。等宽网格得到 3 + 2，各卡同宽且左缘对齐。minmax(180px)
+     使窄窗口自动降为两列，无需额外断点。六项填满 3 × 2。左右 -17px 为出血：卡片自带 1px 边框与 16px 内边距，与内容列叠加后卡内文字比下方设置行多缩进 17px；负 margin 将卡片外缘推出，卡内文字与设置行左缘对齐 */
   .lib-stats {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -897,9 +873,8 @@ import TextTabs from './ui/TextTabs.svelte';
     flex-direction: column;
   }
 
-  /* 居中列（1064 = 内容 1020 + 左右 padding 22×2）：头部与滚动容器同一
-     列宽，标题、tab、设置行左缘全部对齐；窄窗口 max-width 不生效，
-     行为与全宽时一致 */
+  /* 居中列（1064 = 内容 1020 + 左右 padding
+     22×2）：头部与滚动容器同一列宽，标题、tab、设置行左缘全部对齐；窄窗口 max-width 不生效，行为与全宽时一致 */
   .settings-headwrap {
     max-width: 1064px;
     width: 100%;
@@ -918,11 +893,8 @@ import TextTabs from './ui/TextTabs.svelte';
 
   /* tab 形态与曲库页一致：纯文字 + accent 下划线，小标题档（由 TextTabs 统一） */
 
-  /* 被「全局 3D 效果」闸门关闭的行：整行压暗，与"该项自身关闭"区分。
-     仅给控件加 disabled 不足以表达——关闭态的开关本身即为灰色，两种情况会混淆。
-     使用内联 style:opacity 而非 `.setting-row.muted` 规则：Svelte 5 的未使用
-     选择器裁剪会把"仅由 class: 指令产生"的类名判为未使用并删除整条规则
-     （表现为 class 已加上、规则不存在、computed opacity 仍为 1） */
+  /* 被「全局 3D 效果」闸门关闭的行：整行压暗，与"该项自身关闭"区分。仅给控件加 disabled 不足以表达——关闭态的开关本身即为灰色，两种情况会混淆。使用内联 style:opacity 而非 `.setting-row.muted`
+     规则：Svelte 5 的未使用选择器裁剪会把"仅由 class: 指令产生"的类名判为未使用并删除整条规则 （表现为 class 已加上、规则不存在、computed opacity 仍为 1） */
 
   /* 环境警告（如"仅检测到软件渲染"）：随 hint 排布，需具备足够对比度 */
   .hint-warn {

@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 
 /// 本 crate 支持的协议版本。
 ///
-/// v2（2026-10-29，docs/41 §6）：加法为主（requestId/resume/evidence/
 /// libraryLock/E_LIBRARY_BUSY/resumedSkipped），拍板升版 + 新字段在 v2 内
 /// 定为 required。v1 宿主连 v2 工具会被 `E_PROTOCOL_MISMATCH` 拒绝并在
 /// message 里说明升级方向——不做降级协商。

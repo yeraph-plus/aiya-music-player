@@ -29,8 +29,7 @@ export function artworkUrl(artworkId: string | null, size: number = DEFAULT_SIZE
     );
   }
   const safe = (ARTWORK_SIZES as readonly number[]).includes(size) ? size : DEFAULT_SIZE;
-  // Tauri 2 的自定义协议在 Windows 上经 `http://<scheme>.localhost` 暴露。处理器
-  // 返回 `Access-Control-Allow-Origin: *`，`artwork-blob` 的 fetch 与 canvas 取色
-  // 依赖该响应头。当前仅发布 Windows；跨平台时按平台切换 URL 前缀。
+  // Tauri 2 的自定义协议在 Windows 上经 `http://<scheme>.localhost` 暴露。处理器返回 `Access-Control-Allow-Origin:
+  // *`，`artwork-blob` 的 fetch 与 canvas 取色依赖该响应头。当前仅发布 Windows；跨平台时按平台切换 URL 前缀。
   return `http://aiya-artwork.localhost/artwork/${encodeURIComponent(artworkId)}?size=${safe}`;
 }

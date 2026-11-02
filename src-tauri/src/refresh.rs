@@ -163,9 +163,8 @@ pub fn run(app: &tauri::AppHandle, params: &RefreshParams, trigger: Trigger) {
     }
     let _guard = FlagGuard(Arc::clone(&params.scanning));
 
-    // 清掉上一次手动扫描留下的取消请求：scan_cancel 只在手动扫描开头清零，
-    // 这里是自动刷新唯一会碰它的入口 —— 用户取消过一次手动扫描后，残留的
-    // true 会让此后每次自动刷新在扫描第一步就静默 Skipped("cancelled")。
+    // 清掉上一次手动扫描留下的取消请求：scan_cancel 只在手动扫描开头清零，这里是自动刷新唯一会碰它的入口 —— 用户取消过一次手动扫描后，残留的 true
+    // 会让此后每次自动刷新在扫描第一步就静默 Skipped("cancelled")。
     params.scan_cancel.store(false, Ordering::SeqCst);
 
     match execute(app, params) {
@@ -288,7 +287,7 @@ fn execute(app: &tauri::AppHandle, params: &RefreshParams) -> Result<Outcome, Fa
     Ok(Outcome { scan })
 }
 
-/* ---------------- 曲库根 ---------------- */
+/* 曲库根 */
 
 /// 从设置读曲库根（多目录并集单库，docs/29 批 A）。
 ///
@@ -297,16 +296,8 @@ fn execute(app: &tauri::AppHandle, params: &RefreshParams) -> Result<Outcome, Fa
 /// 抽成公开函数是为了让 `library_scan` 复用同一份判定——两处各写一遍的话，
 /// "手动扫描扫的目录"与"自动刷新扫的目录"迟早会不一样。
 pub fn roots_from_settings(conn: &rusqlite::Connection) -> Vec<PathBuf> {
-    // 新键 `library.roots`（数组）**存在即权威，空数组就是空**——用户在
-    // textarea 里删光了目录，自动刷新就不该再去扫任何地方。
-    //
-    // 曾经的行为是"空数组回落旧键"：用户把列表删空后，自动刷新按旧键
-    // /系统 Music 把目录"死而复生"地扫回来，症状是"已添加的目录移除不掉"
-    // （2026-10-28 实测修复）。旧键兜底只保留给**从未写过新键**的老库。
-    //
-    // 这里**不能用 `?` 串起来**：`library.roots` 不存在时 `?` 会直接把整个
-    // 解析判成"没配"，旧键分支永远走不到 —— 老用户的库根全在 `library.root`
-    // 里，症状是"自动刷新和手动扫描都说未配置任何扫描目录"，而界面看着一切正常。
+    // 新键 `library.roots`（数组）**存在即权威，空数组就是空**——用户在 textarea 里删光了目录，自动刷新就不该再去扫任何地方。曾经的行为是"空数组回落旧键"：用户把列表删空后，自动刷新按旧键 /系统 Music 把目录"死而复生"地扫回来，症状是"已添加的目录移除不掉" 这里**不能用 `?`
+    // 串起来**：`library.roots` 不存在时 `?` 会直接把整个解析判成"没配"，旧键分支永远走不到 —— 老用户的库根全在 `library.root` 里，症状是"自动刷新和手动扫描都说未配置任何扫描目录"，而界面看着一切正常。
     let from_roots = crate::setting_has(conn, "library.roots").then(|| {
         crate::setting_get(conn, "library.roots")
             .and_then(|v| v.as_array().cloned())
@@ -334,7 +325,7 @@ pub fn roots_from_settings(conn: &rusqlite::Connection) -> Vec<PathBuf> {
     }
 }
 
-/* ---------------- 定时器 + 焦点 ---------------- */
+/* 定时器 + 焦点 */
 
 /// 定时线程收到的唤醒。
 pub enum Wake {
@@ -370,9 +361,8 @@ pub fn start_scheduler(app: tauri::AppHandle, params: Arc<RefreshParams>) {
 
     let builder = std::thread::Builder::new().name("library-refresh-timer".into());
     if let Err(e) = builder.spawn(move || {
-        // 启动后补一次：上次退出到现在，用户可能在别的工具里改过标签。
-        // 延迟 3 s 是给 boot 的首屏查询让路 —— 同时发两个查询会让首屏闪一下，
-        // 而这次刷新本来也不急（它是"兜底"，不是"首屏数据源"）。
+        // 启动后补一次：上次退出到现在，用户可能在别的工具里改过标签。延迟 3 s 是给 boot 的首屏查询让路 ——
+        // 同时发两个查询会让首屏闪一下，而这次刷新本来也不急（它是"兜底"，不是"首屏数据源"）。
         std::thread::sleep(Duration::from_secs(3));
         if FOCUSED.load(Ordering::Acquire) {
             run(&app, &params, Trigger::Timer);
@@ -457,7 +447,7 @@ fn interval_secs(app: &tauri::AppHandle) -> u64 {
         .unwrap_or(DEFAULT_INTERVAL_SECS)
 }
 
-/* ---------------- 快照读写 ---------------- */
+/* 快照读写 */
 
 fn store_last(app: &tauri::AppHandle, snapshot: RefreshSnapshot) {
     if let Some(state) = app.try_state::<crate::AppState>() {
@@ -468,7 +458,7 @@ fn store_last(app: &tauri::AppHandle, snapshot: RefreshSnapshot) {
     }
 }
 
-/* ---------------- 事件 ---------------- */
+/* 事件 */
 
 fn emit(app: &tauri::AppHandle, v: serde_json::Value) {
     // 通道与 beets 导入链路共用：UI 侧本来就在听 `beets:import`
@@ -476,7 +466,7 @@ fn emit(app: &tauri::AppHandle, v: serde_json::Value) {
     let _ = app.emit("beets:import", v);
 }
 
-/* ---------------- 时间 ---------------- */
+/* 时间 */
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -489,7 +479,7 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
 
-    /* ---------------- 曲库根解析（新旧两个键） ---------------- */
+    /* 曲库根解析（新旧两个键） */
 
     fn temp_conn() -> (tempfile::TempDir, rusqlite::Connection) {
         let dir = tempfile::tempdir().unwrap();
@@ -523,7 +513,6 @@ mod tests {
     }
 
     /// 空数组是**权威**的：用户在 textarea 里删光了目录，就不该回落旧键
-    /// 把目录"死而复生"地扫回来（2026-10-28 实测缺陷修复）。
     /// 旧键兜底只属于"从未写过新键"的库（见 `roots_read_legacy_single_key`）。
     #[test]
     fn empty_array_is_authoritative() {

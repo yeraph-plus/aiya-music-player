@@ -118,14 +118,12 @@ export function runShortcut(action: ShortcutAction): void {
 }
 
 export function onKeydown(event: KeyboardEvent): void {
-  // 行组件/歌词行/Knob 等已经 preventDefault 的按键不再重复处理：
-  // 它们各自消化掉了（起播/seek/调值），全局再走一遍就是双触发
+  // 行组件/歌词行/Knob 等已经 preventDefault 的按键不再重复处理：它们各自消化掉了（起播/seek/调值），全局再走一遍就是双触发
   // （聚焦列表行按空格"先起播再暂停"、设置页旋钮方向键同时 seek）。
   if (event.defaultPrevented) return;
 
-  // 正在设置页录制快捷键：**所有**全局快捷键让路。
-  // 两个 listener 都在 window 上，录制侧 stopPropagation 拦不住这一条，
-  // 只能靠共享标志判断（见 stores/capture.svelte.ts）。
+  // 正在设置页录制快捷键：**所有**全局快捷键让路。两个 listener 都在 window 上，录制侧 stopPropagation
+  // 拦不住这一条，只能靠共享标志判断（见 stores/capture.svelte.ts）。
   if (capture.active) return;
 
   if (isTyping(event.target)) {
@@ -137,12 +135,11 @@ export function onKeydown(event: KeyboardEvent): void {
     }
     // **Esc 例外**：焦点停在按钮上时（典型：点播放条歌曲区进正在播放页，
     // 焦点还留在那个按钮上），Esc 没有"控件语义"，必须继续往下走让页面级
-    // 处理拿到——否则用户在正在播放页按 Esc 毫无反应（2026-10-30 实测）。
     if (event.key !== 'Escape') return;
   }
 
   /**
-   * 正在播放页：Esc = 返回上一页（docs/46 §5.2）。
+   * 正在播放页：Esc = 返回上一页。
    *
    * 侧栏在这一页整体退出，页面没有别的退路；给 Esc 一个明确的"退出这一页"
    * 语义，和抽屉/弹窗的 Esc 保持一致的心智。

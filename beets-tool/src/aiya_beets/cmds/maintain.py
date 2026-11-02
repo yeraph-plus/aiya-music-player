@@ -19,7 +19,7 @@ from ..beetslib import (
 from ..runtime import cancel_gen, emit
 
 
-# ---------- 曲库维护（docs/29 批 D 四件套） ----------
+# 曲库维护
 #
 #   adopt_library   自有库文件 → beets 库（as-is 入库：不联网 / 不改标签 / 不移动）
 #   update_library  文件标签 → beets 库（beet update 语义，mtime 驱动）
@@ -38,9 +38,8 @@ from ..runtime import cancel_gen, emit
 
 # 维护任务的错误清单上限：几千个失败全塞进一个事件没有意义，UI 也只展示前几条
 MAINT_MAX_ERRORS = 50
-# 明细类事件（update 的字段变化、duplicates 的分组）的条数上限。
-# 几千条 diff 会让一次会话的 stdout 膨胀到几十 MB，而用户根本看不过来；
-# 超限只发计数，UI 显示"另有 N 条未列出"。
+# 明细类事件（update 的字段变化、duplicates 的分组）的条数上限。几千条 diff 会让一次会话的 stdout 膨胀到几十
+# MB，而用户根本看不过来；超限只发计数，UI 显示"另有 N 条未列出"。
 MAINT_MAX_DETAIL = 500
 # 进度事件步长（文件数）：按文件发太吵（1846 首 = 1846 条事件），
 # 按批次又会让进度条一顿一顿
@@ -100,9 +99,7 @@ def adopt_library(req_id, paths: list[str], gen: int) -> None:
     from beets.library import Item
 
     lib = open_library()
-    # 已在库的路径集合：一次全量读出比逐条 PathQuery 快一个量级
-    # （1846 条逐条查 = 1846 次 SQL；本文件其它地方逐条查是为了拿整行，
-    # 这里只要 path）
+    # 已在库的路径集合：一次全量读出比逐条 PathQuery 快一个量级 （1846 条逐条查 = 1846 次 SQL；本文件其它地方逐条查是为了拿整行，这里只要 path）
     known = {it.path.lower() for it in lib.items()}
     files = scan_audio_files([str(p) for p in paths])
     total = len(files)
@@ -111,9 +108,8 @@ def adopt_library(req_id, paths: list[str], gen: int) -> None:
 
     added = skipped = 0
     errors: list[dict] = []
-    # 一个大事务：1846 条的逐条隐式提交会让 beets DB 做上千次 fsync。
-    # 取消时是 `return`（正常退出 with）= 已登记的保留，不是回滚 ——
-    # adopt 幂等，中断了重跑即可，用户不该丢掉已经等过的那几分钟。
+    # 一个大事务：1846 条的逐条隐式提交会让 beets DB 做上千次 fsync。取消时是 `return`（正常退出 with）=
+    # 已登记的保留，不是回滚 —— adopt 幂等，中断了重跑即可，用户不该丢掉已经等过的那几分钟。
     with lib.transaction():
         for i, p in enumerate(files):
             if cancel_gen() != gen:
@@ -274,9 +270,8 @@ def find_duplicates(req_id, keys: list[str], gen: int) -> None:
         if not any(vals):
             continue  # 全空：无从比较（与 _group_by 的 not strict 分支一致）
         if vals not in groups:
-            # 分组 key 用小写归一值（大小写不同算重复），但**展示**要用首条
-            # 的原始大小写——否则 UI 上会看到 "曲目a" 这种被压平的值，
-            # 用户对着库里的 "曲目A" 找不到对应行
+            # 分组 key 用小写归一值（大小写不同算重复），但**展示**要用首条的原始大小写——否则 UI 上会看到 "曲目a"
+            # 这种被压平的值，用户对着库里的 "曲目A" 找不到对应行
             labels[vals] = [norm(item.get(k)) for k in keys]
         groups.setdefault(vals, []).append(item)
         if (i + 1) % (MAINT_PROGRESS_STEP * 5) == 0 or i + 1 == total:
@@ -323,9 +318,8 @@ def move_items(req_id, directory: str, pretend: bool, gen: int) -> None:
 
     session = f"move_{req_id:02d}"
     configured = configured_directory()
-    # 三种拒绝都是**业务判定**，必须带自己的码回（以前抛 ValueError 被顶层
-    # 兜底成 E_INTERNAL，宿主只能显示"工具内部异常"——而这三条恰恰是
-    # 用户能自己解决的事：去配扫描目录、别在未知位置搬文件）。
+    # 三种拒绝都是**业务判定**，必须带自己的码回（以前抛 ValueError 被顶层兜底成
+    # E_INTERNAL，宿主只能显示"工具内部异常"——而这三条恰恰是用户能自己解决的事：去配扫描目录、别在未知位置搬文件）。
     if not configured:
         raise ProtocolError(
             E_NO_LIBRARY_DIR, "move",

@@ -121,7 +121,6 @@ def _ignore(_dir: str, names: list[str]) -> set[str]:
 
 
 # 自带解释器的版本：固定而不是"取最新"。发布物的可复现性优先于拿到 patch 更新。
-# 2026-10-31 从 3.14.0 → 3.14.10：落后 10 个补丁版（通常含安全修复），且这个
 # 解释器随免配置包分发给用户。哈希与 python.org 官方发布页逐字节核对过。
 EMBED_VERSION = "3.14.10"
 # 下载物的 sha256 钉扎（发布前审查 P2-7）：urlretrieve 无任何完整性校验，
@@ -231,7 +230,7 @@ def install_deps(runtime: Path, extra: list[str], uv: str | None) -> None:
 
     # 装到**空目录**再合并，不能直接 `--target site`。
     #
-    # 为什么（实测，docs/54 §5）：pip 的 `--target` 遇到已存在的顶层目录会整目录
+    # 为什么（实测）：pip 的 `--target` 遇到已存在的顶层目录会整目录
     # 跳过，只打一条 `Target directory … already exists` 警告。beets 已经占着
     # `beetsplug/`，于是 `beets-xtractor` 的 `beetsplug/xtractor/` 永远进不去——
     # 构建日志一片绿（那些警告平时就在），只有最后一步的 import 自检会红，
@@ -241,9 +240,8 @@ def install_deps(runtime: Path, extra: list[str], uv: str | None) -> None:
     env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     try:
         if uv:
-            # --python 指 embeddable：让 uv 按它的版本/平台解析 wheel（cp314, win_amd64）
-            # --link-mode=copy：`--target` 默认会 hardlink 到 uv 缓存，跨盘时 uv 自己
-            # 也会回落 copy（还打一条 warning）。发布物应当自包含，统一 copy 更省事。
+            # --python 指 embeddable：让 uv 按它的版本/平台解析 wheel（cp314, win_amd64）--link-mode=copy：`--target` 默认会 hardlink
+            # 到 uv 缓存，跨盘时 uv 自己也会回落 copy（还打一条 warning）。发布物应当自包含，统一 copy 更省事。
             cmd = [uv, "pip", "install", "--python", str(runtime / "python.exe"),
                    "--target", str(staging), "--link-mode=copy", "-r", str(req), *extra, "pip"]
             print(f"安装依赖（uv）→ 合并进 {site}")
@@ -457,7 +455,7 @@ def main() -> int:
     print("安装 aiya_beets 包 → Lib/site-packages")
     shutil.copytree(SRC / "aiya_beets", site / "aiya_beets", dirs_exist_ok=True, ignore=_ignore)
 
-    # 外置工具（docs/54）：Essentia 提取器随包发。xtractor 没有它等于"预置了
+    # 外置工具：Essentia 提取器随包发。xtractor 没有它等于"预置了
     # 一个被渲染侧剔掉的插件"，所以这一段失败就整包失败。
     staged = stage_binaries(work, bundle_binary_plan())
 

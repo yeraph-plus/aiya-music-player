@@ -370,7 +370,7 @@ mod tests {
         );
     }
 
-    /* ---------------- 节流 ---------------- */
+    /* 节流 */
 
     #[test]
     fn position_emit_due_is_500ms_window() {
@@ -432,7 +432,7 @@ mod tests {
         assert_eq!(emits, 2, "1000 放行、1100 压掉、1600 放行");
     }
 
-    /* ---------------- token 过滤 ---------------- */
+    /* token 过滤 */
 
     #[test]
     fn stale_position_and_eof_are_dropped() {
@@ -467,7 +467,7 @@ mod tests {
         assert_eq!(actor.state().token, new_token, "过期 Eof 不该推进队列");
     }
 
-    /* ---------------- 曲尾：记历史 + 纠偏下发 ---------------- */
+    /* 曲尾：记历史 + 纠偏下发 */
 
     #[test]
     fn eof_records_history_with_played_seconds_and_stops_at_tail() {
@@ -549,7 +549,7 @@ mod tests {
         }
     }
 
-    /* ---------------- 频谱 / 错误 ---------------- */
+    /* 频谱 / 错误 */
 
     #[test]
     fn spectrum_frames_pass_through_untouched() {
@@ -624,7 +624,7 @@ mod tests {
         assert!(fx.is_empty(), "过期 token 的错误不该污染新曲状态");
     }
 
-    /* ---------------- 装载回报 ---------------- */
+    /* 装载回报 */
 
     #[test]
     fn loaded_with_stale_token_does_not_emit() {
@@ -650,7 +650,7 @@ mod tests {
         );
     }
 
-    /* ---------------- 落库门控（P1 回归） ---------------- */
+    /* 落库门控（P1 回归） */
 
     /// 泵循环用 EmitState 门控全量落库的旧缺陷：播放中每 500ms 一次的
     /// Position 节流也置位 EmitState，于是 queue_items 被反复 DELETE+重写，

@@ -24,7 +24,6 @@ export interface SmartCond {
 export interface SmartRule {
   all: SmartCond[];
   /**
-   * 排序键/方向：2026-10-28 拍板后**编辑器不再暴露**——排序由歌单视图的
    * 列头处理，保存时恒写 title/asc。字段保留是协议兼容（旧 rule_json 里
    * 有值，Rust 侧仍解析），不是可配置项。
    */
@@ -67,13 +66,8 @@ export const OPS_BY_FIELD: Record<SmartField, { op: SmartOp; label: string }[]> 
   ],
 };
 
-/* ---------------- 条件模式（2026-10-28 拍板：第一列选"怎么匹配"） ----------------
- *
- * 规则引擎的形状是 (field, op, value)，但那对用户是程序员词汇——编辑器把它
- * 折叠成「条件模式」：一个模式 = 固定的 field+op + 一种值控件（流派是下拉、
- * 艺人/专辑是关键词输入、年份/播放次数是数字）。已有的条件用 `modeOfCond`
- * 反推回模式，任何 field/op 组合都有归处，不会丢规则。
- */
+/* 条件模式 ---------------- 规则引擎的形状是 (field, op, value)，但那对用户是程序员词汇——编辑器把它折叠成「条件模式」：一个模式 = 固定的
+   field+op + 一种值控件（流派是下拉、艺人/专辑是关键词输入、年份/播放次数是数字）。已有的条件用 `modeOfCond` 反推回模式，任何 field/op 组合都有归处，不会丢规则。 */
 
 export type CondMode =
   | 'genre'

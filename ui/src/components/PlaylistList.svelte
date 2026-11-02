@@ -56,14 +56,14 @@ import CheckCell from './ui/CheckCell.svelte';
     onlocated: () => void;
     playing: boolean;
     /**
-     * 播放。仅由双击、封面悬浮播放键或键盘 Enter 触发（docs/24 §6）：
+     * 播放。仅由双击、封面悬浮播放键或键盘 Enter 触发：
      * 单击的职责是选中，不承担切歌，以免二者混淆。
      */
     onplay: (index: number) => void;
     /**
      * 选中。裸点、Ctrl、Shift **都走这里**（语义差别在
      * `selection.handleSelect` 内部分流）：裸点=只选这行、Ctrl=切换、
-     * Shift=连选。Ctrl 点行时若批量模式没开，组件会先打开它（docs/27）。
+     * Shift=连选。Ctrl 点行时若批量模式没开，组件会先打开它。
      */
     onselect: (index: number, event: MouseEvent | KeyboardEvent) => void;
     /** 勾选框：点=切换、Shift=连选（与 ctrl+点击的语义不同）；键盘 Space/Enter 也走这里 */
@@ -76,7 +76,7 @@ import CheckCell from './ui/CheckCell.svelte';
     onretry: (index: number) => void;
     /** 拖放排序（本组件存在的前提）：松手时报告 from → to */
     onmove: (from: number, to: number) => void;
-    /* ---------------- 工具条（docs/27 内置，替代悬浮 BatchBar） ---------------- */
+    /* 工具条（内置，替代悬浮 BatchBar） */
     batchMode: boolean;
     onbatchmode: (on: boolean) => void;
     /** 跳到正在播放的条目（解析下标在父组件，这里只透传给工具条） */
@@ -94,7 +94,7 @@ import CheckCell from './ui/CheckCell.svelte';
     onopenartist: (id: string) => void;
     onopenalbum: (id: string) => void;
     /**
-     * 详情页把自己的列链接废掉（docs/28）：在专辑页里点"专辑"跳的是当前页，
+     * 详情页把自己的列链接废掉：在专辑页里点"专辑"跳的是当前页
      * 渲染成纯文本（歌单视图用不到，接口与 TrackList 对齐省一层分支）。
      */
     disableArtistLink?: boolean;
@@ -187,9 +187,8 @@ import CheckCell from './ui/CheckCell.svelte';
     return out;
   });
 
-  // roving tabindex 的锚：只有焦点行是 0，其余行 -1，Tab 一次进列表、方向键
-  // 在行间移动焦点。什么都没选时锚在第一个可见行——否则 Tab 永远进不了列表
-  // （全部 -1 = 没有入口）。
+  // roving tabindex 的锚：只有焦点行是 0，其余行 -1，Tab
+  // 一次进列表、方向键在行间移动焦点。什么都没选时锚在第一个可见行——否则 Tab 永远进不了列表 （全部 -1 = 没有入口）。
   const focusAnchor = $derived(selectedIndex >= 0 ? selectedIndex : (rows[0]?.index ?? -1));
 
   /**
@@ -216,13 +215,8 @@ import CheckCell from './ui/CheckCell.svelte';
     onrestored();
   });
 
-  // 焦点行（键盘或点选）变化时将其滚入视野。
-  // 需要拦截重复执行：该 effect 在组件重挂载、视口尺寸变化（抽屉开合、窗口
-  // 缩放）、行高变化时均会重跑，而非仅在焦点变化时。双击播放后 selectedIndex
-  // 长期停在播放行上，每次重跑都会把浏览位置拉回播放行（表现为播放中滚动列表
-  // 反复跳回正在播放的条目）。
-  // 闸门 `selection.followedIndex` 记录已跟随到的下标，焦点未变则不滚动；存于
-  // store 而非局部变量，因为重挂载会清零局部变量而使闸门失效。
+  // 焦点行（键盘或点选）变化时将其滚入视野。需要拦截重复执行：该 effect 在组件重挂载、视口尺寸变化（抽屉开合、窗口缩放）、行高变化时均会重跑，而非仅在焦点变化时。双击播放后 selectedIndex
+  // 长期停在播放行上，每次重跑都会把浏览位置拉回播放行（表现为播放中滚动列表反复跳回正在播放的条目）。闸门 `selection.followedIndex` 记录已跟随到的下标，焦点未变则不滚动；存于 store 而非局部变量，因为重挂载会清零局部变量而使闸门失效。
   $effect(() => {
     if (!vw.scroller || selectedIndex < 0) return;
     if (selectionStore.followedIndex === selectedIndex) return;
@@ -231,10 +225,8 @@ import CheckCell from './ui/CheckCell.svelte';
     if (target !== vw.scroller.scrollTop) vw.scroller.scrollTop = target;
   });
 
-  // 键盘移动后把 DOM 焦点交给目标行。若只移动高亮类名而焦点不动，Space 会播放
-  // 焦点所在行、Enter 播放高亮行，同一屏幕两个键对应两首歌。focusNonce 仅由键盘
-  // move 意图置位（selection.requestRowFocus()），点选与定位到正在播放等编程路径
-  // 不夺取焦点。preventScroll：滚动由上述跟随效果负责，此处只处理焦点。
+  // 键盘移动后把 DOM 焦点交给目标行。若只移动高亮类名而焦点不动，Space 会播放焦点所在行、Enter 播放高亮行，同一屏幕两个键对应两首歌。focusNonce 仅由键盘 move
+  // 意图置位（selection.requestRowFocus()），点选与定位到正在播放等编程路径不夺取焦点。preventScroll：滚动由上述跟随效果负责，此处只处理焦点。
   $effect(() => {
     if (selectionStore.focusNonce === 0 || selectedIndex < 0 || !vw.scroller) return;
     const idx = selectedIndex;
@@ -271,10 +263,7 @@ import CheckCell from './ui/CheckCell.svelte';
   }
 </script>
 
-<!--
-  外壳与 TrackList 同构（工具条 + 滚动区）。`.list` 是虚拟滚动的
-  scroller（vw.scroller 绑在这里，几何不变）。
--->
+<!-- 外壳与 TrackList 同构（工具条 + 滚动区）。`.list` 是虚拟滚动的 scroller（vw.scroller 绑在这里，几何不变）。 -->
 <div class="list-shell" class:no-batch={!batchMode}>
   <ListToolbar
     {total}
@@ -360,11 +349,10 @@ import CheckCell from './ui/CheckCell.svelte';
                 event.stopPropagation();
                 return;
               }
-              // 勾选列、播放键、跳转链接上的点击不代表"选中该行"。
-              // Svelte 5 将 click 委托到根节点统一派发，stopPropagation 无法拦截
-              // 同一批委托 handler，因此由行自身判断事件来源。
+              // 勾选列、播放键、跳转链接上的点击不代表"选中该行"。Svelte 5 将 click 委托到根节点统一派发，stopPropagation
+              // 无法拦截同一批委托 handler，因此由行自身判断事件来源。
               if (isRowInternalTarget(event.target)) return;
-              // Ctrl/⌘ + 点击行表达批量意图：批量模式未开启时自动开启（docs/27 第 5 点），
+              // Ctrl/⌘ + 点击行表达批量意图：批量模式未开启时自动开启
               // 不要求用户先去工具条查找开关
               if ((event.ctrlKey || event.metaKey) && !batchMode) onbatchmode(true);
               onselect(row.index, event);
@@ -385,7 +373,7 @@ import CheckCell from './ui/CheckCell.svelte';
             oncontextmenu={(event) => {
               event.preventDefault();
               // 右键的行不在选择集里 → 先单选它；在 selection 里则保持整组，
-              // 菜单按 multi 语义对整组生效（docs/27 第 6 点）
+              // 菜单按 multi 语义对整组生效
               if (!selection.has(row.index)) onselect(row.index, event);
               onmenu(event, row.index, row.track ?? null);
             }}
@@ -407,7 +395,7 @@ import CheckCell from './ui/CheckCell.svelte';
                 <span class="idx-num">{row.index + 1}</span>
               {/if}
             </span>
-            <!-- 封面悬浮播放键（docs/27 第 4 点）：从 # 列搬到封面上，
+            <!-- 封面悬浮播放键：从 # 列搬到封面上
                  行 hover 时以半透明底叠在封面中央 -->
             <span class="cover-slot">
               {#if row.track.artworkId}

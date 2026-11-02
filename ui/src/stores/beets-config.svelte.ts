@@ -3,7 +3,7 @@ import { errorMessage } from '../lib/errors';
 import { ipc } from '../lib/ipc';
 
 /**
- * beets 配置 store（docs/40 十三轮）：待整理目录 + 整理输出根。
+ * beets 配置 store：待整理目录 + 整理输出根。
  *
  * 两个消费方：ImportPanel 的「待整理目录」行（inbox 的展示/更换/打开/整理
  * 入库），与曲库目录列表的「整理输出」radio（单选，唯一生效）。数据来自

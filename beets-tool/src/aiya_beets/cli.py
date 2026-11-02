@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     except cfg.ConfigConflict as e:
         return _config_refusal(e)
 
-    # 外部二进制（ffmpeg / Essentia 提取器 / fpcalc）先进 PATH（docs/53）。
+    # 外部二进制（ffmpeg / Essentia 提取器 / fpcalc）先进 PATH。
     # 必须在任何 import beets 之前：replaygain / convert 用裸名字 "ffmpeg" 去
     # spawn，只有 PATH 一条路；晚一步就是"装了却找不到"。
     from . import bins
@@ -152,10 +152,8 @@ def main(argv: list[str] | None = None) -> int:
             argv += ["--carrier", item]
         return bins.main(argv)
 
-    # 读配置的命令必须在 import beets **之前**把 config.yaml 备好：beets 一导入
-    # 就把配置读进内存，之后写的文件对它不生效。以前这一步藏在 serve() 里，
-    # 于是 `status` 对新家（还没 config）报的是 beets 默认家的库路径——双家隔离
-    # 一上来就报错位。现在统一在这里做，所有读命令看到的是同一份事实。
+    # 读配置的命令必须在 import beets **之前**把 config.yaml 备好：beets 一导入就把配置读进内存，之后写的文件对它不生效。以前这一步藏在 serve() 里，于是 `status`
+    # 对新家（还没 config）报的是 beets 默认家的库路径——双家隔离一上来就报错位。现在统一在这里做，所有读命令看到的是同一份事实。
     try:
         cfg.ensure_config(None, prof)
     except OSError as e:

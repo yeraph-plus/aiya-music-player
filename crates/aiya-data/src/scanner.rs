@@ -397,13 +397,8 @@ fn upsert(
         )
         .ok();
 
-    // 改名/移动对账（P1：文件改名 = 旧行被标 missing + 新路径重复插入，
-    // 播放统计和歌单引用全留在死行上）。path 未命中、且"本轮没 walk 到"的
-    // 行里恰好一条 (size, mtime) 完全相等 —— 那就是同一份文件被改名/移动了
-    //（rename 不改 mtime 与 size）。做 relocate：行身份（主键 id）不变，
-    // 只更新路径字段；随后的 INSERT ON CONFLICT(path_lower) 命中迁好的行，
-    // 照常刷标签并把 availability 翻回 online。参考 beets_sync::relocate_track
-    // 的同一先例。0 条或多条候选维持现状（新插入 / 标 missing），不猜。
+    // 改名/移动对账（P1：文件改名 = 旧行被标 missing + 新路径重复插入，播放统计和歌单引用全留在死行上）。path 未命中、且"本轮没 walk 到"的行里恰好一条 (size, mtime) 完全相等 —— 那就是同一份文件被改名/移动了 （rename 不改 mtime 与 size）。做 relocate：行身份（主键
+    // id）不变，只更新路径字段；随后的 INSERT ON CONFLICT(path_lower) 命中迁好的行，照常刷标签并把 availability 翻回 online。参考 beets_sync::relocate_track 的同一先例。0 条或多条候选维持现状（新插入 / 标 missing），不猜。
     if existing.is_none() {
         if let Some(mtime) = t.mtime {
             let candidate_key = reloc
@@ -436,9 +431,8 @@ fn upsert(
     }
 
     if let Some((_, old_mtime, old_size, availability)) = &existing {
-        // 1) mtime 读取失败（None）→ 必须重新解析，不走 unchanged 短路；
-        // 2) 行标记为 missing（文件曾消失又出现）→ 也必须走更新路径，
-        //    否则 mtime/size 相同时恢复的文件永远翻不回 online。
+        // 1) mtime 读取失败（None）→ 必须重新解析，不走 unchanged 短路；2) 行标记为 missing（文件曾消失又出现）→
+        // 也必须走更新路径，否则 mtime/size 相同时恢复的文件永远翻不回 online。
         let must_refresh = *availability == "missing";
         if !must_refresh {
             if let Some(m) = t.mtime {
@@ -481,14 +475,8 @@ fn upsert(
         )?;
     }
 
-    // 行身份（主键）：更新已有行时用**行上的真实 id**——它可能是 relocate
-    // 保留下来的旧路径派生 id；用 `track_id(当前路径)` 重算会撞别的行的 PK，
-    // 而 ON CONFLICT(path_lower) 不覆盖 PK 冲突，整批会失败。
-    // 新文件按路径派生；若该 id 已被一条 path_lower 不同的行占用（典型场景：
-    // 旧路径的文件被 relocate 走后，同路径又来了一个**不同的**新文件——恢复
-    // 备份、重抓轨、改名回来，都是现实操作），换盐派生。新文件本就没有历史
-    // 引用，换 id 无副作用；被 relocate 的行继续持有原 id，引用不断。
-    // 发布前审查 P1-4：此前该场景每次扫描都 UNIQUE 失败，文件永远进不了库。
+    // 行身份（主键）：更新已有行时用**行上的真实 id**——它可能是 relocate 保留下来的旧路径派生 id；用 `track_id(当前路径)` 重算会撞别的行的 PK，而 ON CONFLICT(path_lower) 不覆盖 PK 冲突，整批会失败。新文件按路径派生；若该 id 已被一条 path_lower 不同的行占用（典型场景：旧路径的文件被
+    // relocate 走后，同路径又来了一个**不同的**新文件——恢复备份、重抓轨、改名回来，都是现实操作），换盐派生。新文件本就没有历史引用，换 id 无副作用；被 relocate 的行继续持有原 id，引用不断。发布前审查 P1-4：此前该场景每次扫描都 UNIQUE 失败，文件永远进不了库。
     let tid = if let Some((row_id, _, _, _)) = &existing {
         row_id.clone()
     } else {
@@ -529,9 +517,8 @@ fn upsert(
     };
     let title_norm = norm(&t.title);
 
-    // 封面：图已由解析线程落盘（artwork::stage），这里只登记一行（artwork::link）。
-    // 拆开的原因见 artwork::stage 的注释：连接归入库线程独占，解析线程无法
-    // 同时做 upsert；而 hash + 写盘才是封面的主要开销。
+    // 封面：图已由解析线程落盘（artwork::stage），这里只登记一行（artwork::link）。拆开的原因见 artwork::stage
+    // 的注释：连接归入库线程独占，解析线程无法同时做 upsert；而 hash + 写盘才是封面的主要开销。
     let artwork_id = artwork.and_then(|staged| match crate::artwork::link(conn, staged, now) {
         Ok(r) => Some(r.id),
         Err(e) => {
@@ -608,9 +595,7 @@ enum UpsertOutcome {
     Unchanged,
 }
 
-// ---------------------------------------------------------------------------
 // 流水线的三个部件：预筛索引 / 解析池产出 / 入库攒批
-// ---------------------------------------------------------------------------
 
 /// 库里已有行的轻量索引项（只取预筛要用的四列）。
 struct IndexEntry {
@@ -731,9 +716,8 @@ fn process_file(
 
     match parse_file_with_meta(path, &meta, mtime) {
         Ok(mut t) => {
-            // 封面：hash + 原子落盘在解析侧就地做（这是纯 CPU + IO，能并行）。
-            // take() 掉原始字节，别让几百 KB 的图跟着 Item 进队列 ——
-            // 无界积压时那就是 GB 级内存峰值。
+            // 封面：hash + 原子落盘在解析侧就地做（这是纯 CPU + IO，能并行）。take() 掉原始字节，别让几百 KB 的图跟着
+            // Item 进队列 —— 无界积压时那就是 GB 级内存峰值。
             let artwork = match (t.picture.take(), artwork_cache) {
                 (Some((data, mime)), Some(dir)) => {
                     match crate::artwork::stage(dir, &data, mime.as_deref()) {
@@ -987,9 +971,7 @@ pub fn scan_roots_ext(
         .map(|p| p.to_string_lossy().to_lowercase())
         .collect();
 
-    // 库内已有行的轻量索引：预筛 unchanged 用。
-    // 只取四列、一次性读全表 —— 5 万行约 8–10MB，换来解析阶段对每个文件都
-    // 不必再查库（解析线程没有连接，也根本不该有）。
+    // 库内已有行的轻量索引：预筛 unchanged 用。只取四列、一次性读全表 —— 5 万行约 8–10MB，换来解析阶段对每个文件都不必再查库（解析线程没有连接，也根本不该有）。
     let index = load_index(conn)?;
 
     // 改名/移动对账索引：本轮没 walk 到的行里 (mtime, size) 唯一对应的候选。
@@ -1002,9 +984,8 @@ pub fn scan_roots_ext(
     // 解析完成计数由各 worker 递增（它们互不知道），入库线程发进度时读
     let parsed_done = AtomicUsize::new(0);
 
-    // 局部线程池而不是 rayon 全局池：扫描是偶发的批任务，不该长期占着全局池；
-    // 而且这里要精确控制 N。留一个核给入库线程 —— 它是 SQLite 单写者，
-    // 多一个解析 worker 只会在 channel 上堵着，不如把时间片让给写锁。
+    // 局部线程池而不是 rayon 全局池：扫描是偶发的批任务，不该长期占着全局池；而且这里要精确控制 N。留一个核给入库线程 —— 它是 SQLite
+    // 单写者，多一个解析 worker 只会在 channel 上堵着，不如把时间片让给写锁。
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
@@ -1016,11 +997,8 @@ pub fn scan_roots_ext(
 
     let (tx, rx) = sync_channel::<Item>(CHANNEL_CAP);
 
-    // 流水线级取消标志（区别于用户的 should_cancel）：DB 侧出错（commit 失败
-    // 早退）或 send 失败（消费者已走）时置位，producer 在每个条目处理**前**
-    // 检查并快速返回。没有这个标志，DB 出错后 producer 仍会把剩余整库解析完
-    // 才发现 channel 断了 —— 白烧几分钟 CPU/IO（此前 `let _ = tx.send` 把
-    // Disconnected 吞掉，`std::thread::scope` 又要等 par_iter 跑完）。
+    // 流水线级取消标志（区别于用户的 should_cancel）：DB 侧出错（commit 失败早退）或 send 失败（消费者已走）时置位，producer 在每个条目处理**前** 检查并快速返回。没有这个标志，DB 出错后 producer 仍会把剩余整库解析完才发现
+    // channel 断了 —— 白烧几分钟 CPU/IO（此前 `let _ = tx.send` 把 Disconnected 吞掉，`std::thread::scope` 又要等 par_iter 跑完）。
     let pipeline_cancelled = std::sync::atomic::AtomicBool::new(false);
 
     // 进度上报口径统一收在这一个闭包里：phase 要同时看两个计数，
@@ -1036,20 +1014,11 @@ pub fn scan_roots_ext(
         on_progress(snap(phase, t, Some(total), current, started));
     };
 
-    // 按批包事务：一个事务提交 BATCH_SIZE 个文件的 upsert；
-    // 批内某个 upsert 失败 → 回滚整批、整批计入 failed，继续下一批。
-    //
-    // BEGIN IMMEDIATE（不是默认的 DEFERRED）：扫描连接与主 DB 线程是**两个连接**，
-    // DEFERRED 事务先拿读锁，要等第一条写语句才升级写锁；升级时若别处已持有写锁，
-    // SQLITE_BUSY 会立刻返回（busy_timeout 对"锁升级"不生效），表现为扫描中途
-    // 突然整批失败。IMMEDIATE 在事务开始就排队等写锁，busy_timeout 才真正起作用。
+    // 按批包事务：一个事务提交 BATCH_SIZE 个文件的 upsert；批内某个 upsert 失败 → 回滚整批、整批计入 failed，继续下一批。BEGIN IMMEDIATE（不是默认的 DEFERRED）：扫描连接与主 DB 线程是**两个连接**，DEFERRED
+    // 事务先拿读锁，要等第一条写语句才升级写锁；升级时若别处已持有写锁，SQLITE_BUSY 会立刻返回（busy_timeout 对"锁升级"不生效），表现为扫描中途突然整批失败。IMMEDIATE 在事务开始就排队等写锁，busy_timeout 才真正起作用。
     std::thread::scope(|scope| -> DbResult<()> {
-        // 生产者：解析池。不碰 DB、不碰 on_progress。
-        //
-        // 闭包必须是 `move` 的：`tx` 要**跟着闭包一起 drop**，消费者才能收到
-        // Disconnected 收尾。上一版写成非 move 闭包（只借用 tx），tx 活到函数
-        // 末尾，`rx.recv()` 在生产者已经跑完之后还会一直等下去 —— 第一次跑
-        // 测试就是卡死在这（`case_variant_paths_do_not_duplicate_rows`）。
+        // 生产者：解析池。不碰 DB、不碰 on_progress。闭包必须是 `move` 的：`tx` 要**跟着闭包一起 drop**，消费者才能收到 Disconnected 收尾。上一版写成非 move 闭包（只借用 tx），tx
+        // 活到函数末尾，`rx.recv()` 在生产者已经跑完之后还会一直等下去 —— 第一次跑测试就是卡死在这（`case_variant_paths_do_not_duplicate_rows`）。
         let (pool_ref, files_ref, index_ref) = (&pool, &files, &index);
         let cancel_ref = &should_cancel;
         let done_ref = &parsed_done;
@@ -1062,9 +1031,8 @@ pub fn scan_roots_ext(
                     }
                     let item = process_file(path, index_ref, artwork_cache);
                     done_ref.fetch_add(1, Ordering::Relaxed);
-                    // channel 满时这里阻塞 —— 这就是背压本身，不是缺陷。
-                    // 发送失败 = 消费者已经走了（DB 出错提前返回）：置位取消
-                    // 标志让还在排队的工作线程立刻停手，不再白解析剩余整库。
+                    // channel 满时这里阻塞 —— 这就是背压本身，不是缺陷。发送失败 = 消费者已经走了（DB
+                    // 出错提前返回）：置位取消标志让还在排队的工作线程立刻停手，不再白解析剩余整库。
                     if tx.send(item).is_err() {
                         pipe_ref.store(true, Ordering::Relaxed);
                     }
@@ -1116,9 +1084,8 @@ pub fn scan_roots_ext(
                             }
                         };
                         apply_commit(&mut tally, &mut errors, outcome);
-                        // 批边界必报一次：这是用户唯一能感觉到"又前进了一批"的地方
-                        // （旧实现也是每批一次）。同时前推 next_report，否则下面的
-                        // 步长判断会立刻再报一次一模一样的事件。
+                        // 批边界必报一次：这是用户唯一能感觉到"又前进了一批"的地方 （旧实现也是每批一次）。同时前推
+                        // next_report，否则下面的步长判断会立刻再报一次一模一样的事件。
                         report(&tally, last_path.clone());
                         next_report = tally.scanned + PROGRESS_STEP;
                     }
@@ -1133,9 +1100,8 @@ pub fn scan_roots_ext(
 
         // 尾部不满一批的也要提交 —— 否则最后几个文件永远不入库
         if !batch.is_empty() && !cancelled {
-            // 解析已经全完成、只剩这批没写库 —— 这正是 importing 该出现的时刻。
-            // 提交前先如实报一次，否则这个状态在正常时序里几乎没有露面机会
-            // （只有解析明显快于入库时才会被下面的步长判断撞上）。
+            // 解析已经全完成、只剩这批没写库 —— 这正是 importing
+            // 该出现的时刻。提交前先如实报一次，否则这个状态在正常时序里几乎没有露面机会 （只有解析明显快于入库时才会被下面的步长判断撞上）。
             tally.parsed = parsed_done.load(Ordering::Relaxed);
             if tally.parsed >= total {
                 report(&tally, last_path.clone());
@@ -1174,8 +1140,7 @@ pub fn scan_roots_ext(
     let missing = mark_missing(conn, roots, &seen)?;
 
     // 实体封面回填（albums/artists.artwork_id 从曲目聚合）：必须在 GC
-    // **之前**——回填建立的实体引用要先于"删无引用封面"的对账，否则刚该
-    // 被引用的原图会被 GC 误删。失败只记日志不拖垮扫描结果。
+    // 之前**——回填建立的实体引用要先于"删无引用封面"的对账，否则刚该被引用的原图会被 GC 误删。失败只记日志不拖垮扫描结果。
     match crate::artwork::refresh_entity_artwork(conn) {
         Ok((albums, artists)) if albums + artists > 0 => {
             tracing::debug!(albums, artists, "实体封面已回填");
@@ -1184,10 +1149,8 @@ pub fn scan_roots_ext(
         Err(e) => tracing::warn!(error = %e, "实体封面回填失败（跳过，不影响扫描结果）"),
     }
 
-    // 封面 GC：所有批次提交完之后做一次对账（增量扫描同样收尾跑）——
-    // 删除不再被 tracks/albums/artists 引用（含 missing 行的引用）的
-    // artwork 行与 originals/ 原图，否则行与文件只增不减。GC 是内务，
-    // 失败只记日志不拖垮扫描结果。
+    // 封面 GC：所有批次提交完之后做一次对账（增量扫描同样收尾跑）—— 删除不再被 tracks/albums/artists 引用（含 missing 行的引用）的
+    // artwork 行与 originals/ 原图，否则行与文件只增不减。GC 是内务，失败只记日志不拖垮扫描结果。
     if let Some(cache) = artwork_cache {
         match crate::artwork::gc_unreferenced(conn, cache) {
             Ok(0) => {}
@@ -1914,7 +1877,7 @@ mod tests {
             |p| {
                 // 判定条件用 scanned，**不要用 phase**。
                 //
-                // 并行化之后（docs/29 批 B）解析常常先于入库跑完，第一批提交时
+                // 并行化之后解析常常先于入库跑完，第一批提交时
                 // `parsed` 已经等于 total，于是这一次事件的 phase 是 `importing`
                 // 而不是 `parsing`。写成 `phase == "parsing"` 时取消就永远不会
                 // 置位，扫描会正常跑完，断言以"取消没生效"的形式间歇性失败 ——

@@ -2,7 +2,7 @@
  * 右键菜单（Menu.svelte 的 .k-menu*）与模态框（Dialog.svelte 的 .k-dlg*）
  * 均已组件化且样式随组件走，旧的全局 .menu* / .modal* / .picker* 已删。 */
 
-/* ---------------- 设置 ---------------- */
+/* 设置 */
 
 .setting-row {
   display: flex;
@@ -78,10 +78,8 @@
   color: var(--text-3);
 }
 
-/* ---------------- 诊断（设置页「关于」与最近错误） ----------------
- * 快捷键录制/绑定样式在上方设置区；本段只剩「关于」页还在用的三小块。
- * 高级诊断折叠区已迁往设置页并随后精简（docs/29 批 A / 2026-10-28），
- * diag-grid / plugin-* / diag-table / diag-actions 已随宿主删除。 */
+/* 诊断（设置页「关于」与最近错误）快捷键录制/绑定样式在上方设置区；本段只剩「关于」页还在用的三小块。diag-grid / plugin-* /
+   diag-table / diag-actions 已随宿主删除。 */
 
 .diag-block {
   margin-bottom: 14px;

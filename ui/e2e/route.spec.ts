@@ -77,7 +77,6 @@ test('旧 UiState：page=mostPlayed → 落到曲库（docs/28）', async ({ pag
 test('旧 UiState：home 且无 libraryDetail → 推荐页（仪表盘）', async ({ page }) => {
   await seedState(page, { page: 'home', libraryDetail: false, view: 'library' });
   await page.goto('/');
-  // 2026-10-28：推荐页仪表盘化，没有页标题
   await expect(page.locator('.main h1')).toHaveCount(0);
   await expect(page.locator('.main .playlist-row .playlist-card').first()).toBeVisible();
   expect(await activeSidebar(page)).toEqual(['推荐']);
@@ -105,23 +104,22 @@ test('一级路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => 
   }> = [
     { via: 'initial', text: '', title: '' }, // 仪表盘无页标题（2026-10-28）
     { via: 'nav', text: '曲库', title: '全部曲目' },
-    // docs/28：专辑/艺人升侧栏一级项（曲库 tab 撤掉）
+    // 专辑/艺人升侧栏一级项（曲库 tab 撤掉）
     { via: 'nav', text: '专辑', title: '专辑' },
     { via: 'nav', text: '艺人', title: '艺人' },
-    // docs/48：beets 独立成页
+    // beets 独立成页
     { via: 'nav', text: 'Beets', title: 'Beets' },
-    // docs/52 §7.4：FM 电台占位页换成直播页（路由 radio → live）。标题也从
+    // FM 电台占位页换成直播页（路由 radio → live）。标题也从
     // 「FM 电台」改成「直播」——侧栏文字与页内 h1 必须一致，否则这条断言
     // 会变成"文字对上了但点的是另一页"。
     { via: 'nav', text: '直播', title: '直播' },
     { via: 'playlist', text: '', title: '' }, // 标题动态取歌单名
-    // 2026-10-30：原「扫描入库」一级页并入设置页「曲库」组，侧栏席位撤销
     // （下面「底部工具组只有两项」那条用例守住"它不能复活"）
     { via: 'nav', text: '设置', title: '设置' }, // 2026-10-28 三次修订：单页平铺，标题固定
-    // **正在播放页放最后**：那一页侧栏整体退出（docs/46 §5.2），留在它上面时
+    // 正在播放页放最后**：那一页侧栏整体退出，留在它上面时
     // 后面任何一次 `.sidebar .nav-item` 点击都会"element is not visible"。
     // 这条顺序不是随意的——它曾经排在中间，于是这个用例稳定超时 30s。
-    // docs/25 §6：正在播放页从播放条歌曲区域进（侧栏席位已撤）
+    // 正在播放页从播放条歌曲区域进（侧栏席位已撤）
     { via: 'player', text: '', title: '未在播放', sidebarActive: 0 },
   ];
 
@@ -158,7 +156,6 @@ test('一级路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => 
 /**
  * 打开「设置 → 曲库」组。
  *
- * 2026-10-30：原「扫描入库」一级页并入设置页，下面六条用例（原本都以
  * `.sidebar .nav-item 扫描入库` 起步）统一改走这条路。断言主体没变——
  * 目录条目列表、执行状态卡片、动作按钮都还在，只是换了个宿主。
  */
@@ -171,7 +168,7 @@ async function openLibrarySettings(page: Page): Promise<void> {
 
 test('2026-10-30：侧栏底部工具组只剩「Beets / 设置」两项', async ({ page }) => {
   await page.goto('/');
-  // 「扫描入库」那条路走完了：docs/29 批 A 升成一级页 → docs/48 拆走 beets →
+  // 「扫描入库」那条路走完了： 升成一级页 → 拆走 beets →
   // 只剩一条目录卡片 → 并入设置页「曲库」组。席位留着就是死链接。
   await expect(page.locator('.sidebar .nav-item', { hasText: '扫描入库' })).toHaveCount(0);
   const footer = page.locator('.sidebar .sidebar-footer .nav-item');
@@ -183,9 +180,8 @@ test('2026-10-30：侧栏底部工具组只剩「Beets / 设置」两项', async
 test('2026-10-30：首页「位置缺失」告警 → 设置页曲库组（滚过去 + 高亮那一组）', async ({
   page,
 }) => {
-  // `?missing=2` 让 mock 的 library_stats 报出缺失（默认 0，那条告警不出现）。
-  // 这条路径以前指向「扫描入库」页；那页并入设置页之后，导航变成"切路由 +
-  // 一次性跳转请求"，只切路由的话人会落在「外观」组——正是这次要守的东西。
+  // `?missing=2` 让 mock 的 library_stats 报出缺失（默认
+  // 0，那条告警不出现）。这条路径以前指向「扫描入库」页；那页并入设置页之后，导航变成"切路由 + 一次性跳转请求"，只切路由的话人会落在「外观」组——正是这次要守的东西。
   await page.goto('/?missing=2');
   const warn = page.locator('.stat-warn');
   await expect(warn).toContainText('2 个位置缺失');
@@ -250,7 +246,6 @@ test('docs/48：曲库目录行不再带 beets 的「整理输出」单选', asy
   await openLibrarySettings(page);
   await page.locator('#settings-library .root-list .root-row').first().waitFor();
 
-  // 2026-10-30 解耦：这个 radio 以前直接写 beets 的 config.yaml——曲库是
   // **本应用**的设置面，不该出现另一个库的配置项。搬走之后若有人"顺手加回来"，
   // 症状是曲库又开始改一个它不拥有的文件。
   await expect(page.locator('.root-list .root-target')).toHaveCount(0);
@@ -295,7 +290,6 @@ test('设置页「曲库」组：统计卡 + 曲库卡片；beets 段与诊断�
   await openLibrarySettings(page);
 
   // 六张统计卡（曲目/专辑/艺人/总时长/文件容量/索引大小；位置缺失为 0 时不出现）。
-  // 2026-10-30 补第六项：五项时 3 × 2 的第二行右边空一块，看着像布局没做完。
   const cards = page.locator('#settings-library .k-stat.row');
   await expect(cards).toHaveCount(6);
   await expect(cards.first()).toContainText('曲目');
@@ -303,10 +297,8 @@ test('设置页「曲库」组：统计卡 + 曲库卡片；beets 段与诊断�
   await expect(page.locator('#settings-library .k-stat.row', { hasText: '文件容量' })).toHaveCount(1);
   await expect(page.locator('#settings-library .k-stat.row', { hasText: '索引大小' })).toHaveCount(1);
 
-  // 整页六个 tab（曲库/外观/播放/系统/快捷键/关于）——2026-10-30 曲库提到第一位
   await expect(page.locator('.text-tabs .text-tab')).toHaveCount(6);
 
-  // 整理库（beets）在 2026-10-30 已搬成侧栏独立一页（docs/48）
   await expect(page.locator('#tools-beets')).toHaveCount(0);
   await expect(page.locator('.beets-section')).toHaveCount(0);
 
@@ -315,7 +307,6 @@ test('设置页「曲库」组：统计卡 + 曲库卡片；beets 段与诊断�
   await expect(page.locator('.diag-grid')).toHaveCount(0);
 
   // 设置 → 关于：版本 + 数据目录 + 最近错误（单页平铺，tab 点击只滚动）。
-  // 2026-10-28 九轮半拍板：一行一项；平台/Schema/播放列表/重新读取已删；
   // 版本行带禁用的「获取更新」占位按钮；爱发电二维码在支持开发行
   await page.locator('.text-tab', { hasText: '关于' }).click();
   const about = page.locator('.settings-about');
@@ -352,17 +343,15 @@ test('docs/48：未装 beets 时 Beets 页只给两条安装路线，不出查�
 
   const main = page.locator('.main');
   await expect(main).toContainText('未安装 Beets 分析工具');
-  // 两张平级卡、各占一行（docs/51 §4）：预配置环境常驻；本机安装只差"有没有 Python"
+  // 两张平级卡、各占一行：预配置环境常驻；本机安装只差"有没有 Python"
   await expect(main.getByRole('button', { name: /下载并安装/ })).toBeVisible();
   await expect(main.locator('section.beets-panel').filter({ hasText: '预配置环境' })).toHaveCount(1);
-  // mock 的 Python 探测报"找不到" → 本机安装卡整个不出现（2026-10-31 两分支：
   // 检测到 Python 才渲染本机安装路线），只留一行说明 + 重新检测
   // Python 探测整链退役：页面里不该再出现任何"本机安装"痕迹
   await expect(main).not.toContainText('本机安装');
   await expect(main).not.toContainText('重新检测');
 
   // 没装就没有查询入口。导入面板 / 维护四件套都不在；插件市场的后端实现
-  // 已整体回收（2026-10-31）——插件只走勾选表一路，不该有第二个入口
   await expect(main.getByRole('button', { name: '查询' })).toHaveCount(0);
   await expect(main.getByRole('heading', { name: '导入新文件夹' })).toHaveCount(0);
   await expect(main.locator('.maint-fold')).toHaveCount(0);
@@ -379,7 +368,7 @@ test('docs/51：安装页给出插件勾选与卸载入口（卸载只删组件�
   // 所以勾选清单现在就应该在——否则用户没法在安装前决定要什么
   await expect(main.locator('.pick input[type="checkbox"]')).toHaveCount(4);
   await expect(main).toContainText('beautifulsoup4>=4.12,<5');
-  // 依赖"另下"提示已删：脚本自己下载（docs/53），装前不再罗列缺什么
+  // 依赖"另下"提示已删：脚本自己下载，装前不再罗列缺什么
   await expect(main).not.toContainText('另下');
 
   // 卸载是两段式：先「卸载组件」，点了才出「确认卸载」。
@@ -475,7 +464,7 @@ test('docs/49：整理链路 待整理目录 → 预览 → 应用所选 → 汇
   // 预览：mock 发两张专辑（一张高置信默认选中、一张低置信默认跳过）
   await start.click();
   await expect(main.locator('.album-card')).toHaveCount(2);
-  // 低置信不默认勾选（docs/08 §4.1）：所以只有 1 张会被写
+  // 低置信不默认勾选：所以只有 1 张会被写
   await expect(main.getByRole('button', { name: /应用所选（1 张）/ })).toBeVisible();
 
   // 应用：走 applied → applyDone，汇总出现且按钮解锁
@@ -508,11 +497,9 @@ test('docs/40 二轮：动态歌单模态框（Switch → 条件模式行 → �
   await row.getByRole('combobox', { name: '流派' }).click();
   await page.getByRole('option', { name: '流行' }).click();
 
-  // 上限输入已随物化模型移除（2026-10-30）；排序在编辑器里不出现
   await expect(dialog.locator('input[type="number"]')).toHaveCount(0);
   await expect(dialog.locator('.rule-meta [role="combobox"]')).toHaveCount(0);
 
-  // 创建 → 侧栏出现带 activity 图标徽标的歌单（2026-10-30：智字换图标）
   await dialog.locator('.prompt-body input[type="text"]').first().fill('我的流行电台');
   await dialog.getByRole('button', { name: '创建' }).click();
   await expect(dialog).toHaveCount(0);
@@ -520,7 +507,6 @@ test('docs/40 二轮：动态歌单模态框（Switch → 条件模式行 → �
   await expect(item).toHaveCount(1);
   await expect(item.locator('.pl-badge svg')).toBeVisible();
 
-  // 物化模型（2026-10-30）：建单即按规则入库 → 打开有行；头部有"刷新"按钮，
   // 无新命中时刷新提示"没有新增"
   await item.click();
   await expect(page.locator('.main h1')).toHaveText('我的流行电台');
@@ -547,7 +533,7 @@ test('docs/28：专辑宫格（侧栏一级项）→ 卡片 → 专辑详情 →
   expect(await activeSidebar(page)).toEqual(['专辑']);
   // 曲目列表是同一查询路径（albumId 筛选），行数 > 0
   await expect(page.locator('.main .list .row').first()).toBeVisible();
-  // docs/28：详情页的"专辑"列链接失效（点了=指向自己），只剩歌手列可点
+  // 详情页的"专辑"列链接失效（点了=指向自己），只剩歌手列可点
   // （曲库页每行有歌手+专辑两个 .link-cell，这里应只剩 1 个）
   await expect(page.locator('.main .list .row:not(.skeleton):not(.failed)').first().locator('.link-cell')).toHaveCount(1);
 
@@ -567,7 +553,7 @@ test('docs/28：艺人详情页列出该艺人的曲目，歌手列链接失效'
   await card.click();
 
   await expect(page.locator('.main h1')).toHaveText(artistName);
-  // docs/28 修订：艺人不做图片获取逻辑——头部是 user 图标位，不是封面
+  // 艺人不做图片获取逻辑——头部是 user 图标位，不是封面
   await expect(page.locator('.content-header .ch-icon')).toBeVisible();
 
   // 曲目列表（查询走 artistId 筛选）首行内容含这位艺人——不猜列下标，
@@ -607,7 +593,6 @@ test('B4-3c：搜索落独立结果页，三段（曲目/专辑/艺人）+ 卡�
   await page.waitForTimeout(500); // 曲目 120ms + 卡片段 200ms 两层防抖
 
   await expect(page.locator('.main h1')).toHaveText('搜索「深」');
-  // 2026-10-28：曲库三 tab 不出现在搜索页（那是曲库页的子状态）
   await expect(page.locator('.text-tabs')).toHaveCount(0);
   // 按 h2 文本锁定段（卡片副标题也含"专辑/艺人"字样，hasText 会串段）
   const albumRow = page.locator('.facet-row').filter({

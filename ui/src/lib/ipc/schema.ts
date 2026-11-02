@@ -1,5 +1,5 @@
 /**
- * 动态边界的运行期校验（docs/17 §6）：**只有这三类**才用 zod。
+ * 动态边界的运行期校验：**只有这三类**才用 zod。
  *
  * 为什么不全量校验：命令的返回类型已经由 Rust 生成（`generated/`），
  * 再写一遍 schema 是重复劳动，改一处要改两处。真正需要运行期校验的是
@@ -17,18 +17,15 @@ import { z } from 'zod';
 export const settingsSchema = z
   .object({
     theme: z.enum(['dark', 'light']).optional(),
-    /** 主题颜色（2026-10-26 起取代 accentFromArtwork；旧字段不再写） */
     ambient: z.enum(['aurora', 'ember', 'meadow', 'dusk', 'mono']).optional(),
     /** 界面缩放档位（docs/56）：只验数值，档位白名单收口在 mergeSettings */
     uiScale: z.number().optional(),
     /** 禁用系统缩放（docs/56）：Rust 侧 apply_scale_policy 消费 */
     disableSystemScale: z.boolean().optional(),
     normalizeVolume: z.boolean().optional(),
-    /** 2026-10-30 前的单开关：**只读不写**，`mergeSettings` 用它派生两个新键后丢弃 */
     spectrum: z.boolean().optional(),
     /** 全局 3D 效果总闸（docs/46 §6.2）；缺省时按默认开兜底 */
     glEffects: z.boolean().optional(),
-    /** 背景动态频谱 / 正在播放页频谱：2026-10-30 拆开（docs/46 §5） */
     bgSpectrum: z.boolean().optional(),
     npSpectrum: z.boolean().optional(),
     /** 山形光晕档位（docs/46 §3.2） */
@@ -38,7 +35,6 @@ export const settingsSchema = z
      * 要能过校验（再由 mergeSettings 迁移）。新代码不再写这两个值。
      */
     spectrumStyle: z.enum(['mirror', 'radial', 'wave', 'ripple', 'off']).optional(),
-    /** 背景频谱形态（2026-10-30 新增；缺省按山形兜底） */
     bgSpectrumStyle: z.enum(['ridge', 'ripple']).optional(),
     mediaKeys: z.boolean().optional(),
     autoplayOnStart: z.boolean().optional(),
@@ -78,8 +74,7 @@ export const uiStateSchema = z
     artistId: z.string().nullable().optional(),
     albumId: z.string().nullable().optional(),
     /**
-     * 一级路由（B4-1 拆页 8 值；B4-3 加专辑/艺人/搜索；docs/28 撤
-     * recent/mostPlayed；docs/29 批 A 加 tools；2026-10-30 撤 tools——
+     * 一级路由（B4-1 拆页 8 值；B4-3 加专辑/艺人/搜索； 撤
      * 那一页并入设置页的「曲库」组）。旧文件的 `home` 仍合法；落到已退役的
      * `recent`/`mostPlayed`/`tools` 时由 ui.restore() 换算（这里不收编，
      * 让 devValidate 在开发期把"还在写退役值"的代码暴露出来）。
@@ -108,7 +103,6 @@ export const uiStateSchema = z
       .optional(),
     /** `page === 'playlist'` 的参数 */
     playlistId: z.string().nullable().optional(),
-    /** 拆页（2026-10-26）之前的两个字段：只在新字段缺失时用于换算，不再写回 */
     view: z.string().optional(),
     libraryDetail: z.boolean().optional(),
   })

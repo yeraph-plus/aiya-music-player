@@ -1,10 +1,6 @@
 #!/usr/bin/env node
-// 生成 licenses/CARGO-DEPS.md：Rust 依赖全量清单（名称/版本/许可/来源）。
-//
-// 为什么要生成而不是手写：直接依赖十几个、传递依赖数百个，手写必然过期。
-// GPL-3.0 分发时"完整、对应版本的依赖清单"是合规底线，生成物随版本走。
-//
-// 用法：node tools/gen-notices.mjs   （需要 cargo 在 PATH，可用 --offline）
+// 生成 licenses/CARGO-DEPS.md：Rust 依赖全量清单（名称/版本/许可/来源）。为什么要生成而不是手写：直接依赖十几个、传递依赖数百个，手写必然过期。GPL-3.0
+// 分发时"完整、对应版本的依赖清单"是合规底线，生成物随版本走。用法：node tools/gen-notices.mjs   （需要 cargo 在 PATH，可用 --offline）
 
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";

@@ -124,7 +124,7 @@ export function shortenPath(path: string, maxSegments = 3): string {
   return `…/${parts.slice(-maxSegments).join('/')}`;
 }
 
-/* ---------------- 临时项（不进曲库，docs/52 §6） ---------------- */
+/* 临时项（不进曲库） */
 
 /**
  * 与 Rust 侧 `TrackRef::FILE_ID_PREFIX` / `STREAM_ID_PREFIX` **一字不差**。
@@ -152,7 +152,7 @@ export function isStreamId(id: string | null | undefined): boolean {
  * 副标题不显示"编码 + 码率"：两者在 UI 侧都取不到。`TrackRef.audio` 由曲库单曲
  * 查询填充，临时项恒为 `null`；把 TS 容器内的 `stream_type` / ADTS 帧率接到 UI
  * 需要给 `PlayerState` 加字段并重生成 ts-rs 绑定。播放码率由流决定，不提供码率
- * 选择（docs/52 §10）。
+ * 选择。
  *
  * 无法判定来源时返回 `null`，由调用方回落到通用文案。
  */

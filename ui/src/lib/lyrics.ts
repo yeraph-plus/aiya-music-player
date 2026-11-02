@@ -6,7 +6,6 @@ import type { LyricLine } from './ipc/generated/LyricLine';
  * 渲染层每 500ms 调一次，只依赖 `LyricLine`；二分查找：一首歌几百行，
  * 线性扫描也不慢，但没必要。
  *
- * 2026-10-25 批次 4：从已删除的 `@aiya/contracts` 搬来，
  * `LyricLine` 换成 Rust 生成的同名类型（字段一致：timeMs / text）。
  */
 export function findActiveLine(lines: readonly LyricLine[], positionMs: number): number {

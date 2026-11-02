@@ -21,13 +21,13 @@
    * 点击坐标上。副作用是锚点为一次性隐藏元素，菜单关闭时随组件卸载，不受行
    * 回收影响。
    *
-   * 约束（docs/24 §4.5）：组件的 `class` 不带 scoped 哈希，样式一律使用
+   * 约束：组件的 `class` 不带 scoped 哈希，样式一律使用
    * `:global(.k-*)`；`class:` 指令不能用于组件，需拼接字符串。
    *
    * 锚点必须 portal 到 body：锚点为 `position: fixed`，若 Menu 被置于带
    * `transform` 的容器内（bits-ui 的 Popover.Content 以 transform 定位，EQ 抽屉
    * 即此类宿主），fixed 会退化为相对该容器定位，点击坐标成为容器内偏移，菜单
-   * 整体移出视口。portal 到 body 后 fixed 恒等于视口坐标（docs/25 §1）。
+   * 整体移出视口。portal 到 body 后 fixed 恒等于视口坐标。
    */
 
   interface Props {
@@ -46,11 +46,8 @@
   }
 </script>
 
-<!--
-  `open` 恒为 true：调用方用 `{#if overlay.trackMenu}` 控制挂载，
-  所以挂载即打开、卸载即关闭。`onOpenChange(false)` 只能是用户动作
-  （Esc / 点外面 / 选中项）触发的，直接转成 onclose。
--->
+<!-- `open` 恒为 true：调用方用 `{#if overlay.trackMenu}`
+控制挂载，所以挂载即打开、卸载即关闭。`onOpenChange(false)` 只能是用户动作 （Esc / 点外面 / 选中项）触发的，直接转成 onclose。 -->
 <DropdownMenu.Root open={true} onOpenChange={(value) => (value ? undefined : onclose())}>
   <DropdownMenu.Trigger>
     {#snippet child({ props })}

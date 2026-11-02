@@ -253,7 +253,7 @@ fn track_audio_wire_carries_three_state_lossless() {
     assert!(v["lossless"].is_null(), "认不出来时要发 null：{v}");
 }
 
-/* ---------------- B2/B3：歌单 / 历史 / 歌词 / 扫描 / 选择 ---------------- */
+/* B2/B3：歌单 / 历史 / 歌词 / 扫描 / 选择 */
 
 #[test]
 fn playlist_summary_converts_seconds_to_ms() {
@@ -501,7 +501,7 @@ fn small_result_dtos_keep_their_exact_keys() {
         ])
     );
 
-    // beets 配置快照（docs/40 十三轮）：inbox / 输出根 / 排除表计数。
+    // beets 配置快照：inbox / 输出根 / 排除表计数。
     // UI 的待整理目录行与输出根 radio 都吃这份——键名错位 = 又一个
     // "from_value 落空 UI 什么都不显示"
     let cfg = serde_json::to_value(aiya_lib::dto::beets::BeetsConfig {
@@ -567,7 +567,6 @@ fn beets_status_protocol_version_is_number() {
     assert_eq!(v["entrySource"], "settings");
     assert_eq!(v["pluginHealth"][0]["state"], "ready");
     assert_eq!(v["pluginSummary"]["missingDeps"], 0);
-    assert!(v["pythonSupported"].is_boolean());
     // v2：schemaHash 比对结论 + 库锁三态（UI 据此出警告条/占用徽标）
     assert_eq!(v["schemaMatched"], true);
     assert_eq!(v["libraryLock"], "held");
@@ -632,7 +631,7 @@ fn diagnostics_has_no_shortcut_conflicts_field() {
     );
 }
 
-/* ---------------- m3u/m3u8 导入导出（docs/22 G2） ---------------- */
+/* m3u/m3u8 导入导出 */
 
 /// 导入结果的 wire 形状：`playlist` 可空（用户取消是正常分支）、
 /// matched/duplicates 分开、未匹配条目带行号。

@@ -6,10 +6,9 @@ import type { TrackQueryInput } from './ipc/client';
 /**
  * 列表查询：排序、数据来源、分页协议（游标 / offset 双模式）。
  *
- * 2026-10-25 批次 4：从已删除的 `@aiya/contracts` 搬来。
  *
  * 为什么还留 zod：`TrackQuery` 是**命令入参**，Rust 侧收 `Json` 再手动解析
- * （docs/17 §3.2 的取舍），所以没有生成类型可依赖。这里的 schema 既做
+ * 所以没有生成类型可依赖。这里的 schema 既做
  * 前端解析（补齐默认值、拒绝非法 mode），也是"入参形状"的唯一文字来源。
  * 返回值不走 zod —— 那是 `generated/` 的事。
  */

@@ -1,31 +1,6 @@
 #!/usr/bin/env node
-// 打便携版：把 release 产物收成一个「解压即用」的 zip。
-//
-// ## 为什么要它
-//
-// 安装包（NSIS）在 Windows 上必然触发 SmartScreen「未知发布者」——
-// 没有代码签名证书时这个提示无法避免（本项目的决定：不买证书，如实提示，
-// 同时给一个不需要安装、不需要写注册表的版本）。便携版还有第二个用处：
-// 用户可以把它丢进 U 盘，数据全在 data/ 下，拔盘即走。
-//
-// ## 里有什么、为什么
-//
-//   AIYA Music.exe      ← 主程序（与安装版同名，任务管理器里对得上）
-//   aiya-audio-host.exe ← 引擎进程，`sidecar.rs` 的 locate_host_exe 找**同目录**
-//                         的这个名字，所以它不能进子目录
-//   portable.txt        ← 便携标记，`paths::portable_data_root` 只认这个文件
-//   README.txt          ← 「未知发布者」怎么处理、数据在哪、许可
-//   licenses/           ← 与 NSIS 的 resources 一一对应（GPL 要求随包附全文）
-//
-// ## 为什么自己写 zip（而不是调 PowerShell Compress-Archive）
-//
-// 1) `Compress-Archive` 会丢掉空目录、把路径分隔符写成 `\`（部分解压器不认），
-//    而且对大文件是整体读进内存；
-// 2) 项目里所有 tools/*.mjs 都只用 Node 内置模块，不引依赖；
-// 3) zip 容器本身很小：deflate 是 Node 内置的，缺的只有 CRC32 和头部拼装。
-//
-// 用法：node tools/build-portable.mjs [--no-zip]
-// 前置：`npm run bundle`（要 target/release 下的两个 exe）
+// 打便携版：把 release 产物收成一个「解压即用」的 zip。## 为什么要它安装包（NSIS）在 Windows 上必然触发 SmartScreen「未知发布者」—— 没有代码签名证书时这个提示无法避免（本项目的决定：不买证书，如实提示，同时给一个不需要安装、不需要写注册表的版本）。便携版还有第二个用处：用户可以把它丢进 U 盘，数据全在 data/ 下，拔盘即走。## 里有什么、为什么 AIYA Music.exe      ← 主程序（与安装版同名，任务管理器里对得上）aiya-audio-host.exe ← 引擎进程，`sidecar.rs` 的 locate_host_exe 找**同目录** 的这个名字，所以它不能进子目录 portable.txt        ← 便携标记，`paths::portable_data_root` 只认这个文件 README.txt          ←
+// 「未知发布者」怎么处理、数据在哪、许可 licenses/           ← 与 NSIS 的 resources 一一对应（GPL 要求随包附全文）## 为什么自己写 zip（而不是调 PowerShell Compress-Archive）1) `Compress-Archive` 会丢掉空目录、把路径分隔符写成 `\`（部分解压器不认），而且对大文件是整体读进内存；2) 项目里所有 tools/*.mjs 都只用 Node 内置模块，不引依赖；3) zip 容器本身很小：deflate 是 Node 内置的，缺的只有 CRC32 和头部拼装。用法：node tools/build-portable.mjs [--no-zip] 前置：`npm run bundle`（要 target/release 下的两个 exe）
 
 import {
   copyFileSync,
@@ -228,14 +203,8 @@ eocd.writeUInt32LE(offset, 16);
 mkdirSync(bundleDir, { recursive: true });
 writeFileSync(out, Buffer.concat([...chunks, cdBuf, eocd]));
 
-// ---------------------------------------------------------------- 自检
-// 把产物**读回来**再验一遍：拼 zip 头部最容易错的就是偏移量与中央目录，
-// 写完不解一次等于没验。
-//
-// 为什么不用 tar / Expand-Archive：GNU tar 根本不认 zip（"This does not look
-// like a tar archive"），而且 `D:\...` 会被 tar 当成「远程主机:路径」
-// （Cannot connect to D）；换 PowerShell 又要多一层 shell 与路径转义。
-// 读中央目录只有十几行，验的还是自己写进去的那几个字节。
+// ---------------------------------------------------------------- 自检把产物**读回来**再验一遍：拼 zip 头部最容易错的就是偏移量与中央目录，写完不解一次等于没验。为什么不用 tar / Expand-Archive：GNU tar 根本不认 zip（"This does not
+// look like a tar archive"），而且 `D:\...` 会被 tar 当成「远程主机:路径」（Cannot connect to D）；换 PowerShell 又要多一层 shell 与路径转义。读中央目录只有十几行，验的还是自己写进去的那几个字节。
 function readZipNames(buf) {
   let eocdAt = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) {

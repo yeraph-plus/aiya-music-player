@@ -16,7 +16,7 @@
   /**
    * 整理子页：**待整理目录 → 预览 → 落点 → 移动或拷贝**。
    *
-   * ## 三个目录各管什么（docs/49 §3）
+   * ## 三个目录各管什么
    *
    * - **待整理目录**（inbox）：还没进曲库的新文件丢这里。必须与曲库目录不重叠
    *   ——copy 模式下原件留在里面，重叠就会被扫描器再扫一遍变成重复曲目。
@@ -62,7 +62,7 @@
     void library.loadRoots();
   });
 
-  /* ---------------- 待整理目录 ---------------- */
+  /* 待整理目录 */
 
   async function chooseInbox(): Promise<void> {
     inboxError = null;
@@ -100,7 +100,7 @@
     }
   }
 
-  /* ---------------- 落点 ---------------- */
+  /* 落点 */
 
   async function setTarget(path: string): Promise<void> {
     targetError = null;
@@ -124,7 +124,7 @@
     await setTarget(path);
   }
 
-  /* ---------------- 预览与应用 ---------------- */
+  /* 预览与应用 */
 
   function startPreview(): void {
     if (!inbox) return;
@@ -162,7 +162,7 @@
     );
   }
 
-  /* ---------------- 展示用 ---------------- */
+  /* 展示用 */
 
   const recLabel: Record<string, string> = {
     strong: '高置信',
@@ -196,7 +196,7 @@
 </script>
 
 <div class="beets-page">
-  <!-- ---------------- 待整理目录 ---------------- -->
+  <!-- 待整理目录 -->
   <section class="beets-panel">
     <div class="beets-panel-head">
       <strong>待整理目录</strong>
@@ -228,7 +228,7 @@
     {/if}
   </section>
 
-  <!-- ---------------- 落点 ---------------- -->
+  <!-- 落点 -->
   <section class="beets-panel">
     <div class="beets-panel-head">
       <strong>整理落点</strong>
@@ -269,7 +269,7 @@
     {/if}
   </section>
 
-  <!-- ---------------- 动作与执行 ---------------- -->
+  <!-- 动作与执行 -->
   <section class="beets-panel">
     <div class="beets-panel-head">
       <strong>整理</strong>
@@ -390,7 +390,7 @@
     {/if}
   </section>
 
-  <!-- ---------------- 专辑卡 ---------------- -->
+  <!-- 专辑卡 -->
   {#each sess.albums as album (album.id)}
     <section class="album-card">
       <div class="album-head">

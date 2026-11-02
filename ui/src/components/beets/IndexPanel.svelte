@@ -127,7 +127,7 @@
 </script>
 
 <div class="beets-page">
-  <!-- ---------------- 曲库分析（查询的前置条件） ---------------- -->
+  <!-- 曲库分析（查询的前置条件） -->
   <section class="beets-panel">
     <div class="beets-panel-head">
       <strong>曲库分析</strong>
@@ -169,7 +169,7 @@
     {/if}
   </section>
 
-  <!-- ---------------- 查询条件 ---------------- -->
+  <!-- 查询条件 -->
   <section class="beets-panel">
     <div class="beets-panel-head">
       <strong>查询</strong>
@@ -178,7 +178,7 @@
           条件之间是「并且」；范围用两条（≥ / ≤）表达。
           <!-- 求值在工具侧完成，不下推 beets 查询语法。beets 的区间比较对
                未注册类型的插件字段会静默 0 命中，下推等于让"有没有结果"
-               取决于第三方有没有 register 类型（docs/45 §3.3）。本说明面向
+               取决于第三方有没有 register 类型。本说明面向
                实现维护，不进界面文案。 -->
         {:else}
           直接写 beets 的查询语法（如 <code>year:2000..2010 genre:Jazz</code>），
@@ -286,7 +286,7 @@
     {/if}
   </section>
 
-  <!-- ---------------- 结果 ---------------- -->
+  <!-- 结果 -->
   <section class="result-panel">
     <div class="result-bar">
       <span class="pick-all">

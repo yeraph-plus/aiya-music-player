@@ -26,7 +26,7 @@
   interface Props {
     /**
      * 标题。未提供时不渲染整个头部（标题与关闭键），用于极简壳，如歌单选择器
-     * （docs/25：点击行即添加，标题与关闭键无信息量，关闭走 Esc 或点击遮罩）。
+     * 点击行即添加，标题与关闭键无信息量，关闭走 Esc 或点击遮罩。
      * 无障碍仍需 Dialog.Title，此时以视觉隐藏形式使用 `label` 挂载。
      */
     title?: string;
@@ -98,9 +98,8 @@
     z-index: var(--z-modal);
     background: var(--backdrop);
     backdrop-filter: blur(var(--blur-scrim));
-    /* 入场动画 120ms，与 SideDrawer、Toast 的弹层节奏一致。bits-ui 关闭时立即
-       移除 DOM，CSS 无法承担退场动画，因此退场仍是瞬消。仅动画 opacity 与
-       transform，reduced-motion 下关闭。 */
+    /* 入场动画 120ms，与 SideDrawer、Toast 的弹层节奏一致。bits-ui 关闭时立即移除 DOM，CSS
+       无法承担退场动画，因此退场仍是瞬消。仅动画 opacity 与 transform，reduced-motion 下关闭。 */
     animation: k-dlg-fade 120ms var(--ease);
   }
 
