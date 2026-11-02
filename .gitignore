@@ -89,5 +89,8 @@ tools/bench/shots/
 # 会话工具的本地记忆/临时数据（误落时会跑到仓库子目录里，别进版本库）
 .workbuddy/
 
+# 注释治理工具的报告输出：每次跑现生成，只服务当场比对，结论落 docs 不落这里
+tools/comment-gov/reports/
+
 .install-shot.png
 .state-shot.png
