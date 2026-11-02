@@ -962,7 +962,7 @@ fn run_env_manager(
         .args(["install", "--plugins", &plugins.join(",")]);
     // 旧清单为空（首次安装/没勾过）就不传：脚本语义是"缺省 = 无差量卸载"。
     if !previous.is_empty() {
-        cmd.arg("--previous").arg(&previous.join(","));
+        cmd.arg("--previous").arg(previous.join(","));
     }
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
