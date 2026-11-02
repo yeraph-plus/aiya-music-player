@@ -10,6 +10,11 @@
  * 写回，`main.ts` 挂载前先读。镜像与库里不一致时最多闪一帧，紧接着
  * `bootstrap()` 返回真值就会纠正——比"每次都闪"好。
  *
+ * `theme` 存的是偏好（`'dark' | 'light' | 'system'`），`<html data-theme>` 上写
+ * 的是解析值（CSS 只有 dark / light 两套变量）。`'system'` 经
+ * `prefers-color-scheme` 媒体查询解析，查询是同步求值的，首帧同样无闪烁；
+ * 跟随档下系统切换深浅色由 `watchSystemTheme` 重放 `applyLook`。
+ *
  * `window.__AIYA_LOOK__` 是给"主进程往 HTML 里预置首帧数据"留的入口。
  * 实测（`grep __AIYA_LOOK__ src-tauri` 为空）主进程**没有**注入它，
  * 所以 Tauri 下这条分支目前不生效；保留是为了将来若真的在 `index.html`
@@ -18,6 +23,7 @@
 import { normalizeUiScale, type AmbientScheme, type ThemeMode, type UiScale } from './settings';
 
 export interface Look {
+  /** 主题偏好：`'system'` 表示跟随操作系统深浅色，实际主题由 `resolveTheme` 解析 */
   theme: ThemeMode;
   /** 主题颜色：切 `html[data-ambient]`，CSS 渐变与强调色成套换 */
   ambient: AmbientScheme;
@@ -33,7 +39,7 @@ const FALLBACK: Look = { theme: 'dark', ambient: 'aurora', uiScale: 100 };
 const AMBIENTS: ReadonlySet<string> = new Set(['aurora', 'ember', 'meadow', 'dusk', 'mono']);
 
 function isTheme(value: unknown): value is ThemeMode {
-  return value === 'dark' || value === 'light';
+  return value === 'dark' || value === 'light' || value === 'system';
 }
 
 function isAmbient(value: unknown): value is AmbientScheme {
@@ -113,13 +119,43 @@ export function readRowHeight(): number {
   return Number.isFinite(px) && px > 0 ? px : 52;
 }
 
+const SYSTEM_DARK_QUERY = '(prefers-color-scheme: dark)';
+
+/**
+ * 把主题偏好解析成实际主题。
+ *
+ * CSS 变量只按 `html[data-theme='dark' | 'light']` 两套定义，跟随系统档必须
+ * 在写 DOM 前落成具体值。判据是 `prefers-color-scheme` 媒体查询：同步求值，
+ * 首帧路径（`readLook` → `applyLook`）可直用；WebView2 与浏览器预览下都随
+ * 操作系统的应用深浅色模式走。
+ */
+export function resolveTheme(theme: ThemeMode): 'dark' | 'light' {
+  if (theme !== 'system') return theme;
+  return window.matchMedia(SYSTEM_DARK_QUERY).matches ? 'dark' : 'light';
+}
+
+/**
+ * 订阅操作系统的深浅色变化，返回解绑函数。
+ *
+ * 供跟随系统档使用：固定深/浅档的系统事件无意义，不订阅。判据与
+ * `resolveTheme` 同一条媒体查询，两者不会给出相反结果。
+ */
+export function watchSystemTheme(onChange: () => void): () => void {
+  const mq = window.matchMedia(SYSTEM_DARK_QUERY);
+  mq.addEventListener('change', onChange);
+  return () => mq.removeEventListener('change', onChange);
+}
+
 /**
  * 把外观写到 `<html>`（CSS 变量按 `[data-theme]` / `[data-ambient]` 切换；
  * 界面缩放走 `html` 内联 font-size，tokens.css 的 rem 尺寸轴整体跟随）。
  * 100 档也照写 16px：与"没设过"完全同值，省一条分支。
+ *
+ * `data-theme` 写解析值：跟随系统档在此刻求值，系统切换深浅色由调用方
+ * （`App` 的主题 effect 经 `watchSystemTheme`）重放本函数来跟进。
  */
 export function applyLook(look: Look): void {
-  document.documentElement.dataset.theme = look.theme;
+  document.documentElement.dataset.theme = resolveTheme(look.theme);
   document.documentElement.dataset.ambient = look.ambient;
   document.documentElement.style.fontSize = `${(16 * look.uiScale) / 100}px`;
 }

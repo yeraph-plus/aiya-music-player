@@ -1,14 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { FolderOpen, RefreshCw, ScanSearch } from '@lucide/svelte';
+  import { FolderOpen, Radar, RefreshCw, ScanSearch } from '@lucide/svelte';
   import Button from './ui/Button.svelte';
-  import IconButton from './ui/IconButton.svelte';
+  import Popover from './ui/Popover.svelte';
   import Progress from './ui/Progress.svelte';
   import Icon from './Icon.svelte';
   import { errorMessage } from '../lib/errors';
   import { history } from '../stores/history.svelte';
   import { library } from '../stores/library.svelte';
-  import { notify } from '../stores/notify.svelte';
   import { scan } from '../stores/scan.svelte';
 
   /**
@@ -17,67 +16,108 @@
    * 宿主为设置页的「曲库」组。本组件不依赖页面壳，只派发动作并读取
    * `library` / `scan` 两个 store，因此更换宿主不影响逻辑。
    *
-   * 目录条目列表：每行一条路径，右侧为删除按钮，删除先出确认条（可连曲目
-   * 一并清除或仅停止监听）。路径以整行条目增删，不使用可编辑文本框。
+   * 目录条目行：路径在左；行尾两颗图标钮——雷达图标是监听开关（停用叠斜
+   * 划线、行变暗，随时可恢复；停止监听只影响扫描范围，不清理数据），垃圾桶
+   * 打开删除确认气泡（报影响面曲目数，确认才清除索引并从两组列表移除，
+   * 磁盘文件不动）。
    *
-   * 执行状态（分隔线以下）：进行中显示"⟳ 曲库索引 · 阶段"、进度条与数字明细，
-   * 取消按钮位于同一行右端（全应用唯一的取消入口；其他页面的进度条仅作环境
-   * 指示）。结束后显示上次索引的统计。自动刷新为静默管线，不在此占版面。
-   * 扫描报错内置于卡片（`scan.lastError`），不弹全局 toast。
+   * 执行状态区（分隔线以下）同时是本卡唯一的提示区：报错、动作结果反馈、
+   * 清空曲库确认与扫描进度都渲染在此，不弹出独立提示层。进行中显示
+   * "⟳ 曲库索引 · 阶段"、进度条与数字明细，取消按钮位于同一行右端（全应用
+   * 唯一的取消入口；其他页面的进度条仅作环境指示）；结束后显示上次索引的
+   * 统计。自动刷新为静默管线，不在此占版面。
    *
-   * 数据流：目录列表来自 `library.roots`（后端归一化后回填），本组件只派发
-   * 动作；曲目删除后统一走 `scan.afterScan()` 收尾，使列表、统计、歌单同步刷新。
+   * 数据流：目录列表来自 `library.roots`（监听中）与 `library.pausedRoots`
+   * （停用，后端归一化后回填），本组件只派发动作；曲目删除后统一走
+   * `scan.afterScan()` 收尾，使列表、统计、歌单同步刷新。
    */
+
   let saving = $state(false);
   /** 目录卡片的内置报错（保存/删除/统计中的失败），下次动作开始时清除 */
   let rootsError = $state<string | null>(null);
 
   /**
-   * 移除目录的确认态。
-   *
-   * 需要确认的原因：直接改写 `library.roots` 会使该目录下的曲目永久留在库中
-   * （后续扫描将其标记为 missing 而非删除）。确认条提供两种处理：连同曲目
-   * 一并清除（按路径前缀删除索引记录，不触碰磁盘），或仅停止监听并保留曲目。
+   * 动作结果反馈行（替代全局 toast）：本卡内成功/完成类消息的唯一出口，
+   * 数秒后自动消退，下一条动作结果会覆盖它。报错走 `rootsError` /
+   * `scan.lastError`，不进这条。
    */
-  interface PendingRemoval {
-    paths: string[];
-    count: number | null;
+  let notice = $state<string | null>(null);
+  let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+  const NOTICE_TTL_MS = 6000;
+
+  function showNotice(text: string): void {
+    notice = text;
+    if (noticeTimer !== null) clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => {
+      notice = null;
+      noticeTimer = null;
+    }, NOTICE_TTL_MS);
   }
-  let pendingRemoval = $state<PendingRemoval | null>(null);
+
+  /**
+   * 删除确认气泡的状态：`openRemoval` 记录气泡属于哪一行（一次只开一个），
+   * `removalCount` 是气泡打开时异步取到的影响面曲目数（null = 统计中，确认
+   * 键禁用）。代次号防串台：连开两行时，前一行慢返回的计数不得落到后一行。
+   */
+  let openRemoval = $state<string | null>(null);
+  let removalCount = $state<number | null>(null);
+  let removalGeneration = 0;
 
   /** 清空曲库的确认态（删除全部曲目记录：歌单壳保留，条目/历史级联清空） */
   let clearConfirm = $state(false);
   let clearing = $state(false);
 
-  /* 两个确认条是页面内联区块，不使用模态语义：无焦点圈禁与滚动锁的容器不应声明 role="alertdialog"；取消键也不设
+  /* 清空确认条是页面内联区块，不使用模态语义：无焦点圈禁与滚动锁的容器不应声明 role="alertdialog"；取消键也不设
      autofocus，非模态区块不夺取焦点。出现时的播报由条内 role="alert" 的文本承担。 */
 
   const stats = $derived(library.stats);
 
+  /** 行展示序：监听中在前、停用在后（后端对两组各自保序归一化） */
+  const displayRoots = $derived([...library.roots, ...library.pausedRoots]);
+
+  /** 监听判定走大小写不敏感比较：后端归一化不改变已有条目的大小写 */
+  function isWatched(root: string): boolean {
+    const lower = root.trim().toLowerCase();
+    return library.roots.some((r) => r.trim().toLowerCase() === lower);
+  }
+
+  /** 大小写不敏感地剔除一个路径（两组列表都用它做移动/遗忘） */
+  function withoutPath(paths: string[], target: string): string[] {
+    const lower = target.trim().toLowerCase();
+    return paths.filter((p) => p.trim().toLowerCase() !== lower);
+  }
+
   onMount(() => {
     void library.loadRoots();
+    return () => {
+      if (noticeTimer !== null) clearTimeout(noticeTimer);
+    };
   });
 
   /* 目录条目操作 */
 
-  /** 移除单个目录：先查影响面（曲目数），出确认条 */
-  async function requestRemove(root: string): Promise<void> {
-    rootsError = null;
-    try {
-      const count = await library.countForRemoval([root]);
-      pendingRemoval = { paths: [root], count };
-    } catch (err) {
-      rootsError = errorMessage(err);
-    }
-  }
-
-  /** 保存根列表。失败时在卡片内显示错误；列表以 store 为准，不保留本地草稿 */
-  async function saveRoots(next: string[], toast: string): Promise<void> {
+  /**
+   * 开/关某目录的监听：在监听组与停用组之间移动，曲目不动。
+   * 停用后其曲目在下轮索引被标记离线；恢复后下次索引重新纳入。
+   * 失败时 store 不变，图标随状态弹回原位。
+   */
+  async function setWatched(root: string, watched: boolean): Promise<void> {
     saving = true;
     rootsError = null;
     try {
-      await library.saveRoots(next);
-      notify.showToast(toast);
+      if (watched) {
+        await library.saveRoots(
+          [...library.roots, root],
+          withoutPath(library.pausedRoots, root),
+        );
+        showNotice('已恢复监听，下次索引时重新纳入该目录');
+      } else {
+        await library.saveRoots(
+          withoutPath(library.roots, root),
+          [...library.pausedRoots, root],
+        );
+        showNotice('已停止监听：曲目保留在库中，下次索引将标记为离线');
+      }
     } catch (err) {
       rootsError = errorMessage(err);
     } finally {
@@ -85,42 +125,47 @@
     }
   }
 
-  /** 删除曲目并保存：前缀清除（外键级联清歌单/队列/历史）→ 存根列表 → 统一收尾 */
-  async function confirmPrune(): Promise<void> {
-    const p = pendingRemoval;
-    if (!p) return;
-    saving = true;
-    rootsError = null;
+  /** 打开删除气泡时取影响面（曲目数）；失败收回气泡，在提示区报错 */
+  async function fetchRemovalCount(root: string): Promise<void> {
+    const generation = (removalGeneration += 1);
+    removalCount = null;
     try {
-      const pruned = await library.pruneRoots(p.paths);
-      const lower = new Set(p.paths.map((x) => x.trim().toLowerCase()));
-      const next = library.roots.filter((r) => !lower.has(r.trim().toLowerCase()));
-      await library.saveRoots(next);
-      pendingRemoval = null;
-      notify.showToast(`已停止监听 ${p.paths.length} 个目录，清除 ${pruned} 首曲目`);
-      saving = false;
-      await scan.afterScan();
+      const count = await library.countForRemoval([root]);
+      if (generation !== removalGeneration) return;
+      removalCount = count;
     } catch (err) {
+      if (generation !== removalGeneration) return;
+      openRemoval = null;
       rootsError = errorMessage(err);
-      saving = false;
     }
   }
 
-  /** 仅停止监听（保留曲目，下轮扫描它们会被标离线，不删） */
-  async function confirmKeep(): Promise<void> {
-    const p = pendingRemoval;
-    if (!p) return;
-    const lower = new Set(p.paths.map((x) => x.trim().toLowerCase()));
-    pendingRemoval = null;
-    await saveRoots(
-      library.roots.filter((r) => !lower.has(r.trim().toLowerCase())),
-      `已停止监听 ${p.paths.length} 个目录（曲目保留在库中）`,
-    );
-  }
-
-  /** 放弃本次删除 */
-  function dismissRemoval(): void {
-    pendingRemoval = null;
+  /**
+   * 气泡确认键：清除该目录曲目索引（前缀清除，外键级联清歌单/队列/历史，
+   * 不触碰磁盘）并从两组列表移除——彻底遗忘这个目录。
+   */
+  async function confirmRemove(root: string): Promise<void> {
+    saving = true;
+    rootsError = null;
+    try {
+      const removed = await library.pruneRoots([root]);
+      await library.saveRoots(
+        withoutPath(library.roots, root),
+        withoutPath(library.pausedRoots, root),
+      );
+      openRemoval = null;
+      removalCount = null;
+      showNotice(
+        removed > 0
+          ? `已删除 ${removed} 首曲目并停止监听该目录`
+          : '已移除该目录，曲库中没有它的曲目',
+      );
+      await scan.afterScan();
+    } catch (err) {
+      rootsError = errorMessage(err);
+    } finally {
+      saving = false;
+    }
   }
 
   /** 添加目录：系统选择器选中即追加（后端 `library_choose_root` 追加语义） */
@@ -136,7 +181,7 @@
     try {
       const removed = await library.clearLibrary();
       clearConfirm = false;
-      notify.showToast(`已清空曲库记录（${removed} 首），磁盘文件未动`);
+      showNotice(`已清空曲库记录，共 ${removed} 首，磁盘文件未动`);
       clearing = false;
       await scan.afterScan();
     } catch (err) {
@@ -180,104 +225,131 @@
           </Button>
         {/if}
         <!-- 清空播放历史：与「清空曲库」同属清除一类记录的动作，排在同一行。
-             不设确认——播放历史不承载其他数据，toast 即时反馈，与首页同语义 -->
+             不设确认——播放历史不承载其他数据，提示区即时反馈，与首页同语义 -->
         <Button size="sm" onclick={() => void history.clear()} disabled={clearing}>
           清空播放历史
         </Button>
       </div>
     </div>
 
-    {#if rootsError}
-      <div class="tool-error" role="alert">{rootsError}</div>
-    {/if}
-
-    {#if pendingRemoval}
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <!-- Esc 处理只服务"焦点在确认条内"的场景（从危险/取消键冒泡上来），
-           容器自身不可聚焦、非交互——role=group 只为可访问性命名 -->
-      <div
-        class="roots-confirm"
-        role="group"
-        aria-label="移除目录确认"
-        onkeydown={(event) => {
-          // 焦点在确认条内（危险/取消键）时 Esc 归它：stopPropagation 挡住
-          // window 上的全局 Esc（否则关确认条的同时还会清掉列表选择集）
-          if (event.key === 'Escape') {
-            event.stopPropagation();
-            dismissRemoval();
-          }
-        }}
-      >
-        <span class="roots-confirm-text" role="alert">
-          将停止监听 <b>{pendingRemoval.paths[0]}</b>
-          {#if pendingRemoval.count !== null}，涉及 <b>{pendingRemoval.count}</b> 首曲目{/if}。
-        </span>
-        <div class="roots-confirm-actions">
-          <Button size="sm" variant="danger" onclick={() => void confirmPrune()} disabled={saving}>
-            删除曲目并停止监听
-          </Button>
-          <Button size="sm" onclick={() => void confirmKeep()} disabled={saving}>
-            仅停止监听
-          </Button>
-          <Button variant="link" onclick={dismissRemoval} disabled={saving}>取消</Button>
-        </div>
-      </div>
-    {/if}
-
-    {#if clearConfirm}
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <!-- Esc 处理只服务"焦点在确认条内"的场景（从危险/取消键冒泡上来），
-           容器自身不可聚焦、非交互——role=group 只为可访问性命名 -->
-      <div
-        class="roots-confirm"
-        role="group"
-        aria-label="清空曲库确认"
-        onkeydown={(event) => {
-          if (event.key === 'Escape') {
-            event.stopPropagation();
-            clearConfirm = false;
-          }
-        }}
-      >
-        <span class="roots-confirm-text" role="alert">
-          将删除全部 <b>{stats?.tracks ?? 0}</b> 首曲目的索引记录，歌单内容、播放队列与播放历史一并清空
-          （歌单本身保留；<b>磁盘文件不动</b>）。此操作不可撤销。
-        </span>
-        <div class="roots-confirm-actions">
-          <Button size="sm" variant="danger" onclick={() => void doClear()} disabled={clearing}>
-            确认清空
-          </Button>
-          <Button variant="link" onclick={() => (clearConfirm = false)} disabled={clearing}>取消</Button>
-        </div>
-      </div>
-    {/if}
-
-    {#if library.roots.length === 0}
-      <div class="dim roots-empty">还没有目录。点「添加目录」选择音乐文件夹建立索引。</div>
+    {#if displayRoots.length === 0}
+      <div class="dim roots-empty">还没有目录，点「添加目录」选择音乐文件夹建立索引</div>
     {:else}
       <ul class="root-list">
-        {#each library.roots as root (root)}
-          <li class="root-row">
+        {#each displayRoots as root (root)}
+          {@const watched = isWatched(root)}
+          <li class="root-row" class:unwatched={!watched}>
             <span class="root-path" title={root}>{root}</span>
             <!-- beets 相关设置不在本组件：曲库页只管理应用自身的索引库，
                  beets 的 config.yaml 由「整理库」页独立维护 -->
-            <IconButton
-              label={`移除目录 ${root}`}
-              size="sm"
+            <!-- 监听开关在删除键左侧：状态指示离路径近，破坏性动作（删除）居行尾。
+                 雷达即状态——监听中正常显色，停用变暗并叠斜划线（lucide 无
+                 radar-off，划线是同图标上的 CSS 覆盖层，天然成套） -->
+            <button
+              type="button"
+              class="root-watch"
+              class:off={!watched}
+              aria-pressed={watched}
+              aria-label={`监听目录 ${root}`}
+              title={watched ? '监听中，点击停止监听' : '已停止监听，点击恢复，曲目保留在库中'}
               disabled={saving || clearing}
-              onclick={() => void requestRemove(root)}
+              onclick={() => void setWatched(root, !watched)}
             >
-              <Icon name="close" size={12} />
-            </IconButton>
+              <Radar size={14} />
+            </button>
+
+            <Popover
+              open={openRemoval === root}
+              onopenchange={(open) => {
+                openRemoval = open ? root : null;
+                if (open) void fetchRemovalCount(root);
+                else removalCount = null;
+              }}
+              side="top"
+              align="end"
+            >
+              {#snippet trigger(props)}
+                <button
+                  {...props}
+                  type="button"
+                  class="root-remove"
+                  aria-label={`删除目录 ${root}`}
+                  title="删除该目录及其曲目索引，磁盘文件不动"
+                  disabled={saving || clearing}
+                >
+                  <Icon name="trash" size={13} />
+                </button>
+              {/snippet}
+              <!-- role="alert"：气泡出现即播报影响面；外点/Esc 关闭由 bits-ui 承担 -->
+              <div class="roots-pop" role="alert">
+                <span class="roots-pop-text">
+                  将删除 <b>{root}</b> 的曲目索引并停止监听，磁盘文件不动
+                  {#if removalCount === null}
+                    ，正在统计曲目…
+                  {:else}
+                    ，涉及 <b>{removalCount}</b> 首曲目
+                  {/if}
+                </span>
+                <div class="roots-pop-actions">
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    disabled={saving || removalCount === null}
+                    onclick={() => void confirmRemove(root)}
+                  >
+                    确认删除
+                  </Button>
+                  <Button variant="link" onclick={() => (openRemoval = null)}>取消</Button>
+                </div>
+              </div>
+            </Popover>
           </li>
         {/each}
       </ul>
     {/if}
 
-    <!-- 执行状态并入本卡，以分隔线分区。进行中：阶段与任务名一行，取消按钮位于该行右端；结束后只留一行统计。不设标题行——分隔线已表达分区，「执行状态」四字不携带额外信息 -->
+    <!-- 执行状态并入本卡，以分隔线分区，同时是本卡唯一提示区：报错 / 动作
+         反馈 / 清空确认 / 扫描进度都渲染在此。进行中：阶段与任务名一行，取消
+         按钮位于该行右端；结束后只留一行统计。不设标题行——分隔线已表达分区 -->
     <div class="status-block">
       {#if scan.lastError}
         <div class="tool-error" role="alert">{scan.lastError}</div>
+      {/if}
+
+      {#if rootsError}
+        <div class="tool-error" role="alert">{rootsError}</div>
+      {/if}
+
+      {#if notice}
+        <div class="tool-notice" role="status">{notice}</div>
+      {/if}
+
+      {#if clearConfirm}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <!-- Esc 处理只服务"焦点在确认条内"的场景（从危险/取消键冒泡上来），
+             容器自身不可聚焦、非交互——role=group 只为可访问性命名 -->
+        <div
+          class="roots-confirm"
+          role="group"
+          aria-label="清空曲库确认"
+          onkeydown={(event) => {
+            if (event.key === 'Escape') {
+              event.stopPropagation();
+              clearConfirm = false;
+            }
+          }}
+        >
+          <span class="roots-confirm-text" role="alert">
+            将删除全部 <b>{stats?.tracks ?? 0}</b> 首曲目的索引记录，歌单内容、播放队列与播放历史一并清空，
+            歌单本身保留，<b>磁盘文件不动</b>，此操作不可撤销
+          </span>
+          <div class="roots-confirm-actions">
+            <Button size="sm" variant="danger" onclick={() => void doClear()} disabled={clearing}>
+              确认清空
+            </Button>
+            <Button variant="link" onclick={() => (clearConfirm = false)} disabled={clearing}>取消</Button>
+          </div>
+        </div>
       {/if}
 
       {#if library.scanning && library.scan}
@@ -294,7 +366,7 @@
             正在遍历目录…
           {:else}
             {progress.scanned}/{progress.total ?? '?'} 已入库 · 解析 {progress.parsed}{#if progress.parsed > progress.scanned}<span class="dim">
-              （排队 {progress.parsed - progress.scanned}）</span>{/if} · 新增 {progress.imported} · 更新 {progress.updated} · 跳过 {progress.skipped} · 失败 {progress.failed}
+              · 排队 {progress.parsed - progress.scanned}</span>{/if} · 新增 {progress.imported} · 更新 {progress.updated} · 跳过 {progress.skipped} · 失败 {progress.failed}
           {/if}
         </div>
       {:else if library.scan}
@@ -303,13 +375,13 @@
           {#if progress.phase === 'done'}
             上次索引：新增 {progress.imported} · 更新 {progress.updated} · 离线 {progress.missing} · 跳过 {progress.skipped}{#if progress.failed} · <span class="danger">失败 {progress.failed}</span>{/if} · {Math.round(progress.elapsedMs / 100) / 10} 秒
           {:else if progress.phase === 'cancelled'}
-            上次索引已取消（已完成部分保留）
+            上次索引已取消，已完成部分保留
           {:else}
-            上次索引异常退出（{progress.phase}）
+            上次索引异常退出：{progress.phase}
           {/if}
         </div>
       {:else}
-        <div class="task-detail dim">还没有索引记录。</div>
+        <div class="task-detail dim">还没有索引记录</div>
       {/if}
     </div>
   </div>

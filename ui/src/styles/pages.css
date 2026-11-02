@@ -613,6 +613,118 @@
   word-break: break-all;
 }
 
+/* 动作结果反馈行：与报错同区同形状，仅描边换成 accent（role="status" 播报） */
+.tool-notice {
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: var(--fs-base);
+  color: var(--text-1);
+  word-break: break-all;
+}
+
+/* 目录行删除按钮：红色幽灵单图标，确认在气泡里完成（.roots-pop） */
+.root-remove {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  width: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.root-remove:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 32%, transparent);
+}
+
+.root-remove:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 监听指示按钮：雷达图标即状态。监听中正常显色；停用变暗并叠斜划线
+   （与 lucide 自家 *-off 图标同方向：左上→右下），成套指示不引入新图形 */
+.root-watch {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  width: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.root-watch:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-1);
+}
+
+.root-watch:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.root-watch.off {
+  color: var(--text-3);
+}
+
+.root-watch.off::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  height: 1.6px;
+  border-radius: 1px;
+  background: currentColor;
+  transform: rotate(45deg);
+}
+
+/* 删除确认气泡：贴垃圾桶按钮就地确认，报影响面曲目数（外点/Esc 关闭
+   由 bits-ui 承担） */
+.roots-pop {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 320px;
+}
+
+.roots-pop-text {
+  font-size: var(--fs-base);
+  color: var(--text-1);
+  word-break: break-all;
+}
+
+.roots-pop-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 停止监听的行：路径变暗（行尾扫描图标的斜划线态同示停用），行内其余交互不变 */
+.root-row.unwatched .root-path {
+  color: var(--text-3);
+}
+
 /* 移除/清空确认条：卡片内内联出现（不用弹窗——它是动作流程的一小步，
    弹窗会打断节奏；但必须是 alertdialog 语义，别静默吞掉删除） */
 .roots-confirm {

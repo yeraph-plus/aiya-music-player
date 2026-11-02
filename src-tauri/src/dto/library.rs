@@ -126,14 +126,22 @@ pub struct ScanCancel {
 pub struct ChosenRoot {
     pub path: String,
     pub roots: Vec<String>,
+    /// 选择器选中的目录若停在停用组，加入监听时已移出；回填两列表与
+    /// `LibraryRoots` 对齐
+    pub paused: Vec<String>,
 }
 
-/// 扫描根列表（settings 键 `library.roots`，多目录并集单库）。
+/// 扫描根列表（settings 键 `library.roots` 与 `library.roots.paused`，多目录并集单库）。
+///
+/// `roots` 是监听中的目录（扫描器唯一输入）；`paused` 是已停止监听的目录——
+/// 行上保留开关便于恢复，扫描器不接收它们，其曲目在下轮索引被标离线。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryRoots {
     pub roots: Vec<String>,
+    #[serde(default)]
+    pub paused: Vec<String>,
 }
 
 /// 在文件管理器中定位曲目。
@@ -158,7 +166,7 @@ pub struct RemoveTracks {
     pub removed: i64,
 }
 
-/// 移除目录前的影响面统计（`library_roots_count`，UI 确认条用）。
+/// 删除目录前的影响面统计（`library_roots_count`，删除确认气泡用）。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]

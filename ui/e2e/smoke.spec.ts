@@ -185,6 +185,17 @@ test('设置页：单页平铺 + tab 跳转定位 + 主题切换生效', async (
     .locator('button', { hasText: '浅色' })
     .click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+
+  // 跟随系统档：data-theme 写解析值，系统深浅色翻转（emulateMedia 模拟）时
+  // 实时跟进，期间不再点击任何按钮
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page
+    .locator('.setting-row', { hasText: '主题' })
+    .locator('button', { hasText: '跟随系统' })
+    .click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });
 
 test('正在播放页：起播后两栏沉浸布局 + 背景四层接住真实曲目', async ({ page }) => {

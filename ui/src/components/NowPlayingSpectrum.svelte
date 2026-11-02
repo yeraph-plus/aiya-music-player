@@ -24,14 +24,16 @@
    * 与背景层（AmbientBackdrop 山形）分工：背景承担氛围，本组件为主视觉——
    * 居中悬浮（舞台语义），不从底部伸出（后者属仪表语义）。
    *
-   * 三形态，由设置中的「频谱形态」切换；背景形态由 `bgSpectrumStyle` 单独控制，
+   * 四形态，由设置中的「频谱形态」切换；背景形态由 `bgSpectrumStyle` 单独控制，
    * 两者互不影响：
-   * - `mirror` 镜像曲线：水平中线上一条平滑贝塞尔曲线随频谱呼吸，上下对称，
+   * - `mirror` 镜像：水平中线上一条平滑贝塞尔曲线随频谱呼吸，上下对称，
    *   描边发光加半透明透镜填充；
-   * - `radial` 径向环形：频谱绕圆一周向外呼吸，慢速旋转，结构感强；
-   * - `ripple` 中轴波纹：单条居中曲线随频谱起伏并缓慢横移（画法见
+   * - `radial` 环带：频谱绕圆一周向外呼吸，慢速旋转，结构感强；
+   * - `ripple` 残影：单条居中曲线 + 反馈式残影缓冲（画法见
    *   `drawRipple` 上方注释）。等深线地形形态仅用于背景层，见
    *   `lib/render/layers/ripple.ts`。
+   * - `wave` 波纹：频谱曲线逐带交替成山与谷，振幅跨中线上下两段（画法见
+   *   `drawWave` 上方注释）。
    *
    * 共同画法：48 带时间平滑（起音跟随、衰减绵长）→ 中点二次贝塞尔平滑 →
    * accent 色 shadowBlur 发光描边加低透明度填充（避免削弱歌词可读性）。
@@ -61,6 +63,25 @@
   let gate = 1;
   /** 上一帧时间戳（秒），用来把"每帧 0.25"换算成与帧率无关的系数 */
   let lastAt = 0;
+
+  /**
+   * 波纹残影（反馈缓冲 + 帧步进节拍）：画布不清屏，残影由双缓冲乒乓维护。
+   *
+   * 主帧形状每 `RIPPLE_MAIN_EVERY` 秒步进一次（display 平滑与漂移时钟只在
+   * 节拍帧推进）；每 `RIPPLE_ECHO_TICK_DIV` 个节拍把当前形状烙进缓冲成为
+   * 残影（默认 2 = 残影节拍为主帧的一半），缓冲内容逐帧整体上飘、按时间
+   * 常数衰减。衰减与上飘以真实 dt 连续推进，帧率无关。
+   */
+  const RIPPLE_MAIN_EVERY = 0.083;
+  const RIPPLE_ECHO_TICK_DIV = 2;
+  const RIPPLE_ECHO_TAU = 0.11;
+  const RIPPLE_ECHO_RISE = 0.3;
+  let echoRead: HTMLCanvasElement | null = null;
+  let echoWrite: HTMLCanvasElement | null = null;
+  let rippleAcc = 0;
+  let rippleClock = 0;
+  let rippleTickIndex = 0;
+  let ripplePts: Array<[number, number]> | null = null;
 
   /** 中点二次贝塞尔画一条经过 pts（[x,y] 数组）的开放曲线 */
   function smoothPath(ctx: CanvasRenderingContext2D, pts: Array<[number, number]>): void {
@@ -156,12 +177,27 @@
     const cy = height / 2;
     const base = Math.min(width, height);
     const r0 = base * 0.2;
-    const amp = base * 0.13;
+    const amp = base * 0.15;
     const n = vals.length;
 
     // 慢速旋转（~0.05 rad/s）：环形有了"活着"的转向感，又不干扰读歌词
     const spin = (timeMs / 1000) * 0.05;
-    const pts: Array<[number, number]> = vals.map((v, i) => {
+    // 环形映射把首尾频带直接相邻（低频贴着高频）：只有低音没有高音时，
+    // band 0 与 band 47 的半径差会在衔接点形成一个尖角。把带值视为环状
+    // 做两轮三点点平滑（[0.25, 0.5, 0.25]，环绕取样），衔接处的半径差
+    // 在任何频带构成下都摊成跨数带的缓坡；代价是各带的峰值被轻微削低。
+    let ring: Array<number> = Array.from(vals);
+    for (let pass = 0; pass < 2; pass += 1) {
+      const blurred: number[] = new Array(n);
+      for (let i = 0; i < n; i += 1) {
+        const prev = ring[(i - 1 + n) % n]!;
+        const cur = ring[i]!;
+        const next = ring[(i + 1) % n]!;
+        blurred[i] = prev * 0.25 + cur * 0.5 + next * 0.25;
+      }
+      ring = blurred;
+    }
+    const pts: Array<[number, number]> = ring.map((v, i) => {
       const theta = spin + (i / n) * Math.PI * 2 - Math.PI / 2;
       const r = r0 + v * amp;
       return [cx + Math.cos(theta) * r, cy + Math.sin(theta) * r];
@@ -216,10 +252,16 @@
    * - 振幅随能量缩放，映射到 0.45–1.0 区间。安静段接近静态水面，强段抬升；
    *   下限保留 0.45，否则静音时曲线压为直线，读者会判为绘制异常。
    *
-   * 不做透镜填充（镜像形态依赖上下两条曲线的间距表达音量）：单线只有高度一个
-   * 自由度，填充会把中间的歌词压成灰底。发声感由 `shadowBlur` 发光描边承担，
-   * 透明度与镜像描边对齐，两形态切换时亮度不跳变。
-   */
+ * 不做透镜填充（镜像形态依赖上下两条曲线的间距表达音量）：单线只有高度一个
+ * 自由度，填充会把中间的歌词压成灰底。发声感由 `shadowBlur` 发光描边承担，
+ * 透明度与镜像描边对齐，两形态切换时亮度不跳变。
+ *
+ * 拖影：反馈式残影缓冲 + 帧步进节拍——主帧形状每 RIPPLE_MAIN_EVERY 秒
+ * 步进一次，每 RIPPLE_ECHO_TICK_DIV 个节拍把当前形状烙进缓冲成为残影
+ * （残影节拍为主帧的一半），缓冲内容逐帧整体上飘、按时间常数衰减。
+ * 发光随残影一起烙进缓冲。暂停时主帧收平，存量残影按时间常数衰减
+ * 殆尽后画面静止，与"暂停即静止"语义一致。
+ */
   function drawRipple(
     ctx: CanvasRenderingContext2D,
     vals: number[],
@@ -227,36 +269,12 @@
     height: number,
     accent: string,
     timeMs: number,
+    dt: number,
+    isTick: boolean,
+    bake: boolean,
   ): void {
     const n = vals.length;
-    const cols = 72;
     const cy = height / 2;
-    const t = timeMs / 1000;
-
-    // 整体能量（0–1）：与背景层同一口径（均值 0.32 视为满浪）
-    let sum = 0;
-    for (let i = 0; i < n; i += 1) sum += vals[i] as number;
-    const energy = Math.min(1, sum / n / 0.32);
-
-    /** 按"带"为单位的浮点位置采样（循环 + 线性插值），横移后仍连续 */
-    const sample = (pos: number): number => {
-      const p = ((pos % n) + n) % n;
-      const i0 = Math.floor(p);
-      const f = p - i0;
-      const a = vals[i0] as number;
-      const b = vals[(i0 + 1) % n] as number;
-      return a + (b - a) * f;
-    };
-
-    // 振幅以**画布高度**为基准：宽度只影响采样密度，不该让线变陡。
-    const amp = height * 0.115 * (0.45 + 0.55 * energy);
-    const offset = t * 0.35;
-
-    const pts: Array<[number, number]> = [];
-    for (let c = 0; c <= cols; c += 1) {
-      const xr = c / cols;
-      pts.push([xr * width, cy - sample(xr * n + offset) * amp]);
-    }
 
     // 左右各 7% 淡出：canvas 是整页宽（inset:0），线直接顶到边缘像被裁断，
     // 渐隐后读成"延伸到画面之外"
@@ -266,10 +284,144 @@
     stroke.addColorStop(0.93, accent);
     stroke.addColorStop(1, 'transparent');
 
+    const drawLine = (g: CanvasRenderingContext2D, pts: Array<[number, number]>): void => {
+      g.lineJoin = 'round';
+      g.lineCap = 'round';
+      g.lineWidth = 1.8;
+      g.strokeStyle = stroke;
+      g.shadowColor = accent;
+      g.shadowBlur = 16;
+      g.beginPath();
+      smoothPath(g, pts);
+      g.stroke();
+      g.shadowBlur = 0;
+    };
+
+    // 缓冲演化：读缓冲整体上飘 + 衰减写入写缓冲（残影持续上飘渐隐）
+    const cv = ctx.canvas;
+    const dpr = cv.width / Math.max(1, width);
+    if (!echoRead) echoRead = document.createElement('canvas');
+    if (!echoWrite) echoWrite = document.createElement('canvas');
+    for (const buf of [echoRead, echoWrite]) {
+      if (buf.width !== cv.width || buf.height !== cv.height) {
+        buf.width = cv.width;
+        buf.height = cv.height;
+      }
+    }
+    const wctx = echoWrite.getContext('2d');
+    if (!wctx) return;
+    wctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    wctx.clearRect(0, 0, width, height);
+    wctx.globalAlpha = Math.exp(-dt / RIPPLE_ECHO_TAU);
+    wctx.drawImage(
+      echoRead,
+      0,
+      0,
+      echoRead.width,
+      echoRead.height,
+      0,
+      -height * RIPPLE_ECHO_RISE * dt,
+      width,
+      height,
+    );
+    wctx.globalAlpha = 1;
+
+    // 节拍帧：主帧形状按当前带值重建；烙印帧（每 TICK_DIV 个节拍一次）
+    // 把当前形状烙进缓冲成为残影
+    if (isTick) {
+      if (bake && ripplePts) drawLine(wctx, ripplePts);
+      const t = timeMs / 1000;
+      // 整体能量（0–1）：与背景层同一口径（均值 0.32 视为满浪）
+      let sum = 0;
+      for (let i = 0; i < n; i += 1) sum += vals[i] as number;
+      const energy = Math.min(1, sum / n / 0.32);
+
+      /** 按"带"为单位的浮点位置采样（循环 + 线性插值），横移后仍连续 */
+      const sample = (pos: number): number => {
+        const p = ((pos % n) + n) % n;
+        const i0 = Math.floor(p);
+        const f = p - i0;
+        const a = vals[i0] as number;
+        const b = vals[(i0 + 1) % n] as number;
+        return a + (b - a) * f;
+      };
+
+      // 振幅以**画布高度**为基准：宽度只影响采样密度，不该让线变陡。
+      const amp = height * 0.13 * (0.45 + 0.55 * energy);
+      const offset = t * 0.35;
+      const cols = 72;
+      const pts: Array<[number, number]> = [];
+      for (let c = 0; c <= cols; c += 1) {
+        const xr = c / cols;
+        pts.push([xr * width, cy - sample(xr * n + offset) * amp]);
+      }
+      ripplePts = pts;
+    }
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.drawImage(echoWrite, 0, 0, echoWrite.width, echoWrite.height, 0, 0, width, height);
+    if (ripplePts) drawLine(ctx, ripplePts);
+    [echoRead, echoWrite] = [echoWrite, echoRead];
+  }
+
+  /**
+   * 波纹（wave）。
+   *
+   * 频谱曲线本身占满中线上下两段：带值按序交替取向——偶数带向上成山、
+   * 奇数带向下成谷，`cos(π·pos)` 在相邻带之间平滑过零，每个带的幅值完整
+   * 呈现为山或谷（原单线只有山形，谷来自数据而非载波）。漂移沿用横移
+   * 0.35 带/秒，方向随带序一起行进；能量档缩放整体振幅（均值 0.32 视为
+   * 满浪，与残影同口径）。
+   *
+   * 画法与残影同语言：左右 7% 渐隐、发光描边、不填充（歌词可读性）。
+   * 无残影缓冲：本形态每帧整帧重画，走与镜像/环带相同的清屏路径。
+   */
+  function drawWave(
+    ctx: CanvasRenderingContext2D,
+    vals: number[],
+    width: number,
+    height: number,
+    accent: string,
+    timeMs: number,
+  ): void {
+    const n = vals.length;
+    const cy = height / 2;
+    const t = timeMs / 1000;
+    // 整体能量（0–1）：与残影同一口径（均值 0.32 视为满浪）
+    let sum = 0;
+    for (let i = 0; i < n; i += 1) sum += vals[i] as number;
+    const energy = Math.min(1, sum / n / 0.32);
+    /** 按"带"为单位的浮点位置采样（循环 + 线性插值），横向无带边界折角 */
+    const sample = (pos: number): number => {
+      const p = ((pos % n) + n) % n;
+      const i0 = Math.floor(p);
+      const f = p - i0;
+      const a = vals[i0] as number;
+      const b = vals[(i0 + 1) % n] as number;
+      return a + (b - a) * f;
+    };
+
+    const amp = height * 0.13 * (0.45 + 0.55 * energy);
+    const offset = t * 0.35;
+    const cols = 96;
+    const pts: Array<[number, number]> = [];
+    for (let c = 0; c <= cols; c += 1) {
+      const xr = c / cols;
+      const pos = xr * n + offset;
+      pts.push([xr * width, cy - sample(pos) * Math.cos(Math.PI * pos) * amp]);
+    }
+
+    // 左右各 7% 淡出：与残影同语言
+    const strokeGrad = ctx.createLinearGradient(0, 0, width, 0);
+    strokeGrad.addColorStop(0, 'transparent');
+    strokeGrad.addColorStop(0.07, accent);
+    strokeGrad.addColorStop(0.93, accent);
+    strokeGrad.addColorStop(1, 'transparent');
+
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     ctx.lineWidth = 1.8;
-    ctx.strokeStyle = stroke;
+    ctx.strokeStyle = strokeGrad;
     ctx.shadowColor = accent;
     ctx.shadowBlur = 16;
     ctx.beginPath();
@@ -325,17 +477,39 @@
       target.height = bh;
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, cssW, cssH);
+    // 波纹的残影是画布自身的持久化（反馈缓冲），不能整帧清屏；其余形态每帧重画
+    if (style !== 'ripple') ctx.clearRect(0, 0, cssW, cssH);
 
     const bands = source.frame();
     const n = bands.length;
     if (!display || display.length !== n) display = new Float32Array(n);
-    // 时间平滑：0.25/帧 @60fps 换算成 dt 形式，帧率变了手感不变。
+
+    // 波纹按主帧节拍步进（帧步进美学）：display 平滑与漂移时钟只在节拍帧
+    // 推进，两拍之间主帧形状保持静止；其余形态逐帧平滑。
+    // 平滑：0.25/帧 @60fps 换算成 dt 形式，帧率变了手感不变。
     // 暂停时目标值取 0——不是"停在上一帧"，而是收平（恢复播放从 0 长起来）
-    const smooth = 1 - Math.pow(1 - 0.25, dt * 60);
-    for (let i = 0; i < n; i += 1) {
-      const v = paused ? 0 : (bands[i] as number);
-      display[i] = display[i] + (v - display[i]) * smooth;
+    let stepDt = dt;
+    let tick = false;
+    let bake = false;
+    if (style === 'ripple') {
+      rippleAcc += dt;
+      if (rippleAcc >= RIPPLE_MAIN_EVERY) {
+        tick = true;
+        stepDt = rippleAcc;
+        rippleAcc = 0;
+        if (!paused) rippleClock += stepDt * 1000;
+        rippleTickIndex += 1;
+        bake = rippleTickIndex % RIPPLE_ECHO_TICK_DIV === 0;
+      } else {
+        stepDt = 0;
+      }
+    }
+    if (stepDt > 0) {
+      const smooth = 1 - Math.pow(1 - 0.25, stepDt * 60);
+      for (let i = 0; i < n; i += 1) {
+        const v = paused ? 0 : (bands[i] as number);
+        display[i] = display[i] + (v - display[i]) * smooth;
+      }
     }
 
     // 主题色取缓存值：每帧 getComputedStyle 会强制一次样式解析（见 accent.ts）
@@ -347,8 +521,12 @@
       // 环形直接用 48 带（绕圆一周，首尾相接天然对称，无需镜像）
       drawRadial(ctx, vals, cssW, cssH, accent, clock);
     } else if (style === 'ripple') {
-      // 中轴波纹：一条横贯页面中线的曲线（见 drawRipple）
-      drawRipple(ctx, vals, cssW, cssH, accent, clock);
+      // 中轴波纹：一条横贯页面中线的曲线 + 反馈式残影（见 drawRipple）；
+      // 主帧形状按 RIPPLE_MAIN_EVERY 节拍步进，残影每 TICK_DIV 个节拍烙一帧
+      drawRipple(ctx, vals, cssW, cssH, accent, rippleClock, dt, tick, bake);
+    } else if (style === 'wave') {
+      // 波纹：频谱曲线逐带交替成山与谷，振幅跨中线上下两段（见 drawWave）
+      drawWave(ctx, vals, cssW, cssH, accent, clock);
     } else {
       // 镜像带序列：左半倒序 + 右半正序（中心带不重复）→ 水平居中对称
       const mirrored: number[] = [];

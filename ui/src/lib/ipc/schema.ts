@@ -16,7 +16,7 @@ import { z } from 'zod';
 /** 设置项。老配置文件缺字段是常态（`output` 是 2026-10 才加的），所以全 optional + passthrough。 */
 export const settingsSchema = z
   .object({
-    theme: z.enum(['dark', 'light']).optional(),
+    theme: z.enum(['dark', 'light', 'system']).optional(),
     ambient: z.enum(['aurora', 'ember', 'meadow', 'dusk', 'mono']).optional(),
     /** 界面缩放档位（docs/56）：只验数值，档位白名单收口在 mergeSettings */
     uiScale: z.number().optional(),

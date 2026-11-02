@@ -5,6 +5,7 @@
     GripVertical,
     Heart,
     ListVideo,
+    Monitor,
     Moon,
     Pause,
     Pencil,
@@ -26,7 +27,7 @@
   /**
    * 图标注册表：语义名 → lucide 组件。
    *
-   * 表内 20 个语义名即当前全部图标。图标来源只有 `@lucide/svelte`，新增图标在表内
+   * 表内 21 个语义名即当前全部图标。图标来源只有 `@lucide/svelte`，新增图标在表内
    * 注册一行；不手写 SVG path——混入手写 path 会使同一界面的 strokeWidth 出现多个
    * 取值。
    *
@@ -59,6 +60,7 @@
     refresh: RotateCw,
     sun: Sun,
     moon: Moon,
+    monitor: Monitor,
   } satisfies Record<string, Component>;
 
   type IconName = keyof typeof ICONS;

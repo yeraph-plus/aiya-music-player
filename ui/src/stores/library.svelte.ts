@@ -112,29 +112,43 @@ class LibraryStore {
   /** 打开系统目录选择器；用户取消返回 null。选中后回填根列表状态 */
   async chooseRoot(): Promise<string | null> {
     const chosen = await ipc.library.chooseRoot();
-    if (chosen) this.roots = chosen.roots;
+    if (chosen) {
+      this.roots = chosen.roots;
+      this.pausedRoots = chosen.paused;
+    }
     return chosen?.path ?? null;
   }
 
   /* 扫描根列表 */
 
+  /** 监听中的目录（扫描器唯一输入） */
   roots = $state<string[]>([]);
 
-  /** 拉取扫描根列表（textarea 数据源）。失败降级为不动（旧值比空列表好） */
+  /** 已停止监听的目录：行上保留开关便于恢复，扫描器不接收它们 */
+  pausedRoots = $state<string[]>([]);
+
+  /** 拉取扫描根列表（含停用组）。失败降级为不动（旧值比空列表好） */
   async loadRoots(): Promise<void> {
     try {
-      this.roots = (await ipc.library.rootsGet()).roots;
+      const result = await ipc.library.rootsGet();
+      this.roots = result.roots;
+      this.pausedRoots = result.paused;
     } catch (e) {
       console.warn('library.rootsGet failed:', errorMessage(e));
     }
   }
 
-  /** 覆盖写扫描根列表。后端会再归一化，这里以后端返回为准回填 */
-  async saveRoots(roots: string[]): Promise<void> {
-    this.roots = (await ipc.library.rootsSet(roots)).roots;
+  /**
+   * 覆盖写扫描根列表（监听中 + 停用两组）。后端会再归一化并保证两组不并存
+   * （监听中优先），这里以后端返回为准回填。失败抛出。
+   */
+  async saveRoots(roots: string[], paused: string[]): Promise<void> {
+    const result = await ipc.library.rootsSet(roots, paused);
+    this.roots = result.roots;
+    this.pausedRoots = result.paused;
   }
 
-  /** 移除目录的影响面（曲目数，UI 确认条用）。失败抛出 */
+  /** 删除目录的影响面（曲目数，删除确认气泡用）。失败抛出 */
   async countForRemoval(paths: string[]): Promise<number> {
     return (await ipc.library.rootsCount(paths)).count;
   }

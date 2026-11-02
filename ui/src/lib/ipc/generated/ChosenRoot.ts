@@ -6,4 +6,9 @@
  * docs/29 批 A：`roots` 是选择后的**完整根列表**（多目录并集单库），
  * UI 拿它直接回填 textarea，省一次 roots_get 往返。
  */
-export type ChosenRoot = { path: string, roots: Array<string>, };
+export type ChosenRoot = { path: string, roots: Array<string>, 
+/**
+ * 选择器选中的目录若停在停用组，加入监听时已移出；回填两列表与
+ * `LibraryRoots` 对齐
+ */
+paused: Array<string>, };

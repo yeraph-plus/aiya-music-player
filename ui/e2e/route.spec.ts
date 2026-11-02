@@ -207,19 +207,28 @@ test('docs/29 批 A 六轮：曲库目录条目列表增删（设置 → 曲库�
   // 曲库组不是独立路由：侧栏高亮只有「设置」一个
   expect(await activeSidebar(page)).toEqual(['设置']);
 
-  // 目录是条目列表（textarea 已废）：mock 默认 1 个根
+  // 目录是条目列表：mock 默认 1 个根，行尾是删除按钮 + 监听指示图标
   const list = page.locator('#settings-library .root-list');
+  const row = list.locator('.root-row').first();
   await expect(list.locator('.root-row')).toHaveCount(1);
 
-  // 点移除 → 内联确认条报影响面（mock 每目录示意 3 首）→ 仅停止监听
-  await list.locator('.root-row').first().getByRole('button').click();
-  const confirm = page.locator('#settings-library .roots-confirm');
-  await expect(confirm).toBeVisible();
-  await expect(confirm).toContainText('涉及 3 首曲目');
-  await confirm.locator('button', { hasText: '仅停止监听' }).click();
-  // 列表清空 → 空态提示（七轮起没有"N 个目录"计数行）
+  // 行尾扫描图标 = 监听开关：停用后行变暗（划线态），不弹确认层
+  const watchButton = row.locator('button.root-watch');
+  await watchButton.click();
+  await expect(row).toHaveClass(/unwatched/);
+  await expect(page.locator('#settings-library .tool-notice')).toContainText('已停止监听');
+  await watchButton.click();
+  await expect(row).not.toHaveClass(/unwatched/);
+
+  // 行尾垃圾桶 = 删除：气泡确认报影响面（mock 每目录示意 3 首）→ 确认删除
+  await row.locator('button.root-remove').click();
+  const pop = page.locator('.roots-pop');
+  await expect(pop).toBeVisible();
+  await expect(pop).toContainText('涉及 3 首曲目');
+  await pop.locator('button', { hasText: '确认删除' }).click();
   await expect(list).toHaveCount(0);
   await expect(page.locator('#settings-library .roots-empty')).toBeVisible();
+  await expect(page.locator('#settings-library .tool-notice')).toContainText('已移除该目录');
 
   // 浏览器里没有系统目录选择器：添加目录 = 用户取消，列表不动、无报错
   await page.getByRole('button', { name: '添加目录' }).click();

@@ -31,7 +31,7 @@
   import { boot } from './lib/boot';
   import { onKeydown } from './lib/keyboard';
   import { createMediaSession, type MediaSessionBridge } from './lib/media-session';
-  import { applyLook, readRowHeight, writeLook } from './lib/look';
+  import { applyLook, readRowHeight, watchSystemTheme, writeLook } from './lib/look';
   import { drop } from './stores/drop.svelte';
   import { list } from './stores/list.svelte';
   import { notify } from './stores/notify.svelte';
@@ -73,6 +73,12 @@
     // 行高只有 CSS 一处定义，这里把它的当前值同步给虚拟列表。
     // 缩放档变化也会走到这里：--row-h 是 rem，行高跟着档位变，列表要重新对齐。
     ui.rowHeight = readRowHeight();
+
+    // 跟随系统档：操作系统切换深浅色时重放主题属性（data-theme 取解析值，
+    // 值变了 accent 观察器、频谱取色随之刷新）。行高不随主题变，无需重算。
+    // 仅跟随档订阅；固定深/浅档的系统事件无意义。
+    if (look.theme !== 'system') return;
+    return watchSystemTheme(() => applyLook(look));
   });
 
   /**

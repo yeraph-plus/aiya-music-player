@@ -204,11 +204,12 @@ export const ipc = {
      * 而且紧接着的重叠校验会拒绝这次选择，用户看不懂为什么。
      */
     pickFolder: () => call<string | null>('pick_folder'),
-    /** 扫描根列表（settings `library.roots`；textarea 数据源） */
+    /** 扫描根列表（监听中 `roots` + 停用 `paused`，settings KV） */
     rootsGet: () => call<LibraryRoots>('library_roots_get'),
-    /** 覆盖写扫描根列表（后端再归一化：trim/去空/去引号/去重） */
-    rootsSet: (roots: string[]) => call<LibraryRoots>('library_roots_set', { roots }),
-    /** 移除这些目录会波及多少曲目（path_lower 前缀统计，只读） */
+    /** 覆盖写扫描根列表（后端再归一化：trim/去空/去引号/去重；两组不并存，监听中优先） */
+    rootsSet: (roots: string[], paused: string[]) =>
+      call<LibraryRoots>('library_roots_set', { roots, paused }),
+    /** 删除这些目录会波及多少曲目（path_lower 前缀统计，只读） */
     rootsCount: (paths: string[]) => call<RootsTrackCount>('library_roots_count', { paths }),
     /** 从曲库删除这些目录下的曲目（只删索引不动磁盘，外键级联清歌单/队列/历史） */
     rootsPrune: (paths: string[]) => call<RemoveTracks>('library_roots_prune', { paths }),

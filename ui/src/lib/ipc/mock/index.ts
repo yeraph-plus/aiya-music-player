@@ -55,7 +55,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
     case 'library_roots_get':
       return mock.rootsGet();
     case 'library_roots_set':
-      return mock.rootsSet(a.roots as string[]);
+      return mock.rootsSet(a.roots as string[], a.paused as string[]);
     case 'library_roots_count':
       return mock.rootsCount(a.paths as string[]);
     case 'library_roots_prune':

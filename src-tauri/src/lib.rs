@@ -2105,7 +2105,7 @@ async fn library_choose_root(
         return Err(dto::ApiError::internal("app state 不可用"));
     };
     let chosen = path_str.clone();
-    let saved: aiya_data::DbResult<Vec<String>> = state.db().send(move |conn| {
+    let saved: aiya_data::DbResult<(Vec<String>, Vec<String>)> = state.db().send(move |conn| {
         let mut roots = read_roots(conn);
         // 大小写不敏感去重（Windows 路径）：重复选择同一目录不动列表
         let chosen_lower = chosen.to_lowercase();
@@ -2113,12 +2113,20 @@ async fn library_choose_root(
             roots.push(chosen);
         }
         setting_set(conn, "library.roots", &json!(roots))?;
-        Ok(roots)
+        // 同一目录若停在停用组，加入监听即移出：两组不并存
+        let paused: Vec<String> = read_paused_roots(conn)
+            .into_iter()
+            .filter(|p| p.to_lowercase() != chosen_lower)
+            .collect();
+        setting_set(conn, "library.roots.paused", &json!(paused))?;
+        Ok((roots, paused))
     });
-    let roots = saved.map_err(|e| dto::ApiError::internal(format!("无法保存曲库目录：{e}")))?;
+    let (roots, paused) =
+        saved.map_err(|e| dto::ApiError::internal(format!("无法保存曲库目录：{e}")))?;
     Ok(Some(dto::library::ChosenRoot {
         path: path_str,
         roots,
+        paused,
     }))
 }
 
@@ -2141,31 +2149,24 @@ pub(crate) fn read_roots(conn: &rusqlite::Connection) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// 读扫描根列表（UI 的 textarea 数据源）。
-#[tauri::command]
-fn library_roots_get(
-    state: State<'_, AppState>,
-) -> Result<dto::library::LibraryRoots, dto::ApiError> {
-    let roots = state
-        .db()
-        .send(|conn| Ok(read_roots(conn)))
-        .map_err(|e| dto::ApiError::internal(format!("读取扫描目录失败：{e}")))?;
-    Ok(dto::library::LibraryRoots { roots })
+/// 读停用的根列表（`library.roots.paused`）。仅是 UI 行上的记忆，扫描器
+/// 不读它——监听中的目录由 `read_roots` 单独回答。
+pub(crate) fn read_paused_roots(conn: &rusqlite::Connection) -> Vec<String> {
+    setting_get(conn, "library.roots.paused")
+        .and_then(|v| v.as_array().cloned())
+        .map(|a| {
+            a.into_iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .filter(|s| !s.trim().is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
-/// 覆盖写扫描根列表（目录条目列表的保存动作）。
-///
-/// 参数收 `Vec<String>` 强类型而不是 `Json`：客户端传的就是数组本身
-/// （Tauri 按参数名 `roots` 取值），此前用 `Json` 再 `.get("roots")` 是
-/// 把"参数对象"和"参数值"搞混了——实测每次都报「缺少 roots 数组」。
-/// 归一化在服务端再做一遍：trim、去空行、去引号、大小写不敏感去重。
-#[tauri::command]
-fn library_roots_set(
-    state: State<'_, AppState>,
-    roots: Vec<String>,
-) -> Result<dto::library::LibraryRoots, dto::ApiError> {
+/// 目录条目归一化：trim、去空行、去引号、大小写不敏感去重（Windows 路径）。
+fn normalize_root_list(items: Vec<String>) -> Vec<String> {
     let mut cleaned: Vec<String> = Vec::new();
-    for item in roots {
+    for item in items {
         let s = item.trim();
         if s.is_empty() {
             continue;
@@ -2177,16 +2178,56 @@ fn library_roots_set(
             cleaned.push(s);
         }
     }
+    cleaned
+}
+
+/// 读扫描根列表（目录条目列表的数据源，含停用组）。
+#[tauri::command]
+fn library_roots_get(
+    state: State<'_, AppState>,
+) -> Result<dto::library::LibraryRoots, dto::ApiError> {
+    let (roots, paused) = state
+        .db()
+        .send(|conn| Ok((read_roots(conn), read_paused_roots(conn))))
+        .map_err(|e| dto::ApiError::internal(format!("读取扫描目录失败：{e}")))?;
+    Ok(dto::library::LibraryRoots { roots, paused })
+}
+
+/// 覆盖写扫描根列表（监听中 + 停用两组，目录条目列表的保存动作）。
+///
+/// 参数收 `Vec<String>` 强类型而不是 `Json`：客户端传的就是数组本身
+/// （Tauri 按参数名 `roots` 取值），此前用 `Json` 再 `.get("roots")` 是
+/// 把"参数对象"和"参数值"搞混了——实测每次都报「缺少 roots 数组」。
+/// 归一化在服务端再做一遍：trim、去空行、去引号、大小写不敏感去重；
+/// 同一目录不允许两组并存（以监听中为准，从停用组剔除）。
+#[tauri::command]
+fn library_roots_set(
+    state: State<'_, AppState>,
+    roots: Vec<String>,
+    paused: Vec<String>,
+) -> Result<dto::library::LibraryRoots, dto::ApiError> {
+    let cleaned = normalize_root_list(roots);
+    let watched: std::collections::HashSet<String> =
+        cleaned.iter().map(|r| r.to_lowercase()).collect();
+    let paused_cleaned: Vec<String> = normalize_root_list(paused)
+        .into_iter()
+        .filter(|p| !watched.contains(&p.to_lowercase()))
+        .collect();
     let to_save = cleaned.clone();
+    let to_save_paused = paused_cleaned.clone();
     state
         .db()
         .send(move |conn| {
             setting_set(conn, "library.roots", &json!(to_save))?;
+            setting_set(conn, "library.roots.paused", &json!(to_save_paused))?;
             // 目录列表变了：整理输出根若被移除就清掉（回退首根）
             Ok(())
         })
         .map_err(|e| dto::ApiError::internal(format!("保存扫描目录失败：{e}")))?;
-    Ok(dto::library::LibraryRoots { roots: cleaned })
+    Ok(dto::library::LibraryRoots {
+        roots: cleaned,
+        paused: paused_cleaned,
+    })
 }
 
 /// 把用户输入的目录归一化成 `path_lower` 前缀（带尾部分隔符）。
@@ -2213,7 +2254,7 @@ fn count_tracks_under_prefix(conn: &rusqlite::Connection, prefix: &str) -> rusql
     )
 }
 
-/// 移除这些目录时会波及多少曲目（UI 确认条用，只读不删）。
+/// 删除这些目录会波及多少曲目（删除确认气泡用，只读不删）。
 #[tauri::command]
 fn library_roots_count(
     state: State<'_, AppState>,

@@ -14,6 +14,7 @@
     BG_SPECTRUM_STYLES,
     RIDGE_GLOWS,
     SPECTRUM_STYLES,
+    THEME_MODES,
     UI_SCALE_OPTIONS,
     normalizeUiScale,
   } from '../lib/settings';
@@ -185,17 +186,23 @@ import TextTabs from './ui/TextTabs.svelte';
    * 输出模式的取值须与 `aiya-audio` 的 `ModePref::parse` / `ClockPref::parse`
    * 一致（`crates/aiya-audio/src/engine.rs`）。后端对未知取值按 `shared` / `auto`
    * 处理，写错不报错而是静默降级，因此此处只列后端识别的字符串，不提供别名。
+   *
+   * `'null'`（静音）是后端仍识别的排查档，设置页不提供选择入口：清单里保留它
+   * 只为下方的 hint 查询能如实描述当前生效值（既有配置可能停留在该档），
+   * `OUTPUT_OPTIONS` 把它过滤出分段控件。
    */
   const OUTPUT_MODES: Array<{ value: string; label: string; hint: string }> = [
     { value: 'shared', label: '共享', hint: '与系统混音，其他程序照常出声' },
-    { value: 'exclusive', label: '独占', hint: '优先独占，设备拒绝时自动回落共享' },
-    { value: 'exclusiveRequired', label: '独占(强)', hint: '必须独占，设备拒绝就报错——不静默降级' },
-    { value: 'null', label: '静音', hint: '不开音频设备：进度照常走但不出声（排查用）' },
+    { value: 'exclusive', label: '独占', hint: '优先独占，设备拒绝时自动改用共享' },
+    { value: 'exclusiveRequired', label: '独占(强)', hint: '必须独占，设备拒绝时直接报错' },
+    { value: 'null', label: '静音', hint: '不开音频设备，进度照常走但不出声，仅排查时使用' },
   ];
 
   /** 分段控件使用 `title`，此处把 `hint` 映射过去。模块级只求值一次：
    *  内联求值会每次渲染产生新数组引用，导致 RadioGroup 重挂并丢失键盘焦点。 */
-  const OUTPUT_OPTIONS = OUTPUT_MODES.map(({ value, label, hint }) => ({ value, label, title: hint }));
+  const OUTPUT_OPTIONS = OUTPUT_MODES
+    .filter((m) => m.value !== 'null')
+    .map(({ value, label, hint }) => ({ value, label, title: hint }));
 
   /**
    * 0 = 交由引擎按输出模式取默认值（共享 200ms，独占取设备周期）。
@@ -239,11 +246,8 @@ import TextTabs from './ui/TextTabs.svelte';
   ];
 
   /** 分段控件的选项一律写成模块级常量：内联数组字面量每次渲染都是新引用，
-   *  RadioGroup 会连同 `title` 一起重挂，键盘焦点在重挂瞬间丢掉。 */
-  const THEME_OPTIONS: Array<{ value: string; label: string }> = [
-    { value: 'dark', label: '深色' },
-    { value: 'light', label: '浅色' },
-  ];
+   *  RadioGroup 会连同 `title` 一起重挂，键盘焦点在重挂瞬间丢掉。主题清单
+   *  （THEME_MODES）与其他档位一样以 settings.ts 为真源，这里只消费。 */
 </script>
 
 <svelte:window onkeydown={onWindowKey} />
@@ -328,16 +332,20 @@ import TextTabs from './ui/TextTabs.svelte';
       <div class="setting-row">
           <div>
             <div class="setting-title">主题</div>
-            <div class="setting-hint">浅色主题适合白天与投影，切换即时生效</div>
+            <div class="setting-hint">
+              {settings.theme === 'system'
+                ? '随操作系统的深浅色模式自动切换，系统切换时即时生效'
+                : '浅色主题适合白天与投影，切换即时生效'}
+            </div>
           </div>
           <SegmentedControl
             label="主题"
             value={settings.theme}
-            options={THEME_OPTIONS}
+            options={THEME_MODES}
             onchange={(value) => apply({ theme: value as ThemeMode })}
           >
             {#snippet icon(value)}
-              <Icon name={value === 'dark' ? 'moon' : 'sun'} size={13} />
+              <Icon name={value === 'dark' ? 'moon' : value === 'light' ? 'sun' : 'monitor'} size={13} />
             {/snippet}
           </SegmentedControl>
         </div>
@@ -359,7 +367,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <div>
             <div class="setting-title">界面缩放</div>
             <div class="setting-hint">
-              整体放大文字与间距，适配高分屏可读性；100% 即设计原稿，切换即时生效
+              整体放大文字与间距，适配高分屏可读性，100% 为标准大小，切换即时生效
             </div>
           </div>
           <SegmentedControl
@@ -374,7 +382,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <div>
             <div class="setting-title">全局 3D 效果</div>
             <div class="setting-hint">
-              总开关：关闭后所有三维频谱与流动背景停用，只留静态渐变；下面的频谱项随之失效
+              关闭后三维频谱与动态背景全部停用，只留静态渐变，频谱相关设置一并失效
               {#if !cap.hardware}
                 <strong class="hint-warn">本机只检测到软件渲染，建议保持关闭</strong>
               {/if}
@@ -392,7 +400,7 @@ import TextTabs from './ui/TextTabs.svelte';
             <div class="setting-title">背景动态频谱</div>
             <div class="setting-hint">
               {gl
-                ? '整个应用的背景有随音乐起伏的山形环境光；关闭后只剩静态渐变，引擎 tap 停止、零开销'
+                ? '整个应用的背景随音乐起伏，呈现山形环境光；关闭后只剩静态渐变'
                 : '已随「全局 3D 效果」关闭'}
             </div>
           </div>
@@ -409,7 +417,7 @@ import TextTabs from './ui/TextTabs.svelte';
             <div class="setting-title">背景频谱形态</div>
             <div class="setting-hint">
               {gl
-                ? '山形：底部一团起伏的环境光；波纹：一层层等深线铺满下半屏。两者用的都是同一份频谱，与「正在播放」页的形态各自独立'
+                ? '山形：底部一团起伏的环境光；波纹：一层层等深线铺满下半屏，与「正在播放」页的形态各自独立'
                 : '已随「全局 3D 效果」关闭'}
             </div>
           </div>
@@ -427,7 +435,7 @@ import TextTabs from './ui/TextTabs.svelte';
             <div class="setting-title">背景频谱光效</div>
             <div class="setting-hint">
               {gl
-                ? '山形与波纹共用这一档：柔雾只有形状没有光，平衡在边缘带一点光，锐光把脊线/线心描出来'
+                ? '控制光效的强度与锐度：柔雾只有形状没有光，平衡在边缘带一点光，锐光明亮清晰'
                 : '已随「全局 3D 效果」关闭'}
             </div>
           </div>
@@ -461,7 +469,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <div>
             <div class="setting-title">频谱形态</div>
             <div class="setting-hint">
-              「正在播放」页可视化的形态：镜像曲线（中线上下对称）、径向环形（绕圆一周）、中轴波纹（一条居中曲线），切换即时生效
+              「正在播放」页的频谱形状：镜像曲线沿中线对称，径向环形绕圆一周，中轴波纹是居中的一条曲线，切换即时生效
             </div>
           </div>
           <SegmentedControl
@@ -496,7 +504,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <div>
             <div class="setting-title">缓冲</div>
             <div class="setting-hint">
-              越深越抗抖、延迟越大；「自动」按模式取默认（共享 200ms，独占按设备周期）
+              缓冲越深越抗卡顿、延迟越大，自动档按输出模式取默认值
             </div>
           </div>
           <SegmentedControl
@@ -511,7 +519,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <div>
             <div class="setting-title">时钟</div>
             <div class="setting-hint">
-              自动 = 独占先试事件、失败再试轮询；共享固定用事件（更省电、延迟更稳）
+              自动：独占输出先试事件、失败再试轮询；共享输出固定用事件，更省电也更稳
             </div>
           </div>
           <SegmentedControl
@@ -526,7 +534,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <div>
             <div class="setting-title">暂停时释放设备</div>
             <div class="setting-hint">
-              暂停就关流，让独占设备回到系统；再播放会重新打开（有几十毫秒空白）
+              暂停时把独占的音频设备让回给系统，其他程序可以出声；恢复播放会重新占用，可能有短暂停顿
             </div>
           </div>
           <Switch
@@ -577,7 +585,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <div>
             <div class="setting-title">音量归一化</div>
             <div class="setting-hint">
-              按 ReplayGain 标签换算音量系数。近似实现：不改变你设置的音量，只做播放时的补偿
+              拉平不同曲目之间的响度差异，不改变你设置的音量，只在播放时做补偿
             </div>
           </div>
           <Switch
@@ -594,8 +602,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <div>
             <div class="setting-title">禁用系统缩放</div>
             <div class="setting-hint">
-              按 100% 渲染，忽略 Windows 的显示缩放（125%/150% 等）：文字变小、一屏内容变多，且重排渲染不会模糊。
-              与「外观 → 界面缩放」叠加生效，改后立即应用、无需重启
+              忽略 Windows 的显示缩放，按 100% 渲染：文字变小、一屏内容更多；与「外观 → 界面缩放」叠加生效，改后立即应用无需重启
             </div>
           </div>
           <Switch
@@ -610,7 +617,7 @@ import TextTabs from './ui/TextTabs.svelte';
             <div class="setting-title">关闭窗口时最小化到托盘</div>
             <div class="setting-hint">
               打开后点关闭只是隐藏窗口，播放继续；要退出请用托盘菜单或 Ctrl+Q
-              {#if sys}<span class="state-tail">当前：{sys.tray ? '已创建' : '未创建'}</span>{/if}
+              {#if sys}<span class="state-tail">当前：{sys.tray ? '已生效' : '未生效'}</span>{/if}
             </div>
           </div>
           <Switch
@@ -624,8 +631,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <div>
             <div class="setting-title">曲库自动刷新</div>
             <div class="setting-hint">
-              在别的软件里改了标签或移动了文件，播放器隔多久自己发现。
-              关闭后仍会在切回窗口时刷一次
+              在别的软件里改了标签或移动了文件，播放器隔多久自己发现；关闭后仍会在切回窗口时刷一次
             </div>
           </div>
           <SegmentedControl
@@ -640,8 +646,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <div>
             <div class="setting-title">最近播放保留</div>
             <div class="setting-hint">
-              播放记录只存这段时间内的（到点自动清理，防数据无限膨胀）。
-              「最近播放」列表与常听榜都按这个范围统计
+              播放记录只保留这段时间，到期自动清理；「最近播放」列表与常听榜都按这个范围统计
             </div>
           </div>
           <SegmentedControl
@@ -663,7 +668,7 @@ import TextTabs from './ui/TextTabs.svelte';
                     ? '已关闭'
                     : sys.mediaKeys.active.length > 0
                       ? '已生效'
-                      : '未生效（还没有播放会话）'}
+                      : '未生效，还没有播放会话'}
                 </span>
               {/if}
             </div>
@@ -681,7 +686,7 @@ import TextTabs from './ui/TextTabs.svelte';
 
       <!-- 录制规则与恢复默认放在组首：用户在点击绑定键之前需要知道 Esc / Backspace 的行为。外框使其读作操作须知，而非列表末尾的附注。 -->
       <div class="shortcut-foot">
-        <span class="dim">Esc 取消录制，Backspace 清空绑定。↑/↓ 与 Enter 是列表导航，不占用快捷键。</span>
+        <span class="dim">Esc 取消录制，Backspace 清空绑定；↑/↓ 与 Enter 是列表导航，不占用快捷键</span>
         <Button size="sm" onclick={() => apply({ shortcuts: {} })}>恢复默认</Button>
       </div>
 
@@ -689,8 +694,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <div class="notice danger">
             {#each conflicts as conflict (conflict.binding)}
               <div>
-                {formatBinding(conflict.binding)} 同时绑定了
-                {conflict.actions.map((action) => SHORTCUT_LABELS[action as ShortcutAction]).join('、')}
+                「{formatBinding(conflict.binding)}」同时绑定多个动作：{conflict.actions.map((action) => SHORTCUT_LABELS[action as ShortcutAction]).join('、')}
               </div>
             {/each}
           </div>
@@ -746,7 +750,7 @@ import TextTabs from './ui/TextTabs.svelte';
                 <span class="danger">{item.code}</span>
                 {item.message}
                 {#if item.detail}
-                  <span class="dim" title={item.detail}>（有详情）</span>
+                  <span class="dim" title={item.detail}>有详情</span>
                 {/if}
               </li>
             {/each}

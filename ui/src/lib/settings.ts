@@ -14,7 +14,21 @@
 import type { DesiredOutput } from './ipc/generated/DesiredOutput';
 import type { ShortcutAction } from './shortcuts';
 
-export type ThemeMode = 'dark' | 'light';
+/**
+ * 主题偏好。`'system'` 表示跟随操作系统的深浅色（`prefers-color-scheme`）。
+ *
+ * 该值是**偏好**而非实际主题：`<html data-theme>` 上写的是解析后的
+ * `'dark'` / `'light'`（CSS 只有这两套变量），解析规则见 `lib/look.ts` 的
+ * `resolveTheme`。
+ */
+export type ThemeMode = 'dark' | 'light' | 'system';
+
+/** 主题偏好的取值清单：设置页分段控件与 `mergeSettings` 白名单共用，顺序即展示顺序 */
+export const THEME_MODES: Array<{ value: ThemeMode; label: string }> = [
+  { value: 'dark', label: '深色' },
+  { value: 'light', label: '浅色' },
+  { value: 'system', label: '跟随系统' },
+];
 
 /**
  * 主题配色：固定 CSS 渐变 + 配套强调色，成套切换。
@@ -58,22 +72,23 @@ export function normalizeUiScale(value: unknown): UiScale {
 /**
  * 正在播放页的频谱形态。
  *
- * 取值：`mirror` 镜像曲线、`radial` 径向环形、`ripple` 中轴波纹。`ripple` 在页内
- * 只画一条居中曲线：地形形态（多层等深线铺满下半屏）与背景层
- * `bgSpectrumStyle = 'ripple'` 重复，且页内只覆盖内容区，水面会在画布边缘断开，
- * 因此地形仅用于背景。
+ * 取值：`mirror` 镜像、`radial` 环带、`ripple` 残影（中轴单线 + 反馈式残影
+ * 缓冲）、`wave` 波纹（频谱曲线逐带交替成山与谷，振幅跨中线上下两段）。
+ * `ripple` 在页内只画一条居中曲线：等深线地形形态（多层等深线铺满下半屏）
+ * 与背景层 `bgSpectrumStyle = 'ripple'` 重复，且页内只覆盖内容区，水面会在
+ * 画布边缘断开，因此地形仅用于背景。
  *
- * 旧取值 `'off'` 与 `'wave'` 由 `mergeSettings` 消化：`'off'`（与
- * `npSpectrum = false` 语义重复）落默认形态，`'wave'` 映射到 `'ripple'`，均不写回
- * 磁盘。
+ * 旧取值 `'off'`（与 `npSpectrum = false` 语义重复）由 `mergeSettings` 消化：
+ * 落默认形态，不写回磁盘。
  */
-export type SpectrumStyle = 'mirror' | 'radial' | 'ripple';
+export type SpectrumStyle = 'mirror' | 'radial' | 'ripple' | 'wave';
 
 /** 设置页与 NowPlayingSpectrum 共用的形态清单（id 顺序即展示顺序） */
 export const SPECTRUM_STYLES: Array<{ value: SpectrumStyle; label: string }> = [
-  { value: 'mirror', label: '镜像曲线' },
-  { value: 'radial', label: '径向环形' },
-  { value: 'ripple', label: '中轴波纹' },
+  { value: 'mirror', label: '镜像' },
+  { value: 'radial', label: '环带' },
+  { value: 'ripple', label: '残影' },
+  { value: 'wave', label: '波纹' },
 ];
 
 /**
@@ -207,6 +222,7 @@ export interface LiveRecentEntry {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
+  // 默认固定深色：跟随系统由用户显式选择，不作为初始外观
   theme: 'dark',
   ambient: 'aurora',
   // 100% = 设计原稿；高分屏可自行上调

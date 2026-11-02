@@ -18,6 +18,7 @@ import {
   BG_SPECTRUM_STYLES,
   RIDGE_GLOWS,
   SPECTRUM_STYLES,
+  THEME_MODES,
   normalizeUiScale,
   type AppSettings,
 } from './settings';
@@ -25,6 +26,7 @@ import {
 const SPECTRUM_STYLE_VALUES: ReadonlySet<string> = new Set(SPECTRUM_STYLES.map((s) => s.value));
 const BG_SPECTRUM_STYLE_VALUES: ReadonlySet<string> = new Set(BG_SPECTRUM_STYLES.map((s) => s.value));
 const RIDGE_GLOW_VALUES: ReadonlySet<string> = new Set(RIDGE_GLOWS.map((s) => s.value));
+const THEME_VALUES: ReadonlySet<string> = new Set(THEME_MODES.map((m) => m.value));
 
 /**
  * 已退役的键：读时消化，写时剔除。
@@ -56,12 +58,8 @@ export function mergeSettings(raw: unknown): AppSettings {
 
   const merged: AppSettings = { ...DEFAULT_SETTINGS, ...(rest as Partial<AppSettings>) };
 
-  // 形态更名：`'wave'`（心电图）退役，由 `'ripple'`（中轴波纹）接管。这里显式映射**而不是靠白名单落回默认——用户原选择是"折线感"，落回镜像曲线等于改掉其选择。必须早于白名单检查，否则 'wave' 先被判为不认识而变成
-  // 'mirror'。（比较走 String()：`merged` 由磁盘 JSON 强转而来，类型声明为 SpectrumStyle 不代表运行期不会出现 'wave'。）
-  if (String(merged.spectrumStyle) === 'wave') merged.spectrumStyle = 'ripple';
-
-  // 形态/档位白名单：旧配置里的 `'off'` 也走这条（它已不在 SPECTRUM_STYLES
-  // 里），于是自动落回默认形态——退役取值要靠**不在白名单**这件事被消化掉，而不是到处写 `if (x === 'off')`（那种写法会在加第四种形态时漏掉）。
+  // 形态/档位白名单：退役取值（如频谱的 'off'）要靠**不在白名单**这件事被
+  // 消化掉，而不是到处写 `if (x === 'off')`（那种写法会在加第四种形态时漏掉）。
   if (!SPECTRUM_STYLE_VALUES.has(String(merged.spectrumStyle))) {
     merged.spectrumStyle = DEFAULT_SETTINGS.spectrumStyle;
   }
@@ -77,6 +75,13 @@ export function mergeSettings(raw: unknown): AppSettings {
   // 界面缩放档位：数值白名单收口。手改配置里出现 87.5 这类值时
   // 落回 100，不让未知档位流进 look/DOM（档位语义见 settings.ts 的 UI_SCALES）。
   merged.uiScale = normalizeUiScale(merged.uiScale);
+
+  // 主题偏好白名单：未知值落回默认。不收口的话分段控件会呈现"无选中项"，
+  // data-theme 也写不出合法值（`'system'` 是合法偏好，经 look.ts 解析成
+  // dark/light，本身不经此档位语义）。
+  if (!THEME_VALUES.has(String(merged.theme))) {
+    merged.theme = DEFAULT_SETTINGS.theme;
+  }
 
   // 「最近打开」是新键：老配置里没有它（`...DEFAULT_SETTINGS` 兜成空表），这里只负责挡住被手改成别的形状的值——`AppSettings`
   // 说是数组，运行期从磁盘 JSON 强转来的可能是个对象，下游 `.length` 会静默变成 undefined。

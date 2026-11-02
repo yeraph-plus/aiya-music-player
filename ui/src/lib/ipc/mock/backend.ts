@@ -1270,24 +1270,31 @@ export class MockBackend {
   /* 扫描根列表 */
 
   private scanRoots: string[] = ['D:/MUSIC_Player/test-music'];
+  /** 停止监听的目录（与真后端 `library.roots.paused` 同语义） */
+  private scanRootsPaused: string[] = [];
 
   rootsGet(): LibraryRoots {
-    return { roots: [...this.scanRoots] };
+    return { roots: [...this.scanRoots], paused: [...this.scanRootsPaused] };
   }
 
-  /** 与真后端同语义：trim / 去空行 / 去引号 / 大小写不敏感去重 */
-  rootsSet(roots: string[]): LibraryRoots {
-    const cleaned: string[] = [];
-    for (const item of roots) {
-      const s = item
-        .trim()
-        .replace(/^["']+|["']+$/g, '')
-        .trim();
-      if (!s) continue;
-      if (!cleaned.some((r) => r.toLowerCase() === s.toLowerCase())) cleaned.push(s);
-    }
-    this.scanRoots = cleaned;
-    return { roots: [...cleaned] };
+  /** 与真后端同语义：trim / 去空行 / 去引号 / 大小写不敏感去重；两组不并存（监听中优先） */
+  rootsSet(roots: string[], paused: string[]): LibraryRoots {
+    const normalize = (items: string[]): string[] => {
+      const cleaned: string[] = [];
+      for (const item of items) {
+        const s = item
+          .trim()
+          .replace(/^["']+|["']+$/g, '')
+          .trim();
+        if (!s) continue;
+        if (!cleaned.some((r) => r.toLowerCase() === s.toLowerCase())) cleaned.push(s);
+      }
+      return cleaned;
+    };
+    this.scanRoots = normalize(roots);
+    const watched = new Set(this.scanRoots.map((r) => r.toLowerCase()));
+    this.scanRootsPaused = normalize(paused).filter((p) => !watched.has(p.toLowerCase()));
+    return { roots: [...this.scanRoots], paused: [...this.scanRootsPaused] };
   }
 
   /** mock 库没有真实 path_lower 数据，按目录名出现次数给个示意值 */
