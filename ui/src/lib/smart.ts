@@ -148,15 +148,15 @@ export function validateRule(rule: SmartRule): string | null {
     if (isEmptyCond(cond)) continue;
     if (isTextField(cond.field)) {
       if (typeof cond.value !== 'string' || !cond.value.trim()) {
-        return `${FIELD_LABELS[cond.field]}条件需要一个非空文本值`;
+        return `${FIELD_LABELS[cond.field]}需填写内容`;
       }
     } else {
       if (typeof cond.value !== 'number' || !Number.isFinite(cond.value)) {
-        return `${FIELD_LABELS[cond.field]}条件需要一个数字值`;
+        return `${FIELD_LABELS[cond.field]}需填数字`;
       }
     }
     if (!OPS_BY_FIELD[cond.field].some((o) => o.op === cond.op)) {
-      return `${FIELD_LABELS[cond.field]}不支持该操作符`;
+      return `${FIELD_LABELS[cond.field]}操作符无效`;
     }
   }
   return null;

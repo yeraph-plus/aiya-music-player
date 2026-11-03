@@ -669,7 +669,7 @@ fn busy_status(entry: &ToolEntry, source: EntrySource) -> BeetsStatus {
         library_lock: Some("held".into()),
         library_lock_holder: Some("本应用正在执行 beets 任务".into()),
         error_code: Some("E_BEETS_BUSY".into()),
-        error_message: Some("组件正在执行其它任务（完成后再看状态）".into()),
+        error_message: Some("组件正在执行其它任务".into()),
     }
 }
 

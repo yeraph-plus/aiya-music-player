@@ -62,7 +62,7 @@ export function boot(options: { onState: (state: PlayerState) => void }): () => 
   const guardTimer = setTimeout(() => {
     if (list.booted) return;
     list.booted = true;
-    notify.showError('部分数据未加载：启动引导超时，可重试或重启应用');
+    notify.showError('启动超时，部分数据未加载');
   }, BOOT_TIMEOUT_MS);
 
   void (async () => {

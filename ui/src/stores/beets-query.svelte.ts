@@ -197,7 +197,7 @@ class BeetsQueryStore {
     for (const [i, rule] of this.rules.entries()) {
       const kind = this.fields.find((f) => f.name === rule.field)?.kind ?? 'string';
       const text = rule.value.trim();
-      if (!text) return `第 ${i + 1} 条条件还没有填值`;
+      if (!text) return `第 ${i + 1} 条未填值`;
       if (isNumeric(kind)) {
         const n = Number(text);
         if (!Number.isFinite(n)) return `第 ${i + 1} 条条件的值要填数字（${rule.field}）`;
@@ -295,7 +295,7 @@ class BeetsQueryStore {
 
   openSave(): void {
     if (this.selectedTrackIds.length === 0) {
-      notify.showToast('先选中几首已入库的曲目');
+      notify.showToast('先选中已入库曲目');
       return;
     }
     // 预填一个能直接用的名字：beets 查询页存出来的歌单多半是"某次筛选的结果"
@@ -336,7 +336,7 @@ class BeetsQueryStore {
       const summary = await ipc.playlist.create(this.saveName.trim(), trackIds);
       // 侧栏由 `library.playlists` 驱动，创建后必须重拉——否则新歌单要等重启
       await library.loadPlaylists();
-      notify.showToast(`已存为歌单「${summary.name}」（共 ${summary.trackCount} 首）`);
+      notify.showToast(`已存为歌单「${summary.name}」`);
       this.saveOpen = false;
       this.saveName = '';
       this.clearSelection();

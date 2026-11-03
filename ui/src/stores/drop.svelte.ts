@@ -107,10 +107,7 @@ class DropStore {
       const receipt = await ipc.player.openPaths(paths);
 
       if (receipt.opened === 0) {
-        notify.showToast(
-          `没有可播放的内容：${reasons(receipt.skipped)}`,
-          receipt.skipped.length ? 6000 : 2600,
-        );
+        notify.showToast(`无法播放：${reasons(receipt.skipped)}`, receipt.skipped.length ? 6000 : 2600);
         return;
       }
 

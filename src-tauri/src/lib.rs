@@ -1222,7 +1222,7 @@ fn beets_set_inbox(
     if let Some(p) = trimmed {
         if path_conflicts_with_roots(p, &roots) {
             return Err(dto::ApiError::invalid_arg(
-                "待整理目录不能与曲库目录相同或在其内部",
+                "待整理目录不能与曲库目录重叠",
             ));
         }
     }
@@ -1251,7 +1251,7 @@ fn beets_set_target(
     let roots = roots_of(&app)?;
     if !path_within_roots(&p, &roots) {
         return Err(dto::ApiError::invalid_arg(
-            "整理落点必须在曲库目录之内（可以选曲库目录本身或它的子目录）",
+            "整理落点必须在曲库目录内",
         ));
     }
     let saved = p;
@@ -1268,7 +1268,7 @@ fn beets_open_inbox(app: AppHandle) -> Result<(), dto::ApiError> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
     let Some(dir) = inbox else {
-        return Err(dto::ApiError::invalid_arg("还没设置待整理目录"));
+        return Err(dto::ApiError::invalid_arg("未设置待整理目录"));
     };
     let _ = std::process::Command::new("explorer").arg(dir).spawn();
     Ok(())
@@ -2056,7 +2056,7 @@ fn library_scan_cancel(
 /// `library.roots`**（它是"加一个曲库目录"的动作）。用它来选「待整理目录」
 /// 会把待整理目录变成曲库根——copy 模式下原件留在 inbox，扫描器再扫一遍就是
 /// 重复曲目；更要命的是紧接着 `beets_set_inbox` 的重叠校验会拒绝这个选择，
-/// 用户看到的是"待整理目录不能与曲库目录相同或在其内部"，完全猜不到是自己
+/// 用户看到的是"待整理目录不能与曲库目录重叠"，完全猜不到是自己
 /// 刚才那一下把它加进去的。整理落点同理（落点校验比的是"在不在曲库里"）。
 ///
 /// `beets_preview` 的源、`beets_set_inbox` 的值、`beets_set_target` 的值都用这条。
@@ -2122,7 +2122,7 @@ async fn library_choose_root(
         Ok((roots, paused))
     });
     let (roots, paused) =
-        saved.map_err(|e| dto::ApiError::internal(format!("无法保存曲库目录：{e}")))?;
+        saved.map_err(|e| dto::ApiError::internal(format!("保存曲库目录失败：{e}")))?;
     Ok(Some(dto::library::ChosenRoot {
         path: path_str,
         roots,
@@ -2816,7 +2816,7 @@ async fn playlist_import(
     let text = String::from_utf8(bytes).map_err(|_| {
         dto::ApiError::new(
             dto::ApiErrorCode::Unsupported,
-            "播放列表不是 UTF-8 编码：m3u8 请保存为 UTF-8（GBK 编码暂不支持）",
+            "不是 UTF-8 编码，请另存为 UTF-8",
         )
     })?;
 
@@ -2828,10 +2828,10 @@ async fn playlist_import(
         aiya_data::playlist_io::parse_playlist(&text, &base_dir).map_err(|e| match e {
             aiya_data::playlist_io::ParseFailure::HlsManifest { tag } => dto::ApiError::new(
                 dto::ApiErrorCode::Unsupported,
-                format!("这是流媒体 manifest（HLS，#{tag}），不是静态播放列表——请用 FM 频道功能"),
+                format!("HLS 流媒体清单请用直播页打开（#{tag}）"),
             ),
             aiya_data::playlist_io::ParseFailure::Empty => {
-                dto::ApiError::invalid_arg("文件里没有任何曲目条目")
+                dto::ApiError::invalid_arg("播放列表为空")
             }
         })?;
 
@@ -2943,7 +2943,7 @@ async fn playlist_export(
     if let Some(enc) = encoding.as_deref() {
         if enc != "utf8" {
             return Err(dto::ApiError::invalid_arg(format!(
-                "不支持的导出编码：{enc}（目前只有 utf8）"
+                "不支持的导出编码：{enc}"
             )));
         }
     }
@@ -2994,12 +2994,12 @@ async fn playlist_export(
         .map_err(dto::ApiError::from)?;
 
     if items.is_empty() {
-        return Err(dto::ApiError::invalid_arg("歌单是空的，没有可导出的曲目"));
+        return Err(dto::ApiError::invalid_arg("歌单为空"));
     }
     let text = aiya_data::playlist_io::render_playlist(&items, &base_dir, relative);
     let count = items.len() as i64;
     std::fs::write(&out_path, text)
-        .map_err(|e| dto::ApiError::new(dto::ApiErrorCode::Io, format!("写不进导出文件：{e}")))?;
+        .map_err(|e| dto::ApiError::new(dto::ApiErrorCode::Io, format!("导出写入失败：{e}")))?;
     Ok(dto::playlist::PlaylistExportResult { path, count })
 }
 
@@ -3457,7 +3457,7 @@ fn player_play_query(
     start_index: Option<usize>,
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     let q: aiya_data::TrackWindowQuery = serde_json::from_value(query)
-        .map_err(|e| dto::ApiError::invalid_arg(format!("query 无效：{e}")))?;
+        .map_err(|e| dto::ApiError::invalid_arg(format!("查询参数不合法：{e}")))?;
     // 拉全量 id：list_tracks 的 limit 硬钳 500（窗口化列表的正确行为），
     // 此前把 limit 写成 10000 以为能拿全，实际只播了前 500 首。
     let (ids, truncated): (Vec<String>, bool) = state
@@ -3968,7 +3968,7 @@ fn player_open_paths(
         }
     }
     if tracks.is_empty() {
-        return Err(dto::ApiError::not_found("队列里没有可播放的条目"));
+        return Err(dto::ApiError::not_found("队列为空"));
     }
 
     let opened = tracks.len();
@@ -3996,7 +3996,7 @@ fn live_open(
     let url = url.trim().to_string();
     if !aiya_player::is_stream_path(&url) {
         return Err(dto::ApiError::invalid_arg(
-            "只支持 http(s) 的 HLS 地址（本地文件请用「打开文件」）",
+            "仅支持 http(s) 地址（本地文件用「打开文件」）",
         ));
     }
     let title = title

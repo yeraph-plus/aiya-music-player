@@ -21,6 +21,19 @@ export type Dialog =
   | { kind: 'removeTracks'; ids: string[] }
   /** 列表工具条的筛选器模态框（docs/27）；草稿状态在 OverlayHost 本地 */
   | { kind: 'trackFilter' }
+  /**
+   * 阻断级报错弹窗（报错三档的最高档）。
+   *
+   * 三档通道（2026-11 拍板）：后端/数据错误 → 界面错误条；不阻断运行的播放
+   * 报错 → 播放条吐司；**必须用户介入才能继续**的（设备丢失、未知故障）→
+   * 这里。`action` 给了就多渲染一个动作键（如「跳到下一首」）。
+   */
+  | {
+      kind: 'alert';
+      title: string;
+      message: string;
+      action?: { label: string; run: () => void };
+    }
   | null;
 
 export interface TrackMenu {
@@ -83,6 +96,11 @@ class OverlayStore {
 
   closeDialog(): void {
     this.dialog = null;
+  }
+
+  /** 阻断级报错弹窗（三档通道的最高档，见 Dialog 联合类型里的说明） */
+  showAlert(a: { title: string; message: string; action?: { label: string; run: () => void } }): void {
+    this.dialog = { kind: 'alert', ...a };
   }
 }
 

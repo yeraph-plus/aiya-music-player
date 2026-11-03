@@ -10,6 +10,7 @@
   import QueuePanel from './QueuePanel.svelte';
   import SideDrawer from './ui/SideDrawer.svelte';
   import { errorMessage } from '../lib/errors';
+  import type { AudioErrorCode } from '../lib/ipc/generated/AudioErrorCode';
   import type { SpectrumSource } from '../lib/spectrum-source';
   import { eq } from '../stores/eq.svelte';
   import { drop } from '../stores/drop.svelte';
@@ -24,6 +25,37 @@
   let { children }: Props = $props();
 
   const playerState = $derived(player.state);
+
+  /**
+   * 运行时播放错误的分档（报错三档通道，2026-11 拍板）：
+   * - **阻断级**（deviceLost / unknown）：设备或引擎出了状况，不处理就没法继续
+   *   听 → 弹窗，带「跳到下一首」动作；
+   * - **不阻断**（文件缺失、解码、格式不支持等单曲问题）：跳过即可 → 播放条吐司。
+   *   曲名不进文案：播放条歌曲区正显示着它，重复一遍只会把吐司撑长。
+   */
+  const BLOCKING_PLAYBACK_CODES: ReadonlySet<AudioErrorCode> = new Set(['deviceLost', 'unknown']);
+
+  /** 去重键：error 状态会随状态帧持续存在，同一次失败只报一遍 */
+  let lastPlaybackErrorKey: string | null = null;
+
+  $effect(() => {
+    // 先落到局部量再判空：$derived 是 getter，每次访问重新求值，TS 无法跨访问收窄
+    const ps = playerState;
+    if (ps?.status !== 'error' || !ps.error || !ps.current) return;
+    const err = ps.error;
+    const key = `${ps.current.id}|${err.code}|${err.message}`;
+    if (key === lastPlaybackErrorKey) return;
+    lastPlaybackErrorKey = key;
+    if (BLOCKING_PLAYBACK_CODES.has(err.code)) {
+      overlay.showAlert({
+        title: '播放失败',
+        message: `《${ps.current.title ?? '未知曲目'}》${err.message}`,
+        action: { label: '跳到下一首', run: () => player.next() },
+      });
+    } else {
+      notify.showToast(`播放失败：${err.message}`, 4000);
+    }
+  });
 
   /**
    * 全应用背景的频谱源：仅在设置开启时创建，tap 按需订阅
@@ -64,7 +96,8 @@
     try {
       await player.playTracks(player.queueIds, index);
     } catch (err) {
-      notify.showError(errorMessage(err));
+      // 起播失败不阻断运行：走播放条吐司（报错三档，2026-11 拍板）
+      notify.showToast(errorMessage(err));
     }
   }
 </script>
@@ -88,13 +121,7 @@
       <!-- 阻断类错误：没有可自救动作，只有「关闭」（InlineError 的两类之一） -->
       <InlineError message={notify.error} ondismiss={() => notify.clearError()} />
     {/if}
-    {#if playerState?.status === 'error' && playerState.error}
-      <!-- 可重试类错误：动作是「跳到下一首」，用户不用离开当前页 -->
-      <InlineError
-        message={`《${playerState.current?.title ?? '未知曲目'}》${playerState.error.message}`}
-        action={{ label: '跳到下一首', onclick: () => player.next() }}
-      />
-    {/if}
+    <!-- 运行时播放错误不在这里：按阻断级分档走弹窗/播放条吐司，见上方 effect -->
 
     <div class="page-content">
       {@render children()}

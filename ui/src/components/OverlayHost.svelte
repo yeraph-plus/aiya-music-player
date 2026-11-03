@@ -391,6 +391,28 @@
   />
 {/if}
 
+{#if overlay.dialog?.kind === 'alert'}
+  {@const a = overlay.dialog}
+  <!-- 阻断级报错弹窗：报错三档的最高档（设备丢失、未知故障）。动作键先关弹窗再执行，
+       避免 run() 里再开别的浮层被本次关闭覆盖。 -->
+  <Dialog title={a.title} description={a.message} onclose={() => overlay.closeDialog()}>
+    {#snippet actions()}
+      {#if a.action}
+        <Button
+          onclick={() => {
+            const run = a.action!.run;
+            overlay.closeDialog();
+            run();
+          }}
+        >
+          {a.action.label}
+        </Button>
+      {/if}
+      <Button variant="primary" onclick={() => overlay.closeDialog()}>关闭</Button>
+    {/snippet}
+  </Dialog>
+{/if}
+
 {#if overlay.dialog?.kind === 'playlistEdit'}
   {@const editing = overlay.dialog.playlist}
   <!-- 歌单创建与编辑共用此模态框。类型开关仅在创建时出现（后端不支持手动与智能歌单互相转换）。编辑时：手动歌单只改名称，动态歌单为名称 + 规则。条件行为「模式 select +

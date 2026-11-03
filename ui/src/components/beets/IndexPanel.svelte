@@ -10,6 +10,7 @@
   import Select from '../ui/Select.svelte';
   import { OP_LABELS, opsFor, beetsQuery as q } from '../../stores/beets-query.svelte';
   import { shortenPath } from '../../lib/format';
+  import { errorMessage } from '../../lib/errors';
   import { events, ipc } from '../../lib/ipc';
 
   /**
@@ -98,7 +99,9 @@
       await ipc.beets.indexImport();
     } catch (e) {
       endIndex();
-      indexError = e instanceof Error ? e.message : String(e);
+      // 走 errorMessage 而不是 e.message：ApiError 是普通对象不是 Error 实例，
+      // instanceof 判不中会显示成 [object Object]（lib/errors.ts 头注释的坑）
+      indexError = errorMessage(e);
     }
   }
 

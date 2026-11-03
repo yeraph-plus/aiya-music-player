@@ -81,7 +81,7 @@
     try {
       const index = await list.indexOfTrack(id);
       if (index === null) {
-        notify.showToast('正在播放的曲目不在当前列表里');
+        notify.showToast('当前曲目不在列表里');
         return;
       }
       locateIndex = index;
@@ -92,14 +92,14 @@
 
   function handleSelect(index: number, event: MouseEvent | KeyboardEvent): void {
     if (selection.handleSelect(index, event) === 'capped') {
-      notify.showToast(`单次最多选择 ${SELECTION_CAP} 首，已截取刚点中的一段`);
+      notify.showToast(`最多选 ${SELECTION_CAP} 首，已截取`);
     }
   }
 
   /** 勾选框：点=切换、Shift=连选（与 ctrl+点行的语义不同） */
   function handleCheck(index: number, event: MouseEvent | KeyboardEvent): void {
     if (selection.handleCheck(index, event) === 'capped') {
-      notify.showToast(`单次最多选择 ${SELECTION_CAP} 首，已截取刚点中的一段`);
+      notify.showToast(`最多选 ${SELECTION_CAP} 首，已截取`);
     }
   }
 
@@ -131,7 +131,8 @@
         notify.showToast(`已加入队列 ${ids.length} 首`);
         selection.clear();
       } catch (error) {
-        notify.showError(errorMessage(error));
+        // 入队失败不阻断运行：走播放条吐司（报错三档，2026-11 拍板）
+        notify.showToast(errorMessage(error));
       }
     })();
   }

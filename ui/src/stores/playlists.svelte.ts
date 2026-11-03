@@ -82,7 +82,7 @@ class PlaylistsStore {
     await this.refresh();
     const view = ui.view;
     if (view.kind === 'playlist' && view.id === playlist.id) await list.reload();
-    notify.showToast('规则已保存，歌单已按新规则重算');
+    notify.showToast('规则已保存');
     return true;
   }
 
@@ -93,9 +93,7 @@ class PlaylistsStore {
       await this.refresh();
       const view = ui.view;
       if (view.kind === 'playlist' && view.id === playlist.id) await list.reload();
-      notify.showToast(
-        result.added > 0 ? `新增 ${result.added} 首，共 ${result.total} 首` : '没有新增的匹配曲目',
-      );
+      notify.showToast(result.added > 0 ? `新增 ${result.added} 首` : '没有新增曲目');
     } catch (err) {
       notify.showError(errorMessage(err));
     }
@@ -145,7 +143,7 @@ class PlaylistsStore {
     await this.refresh();
     const view = ui.view;
     if (view.kind === 'playlist' && view.id === playlist.id) await list.reload();
-    notify.showToast('已清空播放列表');
+    notify.showToast('已清空歌单');
   }
 
   /**

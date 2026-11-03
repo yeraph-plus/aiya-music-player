@@ -75,7 +75,8 @@
     try {
       await player.playTracks(rows.map((row) => row.id), index);
     } catch (error) {
-      notify.showError(errorMessage(error));
+      // 起播失败不阻断运行：走播放条吐司（报错三档，2026-11 拍板）
+      notify.showToast(errorMessage(error));
     }
   }
 
@@ -91,7 +92,7 @@
         0,
       );
     } catch (error) {
-      notify.showError(errorMessage(error));
+      notify.showToast(errorMessage(error));
     }
   }
 </script>

@@ -1356,7 +1356,7 @@ export class MockBackend {
     const p = path?.trim();
     if (p) {
       if (this.scanRoots.some((r) => MockBackend.overlaps(p, r))) {
-        throw new Error('待整理目录不能与曲库目录重叠（相同、在里面、或是它的上级目录都不行）');
+        throw new Error('待整理目录不能与曲库目录重叠');
       }
       this.beetsInbox = p;
     } else {
@@ -1369,7 +1369,7 @@ export class MockBackend {
   beetsSetTarget(path: string): BeetsConfig {
     const p = path.trim();
     if (!this.scanRoots.some((r) => MockBackend.within(p, r))) {
-      throw new Error('整理落点必须在曲库目录之内（可以选曲库目录本身或它的子目录）');
+      throw new Error('整理落点必须在曲库目录内');
     }
     this.beetsTarget = p;
     return this.beetsConfigGet();
@@ -1597,7 +1597,7 @@ export class MockBackend {
    */
   playlistExport(id: string, path: string): PlaylistExportResult {
     const count = this.playlistItems.get(id)?.length ?? 0;
-    if (count === 0) throw new Error('歌单是空的，没有可导出的曲目');
+    if (count === 0) throw new Error('歌单为空');
     return { path, count };
   }
 

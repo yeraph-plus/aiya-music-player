@@ -141,7 +141,8 @@ class ListStore {
     try {
       await player.playQuery(this.query(), index);
     } catch (err) {
-      notify.showError(errorMessage(err));
+      // 起播失败不阻断运行：走播放条吐司（报错三档，2026-11 拍板）
+      notify.showToast(errorMessage(err));
     }
   }
 
@@ -151,7 +152,7 @@ class ListStore {
     try {
       await player.playQuery(this.query(), 0);
     } catch (err) {
-      notify.showError(errorMessage(err));
+      notify.showToast(errorMessage(err));
     }
   }
 
