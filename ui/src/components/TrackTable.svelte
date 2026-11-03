@@ -16,13 +16,22 @@
   import { Play } from '@lucide/svelte';
   import type { TrackRow } from '../lib/ipc';
   import { artworkUrl } from '../lib/artwork';
-  import { formatDay, formatPlays, formatTime } from '../lib/format';
+  import { formatDateTime, formatDay, formatPlays, formatTime } from '../lib/format';
   import { player } from '../stores/player.svelte';
   import Cover from './ui/Cover.svelte';
   import EmptyState from './ui/EmptyState.svelte';
 
   /** 可选列：数值列（plays/duration/added）三选一，kind 即列内容 */
-  export type Column = 'index' | 'cover' | 'title' | 'artist' | 'album' | 'plays' | 'duration' | 'added';
+  export type Column =
+    | 'index'
+    | 'cover'
+    | 'title'
+    | 'artist'
+    | 'album'
+    | 'plays'
+    | 'duration'
+    | 'added'
+    | 'lastPlayed';
 
   interface Props {
     rows: TrackRow[];
@@ -54,7 +63,8 @@
     album: 'minmax(80px, 1.3fr)',
     plays: '56px',
     duration: '56px',
-    added: '72px',
+    added: '80px',
+    lastPlayed: '80px',
   };
 
   /** 列 → 表头文案。cover 列无表头 */
@@ -67,18 +77,25 @@
     plays: '次数',
     duration: '时长',
     added: '入库',
+    lastPlayed: '最近播放',
   };
 
-  const isValue = (col: Column): boolean => col === 'plays' || col === 'duration' || col === 'added';
+  const isValue = (col: Column): boolean =>
+  col === 'plays' || col === 'duration' || col === 'added' || col === 'lastPlayed';
 
   function value(row: TrackRow, col: Column): string {
     if (col === 'plays') return formatPlays(row.playCount);
     if (col === 'added') return formatDay(row.addedAtMs);
+    if (col === 'lastPlayed') return row.lastPlayedAtMs === null ? '—' : formatDay(row.lastPlayedAtMs);
     return formatTime(row.durationMs);
   }
 
   const valueTitle = (row: TrackRow, col: Column): string =>
-    col === 'added' ? new Date(row.addedAtMs).toLocaleString('zh-CN') : value(row, col);
+    col === 'added'
+      ? new Date(row.addedAtMs).toLocaleString('zh-CN')
+      : col === 'lastPlayed' && row.lastPlayedAtMs !== null
+        ? formatDateTime(row.lastPlayedAtMs)
+        : value(row, col);
 
   const gridStyle = $derived(columns.map((col) => GRID[col]).join(' '));
 </script>

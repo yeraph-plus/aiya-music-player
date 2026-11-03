@@ -51,10 +51,10 @@
       subtitle: al?.artist ?? row?.artist ?? undefined,
       meta:
         al === null
-          ? `${list.total} 首`
-          : `${al.trackCount} 首` +
-            (al.year ? ` · ${al.year}` : '') +
-            (al.totalDurationMs > 0 ? ` · ${formatDurationLong(al.totalDurationMs)}` : ''),
+          ? `共 ${list.total} 首`
+          : `共 ${al.trackCount} 首` +
+            (al.year ? `，${al.year}` : '') +
+            (al.totalDurationMs > 0 ? `，${formatDurationLong(al.totalDurationMs)}` : ''),
       // 92px Cover lg 档：96 其实够用，取 256 给高 DPI 留余量（320 不在档内会被吞成 96）
       cover: artworkId ? (artworkUrl(artworkId, 256) ?? null) : null,
     };

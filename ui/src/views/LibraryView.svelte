@@ -48,7 +48,7 @@ import Progress from '../components/ui/Progress.svelte';
           ? '按规则自动聚合的曲目合集'
           : '按顺序编排的曲目合集') as string | undefined,
         meta: playlist
-          ? `${playlist.trackCount} 首 · ${formatDurationLong(playlist.durationMs)}`
+          ? `共 ${playlist.trackCount} 首，${formatDurationLong(playlist.durationMs)}`
           : '',
         cover: playlist?.artworkId ? (artworkUrl(playlist.artworkId, 256) ?? null) : null,
         playDisabled: !playlist || playlist.trackCount === 0,
@@ -59,7 +59,7 @@ import Progress from '../components/ui/Progress.svelte';
         kicker: 'SEARCH',
         title: ui.search.trim() ? `搜索「${ui.search.trim()}」` : '搜索',
         subtitle: '曲目、专辑与艺人的聚合查找',
-        meta: `${list.total} 首`,
+        meta: `共 ${list.total} 首`,
         cover: undefined as string | null | undefined,
         playDisabled: list.total === 0,
       };

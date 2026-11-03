@@ -41,9 +41,9 @@
       title: ar?.name ?? row?.artist ?? '艺人',
       meta:
         ar === null
-          ? `${list.total} 首`
-          : `${ar.trackCount} 首 · ${ar.albumCount} 张专辑` +
-            (ar.totalDurationMs > 0 ? ` · ${formatDurationLong(ar.totalDurationMs)}` : ''),
+          ? `共 ${list.total} 首`
+          : `共 ${ar.trackCount} 首，${ar.albumCount} 张专辑` +
+            (ar.totalDurationMs > 0 ? `，${formatDurationLong(ar.totalDurationMs)}` : ''),
     };
   });
 </script>

@@ -200,7 +200,8 @@ function buildLibrary(): TrackRow[] {
           addedAtMs: Math.floor(base - rand() * 86400 * 180) * 1000,
           artworkId: null,
           playCount: played ? Math.floor(rand() * 60) : 0,
-          lastPlayedAtMs: played ? Math.floor(base - rand() * 86400 * 60) : null,
+          // 与 addedAtMs 同规：base 是秒，×1000 成契约要求的毫秒（漏乘会显示 1970 年）
+          lastPlayedAtMs: played ? Math.floor(base - rand() * 86400 * 60) * 1000 : null,
           gainDb: null,
           // 假数据全部"在线"：预览里不需要模拟灰标，那要看真库的 missing 状态
           availability: 'online',

@@ -30,7 +30,8 @@
     title: string;
     /** 标题下一行说明（产品陈述，一句话） */
     subtitle?: string;
-    /** 标题下的补充统计，如「12 首 · 43 分钟」。**与 subtitle 合并渲染在同一行**，
+    /** 标题下的补充统计，如「共 12 首，43 分钟」。**与 subtitle 合并渲染在同一行**
+     * （逗号分隔，不用间隔号），
      *  不另起一行。**是字符串不是 snippet**：
      *  snippet 的内容渲染在父组件作用域，这里的 scoped class 命中不了它 */
     meta?: string;
@@ -61,7 +62,7 @@
     {#if subtitle || meta}
       <!-- 描述与统计合成一行：两层文本会把头部撑到四行，仪表盘页撑得太高 -->
       <p>
-        {#if subtitle}{subtitle}{#if meta} · {/if}{/if}{#if meta}<span class="ch-meta">{meta}</span>{/if}
+        {#if subtitle}{subtitle}{/if}{#if subtitle && meta}，{/if}{#if meta}<span class="ch-meta">{meta}</span>{/if}
       </p>
     {/if}
   </div>

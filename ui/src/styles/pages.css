@@ -70,9 +70,60 @@
 
 /* 首页 */
 
-/* 常听区半宽：通用表格列少（封面/标题/歌手/数值），整页宽会把列距拉稀 */
-.home-section.half {
-  width: 50%;
+/* 第一行：歌单卡片区（弹性占满）+ 统计卡（固定 30%）。对齐 flex-start：
+   卡片行比统计卡高得多，统计卡贴顶即可 */
+.home-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.home-top .home-section:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 统计卡：2×2 网格。不可点（导航归侧栏），纯事实陈述 */
+.stat-tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.stat-tile .tile-value {
+  font-size: var(--fs-2xl);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stat-tile .tile-label {
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+/* 第二行双表：常听 | 最近播放，各占一半 */
+.home-duo {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.home-duo .home-section {
+  flex: 1;
   min-width: 0;
 }
 
