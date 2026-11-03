@@ -41,9 +41,12 @@ import Progress from '../components/ui/Progress.svelte';
     if (view.kind === 'playlist') {
       const playlist = currentPlaylist;
       return {
-        kicker: '播放列表',
+        kicker: 'PLAYLIST',
         title: playlist?.name ?? '播放列表',
-        subtitle: undefined as string | undefined,
+        // 动态歌单是规则聚合，手动歌单是顺序编排——描述跟着种类说实话
+        subtitle: (playlist?.kind === 'smart'
+          ? '按规则自动聚合的曲目合集'
+          : '按顺序编排的曲目合集') as string | undefined,
         meta: playlist
           ? `${playlist.trackCount} 首 · ${formatDurationLong(playlist.durationMs)}`
           : '',
@@ -53,21 +56,19 @@ import Progress from '../components/ui/Progress.svelte';
     }
     if (isSearchPage) {
       return {
-        // 搜索页与其他列表页同一标题级：大标题 + 统计，不用 kicker/subtitle 两层
-        kicker: undefined as string | undefined,
+        kicker: 'SEARCH',
         title: ui.search.trim() ? `搜索「${ui.search.trim()}」` : '搜索',
-        subtitle: undefined as string | undefined,
+        subtitle: '曲目、专辑与艺人的聚合查找',
         meta: `${list.total} 首`,
         cover: undefined as string | null | undefined,
         playDisabled: list.total === 0,
       };
     }
     return {
-      // 列表页标题形态：大标题 + 统计描述，不用 kicker/subtitle 三层。
       // 标题随 tab 走（最近播放/最近添加是曲库页的 tab 索引）
-      kicker: undefined as string | undefined,
+      kicker: 'LIBRARY',
       title: LIB_TABS.find((t) => t.key === ui.libraryTab)?.label ?? '全部曲目',
-      subtitle: undefined as string | undefined,
+      subtitle: '本地曲库的完整索引',
       meta: `${list.total} 首`,
       cover: undefined as string | null | undefined,
       playDisabled: list.total === 0,
@@ -77,9 +78,6 @@ import Progress from '../components/ui/Progress.svelte';
   /* 搜索结果页（B4-3c） */
 
   const isSearchPage = $derived(ui.page === 'search');
-
-  /** 列表页与搜索页同用大标题形态（非歌单页） */
-  const isListPage = $derived(view.kind !== 'playlist');
 
   /**
    * 曲库页 tab 索引：「全部曲目」旁的三个小标题 tab。排序控件只在「全部曲目」给——
@@ -154,7 +152,6 @@ import Progress from '../components/ui/Progress.svelte';
     subtitle={header.subtitle}
     meta={header.meta}
     cover={header.cover}
-    big={isListPage}
   >
     {#snippet actions()}
       {#if ui.page === 'library'}

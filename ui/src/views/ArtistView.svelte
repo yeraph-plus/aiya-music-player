@@ -49,7 +49,7 @@
 </script>
 
 <div class="page-pad">
-  <Header kicker="艺人" title={header.title} meta={header.meta}>
+  <Header kicker="ARTIST" title={header.title} meta={header.meta}>
     {#snippet icon()}
       <div class="artist-badge"><User size={40} strokeWidth={1.6} /></div>
     {/snippet}

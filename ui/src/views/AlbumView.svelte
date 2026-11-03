@@ -63,7 +63,7 @@
 
 <div class="page-pad">
   <Header
-    kicker="专辑"
+    kicker="ALBUM"
     title={header.title}
     subtitle={header.subtitle}
     meta={header.meta}

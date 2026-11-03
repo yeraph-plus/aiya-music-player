@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { Flame, ListMusic, Play } from '@lucide/svelte';
+  import { ListMusic, Play } from '@lucide/svelte';
+  import TrackTable from '../components/TrackTable.svelte';
   import InlineError from '../components/ui/InlineError.svelte';
   import EmptyState from '../components/ui/EmptyState.svelte';
-  import TrackTable from '../components/TrackTable.svelte';
   import type { TrackRow } from '../lib/ipc';
   import type { TrackSource } from '../lib/query';
   import { artworkUrl } from '../lib/artwork';
@@ -19,7 +19,7 @@
    *
    * - 第一级 歌单卡片行：封面即播放键（点击直接起播，不跳页），
    *   卡片名点击才进歌单视图；
-   * - 第二级 常听榜：播放最多的 15 首（排序 = 次数 desc，同次数按最近优先），
+   * - 第二级 常听：播放最多的 15 首（排序 = 次数 desc，同次数按最近优先），
    *   第 16 名永远进不来，满额后新歌挤掉末位——天然"新增一个退出一个"。
    *
    * 不设统计入口：曲目/专辑/艺人侧栏都有一级导航，此处重复即视觉冗余。
@@ -103,8 +103,20 @@
   <!-- 第一级：歌单卡片行。封面 = 播放键，名字 = 路由入口 -->
   <section class="home-section">
     <div class="section-heading">
-      <div><ListMusic size={17} /><h2>歌单</h2></div>
-      <span>{playlists.items.length} 个</span>
+      <div class="section-title">
+        <span class="page-kicker">PLAYLISTS</span>
+        <h2>歌单</h2>
+        <p class="section-desc">自己编排的收听合集</p>
+      </div>
+      <!-- 缺失警告的唯一的统计位：有缺失时顶掉计数（两者同占标题行右侧，
+           点击去设置→曲库处理；性质是告警不是导航） -->
+      {#if library.stats && library.stats.missingLocations > 0}
+        <button class="stat-warn" onclick={() => nav.settingsAt('library')}>
+          {library.stats.missingLocations} 个位置缺失，去处理
+        </button>
+      {:else}
+        <span>{playlists.items.length} 个</span>
+      {/if}
     </div>
     <div class="playlist-row">
       {#each playlists.items as playlist (playlist.id)}
@@ -135,29 +147,25 @@
     </div>
   </section>
 
-  <!-- 缺失警告：唯一保留的统计位，性质是告警而非导航，点击即去处理。处理入口在设置页的「曲库」组，因此走 `nav.settingsAt`
-  而不是普通 `go` —— 落地要直接滚到那一组，不让人在设置页顶部自行寻找 -->
-  {#if library.stats && library.stats.missingLocations > 0}
-    <button class="stat-warn" onclick={() => nav.settingsAt('library')}>
-      {library.stats.missingLocations} 个位置缺失，去「设置 → 曲库」查看
-    </button>
-  {/if}
-
-  <!-- 第二级：常听榜。清空历史的唯一入口挂在这里（榜单的输入就是播放计数） -->
-  <section class="home-section">
+  <!-- 第二级：常听。清空历史的唯一入口挂在这里（榜单的输入就是播放计数）。
+       半宽：通用表格列少，整页宽会拉稀列距 -->
+  <section class="home-section half">
     <div class="section-heading">
-      <div><Flame size={17} /><h2>常听榜</h2></div>
+      <div class="section-title">
+        <span class="page-kicker">MOST PLAYED</span>
+        <h2>常听</h2>
+        <p class="section-desc">播放次数排出来的曲目榜单</p>
+      </div>
       <button class="section-link" onclick={() => void clearHistory()}>清空播放历史</button>
     </div>
     <TrackTable
       rows={frequent}
+      columns={['cover', 'title', 'artist', 'plays']}
       {loading}
-      empty="播放次数积累后，这里会形成你的常听榜单。"
-      valueKind="plays"
+      empty="播放次数积累后，这里会长出你的常听曲目。"
       currentId={player.state?.current?.id ?? null}
       onplay={(index) => void play(frequent, index)}
       onopenartist={(id) => nav.go({ kind: 'artist', id })}
-      onopenalbum={(id) => nav.go({ kind: 'album', id })}
     />
   </section>
 </div>

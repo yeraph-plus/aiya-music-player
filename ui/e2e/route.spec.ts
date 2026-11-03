@@ -185,7 +185,8 @@ test('2026-10-30：首页「位置缺失」告警 → 设置页曲库组（滚�
   await page.goto('/?missing=2');
   const warn = page.locator('.stat-warn');
   await expect(warn).toContainText('2 个位置缺失');
-  await expect(warn).toContainText('设置 → 曲库');
+  // 文案压缩后不再复述入口路径（2026-11-03）：动作语义保留
+  await expect(warn).toContainText('去处理');
   await warn.click();
 
   await expect(page.locator('.main h1')).toHaveText('设置');
@@ -351,7 +352,8 @@ test('docs/48：未装 beets 时 Beets 页只给两条安装路线，不出查�
   await page.locator('.sidebar .nav-item', { hasText: 'Beets' }).click();
 
   const main = page.locator('.main');
-  await expect(main).toContainText('未安装 Beets 分析工具');
+  // 未安装状态在页头 meta 说明（一行「未安装」，详细解释归安装页）
+  await expect(main).toContainText('未安装');
   // 两张平级卡、各占一行：预配置环境常驻；本机安装只差"有没有 Python"
   await expect(main.getByRole('button', { name: /下载并安装/ })).toBeVisible();
   await expect(main.locator('section.beets-panel').filter({ hasText: '预配置环境' })).toHaveCount(1);

@@ -10,9 +10,14 @@
 
 /* 页面公共 */
 
-.page-kicker {
-  font-size: var(--fs-xs);
-  letter-spacing: 0.14em;
+/* 装饰英文：页面头（.ch-kicker，Header 内）与首页区块标题（.page-kicker）同源。
+   大写 + 宽字距，字号比正文大半档（原 fs-xs 放大一档），压住标题上缘 */
+.page-kicker,
+.ch-kicker {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
   color: var(--text-3);
 }
 
@@ -21,21 +26,29 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin: 22px 0 10px;
+  margin: 24px 0 10px;
 }
 
-.section-heading > div {
+/* 区块标题的三层装饰：英文 + 标题 + 一句产品陈述（与页面头同构，字号低一档） */
+.section-heading .section-title {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-2);
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .section-heading h2 {
   margin: 0;
-  font-size: var(--fs-lg);
-  font-weight: 600;
+  font-size: var(--fs-xl);
+  font-weight: 400;
+  letter-spacing: -0.01em;
   color: var(--text-1);
+}
+
+.section-heading .section-desc {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
 }
 
 .section-heading > span {
@@ -57,18 +70,23 @@
 
 /* 首页 */
 
-/* 缺失警告：
-   不是装饰——点了去扫描入库页处理 */
+/* 常听区半宽：通用表格列少（封面/标题/歌手/数值），整页宽会把列距拉稀 */
+.home-section.half {
+  width: 50%;
+  min-width: 0;
+}
+
+/* 缺失警告：歌单区标题行右侧的动作位（唯一保留的统计位）。
+   不是装饰——点了去设置→曲库处理 */
 .stat-warn {
-  display: block;
-  margin: 0 0 4px;
-  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
   font-size: var(--fs-sm);
   color: var(--warn);
 }
 
 .stat-warn:hover {
-  color: var(--accent-text);
+  text-decoration: underline;
 }
 
 /* 歌单卡片行：横向滚动，卡片定宽。
@@ -162,25 +180,7 @@
   color: var(--text-2);
 }
 
-/* 首页表格（components/TrackTable.svelte）首页的三段预览是**真表格**（表头 + 勾选列），不再是整行一个 <button>：行里有勾选框就不能用
-   <button> 包（button 内嵌可交互元素是非法的）。列宽与主列表不完全一致——这里是 8 行预览，标题列给得更宽。 */
-
-/* 首页预览列表：行/表头复用 lists.css 的主列表网格 （.list-shell.no-batch + .row/.grid-head），此前的 .tt-*
-   独立表格整套撤销——列宽节奏不同导致的行列错位不再可能出现。空态已统一到 EmptyState.svelte（.k-empty），只留骨架一个展示块。 */
-
-.tt-skeleton {
-  height: 40px;
-  margin: 0 12px;
-  border-radius: 8px;
-  background: var(--surface-hover);
-  animation: pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  50% {
-    opacity: 0.55;
-  }
-}
+/* 首页「常听」榜单（components/FrequentList.svelte）样式自包含在其 scoped 块里。 */
 
 /* 正在播放 */
 
@@ -948,12 +948,26 @@
   .spinning {
     animation: none;
   }
-}
 
-/* reduced-motion（发布前 UI 审查 P1-1）：TrackTable 骨架脉冲静止化 */
-@media (prefers-reduced-motion: reduce) {
+  /* TrackTable 加载骨架脉冲静止化 */
   .tt-skeleton {
     animation: none;
     opacity: 0.7;
   }
 }
+
+/* TrackTable（通用静态表格）加载骨架：行位占位 */
+.tt-skeleton {
+  height: 40px;
+  margin: 0 12px;
+  border-radius: 8px;
+  background: var(--surface-hover);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+

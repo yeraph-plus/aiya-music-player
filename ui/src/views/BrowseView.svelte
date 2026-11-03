@@ -60,8 +60,8 @@
 
   const heading = $derived(
     mode === 'artists'
-      ? { title: '艺人' }
-      : { title: '专辑' },
+      ? { kicker: 'ARTISTS', title: '艺人', subtitle: '以艺人为单位浏览曲库' }
+      : { kicker: 'ALBUMS', title: '专辑', subtitle: '以专辑为单位浏览曲库' },
   );
 
   /* 次要统计描述：只报总数，不做「500 / 共 xxx」的截断说明——分页器本身
@@ -103,7 +103,7 @@
 </script>
 
 <div class="page-pad browse" bind:this={scrollEl}>
-  <Header title={heading.title} {meta} big>
+  <Header {meta} kicker={heading.kicker} title={heading.title} subtitle={heading.subtitle}>
     {#snippet actions()}
       <div class="search">
         <Search size={14} aria-hidden="true" />
@@ -181,7 +181,7 @@
     align-items: center;
     gap: 6px;
     padding: 0 10px;
-    height: 30px;
+    height: var(--control-h);
     min-width: 200px;
     border: 1px solid var(--line);
     border-radius: var(--radius-pill);

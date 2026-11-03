@@ -4,6 +4,7 @@
   import Button from '../components/ui/Button.svelte';
   import Dialog from '../components/ui/Dialog.svelte';
   import Field from '../components/ui/Field.svelte';
+  import Header from '../components/content/Header.svelte';
   import IconButton from '../components/ui/IconButton.svelte';
   import { errorMessage } from '../lib/errors';
   import { formatTime } from '../lib/format';
@@ -257,20 +258,15 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="live">
-  <header class="live-head">
-    <div>
-      <span class="page-kicker">LIVE</span>
-      <h1>直播</h1>
-      <p>左右换台浏览，点中央卡开播。把 m3u8 文件拖进窗口也能直接播。</p>
-    </div>
-    <div class="live-actions">
+  <Header kicker="LIVE" title="直播" subtitle="收听网络电台与 HLS 直播流">
+    {#snippet actions()}
       <Button variant="primary" onclick={openAdd}>
         {#snippet icon()}<Plus size={14} />{/snippet}
         添加台
       </Button>
       <Button variant="ghost" disabled={busy} onclick={() => void pickFile()}>打开文件…</Button>
-    </div>
-  </header>
+    {/snippet}
+  </Header>
 
   <section class="deck">
     <div
@@ -403,7 +399,7 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    padding: 18px 22px 8px;
+    padding: 6px 22px 8px;
   }
 
   /* 内容区高度吃紧时卡组缩一档，头部与信息块不动 */
@@ -412,32 +408,6 @@
       --live-card-w: 200px;
       --live-card-h: 320px;
     }
-  }
-
-  .live-head {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .live-head h1 {
-    margin: 4px 0 2px;
-    font-size: var(--fs-2xl);
-    color: var(--text-1);
-  }
-
-  .live-head p {
-    margin: 0;
-    font-size: var(--fs-base);
-    color: var(--text-2);
-  }
-
-  .live-actions {
-    display: flex;
-    flex: none;
-    gap: 8px;
-    padding-bottom: 2px;
   }
 
   /* 卡组 */

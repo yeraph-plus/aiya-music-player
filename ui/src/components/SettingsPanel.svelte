@@ -258,7 +258,7 @@ import TextTabs from './ui/TextTabs.svelte';
   <div class="settings-headwrap">
     <div class="page-pad">
       <!-- 大标题固定「设置」，右侧 tab 只做跳转定位 -->
-      <Header title="设置" big>
+      <Header kicker="SETTINGS" title="设置" subtitle="应用偏好与曲库管理">
         {#snippet actions()}
           <!-- 语义用 nav + aria-current，而非 role="tablist"/"tab"（同 content/Toolbar）：tab 只执行 scrollIntoView
           跳转，六个区块平铺常驻，不构成"切换面板"；套用 tab 角色会让读屏软件等待一个不存在的 tabpanel。语义与外观统一由 TextTabs 提供。 -->

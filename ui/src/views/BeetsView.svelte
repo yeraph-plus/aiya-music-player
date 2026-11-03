@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { Wrench } from '@lucide/svelte';
   import Header from '../components/content/Header.svelte';
-  import Toolbar from '../components/content/Toolbar.svelte';
+  import TextTabs from '../components/ui/TextTabs.svelte';
   import Button from '../components/ui/Button.svelte';
   import EmptyState from '../components/ui/EmptyState.svelte';
   import InstallPanel from '../components/beets/InstallPanel.svelte';
@@ -46,10 +46,11 @@
   ]);
 
   const headerMeta = $derived.by(() => {
-    if (ui.beets === null) return '正在检测 Beets…';
-    if (!found) return '未安装 Beets 分析工具，请先安装';
-    if (schemaMismatch) return 'Beets 版本不匹配';
-    return [`beets ${ui.beets.beetsVersion ?? '未知版本'}`, '曲库只读分析 + 新文件整理'].join(' · ');
+    if (ui.beets === null) return '正在检测…';
+    // 未安装的说明交给下面的门（EmptyState），meta 不重复一遍
+    if (!found) return '未安装';
+    if (schemaMismatch) return '版本不匹配';
+    return `beets ${ui.beets.beetsVersion ?? '未知版本'}`;
   });
 
   onMount(() => {
@@ -71,16 +72,25 @@
 </script>
 
 <div class="page-scroll beets-page">
-  <Header title="Beets" big meta={headerMeta} />
-
-  <Toolbar
-    tabs={tabs}
-    active={ui.beetsTab}
-    ontab={(id) => {
-      ui.beetsTabTouched = true;
-      ui.beetsTab = id as 'install' | 'index' | 'organize';
-    }}
-  />
+  <Header
+    kicker="LIBRARY TOOLS"
+    title="Beets"
+    subtitle="曲库整理与音频分析工具"
+    meta={headerMeta}
+  >
+    {#snippet actions()}
+      <!-- tab 在头部右侧（与设置页同构），不再单独占一条工具栏 -->
+      <TextTabs
+        items={tabs}
+        value={ui.beetsTab}
+        onchange={(id) => {
+          ui.beetsTabTouched = true;
+          ui.beetsTab = id as 'install' | 'index' | 'organize';
+        }}
+        label="Beets 视图切换"
+      />
+    {/snippet}
+  </Header>
 
   {#if ui.beetsTab === 'install'}
     <InstallPanel />

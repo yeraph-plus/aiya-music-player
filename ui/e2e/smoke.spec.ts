@@ -159,7 +159,8 @@ test('设置页：单页平铺 + tab 跳转定位 + 主题切换生效', async (
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
   await expect(page.locator('.main h1')).toHaveText('设置');
-  await expect(page.locator('.main .ch-kicker')).toHaveCount(0);
+  // 三层装饰全站统一后设置页也有装饰英文（2026-11-03）
+  await expect(page.locator('.main .ch-kicker')).toHaveText('SETTINGS');
 
   // 初始高亮第一组；六个区块全部渲染（含小标题）。
   // 语义是"滚动到某个区块"而不是"切换面板"→ nav + aria-current（同 content/Toolbar）
