@@ -194,7 +194,7 @@ export interface AppSettings {
    * 播放记录保留周期（天）。0 = 永久。
    *
    * 记录范围由该设置唯一定义：history 表只存周期内的行，宿主在启动、写历史、改
-   * 设置时裁剪，行数由此收敛。「最近播放」tab 与常听榜读取裁剪后的 history；
+   * 设置时裁剪，行数由此收敛。「最近播放」tab 与常听读取裁剪后的 history；
    * 筛选器不设"上次播放"档。
    */
   historyDays: number;

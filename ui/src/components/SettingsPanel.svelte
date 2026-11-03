@@ -646,7 +646,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <div>
             <div class="setting-title">最近播放保留</div>
             <div class="setting-hint">
-              播放记录只保留这段时间，到期自动清理；「最近播放」列表与常听榜都按这个范围统计
+              播放记录只保留这段时间，到期自动清理；「最近播放」列表与常听都按这个范围统计
             </div>
           </div>
           <SegmentedControl

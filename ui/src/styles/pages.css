@@ -231,7 +231,8 @@
   color: var(--text-2);
 }
 
-/* 首页「常听」榜单（components/FrequentList.svelte）样式自包含在其 scoped 块里。 */
+/* 首页三个 TrackTable 区块的行样式复用 lists.css 的 .row/.grid-head，
+   表格外壳差异在组件 scoped 块；骨架 .tt-skeleton 见文件尾。 */
 
 /* 正在播放 */
 

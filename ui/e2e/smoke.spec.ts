@@ -51,11 +51,15 @@ test('启动装配：顶栏四件 + 仪表盘三级 + 播放条空态', async ({
   // 宽 TitleBar：搜索框在位、返回键此时无历史所以 disabled
   await expect(page.locator('.titlebar .tb-search input')).toBeVisible();
   await expect(page.getByRole('button', { name: '返回上一页' })).toBeDisabled();
-  // 三项统计入口二次修订撤销（侧栏已有一级导航），只剩缺失警告位
+  // 首页无页标题（侧栏已是一级导航）；统计是纯事实卡（stat-tile），
+  // 不可点——曾以可点统计卡做导航（.stat-card）被二次修订撤销，守这里
   await expect(page.locator('.main h1')).toHaveCount(0);
   await expect(page.locator('.main .playlist-row .playlist-card').first()).toBeVisible();
+  await expect(page.locator('.main .stat-tile')).toHaveCount(4);
   await expect(page.locator('.main .stat-card')).toHaveCount(0);
-  await expect(page.locator('.main .preview-list .row').first()).toBeVisible();
+  // 三行仪表盘：常听|最近播放双表 + 最近添加整宽表
+  await expect(page.locator('.main .home-duo .preview-list')).toHaveCount(2);
+  await expect(page.locator('.main .home-duo + .home-section .preview-list')).toHaveCount(1);
   await expect(page.locator('.main .list')).toHaveCount(0);
   await expect(page.locator('footer')).toContainText('未在播放');
   // 歌单摘要的加载链路：boot → playlists.refresh() → library.playlists → 侧栏。
