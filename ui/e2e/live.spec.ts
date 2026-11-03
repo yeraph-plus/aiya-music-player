@@ -91,31 +91,38 @@ test('队列面板：临时项自带标题与来源标记，不等库内元数�
   await expect(row.locator('.q-duration')).toHaveText('直播');
 });
 
-test('直播页：地址框打开一个流 → 大画面三态 + 最近打开按地址去重', async ({ page }) => {
+test('直播页：模态添加台 → 卡组按地址去重 → 点中央卡开播 → 移除回空态', async ({ page }) => {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '直播' }).click();
   await expect(page.locator('.main h1')).toHaveText('直播');
-  // 没开过直播时是空态，不是一行假记录
-  await expect(page.locator('.recent-empty')).toBeVisible();
+  // 空态没有单独的占位层：直接就是中央那张加号卡
+  const addCard = page.locator('.live-card.ghost-add');
+  await expect(addCard).toBeVisible();
+  await expect(page.locator('.live-card:not(.ghost)')).toHaveCount(0);
 
-  await page.getByLabel('直播流地址').fill(STREAM_URL);
-  await page.getByRole('button', { name: '打开', exact: true }).click();
+  // 点加号卡 → 弹出新增模态框
+  await addCard.click();
+  await page.getByLabel('m3u8 地址').fill(STREAM_URL);
+  await page.getByLabel('名称（可选）').fill('测试台');
+  await page.getByRole('button', { name: '添加', exact: true }).click();
 
-  // 大画面：标题 + 三态徽章 + 出处
-  await expect(page.locator('.live-stage .stage-title')).toHaveText('index');
-  await expect(page.locator('.stage-badge')).toHaveText('直播');
-  await expect(page.locator('.stage-origin')).toHaveText('stream.example.com');
+  // 卡组：一张卡，卡面是台名
+  const card = page.locator('.live-card:not(.ghost)');
+  await expect(card).toHaveCount(1);
+  await expect(card.locator('.face-name')).toHaveText('测试台');
 
-  // 最近打开：一条，URL 原样留档
-  const row = page.locator('.recent-row').first();
-  await expect(row.locator('.recent-url')).toHaveText(STREAM_URL);
-  await expect(page.locator('.recent-count')).toHaveText('1 / 20');
+  // 同一个地址再添加一次：按地址去重，不新增第二张卡
+  await page.getByRole('button', { name: '添加台', exact: true }).click();
+  await page.getByLabel('m3u8 地址').fill(STREAM_URL);
+  await page.getByRole('button', { name: '添加', exact: true }).click();
+  await expect(page.locator('.live-card:not(.ghost)')).toHaveCount(1);
 
-  // 同一个台再开一次：按地址去重，不新增第二条
-  await row.locator('.recent-open').click();
-  await expect(page.locator('.recent-count')).toHaveText('1 / 20');
+  // 点中央卡开播：信息块徽章与播放条徽章同时进入直播态
+  await page.locator('.live-card.role-current .card-face').click();
+  await expect(page.locator('.live-info .stage-badge')).toHaveText('直播');
+  await expect(page.locator('footer .timeline .live-badge')).toHaveText('直播');
 
-  // 移除后回到空态
-  await row.getByRole('button', { name: '从最近打开中移除' }).click();
-  await expect(page.locator('.recent-empty')).toBeVisible();
+  // 移除后回到空态：加号卡回到中央
+  await page.locator('.live-card.role-current .card-remove').click();
+  await expect(page.locator('.live-card.ghost-add')).toBeVisible();
 });

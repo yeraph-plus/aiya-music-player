@@ -6,6 +6,7 @@
  * `status === 'playing' ? '直播' : '已断开'` 的话，改文案必漏一处——
  * 这个仓在 `is_http_url` 上已经吃过一次同样的亏。
  */
+import { STREAM_ID_PREFIX } from './format';
 import type { LiveRecentEntry } from './settings';
 import type { PlaybackStatus } from './ipc/generated/PlaybackStatus';
 
@@ -30,6 +31,21 @@ export function livePhase(status: PlaybackStatus | null | undefined): LivePhase 
 
 /** 「最近打开」上限。20 条够翻，再多就该做收藏夹了（那是另一件事） */
 export const LIVE_RECENT_LIMIT = 20;
+
+/** 卡组换台的过渡时长，与 LiveView 的 `--live-swap-ms` 同源（后者由组件注入）。 */
+export const LIVE_SWAP_MS = 800;
+
+/**
+ * 从 `TrackRef.id` 取出直播流的原始 URL。
+ *
+ * `stream:` 前缀后的部分就是完整地址（见 `format.ts` 与 Rust 侧的
+ * `STREAM_ID_PREFIX` 约定），直播页靠它把"正在播的流"对回卡组里的台；
+ * 非直播流（本地曲目）返回 null。
+ */
+export function streamUrlOf(id: string | null | undefined): string | null {
+  if (!id || !id.startsWith(STREAM_ID_PREFIX)) return null;
+  return id.slice(STREAM_ID_PREFIX.length);
+}
 
 /**
  * 把一条记录放到「最近打开」最前面：**按 URL 去重**，超上限截尾，不改入参。
