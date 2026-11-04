@@ -14,6 +14,7 @@
  * 2. **所有提示走播放条上方的吐司位**（`Toast` 的 `bottom: --player-h + 16px`），
  *    不新造浮层——拖放是个"顺手的动作"，反馈不该抢走视线。
  */
+import { t } from '../lib/i18n.svelte';
 import { errorMessage } from '../lib/errors';
 import { ipc } from '../lib/ipc';
 import type { DroppedItem } from '../lib/ipc/generated/DroppedItem';
@@ -40,19 +41,19 @@ function summarize(items: DroppedItem[]): string {
   }
 
   const parts: string[] = [];
-  if (playable) parts.push(`${playable} 项可播放`);
-  if (playlists) parts.push(`${playlists} 个歌单会展开`);
-  if (folders) parts.push(`${folders} 个文件夹跳过（走设置 → 曲库导入）`);
-  if (unsupported) parts.push(`${unsupported} 项格式不支持`);
-  return parts.length ? parts.join(' · ') : '没有可识别的内容';
+  if (playable) parts.push(t('lib.drop.hintPlayable', { n: playable }));
+  if (playlists) parts.push(t('lib.drop.hintPlaylists', { n: playlists }));
+  if (folders) parts.push(t('lib.drop.hintFolders', { n: folders }));
+  if (unsupported) parts.push(t('lib.drop.hintUnsupported', { n: unsupported }));
+  return parts.length ? parts.join(' · ') : t('lib.drop.hintEmpty');
 }
 
 /** 吐司里最多列几条原因：多到刷屏就没人看了，剩下的用「N 项」概括 */
 const MAX_REASONS = 2;
 
 function reasons(list: string[]): string {
-  const head = list.slice(0, MAX_REASONS).join('；');
-  return list.length > MAX_REASONS ? `${head} 等 ${list.length} 项` : head;
+  const head = list.slice(0, MAX_REASONS).join(t('lib.drop.reasonsSep'));
+  return list.length > MAX_REASONS ? `${head} ${t('lib.drop.reasonsMore', { n: list.length })}` : head;
 }
 
 class DropStore {
@@ -93,7 +94,7 @@ class DropStore {
       this.hint = summarize(items);
     } catch (error) {
       // 分类只影响预告文案：后端在落点时会重新判一次，这里坏了也不影响播放
-      if (token === this.token) this.hint = `${paths.length} 项`;
+      if (token === this.token) this.hint = t('lib.drop.hintItems', { n: paths.length });
       console.warn('classify_paths failed:', errorMessage(error));
     }
   }
@@ -107,14 +108,14 @@ class DropStore {
       const receipt = await ipc.player.openPaths(paths);
 
       if (receipt.opened === 0) {
-        notify.showToast(`无法播放：${reasons(receipt.skipped)}`, receipt.skipped.length ? 6000 : 2600);
+        notify.showToast(t('lib.drop.openFailed', { reasons: reasons(receipt.skipped) }), receipt.skipped.length ? 6000 : 2600);
         return;
       }
 
       const skipped = receipt.skipped.length
-        ? `，跳过 ${reasons(receipt.skipped)}`
+        ? t('lib.drop.skippedSuffix', { reasons: reasons(receipt.skipped) })
         : '';
-      notify.showToast(`已打开 ${receipt.opened} 项${skipped}`, receipt.skipped.length ? 6000 : 2600);
+      notify.showToast(t('lib.drop.opened', { n: receipt.opened, skipped }), receipt.skipped.length ? 6000 : 2600);
     } catch (error) {
       // 走到这里是**故障**（命令本身失败），不是"拖进来的东西不合适"：
       // 保留常驻的错误条，别让一条 3 秒后消失的吐司把故障吃掉

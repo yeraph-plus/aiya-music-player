@@ -6,6 +6,7 @@
   import TrackListPanel from '../components/TrackListPanel.svelte';
   import { artworkUrl } from '../lib/artwork';
   import { formatDurationLong } from '../lib/format';
+  import { t } from '../lib/i18n.svelte';
   import { facets } from '../stores/facets.svelte';
   import { list } from '../stores/list.svelte';
   import { nav } from '../stores/nav.svelte';
@@ -42,7 +43,7 @@
     // 名字回落链：聚合缓存 → 列表首行 → 通用文案。**绝不把路由参数（uuid）
     // 渲染出来**——那是一串 v5 uuid：聚合缓存加载慢或
     // 失败时，首行的 album/artist 就是从 DB 读出的真名，和列表内容同源。
-    const title = al?.title ?? row?.album ?? '专辑';
+    const title = al?.title ?? row?.album ?? t('album.titleFallback');
     // 封面回落链：聚合缓存的 artworkId → 首曲的 artworkId。扫描器给每条
     // 曲目都写了封面 id，专辑的首曲封面即专辑封面。
     const artworkId = al?.artworkId ?? row?.artworkId ?? null;
@@ -51,10 +52,12 @@
       subtitle: al?.artist ?? row?.artist ?? undefined,
       meta:
         al === null
-          ? `共 ${list.total} 首`
-          : `共 ${al.trackCount} 首` +
-            (al.year ? `，${al.year}` : '') +
-            (al.totalDurationMs > 0 ? `，${formatDurationLong(al.totalDurationMs)}` : ''),
+          ? t('album.metaCount', { n: list.total })
+          : [
+              t('album.metaCount', { n: al.trackCount }),
+              ...(al.year ? [String(al.year)] : []),
+              ...(al.totalDurationMs > 0 ? [formatDurationLong(al.totalDurationMs)] : []),
+            ].join(t('library.metaSep')),
       // 92px Cover lg 档：96 其实够用，取 256 给高 DPI 留余量（320 不在档内会被吞成 96）
       cover: artworkId ? (artworkUrl(artworkId, 256) ?? null) : null,
     };
@@ -72,18 +75,18 @@
     {#snippet actions()}
       <Button variant="primary" onclick={() => void list.playAll()} disabled={list.total === 0}>
         {#snippet icon()}<Icon name="play" size={12} />{/snippet}
-        播放全部
+        {t('library.playAll')}
       </Button>
     {/snippet}
   </Header>
 </div>
 
 <!-- 专辑页把"专辑"列链接废掉（disableAlbumLink）：点了指向的是当前页，nav 视为刷新，只会白丢一次滚动位置。歌手列保持可点——那是真正能走的路。 -->
-<TrackListPanel canSort={true} removeLabel="从曲库中删除" showFilter={false} disableAlbumLink={true}>
+<TrackListPanel canSort={true} removeLabel={t('library.deleteFromLibrary')} showFilter={false} disableAlbumLink={true}>
   {#snippet empty()}
-    <EmptyState title="这张专辑里没有曲目" hint="曲目可能已被移出曲库">
+    <EmptyState title={t('album.emptyTitle')} hint={t('album.emptyHint')}>
       {#snippet action()}
-        <Button onclick={() => nav.go({ kind: 'browse', view: 'albums' })}>返回专辑</Button>
+        <Button onclick={() => nav.go({ kind: 'browse', view: 'albums' })}>{t('album.backToAlbums')}</Button>
       {/snippet}
     </EmptyState>
   {/snippet}

@@ -35,6 +35,7 @@
   import { drop } from './stores/drop.svelte';
   import { list } from './stores/list.svelte';
   import { notify } from './stores/notify.svelte';
+  import { setLocale } from './lib/i18n.svelte';
   import { player } from './stores/player.svelte';
   import { lyrics } from './stores/lyrics.svelte';
   import { isListPage, ui } from './stores/ui.svelte';
@@ -76,6 +77,15 @@
     // 仅跟随档订阅；固定深/浅档的系统事件无意义。
     if (look.theme !== 'system') return;
     return watchSystemTheme(() => applyLook(look));
+  });
+
+  // 界面语言：设置值驱动 i18n locale 与 <html data-lang>（装饰字取消等纯 CSS
+  // 分支靠它）。首启语言由宿主按系统语言写库（docs/64 §3.1），前端只跟随；
+  // 空值（mock 预览）按 zh 兜底。t() 读 i18n.svelte.ts 的 $state，模板自动重渲染。
+  $effect(() => {
+    const lang = ui.settings.language === 'en' ? 'en' : 'zh';
+    setLocale(lang);
+    document.documentElement.dataset.lang = lang;
   });
 
   // 正在播放页打开且换歌时重新取词；离开页面不预取，省一次读盘。

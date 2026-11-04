@@ -255,7 +255,7 @@ def _download(url: str, dest: Path, expect_size: int) -> None:
             declared = resp.headers.get("content-length")
             if declared and declared.isdigit() and int(declared) > MAX_BYTES:
                 raise BinError(
-                    f"下载物声明 {_human(int(declared))}，超过上限 —— 地址指错了？{url}"
+                    f"download declares {_human(int(declared))}, over the limit - wrong address? {url}"
                 )
             written = 0
             with open(dest, "wb") as out:
@@ -265,17 +265,17 @@ def _download(url: str, dest: Path, expect_size: int) -> None:
                         break
                     written += len(chunk)
                     if written > MAX_BYTES:
-                        raise BinError(f"下载物超过 {_human(MAX_BYTES)} 上限，已中止：{url}")
+                        raise BinError(f"download exceeded the {_human(MAX_BYTES)} limit, aborted: {url}")
                     out.write(chunk)
     except urllib.error.HTTPError as e:
-        raise BinError(f"下载失败 HTTP {e.code}：{url}") from e
+        raise BinError(f"download failed with HTTP {e.code}: {url}") from e
     except urllib.error.URLError as e:
-        raise BinError(f"下载失败（网络不可达）：{url} —— {e.reason}") from e
+        raise BinError(f"download failed (network unreachable): {url} - {e.reason}") from e
     except TimeoutError as e:
-        raise BinError(f"下载超时（{TIMEOUT}s）：{url}") from e
+        raise BinError(f"download timed out ({TIMEOUT}s): {url}") from e
     if expect_size and dest.stat().st_size != expect_size:
         raise BinError(
-            f"下载物大小不对：期望 {expect_size} 字节，实际 {dest.stat().st_size}"
+            f"download size mismatch: expected {expect_size} bytes, got {dest.stat().st_size}"
         )
 
 
@@ -301,12 +301,12 @@ def extract_member(carrier: Path, pattern: str) -> bytes:
             names = [n for n in names if not n.endswith("/")]
             if len(names) != 1:
                 raise BinError(
-                    f"载体里匹配 {pattern!r} 的成员有 {len(names)} 个"
-                    f"（必须恰好 1 个）：{', '.join(names[:5]) or '无'}"
+                    f"{len(names)} members in the carrier match {pattern!r}"
+                    f" (exactly 1 required): {', '.join(names[:5]) or 'none'}"
                 )
             return zf.read(names[0])
     except zipfile.BadZipFile as e:
-        raise BinError(f"载体不是有效 zip：{carrier}") from e
+        raise BinError(f"carrier is not a valid zip: {carrier}") from e
 
 
 def fetch_blob(
@@ -328,29 +328,29 @@ def fetch_blob(
         if carrier is not None:
             src = carrier
             if not src.is_file():
-                raise BinError(f"本地包不存在：{src}")
-            talk(f"{spec.name}：用本地包 {src.name}")
+                raise BinError(f"local carrier does not exist: {src}")
+            talk(f"{spec.name}: using local carrier {src.name}")
         else:
             src = tmp / "carrier.zip"
-            talk(f"{spec.name}：下载 {_human(spec.carrier_size)}")
+            talk(f"{spec.name}: downloading {_human(spec.carrier_size)}")
             _download(spec.url, src, spec.carrier_size)
 
         got = src.stat().st_size
         if spec.carrier_size and got != spec.carrier_size:
-            raise BinError(f"{spec.name}：载体大小 {got} ≠ 期望 {spec.carrier_size}")
+            raise BinError(f"{spec.name}: carrier size {got} != expected {spec.carrier_size}")
         digest = _sha256(src)
         if spec.carrier_sha256 and digest != spec.carrier_sha256:
             raise BinError(
-                f"{spec.name}：载体 sha256 不对（{digest[:12]}… ≠ {spec.carrier_sha256[:12]}…）"
+                f"{spec.name}: carrier sha256 mismatch ({digest[:12]}... != {spec.carrier_sha256[:12]}...)"
             )
 
         blob = extract_member(src, spec.member)
         if spec.size and len(blob) != spec.size:
-            raise BinError(f"{spec.name}：解出的大小 {len(blob)} ≠ 期望 {spec.size}")
+            raise BinError(f"{spec.name}: extracted size {len(blob)} != expected {spec.size}")
         inner = hashlib.sha256(blob).hexdigest()
         if spec.sha256 and inner != spec.sha256:
             raise BinError(
-                f"{spec.name}：解出的 sha256 不对（{inner[:12]}… ≠ {spec.sha256[:12]}…）"
+                f"{spec.name}: extracted sha256 mismatch ({inner[:12]}... != {spec.sha256[:12]}...)"
             )
         return blob
     finally:
@@ -375,7 +375,7 @@ def install_one(
     local = dest if dest is not None else bin_dir()
     if local is None:
         raise BinError(
-            "不知道装到哪：AIYA_BEETS_HOME / AIYA_BEETS_DIR / AIYA_BEETS_BIN_DIR 都没设"
+            "no install destination: AIYA_BEETS_HOME / AIYA_BEETS_DIR / AIYA_BEETS_BIN_DIR are all unset"
         )
     local.mkdir(parents=True, exist_ok=True)
     say = on_progress or (lambda _m: None)
@@ -397,8 +397,8 @@ def install_one(
     ok, version = _probe_ok(final, spec)
     if not ok:
         final.unlink(missing_ok=True)
-        raise BinError(f"{name}：落盘后跑不起来（{version or '无输出'}）")
-    say(f"{name}：就绪（{version or spec.target}）")
+        raise BinError(f"{name}: does not run after extraction ({version or 'no output'})")
+    say(f"{name}: ready ({version or spec.target})")
     return {"name": name, "path": str(final), "version": version, "bytes": len(blob)}
 
 
@@ -425,14 +425,14 @@ def ensure(names: list[str], on_progress=None, carriers: dict[str, Path] | None 
         if present is not None:
             ok, version = _probe_ok(present, spec)
             if ok:
-                say(f"{name}：已就绪，跳过")
+                say(f"{name}: already ready, skipping")
                 done.append(
                     {"name": name, "path": str(present), "version": version,
                      "bytes": present.stat().st_size, "skipped": True}
                 )
                 continue
             # 在但跑不起来（缺 DLL / 被杀软拦 / 半截文件）→ 当没有，重下
-            say(f"{name}：现有文件跑不起来，重新下载")
+            say(f"{name}: existing file does not run, re-downloading")
             present.unlink(missing_ok=True)
         if spec.url not in cache:
             local = Path(tempfile.gettempdir()) / f"aiya-carrier-{spec.carrier_sha256[:16]}.zip"
@@ -486,23 +486,23 @@ def main(argv: list[str] | None = None) -> int:
 
     ap = argparse.ArgumentParser(
         prog="aiya-beets bins",
-        description="下载/校验外部二进制（ffmpeg / Essentia 提取器 / fpcalc）到 bin/",
+        description="download/verify external binaries (ffmpeg / Essentia extractor / fpcalc) into bin/",
     )
-    ap.add_argument("--only", default=None, help="只处理这些名字，逗号分隔")
+    ap.add_argument("--only", default=None, help="only these names, comma-separated")
     ap.add_argument(
         "--from-plugins",
         default=None,
         metavar="NAMES",
-        help="按插件名单推导要哪些工具（逗号分隔）。与 --only 二选一",
+        help="derive the needed tools from a plugin list (comma-separated). Mutually exclusive with --only",
     )
-    ap.add_argument("--check", action="store_true", help="只体检，不下载")
-    ap.add_argument("--dry-run", action="store_true", help="只打印将下载什么")
+    ap.add_argument("--check", action="store_true", help="check only, do not download")
+    ap.add_argument("--dry-run", action="store_true", help="print what would be downloaded")
     ap.add_argument(
         "--carrier",
         action="append",
         default=[],
         metavar="NAME=PATH",
-        help="用本地包代替下载（可重复），仍是同一套校验",
+        help="use a local package instead of downloading (repeatable), same verification applies",
     )
     args = ap.parse_args(argv)
 
@@ -511,7 +511,7 @@ def main(argv: list[str] | None = None) -> int:
         # `binaries_for`），两边一旦分家，症状是"装了插件却没下工具"——而缺 ffmpeg 会让 beets 任何子命令都起不来。
         if args.only:
             emit({"type": "error", "stage": "prepare",
-                  "message": "--only 与 --from-plugins 只能给一个"})
+                  "message": "--only and --from-plugins are mutually exclusive"})
             return 2
         wanted = [x.strip() for x in args.from_plugins.split(",") if x.strip()]
         try:
@@ -519,14 +519,14 @@ def main(argv: list[str] | None = None) -> int:
         except KeyError as e:
             known = ", ".join(spec.name for spec in BINARIES)
             emit({"type": "error", "stage": "prepare",
-                  "message": f"不认识的名字：{e.args[0]}（插件名或工具名不在表里；工具可用：{known}）"})
+                  "message": f"unknown name: {e.args[0]} (plugin or tool name is not in the table; tools available: {known})"})
             return 2
         if not names:
             # 勾的插件都不需要外置工具：正常收尾，不是错误
             emit({"type": "progress", "stage": "bin",
-                  "message": "这批插件不需要外置工具"})
+                  "message": "these plugins need no external tools"})
             emit({"type": "done", "stage": "done", "binaries": [],
-                  "message": "无需下载"})
+                  "message": "nothing to download"})
             return 0
     else:
         names = [x.strip() for x in (args.only or "").split(",") if x.strip()]
@@ -536,14 +536,14 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         known = ", ".join(spec.name for spec in BINARIES)
         emit({"type": "error", "stage": "prepare",
-              "message": f"不认识的外部工具 {', '.join(unknown)}（可用：{known}）"})
+              "message": f"unknown external tools {', '.join(unknown)} (available: {known})"})
         return 2
 
     carriers: dict[str, Path] = {}
     for raw in args.carrier:
         name, _, path = raw.partition("=")
         if not path:
-            emit({"type": "error", "stage": "prepare", "message": f"--carrier 要 NAME=PATH：{raw}"})
+            emit({"type": "error", "stage": "prepare", "message": f"--carrier expects NAME=PATH: {raw}"})
             return 2
         carriers[name.strip()] = Path(path.strip())
 
@@ -577,10 +577,10 @@ def main(argv: list[str] | None = None) -> int:
         emit({"type": "error", "stage": "bin", "message": str(e)})
         return 6
     except KeyError as e:
-        emit({"type": "error", "stage": "bin", "message": f"未知工具：{e}"})
+        emit({"type": "error", "stage": "bin", "message": f"unknown tool: {e}"})
         return 2
     except OSError as e:
-        emit({"type": "error", "stage": "bin", "message": f"落盘失败：{e}"})
+        emit({"type": "error", "stage": "bin", "message": f"failed to write to disk: {e}"})
         return 6
 
     emit({"type": "done", "stage": "done", "binaries": rows})

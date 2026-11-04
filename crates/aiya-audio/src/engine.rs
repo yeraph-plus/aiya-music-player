@@ -225,7 +225,7 @@ impl Engine {
                     EventTx(ev_panic).send(EngineEvent::Error {
                         token: 0,
                         kind: AudioErrorKind::Internal.as_str().into(),
-                        message: format!("引擎内部错误（渲染线程崩溃）：{msg}"),
+                        message: format!("internal engine error (render thread panicked): {msg}"),
                     });
                 }
             })
@@ -293,7 +293,7 @@ fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
     } else if let Some(s) = p.downcast_ref::<String>() {
         s.clone()
     } else {
-        "payload 非字符串".to_string()
+        "non-string panic payload".to_string()
     }
 }
 
@@ -601,7 +601,7 @@ fn play_null(
         clock: "null".to_string(),
         buffer_ms: 0,
         format: "none".to_string(),
-        reason: Some("已关闭音频输出（解码与进度照常推进）".to_string()),
+        reason: Some("audio output disabled (decoding and position keep advancing)".to_string()),
     });
 
     let channels = decoder.channels().max(1);
@@ -807,7 +807,7 @@ fn mode_event(token: u64, cfg: &OutputConfig, out: &Output, reason: Option<Strin
             clock: "none".to_string(),
             buffer_ms: 0,
             format: "none".to_string(),
-            reason: reason.or_else(|| Some("输出流未打开".to_string())),
+            reason: reason.or_else(|| Some("output stream not open".to_string())),
         };
     }
     EngineEvent::AudioMode {
@@ -1147,7 +1147,7 @@ fn play_file(
                             token,
                             &cfg,
                             &out,
-                            Some(format!("切换失败：{why}")),
+                            Some(format!("switch failed: {why}")),
                         ));
                     }
                     // 流已彻底释放：交给设备恢复路径重建（会重新退避重试）
@@ -1221,7 +1221,7 @@ fn play_file(
                 tracing::error!(%e, attempts = device_failures, "设备恢复重试耗尽，放弃当前曲目");
                 out.stop();
                 return Err(AudioError::Wasapi(format!(
-                    "设备恢复失败（{device_failures} 次重试）：{e}"
+                    "device recovery failed after {device_failures} retries: {e}"
                 )));
             }
             match reopen_output(&mut out, &decoder, device_failures, &cfg) {
@@ -1250,7 +1250,7 @@ fn play_file(
         if !out.is_live() {
             // 独占暂停释放了设备：这是正常静止态，无需重建
             if !paused {
-                stream_err = Some(AudioError::Device("输出流意外为空".into()));
+                stream_err = Some(AudioError::Device("output stream unexpectedly empty".into()));
             }
             continue;
         }
@@ -1262,7 +1262,7 @@ fn play_file(
             last_write = std::time::Instant::now(); // 重置，避免每轮都触发
             dumb_tries += 1;
             let why = format!(
-                "{} · {}ms 缓冲下设备不消费数据（{DUMB_STREAM_MS}ms 无写入）",
+                "{} · device not consuming data at {}ms buffer (no writes for {DUMB_STREAM_MS}ms)",
                 out.clock.as_str(),
                 out.buffer_ms
             );
@@ -1274,13 +1274,13 @@ fn play_file(
                         SwitchOutcome::Switched(note) => {
                             let mut r = why;
                             if let Some(n) = note {
-                                r.push('；');
+                                r.push_str("; ");
                                 r.push_str(&n);
                             }
                             send(mode_event(token, &cfg, &out, Some(r)));
                         }
                         SwitchOutcome::KeptPlaying(e) => {
-                            send(mode_event(token, &cfg, &out, Some(format!("{why}；{e}"))));
+                            send(mode_event(token, &cfg, &out, Some(format!("{why}; {e}"))));
                         }
                         SwitchOutcome::Dead(e) => stream_err = Some(e),
                     }
@@ -1291,9 +1291,13 @@ fn play_file(
                     tracing::error!(reason = %why, "输出流哑火且无可降级路径");
                     if cfg.mode == ModePref::ExclusiveRequired && out.mode == OutputMode::Exclusive
                     {
-                        return Err(AudioError::Device(format!("独占流不工作：{why}")));
+                        return Err(AudioError::Device(format!(
+                            "exclusive stream not working: {why}"
+                        )));
                     }
-                    stream_err = Some(AudioError::Device(format!("输出流不消费数据：{why}")));
+                    stream_err = Some(AudioError::Device(format!(
+                        "output stream not consuming data: {why}"
+                    )));
                 }
             }
             continue;
@@ -1794,11 +1798,13 @@ fn out_format_from_negotiated(
             20 | 24 => Ok(OutFormat::I24In32),
             32 => Ok(OutFormat::I32),
             v => Err(format!(
-                "设备独占要求 32 bit 整数容器但有效位为 {v}（支持 20/24/32），为保位宽正确拒绝该格式"
+                "device exclusive requires a 32 bit integer container but valid bits are {v} (20/24/32 supported)"
             )),
         },
         (16, _) => Ok(OutFormat::I16),
-        (b, _) => Err(format!("设备独占要求 {b} bit 格式，暂不支持")),
+        (b, _) => Err(format!(
+            "device exclusive requires a {b} bit format, not supported yet"
+        )),
     }
 }
 
@@ -1943,7 +1949,7 @@ struct Attempt {
 impl Attempt {
     fn label(&self) -> String {
         format!(
-            "{} · 周期 {:.1}ms · 缓冲 {:.0}ms",
+            "{} · period {:.1}ms · buffer {:.0}ms",
             self.clock.as_str(),
             self.period_hns as f64 / 10_000.0,
             self.buffer_hns as f64 / 10_000.0
@@ -2092,7 +2098,7 @@ fn open_shared_with_note(
             Ok((
                 o,
                 Some(format!(
-                    "设备不接受 {}ms 缓冲（{e}），已改用自动 {DEFAULT_BUFFER_MS}ms",
+                    "device rejected the {}ms buffer ({e}); falling back to auto {DEFAULT_BUFFER_MS}ms",
                     cfg.buffer_ms
                 )),
             ))
@@ -2129,7 +2135,7 @@ fn open_exclusive(decoder: &DecodedStream, cfg: &OutputConfig) -> Result<Output,
                 Err(e) => {
                     best_reason.get_or_insert_with(|| {
                         format!(
-                            "{rate} Hz / {channels} ch 不支持独占（{} 被拒：{e}）",
+                            "{rate} Hz / {channels} ch does not support exclusive mode ({} rejected: {e})",
                             fmt.label()
                         )
                     });
@@ -2141,7 +2147,7 @@ fn open_exclusive(decoder: &DecodedStream, cfg: &OutputConfig) -> Result<Output,
         {
             best_reason.get_or_insert_with(|| {
                 format!(
-                    "设备独占只支持 {} Hz / {} ch（源为 {rate} Hz / {channels} ch，不做重采样）",
+                    "device exclusive only supports {} Hz / {} ch (source is {rate} Hz / {channels} ch, no resampling)",
                     negotiated.get_samplespersec(),
                     negotiated.get_nchannels()
                 )
@@ -2202,7 +2208,7 @@ fn open_exclusive(decoder: &DecodedStream, cfg: &OutputConfig) -> Result<Output,
                     // 各分支的语义对齐（首个失败者负责解释）。
                     best_reason.get_or_insert_with(|| {
                         format!(
-                            "{} 独占流初始化失败（{}：{e}）",
+                            "{} exclusive stream init failed ({}: {e})",
                             actual.label(),
                             att.label()
                         )
@@ -2212,7 +2218,7 @@ fn open_exclusive(decoder: &DecodedStream, cfg: &OutputConfig) -> Result<Output,
         }
     }
 
-    Err(best_reason.unwrap_or_else(|| "设备不接受任何独占格式".to_string()))
+    Err(best_reason.unwrap_or_else(|| "device accepts no exclusive format".to_string()))
 }
 
 /// 打开输出。第二个返回值是**降级原因**（`None` = 完全按请求生效）。
@@ -2224,19 +2230,23 @@ fn open_output(
     cfg: &OutputConfig,
 ) -> Result<(Output, Option<String>), AudioError> {
     match cfg.mode {
-        ModePref::Null => Err(AudioError::Custom("null 模式不打开音频设备".into())),
+        ModePref::Null => Err(AudioError::Custom(
+            "null mode does not open an audio device".into(),
+        )),
         ModePref::Shared => open_shared_with_note(decoder, cfg),
         ModePref::Exclusive | ModePref::ExclusiveRequired => match open_exclusive(decoder, cfg) {
             Ok(out) => Ok((out, None)),
             Err(reason) => {
                 if cfg.mode == ModePref::ExclusiveRequired {
-                    return Err(AudioError::Unsupported(format!("独占模式不可用：{reason}")));
+                    return Err(AudioError::Unsupported(format!(
+                        "exclusive mode unavailable: {reason}"
+                    )));
                 }
                 let (out, note) = open_shared_with_note(decoder, cfg)?;
                 Ok((
                     out,
                     Some(match note {
-                        Some(n) => format!("{reason}；共享侧：{n}"),
+                        Some(n) => format!("{reason}; shared fallback: {n}"),
                         None => reason,
                     }),
                 ))

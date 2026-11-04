@@ -84,15 +84,15 @@ def compute(match) -> tuple[str, list[str]]:
     try:
         return _compute(match)
     except Exception:  # noqa: BLE001 —— 见上：降级不连累主流程
-        return SIMILARITY, ["证据计算异常，按相似度处理"]
+        return SIMILARITY, ["evidence computation failed, falling back to similarity"]
 
 
 def _compute(match) -> tuple[str, list[str]]:
     if getattr(match, "from_scratch", False):
-        return SIMILARITY, ["无外部匹配，按现有标签入库（fromScratch）"]
+        return SIMILARITY, ["no external match, importing with the current tags (fromScratch)"]
     pairs = list(getattr(match, "item_info_pairs", None) or [])
     if not pairs:
-        return SIMILARITY, ["无逐曲对齐数据"]
+        return SIMILARITY, ["no per-track alignment data"]
 
     # recordingId：全部对齐曲的嵌入 Recording ID 与候选一致
     rec_total = rec_hit = 0
@@ -105,7 +105,7 @@ def _compute(match) -> tuple[str, list[str]]:
                 rec_hit += 1
     if rec_total and rec_hit == rec_total:
         return RECORDING_ID, [
-            f"嵌入的 MusicBrainz Recording ID 与候选完全一致（{rec_hit}/{rec_total} 首）"
+            f"embedded MusicBrainz Recording ID matches the candidate exactly ({rec_hit}/{rec_total} tracks)"
         ]
 
     # metadataSlot：双源印证 + 精确碟轨位置 + 时长容差，全部对齐曲满足
@@ -135,13 +135,13 @@ def _compute(match) -> tuple[str, list[str]]:
             break
     if slot_ok:
         return METADATA_SLOT, [
-            f"原始文件名与嵌入标签双重印证（{len(pairs)} 首），碟轨位置与时长全部对上"
+            f"original filename and embedded tags corroborate each other ({len(pairs)} tracks); disc/track positions and durations all match"
         ]
 
     # releaseGroup：候选锚定 Release Group ID（专辑级身份，ADR 0002）
     rg = getattr(getattr(match, "info", None), "releasegroup_id", None)
     if rg:
         rg = str(rg)
-        return RELEASE_GROUP, [f"候选锚定 Release Group {rg[:8]}…"]
+        return RELEASE_GROUP, [f"candidate anchored to Release Group {rg[:8]}..."]
 
-    return SIMILARITY, ["仅相似度匹配（距离评分），无确定身份证据"]
+    return SIMILARITY, ["similarity match only (distance score), no identity evidence"]

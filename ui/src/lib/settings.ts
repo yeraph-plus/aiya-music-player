@@ -13,6 +13,7 @@
 
 import type { DesiredOutput } from './ipc/generated/DesiredOutput';
 import type { ShortcutAction } from './shortcuts';
+import type { Msg } from './i18n.svelte';
 
 /**
  * 主题偏好。`'system'` 表示跟随操作系统的深浅色（`prefers-color-scheme`）。
@@ -23,11 +24,12 @@ import type { ShortcutAction } from './shortcuts';
  */
 export type ThemeMode = 'dark' | 'light' | 'system';
 
-/** 主题偏好的取值清单：设置页分段控件与 `mergeSettings` 白名单共用，顺序即展示顺序 */
-export const THEME_MODES: Array<{ value: ThemeMode; label: string }> = [
-  { value: 'dark', label: '深色' },
-  { value: 'light', label: '浅色' },
-  { value: 'system', label: '跟随系统' },
+/** 主题偏好的取值清单：设置页分段控件与 `mergeSettings` 白名单共用，顺序即展示顺序。
+ *  `label` 存 i18n 键（settings 域），渲染点（SettingsPanel）经 `t()` 取文案 */
+export const THEME_MODES: Array<{ value: ThemeMode; label: Msg }> = [
+  { value: 'dark', label: 'settings.themeMode.dark' },
+  { value: 'light', label: 'settings.themeMode.light' },
+  { value: 'system', label: 'settings.themeMode.system' },
 ];
 
 /**
@@ -38,13 +40,13 @@ export const THEME_MODES: Array<{ value: ThemeMode; label: string }> = [
  */
 export type AmbientScheme = 'aurora' | 'ember' | 'meadow' | 'dusk' | 'mono';
 
-/** 设置页与 look 校验共用的方案清单（id 顺序即展示顺序） */
-export const AMBIENT_SCHEMES: Array<{ value: AmbientScheme; label: string }> = [
-  { value: 'aurora', label: '极光' },
-  { value: 'ember', label: '流霞' },
-  { value: 'meadow', label: '苔原' },
-  { value: 'dusk', label: '暮紫' },
-  { value: 'mono', label: '素白' },
+/** 设置页与 look 校验共用的方案清单（id 顺序即展示顺序）；label 同 THEME_MODES 存 i18n 键 */
+export const AMBIENT_SCHEMES: Array<{ value: AmbientScheme; label: Msg }> = [
+  { value: 'aurora', label: 'settings.ambient.aurora' },
+  { value: 'ember', label: 'settings.ambient.ember' },
+  { value: 'meadow', label: 'settings.ambient.meadow' },
+  { value: 'dusk', label: 'settings.ambient.dusk' },
+  { value: 'mono', label: 'settings.ambient.mono' },
 ];
 
 /**
@@ -83,12 +85,12 @@ export function normalizeUiScale(value: unknown): UiScale {
  */
 export type SpectrumStyle = 'mirror' | 'radial' | 'ripple' | 'wave';
 
-/** 设置页与 NowPlayingSpectrum 共用的形态清单（id 顺序即展示顺序） */
-export const SPECTRUM_STYLES: Array<{ value: SpectrumStyle; label: string }> = [
-  { value: 'mirror', label: '镜像' },
-  { value: 'radial', label: '环带' },
-  { value: 'ripple', label: '残影' },
-  { value: 'wave', label: '波纹' },
+/** 设置页与 NowPlayingSpectrum 共用的形态清单（id 顺序即展示顺序）；label 存 i18n 键 */
+export const SPECTRUM_STYLES: Array<{ value: SpectrumStyle; label: Msg }> = [
+  { value: 'mirror', label: 'settings.spectrum.mirror' },
+  { value: 'radial', label: 'settings.spectrum.radial' },
+  { value: 'ripple', label: 'settings.spectrum.ripple' },
+  { value: 'wave', label: 'settings.spectrum.wave' },
 ];
 
 /**
@@ -103,10 +105,10 @@ export const SPECTRUM_STYLES: Array<{ value: SpectrumStyle; label: string }> = [
  */
 export type RidgeGlow = 'soft' | 'balanced' | 'neon';
 
-export const RIDGE_GLOWS: Array<{ value: RidgeGlow; label: string }> = [
-  { value: 'soft', label: '柔雾' },
-  { value: 'balanced', label: '平衡' },
-  { value: 'neon', label: '锐光' },
+export const RIDGE_GLOWS: Array<{ value: RidgeGlow; label: Msg }> = [
+  { value: 'soft', label: 'settings.ridgeGlow.soft' },
+  { value: 'balanced', label: 'settings.ridgeGlow.balanced' },
+  { value: 'neon', label: 'settings.ridgeGlow.neon' },
 ];
 
 /**
@@ -121,9 +123,9 @@ export const RIDGE_GLOWS: Array<{ value: RidgeGlow; label: string }> = [
  */
 export type BgSpectrumStyle = 'ridge' | 'ripple';
 
-export const BG_SPECTRUM_STYLES: Array<{ value: BgSpectrumStyle; label: string }> = [
-  { value: 'ridge', label: '山形' },
-  { value: 'ripple', label: '波纹' },
+export const BG_SPECTRUM_STYLES: Array<{ value: BgSpectrumStyle; label: Msg }> = [
+  { value: 'ridge', label: 'settings.bgSpectrumStyle.ridge' },
+  { value: 'ripple', label: 'settings.bgSpectrumStyle.ripple' },
 ];
 
 export interface AppSettings {
@@ -191,6 +193,11 @@ export interface AppSettings {
    * 筛选器不设"上次播放"档。
    */
   historyDays: number;
+  /**
+   * 界面语言。空 = 首启未定（宿主按系统 UI 语言探测后写库，docs/64 §3.1），
+   * 此后恒为 'zh' / 'en'——前端不做探测，只跟随。
+   */
+  language: string;
   /** 只存覆盖项：没写的动作走 `DEFAULT_SHORTCUTS`（改默认值不冲用户自定义） */
   shortcuts: Partial<Record<ShortcutAction, string>>;
   /**
@@ -249,15 +256,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // 总闸默认开：关闭会使全部 WebGL 效果失效，它不是性能选项。
   // 不支持的机器由 capability 探测兜底（探测失败仍可正常使用）
   glEffects: true,
-  // 背景/页面频谱默认关：不订阅 tap，保持最简出口路径
-  bgSpectrum: false,
+  // 背景/页面频谱：背景默认开（山形环境光是应用的主视觉之一），页面默认关
+  bgSpectrum: true,
   npSpectrum: false,
-  // 默认镜像曲线（首发形态）
-  spectrumStyle: 'mirror',
+  // 默认环带（2026-11-05 拍板）
+  spectrumStyle: 'radial',
   // 背景默认山形：常驻图层，不因新增形态而改变既有观感
   bgSpectrumStyle: 'ridge',
-  // 平衡档：柔雾（无光）与锐光之间的中点，有光效但不刺眼
-  ridgeGlow: 'balanced',
+  // 默认柔雾：有氛围不刺眼（2026-11-05 拍板）
+  ridgeGlow: 'soft',
   // 默认关：启动即出声需由用户显式开启
   autoplayOnStart: false,
   // 进度记忆默认开：播放器的通行行为
@@ -270,6 +277,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   refreshSeconds: 30,
   // 90 天：兼顾轻量用户与"还在听"的语义
   historyDays: 90,
+  // 空 = 首启未定；宿主首启按系统语言写库
+  language: '',
   shortcuts: {},
   // 共享 + 200ms + 事件驱动：最稳妥的组合。独占需用户主动开启，
   // 它会锁住设备（其他程序无法出声）。

@@ -87,7 +87,7 @@ try:
     plain = Path(WORK) / "随便一个目录"
     plain.mkdir()
     (plain / "歌曲.flac").write_bytes(b"x")
-    refused(*run(["--target", str(plain), "--all", "--dry-run"]), "不像 beets-tool 安装目录")
+    refused(*run(["--target", str(plain), "--all", "--dry-run"]), "does not look like a beets-tool install directory")
     # 名字对了但里面什么都没有：靠名字过（安装到一半只剩空壳时也要能卸）
     empty = Path(WORK) / "empty" / "beets-tool"
     empty.mkdir(parents=True)
@@ -96,7 +96,7 @@ try:
     print("[2] `--all` 形状闸 OK（陌生目录拒绝；空壳 beets-tool 放行）")
 
     # 3. 不给 `--all`：只认 venv 形态
-    refused(*run(["--target", str(a), "--dry-run"]), "没有 pyvenv.cfg")
+    refused(*run(["--target", str(a), "--dry-run"]), "no pyvenv.cfg")
     code, frames = run(["--target", str(a / "venv"), "--dry-run"])
     assert code == 0 and frames[-1]["all"] is False, frames
     print("[3] 单 venv 语义 OK（整层不给 --all 会被拒；venv 本身放行）")

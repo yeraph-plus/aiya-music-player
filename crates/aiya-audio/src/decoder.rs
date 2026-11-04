@@ -223,7 +223,9 @@ impl DecodedStream {
     pub fn seek_ms(&mut self, ms: u64) -> Result<(), AudioError> {
         match &mut self.inner {
             Inner::Symphonia(s) => s.seek_ms(ms),
-            Inner::Hls(_) => Err(AudioError::Unsupported("直播流不支持拖动进度".into())),
+            Inner::Hls(_) => Err(AudioError::Unsupported(
+                "live streams do not support seeking".into(),
+            )),
         }
     }
 }
@@ -369,7 +371,7 @@ impl SymphoniaStream {
                                 // 统一的 Error 事件出口上报，让宿主换曲或提示。
                                 if self.spec_confirmed {
                                     return Err(AudioError::Decode(format!(
-                                        "解码中途参数变化：{}Hz×{} → {}Hz×{}（输出流按原规格打开，继续播放会变调）",
+                                        "audio parameters changed mid-decode: {}Hz×{} → {}Hz×{} (output stream opened at the original spec; continuing would shift pitch)",
                                         self.sample_rate,
                                         self.channels,
                                         spec.rate,
@@ -491,7 +493,7 @@ fn codec_display_name(codec: CodecType) -> String {
         CODEC_TYPE_PCM_MULAW => "μ-law PCM".into(),
         // 兜底用 Display（它内部就是 `{:#x}`）而不是 Debug：数值形态与 symphonia 源码里 `decl_codec_type`
         // 的常量写法一致，诊断页拿着能直接对回源码（Debug 会印成 `CodecType(4096)`，没法和源码对）。
-        other => format!("未知编码 {other}"),
+        other => format!("unknown codec {other}"),
     }
 }
 

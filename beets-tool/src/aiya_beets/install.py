@@ -93,13 +93,13 @@ def _pip(args: list[str], say) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="aiya_beets install",
-        description="在便携包内变更插件与配置（用包自带解释器运行）",
+        description="change plugins and config inside the portable bundle (runs on the bundled interpreter)",
     )
     ap.add_argument("--plugins", required=True,
-                    help="目标插件名，逗号分隔；all = 表内全部")
+                    help="target plugin names, comma-separated; all = everything in the table")
     ap.add_argument("--previous", default=None,
-                    help="变更前的启用清单（宿主传，用于差量卸载）")
-    ap.add_argument("--dry-run", action="store_true", help="只打印变更计划，不动环境")
+                    help="enabled list before the change (sent by the host, drives differential uninstall)")
+    ap.add_argument("--dry-run", action="store_true", help="print the change plan only, do not touch the environment")
     args = ap.parse_args(argv)
 
     names = parse_plugins(args.plugins)
@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyError as e:
         known = ", ".join(s.name for s in plugins.MARKET_CATALOG)
         emit({"type": "error", "stage": "prepare",
-              "message": f"不认识的插件 {e}（可用：{known}）"})
+              "message": f"unknown plugin {e} (available: {known})"})
         return 2
 
     # 差量：目标集 − 前一集之外的包要卸。共享依赖天然安全（目标集里还有它就
@@ -151,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
                         required_by = line.removeprefix("Required-by:").strip()
                         break
             if required_by:
-                say(f"{name} 仍被 {required_by} 依赖，跳过卸载")
+                say(f"{name} is still required by {required_by}, skipping uninstall")
             else:
                 real_drop.append(req)
         if real_drop:
@@ -159,10 +159,10 @@ def main(argv: list[str] | None = None) -> int:
             _pip(["uninstall", "-y", *real_drop], say)
 
     # 2) 安装目标集全集
-    emit({"type": "progress", "stage": "pip", "message": "pip install 开始"})
+    emit({"type": "progress", "stage": "pip", "message": "pip install starting"})
     code = _pip(["install", *want_pkgs], say) if want_pkgs else 0
     if code != 0:
-        emit({"type": "error", "stage": "pip", "message": f"pip 退出码 {code}"})
+        emit({"type": "error", "stage": "pip", "message": f"pip exit code {code}"})
         return 5
 
     # 3) 自检：真 import 一次 beets。只看 pip 退出码不够——装到一半的依赖也能
@@ -188,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
             missing.append(mod)
     if missing:
         emit({"type": "error", "stage": "verify",
-              "message": f"装完仍缺模块：{', '.join(missing)}（插件要的依赖没装上）"})
+              "message": f"modules still missing after install: {', '.join(missing)} (the plugin's dependencies did not install)"})
         return 6
 
     # 5) 外部工具：新勾的插件要的 exe 按需下载（ffmpeg 等），落
@@ -196,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
     bin_rows: list[dict] = []
     if need_bins:
         emit({"type": "progress", "stage": "bin",
-              "message": f"外置工具：{', '.join(need_bins)}"})
+              "message": f"external tools: {', '.join(need_bins)}"})
         try:
             bin_rows = bins.ensure(
                 need_bins,
@@ -204,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         except (bins.BinError, OSError) as e:
             emit({"type": "error", "stage": "bin",
-                  "message": f"插件包已装好，但外置工具没下下来：{e}"})
+                  "message": f"plugin packages installed, but the external tools failed to download: {e}"})
             return 7
 
     # 6) 同步 workbench 配置的 plugins 行：宿主已把新清单写进 settings.json，这里跑一次 ensure 让 config.yaml 跟上（含
@@ -212,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg.ensure_config()
     except Exception as e:  # noqa: BLE001 —— 安装成功与配置同步是两件事
-        emit({"type": "warning", "message": f"插件已装好，但配置同步失败：{e}"})
+        emit({"type": "warning", "message": f"plugins installed, but config sync failed: {e}"})
 
     emit({
         "type": "done", "stage": "done",

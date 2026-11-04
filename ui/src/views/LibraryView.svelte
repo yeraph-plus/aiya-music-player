@@ -11,6 +11,7 @@ import Progress from '../components/ui/Progress.svelte';
   import EmptyState from '../components/ui/EmptyState.svelte';
   import { artworkUrl } from '../lib/artwork';
   import { formatDurationLong } from '../lib/format';
+  import { t } from '../lib/i18n.svelte';
   import { DEFAULT_TIME_FILTER } from '../lib/time-filter';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
@@ -42,13 +43,13 @@ import Progress from '../components/ui/Progress.svelte';
       const playlist = currentPlaylist;
       return {
         kicker: 'PLAYLIST',
-        title: playlist?.name ?? '播放列表',
+        title: playlist?.name ?? t('library.playlistFallback'),
         // 动态歌单是规则聚合，手动歌单是顺序编排——描述跟着种类说实话
         subtitle: (playlist?.kind === 'smart'
-          ? '按规则自动聚合的曲目合集'
-          : '按顺序编排的曲目合集') as string | undefined,
+          ? t('library.playlistSmartSubtitle')
+          : t('library.playlistManualSubtitle')) as string | undefined,
         meta: playlist
-          ? `共 ${playlist.trackCount} 首，${formatDurationLong(playlist.durationMs)}`
+          ? t('library.playlistMeta', { n: playlist.trackCount, duration: formatDurationLong(playlist.durationMs) })
           : '',
         cover: playlist?.artworkId ? (artworkUrl(playlist.artworkId, 256) ?? null) : null,
         playDisabled: !playlist || playlist.trackCount === 0,
@@ -57,9 +58,9 @@ import Progress from '../components/ui/Progress.svelte';
     if (isSearchPage) {
       return {
         kicker: 'SEARCH',
-        title: ui.search.trim() ? `搜索「${ui.search.trim()}」` : '搜索',
-        subtitle: '曲目、专辑与艺人的聚合查找',
-        meta: `共 ${list.total} 首`,
+        title: ui.search.trim() ? t('library.searchTitle', { q: ui.search.trim() }) : t('library.searchTitleEmpty'),
+        subtitle: t('library.searchSubtitle'),
+        meta: t('library.searchMeta', { n: list.total }),
         cover: undefined as string | null | undefined,
         playDisabled: list.total === 0,
       };
@@ -67,9 +68,9 @@ import Progress from '../components/ui/Progress.svelte';
     return {
       // 标题随 tab 走（最近播放/最近添加是曲库页的 tab 索引）
       kicker: 'LIBRARY',
-      title: LIB_TABS.find((t) => t.key === ui.libraryTab)?.label ?? '全部曲目',
-      subtitle: '本地曲库的完整索引',
-      meta: `${list.total} 首`,
+      title: LIB_TABS.find((tab) => tab.key === ui.libraryTab)?.label ?? t('library.tabAll'),
+      subtitle: t('library.subtitle'),
+      meta: t('common.trackCount', { n: list.total }),
       cover: undefined as string | null | undefined,
       playDisabled: list.total === 0,
     };
@@ -84,11 +85,11 @@ import Progress from '../components/ui/Progress.svelte';
    * 另两个 tab 的顺序是语义（默认倒序），再点一次整 tab 翻转正倒序
    * （`list.openLibraryTab`），列头排序对它们没有意义。
    */
-  const LIB_TABS = [
-    { key: 'all', label: '全部曲目' },
-    { key: 'added', label: '最近添加' },
-    { key: 'recent', label: '最近播放' },
-  ] as const;
+  const LIB_TABS: { key: 'all' | 'added' | 'recent'; label: string }[] = $derived([
+    { key: 'all', label: t('library.tabAll') },
+    { key: 'added', label: t('library.tabAdded') },
+    { key: 'recent', label: t('library.tabRecent') },
+  ]);
 
   /**
    * 排序控件开关：曲库页非 all tab 的顺序是语义，不给列头排序；手动歌单的顺序
@@ -137,7 +138,7 @@ import Progress from '../components/ui/Progress.svelte';
    */
   const filterChips = $derived(
     ui.page === 'library' && list.timeFilterOn
-      ? [{ label: '筛选中', onclear: () => list.setTimeFilter({ ...DEFAULT_TIME_FILTER, conds: [] }) }]
+      ? [{ label: t('library.filterChip'), onclear: () => list.setTimeFilter({ ...DEFAULT_TIME_FILTER, conds: [] }) }]
       : [],
   );
 </script>
@@ -158,17 +159,17 @@ import Progress from '../components/ui/Progress.svelte';
         <!-- tab 索引：小标题形态贴着大标题，当前项高亮。只在曲库页给—— 搜索页复用 library view，但三个 tab 在那里是"同库换排序"，语义不成立。语义归 TextTabs（nav +
         aria-current）：套完整的 tablist/tab 角色而没有 tabpanel，会让读屏软件等待一个不存在的面板。 -->
         <TextTabs
-          items={LIB_TABS.map((t) => ({
-            id: t.key,
-            label: t.label,
+          items={LIB_TABS.map((tab) => ({
+            id: tab.key,
+            label: tab.label,
             title:
-              t.key === 'all'
-                ? '再点一次重新加载'
-                : `再点一次切换最新/最旧顺序（当前：${ui.direction === 'desc' ? '倒序' : '正序'}）`,
+              tab.key === 'all'
+                ? t('library.tabAllTip')
+                : t('library.tabSortTip', { dir: ui.direction === 'desc' ? t('library.dirDesc') : t('library.dirAsc') }),
           }))}
           value={ui.libraryTab}
           onchange={(key) => list.openLibraryTab(key as (typeof LIB_TABS)[number]['key'])}
-          label="曲库视图切换"
+          label={t('library.tabsLabel')}
         >
           {#snippet trailing(tab)}
             <!-- 方向箭头只画在活跃 tab 上：ui.direction 是全局共享状态，
@@ -186,7 +187,7 @@ import Progress from '../components/ui/Progress.svelte';
       {#if view.kind === 'playlist'}
         <Button variant="primary" onclick={() => void list.playAll()} disabled={header.playDisabled}>
           {#snippet icon()}<Icon name="play" size={12} />{/snippet}
-          播放全部
+          {t('library.playAll')}
         </Button>
         {#if currentPlaylist}
           {#if currentPlaylist.kind === 'smart'}
@@ -198,7 +199,7 @@ import Progress from '../components/ui/Progress.svelte';
               disabled={library.scanning}
             >
               {#snippet icon()}<Icon name="refresh" size={12} />{/snippet}
-              刷新
+              {t('library.refresh')}
             </Button>
           {/if}
           <Button
@@ -207,7 +208,7 @@ import Progress from '../components/ui/Progress.svelte';
             }}
           >
             {#snippet icon()}<Icon name="edit" size={12} />{/snippet}
-            编辑
+            {t('library.edit')}
           </Button>
           <Button
             disabled={currentPlaylist.trackCount === 0}
@@ -215,7 +216,7 @@ import Progress from '../components/ui/Progress.svelte';
               if (currentPlaylist) void playlists.clear(currentPlaylist);
             }}
           >
-            清空
+            {t('library.clear')}
           </Button>
           <Button
             variant="danger"
@@ -224,7 +225,7 @@ import Progress from '../components/ui/Progress.svelte';
             }}
           >
             {#snippet icon()}<Icon name="trash" size={12} />{/snippet}
-            删除
+            {t('common.delete')}
           </Button>
         {/if}
       {/if}
@@ -244,11 +245,11 @@ import Progress from '../components/ui/Progress.svelte';
   <!-- 扫描时的环境指示：只报进度不带按钮。全应用唯一的取消入口在设置页
        「扫描入库」的执行状态卡，不另造第二份取消 -->
   <div class="scan-bar">
-    <Progress value={progress.total ? Math.min(100, Math.round((progress.scanned / progress.total) * 100)) : 8} label="扫描进度" />
+    <Progress value={progress.total ? Math.min(100, Math.round((progress.scanned / progress.total) * 100)) : 8} label={t('library.scanProgressLabel')} />
     <span>
       {progress.phase === 'walking'
-        ? '正在遍历目录…（到设置 → 曲库可取消）'
-        : `${progress.scanned}/${progress.total ?? '?'} · 新增 ${progress.imported} · 跳过 ${progress.skipped} · 失败 ${progress.failed}`}
+        ? t('library.scanWalking')
+        : t('library.scanLive', { scanned: progress.scanned, total: progress.total ?? '?', imported: progress.imported, skipped: progress.skipped, failed: progress.failed })}
     </span>
   </div>
 {/if}
@@ -257,12 +258,14 @@ import Progress from '../components/ui/Progress.svelte';
   <div class="facet-rows">
     {#if searchAlbums?.length}
       <section class="facet-row">
-        <h2>专辑</h2>
+        <h2>{t('library.sectionAlbums')}</h2>
         <div class="facet-grid">
           {#each searchAlbums as al (al.id)}
             <Card
               title={al.title}
-              subtitle={al.artist ? `${al.artist} · ${al.trackCount} 首` : `${al.trackCount} 首`}
+              subtitle={al.artist
+                ? `${al.artist} · ${t('common.trackCount', { n: al.trackCount })}`
+                : t('common.trackCount', { n: al.trackCount })}
               cover={al.artworkId ? artworkUrl(al.artworkId, 256) : null}
               onclick={() => nav.go({ kind: 'album', id: al.id })}
             />
@@ -272,12 +275,12 @@ import Progress from '../components/ui/Progress.svelte';
     {/if}
     {#if searchArtists?.length}
       <section class="facet-row">
-        <h2>艺人</h2>
+        <h2>{t('library.sectionArtists')}</h2>
         <div class="facet-grid">
           {#each searchArtists as ar (ar.id)}
             <Card
               title={ar.name}
-              subtitle={`${ar.trackCount} 首 · ${ar.albumCount} 张专辑`}
+              subtitle={t('browse.artistCardMeta', { n: ar.trackCount, albums: ar.albumCount })}
               cover={ar.artworkId ? artworkUrl(ar.artworkId, 256) : null}
               onclick={() => nav.go({ kind: 'artist', id: ar.id })}
             />
@@ -289,16 +292,16 @@ import Progress from '../components/ui/Progress.svelte';
 {/if}
 
 {#if isSearchPage && !ui.search.trim()}
-  <EmptyState fill title="在上方搜索框输入关键词" hint="曲目、专辑与艺人会同时匹配" />
+  <EmptyState fill title={t('library.searchEmptyTitle')} hint={t('library.searchEmptyHint')} />
 {:else}
   <!-- 搜索页的曲目小标题：与上面的专辑/艺人两段同一级，明确隔开。
        其他页面没有这段 -->
   {#if isSearchPage}
-    <div class="facet-rows tracks-head"><h2>曲目</h2></div>
+    <div class="facet-rows tracks-head"><h2>{t('library.sectionTracks')}</h2></div>
   {/if}
   <TrackListPanel
     {canSort}
-    removeLabel={view.kind === 'playlist' ? '从播放列表移除' : '从曲库中删除'}
+    removeLabel={view.kind === 'playlist' ? t('library.removeFromPlaylist') : t('library.deleteFromLibrary')}
     showFilter={ui.page === 'library'}
     dragSort={
       view.kind === 'playlist' ? (from, to) => void playlists.moveItem(from, to) : undefined
@@ -306,38 +309,38 @@ import Progress from '../components/ui/Progress.svelte';
   >
     {#snippet empty()}
       {#if ui.search.trim()}
-        <EmptyState title="没有匹配的曲目" hint="换个关键词，或清除搜索条件">
+        <EmptyState title={t('library.noMatchTitle')} hint={t('library.noMatchHint')}>
           {#snippet action()}
-            <Button onclick={() => list.clearSearch()}>清除搜索</Button>
+            <Button onclick={() => list.clearSearch()}>{t('shell.titlebar.searchClear')}</Button>
           {/snippet}
         </EmptyState>
       {:else if list.timeFilterOn}
         <!-- 筛选到 0 行 ≠ 空库：文案必须分开，否则用户会去重新扫描 -->
-        <EmptyState title="筛选后没有匹配的曲目" hint="放宽时间范围，或删掉几个条件试试">
+        <EmptyState title={t('library.filteredEmptyTitle')} hint={t('library.filteredEmptyHint')}>
           {#snippet action()}
             <Button onclick={() => list.setTimeFilter({ ...DEFAULT_TIME_FILTER, conds: [] })}>
-              清除筛选
+              {t('library.clearFilter')}
             </Button>
           {/snippet}
         </EmptyState>
       {:else if view.kind === 'playlist'}
-        <EmptyState title="这个播放列表还是空的" hint="在曲库里选中歌曲，右键或批量操作加入这里">
+        <EmptyState title={t('library.playlistEmptyTitle')} hint={t('library.playlistEmptyHint')}>
           {#snippet action()}
-            <Button onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>去曲库看看</Button>
+            <Button onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>{t('library.goToLibrary')}</Button>
           {/snippet}
         </EmptyState>
       {:else if view.kind === 'library' && ui.libraryTab === 'recent' && (library.stats?.tracks ?? 0) > 0}
         <!-- 「最近播放」空 ≠ 空库：库里有歌只是还没播过，"添加曲库"文案会把用户引去重扫。库真空时才走下面的"曲库还是空的" —— 那才是该给的动作 -->
-        <EmptyState title="还没有播放记录" hint="双击任意曲目开始播放，听过的会出现在这里">
+        <EmptyState title={t('library.recentEmptyTitle')} hint={t('library.recentEmptyHint')}>
           {#snippet action()}
-            <Button onclick={() => list.openLibraryTab('all')}>先看全部曲目</Button>
+            <Button onclick={() => list.openLibraryTab('all')}>{t('library.recentEmptyAction')}</Button>
           {/snippet}
         </EmptyState>
       {:else}
-        <EmptyState title="曲库还是空的" hint="选择一个音乐目录，AIYA 会扫描并建立索引">
+        <EmptyState title={t('library.emptyTitle')} hint={t('library.emptyHint')}>
           {#snippet action()}
             <Button variant="primary" onclick={() => void scan.pickRootAndScan()} disabled={library.scanning}>
-              选择音乐目录
+              {t('library.chooseFolder')}
             </Button>
           {/snippet}
         </EmptyState>

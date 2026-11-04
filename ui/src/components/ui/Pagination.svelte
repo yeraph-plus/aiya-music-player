@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Pagination } from 'bits-ui';
   import { ChevronLeft, ChevronRight } from '@lucide/svelte';
+  import { t } from '../../lib/i18n.svelte';
 
   /**
    * 列表底部分页，用于专辑与艺人宫格页。
@@ -33,10 +34,10 @@
   onPageChange={onchange}
   class="k-pag"
   role="navigation"
-  aria-label="分页"
+  aria-label={t('common.pagination')}
 >
   {#snippet children({ pages })}
-    <Pagination.PrevButton class="k-pag-btn" aria-label="上一页">
+    <Pagination.PrevButton class="k-pag-btn" aria-label={t('common.prevPage')}>
       <ChevronLeft size={14} />
     </Pagination.PrevButton>
 
@@ -54,7 +55,7 @@
       {/if}
     {/each}
 
-    <Pagination.NextButton class="k-pag-btn" aria-label="下一页">
+    <Pagination.NextButton class="k-pag-btn" aria-label={t('common.nextPage')}>
       <ChevronRight size={14} />
     </Pagination.NextButton>
   {/snippet}

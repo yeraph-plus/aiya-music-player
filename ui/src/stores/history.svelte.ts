@@ -1,4 +1,5 @@
 import { errorMessage } from '../lib/errors';
+import { t } from '../lib/i18n.svelte';
 import { library } from './library.svelte';
 import { notify } from './notify.svelte';
 import { ui } from './ui.svelte';
@@ -28,7 +29,7 @@ class HistoryStore {
       notify.showError(errorMessage(err));
       return;
     }
-    notify.showToast('播放历史已清空');
+    notify.showToast(t('history.cleared'));
     await library.loadStats();
     // 设置页的「关于」诊断块里也展示历史相关数字，开着就一起刷
     if (ui.page === 'settings') await ui.refreshDiagnostics();

@@ -8,10 +8,11 @@
   import Field from '../ui/Field.svelte';
   import SegmentedControl from '../ui/SegmentedControl.svelte';
   import Select from '../ui/Select.svelte';
-  import { OP_LABELS, opsFor, beetsQuery as q } from '../../stores/beets-query.svelte';
+  import { opLabel, opsFor, beetsQuery as q } from '../../stores/beets-query.svelte';
   import { shortenPath } from '../../lib/format';
   import { errorMessage } from '../../lib/errors';
   import { events, ipc } from '../../lib/ipc';
+  import { t } from '../../lib/i18n.svelte';
 
   /**
    * 分析子页：分析库 → 查询 → 存为歌单。
@@ -72,7 +73,7 @@
       message?: string;
     };
     if (e.type === 'progress') {
-      if (localRun) indexNote = `入库 ${e.current ?? 0}/${e.total ?? 0}`;
+      if (localRun) indexNote = t('beets.index.noteProgress', { current: e.current ?? 0, total: e.total ?? 0 });
     } else if (e.type === 'indexDone') {
       if (localRun) {
         endIndex();
@@ -84,7 +85,7 @@
     } else if (e.type === 'cancelled' || e.type === 'error' || e.type === 'sessionFailed') {
       if (localRun) {
         endIndex();
-        indexError = e.message ?? '入库被中断';
+        indexError = e.message ?? t('beets.index.errorInterrupted');
       }
     }
   }
@@ -94,7 +95,7 @@
     indexRun = true;
     localRun = true;
     indexError = null;
-    indexNote = '正在入库…';
+    indexNote = t('beets.index.noteImporting');
     try {
       await ipc.beets.indexImport();
     } catch (e) {
@@ -124,7 +125,7 @@
     const v = row.hit.fields?.[name];
     if (v === null || v === undefined) return '';
     if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2);
-    if (typeof v === 'boolean') return v ? '是' : '否';
+    if (typeof v === 'boolean') return v ? t('beets.cellYes') : t('beets.cellNo');
     return String(v);
   }
 </script>
@@ -133,20 +134,19 @@
   <!-- 曲库分析（查询的前置条件） -->
   <section class="beets-panel">
     <div class="beets-panel-head">
-      <strong>曲库分析</strong>
+      <strong>{t('beets.index.title')}</strong>
       <span class="beets-dim">
-        beets 对着曲库根做<b>只读</b>分析（不写标签、不搬文件），分析库是曲库的镜像。
-        查询读的就是它——分析库空着的时候筛选一定 0 命中。
+        {t('beets.index.descHead')}<b>{t('beets.index.descReadonly')}</b>{t('beets.index.descTail')}
       </span>
     </div>
     <div class="beets-row">
       {#if tracksTotal !== null}
-        <span>曲库 <b>{tracksTotal}</b> 首</span>
+        <span>{t('beets.index.libraryLabel')} <b>{tracksTotal}</b> {t('beets.index.trackUnit')}</span>
       {/if}
       {#if indexItems !== null}
-        <span>分析库 <b>{indexItems}</b> 条</span>
+        <span>{t('beets.index.indexLabel')} <b>{indexItems}</b> {t('beets.index.itemUnit')}</span>
       {:else}
-        <span class="beets-dim">分析库状态未知</span>
+        <span class="beets-dim">{t('beets.index.statusUnknown')}</span>
       {/if}
       <Button
         size="sm"
@@ -156,18 +156,18 @@
         onclick={() => void startIndex()}
       >
         {#snippet icon()}<ListFilter size={14} />{/snippet}
-        {indexItems === 0 ? '建立分析库' : '重建分析库'}
+        {indexItems === 0 ? t('beets.index.build') : t('beets.index.rebuild')}
       </Button>
       {#if indexNote}<span class="beets-dim">{indexNote}</span>{/if}
       {#if indexError}<span class="beets-danger">{indexError}</span>{/if}
     </div>
     {#if indexItems === 0 && !indexRun}
       <p class="beets-dim">
-        分析库还是空的，下面的查询不会有结果。第一次要把曲库通读一遍，几万首需要一段时间。
+        {t('beets.index.emptyHint')}
       </p>
     {:else if indexItems !== null && tracksTotal !== null && indexItems < tracksTotal}
       <p class="beets-dim">
-        分析库比曲库少 {tracksTotal - indexItems} 首：曲库新增的文件还没登记，重建一次就好。
+        {t('beets.index.behindHint', { n: tracksTotal - indexItems })}
       </p>
     {/if}
   </section>
@@ -175,42 +175,36 @@
   <!-- 查询条件 -->
   <section class="beets-panel">
     <div class="beets-panel-head">
-      <strong>查询</strong>
+      <strong>{t('beets.query.title')}</strong>
       <span class="beets-dim">
         {#if q.mode === 'rules'}
-          条件之间是「并且」；范围用两条（≥ / ≤）表达。
+          {t('beets.query.descRules')}
           <!-- 求值在工具侧完成，不下推 beets 查询语法。beets 的区间比较对
                未注册类型的插件字段会静默 0 命中，下推等于让"有没有结果"
                取决于第三方有没有 register 类型。本说明面向
                实现维护，不进界面文案。 -->
         {:else}
-          直接写 beets 的查询语法（如 <code>year:2000..2010 genre:Jazz</code>），
-          语义完全跟着 beets 走。
+          {t('beets.query.descRawHead')} <code>year:2000..2010 genre:Jazz</code>{t('beets.query.descRawTail')}
         {/if}
       </span>
     </div>
 
     <div class="mode-row">
       <SegmentedControl
-        label="查询方式"
+        label={t('beets.query.modeLabel')}
         size="sm"
         value={q.mode}
         options={[
-          { value: 'rules', label: '条件', title: '按字段逐条筛选' },
-          { value: 'raw', label: '原始语法', title: 'beets 自己的查询语法' },
+          { value: 'rules', label: t('beets.query.modeRules'), title: t('beets.query.modeRulesTip') },
+          { value: 'raw', label: t('beets.query.modeRaw'), title: t('beets.query.modeRawTip') },
         ]}
         onchange={(v) => (q.mode = v as 'rules' | 'raw')}
       />
-      <span class="beets-dim">最多返回</span>
+      <span class="beets-dim">{t('beets.query.limitPrefix')}</span>
       <Select
-        label="条数上限"
+        label={t('beets.query.limitLabel')}
         value={String(q.limit)}
-        options={[
-          { value: '100', label: '100 条' },
-          { value: '200', label: '200 条' },
-          { value: '500', label: '500 条' },
-          { value: '2000', label: '2000 条' },
-        ]}
+        options={[100, 200, 500, 2000].map((n) => ({ value: String(n), label: t('beets.query.limitOption', { n }) }))}
         onchange={(v) => (q.limit = Number(v))}
       />
     </div>
@@ -220,45 +214,45 @@
         {#each q.rules as rule, index (index)}
           <div class="rule-row">
             <Select
-              label="字段"
+              label={t('beets.query.fieldLabel')}
               value={rule.field}
               options={q.fields.map((f) => ({
                 value: f.name,
-                label: f.kind === 'flexible' ? `${f.name}（插件）` : f.name,
+                label: f.kind === 'flexible' ? t('beets.query.flexibleField', { name: f.name }) : f.name,
               }))}
               onchange={(v) => q.setRuleField(index, v)}
             />
             <Select
-              label="条件"
+              label={t('beets.query.opLabel')}
               value={rule.op}
               options={opsFor(q.fields.find((f) => f.name === rule.field)?.kind ?? 'string').map(
-                (op) => ({ value: op, label: OP_LABELS[op] ?? op }),
+                (op) => ({ value: op, label: opLabel(op) }),
               )}
               onchange={(v) => q.setRuleOp(index, v)}
             />
             <Field
-              label="值"
+              label={t('beets.query.valueLabel')}
               hideLabel
               value={rule.value}
-              placeholder={rule.op === 'regex' ? '正则表达式' : '值'}
+              placeholder={rule.op === 'regex' ? t('beets.query.regexPh') : t('beets.query.valueLabel')}
               oninput={(v) => q.setRuleValue(index, v)}
               onenter={() => void q.run()}
             />
-            <Button variant="ghost" size="sm" onclick={() => q.removeRule(index)} title="删掉这条条件">
-              删除
+            <Button variant="ghost" size="sm" onclick={() => q.removeRule(index)} title={t('beets.query.removeRuleTip')}>
+              {t('common.delete')}
             </Button>
           </div>
         {/each}
         <div class="rules-actions">
-          <Button size="sm" onclick={() => q.addRule()}>+ 添加条件</Button>
+          <Button size="sm" onclick={() => q.addRule()}>{t('shell.playlist.addCond')}</Button>
           {#if q.rules.length === 0}
-            <span class="beets-dim">不加条件 = 整个分析库</span>
+            <span class="beets-dim">{t('beets.query.noConds')}</span>
           {/if}
         </div>
       </div>
     {:else}
       <Field
-        label="beets 查询语法"
+        label={t('beets.query.rawLabel')}
         hideLabel
         mono
         value={q.raw}
@@ -269,17 +263,17 @@
     {/if}
 
     {#if q.catalogError}
-      <p class="beets-warn">字段清单读取失败，下拉框只有基础字段：{q.catalogError}</p>
+      <p class="beets-warn">{t('beets.query.catalogError', { message: q.catalogError })}</p>
     {/if}
 
     <div class="run-row">
       <Button variant="primary" loading={q.running} onclick={() => void q.run()}>
         {#snippet icon()}<Search size={14} />{/snippet}
-        查询
+        {t('beets.query.run')}
       </Button>
       {#if q.ran}
         <span class="beets-dim">
-          命中 {q.total} 首{#if q.truncated}（只显示前 {q.rows.length} 首，缩小条件或提高上限）{/if}
+          {t('beets.query.hits', { n: q.total })}{#if q.truncated}{t('beets.query.truncated', { n: q.rows.length })}{/if}
         </span>
       {/if}
     </div>
@@ -297,11 +291,11 @@
           checked={q.allSelected}
           indeterminate={q.selected.size > 0 && !q.allSelected}
           disabled={q.selectablePaths.length === 0}
-          label="全选本页已入库的曲目"
+          label={t('beets.result.selectAll')}
           ontoggle={() => q.toggleAll()}
         />
         <span class="beets-dim">
-          已选 {q.selected.size} 首{#if q.missingCount > 0} · 本页 {q.missingCount} 首不在曲库{/if}
+          {t('beets.result.selected', { n: q.selected.size })}{#if q.missingCount > 0} · {t('beets.result.pageMissing', { n: q.missingCount })}{/if}
         </span>
       </span>
       <Button
@@ -311,26 +305,26 @@
         onclick={() => q.openSave()}
       >
         {#snippet icon()}<Tag size={14} />{/snippet}
-        存为歌单
+        {t('beets.result.savePlaylist')}
       </Button>
     </div>
 
     {#if !q.ran}
       <EmptyState
-        title="还没有查询"
-        hint="设好条件点「查询」。分析库里有什么，取决于曲库根下有多少文件被登记过。"
+        title={t('beets.result.emptyTitle')}
+        hint={t('beets.result.emptyHint')}
         fill
       >
         {#snippet icon()}<ListFilter size={26} />{/snippet}
       </EmptyState>
     {:else if q.rows.length === 0}
-      <EmptyState title="没有命中" hint="换个条件试试，或切到「原始语法」用 beets 的写法。" fill />
+      <EmptyState title={t('beets.result.noHitsTitle')} hint={t('beets.result.noHitsHint')} fill />
     {:else}
       <div class="table-head">
         <span class="col-check"></span>
-        <span class="col-title">标题</span>
-        <span class="col-artist">艺人</span>
-        <span class="col-album">专辑</span>
+        <span class="col-title">{t('beets.result.colTitle')}</span>
+        <span class="col-artist">{t('beets.result.colArtist')}</span>
+        <span class="col-album">{t('beets.result.colAlbum')}</span>
         {#each q.returnFields.filter((f) => !['title', 'artist', 'album'].includes(f)) as extra (extra)}
           <span class="col-extra">{extra}</span>
         {/each}
@@ -343,7 +337,7 @@
               <CheckCell
                 checked={q.isSelected(row.hit.path)}
                 disabled={row.trackId === null}
-                label={`选择 ${cell(row, 'title') || row.hit.path}`}
+                label={t('beets.result.selectRow', { name: cell(row, 'title') || row.hit.path })}
                 ontoggle={() => row.trackId && q.toggle(row.hit.path)}
               />
             </span>
@@ -357,7 +351,7 @@
             {/each}
             <span class="col-state">
               {#if row.trackId === null}
-                <span class="beets-badge" title="这个文件还没被扫描进曲库，存歌单时会跳过">未入库</span>
+                <span class="beets-badge" title={t('beets.result.notIndexedTip')}>{t('beets.result.notIndexed')}</span>
               {/if}
             </span>
           </li>
@@ -369,23 +363,23 @@
 
 {#if q.saveOpen}
   <Dialog
-    title="存为歌单"
-    description={`把选中的 ${q.selectedTrackIds.length} 首存成歌单。同名歌单会合并（已在里面的曲目自动跳过），不会建出第二个。`}
+    title={t('beets.result.savePlaylist')}
+    description={t('beets.save.desc', { n: q.selectedTrackIds.length })}
     onclose={() => q.closeSave()}
     autofocus={() => undefined}
   >
     <Field
-      label="歌单名"
+      label={t('beets.save.nameLabel')}
       value={q.saveName}
-      placeholder="例如：2010 年代爵士"
+      placeholder={t('beets.save.namePh')}
       maxlength={60}
       oninput={(v) => (q.saveName = v)}
       onenter={() => void q.save()}
       error={q.saveError}
     />
     {#snippet actions()}
-      <Button variant="ghost" onclick={() => q.closeSave()}>取消</Button>
-      <Button variant="primary" loading={q.saving} onclick={() => void q.save()}>保存</Button>
+      <Button variant="ghost" onclick={() => q.closeSave()}>{t('common.cancel')}</Button>
+      <Button variant="primary" loading={q.saving} onclick={() => void q.save()}>{t('common.save')}</Button>
     {/snippet}
   </Dialog>
 {/if}

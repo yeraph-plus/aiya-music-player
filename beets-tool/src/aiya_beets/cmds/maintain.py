@@ -183,8 +183,8 @@ def update_library(req_id, pretend: bool, gen: int) -> None:
         if not root or not os.path.isdir(root):
             raise ProtocolError(
                 E_CONFIG, "update",
-                f"库根目录不可访问（盘没挂载？）：{root or '(未配置)'}。"
-                "为防整库误删，本次刷新已取消；接好存储后再试。",
+                f"library root is not accessible (drive not mounted?): {root or '(not configured)'}. "
+                "To protect the library from a mass delete, this refresh was cancelled; reconnect the storage and try again.",
             )
         # 预检缺失占比：每条目多一次 exists（NTFS 元数据缓存后毫秒级），
         # 换"存储没挂载就清库"不可能发生，值。乘 5 避免浮点除法。
@@ -194,9 +194,9 @@ def update_library(req_id, pretend: bool, gen: int) -> None:
         if missing_now * 5 > total:
             raise ProtocolError(
                 E_CONFIG, "update",
-                f"缺失 {missing_now}/{total} 条（超过 20%），疑似存储未挂载。"
-                "为防整库误删，本次刷新已取消；可用 pretend 预览缺失清单，"
-                "确认后用 beet 命令行（beet update）走有确认的清除。",
+                f"{missing_now}/{total} items missing (over 20%), the storage is probably not mounted. "
+                "To protect the library from a mass delete, this refresh was cancelled; use pretend to preview "
+                "the missing list, then confirm the removal with the beet command line (beet update).",
             )
 
     emit({"type": "progress", "session": session, "stage": "update",
@@ -334,8 +334,8 @@ def move_items(req_id, directory: str, pretend: bool, gen: int) -> None:
     if not configured:
         raise ProtocolError(
             E_NO_LIBRARY_DIR, "move",
-            "beets 配置里没有 directory（库根目录）：请先在「扫描入库」页设置扫描目录，"
-            "或手改 beets 的 config.yaml",
+            "no directory (library root) in the beets config: set a scan folder on the import page first, "
+            "or edit beets' config.yaml by hand",
         )
     want = (directory or "").strip()
     if want and os.path.normcase(os.path.abspath(want)) != os.path.normcase(
@@ -343,13 +343,13 @@ def move_items(req_id, directory: str, pretend: bool, gen: int) -> None:
     ):
         raise ProtocolError(
             E_LIBRARY_DIR_MISMATCH, "move",
-            f"目标根不一致：应用配置 {want}，beets 配置 {configured}"
-            "（拒绝在未知位置搬动文件）",
+            f"target root mismatch: app config {want}, beets config {configured}"
+            " (refusing to move files to an unknown location)",
             requested=want, configured=configured,
         )
     if not os.path.isdir(configured):
         raise ProtocolError(
-            E_NO_LIBRARY_DIR, "move", f"beets 库根目录不存在：{configured}",
+            E_NO_LIBRARY_DIR, "move", f"beets library root does not exist: {configured}",
             configured=configured,
         )
 
@@ -373,7 +373,7 @@ def move_items(req_id, directory: str, pretend: bool, gen: int) -> None:
             if os.path.normcase(dest) == os.path.normcase(src):
                 status, reason = "same", ""
             elif not src or not os.path.exists(src):
-                status, reason = "conflict", "源文件不存在"
+                status, reason = "conflict", "source file does not exist"
             else:
                 conflict = dest_conflict(item, src)
                 if conflict == "same":

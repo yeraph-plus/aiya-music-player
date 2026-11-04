@@ -6,9 +6,9 @@
 （流程见 §5.3）。
 
 项目定位：Tauri 2 本地音乐播放器，Windows 优先。Rust 宿主 + 原生音频 sidecar
-进程 + Svelte 5 前端；beets 集成为可选增强。功能已收尾，剩余项以
+进程 + Svelte 5 前端；beets 集成为可选增强。剩余项以
 [docs/35-closing-ledger-2026-10-27.md](docs/35-closing-ledger-2026-10-27.md)
-为唯一真源。
+为唯一真源，进行中的批次以 docs/ 下编号最新的文档为准。
 
 ## 1. 项目结构与依赖边界
 
@@ -17,19 +17,21 @@
 ```
 AIYA_MUSIC_TAURI/
 ├── AGENTS.md              # 本文件：结构、操作、约束、文风、文档制度
-├── docs/                  # 编号记录：调研/计划/审计/账本，制度见 §5
+├── docs/                  # 编号记录：调研/计划/审计/账本；ledger/ 为架构域流水账，制度见 §5
 ├── crates/
 │   ├── aiya-player/       # 纯领域：队列、状态归约、命令/事件；不依赖 tauri/rusqlite/windows
-│   ├── aiya-data/         # SQLite v1、Repository、扫描、封面、beets 读模型；不依赖 tauri
+│   ├── aiya-data/         # SQLite v1、Repository、扫描、封面缓存、设置；不依赖 tauri
 │   ├── aiya-audio/        # 原生引擎：Symphonia 解码 + wasapi-rs 输出 + DSP/频谱/EQ
 │   ├── aiya-audio-host/   # 音频 sidecar 进程入口（命名管道行 JSON，不传 PCM）
-│   └── aiya-beets-client/ # beets 协议客户端：发现/起进程/说协议；零 Tauri、零环境知识
+│   ├── aiya-beets-client/ # beets 协议客户端：发现/起进程/说协议；零环境知识
+│   └── aiya-beets-store/  # beets 索引增强的派生数据：独立 SQLite 文件，不认识应用曲库
 ├── beets-tool/            # beets 侧全部能力（独立发布单元，Python 包 aiya-beets）
 ├── src-tauri/             # Tauri 宿主：命令、事件桥、协议注册、窗口、日志
 ├── ui/                    # Svelte 5 + Vite：views / stores / 组件分 content·shell·ui
-├── protocol/              # beets 协议 v1 schema 的本仓镜像（字节副本 + sha256）
-├── tools/                 # 类型生成、依赖图、CDP 探针、notice 生成、打包辅助、run.mjs
+├── protocol/              # beets 协议 v2 schema 的本仓镜像（字节副本 + sha256）
+├── tools/                 # 类型生成、依赖图、CDP 探针、notice 生成、门禁脚本、打包辅助、run.mjs
 ├── contracts/             # 契约说明 README
+├── scripts/               # 图标生成等辅助脚本
 └── licenses/              # 随包分发的许可材料（npm run notices 生成部分）
 ```
 
@@ -41,13 +43,15 @@ AIYA_MUSIC_TAURI/
 ```
 ui ── lib/ipc/client.ts ──▶ src-tauri(aiya) ──┬─▶ aiya-data
                                              ├─▶ aiya-player ──▶ aiya-audio
+                                             ├─▶ aiya-beets-store
                                              └─▶ aiya-audio      ⇠ 同一 crate 也被 sidecar 用
 src-tauri ⇠ 命名管道行 JSON ⇢ aiya-audio-host
 src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立安装，可能根本没装）
 ```
 
 - `aiya-player` 不依赖 `tauri`、`tokio`、`rusqlite`、`windows`；`aiya-data`
-  不依赖 `tauri` 与音频平台。违反即退化回上一代结构，合并前必须修正。
+  不依赖 `tauri` 与音频平台；`aiya-beets-store` 不依赖应用曲库（`aiya-data`）。
+  违反视为结构破坏，合并前必须修正。
 - 核心链路 `aiya-audio` / `aiya-audio-host` / `aiya-player` / `aiya-data` 不依赖
   `aiya-beets-client`，"没装 beets 也能完整播放"是编译期事实。门禁：
   `npm run check:boundary`。
@@ -62,7 +66,7 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
   （把 `%USERPROFILE%\.cargo\bin` 前置进 PATH）。
 - `beforeBuildCommand` 的 cwd 是调用 tauri CLI 时的目录：`tauri build` / `tauri dev`
   只在仓库根执行，不在 `ui/` 内。
-- beets-tool 开发与 `.pyz` 安装器构建需要 Python 3.10–3.14；播放器本身无此依赖。
+- beets-tool 开发与套件包构建需要 Python 3.10+；播放器本身无此依赖。
 - e2e 使用 mock 后端 + 系统 Edge，无需真实后端与声卡。
 
 ### 2.2 常用命令（仓库根执行）
@@ -73,21 +77,24 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 | `npm run dev:ui` | 只起前端（浏览器 mock 数据，不开 Tauri） |
 | `npm run build` / `bundle` | 出安装包：`vite build` → 编 sidecar → release 编译 → NSIS（不含 beets） |
 | `npm run portable` | 出便携版 zip：两个 exe + 许可 + `portable.txt` |
-| `npm run beets:release` | 出 beets 两个发布物（`.pyz` 安装器 / 免安装套件包） |
+| `npm run beets:bundle` | 出 beets 单轨发布物 `beets-tool/dist/beets-portable-win-x64.zip` |
 | `npm run build:ui` | 只构建前端到 `ui/dist` |
 | `npm run check` | `svelte-check`（0 error / 0 warning 才算过） |
 | `npm run test` | Rust 全量测试（1 条 `--ignored` 为 `bench:50k` 性能基准） |
 | `npm run test:data` / `test:audio` / `test:player` / `test:app` | 单 crate 测试 |
-| `npm run test:all` | 先编 sidecar → Rust 全量 + UI 类型检查 + UI 构建 |
+| `npm run test:all` | 先编 sidecar → Rust 全量 + UI 类型检查 + 依赖/边界/分层/协议门禁 + UI 构建 |
 | `npm run test:e2e` | Playwright（mock 后端 + 系统 Edge） |
-| `npm run verify` | `test:all` + `test:e2e` + `check:fmt` + `check:clippy`（-D warnings）+ `gen:types:check` + beets 导入/维护/契约冒烟 |
+| `npm run verify` | `test:all` + `test:e2e` + `check:fmt` + `check:clippy`（-D warnings）+ `gen:types:check` + `check:style:strict` + beets 九项冒烟（apply/maint/proto/config/catalog/bins/uninstall/lock/enrich） |
 | `npm run gen:types` / `gen:types:check` | 从 Rust 生成 TS 类型 / 只校验不写盘 |
-| `npm run smoke:engine` / `smoke:offset` / `smoke:switch` / `smoke:rate` | 真机 WASAPI 出声冒烟（需要声卡） |
+| `npm run smoke:engine` / `smoke:offset` / `smoke:switch` / `smoke:rate` / `smoke:mode` | 真机 WASAPI 出声冒烟（需要声卡） |
 | `npm run smoke:supervisor` | sidecar 握手/心跳/看门狗冒烟（不需要声卡） |
 | `npm run smoke:beets` / `smoke:maint` | beets apply 五场景 / 维护四件套（隔离 `BEETSDIR`，不动真实库） |
+| `npm run smoke:proto` / `smoke:config` / `smoke:catalog` / `smoke:bins` / `smoke:uninstall` / `smoke:lock` / `smoke:enrich` | beets 契约与能力冒烟（隔离 `BEETSDIR`） |
 | `npm run bench:50k` | 5 万首查询性能基准（release，`--ignored`） |
 | `npm run check:boundary` | 边界门禁：核心链路不依赖 beets 工具、client 无环境知识 |
 | `npm run check:deps` | store 依赖方向/环检测 |
+| `npm run check:style` / `check:style:strict` | 注释文风门禁（report-only / strict 阻断，见 §4.4） |
+| `npm run check:ui-layers` | UI 分层门禁 |
 | `npm run proto:check` / `proto:sync` | 协议门禁：镜像与工具侧真源字节一致 / 同步镜像 |
 | `npm run notices` | 刷新 `licenses/CARGO-DEPS.md`（依赖变更后跑） |
 | `npm run probe:ui` | CDP 探针（对真实窗口做 UI 断言） |
@@ -95,106 +102,82 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 ### 2.3 验证门禁
 
 - 提交前基线：`npm run verify`（含 e2e、fmt、clippy -D warnings、类型生成校验、
-  beets 冒烟）。
+  文风门禁、beets 冒烟）。
 - 干净检出直接跑 Rust 测试会因缺 sidecar 二进制失败；`test:all` 已把编 sidecar
   纳入第一步，单独 `cargo test` 前先编 sidecar。
 - svelte-check 要求 0 error / 0 warning。
-- 改动注释/文档的批次同样跑 `cargo test`（`///`、`//!` 改动可能影响 doctest）
-  与 `svelte-check`。
+- `///`、`//!` 注释参与 doctest：改动契约层注释时同样跑 `cargo test` 与
+  `svelte-check`。
 
 ## 3. 约束（既定决策事实）
 
-> 本节吸收原 `docs/adr/` 六份记录中仍然成立的事实（该结构已于 2026-11-01 废弃、
-> 记录删除，见 docs/59 §3.3/§6）。每条标注来源。**修改本节即修改约束**，
-> 须在批次文档中记录来由。
+> 每条是现行约束事实，标注来源编号。**修改本节即修改约束**，须在批次文档中
+> 记录来由（流程见 §5.3）。
 
-- **C1 后端拥有音频输出**（原 ADR-0001）：解码、DSP、设备枚举、播放时钟全部由
-  Rust 音频进程负责；WebView 不创建 `<audio>` / `AudioContext` /
-  `MediaElementSource`，不接触音频文件路径；UI 经 `AudioPort` 抽象与引擎解耦，
-  不感知引擎实现。
-- **C2 播放状态机唯一真源在 Rust**（原 ADR-0003）：`PlayerActor` 独占队列、随机、
-  重复、位置、音量、速率；UI 经命令与快照事件交互，不判断"下一首"、不维护第二套
-  队列。`PlayerState` 不含完整队列（`queue_slice` 分片拉取）；每个 `load` 带
+- **C1 后端拥有音频输出**：解码、DSP、设备枚举、播放时钟全部由 Rust 音频进程
+  负责；WebView 不创建 `<audio>` / `AudioContext` / `MediaElementSource`，不接触
+  音频文件路径；UI 经 `AudioPort` 抽象与引擎解耦，不感知引擎实现。
+- **C2 播放状态机唯一真源在 Rust**：`PlayerActor` 独占队列、随机、重复、位置、
+  音量、速率；UI 经命令与快照事件交互，不判断"下一首"、不维护第二套队列。
+  `PlayerState` 不含完整队列（`queue_slice` 分片拉取）；每个 `load` 带
   `generation`、事件带 `revision`/`seq`，过期与乱序事件丢弃；UI 仅保留 pending
   覆盖层（拖动 seek、输入中的音量），不拥有权威状态。系统媒体键、托盘、关窗
   控制同一个 Actor。
-- **C3 音频独立 sidecar 进程，命名管道行 JSON**（原 ADR-0002；进程形态不变，
-  引擎实现由 C6 修订）：只传命令/状态/错误/频谱 band，不传 PCM。
-  `PROTOCOL_VERSION` 握手，不兼容拒绝启动、不静默降级；控制命令有界队列不丢，
-  `Position`/`Spectrum` 可丢旧帧；2s 心跳、5s 超时 kill + restart；心跳由 sidecar
-  独立线程发出、不等引擎初始化完成（初始化慢不等于进程死）；sidecar 不打开
-  SQLite、不依赖 Tauri 类型。
-- **C4 契约以 Rust 为源**（原 ADR-0004）：命令、事件、错误、DTO 定义在 Rust，
-  `#[derive(TS)]`（ts-rs，经 `cargo test` 导出）由 `npm run gen:types` 直接写进
+- **C3 音频独立 sidecar 进程，命名管道行 JSON**：只传命令/状态/错误/频谱 band，
+  不传 PCM。`PROTOCOL_VERSION` 握手，不兼容拒绝启动、不静默降级；控制命令有界
+  队列不丢，`Position`/`Spectrum` 可丢旧帧；2s 心跳、5s 超时 kill + restart；
+  心跳由 sidecar 独立线程发出、不等引擎初始化完成（初始化慢不等于进程死）；
+  sidecar 不打开 SQLite、不依赖 Tauri 类型。
+- **C4 契约以 Rust 为源**：命令、事件、错误、DTO 定义在 Rust，`#[derive(TS)]`
+  （ts-rs，经 `cargo test` 导出）由 `npm run gen:types` 直接写进
   `ui/src/lib/ipc/generated/`（`TS_RS_EXPORT_DIR` 指向该目录，桶文件 index.ts
   同脚本生成）；不手改生成物，`gen:types:check` 校验一致。UI 只走
-  `lib/ipc/client.ts` 一层访问 IPC；参数侧
-  复合对象收 `Json` 手动解析（否则参数不合法会绕开 `ApiError` 分类）。事件/命令
-  用 tagged enum；sidecar 协议独立定义，不复用 Tauri 类型。
-- **C5 自定义协议仅保留封面**（原 ADR-0005）：`aiya-artwork` 协议只接受
-  artworkId（`/artwork/{id}?size=96|256|512`），不接受任意文件路径；handler 只按
-  ID 查缓存，404 与错误响应不落盘；音频文件路径只存在于 host 与 sidecar 的
-  `Load` 命令中。Windows 运行时 URL 形态为 `http://aiya-artwork.localhost/...`。
-- **C6 原生音频引擎**（原 ADR-0006，修订原 ADR-0001 中 v1 用 mpv 的实现选择）：
-  引擎 = Symphonia 解码 + `wasapi` crate 输出，经 `aiya-audio-host` sidecar 交付。
-  DSP 链固定为 `decode → [resample(共享)] → [ReplayGain] → [EQ] → tap →
-  [volume/fade] → WASAPI`，tap 在 EQ 之后、主音量之前。tap 为订阅制必要采样
-  复制（SPSC 无锁环，分析线程 30Hz：FFT → 48 对数分带 `u8[48]` 事件），仅在
-  UI 开启频谱时生效，关闭时零拷贝零分配，不破坏 bit-perfect。不采用
-  Rodio/CPAL（模型与自有 DSP 链、位置时钟、独占模式冲突）；mpv 仅作对照实验，
-  不进发布包。
+  `lib/ipc/client.ts` 一层访问 IPC；参数侧复合对象收 `Json` 手动解析（否则参数
+  不合法会绕开 `ApiError` 分类）。事件/命令用 tagged enum；sidecar 协议独立
+  定义，不复用 Tauri 类型。
+- **C5 自定义协议仅保留封面**：`aiya-artwork` 协议只接受 artworkId
+  （`/artwork/{id}?size=96|256|512`），不接受任意文件路径；handler 只按 ID 查
+  缓存，404 与错误响应不落盘；音频文件路径只存在于 host 与 sidecar 的 `Load`
+  命令中。Windows 运行时 URL 形态为 `http://aiya-artwork.localhost/...`。
+- **C6 原生音频引擎**：引擎 = Symphonia 解码 + `wasapi` crate 输出，经
+  `aiya-audio-host` sidecar 交付。DSP 链固定为 `decode → [resample(共享)] →
+  [ReplayGain] → [EQ] → tap → [volume/fade] → WASAPI`，tap 在 EQ 之后、主音量
+  之前。tap 为订阅制必要采样复制（SPSC 无锁环，分析线程 30Hz：FFT → 48 对数
+  分带 `u8[48]` 事件），仅在 UI 开启频谱时生效，关闭时零拷贝零分配，不破坏
+  bit-perfect。不采用 Rodio/CPAL（模型与自有 DSP 链、位置时钟、独占模式冲突）；
+  mpv 仅作对照实验，不进发布包。
 - **C7 单一数据库写入者**（docs/02）：只有宿主打开 SQLite；音频/beets sidecar
   不碰宿主库。
-- **C8 全新 schema v1，无历史迁移链**（docs/02）：不迁移旧库、不兼容 Electron
-  时代的 `media://` 与 IPC。
+- **C8 数据库无迁移链**（docs/02）：schema 自 v1 起，不提供旧库迁移路径。
 - **C9 beets 是增强能力，不是播放依赖**（docs/33）：协议 v2 已冻结，真源在
   `beets-tool/protocol/v2.schema.json`，本仓镜像 `protocol/aiya-beets-v2.json`
   （字节副本 + sha256）。守线各管一面：`smoke:proto`（工具输出合 schema）、
   `cargo test -p aiya-beets-client`（serde 形状对齐镜像）、`proto:check`（镜像
   未被单方面修改；改镜像只能经 `proto:sync`）、运行时 `schemaHash` 比对
-  （宿主与工具必须是同一版契约字节，见 `beets.rs`）。beets 为写权威，自有表是读模型，
-  不用 beets 查询语法替代内置索引（docs/29）。
-- **C10 分发形态**（docs/33/35/53/54/58）：安装包（NSIS，当前用户级）不含 beets；
-  beets 单轨分发——免安装套件包（自带 embeddable 解释器，整目录复制可用；
-  曾经的 `.pyz` 安装器/A 轨 venv 随单轨化退役，见 docs/58 §5）。播放器侧安装
-  流程：下载 → 展开 → 记入口 → 跑一次 `status` 验证；**成功判据是探测到的
-  `found`，不是退出码**。下载物按 zip 容器形状校验（GitHub 未发布资产时返回
-  200 的 HTML 错误页）。不做代码签名（2026-10-27），SmartScreen 提示为预期，
-  以便携版 zip 作为补偿轨道。
+  （宿主与工具必须是同一版契约字节，见 `beets.rs`）。beets 为写权威，
+  `aiya-beets-store` 保存派生数据（读模型），不用 beets 查询语法替代内置索引
+  （docs/29）。
+- **C10 分发形态**（docs/33/35/53/54/58）：安装包（NSIS，当前用户级）不含
+  beets；beets 单轨分发——免安装套件包（自带 embeddable 解释器与外置工具，
+  整目录复制可用）。播放器侧安装流程：下载 → 展开 → 记入口 → 跑一次 `status`
+  验证；**成功判据是探测到的 `found`，不是退出码**。下载物按 zip 容器形状校验
+  （GitHub 未发布资产时返回 200 的 HTML 错误页）。不做代码签名，SmartScreen
+  提示为预期，以便携版 zip 作为补偿轨道。
 - **C11 数据位置唯一真源**（`src-tauri/src/paths.rs`）：便携判定只看 exe 同目录
   有无 `portable.txt`（不探测目录可写性）；命中则数据根为 `<exe目录>/data`，
   否则 `%APPDATA%\dev.aiya.music`。全仓只有 `paths.rs` 回答"数据放哪"。
 - **C12 发布基址覆盖**（docs/33）：仅经 `AIYA_BEETS_RELEASE_BASE` 环境变量覆盖，
-  高于内置常量；不设 `beets.releaseBase` 配置键（该键无 UI 入口，已删除）。
+  高于内置常量；不设 `beets.releaseBase` 配置键。
 
 ### 3.1 范围边界（现在不做什么）
 
-- 不在前端建第二条音频路径（Web Audio 不回迁；频谱只来自引擎链内 tap）。
-- 不做 SSR / 路由库 / URL 状态、主题编辑器、移动端适配（保证 960px 以上不破）。
-- 不迁移旧数据库，不保留 Electron preload/IPC。
-- 自动更新后置到 v2。
-
-### 3.2 历史引用映射
-
-代码注释与文档中现存的 `ADR-000N` 引用按下表对应本节条目，注释治理批次
-（docs/59 G5/G6）中改写：
-
-| 旧引用 | 本节条目 |
-|---|---|
-| ADR-0001 | C1（边界）、C6（实现选择） |
-| ADR-0002 | C3 |
-| ADR-0003 | C2 |
-| ADR-0004 | C4 |
-| ADR-0005 | C5 |
-| ADR-0006 | C6 |
-
-注：`docs/00` 中出现的 `ADR-0xx`（018/027/034/037）指上一代 Electron 仓库的
-编号，与本仓无关；`ui/src/lib/beets.ts` 中引用的 ADR 属 beets-web-manager
-项目，亦与本仓无关。
+- 前端不建第二条音频路径：WebView 不创建 Web Audio 节点，频谱只来自引擎链内
+  tap（C1/C6）。
+- 不做 SSR / 路由库 / URL 状态；不做主题编辑器；不做移动端适配（保证 960px
+  以上不破）。
+- 数据库无迁移链（C8）；自动更新后置到 v2。
 
 ## 4. 注释与文档文风
-
-完整调研与改写对照见 docs/59 §2，本节为执行规范。
 
 ### 4.1 两个语域
 
@@ -210,22 +193,21 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 判据：注释中出现日期、轮次、人称、旧实现对比、指向 docs 的引用，即违反
 交付物语域；编号文档中把结论写成面向读者的禁令，即越界为训诫。
 
-### 4.2 交付物注释两段法（docs/60 修订）
+### 4.2 交付物注释两段法
 
 按"是什么 → 为什么"组织，两段不必齐备：
 
 1. **是什么**：该代码/契约的行为、单位、边界、不变量（现在时）。
 2. **为什么**：当前约束来源——性能、正确性、平台行为、本文件 §3 的某条
-   约束编号（`C1`–`C12` 属现行约束编号，可注，不属历史引用）。
+   约束编号（`C1`–`C12` 为现行约束编号，可注）。
 
-历史叙事、迭代记录、设计取舍、踩坑过程不进注释，落 `docs/ledger/`
-（制度见 docs/60 §2）。**注释内禁止指向 docs 的引用**（`docs/NN`、`§`、
-`ADR-`、`notes/`、`AGENTS.md`）；字符串字面量中的引用不受限（UI 文案）。
-证据只能指向仓内真实目标（测试名、schema、实测数字），不造名。
+历史叙事、迭代记录、设计取舍、踩坑过程不进注释，落 `docs/ledger/`。
+**注释内禁止指向 docs 的引用**（`docs/NN`、`§`、`ADR-`、`notes/`、
+`AGENTS.md`）；字符串字面量中的引用不受限（UI 文案）。证据只能指向仓内
+真实目标（测试名、schema、实测数字），不造名。
 
 规约型注释（文件头"如何扩展"段）允许中性祈使，但不用面向人的训诫与强调
-修辞。删除历史叙事时：有保留价值的落 docs/ledger/ 对应主题，无保留价值的
-直接删除（git 历史可查）。
+修辞。
 
 ### 4.3 不算违例的情形
 
@@ -234,18 +216,16 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 
 ### 4.4 自动检查
 
-`tools/check-style.mjs` 已接入 `verify` 阻断（`check:style:strict`），命中分桶：
-**阻断** = 非 L2 注释（`//`、HTML 注释等）里的日期戳与 docs 引用（`docs/NN`、
-`notes/`、`ADR-`；裸 `§` 为 GPL 条款/源码定位等合法引用，不拦）；**L2 延后** =
-`///`/`//!` 与块注释内部的同类命中（随 L2 收口批清零后并入阻断）；**语域
-report** = 高精度禁词（人话、拍板、顺手、翻车、搞定、抽风、收尸），维持
-report-only。宽泛词（像、别、坑、必须）误报率高，不进自动门禁，由批次人工
-处理。附白名单（`tools/check-style-allowlist.json`，整文件或单行豁免）。
-beets-tool 的 Python 侧不在其范围，由 `tools/comment-gov/scan.py` 覆盖。
-
-`tools/comment-gov/`（docs/60）：注释机械治理与验收工具——scan（盘点）、
-apply（三重门变换：diff 行级白名单、属性行计数、剥注释+丢空行零差异）、
-verify（对 HEAD 终验）、test_scan（状态机用例）。
+`tools/check-style.mjs` 接入 `verify`（`check:style:strict`），扫描 Rust
+（crates/、src-tauri/）、前端（ui/src/、ui/e2e/，排除生成物）与构建脚本
+（tools/*.mjs）。命中分桶：**阻断** = 非 L2 注释（`//`、HTML 注释等）里的
+日期戳与 docs 引用（`docs/NN`、`notes/`、`ADR-`；裸 `§` 为 GPL 条款/源码定位
+等合法引用，不拦）；**L2 延后** = `///`、`//!` 与块注释内部的同类命中；
+**语域 report** = 高精度禁词（人话、拍板、顺手、翻车、搞定、抽风、收尸），
+维持 report-only。宽泛词（像、别、坑、必须）误报率高，不进自动门禁，由批次
+人工处理。白名单在 `tools/check-style-allowlist.json`（整文件或单行豁免）。
+beets-tool 的 Python 侧不在其范围，由 `tools/comment-gov/scan.py` 覆盖
+（同目录另含批次治理与验收工具 apply / verify / test_scan）。
 
 ## 5. 文档制度
 
@@ -265,23 +245,20 @@ verify（对 HEAD 终验）、test_scan（状态机用例）。
 
 - 命名 `NN-slug-YYYY-MM-DD.md`，日期为写作日；新编号取现存最大值 +1。
 - 历史撞号登记（不重排，交叉引用以编号为键）：10 号两份并存
-  （`10-full-code-review-2026-10-24.md` / `10-plan-alignment.md`）；42 号撞号已随
-  `42-release-fix-ledger-2026-10-29.md` 删除消除（2026-11-01）。
+  （`10-full-code-review-2026-10-24.md` / `10-plan-alignment.md`）。
 - 标题体例统一为 `# NN · 标题（YYYY-MM-DD）`。
 - 会话级临时物（`.commitmsg-*.txt`、探针/自测目录等）不进 docs/、不入库。
 
 ### 5.3 架构决策的登记
 
-不再使用 ADR 结构（2026-11-01 起）。决策过程与证据落在所在批次的编号文档；
-决策事实（现行约束）同批更新本文件 §3 并注明来源编号；推翻既有约束时直接修改
-§3 对应条目，并在新编号文档记录来由。需要登记的情形：跨进程/跨仓边界的契约
-决定；难以回退的决定（数据格式、分发形态、签名与信任）；推翻既有约束；约束
-后续多个批次的架构选择。
+决策过程与证据落在所在批次的编号文档；决策事实（现行约束）同批更新本文件
+§3 并注明来源编号；推翻既有约束时直接修改 §3 对应条目，并在新编号文档记录
+来由。需要登记的情形：跨进程/跨仓边界的契约决定；难以回退的决定（数据格式、
+分发形态、签名与信任）；推翻既有约束；约束后续多个批次的架构选择。
 
 ### 5.4 相关文档
 
-- docs/60：注释治理 v2——引用单向化与 docs/ledger（现行）
-- docs/59：注释与文档文风治理的调研（G0–G4b 已落地；其后的批次执行方式被
-  docs/60 取代）
-- docs/ledger/：架构域流水账，历史与取舍的唯一承接位
-- docs/35：发布前收尾账本（剩余项唯一真源）
+- [docs/ledger/](docs/ledger/README.md)：架构域流水账，历史叙事与设计取舍的
+  唯一承接位（主题索引见其 README）
+- [docs/35-closing-ledger-2026-10-27.md](docs/35-closing-ledger-2026-10-27.md)：
+  发布前收尾账本（剩余项唯一真源）

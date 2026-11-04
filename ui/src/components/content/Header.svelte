@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import Cover from '../ui/Cover.svelte';
+  import { t } from '../../lib/i18n.svelte';
 
   /**
    * 页内标题零件：**三层装饰文本**（装饰英文 kicker + 主标题 + 描述行）
@@ -62,7 +63,7 @@
     {#if subtitle || meta}
       <!-- 描述与统计合成一行：两层文本会把头部撑到四行，仪表盘页撑得太高 -->
       <p>
-        {#if subtitle}{subtitle}{/if}{#if subtitle && meta}，{/if}{#if meta}<span class="ch-meta">{meta}</span>{/if}
+        {#if subtitle}{subtitle}{/if}{#if subtitle && meta}{t('library.metaSep')}{/if}{#if meta}<span class="ch-meta">{meta}</span>{/if}
       </p>
     {/if}
   </div>

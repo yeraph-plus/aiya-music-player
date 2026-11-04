@@ -158,7 +158,7 @@ impl ApiError {
     pub fn internal(detail: impl std::fmt::Display) -> Self {
         let err = Self {
             code: ApiErrorCode::Internal,
-            message: "内部错误".into(),
+            message: "internal error".into(),
             detail: Some(detail.to_string()),
             retryable: false,
         };
@@ -290,6 +290,6 @@ mod ring_tests {
             .find(|e| e.detail.as_deref() == Some(marker.as_str()))
             .expect("internal 错误必须进台账");
         assert_eq!(hit.code, ApiErrorCode::Internal);
-        assert_eq!(hit.message, "内部错误");
+        assert_eq!(hit.message, "internal error");
     }
 }

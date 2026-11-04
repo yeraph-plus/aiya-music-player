@@ -5,6 +5,7 @@
   import { startRowDrag, consumeClickSuppressed } from '../lib/drag';
   import { createVirtualWindow } from '../lib/create-virtual-window.svelte';
   import { formatDurationLong, formatTime, isStreamId, transientOrigin } from '../lib/format';
+  import { t } from '../lib/i18n.svelte';
   import { library as libraryStore } from '../stores/library.svelte';
   import Cover from './ui/Cover.svelte';
   import EmptyState from './ui/EmptyState.svelte';
@@ -199,10 +200,10 @@ aria-expanded 都由外层 SideDrawer 的 role=dialog 提供——aria-label 不
 的 cell 对读屏是坏表；列语义由 TrackList 的 grid→row→cell 结构承担）。 -->
 <div class="queue-panel queue-float">
   <header>
-    <strong>播放队列</strong>
-    <span class="dim">{ids.length} 首{totalMs > 0 ? ` · ${formatDurationLong(totalMs)}` : ''}</span>
-    <Button variant="link" onclick={onclear} disabled={ids.length === 0}>清空</Button>
-    <IconButton label="关闭队列" size="sm" onclick={onclose}>
+    <strong>{t('shell.drawer.queue')}</strong>
+    <span class="dim">{t('common.trackCount', { n: ids.length })}{totalMs > 0 ? ` · ${formatDurationLong(totalMs)}` : ''}</span>
+    <Button variant="link" onclick={onclear} disabled={ids.length === 0}>{t('library.clear')}</Button>
+    <IconButton label={t('now.queue.close')} size="sm" onclick={onclose}>
       <Icon name="close" size={13} />
     </IconButton>
   </header>
@@ -214,7 +215,7 @@ aria-expanded 都由外层 SideDrawer 的 role=dialog 提供——aria-label 不
     onscroll={vw.handleScroll}
   >
     {#if ids.length === 0}
-      <EmptyState title="队列是空的" hint="右键曲目可加入队列" />
+      <EmptyState title={t('now.queue.emptyTitle')} hint={t('now.queue.emptyHint')} />
     {:else}
       <div style={`height:${range.padTop}px`}></div>
       {#each visible as row (row.index)}
@@ -245,7 +246,7 @@ aria-expanded 都由外层 SideDrawer 的 role=dialog 提供——aria-label 不
           <span class="q-grip" aria-hidden="true"><Icon name="grip" size={13} /></span>
           <span class="q-index">
             {#if row.index === index}
-              <span class="bars" class:animated={playing === true} aria-label="正在播放">
+              <span class="bars" class:animated={playing === true} aria-label={t('format.status.playing')}>
                 <i></i><i></i><i></i>
               </span>
             {:else}
@@ -262,22 +263,22 @@ aria-expanded 都由外层 SideDrawer 的 role=dialog 提供——aria-label 不
             <span class="q-meta">
               <span class="q-title">{row.transient.title}</span>
               <span class="q-artist">
-                <span class="q-tag">{isStreamId(row.id) ? '直播' : '文件'}</span>
+                <span class="q-tag">{isStreamId(row.id) ? t('shell.live.on') : t('now.queue.transientFile')}</span>
                 {transientOrigin(row.id) ?? ''}
               </span>
             </span>
             <span class="q-duration">
-              {isStreamId(row.id) ? '直播' : formatTime(row.transient.durationMs ?? 0)}
+              {isStreamId(row.id) ? t('shell.live.on') : formatTime(row.transient.durationMs ?? 0)}
             </span>
           {:else}
             <span class="q-meta">
-              <span class="q-title">{row.track?.title ?? '载入中…'}</span>
+              <span class="q-title">{row.track?.title ?? t('now.queue.loadingMeta')}</span>
               <span class="q-artist">{row.track?.artist ?? ''}</span>
             </span>
             <span class="q-duration">{formatTime(row.track?.durationMs ?? 0)}</span>
           {/if}
           <IconButton
-            label="从队列移除"
+            label={t('now.queue.remove')}
             size="sm"
             onclick={(event) => {
               event.stopPropagation();

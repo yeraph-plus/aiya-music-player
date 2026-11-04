@@ -13,6 +13,7 @@
     isHiRes,
   } from '../../lib/audio-format';
   import { formatTime, isTransientId, repeatLabel, transientOrigin } from '../../lib/format';
+  import { t } from '../../lib/i18n.svelte';
   import { livePhase } from '../../lib/live';
   import { overlay } from '../../stores/overlay.svelte';
   import { ChevronUp, SlidersHorizontal } from '@lucide/svelte';
@@ -143,6 +144,10 @@
 
   /** 直播徽章三态（文案口径与直播页共用 `lib/live.ts`，避免两处各写一遍） */
   const phase = $derived(livePhase(player?.status));
+  /** 徽章文字按 tone 取键（`livePhase` 的 text 尚未双语化，本组件自渲染） */
+  const phaseText = $derived(
+    phase.tone === 'on' ? t('shell.live.on') : phase.tone === 'wait' ? t('shell.live.wait') : t('shell.live.off'),
+  );
 
   /**
    * 副标题来源：直播流取主机名，拖入的本地文件取所在目录。
@@ -162,7 +167,7 @@
     player?.shuffle ? 'shuffle' : (player?.repeat ?? 'off') === 'one' ? 'one' : (player?.repeat ?? 'off') === 'all' ? 'all' : 'sequential',
   );
   const modeLabel = $derived(
-    mode === 'shuffle' ? '随机播放' : repeatLabel(mode === 'sequential' ? 'off' : mode),
+    mode === 'shuffle' ? t('shell.player.modeShuffle') : repeatLabel(mode === 'sequential' ? 'off' : mode),
   );
   /** PlayMode → Icon 语义名（all 用 repeat 图标，one 用 repeatOne） */
   const modeIcon = $derived(
@@ -190,8 +195,8 @@
     class="now"
     class:open={npOpen}
     onclick={onshownowplaying}
-    title={npOpen ? '收起正在播放' : '打开正在播放'}
-    aria-label={npOpen ? '收起正在播放页' : '打开正在播放页'}
+    title={npOpen ? t('shell.player.npClose') : t('shell.player.npOpen')}
+    aria-label={npOpen ? t('shell.player.npClosePage') : t('shell.player.npOpenPage')}
     aria-expanded={npOpen}
   >
     <span class="now-cover">
@@ -208,15 +213,15 @@
 
     <div class="meta">
       <div class="title" title={player?.current?.title ?? ''}>
-        {player?.current?.title ?? '未在播放'}
+        {player?.current?.title ?? t('shell.player.notPlaying')}
       </div>
       <div class="line2">
         {#if player?.current}
           {#if transient}
             <!-- 临时项没有艺人：直播给主机名、拖入的文件给所在目录 -->
-            <span class="artist">{origin ?? (isStream ? '网络直播流' : '外部音频文件')}</span>
+            <span class="artist">{origin ?? (isStream ? t('shell.player.sourceStream') : t('shell.player.sourceFile'))}</span>
           {:else}
-            <span class="artist">{player.current.artist ?? '未知艺人'}</span>
+            <span class="artist">{player.current.artist ?? t('shell.player.unknownArtist')}</span>
           {/if}
           {#if badge}
             <span
@@ -231,7 +236,7 @@
             <span class="fmt-spec" title={tooltip ?? ''}>{spec}</span>
           {/if}
         {:else}
-          选择一首歌开始
+          {t('shell.player.pickTrack')}
         {/if}
       </div>
     </div>
@@ -242,7 +247,7 @@
       <!-- 临时项（拖入的文件 / 直播流）不在曲库里，id 是 `file:`/`stream:`
            前缀串——写进歌单就是一行永远查不到的坏数据，直接禁掉 -->
       <IconButton
-        label={transient ? '临时项不能加入播放列表' : '把当前曲目加入播放列表'}
+        label={transient ? t('shell.player.addCurrentBlocked') : t('shell.player.addCurrent')}
         round
         disabled={!hasTrack || transient}
         onclick={addCurrentToPlaylist}
@@ -250,12 +255,14 @@
         <Icon name="heart" />
       </IconButton>
 
-      <IconButton label="上一首" round disabled={!hasTrack} onclick={onprev}>
+      <IconButton label={t('shell.player.prev')} round disabled={!hasTrack} onclick={onprev}>
         <Icon name="prev" size={18} />
       </IconButton>
 
       <IconButton
-        label={playing ? (isStream ? '断开直播' : '暂停') : isStream ? '连接直播' : '播放'}
+        label={playing
+          ? (isStream ? t('shell.player.liveDisconnect') : t('shell.player.pause'))
+          : isStream ? t('shell.player.liveConnect') : t('shell.player.play')}
         size="lg"
         variant="solid"
         round
@@ -270,19 +277,19 @@
         {/if}
       </IconButton>
 
-      <IconButton label="下一首" round disabled={!hasTrack} onclick={onnext}>
+      <IconButton label={t('shell.player.next')} round disabled={!hasTrack} onclick={onnext}>
         <Icon name="next" size={18} />
       </IconButton>
 
       <!-- 模式单键循环：列表循环 → 单曲循环 → 随机 → 顺序 -->
-      <IconButton label={`播放模式：${modeLabel}`} round pressed={mode !== 'sequential'} onclick={onmode}>
+      <IconButton label={t('shell.player.mode', { mode: modeLabel })} round pressed={mode !== 'sequential'} onclick={onmode}>
         <Icon name={modeIcon} />
       </IconButton>
     </div>
 
     <div class="timeline" class:live={isStream}>
       <!-- 左 = 已收听时长。直播没有"当前位置"这个概念，但 `positionMs` 在 stream 下单调递增（Actor 从 0 起算、断开即归零），直接当已收听时长用就对。 -->
-      <span class="t" title={isStream ? '已收听' : undefined}>{formatTime(positionMs)}</span>
+      <span class="t" title={isStream ? t('shell.player.listened') : undefined}>{formatTime(positionMs)}</span>
 
       {#if isStream}
         <!--
@@ -295,7 +302,7 @@
         <span class="live-bar" class:on={playing} aria-hidden="true"></span>
       {:else}
         <Slider
-          label="播放进度"
+          label={t('shell.player.seek')}
           value={sliderMs}
           min={0}
           max={Math.max(durationMs ?? 0, 1)}
@@ -319,12 +326,12 @@
           class:on={phase.tone === 'on'}
           class:wait={phase.tone === 'wait'}
           title={phase.tone === 'on'
-            ? '直播流 · 暂停会断开连接，再播放即重连'
+            ? t('shell.player.liveTipOn')
             : phase.tone === 'wait'
-              ? '正在连接直播流…'
-              : '已断开连接 · 按播放重新连接'}
+              ? t('shell.player.liveTipWait')
+              : t('shell.player.liveTipOff')}
         >
-          <span class="live-dot" aria-hidden="true"></span>{phase.text}
+          <span class="live-dot" aria-hidden="true"></span>{phaseText}
         </span>
       {:else}
         <span class="t">{seekable ? formatTime(durationMs) : '--:--'}</span>
@@ -340,14 +347,14 @@
       EQ 的"生效中"打点走 dot。
     -->
     <IconButton
-      label={`播放队列（${player?.queueLength ?? 0} 首）`}
+      label={t('shell.player.queue', { n: player?.queueLength ?? 0 })}
       expanded={queueOpen}
       onclick={() => onqueueopen(!queueOpen)}
     >
       <Icon name="queue" />
     </IconButton>
     <IconButton
-      label={`均衡器（${eqEnabled ? '已启用' : '已关闭'}）`}
+      label={eqEnabled ? t('shell.player.eqOn') : t('shell.player.eqOff')}
       expanded={eqOpen}
       dot={eqEnabled}
       onclick={() => oneqopen(!eqOpen)}
@@ -368,8 +375,8 @@
           {...props}
           class={`rate-chip${rate !== 1 ? ' on' : ''}`}
           ondblclick={() => onrate(1)}
-          aria-label="播放速度"
-          title={`播放速度 ${formatRate(rate)}（双击复位 1.0×）`}
+          aria-label={t('shell.player.rate')}
+          title={t('shell.player.rateTip', { rate: formatRate(rate) })}
         >
           {formatRate(rate)}
         </button>
@@ -377,11 +384,11 @@
 
       <div class="rate-panel">
         <div class="rate-head">
-          <span>播放速度</span>
-          <Button variant="link" onclick={() => onrate(1)}>复位</Button>
+          <span>{t('shell.player.rate')}</span>
+          <Button variant="link" onclick={() => onrate(1)}>{t('shell.player.rateReset')}</Button>
         </div>
         <Slider
-          label="播放速度"
+          label={t('shell.player.rate')}
           value={rate}
           min={AUDIO_RATE_MIN}
           max={AUDIO_RATE_MAX}
@@ -397,12 +404,12 @@
       </div>
     </Popover>
 
-    <IconButton label={player?.muted ? '取消静音' : '静音'} round onclick={onmute}>
+    <IconButton label={player?.muted ? t('shell.player.unmute') : t('shell.player.mute')} round onclick={onmute}>
       <Icon name={player?.muted || (player?.volume ?? 0) === 0 ? 'mute' : 'volume'} />
     </IconButton>
     <div class="volume">
       <Slider
-        label="音量"
+        label={t('shell.player.volume')}
         value={volume}
         min={0}
         max={1}

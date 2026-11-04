@@ -1,4 +1,5 @@
 import { errorMessage } from './errors';
+import { t } from './i18n.svelte';
 import type { PlayerState } from './ipc/generated/PlayerState';
 import { library } from '../stores/library.svelte';
 import { list } from '../stores/list.svelte';
@@ -62,7 +63,7 @@ export function boot(options: { onState: (state: PlayerState) => void }): () => 
   const guardTimer = setTimeout(() => {
     if (list.booted) return;
     list.booted = true;
-    notify.showError('启动超时，部分数据未加载');
+    notify.showError(t('boot.timeout'));
   }, BOOT_TIMEOUT_MS);
 
   void (async () => {

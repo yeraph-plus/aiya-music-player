@@ -36,6 +36,7 @@ export const settingsSchema = z
      */
     spectrumStyle: z.enum(['mirror', 'radial', 'wave', 'ripple', 'off']).optional(),
     bgSpectrumStyle: z.enum(['ridge', 'ripple']).optional(),
+    language: z.string().optional(),
     mediaKeys: z.boolean().optional(),
     autoplayOnStart: z.boolean().optional(),
     rememberPosition: z.boolean().optional(),

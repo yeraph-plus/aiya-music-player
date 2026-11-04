@@ -4,6 +4,7 @@
   import { findActiveLine } from '../lib/lyrics';
   import { anchorAt, projectPosition } from '../lib/lyrics-clock';
   import { subscribeRender } from '../lib/render/scheduler';
+  import { t } from '../lib/i18n.svelte';
 
   interface Props {
     lyrics: Lyrics | null;
@@ -87,7 +88,7 @@
 
 <svelte:window ontouchstart={markUserScroll} onpointerdown={markUserScroll} />
 
-<aside class="lyrics-panel" aria-label="歌词">
+<aside class="lyrics-panel" aria-label={t('now.lyrics.aria')}>
   <!-- 无头部、无底部提示条：唯一消费方是正在播放页的右列，页面语境已经说明
        这里是什么；歌词的编码与跳转结果通过播放器吐司位反馈，不在此重复。 -->
   <div
@@ -96,12 +97,12 @@
     onwheel={() => (userScrolledAt = Date.now())}
   >
     {#if loading}
-      <EmptyState fill title="正在查找歌词…" />
+      <EmptyState fill title={t('now.lyrics.searching')} />
     {:else if !lyrics?.found}
       <EmptyState
         fill
-        title={`《${trackTitle ?? '当前曲目'}》没有歌词`}
-        hint="在同目录放一个同名的 .lrc 文件即可显示"
+        title={t('now.lyrics.notFoundTitle', { title: trackTitle ?? t('now.lyrics.currentTrack') })}
+        hint={t('now.lyrics.notFoundHint')}
       />
     {:else}
       <!-- 上下各设半高空白占位：激活行跟随滚动时会滚到容器中线，占位使第一句之前与最后一句之后同样留出半屏余量，首尾句也能滚到中线。占位高度用
@@ -112,14 +113,14 @@
              同步歌词的行是 button（点=seek），文本选择让位给点击手势 -->
         <div
           class="lyrics-lines plain selectable"
-          aria-label={`歌词（纯文本）：《${trackTitle ?? '当前曲目'}》`}
+          aria-label={t('now.lyrics.plainAria', { title: trackTitle ?? t('now.lyrics.currentTrack') })}
         >
           {#each lines as line, index (index)}
             <div class="lyric-line">{line.text}</div>
           {/each}
         </div>
       {:else}
-        <div class="lyrics-lines" aria-label={`同步歌词：《${trackTitle ?? '当前曲目'}》，点击或回车某一行跳转到该句`}>
+        <div class="lyrics-lines" aria-label={t('now.lyrics.syncedAria', { title: trackTitle ?? t('now.lyrics.currentTrack') })}>
           {#each lines as line, index (index)}
             <button
               class="lyric-line"
@@ -133,7 +134,7 @@
                   seekTo(line.timeMs);
                 }
               }}
-              title="跳到这一句"
+              title={t('now.lyrics.lineSeekTip')}
             >
               <!-- 当前句的衬底（正在播放页：压在频谱上的一团渐隐暗雾）。做成**这一行自己的子元素**而不是容器中心的伪元素：切句、用户滚动、smooth
               滚动中它都跟着这一行走，永远对得准。样式在 pages.css（`--np-scrim` 定义在 tokens.css）。 -->

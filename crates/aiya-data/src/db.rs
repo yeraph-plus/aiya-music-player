@@ -134,7 +134,7 @@ fn is_db_corruption(e: &DbError) -> bool {
 fn set_aside_files(path: &Path, tag: &str) -> DbResult<()> {
     let file_name = path
         .file_name()
-        .ok_or_else(|| DbError::Custom(format!("非法数据库路径: {}", path.display())))?
+        .ok_or_else(|| DbError::Custom(format!("invalid database path: {}", path.display())))?
         .to_string_lossy()
         .into_owned();
     let stamp = std::time::SystemTime::now()
@@ -143,7 +143,7 @@ fn set_aside_files(path: &Path, tag: &str) -> DbResult<()> {
         .as_secs();
     let backup = path.with_file_name(format!("{file_name}.{tag}-{stamp}.bak"));
     std::fs::rename(path, &backup)
-        .map_err(|e| DbError::Custom(format!("数据库留底改名失败（{e}）：{}", path.display())))?;
+        .map_err(|e| DbError::Custom(format!("failed to set aside database file ({e}): {}", path.display())))?;
     for suffix in ["-wal", "-shm"] {
         let side = path.with_file_name(format!("{file_name}{suffix}"));
         if side.exists() {

@@ -99,7 +99,7 @@ try:
     try:
         bins.install_one("fpcalc", Path(junk))
     except bins.BinError as e:
-        assert "大小" in str(e) or "sha256" in str(e), e
+        assert "size" in str(e) or "sha256" in str(e), e
     else:
         raise AssertionError("坏载体必须报错")
     assert not (Path(BIN) / "fpcalc.exe").exists(), "失败后不许留下 exe"
@@ -245,9 +245,9 @@ try:
     assert frames[-1]["binaries"] == [], f"不需要工具时也要正常收尾：{frames}"
     code, frames = run_cli(["--from-plugins", "nope"])
     assert code == 2 and frames[-1]["type"] == "error", frames
-    assert "不认识" in frames[-1]["message"], frames[-1]
+    assert "unknown" in frames[-1]["message"], frames[-1]
     code, frames = run_cli(["--from-plugins", "lyrics", "--only", "ffmpeg"])
-    assert code == 2 and "只能给一个" in frames[-1]["message"], frames[-1]
+    assert code == 2 and "mutually exclusive" in frames[-1]["message"], frames[-1]
     print("[9] `--from-plugins` OK（按插件名推导 / 去重 / 空清单不算错 / 互斥 / 未知名字退出 2）")
 
 finally:

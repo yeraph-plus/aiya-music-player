@@ -506,6 +506,17 @@ impl AppState {
             .unwrap_or(default)
     }
 
+    /// 读设置缓存里的字符串项（缓存未初始化 / 类型不对 = None）。
+    /// 与 `setting_flag` 同一读法；缺失时的回退值由调用方决定。
+    fn setting_str(&self, key: &str) -> Option<String> {
+        self.settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
+
     /// 输出配置（设置缓存 → 引擎类型）。
     ///
     /// 兼容两代字段：老 `exclusiveMode: bool`（UI 尚未升级时仍会写它）与新
@@ -644,6 +655,24 @@ fn setting_set(conn: &rusqlite::Connection, key: &str, value: &Value) -> rusqlit
     Ok(())
 }
 
+/// 系统 UI 语言探测（首启写库用，docs/64 §3.1）：主语言 zh（LANGID 主段
+/// 0x0004）→ "zh"，其余 → "en"。支持面就这两种，zh-Hant 亦归 "en"（未做）。
+#[cfg(windows)]
+fn detect_system_language() -> String {
+    use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
+    let langid = unsafe { GetUserDefaultUILanguage() };
+    if langid & 0x3ff == 0x0004 {
+        "zh".to_string()
+    } else {
+        "en".to_string()
+    }
+}
+
+#[cfg(not(windows))]
+fn detect_system_language() -> String {
+    "en".to_string()
+}
+
 /// 批量收集 ID 的硬上限（防极端库把队列撑爆；超限会记 warn）。
 const ID_COLLECT_CAP: usize = 50_000;
 
@@ -659,10 +688,10 @@ const DEFAULT_SETTINGS: &str = r#"{
   "ambient": "aurora",
   "normalizeVolume": false,
   "glEffects": true,
-  "bgSpectrum": false,
+  "bgSpectrum": true,
   "npSpectrum": false,
-  "spectrumStyle": "mirror",
-  "ridgeGlow": "balanced",
+  "spectrumStyle": "radial",
+  "ridgeGlow": "soft",
   "output": { "mode": "shared", "bufferMs": 0, "clock": "auto", "releaseOnPause": true },
   "autoplayOnStart": false,
   "rememberPosition": true,
@@ -708,10 +737,10 @@ fn player_set_eq(
     eq: Json,
 ) -> Result<dto::EqSettings, dto::ApiError> {
     let mut v: dto::EqSettings = serde_json::from_value(eq)
-        .map_err(|e| dto::ApiError::invalid_arg(format!("EQ 参数不合法：{e}")))?;
+        .map_err(|e| dto::ApiError::invalid_arg(format!("invalid EQ settings: {e}")))?;
     if v.bands.len() != aiya_audio::EQ_BAND_HZ.len() {
         return Err(dto::ApiError::invalid_arg(format!(
-            "EQ 需要 {} 段增益，收到 {} 段",
+            "EQ requires {} band gains, got {}",
             aiya_audio::EQ_BAND_HZ.len(),
             v.bands.len()
         )));
@@ -945,6 +974,29 @@ fn app_open_data_dir(state: State<'_, AppState>) -> Result<(), dto::ApiError> {
     Ok(())
 }
 
+/// 在默认浏览器中打开项目主页 / 发布页（关于段的出站链接）。
+///
+/// URL 走**白名单**：本命令是出站打开的固定出口，不接受运行期任意 URL
+/// （`explorer <url>` 会交给默认浏览器，放行任意串等于给 WebView 里的
+/// 网页内容一个进程出口）。打不开不算失败——目标地址就显示在 hint 里，
+/// 用户可以手动复制。
+#[tauri::command]
+fn app_open_url(url: String) -> Result<(), dto::ApiError> {
+    const ALLOWED: &[&str] = &[
+        "https://github.com/yeraph-plus/aiya-music-player",
+        "https://github.com/yeraph-plus/aiya-music-player/releases",
+        "https://afdian.com",
+    ];
+    let allowed = ALLOWED
+        .iter()
+        .any(|base| url == *base || url.starts_with(&format!("{base}/")));
+    if !allowed {
+        return Err(dto::ApiError::invalid_arg("unsupported link"));
+    }
+    let _ = std::process::Command::new("explorer").arg(url).spawn();
+    Ok(())
+}
+
 /* library 命令 */
 
 /// beets 环境状态（设置页诊断区）。低频查询，每次现查（探测 + 一次 status 往返）。
@@ -991,7 +1043,7 @@ async fn beets_apply(
     resume: Option<bool>,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
     let Some(state) = app.try_state::<AppState>() else {
-        return Err(dto::ApiError::internal("app state 不可用"));
+        return Err(dto::ApiError::internal("app state unavailable"));
     };
     let refresh = state.refresh.clone();
     let resume = resume.unwrap_or(false);
@@ -1088,10 +1140,10 @@ fn setting_str_value(conn: &rusqlite::Connection, key: &str) -> Option<String> {
 /// 曲库目录（应用事实）。beets 的配置视图要用它判断"勾的输出根还在不在"。
 fn roots_of(app: &tauri::AppHandle) -> Result<Vec<String>, dto::ApiError> {
     app.try_state::<AppState>()
-        .ok_or_else(|| dto::ApiError::internal("app state 不可用"))?
+        .ok_or_else(|| dto::ApiError::internal("app state unavailable"))?
         .db()
         .send(|conn| Ok(read_roots(conn)))
-        .map_err(|e| dto::ApiError::internal(format!("读取曲库目录失败：{e}")))
+        .map_err(|e| dto::ApiError::internal(format!("failed to read library folders: {e}")))
 }
 
 /// beets 配置快照（UI 的待整理目录行与输出根 radio 都从这里读）。
@@ -1115,7 +1167,9 @@ fn beets_set_inbox(
     let roots = roots_of(&app)?;
     if let Some(p) = trimmed {
         if path_conflicts_with_roots(p, &roots) {
-            return Err(dto::ApiError::invalid_arg("待整理目录不能与曲库目录重叠"));
+            return Err(dto::ApiError::invalid_arg(
+                "inbox folder must not overlap with library folders",
+            ));
         }
     }
     let inbox = trimmed.map(str::to_string);
@@ -1142,7 +1196,9 @@ fn beets_set_target(
     let p = path.trim().to_string();
     let roots = roots_of(&app)?;
     if !path_within_roots(&p, &roots) {
-        return Err(dto::ApiError::invalid_arg("整理落点必须在曲库目录内"));
+        return Err(dto::ApiError::invalid_arg(
+            "organize target must be inside a library folder",
+        ));
     }
     let saved = p;
     beets::update_settings(&app, move |s| s.target_root = Some(saved))
@@ -1158,7 +1214,7 @@ fn beets_open_inbox(app: AppHandle) -> Result<(), dto::ApiError> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
     let Some(dir) = inbox else {
-        return Err(dto::ApiError::invalid_arg("未设置待整理目录"));
+        return Err(dto::ApiError::invalid_arg("no inbox folder is set"));
     };
     let _ = std::process::Command::new("explorer").arg(dir).spawn();
     Ok(())
@@ -1306,8 +1362,10 @@ async fn beets_plugins_set(
 /// 回答"有哪些插件、各自要装什么"（编译期内嵌 JSON，永远可用）。
 /// 装没装、缺不缺依赖的三态看 `beets_status` 的 pluginHealth。
 #[tauri::command]
-async fn beets_plugin_table() -> Result<Vec<dto::beets::BeetsPluginItem>, dto::ApiError> {
-    tauri::async_runtime::spawn_blocking(beets::plugin_table)
+async fn beets_plugin_table(
+    app: AppHandle,
+) -> Result<Vec<dto::beets::BeetsPluginItem>, dto::ApiError> {
+    tauri::async_runtime::spawn_blocking(move || beets::plugin_table(&app))
         .await
         .map_err(dto::ApiError::internal)?
         .map_err(dto::ApiError::internal)
@@ -1334,7 +1392,7 @@ fn beets_reveal(path: String) -> Result<dto::library::RevealResult, dto::ApiErro
     if path.trim().is_empty() || !std::path::Path::new(&path).is_file() {
         return Ok(dto::library::RevealResult {
             revealed: false,
-            reason: Some("文件不存在".into()),
+            reason: Some("file not found".into()),
         });
     }
     let revealed = proc::reveal_in_explorer(std::path::Path::new(&path));
@@ -1343,7 +1401,7 @@ fn beets_reveal(path: String) -> Result<dto::library::RevealResult, dto::ApiErro
         reason: if revealed {
             None
         } else {
-            Some("explorer 启动失败".into())
+            Some("failed to launch explorer".into())
         },
     })
 }
@@ -1357,10 +1415,12 @@ fn beets_reveal(path: String) -> Result<dto::library::RevealResult, dto::ApiErro
 /// 塞进 `beetsMissing` 会让用户以为自己没装 beets 而反复重装。
 /// 靠消息串判断是因为这条边界本身就是 String（sidecar 是外部进程）。
 ///
-/// 两个关键词都要认：`tool_or_err` 的文案是"未安装 beets 组件…"（不是
-/// "interpreter"），只匹配后者会让"没装"落到 `invalidArg`，UI 就不给安装指引了。
+/// 两个关键词都要认：`tool_or_err` 的文案是 "beets component not installed…"
+/// （不是 "interpreter"），只匹配后者会让"没装"落到 `invalidArg`，UI 就不给
+/// 安装指引了。宿主文案已迁英文（docs/64），组件侧（beets-tool）的旧文案
+/// 仍可能是"未安装…"，两个词都得留着。
 fn map_beets_start(e: String) -> dto::ApiError {
-    if e.contains("interpreter") || e.contains("未安装") {
+    if e.contains("interpreter") || e.contains("未安装") || e.contains("not installed") {
         dto::ApiError::beets_missing(e)
     } else {
         dto::ApiError::invalid_arg(e)
@@ -1381,7 +1441,7 @@ async fn beets_adopt(
     paths: Vec<String>,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
     let Some(state) = app.try_state::<AppState>() else {
-        return Err(dto::ApiError::internal("app state 不可用"));
+        return Err(dto::ApiError::internal("app state unavailable"));
     };
     let refresh = state.refresh.clone();
     let paths = if paths.is_empty() {
@@ -1437,7 +1497,7 @@ async fn beets_move(
     pretend: bool,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
     let Some(state) = app.try_state::<AppState>() else {
-        return Err(dto::ApiError::internal("app state 不可用"));
+        return Err(dto::ApiError::internal("app state unavailable"));
     };
     let refresh = state.refresh.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -1574,7 +1634,7 @@ async fn enrichment_query(
     let args: EnrichmentQueryArgs = match query {
         None => EnrichmentQueryArgs::default(),
         Some(v) => serde_json::from_value(v)
-            .map_err(|e| dto::ApiError::invalid_arg(format!("查询参数不合法：{e}")))?,
+            .map_err(|e| dto::ApiError::invalid_arg(format!("invalid query parameters: {e}")))?,
     };
     let filter = aiya_beets_store::Filter {
         source: args.source,
@@ -1617,7 +1677,7 @@ async fn library_list(
     // 参数仍然是 Value + 手动反序列化：形状不对时由我们给出 `invalidArg`
     // 分类，而不是把 Tauri 自己的反序列化文案抛给 UI（分类权要留在自己手里）。
     let q: TrackWindowQuery = serde_json::from_value(query)
-        .map_err(|e| dto::ApiError::invalid_arg(format!("查询参数不合法：{e}")))?;
+        .map_err(|e| dto::ApiError::invalid_arg(format!("invalid query parameters: {e}")))?;
     // P2：此命令曾是同步——Tauri 2 的同步命令跑在主线程，每页
     // 都要在主线程干等 DB 线程回包（5 万行深页 10–35ms），快速滚动时多页
     // 请求在主线程排成连续冻结段。改 async + spawn_blocking：等待发生在
@@ -1802,7 +1862,7 @@ async fn library_scan_body(
     options: Option<Json>,
 ) -> Result<aiya_data::scanner::ScanResult, dto::ApiError> {
     if state.scanning.swap(true, Ordering::SeqCst) {
-        return Err(dto::ApiError::busy("已有扫描在进行"));
+        return Err(dto::ApiError::busy("a scan is already in progress"));
     }
     // 置位成功即挂 RAII 兜底：本函数此后有多个提前 return（DB 故障、根全无效、
     // spawn_blocking 的 join 失败），spawn_blocking 闭包里还可能 panic —— 此前
@@ -1853,9 +1913,9 @@ async fn library_scan_body(
     roots.retain(|r| r.is_dir());
     if roots.is_empty() {
         let detail = if invalid.is_empty() {
-            "未配置任何扫描目录".to_string()
+            "no scan folders are configured".to_string()
         } else {
-            format!("目录不存在：{}", invalid.join("、"))
+            format!("folders do not exist: {}", invalid.join(", "))
         };
         return Err(dto::ApiError::invalid_arg(detail));
     }
@@ -1974,7 +2034,7 @@ async fn library_choose_root(
     };
     let path_str = p.to_string_lossy().into_owned();
     let Some(state) = app.try_state::<AppState>() else {
-        return Err(dto::ApiError::internal("app state 不可用"));
+        return Err(dto::ApiError::internal("app state unavailable"));
     };
     let chosen = path_str.clone();
     let saved: aiya_data::DbResult<(Vec<String>, Vec<String>)> = state.db().send(move |conn| {
@@ -1994,7 +2054,7 @@ async fn library_choose_root(
         Ok((roots, paused))
     });
     let (roots, paused) =
-        saved.map_err(|e| dto::ApiError::internal(format!("保存曲库目录失败：{e}")))?;
+        saved.map_err(|e| dto::ApiError::internal(format!("failed to save library folders: {e}")))?;
     Ok(Some(dto::library::ChosenRoot {
         path: path_str,
         roots,
@@ -2061,7 +2121,7 @@ fn library_roots_get(
     let (roots, paused) = state
         .db()
         .send(|conn| Ok((read_roots(conn), read_paused_roots(conn))))
-        .map_err(|e| dto::ApiError::internal(format!("读取扫描目录失败：{e}")))?;
+        .map_err(|e| dto::ApiError::internal(format!("failed to read scan folders: {e}")))?;
     Ok(dto::library::LibraryRoots { roots, paused })
 }
 
@@ -2095,7 +2155,7 @@ fn library_roots_set(
             // 目录列表变了：整理输出根若被移除就清掉（回退首根）
             Ok(())
         })
-        .map_err(|e| dto::ApiError::internal(format!("保存扫描目录失败：{e}")))?;
+        .map_err(|e| dto::ApiError::internal(format!("failed to save scan folders: {e}")))?;
     Ok(dto::library::LibraryRoots {
         roots: cleaned,
         paused: paused_cleaned,
@@ -2145,7 +2205,7 @@ fn library_roots_count(
             }
             Ok(total)
         })
-        .map_err(|e| dto::ApiError::internal(format!("统计目录曲目失败：{e}")))?;
+        .map_err(|e| dto::ApiError::internal(format!("failed to count tracks in folders: {e}")))?;
     Ok(dto::library::RootsTrackCount { count })
 }
 
@@ -2189,7 +2249,7 @@ fn library_roots_prune(
             }
             Ok((removed, deleted))
         })
-        .map_err(|e| dto::ApiError::internal(format!("清除目录曲目失败：{e}")))?;
+        .map_err(|e| dto::ApiError::internal(format!("failed to remove folder tracks: {e}")))?;
     prune_queue_for_deleted(&state, &app, &deleted);
     Ok(dto::library::RemoveTracks { removed })
 }
@@ -2212,7 +2272,7 @@ fn library_clear(
             let n = conn.execute("DELETE FROM tracks", [])? as i64;
             Ok((n, ids))
         })
-        .map_err(|e| dto::ApiError::internal(format!("清空曲库失败：{e}")))?;
+        .map_err(|e| dto::ApiError::internal(format!("failed to clear the library: {e}")))?;
     prune_queue_for_deleted(&state, &app, &deleted);
     Ok(dto::library::RemoveTracks { removed })
 }
@@ -2240,13 +2300,13 @@ fn library_reveal_track(
                 reason: if revealed {
                     None
                 } else {
-                    Some("explorer 启动失败".into())
+                    Some("failed to launch explorer".into())
                 },
             })
         }
         Ok(None) => Ok(dto::library::RevealResult {
             revealed: false,
-            reason: Some("曲目不在库中".into()),
+            reason: Some("track is not in the library".into()),
         }),
         Err(e) => Err(dto::ApiError::from(e)),
     }
@@ -2281,15 +2341,15 @@ async fn library_ids_for_selection(
     request: Json,
 ) -> Result<Vec<String>, dto::ApiError> {
     let req: SelectionRequest = serde_json::from_value(request)
-        .map_err(|e| dto::ApiError::invalid_arg(format!("选区请求不合法：{e}")))?;
+        .map_err(|e| dto::ApiError::invalid_arg(format!("invalid selection request: {e}")))?;
     let query: TrackWindowQuery = serde_json::from_value(req.query)
-        .map_err(|e| dto::ApiError::invalid_arg(format!("查询参数不合法：{e}")))?;
+        .map_err(|e| dto::ApiError::invalid_arg(format!("invalid query parameters: {e}")))?;
     let (select_all, indices) = match req.indices {
         None => (false, Vec::new()),
         Some(SelectionIndices::Tag(tag)) if tag == "all" => (true, Vec::new()),
         Some(SelectionIndices::Tag(other)) => {
             return Err(dto::ApiError::invalid_arg(format!(
-                "indices 只接受 \"all\" 或下标数组，收到 \"{other}\""
+                "indices accepts only \"all\" or an index array, got \"{other}\""
             )))
         }
         Some(SelectionIndices::List(v)) => (false, v),
@@ -2456,7 +2516,7 @@ where
 {
     match state.db().send(f) {
         Ok(Some(v)) => Ok(v),
-        Ok(None) => Err(dto::ApiError::not_found("歌单不存在")),
+        Ok(None) => Err(dto::ApiError::not_found("playlist not found")),
         Err(e) => Err(dto::ApiError::from(e)),
     }
 }
@@ -2502,7 +2562,7 @@ fn playlist_create(
             Ok(Some(
                 playlist_summary_by_id(conn, &pid)
                     .map_err(aiya_data::DbError::Sql)?
-                    .ok_or_else(|| aiya_data::DbError::Custom("歌单创建后读不到".into()))?,
+                    .ok_or_else(|| aiya_data::DbError::Custom("playlist not readable after creation".into()))?,
             ))
         })
     } else {
@@ -2514,7 +2574,7 @@ fn playlist_create(
             Ok(Some(
                 playlist_summary_by_id(conn, &pid_for_db)
                     .map_err(aiya_data::DbError::Sql)?
-                    .ok_or_else(|| aiya_data::DbError::Custom("歌单创建后读不到".into()))?,
+                    .ok_or_else(|| aiya_data::DbError::Custom("playlist not readable after creation".into()))?,
             ))
         })
     }
@@ -2561,7 +2621,7 @@ fn playlist_refresh(
         .map_err(dto::ApiError::from)
         .and_then(|inner| match inner {
             Some(v) => Ok(v),
-            None => Err(dto::ApiError::not_found("动态歌单不存在")),
+            None => Err(dto::ApiError::not_found("smart playlist not found")),
         })
 }
 
@@ -2625,7 +2685,7 @@ fn playlist_add_tracks(
         };
         let summary = playlist_summary_by_id(conn, &id)
             .map_err(aiya_data::DbError::Sql)?
-            .ok_or_else(|| aiya_data::DbError::Custom("歌单在事务后消失".into()))?;
+            .ok_or_else(|| aiya_data::DbError::Custom("playlist row missing after transaction".into()))?;
         Ok(Some(dto::playlist::PlaylistAddResult {
             added: outcome.added,
             skipped: outcome.skipped,
@@ -2709,7 +2769,7 @@ async fn playlist_import(
                 dialog_app
                     .dialog()
                     .file()
-                    .add_filter("播放列表 (m3u/m3u8)", &["m3u", "m3u8"])
+                    .add_filter("Playlists (m3u/m3u8)", &["m3u", "m3u8"])
                     .blocking_pick_file()
                     .and_then(|p| p.as_path().map(|pp| pp.to_path_buf()))
             })
@@ -2727,12 +2787,15 @@ async fn playlist_import(
     };
 
     let bytes = std::fs::read(&file).map_err(|e| {
-        dto::ApiError::new(dto::ApiErrorCode::Io, format!("读不到播放列表文件：{e}"))
+        dto::ApiError::new(
+            dto::ApiErrorCode::Io,
+            format!("failed to read playlist file: {e}"),
+        )
     })?;
     let text = String::from_utf8(bytes).map_err(|_| {
         dto::ApiError::new(
             dto::ApiErrorCode::Unsupported,
-            "不是 UTF-8 编码，请另存为 UTF-8",
+            "file is not UTF-8 encoded; save it as UTF-8",
         )
     })?;
 
@@ -2744,10 +2807,10 @@ async fn playlist_import(
         aiya_data::playlist_io::parse_playlist(&text, &base_dir).map_err(|e| match e {
             aiya_data::playlist_io::ParseFailure::HlsManifest { tag } => dto::ApiError::new(
                 dto::ApiErrorCode::Unsupported,
-                format!("HLS 流媒体清单请用直播页打开（#{tag}）"),
+                format!("HLS stream manifest: open it from the Live page (#{tag})"),
             ),
             aiya_data::playlist_io::ParseFailure::Empty => {
-                dto::ApiError::invalid_arg("播放列表为空")
+                dto::ApiError::invalid_arg("playlist file is empty")
             }
         })?;
 
@@ -2755,7 +2818,7 @@ async fn playlist_import(
     // 与扫描落库的 "D:\m\a.flac" 是同一个文件，失败在斜杠上等于白匹配。
     let state = app
         .try_state::<AppState>()
-        .ok_or_else(|| dto::ApiError::internal("app state 不可用"))?;
+        .ok_or_else(|| dto::ApiError::internal("app state unavailable"))?;
     let file_for_ids = file.to_string_lossy().into_owned();
     let result: aiya_data::DbResult<dto::playlist::PlaylistImportResult> =
         state.db().send(move |conn| {
@@ -2817,7 +2880,7 @@ async fn playlist_import(
             let outcome = playlist_repo::create(conn, &pid, &name, &matched_ids, now)?;
             let summary = playlist_summary_by_id(conn, &pid)
                 .map_err(aiya_data::DbError::Sql)?
-                .ok_or_else(|| aiya_data::DbError::Custom("歌单导入后读不到".into()))?;
+                .ok_or_else(|| aiya_data::DbError::Custom("playlist not readable after import".into()))?;
             Ok(dto::playlist::PlaylistImportResult {
                 playlist: Some(summary),
                 matched: outcome.added,
@@ -2833,7 +2896,7 @@ fn file_stem_name(file_path: &str) -> String {
     std::path::Path::new(file_path)
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "导入的歌单".into())
+        .unwrap_or_else(|| "Imported playlist".into())
 }
 
 /// 导出歌单为 m3u/m3u8。
@@ -2859,7 +2922,7 @@ async fn playlist_export(
     if let Some(enc) = encoding.as_deref() {
         if enc != "utf8" {
             return Err(dto::ApiError::invalid_arg(format!(
-                "不支持的导出编码：{enc}"
+                "unsupported export encoding: {enc}"
             )));
         }
     }
@@ -2868,7 +2931,7 @@ async fn playlist_export(
         Some("relative") => true,
         Some(other) => {
             return Err(dto::ApiError::invalid_arg(format!(
-                "未知的导出风格：{other}"
+                "unknown export style: {other}"
             )))
         }
     };
@@ -2876,7 +2939,7 @@ async fn playlist_export(
         None | Some("m3u8") | Some("m3u") => (),
         Some(other) => {
             return Err(dto::ApiError::invalid_arg(format!(
-                "未知的导出格式：{other}"
+                "unknown export format: {other}"
             )))
         }
     };
@@ -2910,12 +2973,13 @@ async fn playlist_export(
         .map_err(dto::ApiError::from)?;
 
     if items.is_empty() {
-        return Err(dto::ApiError::invalid_arg("歌单为空"));
+        return Err(dto::ApiError::invalid_arg("playlist is empty"));
     }
     let text = aiya_data::playlist_io::render_playlist(&items, &base_dir, relative);
     let count = items.len() as i64;
-    std::fs::write(&out_path, text)
-        .map_err(|e| dto::ApiError::new(dto::ApiErrorCode::Io, format!("导出写入失败：{e}")))?;
+    std::fs::write(&out_path, text).map_err(|e| {
+        dto::ApiError::new(dto::ApiErrorCode::Io, format!("failed to write export file: {e}"))
+    })?;
     Ok(dto::playlist::PlaylistExportResult { path, count })
 }
 
@@ -3432,7 +3496,7 @@ async fn player_play_tracks(
             .await
             .map_err(dto::ApiError::internal)?;
     if tracks.is_empty() {
-        return Err(dto::ApiError::not_found("没有可播放的曲目"));
+        return Err(dto::ApiError::not_found("no playable tracks"));
     }
     let start = start_index.unwrap_or(0);
     {
@@ -3456,7 +3520,7 @@ async fn player_play_query(
     start_index: Option<usize>,
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     let q: aiya_data::TrackWindowQuery = serde_json::from_value(query)
-        .map_err(|e| dto::ApiError::invalid_arg(format!("查询参数不合法：{e}")))?;
+        .map_err(|e| dto::ApiError::invalid_arg(format!("invalid query parameters: {e}")))?;
     // P2：此命令曾是同步——Tauri 2 的同步命令跑在主线程，"播放全部"要在
     // 主线程先后等两次 DB：收最多 5 万个 id，再逐 id 回查 TrackRef（5 万次
     // 点查）。主线程被占住的时间以秒计。改 async + spawn_blocking：两次
@@ -3476,7 +3540,7 @@ async fn player_play_query(
             tracing::warn!(cap = ID_COLLECT_CAP, "播放全部：曲目数超过上限，已截断");
         }
         if ids.is_empty() {
-            return Err(dto::ApiError::not_found("查询结果为空"));
+            return Err(dto::ApiError::not_found("query returned no results"));
         }
         Ok(track_refs_by_ids_db(&db, &ids))
     })
@@ -3708,7 +3772,7 @@ fn player_set_repeat(
             "off" => aiya_player::RepeatMode::Off,
             other => {
                 return Err(dto::ApiError::invalid_arg(format!(
-                    "未知 repeat 值：{other}"
+                    "unknown repeat value: {other}"
                 )));
             }
         };
@@ -3745,7 +3809,7 @@ fn player_enqueue(
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     let tracks = track_refs_by_ids(&state, &track_ids);
     if tracks.is_empty() {
-        return Err(dto::ApiError::not_found("没有可播放的曲目"));
+        return Err(dto::ApiError::not_found("no playable tracks"));
     }
     // options: { mode: "next" | "end" }（contracts QueueInsertMode）
     let mode = options
@@ -3775,7 +3839,7 @@ fn player_insert_next(
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     let tracks = track_refs_by_ids(&state, &[track_id]);
     if tracks.is_empty() {
-        return Err(dto::ApiError::not_found("曲目不存在"));
+        return Err(dto::ApiError::not_found("track not found"));
     }
     {
         let mut actor = state
@@ -3879,15 +3943,18 @@ fn expand_dropped(paths: &[String], skipped: &mut Vec<String>) -> Vec<DropCandid
                                 dto::DroppedKind::HlsPlaylist => {
                                     out.push(DropCandidate::Hls(sub.path))
                                 }
-                                _ => skipped.push(format!("{}（{}）", sub.label, sub.note)),
+                                _ => skipped.push(format!("{} ({})", sub.label, sub.note)),
                             }
                         }
                     }
-                    Err(e) => skipped.push(format!("{}（{e}）", item.label)),
+                    Err(e) => skipped.push(format!("{} ({e})", item.label)),
                 }
             }
             dto::DroppedKind::Directory => {
-                skipped.push(format!("{}（文件夹不展开，走设置 → 曲库导入）", item.label))
+                skipped.push(format!(
+                    "{} (folders are not expanded, import them via Settings > Library)",
+                    item.label
+                ))
             }
             dto::DroppedKind::Unsupported => {
                 skipped.push(format!("{}（{}）", item.label, item.note))
@@ -3933,9 +4000,9 @@ async fn player_open_paths(
             if candidates.is_empty() {
                 // 全部跳过时说清为什么（比"没有可播放的文件"有用）
                 return Err(dto::ApiError::invalid_arg(if skipped.is_empty() {
-                    "没有可播放的文件".to_string()
+                    "no playable files".to_string()
                 } else {
-                    format!("没有可播放的文件：{}", skipped.join("；"))
+                    format!("no playable files: {}", skipped.join("; "))
                 }));
             }
 
@@ -3992,7 +4059,7 @@ async fn player_open_paths(
                 }
             }
             if tracks.is_empty() {
-                return Err(dto::ApiError::not_found("队列为空"));
+                return Err(dto::ApiError::not_found("queue is empty"));
             }
             let opened = tracks.len();
             Ok((tracks, opened, skipped))
@@ -4024,7 +4091,7 @@ fn live_open(
     let url = url.trim().to_string();
     if !aiya_player::is_stream_path(&url) {
         return Err(dto::ApiError::invalid_arg(
-            "仅支持 http(s) 地址（本地文件用「打开文件」）",
+            "only http(s) URLs are supported (use Open File for local files)",
         ));
     }
     let title = title
@@ -4081,7 +4148,7 @@ async fn live_pick_playlist(app: AppHandle) -> Result<Option<String>, dto::ApiEr
     let picked = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
-            .add_filter("播放列表", &["m3u8", "m3u"])
+            .add_filter("Playlists", &["m3u8", "m3u"])
             .blocking_pick_file()
             .and_then(|p| p.as_path().map(|pp| pp.to_path_buf()))
     })
@@ -4419,7 +4486,7 @@ pub fn run() {
             let db = aiya_data::open(&db_path).map_err(|e| -> Box<dyn std::error::Error> {
                 tracing::error!(error = %e, db = %db_path.display(), "数据库打开失败");
                 fatal_dialog(&format!(
-                    "AIYA Music 无法打开音乐库数据库：\n{e}\n\n位置：{}\n\n请检查磁盘空间与权限后重试；若反复出现，可把该文件移走后重新启动（将重建空库）。",
+                    "AIYA Music could not open the library database:\n{e}\n\nLocation: {}\n\nCheck disk space and permissions, then try again. If this keeps happening, move the file away and restart (an empty database will be recreated).",
                     db_path.display()
                 ));
                 e.into()
@@ -4437,8 +4504,27 @@ pub fn run() {
                     serde_json::from_str(DEFAULT_SETTINGS).unwrap_or_else(|_| json!({}))
                 };
                 let def = fallback();
-                db.send(move |conn| Ok(setting_get(conn, "app_settings").unwrap_or(def)))
-                    .unwrap_or_else(|_| fallback())
+                let mut blob = db
+                    .send(move |conn| Ok(setting_get(conn, "app_settings").unwrap_or(def)))
+                    .unwrap_or_else(|_| fallback());
+                // 语言首启（docs/64 §3.1）：空/缺失 = 未定 → 按系统 UI 语言探测
+                // 写库，此后恒按设置值。空值不会到达前端。
+                let unset = blob
+                    .get("language")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .is_empty();
+                if unset {
+                    let detected = detect_system_language();
+                    blob["language"] = Value::String(detected.clone());
+                    let persisted = blob.clone();
+                    let _ = db.send(move |conn| {
+                        setting_set(conn, "app_settings", &persisted)
+                            .map_err(aiya_data::DbError::Sql)
+                    });
+                    tracing::info!(language = %detected, "首启语言探测完成");
+                }
+                blob
             };
             // EQ 偏好（协议 v6）同样在 manage 前取：db 马上要被 move 进 AppState
             let eq0: aiya_audio::EqParams = db
@@ -4571,15 +4657,18 @@ pub fn run() {
                             }
                             Ok(())
                         }
-                        None => Err("SMTC 会话创建失败".to_string()),
+                        None => Err("failed to create SMTC session".to_string()),
                     },
-                    Err(e) => Err(format!("取主窗口 HWND 失败：{e}")),
+                    Err(e) => Err(format!("failed to get main window HWND: {e}")),
                 },
-                None => Err("主窗口不存在".to_string()),
+                None => Err("main window not found".to_string()),
             };
             if let Err(detail) = smtc_result {
                 tracing::error!("{detail}");
-                dto::ApiError::record_background("SMTC 不可用，系统媒体面板与媒体键不生效", detail);
+                dto::ApiError::record_background(
+                    "SMTC is unavailable; the system media panel and media keys will not work",
+                    detail,
+                );
             }
 
             // 启动恢复：queue_state + queue_items → Actor hydrate →
@@ -4659,8 +4748,8 @@ pub fn run() {
                 use tauri::menu::{Menu, MenuItem};
                 let tray_result = (|| -> tauri::Result<()> {
                     let show_item =
-                        MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-                    let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+                        MenuItem::with_id(app, "show", "Show main window", true, None::<&str>)?;
+                    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
                     let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
                     let mut tray = tauri::tray::TrayIconBuilder::with_id("aiya-tray")
                         .menu(&menu)
@@ -4695,7 +4784,10 @@ pub fn run() {
                     }
                     Err(e) => {
                         tracing::error!("托盘图标创建失败：{e}");
-                        dto::ApiError::record_background("托盘不可用，关闭窗口将直接退出", e);
+                        dto::ApiError::record_background(
+                            "tray is unavailable; closing the window will quit the app",
+                            e,
+                        );
                     }
                 }
             }
@@ -4874,6 +4966,7 @@ pub fn run() {
             app_set_settings,
             app_diagnostics,
             app_open_data_dir,
+            app_open_url,
             beets_status,
             beets_preview,
             beets_apply,

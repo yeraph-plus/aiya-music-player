@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { Download, Package, RefreshCw, Trash2, TriangleAlert } from '@lucide/svelte';
   import Button from '../ui/Button.svelte';
+  import { t, type Msg } from '../../lib/i18n.svelte';
   import { ui } from '../../stores/ui.svelte';
 
   /**
@@ -44,29 +45,28 @@
     picked = [...next];
   }
 
-  /** 安装阶段徽章文本：宿主下发的 stage 取值映射为面向用户的短语；未知取值原样显示 */
-
-  const stageText: Record<string, string> = {
-    prepare: '准备',
-    download: '下载',
-    install: '安装',
-    unpack: '解压',
-    bin: '外置工具',
-    pip: 'pip',
+  /** 安装阶段徽章文本：宿主下发的 stage 取值映射为面向用户的短语；未知取值原样显示
+   *  （pip 各语言同形，不进键表，走原样回落） */
+  const STAGE_KEY: Record<string, Msg> = {
+    prepare: 'beets.stage.prepare',
+    download: 'beets.stage.download',
+    install: 'beets.stage.install',
+    unpack: 'beets.stage.unpack',
+    bin: 'beets.stage.bin',
   };
-  const stageLabel = (s: string): string => stageText[s] ?? s;
+  const stageLabel = (s: string): string => (STAGE_KEY[s] ? t(STAGE_KEY[s]) : s);
 
   /** 入口来源（docs/33 §6.1）：排障第一个问题是"为什么用的是这个" */
   function entryText(source: string | null | undefined): string {
     switch (source) {
       case 'env':
-        return '环境变量 AIYA_BEETS_BIN';
+        return t('beets.entry.env');
       case 'settings':
-        return '设置里记录的路径';
+        return t('beets.entry.settings');
       case 'path':
-        return '系统 PATH';
+        return t('beets.entry.path');
       default:
-        return source ?? '未知';
+        return source ?? t('beets.entry.unknown');
     }
   }
 </script>
@@ -85,7 +85,7 @@
 
 {#snippet uninstallLine()}
   {#if uninstall.running}
-    <p class="beets-dim">{uninstall.message || '正在卸载…'}</p>
+    <p class="beets-dim">{uninstall.message || t('beets.uninstallRunning')}</p>
   {:else if uninstall.error}
     <p class="beets-danger">{uninstall.error}</p>
   {:else if uninstall.message}
@@ -96,7 +96,7 @@
 {#snippet pluginPicker(hint: string)}
   <p class="beets-dim">{hint}</p>
   {#if table.length === 0}
-    <p class="beets-dim">插件表没加载出来（这不影响装基础组件）。</p>
+    <p class="beets-dim">{t('beets.pluginTableEmpty')}</p>
   {:else}
     <ul class="pick">
       {#each table as p (p.name)}
@@ -119,24 +119,23 @@
 <div class="beets-page">
   {#if ui.beets === null}
     <section class="beets-panel">
-      <p class="beets-dim">正在检测 Beets…</p>
+      <p class="beets-dim">{t('beets.detectingBeets')}</p>
     </section>
   {:else if !found}
     {#if ui.beets.errorCode === 'E_PROTOCOL_MISMATCH'}
       <!-- 版本不匹配要在安装页说清原因；未安装则页头 meta 已说明，这里不再重复一行 -->
       <p class="install-note beets-danger">
-        Beets 与播放器的协议不一致：{ui.beets.errorMessage ?? 'schema 指纹比对失败'}。
-        曲库与配置不受影响，重新下载安装即可。
+        {t('beets.protocolNote', { message: ui.beets.errorMessage ?? t('beets.schemaMismatchDefault') })}
       </p>
     {/if}
 
     <section class="beets-panel">
       <div class="beets-panel-head">
-        <strong>预配置环境</strong>
+        <strong>{t('beets.bundleTitle')}</strong>
         <span class="beets-dim">
-          下载约 75MB 便携包，自带解释器、pip 与
-          {#if bundled.length > 0}{bundled.map((p) => p.title).join(' / ')}{:else}基础功能{/if}
-          插件（含分析器与模型），下载、校验、解压自动完成，不需要本机 Python。
+          {t('beets.bundleDesc', {
+            plugins: bundled.length > 0 ? bundled.map((p) => p.title).join(' / ') : t('beets.bundleDescFallback'),
+          })}
         </span>
       </div>
       <div class="beets-gate">
@@ -146,10 +145,10 @@
           loading={install.running}
           disabled={install.running}
           onclick={() => void ui.installBeets()}
-          title="下载并安装"
+          title={t('beets.downloadInstall')}
         >
           {#snippet icon()}<Package size={14} />{/snippet}
-          下载并安装
+          {t('beets.downloadInstall')}
         </Button>
       </div>
       {@render status()}
@@ -159,11 +158,10 @@
       <section class="beets-panel">
         <div class="beets-panel-head">
           <strong class="warn-title">
-            <TriangleAlert size={15} /> Beets 与播放器的协议契约不一致
+            <TriangleAlert size={15} /> {t('beets.contractTitle')}
           </strong>
           <span class="beets-dim">
-            schema 指纹比对失败，查询会读到对不上的形状，因此整页停用。重新下载安装，
-            或升级播放器后重试。
+            {t('beets.contractDesc')}
           </span>
         </div>
         <div class="beets-gate">
@@ -175,7 +173,7 @@
             onclick={() => void ui.installBeets()}
           >
             {#snippet icon()}<Package size={14} />{/snippet}
-            重新下载安装
+            {t('beets.reinstall')}
           </Button>
         </div>
         {@render status()}
@@ -185,69 +183,68 @@
     <!-- 装后状态卡：一张卡，更新 / 换插件 / 删除三个动作 -->
     <section class="beets-panel">
       <div class="beets-panel-head">
-        <strong>预配置环境</strong>
+        <strong>{t('beets.bundleTitle')}</strong>
         <span class="beets-dim">
-          自带解释器与 pip。更新 = 重新下载；换插件 = 包内重跑安装脚本
-          （pip 装/卸与外部工具自动处理）；删除 = 组件目录整体移除。
+          {t('beets.bundleDescInstalled')}
         </span>
       </div>
       <div class="beets-row">
-        <span>beets <b>{ui.beets.beetsVersion ?? '未知版本'}</b></span>
+        <span>beets <b>{ui.beets.beetsVersion ?? t('beets.meta.versionUnknown')}</b></span>
         {#if ui.beets.pythonVersion}
           <span>Python <b>{ui.beets.pythonVersion}</b></span>
         {/if}
         {#if ui.beets.protocolVersion !== null && ui.beets.protocolVersion !== undefined}
-          <span>协议 <b>v{ui.beets.protocolVersion}</b></span>
+          <span>{t('beets.protocolLabel')} <b>v{ui.beets.protocolVersion}</b></span>
         {/if}
         {#if ui.beets.libraryLock === 'held'}
-          <span class="beets-badge warn" title="另一个进程在写库，查询可能读到旧数据">
-            库被占用（{ui.beets.libraryLockHolder ?? '另一个进程'}）
+          <span class="beets-badge warn" title={t('beets.libraryLockTip')}>
+            {t('beets.libraryLock', { holder: ui.beets.libraryLockHolder ?? t('beets.libraryLockFallback') })}
           </span>
         {/if}
-        <Button size="sm" onclick={() => void ui.refreshBeets()} title="重新探测一次（最坏要等 30 秒）">
+        <Button size="sm" onclick={() => void ui.refreshBeets()} title={t('beets.redetectTip')}>
           {#snippet icon()}<RefreshCw size={13} />{/snippet}
-          重新检测
+          {t('beets.redetect')}
         </Button>
       </div>
 
       <table class="facts">
         <tbody>
           <tr>
-            <th>入口来源</th>
+            <th>{t('beets.factsEntry')}</th>
             <td>{entryText(ui.beets.entrySource)}</td>
           </tr>
           {#if ui.beets.interpreter}
             <tr>
-              <th>启动程序</th>
+              <th>{t('beets.factsInterpreter')}</th>
               <td class="mono" title={ui.beets.interpreter}>{ui.beets.interpreter}</td>
             </tr>
           {/if}
           {#if ui.beets.configDir}
             <tr>
-              <th>配置目录</th>
+              <th>{t('beets.factsConfig')}</th>
               <td class="mono" title={ui.beets.configDir}>{ui.beets.configDir}</td>
             </tr>
           {/if}
           {#if ui.beets.dataHome}
             <tr>
-              <th>数据根</th>
+              <th>{t('beets.factsData')}</th>
               <td class="mono" title={ui.beets.dataHome}>{ui.beets.dataHome}</td>
             </tr>
           {/if}
         </tbody>
       </table>
 
-      {@render pluginPicker('换插件时改勾选：确认后包内重跑安装脚本，pip 装/卸自动完成。')}
+      {@render pluginPicker(t('beets.pluginPickerHint'))}
       <div class="beets-gate">
         <Button
           size="sm"
           loading={install.running}
           disabled={install.running}
           onclick={() => void ui.setBeetsPlugins(chosen)}
-          title="在包内环境按勾选变更插件"
+          title={t('beets.changePluginsTip')}
         >
           {#snippet icon()}<Download size={14} />{/snippet}
-          换插件（{chosen.length} 个插件）
+          {t('beets.changePlugins', { n: chosen.length })}
         </Button>
       </div>
       {@render status()}
@@ -258,10 +255,10 @@
           loading={install.running}
           disabled={install.running}
           onclick={() => void ui.installBeets()}
-          title="重新下载并解压，更新到通道最新"
+          title={t('beets.updateLatestTip')}
         >
           {#snippet icon()}<Package size={14} />{/snippet}
-          重新下载并安装（更新到通道最新）
+          {t('beets.updateLatest')}
         </Button>
       </div>
 
@@ -278,19 +275,18 @@
             }}
           >
             {#snippet icon()}<Trash2 size={14} />{/snippet}
-            确认删除
+            {t('beets.confirmDelete')}
           </Button>
-          <Button size="sm" disabled={uninstall.running} onclick={() => (confirming = false)}>取消</Button>
+          <Button size="sm" disabled={uninstall.running} onclick={() => (confirming = false)}>{t('common.cancel')}</Button>
         {:else}
           <Button size="sm" disabled={uninstall.running} onclick={() => (confirming = true)}>
             {#snippet icon()}<Trash2 size={14} />{/snippet}
-            删除组件
+            {t('beets.deleteBundle')}
           </Button>
         {/if}
       </div>
       <p class="install-note">
-        删除只动组件目录（预配置环境与下载缓存），
-        你的 beets 曲库与分析库<b>不动</b>——它们是你的数据，要清理请用各自的入口。
+        {t('beets.deleteNoteHead')}<b>{t('beets.deleteNoteKept')}</b>{t('beets.deleteNoteTail')}
       </p>
       {@render uninstallLine()}
     </section>

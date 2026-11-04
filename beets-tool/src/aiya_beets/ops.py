@@ -94,7 +94,7 @@ def _append(rec: dict) -> bool:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         return True
     except OSError as e:
-        print(f"[aiya-beets] ops 登记簿写入失败（幂等停用）：{e}", file=sys.stderr)
+        print(f"[aiya-beets] ops journal write failed (idempotency disabled): {e}", file=sys.stderr)
         return False
 
 
@@ -125,8 +125,8 @@ def lookup(request_id: str, cmd: str, phash: str) -> list[dict] | None:
         if rec.get("cmd") != cmd or rec.get("payloadHash") != phash:
             raise ProtocolError(
                 E_INVALID_ARG, cmd,
-                f"requestId {request_id!r} 已被不同内容的 {rec.get('cmd')} 请求使用："
-                "换一个 requestId（宿主每次调用都应生成新键）",
+                f"requestId {request_id!r} was already used by a different {rec.get('cmd')} request: "
+                "pick another requestId (the host should generate a new key for every call)",
             )
         if rec.get("status") == "done":
             events = rec.get("events")

@@ -101,7 +101,7 @@ pub fn acquire(stdin: SessionStdin) -> Result<u64, ToolError> {
     let gen = gen_counter().fetch_add(1, Ordering::SeqCst);
     let mut guard = slot()
         .lock()
-        .map_err(|_| ToolError::Io("会话槽已中毒".into()))?;
+        .map_err(|_| ToolError::Io("session slot poisoned".into()))?;
     if guard.is_some() {
         return Err(ToolError::Busy);
     }
@@ -217,13 +217,13 @@ pub fn spawn_session(
         None => {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(ToolError::Io("stdin 未建立".into()));
+            return Err(ToolError::Io("stdin not available".into()));
         }
     };
     if let Err(e) = writeln!(stdin, "{request}") {
         let _ = child.kill();
         let _ = child.wait();
-        return Err(ToolError::Io(format!("写请求失败: {e}")));
+        return Err(ToolError::Io(format!("failed to write request: {e}")));
     }
     Ok((child, stdin))
 }
@@ -288,7 +288,7 @@ pub fn spawn_line_reader<R: Read + Send + 'static>(
             }
         })
         .map(|_| ())
-        .map_err(|e| ToolError::Io(format!("起读线程失败: {e}")))
+        .map_err(|e| ToolError::Io(format!("failed to spawn reader thread: {e}")))
 }
 
 /// 流式读取一个子进程的行帧，直到见到 `done` / 超时 / EOF。
@@ -389,7 +389,7 @@ fn recv_first_json(
             Ok(l) => l,
             Err(RecvTimeoutError::Timeout) => return Err(ToolError::Timeout { timeout }),
             Err(RecvTimeoutError::Disconnected) => {
-                return Err(ToolError::Protocol("进程在应答前退出".into()));
+                return Err(ToolError::Protocol("tool process exited before responding".into()));
             }
         };
         let trimmed = line.trim();
@@ -417,7 +417,7 @@ fn request_once(
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| ToolError::Io("stdout 未建立".into()))?;
+            .ok_or_else(|| ToolError::Io("stdout not available".into()))?;
         let (tx, rx) = channel::<String>();
         spawn_line_reader(stdout, tx, "tool-once-recv")?;
         recv_first_json(&rx, timeout)
@@ -451,7 +451,7 @@ pub fn query_status(launcher: &Launcher, timeout: Duration) -> Result<StatusRepo
     );
     let result = raw.and_then(|raw| {
         let env: Envelope = serde_json::from_value(raw)
-            .map_err(|e| ToolError::Protocol(format!("应答信封形状不对: {e}")))?;
+            .map_err(|e| ToolError::Protocol(format!("unexpected response envelope shape: {e}")))?;
         if !env.ok {
             let err = env.error.unwrap_or_else(|| crate::proto::EnvelopeError {
                 code: "E_UNKNOWN".into(),
@@ -466,7 +466,7 @@ pub fn query_status(launcher: &Launcher, timeout: Duration) -> Result<StatusRepo
         }
         match env.data {
             Some(data) => serde_json::from_value(data)
-                .map_err(|e| ToolError::Protocol(format!("status 字段形状不对: {e}"))),
+                .map_err(|e| ToolError::Protocol(format!("unexpected status field shape: {e}"))),
             None => Ok(StatusReport::default()),
         }
     });
@@ -498,7 +498,7 @@ pub fn query_plugin_catalog(
     );
     let result = raw.and_then(|raw| {
         let env: Envelope = serde_json::from_value(raw)
-            .map_err(|e| ToolError::Protocol(format!("应答信封形状不对: {e}")))?;
+            .map_err(|e| ToolError::Protocol(format!("unexpected response envelope shape: {e}")))?;
         if !env.ok {
             let err = env.error.unwrap_or_else(|| crate::proto::EnvelopeError {
                 code: "E_UNKNOWN".into(),
@@ -517,7 +517,7 @@ pub fn query_plugin_catalog(
             .cloned()
             .unwrap_or(serde_json::Value::Array(Vec::new()));
         serde_json::from_value(catalog)
-            .map_err(|e| ToolError::Protocol(format!("catalog 字段形状不对: {e}")))
+            .map_err(|e| ToolError::Protocol(format!("unexpected catalog field shape: {e}")))
     });
     release_unacquired();
     result
@@ -546,7 +546,7 @@ pub fn request_data(
     }
     let result = request_once(launcher, &req, timeout).and_then(|raw| {
         let env: Envelope = serde_json::from_value(raw)
-            .map_err(|e| ToolError::Protocol(format!("应答信封形状不对: {e}")))?;
+            .map_err(|e| ToolError::Protocol(format!("unexpected response envelope shape: {e}")))?;
         if !env.ok {
             let err = env.error.unwrap_or_else(|| crate::proto::EnvelopeError {
                 code: "E_UNKNOWN".into(),
@@ -607,7 +607,7 @@ pub fn spawn_reader(
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| ToolError::Io("stdout 未建立".into()))?;
+        .ok_or_else(|| ToolError::Io("stdout not available".into()))?;
 
     let (line_tx, line_rx) = channel::<String>();
     if let Err(e) = spawn_line_reader(stdout, line_tx, "tool-pipe-recv") {
@@ -679,7 +679,7 @@ pub fn spawn_reader(
                                             "code": "E_SESSION_CANCEL_TIMEOUT",
                                             "stage": "cancel",
                                             "beets_message":
-                                                "取消后工具未在时限内收尾，进程已被强制结束",
+                                                "tool did not finish within the cancel deadline; process was force-terminated",
                                         },
                                     }),
                                 );
@@ -700,7 +700,7 @@ pub fn spawn_reader(
                                     "error": {
                                         "code": "E_SESSION_TIMEOUT",
                                         "stage": "watchdog",
-                                        "beets_message": "会话 10 分钟无输出，已被看门狗终止",
+                                        "beets_message": "session had no output for 10 minutes and was terminated by the watchdog",
                                     },
                                 }),
                             );
@@ -729,7 +729,7 @@ pub fn spawn_reader(
                         "error": {
                             "code": "E_SESSION_CRASHED",
                             "stage": "reader",
-                            "beets_message": "工具进程在发出终态事件前退出",
+                            "beets_message": "tool process exited before emitting a terminal event",
                         },
                     }),
                 );
@@ -744,7 +744,7 @@ pub fn spawn_reader(
                 let _ = c.wait();
             }
             drop(release(gen));
-            ToolError::Io(format!("起会话线程失败: {e}"))
+            ToolError::Io(format!("failed to spawn session thread: {e}"))
         })
 }
 

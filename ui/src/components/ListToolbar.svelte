@@ -3,6 +3,7 @@
   import Icon from './Icon.svelte';
   import Button from './ui/Button.svelte';
   import IconButton from './ui/IconButton.svelte';
+  import { t } from '../lib/i18n.svelte';
 
   /**
    * 曲目列表工具条：挂在 TrackList 顶部（不随列表滚动）。
@@ -58,18 +59,18 @@
   }: Props = $props();
 </script>
 
-<div class="list-toolbar" role="toolbar" aria-label="列表操作">
+<div class="list-toolbar" role="toolbar" aria-label={t('library.toolbar.aria')}>
   <Button size="sm" variant="primary" disabled={total === 0} onclick={onplayall}>
     {#snippet icon()}<Icon name="play" size={12} />{/snippet}
-    播放全部
+    {t('library.playAll')}
   </Button>
   <Button size="sm" disabled={count === 0} onclick={onenqueue}>
     {#snippet icon()}<ListPlus size={13} />{/snippet}
-    加入播放队列
+    {t('lib.menu.enqueue')}
   </Button>
   <Button size="sm" disabled={count === 0} onclick={onaddto}>
     {#snippet icon()}<HeartPlus size={13} />{/snippet}
-    加入歌单
+    {t('library.toolbar.addToPlaylist')}
   </Button>
   <Button size="sm" variant="danger" disabled={count === 0} onclick={onremove}>
     {#snippet icon()}<Icon name="trash" size={12} />{/snippet}
@@ -77,7 +78,7 @@
   </Button>
 
   {#if count > 0}
-    <span class="lt-count">已选 {count} 首</span>
+    <span class="lt-count">{t('library.toolbar.selectedCount', { n: count })}</span>
   {/if}
 
   <span class="lt-space"></span>
@@ -85,7 +86,7 @@
   {#if canLocate}
     <!-- 定位到正在播放：纯手动触发。
          不做自动跟随——播放中列表被反复拽回播放行是修掉的老 bug。 -->
-    <IconButton label="定位到正在播放" size="sm" onclick={onlocate}>
+    <IconButton label={t('library.toolbar.locate')} size="sm" onclick={onlocate}>
       <LocateFixed size={15} />
     </IconButton>
   {/if}
@@ -93,7 +94,7 @@
   {#if canFilter}
     <span class="lt-filter" class:on={filterCount > 0}>
       <IconButton
-        label={filterCount > 0 ? `筛选器（${filterCount} 档生效）` : '筛选器'}
+        label={filterCount > 0 ? t('library.toolbar.filterOn', { n: filterCount }) : t('library.toolbar.filter')}
         size="sm"
         active={filterCount > 0}
         onclick={onfilteropen}
@@ -107,7 +108,7 @@
     </span>
   {/if}
   <IconButton
-    label="批量操作"
+    label={t('library.toolbar.batch')}
     size="sm"
     pressed={batchMode}
     onclick={() => onbatchmode(!batchMode)}

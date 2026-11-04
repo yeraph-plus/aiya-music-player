@@ -7,6 +7,7 @@
   import type { TrackRow } from '../lib/ipc';
   import type { TrackSource } from '../lib/query';
   import { artworkUrl } from '../lib/artwork';
+  import { t, type Msg } from '../lib/i18n.svelte';
   import { errorMessage } from '../lib/errors';
   import { formatDurationLong, formatPlays } from '../lib/format';
   import { library } from '../stores/library.svelte';
@@ -128,22 +129,25 @@
    * 两行数字很快到，骨架反而闪。
    */
   const totalPlays = $derived(
-    playStats && playStats.totalPlays > 0 ? `${formatPlays(playStats.totalPlays)} 次` : '—',
+    playStats && playStats.totalPlays > 0
+      ? t('now.home.playsValue', { n: formatPlays(playStats.totalPlays) })
+      : '—',
   );
   const totalSpan = $derived(playStats ? formatDurationLong(playStats.totalMs) : '—');
 
   /**
    * 时段问候，按系统小时分四段（5/11/13/18 为界）。组件装载时求值一次就够：
    * 问候跨段差几分钟没人会在意，为它挂一个时钟定时器不值得。
+   * 整句进 i18n 表（英文语序与中文不同，不能只换单位）。
    */
-  function timeGreeting(hour: number): string {
-    if (hour < 5) return '夜深了';
-    if (hour < 11) return '早上好';
-    if (hour < 13) return '中午好';
-    if (hour < 18) return '下午好';
-    return '晚上好';
+  function greetingKey(hour: number): Msg {
+    if (hour < 5) return 'home.greeting.night';
+    if (hour < 11) return 'home.greeting.morning';
+    if (hour < 13) return 'home.greeting.noon';
+    if (hour < 18) return 'home.greeting.afternoon';
+    return 'home.greeting.evening';
   }
-  const greeting = $derived(`${timeGreeting(new Date().getHours())}，今天听点什么？`);
+  const greeting = $derived(t(greetingKey(new Date().getHours())));
 </script>
 
 <div class="page-scroll home-page">
@@ -154,15 +158,15 @@
     <section class="home-section">
       <div class="section-heading">
         <div class="section-title">
-          <h2>歌单</h2>
+          <h2>{t('shell.sidebar.playlists')}</h2>
           <span class="page-kicker">PLAYLISTS</span>
-          <span class="section-meta">{playlists.items.length} 个</span>
+          <span class="section-meta">{t('now.home.playlistCount', { n: playlists.items.length })}</span>
         </div>
         <!-- 缺失警告的唯一的统计位：有缺失时出现在标题行右侧，点击去设置→
              曲库处理；性质是告警不是导航 -->
         {#if library.stats && library.stats.missingLocations > 0}
           <button class="stat-warn" onclick={() => nav.settingsAt('library')}>
-            {library.stats.missingLocations} 个位置缺失，去处理
+            {t('now.home.missingLocationsCta', { n: library.stats.missingLocations })}
           </button>
         {/if}
       </div>
@@ -171,8 +175,8 @@
           <div class="playlist-card">
             <button
               class="pl-cover"
-              title={`播放「${playlist.name}」`}
-              aria-label={`播放 ${playlist.name}`}
+              title={t('now.home.playPlaylistTip', { name: playlist.name })}
+              aria-label={t('now.home.playPlaylistAria', { name: playlist.name })}
               disabled={playlist.trackCount === 0}
               onclick={() => void playPlaylist(playlist.id)}
             >
@@ -187,24 +191,24 @@
             <button class="pl-name" title={playlist.name} onclick={() => nav.go({ kind: 'playlist', id: playlist.id })}>
               {playlist.name}
             </button>
-            <span class="pl-count">{playlist.trackCount} 首</span>
+            <span class="pl-count">{t('common.trackCount', { n: playlist.trackCount })}</span>
           </div>
         {:else}
-          <EmptyState title="从曲目右键菜单或批量操作创建歌单。" />
+          <EmptyState title={t('now.home.playlistEmpty')} />
         {/each}
       </div>
     </section>
 
     <!-- 播放统计：时段问候 + 两组"标签 + 大字号数值"，顶部占位一个标题组件
          高度后与卡面顶沿齐平（不随卡组行高变）。不可点（导航归侧栏） -->
-    <aside class="home-stats" aria-label="播放统计">
+    <aside class="home-stats" aria-label={t('now.home.statsAria')}>
       <p class="stat-greet">{greeting}</p>
       <div class="stat-block">
-        <span class="stat-label">累计播放</span>
+        <span class="stat-label">{t('now.home.statTotalPlays')}</span>
         <span class="stat-value">{totalPlays}</span>
       </div>
       <div class="stat-block">
-        <span class="stat-label">收听时长</span>
+        <span class="stat-label">{t('now.home.statListeningTime')}</span>
         <span class="stat-value">{totalSpan}</span>
       </div>
     </aside>
@@ -215,7 +219,7 @@
     <section class="home-section">
       <div class="section-heading">
         <div class="section-title">
-          <h2>常听</h2>
+          <h2>{t('now.home.mostPlayed')}</h2>
           <span class="page-kicker">MOST PLAYED</span>
         </div>
       </div>
@@ -224,7 +228,7 @@
           rows={frequent}
           columns={['cover', 'title', 'artist', 'plays']}
           {loading}
-          empty="播放次数积累后，这里会长出你的常听曲目。"
+          empty={t('now.home.mostPlayedEmpty')}
           currentId={player.state?.current?.id ?? null}
           onplay={(index) => void play(frequent, index)}
           onopenartist={(id) => nav.go({ kind: 'artist', id })}
@@ -236,7 +240,7 @@
     <section class="home-section">
       <div class="section-heading">
         <div class="section-title">
-          <h2>最近播放</h2>
+          <h2>{t('library.tabRecent')}</h2>
           <span class="page-kicker">RECENTLY PLAYED</span>
         </div>
       </div>
@@ -245,7 +249,7 @@
           rows={recentPlayed}
           columns={['cover', 'title', 'artist', 'lastPlayed']}
           {loading}
-          empty="播放后，这里会留下最近的轨迹。"
+          empty={t('now.home.recentPlayedEmpty')}
           currentId={player.state?.current?.id ?? null}
           onplay={(index) => void play(recentPlayed, index)}
           onopenartist={(id) => nav.go({ kind: 'artist', id })}
@@ -259,7 +263,7 @@
   <section class="home-section">
     <div class="section-heading">
       <div class="section-title">
-        <h2>最近添加</h2>
+        <h2>{t('library.tabAdded')}</h2>
         <span class="page-kicker">RECENTLY ADDED</span>
       </div>
     </div>
@@ -268,7 +272,7 @@
         rows={recentAdded}
         columns={['cover', 'title', 'artist', 'album', 'added']}
         {loading}
-        empty="扫描入库后，最新的曲目会出现在这里。"
+        empty={t('now.home.recentAddedEmpty')}
         currentId={player.state?.current?.id ?? null}
         onplay={(index) => void play(recentAdded, index)}
         onopenartist={(id) => nav.go({ kind: 'artist', id })}

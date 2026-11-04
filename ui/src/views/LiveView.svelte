@@ -8,6 +8,7 @@
   import IconButton from '../components/ui/IconButton.svelte';
   import { errorMessage } from '../lib/errors';
   import { formatTime } from '../lib/format';
+  import { t } from '../lib/i18n.svelte';
   import { ipc } from '../lib/ipc';
   import { LIVE_SWAP_MS, livePhase, rememberLive, streamUrlOf } from '../lib/live';
   import { reducedMotion } from '../lib/motion.svelte';
@@ -104,7 +105,7 @@
   }
 
   function cardAria(entry: LiveRecentEntry): string {
-    return `播放 ${stationName(entry)}`;
+    return t('live.cardPlayAria', { name: stationName(entry) });
   }
 
   /** 浏览到第 index 张卡（含队尾加号卡）。**不循环**：越界即停在端点 */
@@ -177,7 +178,7 @@
   function submitAdd(): void {
     const url = draftUrl.trim();
     if (!/^https?:\/\//i.test(url)) {
-      draftError = '仅支持 http(s) 地址';
+      draftError = t('live.errorHttpOnly');
       return;
     }
     const name = draftName.trim();
@@ -198,7 +199,7 @@
     adding = false;
     // rememberLive 把新流放到卡组头部，浏览位归零它就在中央
     browseIndex = 0;
-    notify.showToast(exists ? `已在列表中：${name || url}` : '已添加流');
+    notify.showToast(exists ? t('live.toastExists', { name: name || url }) : t('live.toastAdded'));
   }
 
   /** 写回「最近打开」。设置走 `applySettings`：失败会落到错误条，不静默 */
@@ -218,7 +219,7 @@
       // 开流的卡被置顶后浏览位跟过去，焦点卡始终是正在播的这一条
       const index = (ui.settings.liveRecent ?? []).findIndex((item) => item.url === url);
       if (index >= 0) browseIndex = index;
-      notify.showToast(`正在连接 ${name ?? url}`);
+      notify.showToast(t('live.toastConnecting', { name: name ?? url }));
     } catch (error) {
       // 开流失败不阻断运行：走播放条吐司（报错三档，2026-11 拍板）。
       // 地址还留在卡组与地址框里，吐司消失后重试成本就是点一下。
@@ -240,10 +241,10 @@
       if (!path) return; // 取消不是错误
       const receipt = await ipc.player.openPaths([path]);
       if (receipt.opened === 0) {
-        notify.showToast(`打不开：${receipt.skipped.join('；')}`, 6000);
+        notify.showToast(t('live.toastOpenFailed', { reasons: receipt.skipped.join(t('lib.drop.reasonsSep')) }), 6000);
         return;
       }
-      notify.showToast('已打开播放列表');
+      notify.showToast(t('live.toastPlaylistOpened'));
     } catch (error) {
       notify.showError(errorMessage(error));
     } finally {
@@ -269,13 +270,13 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="live">
-  <Header kicker="LIVE" title="直播" subtitle="收听网络电台与 HLS 直播流">
+  <Header kicker="LIVE" title={t('live.title')} subtitle={t('live.subtitle')}>
     {#snippet actions()}
       <Button variant="primary" onclick={openAdd}>
         {#snippet icon()}<Plus size={14} />{/snippet}
-        添加流
+        {t('live.addStream')}
       </Button>
-      <Button variant="ghost" disabled={busy} onclick={() => void pickFile()}>打开文件…</Button>
+      <Button variant="ghost" disabled={busy} onclick={() => void pickFile()}>{t('live.openFile')}</Button>
     {/snippet}
   </Header>
 
@@ -306,7 +307,7 @@
             {/if}
           </button>
           <span class="card-remove">
-            <IconButton label="从最近打开中移除" size="sm" onclick={() => forget(entry.id)}>
+            <IconButton label={t('live.removeRecent')} size="sm" onclick={() => forget(entry.id)}>
               <X size={12} />
             </IconButton>
           </span>
@@ -318,21 +319,21 @@
         class="live-card add-card {slotClass(recent.length)}"
         style:z-index={slotZ(recent.length)}
         onclick={onAddCardClick}
-        aria-label="添加流"
+        aria-label={t('live.addStream')}
       >
         <span class="card-face add-face">
           <Plus size={30} strokeWidth={1.6} />
-          <span class="add-text">添加流</span>
+          <span class="add-text">{t('live.addStream')}</span>
         </span>
       </button>
 
       <div class="deck-arrow arrow-left">
-        <IconButton label="上一条流" size="lg" disabled={browseIndex === 0} onclick={() => swap('left')}>
+        <IconButton label={t('live.prevStream')} size="lg" disabled={browseIndex === 0} onclick={() => swap('left')}>
           <ChevronLeft size={28} />
         </IconButton>
       </div>
       <div class="deck-arrow arrow-right">
-        <IconButton label="下一条流" size="lg" disabled={browseIndex === deckLen - 1} onclick={() => swap('right')}>
+        <IconButton label={t('live.nextStream')} size="lg" disabled={browseIndex === deckLen - 1} onclick={() => swap('right')}>
           <ChevronRight size={28} />
         </IconButton>
       </div>
@@ -393,7 +394,7 @@
       <!-- 开播引导：焦点卡外侧下方，悬停浮现。焦点是加号卡时不出现（那一步
            是添加，不是开播），直播中由信息块的徽章+计时接管 -->
       {#if currentEntry && playingUrl !== currentEntry.url}
-        <p class="deck-hint" aria-hidden="true">点击开播</p>
+        <p class="deck-hint" aria-hidden="true">{t('live.clickToPlay')}</p>
       {/if}
     </div>
   </section>
@@ -401,13 +402,13 @@
 
 {#if adding}
   <Dialog
-    title="添加流"
+    title={t('live.addStream')}
     autofocus={() => urlFieldRef?.focus()}
     onclose={closeAdd}
   >
     <div class="add-form">
       <Field
-        label="m3u8 地址"
+        label={t('live.fieldUrl')}
         bind:ref={urlFieldRef}
         value={draftUrl}
         error={draftError}
@@ -420,33 +421,33 @@
         onenter={submitAdd}
       />
       <Field
-        label="名称（可选）"
+        label={t('live.fieldName')}
         value={draftName}
         maxlength={80}
-        placeholder="留空则显示主机名"
+        placeholder={t('live.fieldNamePh')}
         oninput={(value) => (draftName = value)}
         onenter={submitAdd}
       />
       <Field
-        label="副标题（可选）"
+        label={t('live.fieldSubtitle')}
         value={draftSubtitle}
         maxlength={60}
-        placeholder="悬浮层流名下的一行小字，如「Chill · 24h」"
+        placeholder={t('live.fieldSubtitlePh')}
         oninput={(value) => (draftSubtitle = value)}
         onenter={submitAdd}
       />
       <Field
-        label="描述（可选）"
+        label={t('live.fieldDesc')}
         value={draftDescription}
         maxlength={200}
-        placeholder="悬浮层的说明文字，过长会截断"
+        placeholder={t('live.fieldDescPh')}
         oninput={(value) => (draftDescription = value)}
         onenter={submitAdd}
       />
     </div>
     {#snippet actions()}
-      <Button onclick={closeAdd}>取消</Button>
-      <Button variant="primary" disabled={!draftUrl.trim()} onclick={submitAdd}>添加</Button>
+      <Button onclick={closeAdd}>{t('common.cancel')}</Button>
+      <Button variant="primary" disabled={!draftUrl.trim()} onclick={submitAdd}>{t('live.addConfirm')}</Button>
     {/snippet}
   </Dialog>
 {/if}

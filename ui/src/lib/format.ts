@@ -1,3 +1,5 @@
+import { t } from './i18n.svelte';
+
 export function formatTime(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms) || ms <= 0) return '0:00';
   const totalSeconds = Math.floor(ms / 1000);
@@ -9,11 +11,11 @@ export function formatTime(ms: number | null | undefined): string {
 }
 
 export function formatDurationLong(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return '0 分钟';
+  if (!Number.isFinite(ms) || ms <= 0) return t('format.duration.zero');
   const minutes = Math.round(ms / 60000);
-  if (minutes < 60) return `${minutes} 分钟`;
+  if (minutes < 60) return t('format.duration.minutes', { m: minutes });
   const hours = Math.floor(minutes / 60);
-  return `${hours} 小时 ${minutes % 60} 分钟`;
+  return t('format.duration.h-min', { h: hours, m: minutes % 60 });
 }
 
 export interface HighlightPart {
@@ -52,21 +54,21 @@ export function repeatIcon(mode: 'off' | 'all' | 'one'): string {
 }
 
 export function repeatLabel(mode: 'off' | 'all' | 'one'): string {
-  if (mode === 'one') return '单曲循环';
-  if (mode === 'all') return '列表循环';
-  return '顺序播放';
+  if (mode === 'one') return t('format.repeat.one');
+  if (mode === 'all') return t('format.repeat.all');
+  return t('format.repeat.off');
 }
 
 export function statusLabel(status: string): string {
   switch (status) {
     case 'loading':
-      return '正在载入…';
+      return t('format.status.loading');
     case 'playing':
-      return '正在播放';
+      return t('format.status.playing');
     case 'paused':
-      return '已暂停';
+      return t('format.status.paused');
     case 'error':
-      return '播放出错';
+      return t('format.status.error');
     default:
       return '';
   }
@@ -162,7 +164,7 @@ export function transientOrigin(id: string | null | undefined): string | null {
   if (id.startsWith(STREAM_ID_PREFIX)) {
     const url = id.slice(STREAM_ID_PREFIX.length);
     // 本地播放列表（`file:///…/index.m3u8`）没有主机名
-    if (/^file:/i.test(url)) return '本地播放列表';
+    if (/^file:/i.test(url)) return t('lib.liveMessage.localPlaylist');
     try {
       const host = new URL(url).host;
       return host || null;

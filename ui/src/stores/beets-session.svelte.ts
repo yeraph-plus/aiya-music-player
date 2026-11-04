@@ -1,6 +1,7 @@
 import type { AlbumPreview, BeetsImportEvent } from '../lib/beets';
 import { events, ipc, type ApplyDecision } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
+import { t } from '../lib/i18n.svelte';
 import { beetsConfig } from './beets-config.svelte';
 
 /**
@@ -252,7 +253,7 @@ class BeetsSessionStore {
       case 'cancelled':
         // 取消收尾：已完成的部分保留，归 idle 解锁按钮。v2：断点已在（完成的 decision 有 checkpoint），提供续跑——
         // 只对应用阶段**（stage=writing）：预览阶段的取消不能把上一批已完成的 decisions 误报成"可续跑"（checkpoint 会全跳过，白转一圈）。
-        this.errors = [...this.errors, { path: 'cancel', message: '已取消（已完成的部分保留）' }];
+        this.errors = [...this.errors, { path: 'cancel', message: t('beets.session.cancelled') }];
         this.canResume = evt.stage === 'writing' && this.lastDecisions.length > 0;
         this.settle();
         break;
@@ -265,7 +266,7 @@ class BeetsSessionStore {
         this.settle();
         break;
       case 'libraryRefreshSkipped':
-        this.errors = [...this.errors, { path: 'refresh', message: '有扫描正在进行，本次刷新让位；稍后再试' }];
+        this.errors = [...this.errors, { path: 'refresh', message: t('beets.session.refreshSkipped') }];
         this.settle();
         break;
       case 'done':

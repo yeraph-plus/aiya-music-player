@@ -4,6 +4,7 @@
   import NowPlayingSpectrum from '../components/NowPlayingSpectrum.svelte';
   import { artworkUrl } from '../lib/artwork';
   import { audioBadge, audioTooltip, formatAudioSpec } from '../lib/audio-format';
+  import { t } from '../lib/i18n.svelte';
   import { errorMessage } from '../lib/errors';
   import type { SpectrumSource } from '../lib/spectrum-source';
   import { player } from '../stores/player.svelte';
@@ -62,7 +63,7 @@
       <img
         class="np-cover"
         src={artworkUrl(current.artworkId, 512) ?? ''}
-        alt={`《${current.title}》封面`}
+        alt={t('now.np.coverAlt', { title: current.title })}
       />
     {:else}
       <span class="np-cover np-cover-empty"><ListMusic size={64} strokeWidth={1.3} /></span>
@@ -77,12 +78,12 @@
           </span>
         {/if}
       {/if}
-      <h1>{current?.title ?? '未在播放'}</h1>
+      <h1>{current?.title ?? t('shell.player.notPlaying')}</h1>
       {#if current}
         {#if current.album && current.albumId}
           <button
             class="np-line np-album"
-            title={`查看专辑 ${current.album}`}
+            title={t('tracks.viewAlbum', { name: current.album })}
             onclick={() => current?.albumId && nav.go({ kind: 'album', id: current.albumId })}
           >
             {current.album}
@@ -93,16 +94,16 @@
         {#if current.artistId}
           <button
             class="np-line"
-            title={`查看歌手 ${current.artist ?? '未知艺人'}`}
+            title={t('tracks.viewArtist', { name: current.artist ?? t('shell.player.unknownArtist') })}
             onclick={() => current?.artistId && nav.go({ kind: 'artist', id: current.artistId })}
           >
-            {current.artist ?? '未知艺人'}
+            {current.artist ?? t('shell.player.unknownArtist')}
           </button>
         {:else}
-          <p class="np-line">{current.artist ?? '未知艺人'}</p>
+          <p class="np-line">{current.artist ?? t('shell.player.unknownArtist')}</p>
         {/if}
       {:else}
-        <p class="np-line">从推荐页或歌单选择一首歌开始</p>
+        <p class="np-line">{t('now.np.emptyHint')}</p>
       {/if}
     </div>
   </div>

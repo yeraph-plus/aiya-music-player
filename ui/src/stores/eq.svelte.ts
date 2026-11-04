@@ -1,6 +1,7 @@
 import type { EqSettings } from '../lib/ipc/generated';
 import { ipc } from '../lib/ipc/client';
 import { errorMessage } from '../lib/errors';
+import { t, type Msg } from '../lib/i18n.svelte';
 import { notify } from './notify.svelte';
 
 /**
@@ -19,16 +20,19 @@ import { notify } from './notify.svelte';
 
 /** 频段短标签（与 aiya_audio::EQ_BAND_HZ 一一对应） */
 export const EQ_FREQ_LABELS = ['31', '63', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'] as const;
-/** 预设：10 段增益（dB）。命名取主流播放器的常见集合，数值是常识起点不是玄学 */
-export const EQ_PRESETS: Record<string, { label: string; bands: number[] }> = {
-  flat: { label: '平直', bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
-  bass: { label: '重低音', bands: [7, 6, 4, 2, 0, 0, 0, 0, 0, 0] },
-  vocal: { label: '人声', bands: [-2, -1, 0, 2, 4, 4, 3, 1, 0, -1] },
-  treble: { label: '高亮', bands: [0, 0, 0, 0, 0, 1, 2, 4, 6, 7] },
-  pop: { label: '流行', bands: [2, 3, 4, 2, -1, -1, 1, 3, 4, 2] },
-  rock: { label: '摇滚', bands: [5, 4, 2, -1, -2, 0, 2, 4, 5, 4] },
-  jazz: { label: '爵士', bands: [3, 2, 1, 2, -1, -1, 0, 1, 2, 3] },
-  classical: { label: '古典', bands: [0, 0, 0, 0, 0, 0, -1, -1, 0, 2] },
+/**
+ * 预设：10 段增益（dB）。命名取主流播放器的常见集合，数值是常识起点不是玄学。
+ * `label` 存 i18n 键（eq 域），渲染点（EqPanel）经 `t()` 取文案。
+ */
+export const EQ_PRESETS: Record<string, { label: Msg; bands: number[] }> = {
+  flat: { label: 'eq.preset.flat', bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+  bass: { label: 'eq.preset.bass', bands: [7, 6, 4, 2, 0, 0, 0, 0, 0, 0] },
+  vocal: { label: 'eq.preset.vocal', bands: [-2, -1, 0, 2, 4, 4, 3, 1, 0, -1] },
+  treble: { label: 'eq.preset.treble', bands: [0, 0, 0, 0, 0, 1, 2, 4, 6, 7] },
+  pop: { label: 'eq.preset.pop', bands: [2, 3, 4, 2, -1, -1, 1, 3, 4, 2] },
+  rock: { label: 'eq.preset.rock', bands: [5, 4, 2, -1, -2, 0, 2, 4, 5, 4] },
+  jazz: { label: 'eq.preset.jazz', bands: [3, 2, 1, 2, -1, -1, 0, 1, 2, 3] },
+  classical: { label: 'eq.preset.classical', bands: [0, 0, 0, 0, 0, 0, -1, -1, 0, 2] },
 };
 
 function isPreset(bands: readonly number[]): string | null {
@@ -107,7 +111,7 @@ class EqStore {
     } catch (e) {
       // 下发失败回滚显示值（画面对齐引擎真值），并且必须让用户看见：
       // 没有全局 transport 分类层这种机制——那句话引用的是不存在的约定
-      notify.showError(`均衡器设置失败：${errorMessage(e)}`);
+      notify.showError(t('eq.applyFailed', { message: errorMessage(e) }));
     }
   }
 

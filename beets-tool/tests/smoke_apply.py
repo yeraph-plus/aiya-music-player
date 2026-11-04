@@ -160,7 +160,7 @@ events, rc = run_apply([decision("apply_copy", src3, "冒烟C", title_prefix="C�
 applied = [e for e in events if e["type"] == "applied"][0]
 conflicts = [f for f in applied["failed"] if f.get("code") == "conflict"]
 assert len(conflicts) == 3, (applied, conflicts)
-assert all("SENTINEL" not in f["message"] or "目标已存在" in f["message"] for f in conflicts), conflicts
+assert all("SENTINEL" not in f["message"] or "already exists" in f["message"] for f in conflicts), conflicts
 for d in dests:
     with open(d, encoding="utf-8") as f:
         assert f.read() == "SENTINEL-DO-NOT-OVERWRITE", f"哨兵被覆盖: {d}"

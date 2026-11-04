@@ -103,7 +103,7 @@ def preview_import(req_id, paths: list[str], options: dict, gen: int) -> None:
     if bad:
         raise ProtocolError(
             E_INVALID_ARG, "preview",
-            f"searchIds 必须是小写 MusicBrainz Release ID（UUID 带连字符）：{bad[:3]}",
+            f"searchIds must be lowercase MusicBrainz Release IDs (hyphenated UUIDs): {bad[:3]}",
             invalid=bad[:3],
         )
     search_ids = [s.strip() for s in search_ids]
@@ -268,7 +268,7 @@ def apply_import(req_id, decisions: list[dict], resume: bool, gen: int) -> None:
                 if _identity_blank(item):
                     failures.append({
                         "path": p, "code": "blankIdentity",
-                        "message": "合并后标签缺失（标题/专辑/歌手为空），未写入。先补标签或换候选。",
+                        "message": "tags missing after merge (title/album/artist empty), not written. Fill in the tags or pick another candidate first.",
                     })
                     continue
                 item.write()  # 写标签进文件（可抛 ReadError/WriteError）

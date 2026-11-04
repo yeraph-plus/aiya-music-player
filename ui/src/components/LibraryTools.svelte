@@ -6,6 +6,7 @@
   import Progress from './ui/Progress.svelte';
   import Icon from './Icon.svelte';
   import { errorMessage } from '../lib/errors';
+  import { t } from '../lib/i18n.svelte';
   import { history } from '../stores/history.svelte';
   import { library } from '../stores/library.svelte';
   import { scan } from '../stores/scan.svelte';
@@ -110,13 +111,13 @@
           [...library.roots, root],
           withoutPath(library.pausedRoots, root),
         );
-        showNotice('已恢复监听，下次索引时重新纳入该目录');
+        showNotice(t('library.tools.noticeWatchResumed'));
       } else {
         await library.saveRoots(
           withoutPath(library.roots, root),
           [...library.pausedRoots, root],
         );
-        showNotice('已停止监听：曲目保留在库中，下次索引将标记为离线');
+        showNotice(t('library.tools.noticeWatchPaused'));
       }
     } catch (err) {
       rootsError = errorMessage(err);
@@ -157,8 +158,8 @@
       removalCount = null;
       showNotice(
         removed > 0
-          ? `已删除 ${removed} 首曲目并停止监听该目录`
-          : '已移除该目录，曲库中没有它的曲目',
+          ? t('library.tools.noticeRemoved', { n: removed })
+          : t('library.tools.noticeRemovedNoTracks'),
       );
       await scan.afterScan();
     } catch (err) {
@@ -181,7 +182,7 @@
     try {
       const removed = await library.clearLibrary();
       clearConfirm = false;
-      showNotice(`已清空曲库记录，共 ${removed} 首，磁盘文件未动`);
+      showNotice(t('library.tools.noticeCleared', { n: removed }));
       clearing = false;
       await scan.afterScan();
     } catch (err) {
@@ -199,9 +200,13 @@
    * 的区间看到进度条停滞。此处如实报告当前主活动，具体数字由下一行提供。
    */
   function phaseText(phase: string): string {
-    if (phase === 'done') return '已完成';
-    if (phase === 'cancelled') return '已取消';
-    return phase === 'walking' ? '遍历中' : phase === 'importing' ? '入库中' : '解析中';
+    if (phase === 'done') return t('library.tools.phaseDone');
+    if (phase === 'cancelled') return t('library.tools.phaseCancelled');
+    return phase === 'walking'
+      ? t('library.tools.phaseWalking')
+      : phase === 'importing'
+        ? t('library.tools.phaseImporting')
+        : t('library.tools.phaseParsing');
   }
 </script>
 
@@ -209,31 +214,31 @@
   <!-- 单卡片布局：动作按钮位于头部右侧，目录条目与执行状态同卡 -->
   <div class="library-roots">
     <div class="roots-head">
-      <strong>曲库目录</strong>
+      <strong>{t('library.tools.rootsTitle')}</strong>
       <div class="roots-actions">
         <Button size="sm" onclick={() => void addRoot()} disabled={saving || clearing || library.scanning}>
           {#snippet icon()}<FolderOpen size={14} />{/snippet}
-          添加目录
+          {t('library.tools.addFolder')}
         </Button>
         <Button variant="primary" size="sm" onclick={() => void scan.start()} disabled={library.scanning || clearing}>
           {#snippet icon()}<ScanSearch size={14} />{/snippet}
-          {library.scanning ? '索引中…' : '立即索引'}
+          {library.scanning ? t('library.tools.indexing') : t('library.tools.indexNow')}
         </Button>
         {#if stats && stats.tracks > 0}
           <Button variant="danger" size="sm" onclick={() => (clearConfirm = true)} disabled={saving || clearing || library.scanning}>
-            清空曲库
+            {t('library.tools.clearLibrary')}
           </Button>
         {/if}
         <!-- 清空播放历史：与「清空曲库」同属清除一类记录的动作，排在同一行。
              不设确认——播放历史不承载其他数据，提示区即时反馈，与首页同语义 -->
         <Button size="sm" onclick={() => void history.clear()} disabled={clearing}>
-          清空播放历史
+          {t('library.tools.clearHistory')}
         </Button>
       </div>
     </div>
 
     {#if displayRoots.length === 0}
-      <div class="dim roots-empty">还没有目录，点「添加目录」选择音乐文件夹建立索引</div>
+      <div class="dim roots-empty">{t('library.tools.rootsEmpty')}</div>
     {:else}
       <ul class="root-list">
         {#each displayRoots as root (root)}
@@ -250,8 +255,8 @@
               class="root-watch"
               class:off={!watched}
               aria-pressed={watched}
-              aria-label={`监听目录 ${root}`}
-              title={watched ? '监听中，点击停止监听' : '已停止监听，点击恢复，曲目保留在库中'}
+              aria-label={t('library.tools.watchAria', { path: root })}
+              title={watched ? t('library.tools.watchOnTip') : t('library.tools.watchOffTip')}
               disabled={saving || clearing}
               onclick={() => void setWatched(root, !watched)}
             >
@@ -273,8 +278,8 @@
                   {...props}
                   type="button"
                   class="root-remove"
-                  aria-label={`删除目录 ${root}`}
-                  title="删除该目录及其曲目索引，磁盘文件不动"
+                  aria-label={t('library.tools.removeAria', { path: root })}
+                  title={t('library.tools.removeTip')}
                   disabled={saving || clearing}
                 >
                   <Icon name="trash" size={13} />
@@ -283,11 +288,11 @@
               <!-- role="alert"：气泡出现即播报影响面；外点/Esc 关闭由 bits-ui 承担 -->
               <div class="roots-pop" role="alert">
                 <span class="roots-pop-text">
-                  将删除 <b>{root}</b> 的曲目索引并停止监听，磁盘文件不动
+                  {t('library.tools.removeBubblePrefix')} <b>{root}</b> {t('library.tools.removeBubbleTail')}
                   {#if removalCount === null}
-                    ，正在统计曲目…
+                    {t('library.tools.removeBubbleCounting')}
                   {:else}
-                    ，涉及 <b>{removalCount}</b> 首曲目
+                    {t('library.tools.removeBubbleCountPrefix')} <b>{removalCount}</b> {t('library.tools.removeBubbleCountTail')}
                   {/if}
                 </span>
                 <div class="roots-pop-actions">
@@ -297,9 +302,9 @@
                     disabled={saving || removalCount === null}
                     onclick={() => void confirmRemove(root)}
                   >
-                    确认删除
+                    {t('library.tools.confirmRemove')}
                   </Button>
-                  <Button variant="link" onclick={() => (openRemoval = null)}>取消</Button>
+                  <Button variant="link" onclick={() => (openRemoval = null)}>{t('common.cancel')}</Button>
                 </div>
               </div>
             </Popover>
@@ -331,7 +336,7 @@
         <div
           class="roots-confirm"
           role="group"
-          aria-label="清空曲库确认"
+          aria-label={t('library.tools.clearConfirmLabel')}
           onkeydown={(event) => {
             if (event.key === 'Escape') {
               event.stopPropagation();
@@ -340,14 +345,14 @@
           }}
         >
           <span class="roots-confirm-text" role="alert">
-            将删除全部 <b>{stats?.tracks ?? 0}</b> 首曲目的索引记录，歌单内容、播放队列与播放历史一并清空，
-            歌单本身保留，<b>磁盘文件不动</b>，此操作不可撤销
+            {t('library.tools.clearConfirmHead')} <b>{stats?.tracks ?? 0}</b> {t('library.tools.clearConfirmMid')}
+            {t('library.tools.clearConfirmKept')}<b>{t('library.tools.clearConfirmFiles')}</b>{t('library.tools.clearConfirmTail')}
           </span>
           <div class="roots-confirm-actions">
             <Button size="sm" variant="danger" onclick={() => void doClear()} disabled={clearing}>
-              确认清空
+              {t('library.tools.confirmClear')}
             </Button>
-            <Button variant="link" onclick={() => (clearConfirm = false)} disabled={clearing}>取消</Button>
+            <Button variant="link" onclick={() => (clearConfirm = false)} disabled={clearing}>{t('common.cancel')}</Button>
           </div>
         </div>
       {/if}
@@ -356,32 +361,32 @@
         {@const progress = library.scan}
         <div class="status-line">
           <span class="task-name">
-            <RefreshCw size={13} class="spinning" /> 曲库索引 · {phaseText(progress.phase)}
+            <RefreshCw size={13} class="spinning" /> {t('library.tools.taskName')} · {phaseText(progress.phase)}
           </span>
-          <Button variant="link" onclick={() => scan.cancel()}>取消任务</Button>
+          <Button variant="link" onclick={() => scan.cancel()}>{t('library.tools.cancelTask')}</Button>
         </div>
-        <Progress value={progress.total ? Math.min(100, Math.round((progress.scanned / progress.total) * 100)) : 8} label="曲库索引进度" size="md" />
+        <Progress value={progress.total ? Math.min(100, Math.round((progress.scanned / progress.total) * 100)) : 8} label={t('library.tools.progressLabel')} size="md" />
         <div class="task-detail">
           {#if progress.phase === 'walking'}
-            正在遍历目录…
+            {t('library.tools.walkingLine')}
           {:else}
-            {progress.scanned}/{progress.total ?? '?'} 已入库 · 解析 {progress.parsed}{#if progress.parsed > progress.scanned}<span class="dim">
-              · 排队 {progress.parsed - progress.scanned}</span>{/if} · 新增 {progress.imported} · 更新 {progress.updated} · 跳过 {progress.skipped} · 失败 {progress.failed}
+            {t('library.tools.progressMain', { scanned: progress.scanned, total: progress.total ?? '?', parsed: progress.parsed })}{#if progress.parsed > progress.scanned}<span class="dim">
+              {t('library.tools.progressQueued', { n: progress.parsed - progress.scanned })}</span>{/if} {t('library.tools.progressTail', { imported: progress.imported, updated: progress.updated, skipped: progress.skipped, failed: progress.failed })}
           {/if}
         </div>
       {:else if library.scan}
         {@const progress = library.scan}
         <div class="task-detail">
           {#if progress.phase === 'done'}
-            上次索引：新增 {progress.imported} · 更新 {progress.updated} · 离线 {progress.missing} · 跳过 {progress.skipped}{#if progress.failed} · <span class="danger">失败 {progress.failed}</span>{/if} · {Math.round(progress.elapsedMs / 100) / 10} 秒
+            {t('library.tools.lastIndexMain', { imported: progress.imported, updated: progress.updated, missing: progress.missing, skipped: progress.skipped })}{#if progress.failed} · <span class="danger">{t('library.tools.lastIndexFailed', { failed: progress.failed })}</span>{/if} {t('library.tools.lastIndexDuration', { s: Math.round(progress.elapsedMs / 100) / 10 })}
           {:else if progress.phase === 'cancelled'}
-            上次索引已取消，已完成部分保留
+            {t('library.tools.lastIndexCancelled')}
           {:else}
-            上次索引异常退出：{progress.phase}
+            {t('library.tools.lastIndexAborted', { phase: progress.phase })}
           {/if}
         </div>
       {:else}
-        <div class="task-detail dim">还没有索引记录</div>
+        <div class="task-detail dim">{t('library.tools.noIndexRecord')}</div>
       {/if}
     </div>
   </div>

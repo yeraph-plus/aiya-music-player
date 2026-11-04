@@ -2,6 +2,7 @@
   import type { Snippet } from 'svelte';
   import { Dialog } from 'bits-ui';
   import { X } from '@lucide/svelte';
+  import { t } from '../../lib/i18n.svelte';
   import IconButton from './IconButton.svelte';
 
   /**
@@ -63,7 +64,7 @@
       {#if title}
         <header class="k-dlg-head">
           <Dialog.Title class="k-dlg-title">{title}</Dialog.Title>
-          <IconButton label="关闭" size="sm" onclick={onclose}>
+          <IconButton label={t('common.close')} size="sm" onclick={onclose}>
             <X size={14} />
           </IconButton>
         </header>

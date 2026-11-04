@@ -1,5 +1,6 @@
 <script lang="ts">
   import Button from './Button.svelte';
+  import { t } from '../../lib/i18n.svelte';
   /**
    * 行内错误条（kit 第 16 件， 零件表 20）。
    *
@@ -27,7 +28,7 @@
     <Button variant="link" onclick={action.onclick}>{action.label}</Button>
   {/if}
   {#if ondismiss}
-    <Button variant="link" onclick={ondismiss}>关闭</Button>
+    <Button variant="link" onclick={ondismiss}>{t('common.close')}</Button>
   {/if}
 </div>
 

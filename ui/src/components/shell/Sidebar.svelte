@@ -11,6 +11,7 @@
     Settings,
   } from '@lucide/svelte';
   import { artworkUrl } from '../../lib/artwork';
+  import { t } from '../../lib/i18n.svelte';
   import { nav } from '../../stores/nav.svelte';
   import { overlay } from '../../stores/overlay.svelte';
   import { playlists } from '../../stores/playlists.svelte';
@@ -39,28 +40,28 @@
    */
 
   const PAGES = [
-    { key: 'home', label: '推荐', icon: House, go: () => nav.go({ kind: 'dashboard' }) },
+    { key: 'home', labelKey: 'shell.nav.home', icon: House, go: () => nav.go({ kind: 'dashboard' }) },
     {
       key: 'library',
-      label: '曲库',
+      labelKey: 'shell.nav.library',
       icon: Library,
       go: () => nav.go({ kind: 'builtin', view: 'library' }),
     },
     {
       key: 'albums',
-      label: '专辑',
+      labelKey: 'shell.nav.albums',
       icon: Disc,
       go: () => nav.go({ kind: 'browse', view: 'albums' }),
     },
     {
       key: 'artists',
-      label: '艺人',
+      labelKey: 'shell.nav.artists',
       icon: Mic2,
       go: () => nav.go({ kind: 'browse', view: 'artists' }),
     },
     {
       key: 'live',
-      label: '直播',
+      labelKey: 'shell.nav.live',
       icon: Radio,
       go: () => nav.go({ kind: 'page', page: 'live' }),
     },
@@ -70,13 +71,13 @@
   const FOOTER_PAGES = [
     {
       key: 'beets',
-      label: 'Beets',
+      labelKey: 'shell.nav.beets',
       icon: Disc3,
       go: () => nav.go({ kind: 'page', page: 'beets' }),
     },
     {
       key: 'settings',
-      label: '设置',
+      labelKey: 'shell.nav.settings',
       icon: Settings,
       go: () => nav.go({ kind: 'page', page: 'settings' }),
     },
@@ -158,7 +159,7 @@
 </script>
 
 <aside class="sidebar">
-  <nav class="nav" aria-label="主导航">
+  <nav class="nav" aria-label={t('shell.sidebar.nav')}>
     {#each PAGES as item (item.key)}
       <button
         class="nav-item"
@@ -167,16 +168,16 @@
         onclick={item.go}
       >
         <item.icon size={16} strokeWidth={1.8} />
-        <span>{item.label}</span>
+        <span>{t(item.labelKey)}</span>
       </button>
     {/each}
   </nav>
 
   <div class="side-section">
     <div class="side-head">
-      <span>歌单</span>
+      <span>{t('shell.sidebar.playlists')}</span>
       <IconButton
-        label="新建歌单"
+        label={t('shell.sidebar.newPlaylist')}
         size="sm"
         onclick={() => (overlay.dialog = { kind: 'playlistEdit' })}
       >
@@ -198,7 +199,7 @@
           class:drop-above={dropAt === i}
           class:drop-below={dropAt === i + 1}
           aria-current={playlistActive(playlist.id) ? 'page' : undefined}
-          title={`${playlist.name} · ${playlist.trackCount} 首`}
+          title={t('shell.sidebar.playlistTip', { name: playlist.name, n: playlist.trackCount })}
           draggable="true"
           onclick={() => nav.go({ kind: 'playlist', id: playlist.id })}
           ondragstart={(event) => onItemDragStart(event, i)}
@@ -216,14 +217,14 @@
           />
           <span class="pl-name">{playlist.name}</span>
           {#if playlist.kind === 'smart'}
-            <span class="pl-badge" title="动态歌单：按规则收录曲目，「刷新」追加新命中">
+            <span class="pl-badge" title={t('shell.sidebar.smartBadgeTip')}>
               <Activity size={10} strokeWidth={2.4} aria-hidden="true" />
             </span>
           {/if}
           <span class="pl-count">{playlist.trackCount}</span>
         </button>
       {:else}
-        <p class="side-empty">还没有歌单</p>
+        <p class="side-empty">{t('shell.sidebar.empty')}</p>
       {/each}
     </div>
   </div>
@@ -239,7 +240,7 @@
         onclick={item.go}
       >
         <item.icon size={16} strokeWidth={1.8} />
-        <span>{item.label}</span>
+        <span>{t(item.labelKey)}</span>
       </button>
     {/each}
   </div>

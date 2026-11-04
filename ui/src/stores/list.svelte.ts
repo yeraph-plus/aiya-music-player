@@ -1,5 +1,6 @@
 import { parseTrackQuery, type TrackQuery, type TrackSort } from '../lib/query';
 import { errorMessage } from '../lib/errors';
+import { t } from '../lib/i18n.svelte';
 import {
   DEFAULT_TIME_FILTER,
   timeFilterActive,
@@ -226,7 +227,7 @@ class ListStore {
       notify.showError(errorMessage(err));
       return;
     }
-    notify.showToast(`已移出曲库 ${removed} 首`);
+    notify.showToast(t('list.removed', { n: removed }));
     selection.clear();
     await library.loadStats();
     await library.loadPlaylists();

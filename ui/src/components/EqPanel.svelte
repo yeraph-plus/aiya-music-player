@@ -5,6 +5,7 @@
   import Menu from './ui/Menu.svelte';
   import Slider from './ui/Slider.svelte';
   import Switch from './ui/Switch.svelte';
+  import { t } from '../lib/i18n.svelte';
   import { EQ_FREQ_LABELS, EQ_PRESETS, eq } from '../stores/eq.svelte';
 
   /**
@@ -27,7 +28,7 @@
 
   const presetItems = $derived(
     Object.entries(EQ_PRESETS).map(([key, preset]) => ({
-      label: preset.label,
+      label: t(preset.label),
       // 选中标记走 MenuItem.selected（组件画勾）——往 label 里拼 '✓ ' 会被读屏念出来
       selected: eq.presetKey === key,
       action: () => eq.applyPreset(key),
@@ -46,20 +47,20 @@
   }
 </script>
 
-<section class="eq-panel" aria-label="均衡器">
+<section class="eq-panel" aria-label={t('eq.title')}>
   <!-- 抽屉头部：标题 + 开关 -->
   <header>
-    <strong>均衡器</strong>
-    <span class="dim">{eq.enabled ? '已开启' : '已关闭'}</span>
-    <Switch checked={eq.enabled} onchange={(v) => eq.toggle(v)} label="启用均衡器" />
+    <strong>{t('eq.title')}</strong>
+    <span class="dim">{eq.enabled ? t('eq.on') : t('eq.off')}</span>
+    <Switch checked={eq.enabled} onchange={(v) => eq.toggle(v)} label={t('eq.enableToggle')} />
   </header>
 
   <div class="eq-body">
     <!-- 小标题分区（替代内嵌卡片）：与搜索页「曲目」h2 同款档位 -->
     <section class="eq-section">
       <div class="sec-head">
-        <h2>预设</h2>
-        <IconButton label="重置曲线" size="sm" onclick={() => eq.reset()}>
+        <h2>{t('eq.presets')}</h2>
+        <IconButton label={t('eq.resetCurve')} size="sm" onclick={() => eq.reset()}>
           <RotateCcw size={13} />
         </IconButton>
       </div>
@@ -67,7 +68,7 @@
         class="preset-btn"
         onclick={(event) => (presetMenu = { x: event.clientX, y: event.clientY })}
       >
-        <span>{eq.presetKey ? EQ_PRESETS[eq.presetKey].label : '自定义'}</span>
+        <span>{eq.presetKey ? t(EQ_PRESETS[eq.presetKey].label) : t('eq.custom')}</span>
         <ChevronDown size={13} />
       </button>
     </section>
@@ -78,7 +79,7 @@
 
     <!-- 10 段横排，居中留呼吸；宽度预算 10×28 + 9×6 = 334 ≤ 354（内容宽） -->
     <section class="eq-section">
-      <h2>频段</h2>
+      <h2>{t('eq.bands')}</h2>
       <div class="eq-bands">
         {#each eq.bands as gain, i (i)}
           <div class="eq-band">
@@ -91,7 +92,7 @@
                 max={12}
                 step={0.5}
                 disabled={!eq.enabled}
-                label={`频段 ${EQ_FREQ_LABELS[i]} Hz 增益`}
+                label={t('eq.bandGainAria', { freq: EQ_FREQ_LABELS[i] })}
                 oninput={(v) => eq.setBand(i, v)}
               />
             </div>
@@ -104,7 +105,7 @@
     <!-- 增益：三旋钮三角布局。前置增益居上，低音与高音分居下两角，按住横向
          拖动。三者均为宏观量，集中为一块以贴近实体音响的操作形态 -->
     <section class="eq-section">
-      <h2>增益</h2>
+      <h2>{t('eq.gain')}</h2>
       <div class="knob-tri">
         <div class="knob-unit pos-top">
           <Knob
@@ -113,11 +114,11 @@
             max={12}
             step={0.5}
             disabled={!eq.enabled}
-            label="前置增益"
+            label={t('eq.pregain')}
             oninput={(v) => eq.setPregain(v)}
           />
           <span class="eq-val knob-val {valClass(eq.pregain)}">{fmtGain(eq.pregain)} dB</span>
-          <span class="knob-name">前置</span>
+          <span class="knob-name">{t('eq.pregainShort')}</span>
         </div>
         <div class="knob-unit pos-left">
           <Knob
@@ -126,11 +127,11 @@
             max={12}
             step={0.5}
             disabled={!eq.enabled}
-            label="低音增益"
+            label={t('eq.bassGain')}
             oninput={(v) => eq.setBass(v)}
           />
           <span class="eq-val knob-val {valClass(eq.bass)}">{fmtGain(eq.bass)} dB</span>
-          <span class="knob-name">低音</span>
+          <span class="knob-name">{t('eq.bassShort')}</span>
         </div>
         <div class="knob-unit pos-right">
           <Knob
@@ -139,11 +140,11 @@
             max={12}
             step={0.5}
             disabled={!eq.enabled}
-            label="高音增益"
+            label={t('eq.trebleGain')}
             oninput={(v) => eq.setTreble(v)}
           />
           <span class="eq-val knob-val {valClass(eq.treble)}">{fmtGain(eq.treble)} dB</span>
-          <span class="knob-name">高音</span>
+          <span class="knob-name">{t('eq.trebleShort')}</span>
         </div>
       </div>
     </section>

@@ -126,4 +126,4 @@ def dest_conflict(item, src: str) -> str | None:
             return "same"  # 库目录就是来源目录：无需移动
     except OSError:
         pass
-    return f"目标已存在：{dest.decode('utf-8', 'replace')}"
+    return f"destination already exists: {dest.decode('utf-8', 'replace')}"

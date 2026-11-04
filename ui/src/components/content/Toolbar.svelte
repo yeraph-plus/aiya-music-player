@@ -2,6 +2,7 @@
   import type { Snippet } from 'svelte';
   import Chip from '../ui/Chip.svelte';
   import TextTabs from '../ui/TextTabs.svelte';
+  import { t } from '../../lib/i18n.svelte';
 
   /**
    * 页内工具条零件：tab 组、筛选 chip、右侧次级动作。
@@ -49,7 +50,7 @@
         items={tabs}
         value={active ?? ''}
         onchange={(id) => ontab?.(id)}
-        label="视图切换"
+        label={t('common.viewTabs')}
         variant="pill"
       />
     {/if}

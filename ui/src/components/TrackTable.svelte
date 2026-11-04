@@ -17,6 +17,7 @@
   import type { TrackRow } from '../lib/ipc';
   import { artworkUrl } from '../lib/artwork';
   import { formatDateTime, formatDay, formatPlays, formatTime } from '../lib/format';
+  import { t } from '../lib/i18n.svelte';
   import { player } from '../stores/player.svelte';
   import Cover from './ui/Cover.svelte';
   import EmptyState from './ui/EmptyState.svelte';
@@ -67,18 +68,18 @@
     lastPlayed: '80px',
   };
 
-  /** 列 → 表头文案。cover 列无表头 */
-  const LABEL: Record<Column, string> = {
+  /** 列 → 表头文案（$derived：语言切换时跟随）。cover 列无表头 */
+  const LABEL: Record<Column, string> = $derived({
     index: '#',
     cover: '',
-    title: '标题',
-    artist: '歌手',
-    album: '专辑',
-    plays: '次数',
-    duration: '时长',
-    added: '入库',
-    lastPlayed: '最近播放',
-  };
+    title: t('tracks.colTitle'),
+    artist: t('tracks.colArtist'),
+    album: t('tracks.colAlbum'),
+    plays: t('tracks.colPlays'),
+    duration: t('tracks.colDuration'),
+    added: t('tracks.colAdded'),
+    lastPlayed: t('tracks.colLastPlayed'),
+  });
 
   const isValue = (col: Column): boolean =>
   col === 'plays' || col === 'duration' || col === 'added' || col === 'lastPlayed';
@@ -100,7 +101,7 @@
   const gridStyle = $derived(columns.map((col) => GRID[col]).join(' '));
 </script>
 
-<div class="list-shell no-batch preview-list" role="table" aria-label="曲目列表">
+<div class="list-shell no-batch preview-list" role="table" aria-label={t('tracks.tableLabel')}>
   <div class="grid-head tt-head" role="row" style:grid-template-columns={gridStyle}>
     {#each columns as col (col)}
       <span class:idx={col === 'index'} class:num={isValue(col)} role="columnheader">{LABEL[col]}</span>
@@ -134,7 +135,7 @@
         {#if col === 'index'}
           <span class="idx">
             {#if currentId === track.id}
-              <span class="bars" class:animated={playing} aria-label="正在播放">
+              <span class="bars" class:animated={playing} aria-label={t('tracks.nowPlaying')}>
                 <i></i><i></i><i></i>
               </span>
             {:else}
@@ -151,7 +152,7 @@
             <button
               class="play-btn"
               tabindex="-1"
-              aria-label={`播放 ${track.title}`}
+              aria-label={t('tracks.playTrack', { title: track.title })}
               onclick={() => onplay(index)}
             >
               <Play size={13} />
@@ -164,7 +165,7 @@
             {#if track.artistId && track.artist && onopenartist}
               <button
                 class="link-cell"
-                title={`查看歌手 ${track.artist}`}
+                title={t('tracks.viewArtist', { name: track.artist })}
                 onclick={(event) => {
                   event.stopPropagation();
                   onopenartist(track.artistId!);
@@ -173,7 +174,7 @@
                 {track.artist}
               </button>
             {:else}
-              <span title={track.artist ?? ''}>{track.artist ?? '未知艺人'}</span>
+              <span title={track.artist ?? ''}>{track.artist ?? t('shell.player.unknownArtist')}</span>
             {/if}
           </span>
         {:else if col === 'album'}
@@ -181,7 +182,7 @@
             {#if track.albumId && track.album && onopenalbum}
               <button
                 class="link-cell"
-                title={`查看专辑 ${track.album}`}
+                title={t('tracks.viewAlbum', { name: track.album })}
                 onclick={(event) => {
                   event.stopPropagation();
                   onopenalbum(track.albumId!);

@@ -10,15 +10,15 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ToolError {
     /// 进程起不来（路径错、无执行权限、被安全软件拦）。
-    #[error("无法启动外部工具 {program}: {message}")]
+    #[error("failed to start external tool {program}: {message}")]
     Spawn { program: String, message: String },
 
     /// 工具在超时内没有任何应答。调用方负责收尸，这里只报事实。
-    #[error("外部工具在 {timeout:?} 内没有响应")]
+    #[error("external tool did not respond within {timeout:?}")]
     Timeout { timeout: Duration },
 
     /// 收到的不是合法 NDJSON 信封（协议漂移或输出被污染）。
-    #[error("协议解析失败：{0}")]
+    #[error("protocol parse failed: {0}")]
     Protocol(String),
 
     /// 工具明确回了 `ok: false`。`code` / `stage` 由工具定义，宿主不解释，
@@ -31,7 +31,7 @@ pub enum ToolError {
     },
 
     /// 已有会话在跑（会话槽被占）。并发保护的一部分，不算异常。
-    #[error("已有任务在执行（可先取消）")]
+    #[error("a task is already running (cancel it first)")]
     Busy,
 
     /// 进程管道等 IO 层失败。

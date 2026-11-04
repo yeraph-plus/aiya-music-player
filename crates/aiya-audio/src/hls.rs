@@ -103,7 +103,7 @@ fn read_local(
     let file = std::fs::File::open(path).map_err(|e| {
         AudioError::Io(std::io::Error::new(
             e.kind(),
-            format!("读本地{what}失败 {}：{e}", path.display()),
+            format!("failed to read local {what} {}: {e}", path.display()),
         ))
     })?;
     read_capped(file, url, cap, what)
@@ -130,10 +130,10 @@ fn read_capped(reader: impl Read, url: &str, cap: u64, what: &str) -> Result<Vec
     reader
         .take(cap + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| AudioError::Io(std::io::Error::other(format!("读响应失败 {url}: {e}"))))?;
+        .map_err(|e| AudioError::Io(std::io::Error::other(format!("failed to read response body {url}: {e}"))))?;
     if bytes.len() as u64 > cap {
         return Err(AudioError::Decode(format!(
-            "{what}超过字节上限 {cap} B（{url}），疑似对端失控，按协议错误拒绝"
+            "{what} exceeds the byte limit {cap} B ({url}); refusing as a protocol error"
         )));
     }
     Ok(bytes)
@@ -142,10 +142,10 @@ fn read_capped(reader: impl Read, url: &str, cap: u64, what: &str) -> Result<Vec
 impl Fetcher for HybridFetcher {
     fn fetch_text(&mut self, url: &str) -> Result<String, AudioError> {
         let bytes = match file_url_path(url) {
-            Some(path) => read_local(&path, url, PLAYLIST_MAX_BYTES, "播放列表")?,
+            Some(path) => read_local(&path, url, PLAYLIST_MAX_BYTES, "playlist")?,
             None => {
                 let body = self.agent.get(url).call().map_err(|e| http_err(url, e))?;
-                read_capped(body.into_reader(), url, PLAYLIST_MAX_BYTES, "播放列表")?
+                read_capped(body.into_reader(), url, PLAYLIST_MAX_BYTES, "playlist")?
             }
         };
         // m3u8 规范要求 UTF-8；坏字节按 lossy 兜底（比整条流报错友好）
@@ -154,10 +154,10 @@ impl Fetcher for HybridFetcher {
 
     fn fetch_bytes(&mut self, url: &str) -> Result<Vec<u8>, AudioError> {
         match file_url_path(url) {
-            Some(path) => read_local(&path, url, SEGMENT_MAX_BYTES, "媒体段"),
+            Some(path) => read_local(&path, url, SEGMENT_MAX_BYTES, "media segment"),
             None => {
                 let body = self.agent.get(url).call().map_err(|e| http_err(url, e))?;
-                read_capped(body.into_reader(), url, SEGMENT_MAX_BYTES, "媒体段")
+                read_capped(body.into_reader(), url, SEGMENT_MAX_BYTES, "media segment")
             }
         }
     }
@@ -213,7 +213,7 @@ fn parse_media_playlist(text: &str, base: &Url) -> Result<ParsedMedia, AudioErro
             let dur_str = rest.split(',').next().unwrap_or("").trim();
             let secs: f64 = dur_str
                 .parse()
-                .map_err(|_| AudioError::Decode(format!("EXTINF 时长不是数字：{dur_str:?}")))?;
+                .map_err(|_| AudioError::Decode(format!("EXTINF duration is not a number: {dur_str:?}")))?;
             pending_duration_ms = Some((secs.max(0.0) * 1000.0).round() as u64);
             continue;
         }
@@ -237,14 +237,15 @@ fn parse_media_playlist(text: &str, base: &Url) -> Result<ParsedMedia, AudioErro
                 .unwrap_or("UNKNOWN");
             if !method.eq_ignore_ascii_case("NONE") {
                 return Err(AudioError::Unsupported(format!(
-                    "加密 HLS 不支持（METHOD={method}）"
+                    "encrypted HLS is not supported (METHOD={method})"
                 )));
             }
             continue;
         }
         if line.starts_with("#EXT-X-MAP:") {
             return Err(AudioError::Unsupported(
-                "fMP4 初始化段（EXT-X-MAP）不支持：本播放器走 ADTS AAC 路线".into(),
+                "fMP4 init segments (EXT-X-MAP) are not supported: this player uses the ADTS AAC route"
+                    .into(),
             ));
         }
         if line.starts_with('#') {
@@ -257,7 +258,7 @@ fn parse_media_playlist(text: &str, base: &Url) -> Result<ParsedMedia, AudioErro
         // 判定推迟到打开段时的内容嗅探，报错时机才和真实原因对齐。
         let resolved = base
             .join(line)
-            .map_err(|e| AudioError::Decode(format!("段地址解析失败 {line:?}: {e}")))?
+            .map_err(|e| AudioError::Decode(format!("failed to resolve segment URI {line:?}: {e}")))?
             .to_string();
         let index = segments.len() as u64;
         segments.push(RawSegment {
@@ -530,7 +531,10 @@ impl HlsStream {
     /// 完全同一套逻辑，所以本地 m3u8 能当端到端验收的替身（不出网）。
     pub fn new_from_local(path: &std::path::Path) -> Result<Self, AudioError> {
         let url = Url::from_file_path(path).map_err(|()| {
-            AudioError::Unsupported(format!("本地播放列表路径无法解析：{}", path.display()))
+            AudioError::Unsupported(format!(
+                "failed to resolve local playlist path: {}",
+                path.display()
+            ))
         })?;
         Self::new(url.as_str())
     }
@@ -549,17 +553,20 @@ impl HlsStream {
         // STREAM-INF，二跳无从发生）
         if let Some(variant) = extract_master_variant(&text) {
             let resolved = Url::parse(url)
-                .map_err(|e| AudioError::Decode(format!("playlist 地址无效 {url:?}: {e}")))?
+                .map_err(|e| AudioError::Decode(format!("invalid playlist URL {url:?}: {e}")))?
                 .join(&variant)
-                .map_err(|e| AudioError::Decode(format!("变体地址解析失败 {variant:?}: {e}")))?
+                .map_err(|e| {
+                    AudioError::Decode(format!("failed to resolve variant URL {variant:?}: {e}"))
+                })?
                 .to_string();
             tracing::info!("HLS master playlist → 跟进第一个变体：{resolved}");
             playlist_url = resolved;
             text = fetcher.fetch_text(&playlist_url)?;
         }
 
-        let base = Url::parse(&playlist_url)
-            .map_err(|e| AudioError::Decode(format!("playlist 地址无效 {playlist_url:?}：{e}")))?;
+        let base = Url::parse(&playlist_url).map_err(|e| {
+            AudioError::Decode(format!("invalid playlist URL {playlist_url:?}: {e}"))
+        })?;
         let parsed = parse_media_playlist(&text, &base)?;
 
         let kind = if parsed.endlist {
@@ -583,7 +590,7 @@ impl HlsStream {
         // 立即打开第一段：engine 拿到 DecodedStream 就要读 sample_rate/channels
         let first = pending
             .pop_front()
-            .ok_or_else(|| AudioError::Decode("HLS playlist 里没有任何段".to_string()))?;
+            .ok_or_else(|| AudioError::Decode("HLS playlist has no segments".to_string()))?;
         played.insert(first.uri.clone());
         // 打开首段的同时就把第二段排进预取队列（首段本身就快，这里主要是
         // 让"打开"到"播到段尾"之间有一段完整的时间窗给下载用）
@@ -675,8 +682,9 @@ impl HlsStream {
         };
         // 段格式分流：TS 剥出 ES 字节 + 封装种类，其余按原生 ADTS 直接 probe
         let (bytes, extent) = if ts::is_ts(&bytes) {
-            let (es, kind) = ts::strip(&bytes, ts)
-                .map_err(|e| AudioError::Decode(format!("HLS 段 {}：{e}", seg.uri)))?;
+            let (es, kind) = ts::strip(&bytes, ts).map_err(|e| {
+                AudioError::Decode(format!("failed to strip HLS segment {}: {e}", seg.uri))
+            })?;
             (es, kind.hint_ext())
         } else {
             (bytes, "aac")
@@ -688,11 +696,11 @@ impl HlsStream {
             &hint,
             DecodeBackend::Symphonia,
         )
-        .map_err(|e| AudioError::Decode(format!("HLS 段解不开（{}）：{e}", seg.uri)))?;
+        .map_err(|e| AudioError::Decode(format!("failed to decode HLS segment ({}): {e}", seg.uri)))?;
         if let Some((rate, ch)) = expected {
             if stream.sample_rate() != rate || stream.channels() != ch {
                 return Err(AudioError::Decode(format!(
-                    "HLS 流参数中途变化：{}Hz×{} → {}Hz×{}（{}）",
+                    "HLS stream parameters changed mid-flight: {}Hz×{} → {}Hz×{} ({})",
                     rate,
                     ch,
                     stream.sample_rate(),
@@ -731,7 +739,9 @@ impl HlsStream {
                 }
             }
         }
-        Err(last.unwrap_or_else(|| AudioError::Io(std::io::Error::other("fetch 重试窗口耗尽"))))
+        Err(last.unwrap_or_else(|| {
+            AudioError::Io(std::io::Error::other("fetch retry window exhausted"))
+        }))
     }
 
     /// live 轮询：重新拉 playlist，把没播过的新段追加到队尾。
@@ -739,7 +749,7 @@ impl HlsStream {
     fn refresh(&mut self) -> Result<bool, AudioError> {
         let text = self.fetcher.fetch_text(&self.playlist_url)?;
         let base = Url::parse(&self.playlist_url).map_err(|e| {
-            AudioError::Decode(format!("playlist 地址无效 {:?}: {e}", self.playlist_url))
+            AudioError::Decode(format!("invalid playlist URL {:?}: {e}", self.playlist_url))
         })?;
         let parsed = parse_media_playlist(&text, &base)?;
         self.target_duration_ms = parsed.target_duration_ms;
@@ -794,7 +804,7 @@ impl HlsStream {
         let elapsed = self.outage_elapsed();
         if elapsed >= OUTAGE_BUDGET {
             return Err(AudioError::Io(std::io::Error::other(format!(
-                "HLS 流中断：{} 秒内拉取一直失败（{}）",
+                "live stream interrupted: fetches kept failing for {} s ({})",
                 OUTAGE_BUDGET.as_secs(),
                 self.playlist_url
             ))));
@@ -904,7 +914,7 @@ impl HlsStream {
                                     if self.stall_elapsed() >= self.stall_budget() {
                                         return Err(AudioError::Io(std::io::Error::other(
                                             format!(
-                                                "HLS 直播流已停止更新：{} 秒没有新段（{}）",
+                                                "live stream stopped updating: {} s without new segments ({})",
                                                 self.stall_budget().as_secs(),
                                                 self.playlist_url
                                             ),
@@ -1336,7 +1346,7 @@ mod tests {
             }
         }
         let e = err.expect("预算耗尽必须最终报错");
-        assert!(e.to_string().contains("流中断"), "报错要说清是流中断：{e}");
+        assert!(e.to_string().contains("interrupted"), "报错要说清是流中断：{e}");
         assert!(
             sleeps.load(Ordering::Relaxed) >= OUTAGE_BUDGET.as_millis() as u64 / 2,
             "退避必须真的发生（且不超过预算）：{}ms",
@@ -1450,7 +1460,7 @@ mod tests {
         s.current = None;
         let err = s.next_packet().unwrap_err();
         assert!(
-            err.to_string().contains("中途变化"),
+            err.to_string().contains("mid-flight"),
             "参数变化要说清：{err}"
         );
     }
@@ -1503,7 +1513,7 @@ mod tests {
     fn empty_playlist_is_error_on_open() {
         let fetcher = MockFetcher::new().with_text(BASE, &playlist("#EXT-X-ENDLIST"));
         let err = try_open(fetcher).unwrap_err();
-        assert!(err.to_string().contains("没有任何段"), "{err}");
+        assert!(err.to_string().contains("no segments"), "{err}");
     }
 
     /// 本地 m3u8（docs/52 §4）：真读盘、真走 `file:` URL、相对段地址。
@@ -1619,7 +1629,7 @@ mod tests {
             }
         }
         let e = err.expect("停滞的直播流必须报错而不是永远轮询");
-        assert!(e.to_string().contains("停止更新"), "报错要说清是停滞：{e}");
+        assert!(e.to_string().contains("stopped updating"), "报错要说清是停滞：{e}");
     }
 
     /* 审查修复回归 */
@@ -1638,7 +1648,7 @@ mod tests {
     fn oversized_bodies_are_rejected_by_cap() {
         let over = vec![0u8; (SEGMENT_MAX_BYTES + 1) as usize];
         let err = read_capped(Cursor::new(over), "u", SEGMENT_MAX_BYTES, "媒体段").unwrap_err();
-        assert!(err.to_string().contains("超过字节上限"), "{err}");
+        assert!(err.to_string().contains("exceeds the byte limit"), "{err}");
 
         let exact = vec![0u8; SEGMENT_MAX_BYTES as usize];
         assert!(read_capped(Cursor::new(exact), "u", SEGMENT_MAX_BYTES, "媒体段").is_ok());

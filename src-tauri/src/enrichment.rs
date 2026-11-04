@@ -70,7 +70,7 @@ pub fn normalize_source(raw: Option<String>) -> Result<String, String> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
-        return Err(format!("增强源名字不合法：{s}"));
+        return Err(format!("invalid enrichment source name: {s}"));
     }
     Ok(s.to_string())
 }
@@ -79,7 +79,7 @@ pub fn normalize_source(raw: Option<String>) -> Result<String, String> {
 
 fn store_of(app: &tauri::AppHandle) -> Result<Arc<Store>, String> {
     app.try_state::<crate::AppState>()
-        .ok_or_else(|| "AppState 未就绪".to_string())?
+        .ok_or_else(|| "app state not ready".to_string())?
         .enrich_store(app)
 }
 
@@ -90,7 +90,7 @@ fn store_of(app: &tauri::AppHandle) -> Result<Arc<Store>, String> {
 fn arena_of(app: &tauri::AppHandle) -> Result<Arena, String> {
     let state = app
         .try_state::<crate::AppState>()
-        .ok_or_else(|| "AppState 未就绪".to_string())?;
+        .ok_or_else(|| "app state not ready".to_string())?;
     let files = state
         .db()
         .send(|conn| aiya_data::repo::online_files(conn))
@@ -122,7 +122,7 @@ pub fn worklist(
 
     let available = crate::beets::available(app);
     let note = (!available)
-        .then(|| "未找到 aiya-beets 组件：先安装组件，或检查设置里的组件路径".to_string());
+        .then(|| "aiya-beets component not found: install the component first, or check the component path in settings".to_string());
     Ok(EnrichmentWorklist {
         source: source.to_string(),
         available,
@@ -171,7 +171,7 @@ pub fn find(
     let keys: Vec<String> = rows.iter().map(|r| r.path_lower.clone()).collect();
     let state = app
         .try_state::<crate::AppState>()
-        .ok_or_else(|| "AppState 未就绪".to_string())?;
+        .ok_or_else(|| "app state not ready".to_string())?;
     let ids = state
         .db()
         .send(move |conn| aiya_data::repo::track_ids_by_paths(conn, &keys))
@@ -264,7 +264,7 @@ impl Sink {
         let flusher = std::thread::Builder::new()
             .name("aiya-enrich-writer".into())
             .spawn(move || flush_loop(&worker, &store_ref, &alive_ref, &emit_app))
-            .map_err(|e| format!("起落库线程失败：{e}"))?;
+            .map_err(|e| format!("failed to start enrichment writer thread: {e}"))?;
         Ok(Sink {
             app,
             shared,

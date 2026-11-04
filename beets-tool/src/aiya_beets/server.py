@@ -76,7 +76,7 @@ def handle(req: dict, gen: int) -> dict | None:
         paths = req.get("paths") or []
         if not paths:
             return protocol.error_response(
-                req_id, protocol.E_INVALID_ARG, "preview", "paths 为空"
+                req_id, protocol.E_INVALID_ARG, "preview", "paths is empty"
             )
         importer.preview_import(req_id, [str(p) for p in paths], req.get("options") or {}, gen)
         return None
@@ -84,7 +84,7 @@ def handle(req: dict, gen: int) -> dict | None:
         decisions = req.get("decisions") or []
         if not decisions:
             return protocol.error_response(
-                req_id, protocol.E_INVALID_ARG, "apply", "decisions 为空"
+                req_id, protocol.E_INVALID_ARG, "apply", "decisions is empty"
             )
         importer.apply_import(req_id, decisions, bool(req.get("resume")), gen)
         return None
@@ -99,7 +99,7 @@ def handle(req: dict, gen: int) -> dict | None:
         paths = req.get("paths") or []
         if not paths:
             return protocol.error_response(
-                req_id, protocol.E_INVALID_ARG, "enrich", "paths 为空"
+                req_id, protocol.E_INVALID_ARG, "enrich", "paths is empty"
             )
         enrich.enrich(req_id, [str(p) for p in paths],
                       req.get("want") or [], bool(req.get("force")), gen)
@@ -120,7 +120,7 @@ def handle(req: dict, gen: int) -> dict | None:
         paths = req.get("paths") or []
         if not paths:
             return protocol.error_response(
-                req_id, protocol.E_INVALID_ARG, "adopt", "paths 为空"
+                req_id, protocol.E_INVALID_ARG, "adopt", "paths is empty"
             )
         maintain.adopt_library(req_id, [str(p) for p in paths], gen)
         return None
@@ -142,7 +142,7 @@ def handle(req: dict, gen: int) -> dict | None:
         name = str(req.get("name") or "")
         if not name:
             return protocol.error_response(
-                req_id, protocol.E_INVALID_ARG, "pluginInstall", "name 为空"
+                req_id, protocol.E_INVALID_ARG, "pluginInstall", "name is empty"
             )
         market.install_plugin(req_id, name, emit, cancel_gen, gen)
         return None
@@ -206,7 +206,7 @@ def serve() -> int:
         import beets  # noqa: F401
         import beets.ui  # noqa: F401
     except ImportError:
-        _not_installed("this interpreter has no beets installed")
+        _not_installed("beets is not installed in this interpreter")
         return 0
     except SystemExit:
         _not_installed("beets import raised SystemExit")
@@ -254,7 +254,7 @@ def serve() -> int:
                 # 合法 JSON 但不是对象：`[1,2]` / `"x"` / `42` 都到这里。不先挡住的话 `req.get` 会抛 AttributeError
                 # 被归类成 E_INTERNAL，而它其实是调用方拼错了请求——该报参数错。
                 write_line(protocol.error_response(
-                    0, protocol.E_BAD_JSON, "parse", f"请求必须是 JSON 对象：{type(req).__name__}",
+                    0, protocol.E_BAD_JSON, "parse", f"request must be a JSON object: {type(req).__name__}",
                 ))
                 continue
             req_id = req.get("id", 0)

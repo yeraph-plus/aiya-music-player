@@ -5,6 +5,7 @@
   import PlaylistList from './PlaylistList.svelte';
   import TrackList from './TrackList.svelte';
   import { errorMessage } from '../lib/errors';
+  import { t } from '../lib/i18n.svelte';
   import { SELECTION_CAP } from '../lib/selection';
   import { list, PAGE_SIZE } from '../stores/list.svelte';
   import { nav } from '../stores/nav.svelte';
@@ -81,7 +82,7 @@
     try {
       const index = await list.indexOfTrack(id);
       if (index === null) {
-        notify.showToast('当前曲目不在列表里');
+        notify.showToast(t('library.panel.notInList'));
         return;
       }
       locateIndex = index;
@@ -92,14 +93,14 @@
 
   function handleSelect(index: number, event: MouseEvent | KeyboardEvent): void {
     if (selection.handleSelect(index, event) === 'capped') {
-      notify.showToast(`最多选 ${SELECTION_CAP} 首，已截取`);
+      notify.showToast(t('library.panel.selectionCap', { n: SELECTION_CAP }));
     }
   }
 
   /** 勾选框：点=切换、Shift=连选（与 ctrl+点行的语义不同） */
   function handleCheck(index: number, event: MouseEvent | KeyboardEvent): void {
     if (selection.handleCheck(index, event) === 'capped') {
-      notify.showToast(`最多选 ${SELECTION_CAP} 首，已截取`);
+      notify.showToast(t('library.panel.selectionCap', { n: SELECTION_CAP }));
     }
   }
 
@@ -128,7 +129,7 @@
       if (ids.length === 0) return;
       try {
         await player.enqueue(ids);
-        notify.showToast(`已加入队列 ${ids.length} 首`);
+        notify.showToast(t('shell.overlay.addedToQueue', { n: ids.length }));
         selection.clear();
       } catch (error) {
         // 入队失败不阻断运行：走播放条吐司（报错三档，2026-11 拍板）
@@ -217,13 +218,13 @@
     <TrackList {...shared} />
   {/if}
 {:else if !list.booted}
-  <EmptyState fill title="正在启动…" />
+  <EmptyState fill title={t('library.panel.booting')} />
 {:else if notify.error}
   <!-- 查询失败时 total 也是 0，但这时候说"曲库还是空的"是错的：
        用户会去设置页重新扫描，而真正该做的是重试查询 -->
-  <EmptyState fill title="列表加载失败" hint="上方错误条里有原因">
+  <EmptyState fill title={t('library.panel.loadFailedTitle')} hint={t('library.panel.loadFailedHint')}>
     {#snippet action()}
-      <Button onclick={() => void list.reload()}>重试</Button>
+      <Button onclick={() => void list.reload()}>{t('library.panel.retry')}</Button>
     {/snippet}
   </EmptyState>
 {:else}

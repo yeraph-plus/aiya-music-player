@@ -8,6 +8,7 @@
   import InstallPanel from '../components/beets/InstallPanel.svelte';
   import IndexPanel from '../components/beets/IndexPanel.svelte';
   import OrganizePanel from '../components/beets/OrganizePanel.svelte';
+  import { t } from '../lib/i18n.svelte';
   import { ui } from '../stores/ui.svelte';
 
   /**
@@ -40,17 +41,17 @@
 
   /** 未安装（含探测中）时只有安装页可进；协议不符不禁用——壳内 EmptyState 负责解释 */
   const tabs = $derived([
-    { id: 'install', label: '安装' },
-    { id: 'index', label: '分析', disabled: !found },
-    { id: 'organize', label: '整理', disabled: !found },
+    { id: 'install', label: t('beets.tab.install') },
+    { id: 'index', label: t('beets.tab.index'), disabled: !found },
+    { id: 'organize', label: t('beets.tab.organize'), disabled: !found },
   ]);
 
   const headerMeta = $derived.by(() => {
-    if (ui.beets === null) return '正在检测…';
+    if (ui.beets === null) return t('beets.meta.detecting');
     // 未安装的说明交给下面的门（EmptyState），meta 不重复一遍
-    if (!found) return '未安装';
-    if (schemaMismatch) return '版本不匹配';
-    return `beets ${ui.beets.beetsVersion ?? '未知版本'}`;
+    if (!found) return t('beets.meta.notInstalled');
+    if (schemaMismatch) return t('beets.meta.schemaMismatch');
+    return t('beets.meta.version', { version: ui.beets.beetsVersion ?? t('beets.meta.versionUnknown') });
   });
 
   onMount(() => {
@@ -75,7 +76,7 @@
   <Header
     kicker="LIBRARY TOOLS"
     title="Beets"
-    subtitle="曲库整理与音频分析工具"
+    subtitle={t('beets.headerSubtitle')}
     meta={headerMeta}
   >
     {#snippet actions()}
@@ -87,7 +88,7 @@
           ui.beetsTabTouched = true;
           ui.beetsTab = id as 'install' | 'index' | 'organize';
         }}
-        label="Beets 视图切换"
+        label={t('beets.tabAria')}
       />
     {/snippet}
   </Header>
@@ -97,15 +98,15 @@
   {:else if !ready}
     <section class="gate-panel">
       <EmptyState
-        title={schemaMismatch ? 'Beets 与播放器版本不一致' : 'Beets 未安装'}
+        title={schemaMismatch ? t('beets.gate.titleMismatch') : t('beets.gate.titleNotInstalled')}
         hint={schemaMismatch
-          ? 'schema 指纹比对失败。分析与整理都依赖同一份协议，装错了版本读出来的形状会对不上，所以先停在这里。'
-          : '这一页要做的事都要 Beets 分析工具在场。请先到「安装」页装好再回来。'}
+          ? t('beets.gate.hintMismatch')
+          : t('beets.gate.hintNotInstalled')}
         fill
       >
         {#snippet icon()}<Wrench size={26} />{/snippet}
         {#snippet action()}
-          <Button variant="primary" size="sm" onclick={goInstall}>去安装</Button>
+          <Button variant="primary" size="sm" onclick={goInstall}>{t('beets.gate.goInstall')}</Button>
         {/snippet}
       </EmptyState>
     </section>

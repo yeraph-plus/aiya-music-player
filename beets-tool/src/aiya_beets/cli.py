@@ -67,49 +67,49 @@ def main(argv: list[str] | None = None) -> int:
 
     ap = argparse.ArgumentParser(
         prog="aiya-beets",
-        description="AIYA Music 的 beets 侧工具（无子命令时等同于 serve）",
+        description="beets-side tool for AIYA Music (no subcommand means serve)",
     )
     ap.add_argument("--version", action="version", version=f"aiya-beets {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("serve", help="stdio NDJSON 服务（播放器用这个）")
-    sub.add_parser("status", help="打印环境体检 JSON")
-    sub.add_parser("capabilities", help="打印插件能力三态 JSON")
-    sub.add_parser("doctor", help="人类可读的体检报告")
-    sub.add_parser("version", help="打印版本号")
+    sub.add_parser("serve", help="stdio NDJSON server (what the player uses)")
+    sub.add_parser("status", help="print the environment check JSON")
+    sub.add_parser("capabilities", help="print the plugin three-state JSON")
+    sub.add_parser("doctor", help="human-readable health report")
+    sub.add_parser("version", help="print the version")
 
-    p_install = sub.add_parser("install", help="在便携包内变更插件与配置（包内解释器运行）")
+    p_install = sub.add_parser("install", help="change plugins and config inside the portable bundle (runs on the bundled interpreter)")
     p_install.add_argument("--plugins", required=True,
-                           help="目标插件名，逗号分隔；all = 表内全部")
+                           help="target plugin names, comma-separated; all = everything in the table")
     p_install.add_argument("--previous", default=None,
-                           help="变更前的启用清单（宿主传，用于差量卸载）")
-    p_install.add_argument("--dry-run", action="store_true", help="只打印变更计划")
+                           help="enabled list before the change (sent by the host, drives differential uninstall)")
+    p_install.add_argument("--dry-run", action="store_true", help="print the change plan only")
 
-    p_uninstall = sub.add_parser("uninstall", help="删除安装产物（数据不动）")
+    p_uninstall = sub.add_parser("uninstall", help="remove installed artifacts (data untouched)")
     p_uninstall.add_argument("--target", required=True)
     p_uninstall.add_argument(
         "--all", action="store_true",
-        help="目标是 beets-tool 整层（含 venv / bundle / bin），不只是 venv",
+        help="target is the whole beets-tool layer (venv / bundle / bin), not just the venv",
     )
     p_uninstall.add_argument("--dry-run", action="store_true")
 
-    p_bins = sub.add_parser("bins", help="下载/校验外部二进制到 beets-tool/bin")
-    p_bins.add_argument("--only", default=None, help="只处理这些名字，逗号分隔")
+    p_bins = sub.add_parser("bins", help="download/verify external binaries into beets-tool/bin")
+    p_bins.add_argument("--only", default=None, help="only these names, comma-separated")
     p_bins.add_argument(
         "--from-plugins", default=None, metavar="NAMES",
-        help="按插件名单推导要哪些工具（宿主用这条）",
+        help="derive the needed tools from a plugin list (what the host uses)",
     )
-    p_bins.add_argument("--check", action="store_true", help="只体检，不下载")
-    p_bins.add_argument("--dry-run", action="store_true", help="只打印将下载什么")
+    p_bins.add_argument("--check", action="store_true", help="check only, do not download")
+    p_bins.add_argument("--dry-run", action="store_true", help="print what would be downloaded")
     p_bins.add_argument(
         "--carrier", action="append", default=[], metavar="NAME=PATH",
-        help="用本地包代替下载（可重复）",
+        help="use a local package instead of downloading (repeatable)",
     )
 
     # 其余参数原样交给 `beet xtractor`：那条命令自己有六个开关，抄一份必然漂
     p_xt = sub.add_parser(
         "xtractor",
-        help="算 bpm/danceability（索引家；进程内跑 beet xtractor，见 docs/54）",
+        help="compute bpm/danceability (index profile; runs beet xtractor in-process, see docs/54)",
     )
 
     ns = ap.parse_args(args)
@@ -158,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg.ensure_config(None, prof)
     except OSError as e:
         # 写不了配置不该让整个应用不可用：beets 用内置默认也能跑，只是插件全关
-        print(f"[aiya-beets] 生成配置失败：{e}", file=sys.stderr)
+        print(f"[aiya-beets] failed to generate config: {e}", file=sys.stderr)
     except cfg.ConfigGateError as e:
         return _config_refusal(e)
 
@@ -172,8 +172,8 @@ def main(argv: list[str] | None = None) -> int:
     from . import env
 
     if not env.is_available():
-        print(f"beets 不可用（这个解释器：{sys.executable}）", file=sys.stderr)
-        print("安装：重新获取便携套件包（自带 beets），或往这个解释器 pip install beets", file=sys.stderr)
+        print(f"beets is not installed in this interpreter: {sys.executable}", file=sys.stderr)
+        print("to install: re-fetch the portable bundle (ships with beets), or pip install beets into this interpreter", file=sys.stderr)
         return 1
 
     if ns.cmd == "status":
@@ -201,27 +201,27 @@ def _doctor() -> int:
     from .protocol import PROTOCOL_VERSION
 
     data = env.status_payload()
-    print(f"aiya-beets {__version__}  协议 v{PROTOCOL_VERSION}")
+    print(f"aiya-beets {__version__}  protocol v{PROTOCOL_VERSION}")
     print(f"  Python        {data['pythonVersion']}"
-          + ("" if data.get("pythonSupported") else "  ← 不在支持窗口（3.10–3.14）"))
+          + ("" if data.get("pythonSupported") else "  <- outside the supported window (3.10-3.14)"))
     print(f"  beets         {data['beetsVersion']}")
-    print(f"  配置目录      {data['configDir']}")
-    print(f"  数据目录      {data['dataHome']}")
-    print(f"  库文件        {data['libraryPath']}"
-          + ("" if data["libraryExists"] else "  ← 还不存在（首次导入时创建）"))
+    print(f"  config dir    {data['configDir']}")
+    print(f"  data dir      {data['dataHome']}")
+    print(f"  library file  {data['libraryPath']}"
+          + ("" if data["libraryExists"] else "  <- does not exist yet (created on first import)"))
     root = data.get("libraryDirectory")
-    print(f"  整理目标根    {root or '（未配置：整理文件会被拒绝）'}")
-    print("  插件：")
+    print(f"  organize root {root or '(not configured: organizing files will be rejected)'}")
+    print("  plugins:")
     for plug in data["pluginHealth"]:
-        mark = "开" if plug["enabled"] else "关"
+        mark = "on" if plug["enabled"] else "off"
         line = f"    [{plug['state']}] {plug['name']}"
         if plug["missing"]:
-            line += f"   缺：{', '.join(plug['missing'])}"
+            line += f"   missing: {', '.join(plug['missing'])}"
         if plug["note"]:
-            line += f"   — {plug['note']}"
+            line += f"   - {plug['note']}"
         print(f"{line}   ({mark})")
     counts = data["pluginSummary"]
-    print(f"  合计：ready {counts.get('ready', 0)} / "
+    print(f"  total: ready {counts.get('ready', 0)} / "
           f"missing_deps {counts.get('missing_deps', 0)} / "
           f"unavailable {counts.get('unavailable', 0)}")
     return 0

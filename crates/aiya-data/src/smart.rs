@@ -42,7 +42,7 @@ impl Field {
             "album" => Ok(Field::Album),
             "year" => Ok(Field::Year),
             "playCount" => Ok(Field::PlayCount),
-            other => Err(DbError::Custom(format!("未知的规则字段: {other}"))),
+            other => Err(DbError::Custom(format!("unknown rule field: {other}"))),
         }
     }
 
@@ -72,7 +72,7 @@ impl Op {
             "contains" => Ok(Op::Contains),
             "gte" => Ok(Op::Gte),
             "lte" => Ok(Op::Lte),
-            other => Err(DbError::Custom(format!("未知的规则操作符: {other}"))),
+            other => Err(DbError::Custom(format!("unknown rule operator: {other}"))),
         }
     }
 }
@@ -109,7 +109,7 @@ impl SortKey {
             "added" => Ok(SortKey::Added),
             "artist" => Ok(SortKey::Artist),
             "album" => Ok(SortKey::Album),
-            other => Err(DbError::Custom(format!("未知的排序键: {other}"))),
+            other => Err(DbError::Custom(format!("unknown sort key: {other}"))),
         }
     }
 
@@ -166,7 +166,7 @@ impl SmartPlan {
             return Ok(SmartPlan::empty());
         };
         let v: Value = serde_json::from_str(raw)
-            .map_err(|e| DbError::Custom(format!("规则 JSON 无法解析: {e}")))?;
+            .map_err(|e| DbError::Custom(format!("failed to parse rule JSON: {e}")))?;
         SmartPlan::from_value(&v)
     }
 
@@ -180,13 +180,13 @@ impl SmartPlan {
     pub fn from_value(v: &Value) -> DbResult<SmartPlan> {
         let obj = v
             .as_object()
-            .ok_or_else(|| DbError::Custom("规则必须是 JSON 对象".into()))?;
+            .ok_or_else(|| DbError::Custom("rule must be a JSON object".into()))?;
         let mut clauses = Vec::new();
         // all: 条件数组，全部 AND（拍板：首期不做 OR/嵌套，UI 也只出"满足全部"）
         if let Some(all) = obj.get("all") {
             let arr = all
                 .as_array()
-                .ok_or_else(|| DbError::Custom("规则 all 必须是数组".into()))?;
+                .ok_or_else(|| DbError::Custom("rule \"all\" must be an array".into()))?;
             clauses = parse_conds(arr)?;
         }
         // sort/direction：缺省 = 最近添加优先（与推荐页直觉一致）
@@ -275,31 +275,31 @@ fn parse_conds(arr: &[Value]) -> DbResult<Vec<(String, Value)>> {
     for c in arr {
         let c = c
             .as_object()
-            .ok_or_else(|| DbError::Custom("条件必须是对象".into()))?;
+            .ok_or_else(|| DbError::Custom("condition must be an object".into()))?;
         let field = Field::parse(c.get("field").and_then(Value::as_str).unwrap_or_default())?;
         let op = Op::parse(c.get("op").and_then(Value::as_str).unwrap_or_default())?;
         if !field.allows(&op) {
-            return Err(DbError::Custom(format!("字段 {field:?} 不支持该操作符")));
+            return Err(DbError::Custom(format!("field {field:?} does not support this operator")));
         }
         let raw_value = c.get("value").unwrap_or(&Value::Null);
         let value = match (field, raw_value) {
             // 文本字段：转字符串并非空（空串条件 = UI 没填，直接拒绝）
             (Field::Genre | Field::Artist | Field::Album, Value::String(s)) => {
                 if s.trim().is_empty() {
-                    return Err(DbError::Custom("文本条件值不能为空".into()));
+                    return Err(DbError::Custom("text condition value cannot be empty".into()));
                 }
                 CondValue::Text(s.trim().to_string())
             }
             (Field::Year | Field::PlayCount, Value::Number(n)) => {
                 let i = n
                     .as_i64()
-                    .ok_or_else(|| DbError::Custom("数字条件值必须是整数".into()))?;
+                    .ok_or_else(|| DbError::Custom("number condition value must be an integer".into()))?;
                 CondValue::Int(i)
             }
             (Field::Year | Field::PlayCount, _) => {
-                return Err(DbError::Custom("数字条件值必须是整数".into()));
+                return Err(DbError::Custom("number condition value must be an integer".into()));
             }
-            (_, _) => return Err(DbError::Custom("文本条件值必须是字符串".into())),
+            (_, _) => return Err(DbError::Custom("text condition value must be a string".into())),
         };
         clauses.push(build_clause(field, op, &value));
     }
@@ -313,7 +313,7 @@ pub fn conds_from_value(v: &Value) -> DbResult<Vec<(String, Value)>> {
     match v {
         Value::Null => Ok(Vec::new()),
         Value::Array(arr) => parse_conds(arr),
-        _ => Err(DbError::Custom("conds 必须是数组".into())),
+        _ => Err(DbError::Custom("conds must be an array".into())),
     }
 }
 
@@ -387,7 +387,7 @@ pub fn load_plan(conn: &Connection, playlist_id: &str) -> DbResult<SmartPlan> {
         )
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => {
-                DbError::Custom(format!("动态歌单不存在: {playlist_id}"))
+                DbError::Custom(format!("smart playlist not found: {playlist_id}"))
             }
             other => DbError::Sql(other),
         })?;

@@ -57,7 +57,7 @@ pub struct RefreshOutcome {
 pub fn sanitize_name(raw: &str) -> DbResult<String> {
     let name = raw.trim();
     if name.is_empty() {
-        return Err(DbError::Custom("歌单名不能为空".into()));
+        return Err(DbError::Custom("playlist name cannot be empty".into()));
     }
     Ok(name.chars().take(MAX_NAME_CHARS).collect())
 }
@@ -158,7 +158,7 @@ pub fn set_rule(
     };
     match kind.as_deref() {
         None => Ok(false),
-        Some("manual") => Err(DbError::Custom("手动歌单不支持设置规则".into())),
+        Some("manual") => Err(DbError::Custom("manual playlists do not support rules".into())),
         Some(_) => {
             let matched = plan.matched_ids(conn)?;
             let tx = write_tx(conn)?;
@@ -203,7 +203,7 @@ pub fn refresh_smart(
         return Ok(None);
     };
     if kind != "smart" {
-        return Err(DbError::Custom("只有动态歌单支持刷新".into()));
+        return Err(DbError::Custom("only smart playlists support refresh".into()));
     }
     let plan = crate::smart::SmartPlan::parse(rule_json.as_deref())?;
     let matched = plan.matched_ids(conn)?;

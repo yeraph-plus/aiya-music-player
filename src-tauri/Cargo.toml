@@ -59,6 +59,7 @@ tempfile = "3"
 # Security 是 RegCreateKeyExW 的 SECURITY_ATTRIBUTES 参数依赖；
 # WindowsAndMessaging：启动期致命错误弹窗（lib.rs fatal_dialog）。
 windows-sys = { version = "0.60", features = [
+    "Win32_Globalization",
     "Win32_System_Power",
     "Win32_UI_Shell",
     "Win32_System_Registry",

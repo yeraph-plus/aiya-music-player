@@ -4,6 +4,7 @@
   import IconButton from '../ui/IconButton.svelte';
   import Tooltip from '../ui/Tooltip.svelte';
   import { registerSearchFocus } from '../../lib/focus-search';
+  import { t } from '../../lib/i18n.svelte';
   import {
     closeWindow,
     isNative,
@@ -61,7 +62,7 @@
   <!-- 返回键用 `IconButton`（kit），**不套 Tooltip**：`IconButton` 的 `label` 同时产出 `aria-label` 与原生 `title`，再叠一层 Tooltip 会先弹原生再弹自己的（见
   `ui/Tooltip.svelte` 的分工约定：两者不并存）。要 styled 提示的地方用裸 `<button>` + Tooltip（窗控三个就是这样）。 -->
   <div class="tb-back">
-    <IconButton label="返回上一页" disabled={!nav.canGoBack} onclick={() => nav.back()}>
+    <IconButton label={t('shell.titlebar.back')} disabled={!nav.canGoBack} onclick={() => nav.back()}>
       <ChevronLeft size={17} />
     </IconButton>
   </div>
@@ -73,9 +74,9 @@
     <input
       bind:this={input}
       type="search"
-      placeholder="搜索本地曲库"
-      title="搜索本地曲库（按 / 聚焦）"
-      aria-label="搜索本地曲库"
+      placeholder={t('shell.titlebar.search')}
+      title={t('shell.titlebar.searchTip')}
+      aria-label={t('shell.titlebar.search')}
       value={ui.search}
       oninput={(event) => nav.search(event.currentTarget.value)}
       spellcheck="false"
@@ -83,8 +84,8 @@
     {#if ui.search}
       <button
         class="tb-search-clear"
-        aria-label="清除搜索"
-        title="清除搜索"
+        aria-label={t('shell.titlebar.searchClear')}
+        title={t('shell.titlebar.searchClear')}
         onclick={() => nav.clearSearch()}
       >
         <X size={13} />
@@ -95,18 +96,18 @@
   <div class="tb-drag"></div>
 
   <div class="window-controls">
-    <Tooltip label="最小化">
+    <Tooltip label={t('shell.titlebar.minimize')}>
       {#snippet trigger(props)}
-        <button {...props} aria-label="最小化" disabled={!isNative} onclick={minimizeWindow}>
+        <button {...props} aria-label={t('shell.titlebar.minimize')} disabled={!isNative} onclick={minimizeWindow}>
           <Minus size={15} />
         </button>
       {/snippet}
     </Tooltip>
-    <Tooltip label={maximized ? '还原' : '最大化'}>
+    <Tooltip label={maximized ? t('shell.titlebar.restore') : t('shell.titlebar.maximize')}>
       {#snippet trigger(props)}
         <button
           {...props}
-          aria-label={maximized ? '还原' : '最大化'}
+          aria-label={maximized ? t('shell.titlebar.restore') : t('shell.titlebar.maximize')}
           disabled={!isNative}
           onclick={toggleMaximizeWindow}
         >
@@ -114,12 +115,12 @@
         </button>
       {/snippet}
     </Tooltip>
-    <Tooltip label="关闭">
+    <Tooltip label={t('common.close')}>
       {#snippet trigger(props)}
         <button
           {...props}
           class="window-close"
-          aria-label="关闭"
+          aria-label={t('common.close')}
           disabled={!isNative}
           onclick={closeWindow}
         >

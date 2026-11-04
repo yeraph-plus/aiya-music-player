@@ -170,6 +170,7 @@ export const ipc = {
     setUiState: (state: DynamicJson) => call<void>('app_set_ui_state', { state }),
     /** 资源管理器打开数据目录；打不开也算成功（不弹错误框） */
     openDataDir: () => call<void>('app_open_data_dir'),
+    openUrl: (url: string) => call<void>('app_open_url', { url }),
     /** 频谱 tap 订阅开关：面板打开才 true，关闭时引擎内零开销 */
     spectrumSet: (enabled: boolean) => call<SpectrumToggle>('spectrum_set', { enabled }),
   },

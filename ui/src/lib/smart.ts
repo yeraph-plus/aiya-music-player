@@ -6,6 +6,7 @@
  * "数字字段不能填文本"），提交后后端还会再验一遍——两层校验不是冗余，
  * 是把错误拦在离用户最近的那一层。
  */
+import { t, type Msg } from './i18n.svelte';
 
 export type SmartField = 'genre' | 'artist' | 'album' | 'year' | 'playCount';
 export type SmartOp = 'eq' | 'contains' | 'gte' | 'lte';
@@ -31,14 +32,19 @@ export interface SmartRule {
   direction?: 'asc' | 'desc';
 }
 
-/** 字段下拉的标签与语义说明（说明给 placeholder/提示行用） */
-export const FIELD_LABELS: Record<SmartField, string> = {
-  genre: '流派',
-  artist: '艺人',
-  album: '专辑',
-  year: '年份',
-  playCount: '播放次数',
+/** 字段 → i18n 键（流派/艺人/专辑/年份复用 common 域，播放次数归 lib 域） */
+const FIELD_KEY: Record<SmartField, Msg> = {
+  genre: 'common.genre',
+  artist: 'common.artist',
+  album: 'common.album',
+  year: 'common.year',
+  playCount: 'lib.smart.playCount',
 };
+
+/** 字段下拉的标签与语义说明（说明给 placeholder/提示行用） */
+export function fieldLabel(field: SmartField): string {
+  return t(FIELD_KEY[field]);
+}
 
 /** 每个字段允许的操作符（与 Rust Field::allows 同源） */
 export const OPS_BY_FIELD: Record<SmartField, { op: SmartOp; label: string }[]> = {
@@ -148,15 +154,15 @@ export function validateRule(rule: SmartRule): string | null {
     if (isEmptyCond(cond)) continue;
     if (isTextField(cond.field)) {
       if (typeof cond.value !== 'string' || !cond.value.trim()) {
-        return `${FIELD_LABELS[cond.field]}需填写内容`;
+        return t('lib.smart.ruleTextRequired', { field: fieldLabel(cond.field) });
       }
     } else {
       if (typeof cond.value !== 'number' || !Number.isFinite(cond.value)) {
-        return `${FIELD_LABELS[cond.field]}需填数字`;
+        return t('lib.smart.ruleNumberRequired', { field: fieldLabel(cond.field) });
       }
     }
     if (!OPS_BY_FIELD[cond.field].some((o) => o.op === cond.op)) {
-      return `${FIELD_LABELS[cond.field]}操作符无效`;
+      return t('lib.smart.ruleOpInvalid', { field: fieldLabel(cond.field) });
     }
   }
   return null;

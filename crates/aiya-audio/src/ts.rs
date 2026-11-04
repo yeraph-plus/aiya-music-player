@@ -88,11 +88,11 @@ pub fn is_ts(bytes: &[u8]) -> bool {
 /// `st` 跨段复用——本段没 PAT/PMT 时用上一段的定位结果。
 pub fn strip(bytes: &[u8], st: &mut TsState) -> Result<(Vec<u8>, TsAudio), AudioError> {
     if bytes.is_empty() {
-        return Err(AudioError::Decode("TS 段是空的".into()));
+        return Err(AudioError::Decode("TS segment is empty".into()));
     }
     if !bytes.len().is_multiple_of(PACKET_LEN) {
         return Err(AudioError::Decode(format!(
-            "TS 段长度 {} 不是 188 的整数倍（段被截断或不是 TS）",
+            "TS segment length {} is not a multiple of 188 (truncated segment or not TS)",
             bytes.len()
         )));
     }
@@ -105,7 +105,7 @@ pub fn strip(bytes: &[u8], st: &mut TsState) -> Result<(Vec<u8>, TsAudio), Audio
     for (idx, packet) in bytes.as_chunks::<PACKET_LEN>().0.iter().enumerate() {
         if packet[0] != SYNC {
             return Err(AudioError::Decode(format!(
-                "TS 第 {} 个包失去同步（首字节 0x{:02X} 不是 0x47）",
+                "TS packet {} lost sync (first byte 0x{:02X} is not 0x47)",
                 idx + 1,
                 packet[0]
             )));
@@ -146,16 +146,19 @@ pub fn strip(bytes: &[u8], st: &mut TsState) -> Result<(Vec<u8>, TsAudio), Audio
     }
 
     let kind = st.audio_kind.ok_or_else(|| {
-        AudioError::Unsupported("这段 TS 里没有 PAT/PMT，定位不到音频流（HLS 段应带节目表）".into())
+        AudioError::Unsupported(
+            "no PAT/PMT in this TS segment; cannot locate the audio stream (HLS segments should carry program tables)"
+                .into(),
+        )
     })?;
     if out.is_empty() {
         // 有 PMT 但没收到载荷：段被截断，或音频 PID 在本段才出现
         let why = if saw_audio_packet {
-            "音频包只有 PES 头，没有载荷"
+            "audio packets carry only PES headers, no payload"
         } else {
-            "本段没有任何音频包"
+            "no audio packets in this segment"
         };
-        return Err(AudioError::Decode(format!("TS 段无音频数据：{why}")));
+        return Err(AudioError::Decode(format!("TS segment has no audio data: {why}")));
     }
     Ok((out, kind))
 }
@@ -220,7 +223,7 @@ fn parse_pmt(payload: &[u8], st: &mut TsState) -> Result<(), AudioError> {
 
     if saw_latm && st.audio_pid.is_none() {
         return Err(AudioError::Unsupported(
-            "LATM/LOAS 封装的 AAC 不支持（本播放器只剥 ADTS）".into(),
+            "AAC in LATM/LOAS wrapping is not supported (this player only strips ADTS)".into(),
         ));
     }
     Ok(())
@@ -505,7 +508,7 @@ pub(crate) mod tests {
         ts[PACKET_LEN] = 0x00;
         let mut st = TsState::new();
         let err = strip(&ts, &mut st).unwrap_err();
-        assert!(err.to_string().contains("第 2 个包"), "{err}");
+        assert!(err.to_string().contains("packet 2"), "{err}");
     }
 
     #[test]

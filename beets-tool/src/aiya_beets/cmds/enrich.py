@@ -88,9 +88,9 @@ class SourceSpec:
 
 
 SOURCES: tuple[SourceSpec, ...] = (
-    SourceSpec("probe", True, "自测源：按路径哈希造确定性字段，只在 AIYA_BEETS_ENRICH_PROBE=1 时可用"),
-    SourceSpec("xtractor", True, "音频特征（bpm/danceability/mood 等）；Essentia Gaia 构建与 12 件 SVM 模型随便携包分发"),
-    SourceSpec("lastgenre", False, "流派推断（写 item.genre，不入文件）；需要联网（独立来源，尚未接线）"),
+    SourceSpec("probe", True, "self-test source: derives deterministic fields from the path hash, available only with AIYA_BEETS_ENRICH_PROBE=1"),
+    SourceSpec("xtractor", True, "audio features (bpm/danceability/mood and more); the Essentia Gaia build and the 12 SVM models ship with the portable bundle"),
+    SourceSpec("lastgenre", False, "genre inference (writes item.genre, not the file); needs network (separate source, not wired up yet)"),
 )
 
 # probe 声明的字段：与 xtractor 真实字段同名同形
@@ -127,13 +127,13 @@ def xtractor_ready() -> tuple[bool, str]:
 
     exe = plugins.exe_path("streaming_extractor_music")
     if exe is None:
-        return False, "没有 Essentia 提取器（便携包自带；散装可用 aiya-beets bins 补齐）"
+        return False, "missing the Essentia extractor (ships with the portable bundle; a standalone install can fetch it with aiya-beets bins)"
     models_dir = os.path.join(os.path.dirname(exe), "models")
     have = len(glob.glob(os.path.join(models_dir, "*.history")))
     if have < len(cfg.XTRACTOR_MODEL_FILES):
         return False, (
-            f"SVM 模型不全（{have}/{len(cfg.XTRACTOR_MODEL_FILES)}）："
-            "重新下载便携包，或 aiya-beets bins 补齐"
+            f"SVM models incomplete ({have}/{len(cfg.XTRACTOR_MODEL_FILES)}): "
+            "re-download the portable bundle, or fetch them with aiya-beets bins"
         )
     return True, exe
 
@@ -164,7 +164,7 @@ def _resolve_sources(want) -> list[SourceSpec]:
         if not usable:
             raise ProtocolError(
                 E_INVALID_ARG, _STAGE,
-                "这个家没有可用的增强源：先装 beets 并在索引家开启插件",
+                "no usable enrich sources in this home: install beets first and enable the plugin in the index profile",
             )
         return usable
 
@@ -175,17 +175,17 @@ def _resolve_sources(want) -> list[SourceSpec]:
         if spec is None:
             raise ProtocolError(
                 E_INVALID_ARG, _STAGE,
-                f"未知的增强源：{name!r}（可选：{', '.join(sorted(known))}）",
+                f"unknown enrich source: {name!r} (valid: {', '.join(sorted(known))})",
             )
         if not spec.implemented:
             raise ProtocolError(
                 E_INVALID_ARG, _STAGE,
-                f"增强源 {name!r} 尚未接线：{spec.note}",
+                f"enrich source {name!r} is not wired up yet: {spec.note}",
             )
         if name == "probe" and not probe_enabled():
             raise ProtocolError(
                 E_INVALID_ARG, _STAGE,
-                f"增强源 {name!r} 是自测源，需要环境变量 {PROBE_ENV}=1",
+                f"enrich source {name!r} is a self-test source and requires the environment variable {PROBE_ENV}=1",
             )
         if name not in [s.name for s in picked]:
             picked.append(spec)
@@ -236,12 +236,12 @@ def index_import(req_id: int, root: str | None, gen: int) -> None:
     if not target:
         raise ProtocolError(
             E_INVALID_ARG, _STAGE,
-            "没有曲库根：先在设置里选一个扫描目录（索引家对着它做只读分析）",
+            "no library root: pick a scan folder in settings first (the index profile analyzes it read-only)",
         )
     files = scan_audio_files([target])
     total = len(files)
     if total == 0:
-        raise ProtocolError(E_INVALID_ARG, _STAGE, f"曲库根下没有音频文件：{target}")
+        raise ProtocolError(E_INVALID_ARG, _STAGE, f"no audio files under the library root: {target}")
 
     emit({"type": "progress", "session": session, "stage": "import",
           "current": 0, "total": total, "path": None})
@@ -321,7 +321,7 @@ def _import_paths(paths: list[str], gen: int) -> bool:
     real = [p for p in paths if os.path.isfile(p)]
     missing = len(paths) - len(real)
     if missing:
-        print(f"[aiya-beets] enrich 跳过 {missing} 个不存在的路径（不剔会毁掉整批）",
+        print(f"[aiya-beets] enrich skipped {missing} nonexistent paths (without pruning the whole batch would fail)",
               file=sys.stderr)
     if not real:
         return True
@@ -361,7 +361,7 @@ def _run_import(chunk: list[str], gen: int) -> None:
     except OSError as e:
         # 补登失败不是"整体失败"：没进库的路径会在后面以 skipped 逐条报出来，
         # 宿主据此保留工作清单，下次重试。
-        print(f"[aiya-beets] enrich 补登失败：{e}", file=sys.stderr)
+        print(f"[aiya-beets] enrich re-import failed: {e}", file=sys.stderr)
         return
     waited = 0.0
     while True:
@@ -377,10 +377,10 @@ def _run_import(chunk: list[str], gen: int) -> None:
             if waited >= 1800:
                 proc.kill()
                 proc.communicate()
-                print("[aiya-beets] enrich 补登超时（1800s），本批中止", file=sys.stderr)
+                print("[aiya-beets] enrich re-import timed out (1800s), aborting this batch", file=sys.stderr)
                 return
     if proc.returncode != 0:
-        print(f"[aiya-beets] enrich 补登失败（退出码 {proc.returncode}）："
+        print(f"[aiya-beets] enrich re-import failed (exit code {proc.returncode}): "
               f"{(err or '').strip()[-300:]}", file=sys.stderr)
 
 
@@ -413,7 +413,7 @@ def _detach(lib, paths: list[str]) -> None:
         try:
             item.remove()  # delete=False：只删库里的行，文件留着
         except Exception as e:  # noqa: BLE001 —— 单条失败不该中断整批
-            print(f"[aiya-beets] enrich 清旧失败 {p}: {e}", file=sys.stderr)
+            print(f"[aiya-beets] enrich failed to detach {p}: {e}", file=sys.stderr)
 
 
 def _apply_probe(item) -> tuple[str, dict]:
@@ -449,7 +449,7 @@ def _extract_fields(path: str, exe: str, profile: str, out_json: str) -> dict:
     )
     if r.returncode != 0:
         raise RuntimeError(
-            f"提取器退出码 {r.returncode}：{(r.stderr or r.stdout or '').strip()[-300:]}"
+            f"extractor exit code {r.returncode}: {(r.stderr or r.stdout or '').strip()[-300:]}"
         )
     with open(out_json, encoding="utf-8") as f:
         j = json.load(f)
@@ -512,7 +512,7 @@ def enrich(req_id: int, paths: list[str], want, force: bool, gen: int) -> None:
     paths = [str(p) for p in paths if str(p).strip()]
     total = len(paths)
     if total == 0:
-        raise ProtocolError(E_INVALID_ARG, _STAGE, "paths 为空")
+        raise ProtocolError(E_INVALID_ARG, _STAGE, "paths is empty")
 
     def _progress(n: int) -> None:
         emit({
@@ -536,7 +536,7 @@ def enrich(req_id: int, paths: list[str], want, force: bool, gen: int) -> None:
             # E_CONFIG 而不是 E_INVALID_ARG：参数本身没错，错的是环境（缺提取器/
             # 模型），且用户可修（重下便携包 / aiya-beets bins 补齐）。E_INVALID_ARG
             # 的语义是"请求拼错了"，宿主拿它区分"该改请求"还是"该修环境"。
-            raise ProtocolError(E_CONFIG, _STAGE, f"增强源 xtractor 未就绪：{exe_or_why}")
+            raise ProtocolError(E_CONFIG, _STAGE, f"enrich source xtractor is not ready: {exe_or_why}")
         exe = exe_or_why
         profile = os.path.join(work, "profile.yaml")
         models_dir = os.path.join(os.path.dirname(exe), "models")
@@ -576,7 +576,7 @@ def enrich(req_id: int, paths: list[str], want, force: bool, gen: int) -> None:
                 emit({
                     "type": "enrichItem", "session": session, "path": p,
                     "source": spec.name, "status": "skipped", "fields": {},
-                    "message": "补登后仍不在库里（文件可能不存在或不可读）",
+                    "message": "still not in the library after re-import (the file may not exist or be unreadable)",
                 })
             continue
 
@@ -591,7 +591,7 @@ def enrich(req_id: int, paths: list[str], want, force: bool, gen: int) -> None:
                     status, fields = _apply_xtractor(item, exe, profile, work)
                     message = None
                 else:  # pragma: no cover —— 未接线的源在 _resolve_sources 就被拒了
-                    status, fields, message = "skipped", {}, f"源 {spec.name} 未接线"
+                    status, fields, message = "skipped", {}, f"source {spec.name} is not wired up"
             except Exception as e:  # noqa: BLE001 —— 单文件失败要逐条报，不能中断整批
                 status, fields, message = "failed", {}, str(e)
             counts[status] += 1

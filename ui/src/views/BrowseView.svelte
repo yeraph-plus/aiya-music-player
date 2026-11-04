@@ -10,6 +10,7 @@
   import type { AlbumFacet, ArtistFacet } from '../lib/ipc/generated';
   import { artworkUrl } from '../lib/artwork';
   import { formatDurationLong } from '../lib/format';
+  import { t } from '../lib/i18n.svelte';
   import { facets } from '../stores/facets.svelte';
   import { nav } from '../stores/nav.svelte';
   import { ui } from '../stores/ui.svelte';
@@ -60,14 +61,18 @@
 
   const heading = $derived(
     mode === 'artists'
-      ? { kicker: 'ARTISTS', title: '艺人', subtitle: '以艺人为单位浏览曲库' }
-      : { kicker: 'ALBUMS', title: '专辑', subtitle: '以专辑为单位浏览曲库' },
+      ? { kicker: 'ARTISTS', title: t('browse.artistsTitle'), subtitle: t('browse.artistsSubtitle') }
+      : { kicker: 'ALBUMS', title: t('browse.albumsTitle'), subtitle: t('browse.albumsSubtitle') },
   );
 
   /* 次要统计描述：只报总数，不做「500 / 共 xxx」的截断说明——分页器本身
      就是可见边界，无需再用文本解释 */
   const meta = $derived(
-    rows === null ? '' : `共 ${total} ${mode === 'artists' ? '位艺人' : '张专辑'}`,
+    rows === null
+      ? ''
+      : mode === 'artists'
+        ? t('browse.artistsMeta', { n: total })
+        : t('browse.albumsMeta', { n: total }),
   );
 
   /* 前端分页后端 facets 命令冻结（一次 ≤500 条 + total，无 offset），分页是对已拉取数据的纯展示切片。搜索/过滤变化时回第 1 页。 */
@@ -94,7 +99,7 @@
     return {
       title: item.title,
       subtitle:
-        `${item.trackCount} 首` +
+        t('common.trackCount', { n: item.trackCount }) +
         (item.artist ? ` · ${item.artist}` : '') +
         (item.totalDurationMs > 0 ? ` · ${formatDurationLong(item.totalDurationMs)}` : ''),
       cover: item.artworkId ? artworkUrl(item.artworkId, 256) : null,
@@ -109,8 +114,8 @@
         <Search size={14} aria-hidden="true" />
         <input
           type="search"
-          placeholder={mode === 'artists' ? '按艺人名过滤' : '按专辑名过滤'}
-          aria-label={mode === 'artists' ? '按艺人名过滤' : '按专辑名过滤'}
+          placeholder={mode === 'artists' ? t('browse.filterArtists') : t('browse.filterAlbums')}
+          aria-label={mode === 'artists' ? t('browse.filterArtists') : t('browse.filterAlbums')}
           value={search}
           oninput={(e) => onSearchInput(e.currentTarget.value)}
         />
@@ -127,7 +132,7 @@
           <!-- 艺人卡片：user 图标（artists 表没有封面数据，不做图片获取逻辑） -->
           <Card
             title={item.name}
-            subtitle={`${item.trackCount} 首 · ${item.albumCount} 张专辑`}
+            subtitle={t('browse.artistCardMeta', { n: item.trackCount, albums: item.albumCount })}
             onclick={() => nav.go({ kind: 'artist', id: item.id })}
           >
             {#snippet icon()}<User size={22} />{/snippet}
@@ -143,22 +148,22 @@
     <!-- 底部分页：随页面滚动，滚到内容末尾才出现 -->
     <Pagination page={safePage} pageCount={pageCount} onchange={onPageChange} />
   {:else if search.trim()}
-    <EmptyState title="没有匹配的结果" hint="换个关键词，或清除过滤条件">
+    <EmptyState title={t('browse.emptyTitle')} hint={t('browse.emptyHint')}>
       {#snippet icon()}<Search size={26} />{/snippet}
       {#snippet action()}
-        <Button onclick={() => onSearchInput('')}>清除过滤</Button>
+        <Button onclick={() => onSearchInput('')}>{t('browse.clearFilter')}</Button>
       {/snippet}
     </EmptyState>
   {:else}
     <EmptyState
-      title={mode === 'artists' ? '还没有可浏览的艺人' : '还没有可浏览的专辑'}
-      hint="扫描入库时没有读到足够的标签信息；先去曲库确认曲目，再回来看"
+      title={mode === 'artists' ? t('browse.artistsEmptyTitle') : t('browse.albumsEmptyTitle')}
+      hint={t('browse.emptyHintTags')}
     >
       {#snippet icon()}
         {#if mode === 'artists'}<Mic2 size={26} />{:else}<Disc size={26} />{/if}
       {/snippet}
       {#snippet action()}
-        <Button onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>去曲库看看</Button>
+        <Button onclick={() => nav.go({ kind: 'builtin', view: 'library' })}>{t('library.goToLibrary')}</Button>
       {/snippet}
     </EmptyState>
   {/if}

@@ -80,7 +80,7 @@ try:
             raise AssertionError("锁被别人拿着，acquire 必须失败")
         except ProtocolError as e:
             assert e.code == E_LIBRARY_BUSY, e.code
-            assert "正被占用" in e.message, e.message
+            assert "busy" in e.message, e.message
         print(f"[1] 跨进程互斥 OK（holder={holder}）")
 
         # 3. 杀掉持有者（模拟崩溃）：锁立即释放，无需任何清理

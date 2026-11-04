@@ -75,11 +75,11 @@ def _dangerous(target: Path) -> str | None:
     parts = target.parts
     # 盘根（Windows: ("C:\\",) / POSIX: ("/",)）
     if len(parts) <= 1:
-        return "目标是盘根"
+        return "target is a drive root"
     home = Path.home().resolve()
     try:
         if target.resolve() == home:
-            return "目标是用户主目录"
+            return "target is the user home directory"
     except OSError:
         pass
     for env_key in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"):
@@ -92,7 +92,7 @@ def _dangerous(target: Path) -> str | None:
             continue
         try:
             if target.resolve() == sysdir or sysdir in target.resolve().parents:
-                return f"目标在系统目录 {sysdir} 内"
+                return f"target is inside the system directory {sysdir}"
         except OSError:
             pass
     return None
@@ -127,12 +127,12 @@ def _looks_like_install(target: Path, everything: bool) -> str | None:
             return None
         if any((target / name).is_dir() for name in ("venv", "bundle", "bin")):
             return None
-        return f"不像 beets-tool 安装目录（既不是 beets-tool，也没有 venv/bundle/bin）：{target}"
+        return f"does not look like a beets-tool install directory (not beets-tool and has no venv/bundle/bin): {target}"
     # 只认 venv 形态：`pyvenv.cfg` 是 venv 的定义文件。没有它就不是安装器
     # 造出来的东西，删掉等于替用户决定他的目录该不该留。
     if (target / "pyvenv.cfg").is_file() or _venv_python(target).is_file():
         return None
-    return f"不像是安装器建的环境（没有 pyvenv.cfg）：{target}"
+    return f"does not look like an environment created by the installer (no pyvenv.cfg): {target}"
 
 
 def _contains_self(target: Path) -> bool:
@@ -152,15 +152,15 @@ def _contains_self(target: Path) -> bool:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="aiya-beets uninstall",
-        description="删除安装产物（依赖 / beets / 插件 / 外置工具）；数据目录不动",
+        description="remove installed artifacts (dependencies / beets / plugins / external tools); data directories are untouched",
     )
-    ap.add_argument("--target", required=True, help="install 时的 --target，或 beets-tool 整层（配 --all）")
+    ap.add_argument("--target", required=True, help="the --target used by install, or the whole beets-tool layer (with --all)")
     ap.add_argument(
         "--all",
         action="store_true",
-        help="目标是 beets-tool 整层（含 venv / bundle / bin），不只是 venv",
+        help="target is the whole beets-tool layer (venv / bundle / bin), not just the venv",
     )
-    ap.add_argument("--dry-run", action="store_true", help="只报告会删什么，不真删")
+    ap.add_argument("--dry-run", action="store_true", help="report what would be removed without deleting")
     args = ap.parse_args(argv)
 
     raw = Path(args.target)
@@ -168,28 +168,28 @@ def main(argv: list[str] | None = None) -> int:
         # 幂等：已经没有了就是成功，不是错误（重装前先卸载的脚本会撞到这点）
         emit({"type": "done", "stage": "done", "removed": False,
               "target": str(raw), "files": 0, "bytes": 0,
-              "message": "目录不存在，无需卸载"})
+              "message": "directory does not exist, nothing to uninstall"})
         return 0
     if raw.is_symlink():
         emit({"type": "error", "stage": "prepare",
-              "message": f"目标是符号链接，拒绝跟随：{raw}"})
+              "message": f"target is a symlink, refusing to follow: {raw}"})
         return 2
 
     target = raw.resolve()
     why = _dangerous(target)
     if why:
-        emit({"type": "error", "stage": "prepare", "message": f"拒绝卸载：{why}（{target}）"})
+        emit({"type": "error", "stage": "prepare", "message": f"uninstall refused: {why} ({target})"})
         return 2
 
     why = _looks_like_install(target, args.all)
     if why:
-        emit({"type": "error", "stage": "prepare", "message": f"拒绝卸载：{why}"})
+        emit({"type": "error", "stage": "prepare", "message": f"uninstall refused: {why}"})
         return 2
 
     files, size = _measure(target)
     emit({
         "type": "progress", "stage": "prepare",
-        "message": f"将删除 {target}（{files} 个文件，{size / 2**20:.1f} MB）",
+        "message": f"will remove {target} ({files} files, {size / 2**20:.1f} MB)",
     })
     if args.dry_run:
         # 计划里带上 all：宿主据此知道这次核算覆盖的是整层还是单个 venv
@@ -201,8 +201,8 @@ def main(argv: list[str] | None = None) -> int:
         emit({
             "type": "error", "stage": "prepare",
             "message": (
-                f"拒绝删除：当前解释器就在目标目录内（{sys.executable}）。"
-                "Windows 上运行中的 exe 删不掉，请由宿主或另一个目录里的脚本执行"
+                f"refusing to delete: the current interpreter lives inside the target directory ({sys.executable}). "
+                "A running exe cannot be deleted on Windows; let the host or a script in another directory do it"
             ),
         })
         return 2
@@ -213,14 +213,14 @@ def main(argv: list[str] | None = None) -> int:
         # 最常见的原因：sidecar 还在跑、或用户的杀软正扫着目录
         emit({
             "type": "error", "stage": "remove",
-            "message": f"删除失败（{type(e).__name__}: {e}）。请先退出应用再试",
+            "message": f"failed to delete ({type(e).__name__}: {e}). Quit the app and try again",
         })
         return 3
     if target.exists():
-        emit({"type": "error", "stage": "remove", "message": f"删除后目录仍存在：{target}"})
+        emit({"type": "error", "stage": "remove", "message": f"directory still exists after deletion: {target}"})
         return 3
 
     emit({"type": "done", "stage": "done", "removed": True, "target": str(target),
           "files": files, "bytes": size,
-          "message": "环境已删除；整理库与分析库未改动（由应用自己管理）"})
+          "message": "environment removed; the organize and analysis libraries are untouched (managed by the app)"})
     return 0

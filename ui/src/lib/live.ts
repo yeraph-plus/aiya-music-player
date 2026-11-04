@@ -6,6 +6,7 @@
  * `status === 'playing' ? '直播' : '已断开'` 的话，改文案必漏一处——
  * 这个仓在 `is_http_url` 上已经吃过一次同样的亏。
  */
+import { t } from './i18n.svelte';
 import { STREAM_ID_PREFIX } from './format';
 import type { LiveRecentEntry } from './settings';
 import type { PlaybackStatus } from './ipc/generated/PlaybackStatus';
@@ -24,9 +25,10 @@ export interface LivePhase {
  * （见 `actor.rs` 的 Stream 分支），文案必须跟着说实话。
  */
 export function livePhase(status: PlaybackStatus | null | undefined): LivePhase {
-  if (status === 'playing') return { text: '直播', tone: 'on' };
-  if (status === 'loading') return { text: '连接中', tone: 'wait' };
-  return { text: '已断开', tone: 'off' };
+  // 三态文案与播放条同一口径：shell 域的 shell.live.*（zh 值与迁移前逐字一致）
+  if (status === 'playing') return { text: t('shell.live.on'), tone: 'on' };
+  if (status === 'loading') return { text: t('shell.live.wait'), tone: 'wait' };
+  return { text: t('shell.live.off'), tone: 'off' };
 }
 
 /** 「最近打开」上限。20 条够翻，再多就该做收藏夹了（那是另一件事） */

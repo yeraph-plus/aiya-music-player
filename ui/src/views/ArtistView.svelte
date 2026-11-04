@@ -6,6 +6,7 @@
   import EmptyState from '../components/ui/EmptyState.svelte';
   import TrackListPanel from '../components/TrackListPanel.svelte';
   import { formatDurationLong } from '../lib/format';
+  import { t } from '../lib/i18n.svelte';
   import { facets } from '../stores/facets.svelte';
   import { list } from '../stores/list.svelte';
   import { nav } from '../stores/nav.svelte';
@@ -38,12 +39,14 @@
     const ar = artist;
     const row = firstRow;
     return {
-      title: ar?.name ?? row?.artist ?? '艺人',
+      title: ar?.name ?? row?.artist ?? t('artist.titleFallback'),
       meta:
         ar === null
-          ? `共 ${list.total} 首`
-          : `共 ${ar.trackCount} 首，${ar.albumCount} 张专辑` +
-            (ar.totalDurationMs > 0 ? `，${formatDurationLong(ar.totalDurationMs)}` : ''),
+          ? t('artist.metaCountOnly', { n: list.total })
+          : [
+              t('artist.metaCount', { n: ar.trackCount, albums: ar.albumCount }),
+              ...(ar.totalDurationMs > 0 ? [formatDurationLong(ar.totalDurationMs)] : []),
+            ].join(t('library.metaSep')),
     };
   });
 </script>
@@ -56,18 +59,18 @@
     {#snippet actions()}
       <Button variant="primary" onclick={() => void list.playAll()} disabled={list.total === 0}>
         {#snippet icon()}<Icon name="play" size={12} />{/snippet}
-        播放全部
+        {t('library.playAll')}
       </Button>
     {/snippet}
   </Header>
 </div>
 
 <!-- 艺人页把"歌手"列链接废掉（disableArtistLink）：点了指向的是当前页，nav 视为刷新，只会白丢一次滚动位置。专辑列保持可点。 -->
-<TrackListPanel canSort={true} removeLabel="从曲库中删除" showFilter={false} disableArtistLink={true}>
+<TrackListPanel canSort={true} removeLabel={t('library.deleteFromLibrary')} showFilter={false} disableArtistLink={true}>
   {#snippet empty()}
-    <EmptyState title="这位艺人没有曲目" hint="曲目可能已被移出曲库">
+    <EmptyState title={t('artist.emptyTitle')} hint={t('artist.emptyHint')}>
       {#snippet action()}
-        <Button onclick={() => nav.go({ kind: 'browse', view: 'artists' })}>返回艺人</Button>
+        <Button onclick={() => nav.go({ kind: 'browse', view: 'artists' })}>{t('artist.backToArtists')}</Button>
       {/snippet}
     </EmptyState>
   {/snippet}

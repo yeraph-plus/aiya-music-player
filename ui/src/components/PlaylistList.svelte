@@ -31,6 +31,7 @@ import CheckCell from './ui/CheckCell.svelte';
   import { formatTime, highlight } from '../lib/format';
   import type { TrackWindow } from '../lib/track-window';
   import { SELECTION_CAP } from '../lib/selection';
+  import { t } from '../lib/i18n.svelte';
 
   interface Props {
     store: TrackWindow;
@@ -309,7 +310,7 @@ import CheckCell from './ui/CheckCell.svelte';
           role="columnheader"
           checked={allSelected}
           indeterminate={someSelected}
-          label={allSelected ? '取消全选' : '全选'}
+          label={allSelected ? t('library.uncheckAll') : t('library.checkAll')}
           disabled={total === 0}
           ontoggle={() => oncheckall()}
         />
@@ -317,15 +318,15 @@ import CheckCell from './ui/CheckCell.svelte';
       <span class="idx">#</span>
       <span></span>
       <button class="sort-head" class:on={sort === 'title'} onclick={() => canSort && onsort('title')} disabled={!canSort}>
-        标题{@render sortArrow('title')}
+        {t('tracks.colTitle')}{@render sortArrow('title')}
       </button>
       <button class="sort-head" class:on={sort === 'artist'} onclick={() => canSort && onsort('artist')} disabled={!canSort}>
-        歌手{@render sortArrow('artist')}
+        {t('tracks.colArtist')}{@render sortArrow('artist')}
       </button>
       <button class="sort-head" class:on={sort === 'album'} onclick={() => canSort && onsort('album')} disabled={!canSort}>
-        专辑{@render sortArrow('album')}
+        {t('tracks.colAlbum')}{@render sortArrow('album')}
       </button>
-      <span class="num">时长</span>
+      <span class="num">{t('tracks.colDuration')}</span>
     </div>
 
     {#if total > 0}
@@ -382,13 +383,13 @@ import CheckCell from './ui/CheckCell.svelte';
               <CheckCell
                 role="cell"
                 checked={selection.has(row.index)}
-                label={`选择第 ${row.index + 1} 行`}
+                label={t('library.rowCheckAria', { n: row.index + 1 })}
                 ontoggle={(event) => oncheck(row.index, event)}
               />
             {/if}
             <span class="idx">
               {#if row.track.id === currentId}
-                <span class="bars" class:animated={playing} aria-label="正在播放">
+                <span class="bars" class:animated={playing} aria-label={t('tracks.nowPlaying')}>
                   <i></i><i></i><i></i>
                 </span>
               {:else}
@@ -406,7 +407,7 @@ import CheckCell from './ui/CheckCell.svelte';
               <button
                 class="play-btn"
                 tabindex="-1"
-                aria-label={`播放 ${row.track.title}`}
+                aria-label={t('tracks.playTrack', { title: row.track.title })}
                 onclick={() => onplay(row.index)}
               >
                 <Play size={13} />
@@ -421,7 +422,7 @@ import CheckCell from './ui/CheckCell.svelte';
               {#if row.track.artistId && row.track.artist && !disableArtistLink}
                 <button
                   class="link-cell"
-                  title={`查看歌手 ${row.track.artist}`}
+                  title={t('tracks.viewArtist', { name: row.track.artist })}
                   onclick={(event) => {
                     event.stopPropagation();
                     onopenartist(row.track!.artistId!);
@@ -430,14 +431,14 @@ import CheckCell from './ui/CheckCell.svelte';
                   {row.track.artist}
                 </button>
               {:else}
-                <span title={row.track.artist ?? ''}>{row.track.artist ?? '未知歌手'}</span>
+                <span title={row.track.artist ?? ''}>{row.track.artist ?? t('tracks.unknownArtist')}</span>
               {/if}
             </span>
             <span class="cell dim">
               {#if row.track.albumId && row.track.album && !disableAlbumLink}
                 <button
                   class="link-cell"
-                  title={`查看专辑 ${row.track.album}`}
+                  title={t('tracks.viewAlbum', { name: row.track.album })}
                   onclick={(event) => {
                     event.stopPropagation();
                     onopenalbum(row.track!.albumId!);
@@ -459,7 +460,7 @@ import CheckCell from './ui/CheckCell.svelte';
             <span class="cell">{row.error}</span>
             <span class="cell"></span>
             <span class="cell"></span>
-            <span class="cell num"><Button variant="link" onclick={() => onretry(row.index)}>重试</Button></span>
+            <span class="cell num"><Button variant="link" onclick={() => onretry(row.index)}>{t('library.panel.retry')}</Button></span>
           </div>
         {:else}
           <div class="row skeleton" role="row" aria-busy="true">

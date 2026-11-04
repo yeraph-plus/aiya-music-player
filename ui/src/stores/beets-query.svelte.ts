@@ -1,6 +1,7 @@
 import type { BeetsFieldCatalog, BeetsQueryHit } from '../lib/ipc';
 import { ipc } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
+import { t, type Msg } from '../lib/i18n.svelte';
 import { library } from './library.svelte';
 import { notify } from './notify.svelte';
 
@@ -57,15 +58,21 @@ export function opsFor(kind: string): string[] {
   return ['contains', 'eq', 'prefix', 'regex'];
 }
 
-/** 算子 → 人话（下拉里显示这个，不是英文缩写） */
-export const OP_LABELS: Record<string, string> = {
-  contains: '包含',
-  eq: '等于',
-  prefix: '开头是',
-  regex: '匹配正则',
-  gte: '≥',
-  lte: '≤',
+/** 算子 → i18n 键（渲染点经 opLabel 取人话，下拉里显示这个，不是英文缩写） */
+export const OP_LABELS: Record<string, Msg> = {
+  contains: 'beets.query.opContains',
+  eq: 'beets.query.opEq',
+  prefix: 'beets.query.opPrefix',
+  regex: 'beets.query.opRegex',
+  gte: 'beets.query.opGte',
+  lte: 'beets.query.opLte',
 };
+
+/** 算子 → 人话；未登记的算子原样回显（与 beets 侧新增算子解耦） */
+export function opLabel(op: string): string {
+  const key = OP_LABELS[op];
+  return key ? t(key) : op;
+}
 
 /** 数字类字段：值要按数字发过去，否则工具侧会做字符串比较 */
 function isNumeric(kind: string): boolean {
@@ -186,7 +193,7 @@ class BeetsQueryStore {
   private buildFilter(): { raw?: string; rules?: QueryRule[]; limit: number } | string {
     if (this.mode === 'raw') {
       const text = this.raw.trim();
-      if (!text) return '原始语法是空的——要么写一句查询，要么切回「条件」';
+      if (!text) return t('beets.query.rawEmpty');
       return { raw: text, limit: this.limit };
     }
     if (this.rules.length === 0) {
@@ -197,15 +204,17 @@ class BeetsQueryStore {
     for (const [i, rule] of this.rules.entries()) {
       const kind = this.fields.find((f) => f.name === rule.field)?.kind ?? 'string';
       const text = rule.value.trim();
-      if (!text) return `第 ${i + 1} 条未填值`;
+      if (!text) return t('beets.query.ruleValueRequired', { n: i + 1 });
       if (isNumeric(kind)) {
         const n = Number(text);
-        if (!Number.isFinite(n)) return `第 ${i + 1} 条条件的值要填数字（${rule.field}）`;
+        if (!Number.isFinite(n)) {
+          return t('beets.query.ruleNumberRequired', { n: i + 1, field: rule.field });
+        }
         out.push({ field: rule.field, op: rule.op, value: n });
       } else if (kind === 'bool') {
         const lowered = text.toLowerCase();
         if (lowered !== 'true' && lowered !== 'false') {
-          return `第 ${i + 1} 条条件的值只能是 true / false`;
+          return t('beets.query.ruleBoolRequired', { n: i + 1 });
         }
         out.push({ field: rule.field, op: rule.op, value: lowered === 'true' });
       } else {
@@ -295,7 +304,7 @@ class BeetsQueryStore {
 
   openSave(): void {
     if (this.selectedTrackIds.length === 0) {
-      notify.showToast('先选中已入库曲目');
+      notify.showToast(t('beets.query.selectFirst'));
       return;
     }
     // 预填一个能直接用的名字：beets 查询页存出来的歌单多半是"某次筛选的结果"
@@ -313,9 +322,9 @@ class BeetsQueryStore {
   private suggestName(): string {
     if (this.mode === 'rules') {
       const first = this.rules.find((r) => r.value.trim());
-      if (first) return `${first.field} ${OP_LABELS[first.op] ?? first.op} ${first.value.trim()}`;
+      if (first) return `${first.field} ${opLabel(first.op)} ${first.value.trim()}`;
     }
-    return 'Beets 查询';
+    return t('beets.query.suggestNameFallback');
   }
 
   /**
@@ -327,7 +336,7 @@ class BeetsQueryStore {
     if (this.saving) return false;
     const trackIds = this.selectedTrackIds;
     if (trackIds.length === 0) {
-      this.saveError = '没有可保存的曲目（选中的都不在曲库里）';
+      this.saveError = t('beets.query.nothingToSave');
       return false;
     }
     this.saving = true;
@@ -336,7 +345,7 @@ class BeetsQueryStore {
       const summary = await ipc.playlist.create(this.saveName.trim(), trackIds);
       // 侧栏由 `library.playlists` 驱动，创建后必须重拉——否则新歌单要等重启
       await library.loadPlaylists();
-      notify.showToast(`已存为歌单「${summary.name}」`);
+      notify.showToast(t('beets.query.savedToast', { name: summary.name }));
       this.saveOpen = false;
       this.saveName = '';
       this.clearSelection();

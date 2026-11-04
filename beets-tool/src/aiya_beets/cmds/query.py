@@ -96,7 +96,7 @@ def _match(item, rule: dict) -> bool:
             return False
         if op == "range":
             if not isinstance(want, list) or len(want) != 2:
-                raise ProtocolError(E_INVALID_ARG, _STAGE, "range 的 value 必须是 [lo, hi]")
+                raise ProtocolError(E_INVALID_ARG, _STAGE, "range requires value to be [lo, hi]")
             lo, hi = _as_number(want[0]), _as_number(want[1])
             if lo is None or hi is None:
                 return False
@@ -114,7 +114,7 @@ def _match(item, rule: dict) -> bool:
 
     if op == "in":
         if not isinstance(want, list):
-            raise ProtocolError(E_INVALID_ARG, _STAGE, "in 的 value 必须是数组")
+            raise ProtocolError(E_INVALID_ARG, _STAGE, "in requires value to be an array")
         gn = _as_number(got)
         for w in want:
             if gn is not None and _as_number(w) == gn:
@@ -142,25 +142,25 @@ def _match(item, rule: dict) -> bool:
             return re.search(_as_text(want), _as_text(got), re.IGNORECASE) is not None
         except re.error as e:
             # 正则写错是宿主 bug，该立刻失败而不是"筛出零条"
-            raise ProtocolError(E_INVALID_ARG, _STAGE, f"正则无效：{e}") from None
-    raise ProtocolError(E_INVALID_ARG, _STAGE, f"未知算子：{op!r}")
+            raise ProtocolError(E_INVALID_ARG, _STAGE, f"invalid regex: {e}") from None
+    raise ProtocolError(E_INVALID_ARG, _STAGE, f"unknown operator: {op!r}")
 
 
 def _check_rules(rules) -> list[dict]:
     if not isinstance(rules, list):
-        raise ProtocolError(E_INVALID_ARG, _STAGE, "rules 必须是数组")
+        raise ProtocolError(E_INVALID_ARG, _STAGE, "rules must be an array")
     out = []
     for r in rules:
         if not isinstance(r, dict):
-            raise ProtocolError(E_INVALID_ARG, _STAGE, "rule 必须是对象")
+            raise ProtocolError(E_INVALID_ARG, _STAGE, "rule must be an object")
         for k in ("field", "op"):
             if not isinstance(r.get(k), str) or not r[k]:
-                raise ProtocolError(E_INVALID_ARG, _STAGE, f"rule 缺 {k}")
+                raise ProtocolError(E_INVALID_ARG, _STAGE, f"rule is missing {k}")
         if r["op"] not in OPS:
             # 在**校验阶段**就拒：等到逐条求值时才发现，库为空时这个错永远不会暴露
-            raise ProtocolError(E_INVALID_ARG, _STAGE, f"未知算子：{r['op']!r}")
+            raise ProtocolError(E_INVALID_ARG, _STAGE, f"unknown operator: {r['op']!r}")
         if "value" not in r:
-            raise ProtocolError(E_INVALID_ARG, _STAGE, "rule 缺 value")
+            raise ProtocolError(E_INVALID_ARG, _STAGE, "rule is missing value")
         out.append({"field": r["field"], "op": r["op"], "value": r["value"]})
     return out
 
@@ -181,15 +181,15 @@ def _payload(lib, item, fields: list[str]) -> dict:
 def query(rules, raw, fields, limit) -> dict:
     """返回 `{items, total, truncated}`。`total` 是**应用 limit 前**的真实命中数。"""
     if rules and raw:
-        raise ProtocolError(E_INVALID_ARG, _STAGE, "rules 与 raw 只能给一个（不猜优先级）")
+        raise ProtocolError(E_INVALID_ARG, _STAGE, "rules and raw are mutually exclusive (no priority guessing)")
     if raw is not None and not isinstance(raw, str):
-        raise ProtocolError(E_INVALID_ARG, _STAGE, "raw 必须是字符串")
+        raise ProtocolError(E_INVALID_ARG, _STAGE, "raw must be a string")
     if raw is not None and not raw.strip():
-        raise ProtocolError(E_INVALID_ARG, _STAGE, "raw 为空字符串")
+        raise ProtocolError(E_INVALID_ARG, _STAGE, "raw is an empty string")
     if limit is None:
         limit = DEFAULT_LIMIT
     if not isinstance(limit, int) or isinstance(limit, bool) or not (1 <= limit <= MAX_LIMIT):
-        raise ProtocolError(E_INVALID_ARG, _STAGE, f"limit 必须在 1..{MAX_LIMIT}")
+        raise ProtocolError(E_INVALID_ARG, _STAGE, f"limit must be within 1..{MAX_LIMIT}")
 
     want_fields = [str(f) for f in (fields or DEFAULT_FIELDS) if str(f).strip()]
 
@@ -202,7 +202,7 @@ def query(rules, raw, fields, limit) -> dict:
             total = len(results)
             page = list(itertools.islice(results, limit))
         except Exception as e:  # noqa: BLE001 —— 查询语法错误要让用户看见原文
-            raise ProtocolError(E_INVALID_ARG, _STAGE, f"查询语法无效：{e}") from None
+            raise ProtocolError(E_INVALID_ARG, _STAGE, f"invalid query syntax: {e}") from None
     elif rules:
         checked = _check_rules(rules)
         # 结构化规则只能在 Python 侧求值（见模块头注：beets 的范围查询对未注册类型的 flexible 字段会静默 0
@@ -255,7 +255,7 @@ def fields() -> dict:
             conn.close()
     except sqlite3.Error as e:
         raise ProtocolError(
-            E_INVALID_ARG, _STAGE, f"读 flexible 字段失败（库不可读？）：{e}"
+            E_INVALID_ARG, _STAGE, f"failed to read flexible fields (library unreadable?): {e}"
         ) from None
     for name in flexible:
         out.append({"name": name, "type": "flexible", "source": "flexible"})

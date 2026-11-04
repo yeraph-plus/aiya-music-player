@@ -1,3 +1,4 @@
+import { t } from './i18n.svelte';
 import type { PlaylistSummary } from './ipc/generated/PlaylistSummary';
 import type { TrackRow } from './ipc/generated/TrackRow';
 import type { View } from './view.js';
@@ -50,24 +51,24 @@ export function trackMenuItems(
   const items: MenuItem[] = [];
   if (!multi) {
     items.push(
-      { label: '播放', action: actions.play, disabled: !track },
-      { label: '下一首播放', action: actions.insertNext, disabled: !track },
+      { label: t('lib.menu.play'), action: actions.play, disabled: !track },
+      { label: t('lib.menu.playNext'), action: actions.insertNext, disabled: !track },
     );
   }
   items.push(
-    { label: '加入播放队列', action: actions.enqueue, disabled: !track },
-    { label: '添加到播放列表…', action: actions.addToPlaylist, disabled: !track },
+    { label: t('lib.menu.enqueue'), action: actions.enqueue, disabled: !track },
+    { label: t('lib.menu.addToPlaylist'), action: actions.addToPlaylist, disabled: !track },
   );
   if (!multi) {
     // B4-3b 起直达艺人/专辑详情页（不再是"筛选 chip"），文案随之改为浏览语义
     items.push(
-      { label: '查看艺人', action: actions.filterByArtist, disabled: !track?.artistId || self === 'artist' },
-      { label: '查看专辑', action: actions.filterByAlbum, disabled: !track?.albumId || self === 'album' },
-      { label: '在文件夹中显示', action: actions.reveal, disabled: !track },
+      { label: t('lib.menu.viewArtist'), action: actions.filterByArtist, disabled: !track?.artistId || self === 'artist' },
+      { label: t('lib.menu.viewAlbum'), action: actions.filterByAlbum, disabled: !track?.albumId || self === 'album' },
+      { label: t('lib.menu.reveal'), action: actions.reveal, disabled: !track },
     );
   }
   items.push({
-    label: inPlaylist ? '从播放列表移除' : '从曲库移除',
+    label: inPlaylist ? t('lib.menu.removeFromPlaylist') : t('lib.menu.removeFromLibrary'),
     action: actions.remove,
     disabled: !track,
     danger: true,
@@ -90,16 +91,16 @@ export function playlistMenuItems(
   actions: PlaylistMenuActions,
 ): MenuItem[] {
   return [
-    { label: '播放', action: actions.play },
-    { label: playlist.kind === 'smart' ? '编辑规则' : '重命名', action: actions.rename },
-    { label: '上移', action: actions.moveUp, disabled: position.index <= 0 },
+    { label: t('lib.menu.play'), action: actions.play },
+    { label: playlist.kind === 'smart' ? t('lib.menu.editRules') : t('lib.menu.rename'), action: actions.rename },
+    { label: t('lib.menu.moveUp'), action: actions.moveUp, disabled: position.index <= 0 },
     {
-      label: '下移',
+      label: t('lib.menu.moveDown'),
       action: actions.moveDown,
       disabled: position.index < 0 || position.index >= position.total - 1,
     },
     // 一致（曲目是真实入库行，不再是规则的投影），清空后点「刷新规则」可重新追加
-    { label: '清空', action: actions.clear, disabled: playlist.trackCount === 0 },
-    { label: '删除', action: actions.remove, danger: true },
+    { label: t('lib.menu.clear'), action: actions.clear, disabled: playlist.trackCount === 0 },
+    { label: t('lib.menu.delete'), action: actions.remove, danger: true },
   ];
 }

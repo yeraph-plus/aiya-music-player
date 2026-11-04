@@ -22,6 +22,7 @@
   import Select from './ui/Select.svelte';
   import Switch from './ui/Switch.svelte';
   import { ipc } from '../lib/ipc';
+  import { t, type Msg } from '../lib/i18n.svelte';
   import { library } from '../stores/library.svelte';
   import { list } from '../stores/list.svelte';
   import { nav } from '../stores/nav.svelte';
@@ -48,7 +49,7 @@
   async function revealTrack(trackId: string | null | undefined): Promise<void> {
     if (!trackId) return;
     const result = await library.revealTrack(trackId);
-    if (result && !result.revealed) notify.showError(result.reason ?? '无法定位文件');
+    if (result && !result.revealed) notify.showError(result.reason ?? t('shell.overlay.revealFailed'));
   }
 
   function trackItems(menu: NonNullable<typeof overlay.trackMenu>) {
@@ -68,7 +69,7 @@
             const ids = await list.selectionIds();
             if (ids.length === 0) return;
             await player.enqueue(ids);
-            notify.showToast(`已加入队列 ${ids.length} 首`);
+            notify.showToast(t('shell.overlay.addedToQueue', { n: ids.length }));
           })();
         },
         addToPlaylist: () => {
@@ -178,6 +179,27 @@
         .catch(() => (editGenres = []));
     }
   });
+
+  /** 条件模式 → i18n 键：lib/smart.ts 的 COND_MODES 文案渲染进本组件模板，
+   *  双语在 shell 域表维护（zh 值与 COND_MODES 逐字一致，e2e 守护）。 */
+  const COND_MODE_LABEL: Record<CondMode, Msg> = {
+    genre: 'shell.smart.cond.genre.label',
+    artist: 'shell.smart.cond.artist.label',
+    album: 'shell.smart.cond.album.label',
+    yearFrom: 'shell.smart.cond.yearFrom.label',
+    yearTo: 'shell.smart.cond.yearTo.label',
+    playsMin: 'shell.smart.cond.playsMin.label',
+    playsMax: 'shell.smart.cond.playsMax.label',
+  };
+  const COND_MODE_PLACEHOLDER: Record<CondMode, Msg> = {
+    genre: 'shell.smart.cond.genre.placeholder',
+    artist: 'shell.smart.cond.artist.placeholder',
+    album: 'shell.smart.cond.album.placeholder',
+    yearFrom: 'shell.smart.cond.yearFrom.placeholder',
+    yearTo: 'shell.smart.cond.yearTo.placeholder',
+    playsMin: 'shell.smart.cond.playsMin.placeholder',
+    playsMax: 'shell.smart.cond.playsMax.placeholder',
+  };
 
   function addCond(): void {
     // 新条件默认流派——这是用户最常用的入口
@@ -308,7 +330,7 @@
 
   /** 流派下拉选项："任意流派"是空值语义项，放在最前 */
   const filterGenreOptions = $derived([
-    { value: '', label: '任意流派' },
+    { value: '', label: t('shell.filter.genreAny') },
     ...filterGenres.map((g) => ({ value: g, label: g })),
   ]);
 
@@ -408,7 +430,7 @@
           {a.action.label}
         </Button>
       {/if}
-      <Button variant="primary" onclick={() => overlay.closeDialog()}>关闭</Button>
+      <Button variant="primary" onclick={() => overlay.closeDialog()}>{t('common.close')}</Button>
     {/snippet}
   </Dialog>
 {/if}
@@ -418,7 +440,7 @@
   <!-- 歌单创建与编辑共用此模态框。类型开关仅在创建时出现（后端不支持手动与智能歌单互相转换）。编辑时：手动歌单只改名称，动态歌单为名称 + 规则。条件行为「模式 select +
   动态值控件」两列；排序与上限已移除（入库按标题排序，视图内可拖拽重排，刷新只追加），编辑器仅保留条件行。名称输入框在对话框打开时初始化（见 script 中的 effect），否则歌单列表刷新会覆盖正在输入的内容。 -->
   <Dialog
-    title={editing ? '编辑播放列表' : '新建播放列表'}
+    title={editing ? t('shell.playlist.editTitle') : t('shell.playlist.newTitle')}
     onclose={() => overlay.closeDialog()}
     autofocus={() => {
       nameInput?.focus();
@@ -428,7 +450,7 @@
   >
     <div class="prompt-body">
       <Field
-        label="名称"
+        label={t('shell.playlist.nameLabel')}
         bind:ref={nameInput}
         value={editName}
         maxlength={80}
@@ -439,45 +461,46 @@
         <div class="edit-kind">
           <Switch
             checked={editKind === 'smart'}
-            label="动态歌单"
+            label={t('shell.playlist.smartToggle')}
             onchange={(v) => (editKind = v ? 'smart' : 'manual')}
           />
-          <span class="edit-kind-label">动态歌单</span>
+          <span class="edit-kind-label">{t('shell.playlist.smartToggle')}</span>
         </div>
       {/if}
       {#if editKind === 'smart'}
         <div class="rule-editor">
           <div class="rule-head">
-            <Button variant="ghost" onclick={addCond}>+ 添加条件</Button>
+            <Button variant="ghost" onclick={addCond}>{t('shell.playlist.addCond')}</Button>
           </div>
           {#each editRule.all as cond, i (i)}
-            {@const spec = COND_MODES[modeOfCond(cond)]}
+            {@const condMode = modeOfCond(cond)}
+            {@const spec = COND_MODES[condMode]}
             <div class="rule-row">
               <div class="rule-mode">
                 <Select
-                  label="条件"
-                  value={modeOfCond(cond)}
-                  options={COND_MODE_ORDER.map((m) => ({ value: m, label: COND_MODES[m].label }))}
+                  label={t('shell.playlist.condLabel')}
+                  value={condMode}
+                  options={COND_MODE_ORDER.map((m) => ({ value: m, label: t(COND_MODE_LABEL[m]) }))}
                   onchange={(v) => setCondMode(i, v as CondMode)}
                 />
               </div>
               {#if spec.control === 'genreSelect'}
                 <div class="rule-value-box">
                   <Select
-                    label="流派"
+                    label={t('common.genre')}
                     value={String(cond.value)}
                     options={genreOptions(String(cond.value)).map((g) => ({ value: g, label: g }))}
-                    placeholder="选择流派"
+                    placeholder={t('shell.smart.cond.genre.placeholder')}
                     onchange={(v) => (editRule.all[i] = { ...cond, value: v })}
                   />
                 </div>
               {:else}
                 <div class="rule-value-box">
                   <Field
-                    label={spec.label}
+                    label={t(COND_MODE_LABEL[condMode])}
                     hideLabel
                     type={spec.control === 'number' ? 'number' : 'text'}
-                    placeholder={spec.placeholder}
+                    placeholder={t(COND_MODE_PLACEHOLDER[condMode])}
                     value={cond.value == null ? '' : String(cond.value)}
                     oninput={(v) =>
                       (editRule.all[i] = {
@@ -488,47 +511,47 @@
                   />
                 </div>
               {/if}
-              <Button variant="ghost" ariaLabel="删除条件" onclick={() => removeCond(i)}>删除</Button>
+              <Button variant="ghost" ariaLabel={t('shell.playlist.removeCond')} onclick={() => removeCond(i)}>{t('shell.playlist.removeCondBtn')}</Button>
             </div>
           {:else}
-            <div class="rule-empty">无条件</div>
-            <p class="rule-foot">如果不设置查询条件，将匹配整个曲库</p>
+            <div class="rule-empty">{t('shell.playlist.noConds')}</div>
+            <p class="rule-foot">{t('shell.playlist.ruleEmptyHint')}</p>
           {/each}
           {#if editRule.all.length > 0}
-            <p class="rule-foot">满足查询条件的曲目自动加入歌单，按标题排序</p>
+            <p class="rule-foot">{t('shell.playlist.ruleHint')}</p>
           {/if}
         </div>
       {/if}
     </div>
     {#snippet actions()}
-      <Button onclick={() => overlay.closeDialog()}>取消</Button>
+      <Button onclick={() => overlay.closeDialog()}>{t('common.cancel')}</Button>
       <Button variant="primary" disabled={!editName.trim()} onclick={submitPlaylistEdit}>
-        {editing ? '保存' : '创建'}
+        {editing ? t('common.save') : t('common.create')}
       </Button>
     {/snippet}
   </Dialog>
 {:else if overlay.dialog?.kind === 'deletePlaylist'}
   <Dialog
-    title="删除播放列表"
-    description={`「${overlay.dialog.playlist.name}」会被删除，曲库里的歌曲不受影响。`}
+    title={t('shell.playlist.deleteTitle')}
+    description={t('shell.playlist.deleteDesc', { name: overlay.dialog.playlist.name })}
     onclose={() => overlay.closeDialog()}
     autofocus={() => deleteCancelEl?.focus()}
   >
     {#snippet actions()}
-      <Button bind:ref={deleteCancelEl} onclick={() => overlay.closeDialog()}>取消</Button>
-      <Button variant="danger" onclick={submitDelete}>删除</Button>
+      <Button bind:ref={deleteCancelEl} onclick={() => overlay.closeDialog()}>{t('common.cancel')}</Button>
+      <Button variant="danger" onclick={submitDelete}>{t('common.delete')}</Button>
     {/snippet}
   </Dialog>
 {:else if overlay.dialog?.kind === 'removeTracks'}
   <Dialog
-    title="从曲库移除"
-    description={`将从曲库移除 ${overlay.dialog.ids.length} 首曲目。磁盘上的文件不会被删除，下次扫描会重新导入。`}
+    title={t('shell.playlist.removeTracksTitle')}
+    description={t('shell.playlist.removeTracksDesc', { n: overlay.dialog.ids.length })}
     onclose={() => overlay.closeDialog()}
     autofocus={() => removeCancelEl?.focus()}
   >
     {#snippet actions()}
-      <Button bind:ref={removeCancelEl} onclick={() => overlay.closeDialog()}>取消</Button>
-      <Button variant="danger" onclick={submitRemoveTracks}>移除</Button>
+      <Button bind:ref={removeCancelEl} onclick={() => overlay.closeDialog()}>{t('common.cancel')}</Button>
+      <Button variant="danger" onclick={submitRemoveTracks}>{t('common.remove')}</Button>
     {/snippet}
   </Dialog>
 {:else if overlay.dialog?.kind === 'trackFilter'}
@@ -540,16 +563,16 @@
     控件统一使用 kit：Select（原生下拉列表不受 CSS 控制）与 Field。
   -->
   <Dialog
-    title="筛选曲目"
-    description="按入库时间或流派/艺人/专辑/年份过滤当前列表；留空的字段不过滤，换页即清"
+    title={t('shell.filter.title')}
+    description={t('shell.filter.desc')}
     onclose={() => overlay.closeDialog()}
   >
     <div class="filter-body">
       <div class="filter-row">
-        <div class="filter-label">入库时间</div>
+        <div class="filter-label">{t('shell.filter.addedTime')}</div>
         <div class="filter-pair">
           <Field
-            label="入库时间从"
+            label={t('shell.filter.addedFrom')}
             hideLabel
             type="date"
             value={draftAddedFrom}
@@ -557,7 +580,7 @@
           />
           <span class="filter-dash" aria-hidden="true">–</span>
           <Field
-            label="入库时间到"
+            label={t('shell.filter.addedTo')}
             hideLabel
             type="date"
             value={draftAddedTo}
@@ -566,10 +589,10 @@
         </div>
       </div>
       <div class="filter-row">
-        <div class="filter-label">流派</div>
+        <div class="filter-label">{t('common.genre')}</div>
         <div class="filter-value">
           <Select
-            label="流派"
+            label={t('common.genre')}
             value={draftGenre}
             options={filterGenreOptions}
             onchange={(v) => (draftGenre = v)}
@@ -577,48 +600,48 @@
         </div>
       </div>
       <div class="filter-row">
-        <div class="filter-label">艺人</div>
+        <div class="filter-label">{t('common.artist')}</div>
         <div class="filter-value">
           <Field
-            label="艺人关键词"
+            label={t('shell.filter.artistLabel')}
             hideLabel
             type="text"
-            placeholder="艺人名关键词"
+            placeholder={t('shell.filter.artistPlaceholder')}
             value={draftArtist}
             oninput={(v) => (draftArtist = v)}
           />
         </div>
       </div>
       <div class="filter-row">
-        <div class="filter-label">专辑</div>
+        <div class="filter-label">{t('common.album')}</div>
         <div class="filter-value">
           <Field
-            label="专辑关键词"
+            label={t('shell.filter.albumLabel')}
             hideLabel
             type="text"
-            placeholder="专辑名关键词"
+            placeholder={t('shell.filter.albumPlaceholder')}
             value={draftAlbum}
             oninput={(v) => (draftAlbum = v)}
           />
         </div>
       </div>
       <div class="filter-row">
-        <div class="filter-label">年份</div>
+        <div class="filter-label">{t('common.year')}</div>
         <div class="filter-pair">
           <Field
-            label="年份不早于"
+            label={t('shell.filter.yearFrom')}
             hideLabel
             type="number"
-            placeholder="不早于"
+            placeholder={t('shell.filter.yearFromShort')}
             value={String(draftYearFrom ?? '')}
             oninput={(v) => (draftYearFrom = numOrNull(v))}
           />
           <span class="filter-dash" aria-hidden="true">–</span>
           <Field
-            label="年份不晚于"
+            label={t('shell.filter.yearTo')}
             hideLabel
             type="number"
-            placeholder="不晚于"
+            placeholder={t('shell.filter.yearToShort')}
             value={String(draftYearTo ?? '')}
             oninput={(v) => (draftYearTo = numOrNull(v))}
           />
@@ -626,16 +649,16 @@
       </div>
     </div>
     {#snippet actions()}
-      <Button onclick={() => overlay.closeDialog()}>取消</Button>
-      <Button variant="primary" onclick={applyFilter}>应用</Button>
+      <Button onclick={() => overlay.closeDialog()}>{t('common.cancel')}</Button>
+      <Button variant="primary" onclick={applyFilter}>{t('common.apply')}</Button>
     {/snippet}
   </Dialog>
 {:else if overlay.dialog?.kind === 'addToPlaylist'}
   <!-- 极简歌单选择器：无大标题、无关闭键、无底部按钮。顶部仅一行次要文本说明用途，主体为歌单列表，点击行即添加并关闭；无歌单时显示一行空态文案。关闭走 Esc 或点击遮罩。不使用
   Menu：选择歌单属于需要看到各歌单曲目数的浏览行为，而菜单面向 "已知要点哪一项"的快捷路径，两者交互模型不同。 -->
   <Dialog
-    label="添加到播放列表"
-    description="添加到播放列表"
+    label={t('shell.pick.title')}
+    description={t('shell.pick.title')}
     width="md"
     onclose={() => overlay.closeDialog()}
   >
@@ -645,10 +668,10 @@
         <button class="pick-row" onclick={() => submitAddTo(playlist.id)}>
           <Cover src={playlist.artworkId ? artworkUrl(playlist.artworkId, 96) : null} size="sm" />
           <span class="pick-name">{playlist.name}</span>
-          <span class="pick-count">{playlist.trackCount} 首</span>
+          <span class="pick-count">{t('common.trackCount', { n: playlist.trackCount })}</span>
         </button>
       {:else}
-        <p class="pick-empty">还没有播放列表</p>
+        <p class="pick-empty">{t('shell.pick.empty')}</p>
       {/each}
     </div>
   </Dialog>

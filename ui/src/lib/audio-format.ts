@@ -1,3 +1,4 @@
+import { t } from './i18n.svelte';
 import type { TrackAudio } from './ipc/generated/TrackAudio';
 
 /**
@@ -136,12 +137,18 @@ export function audioTooltip(audio: TrackAudio | null | undefined): string | nul
   const rate = audio.sampleRate ? formatSampleRate(audio.sampleRate) : '';
   if (rate) parts.push(rate);
   if (audio.bitsPerSample) parts.push(`${audio.bitsPerSample} bit`);
-  if (audio.channels) parts.push(`${audio.channels} 声道`);
-  parts.push(audio.lossless === true ? '无损' : audio.lossless === false ? '有损' : '未知');
+  if (audio.channels) parts.push(t('lib.audioFormat.channels', { n: audio.channels }));
+  parts.push(
+    audio.lossless === true
+      ? t('lib.audioFormat.lossless')
+      : audio.lossless === false
+        ? t('lib.audioFormat.lossy')
+        : t('lib.audioFormat.unknown'),
+  );
   if (audio.bitrate && audio.bitrate > 0) {
     // 单位 kbps（见 formatAudioSpec 的注释），不需要再除 1000
     const kbps = Math.round(audio.bitrate);
-    parts.push(audio.lossless === true ? `平均码率 ${kbps} kbps` : `${kbps} kbps`);
+    parts.push(audio.lossless === true ? t('lib.audioFormat.avgBitrate', { kbps }) : `${kbps} kbps`);
   }
   return parts.join(' · ');
 }

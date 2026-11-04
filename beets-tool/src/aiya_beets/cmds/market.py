@@ -73,8 +73,8 @@ def resolve_installer() -> tuple[list[str], str] | tuple[None, str]:
         # uv 建的 venv 不带 pip 是常态：uv pip 直接操作目标环境，不需要 pip 模块
         return [uv, "pip", "install", "--python", python], "uv pip"
     return None, (
-        "当前 Python 环境没有 pip，PATH 上也没有 uv，无法在线安装插件。"
-        "离线套件包（bundle）轨道请改用安装器（installer）轨道，或在打包时预置 wheel。"
+        "no pip in the current Python environment and no uv on PATH, cannot install plugins online. "
+        "For the offline bundle track use the installer track instead, or preinstall wheels when packaging."
     )
 
 
@@ -91,14 +91,14 @@ def install_plugin(req_id: int, name: str, emit, cancel_gen, gen: int) -> None:
     spec = plugins.find_market_spec(name)
     if spec is None:
         raise protocol.ProtocolError(
-            protocol.E_INVALID_ARG, "pluginInstall", f"不在插件目录里: {name!r}"
+            protocol.E_INVALID_ARG, "pluginInstall", f"not in the plugin catalog: {name!r}"
         )
     if not spec.packages:
         # 无需额外包：要么随 beets 内置，要么依赖已在 lock 里（fetchart 的
         # requests）。"安装"没有意义，UI 对它只给开关。
         raise protocol.ProtocolError(
             protocol.E_INVALID_ARG, "pluginInstall",
-            f"{name} 不需要额外 Python 包，直接启用即可",
+            f"{name} needs no extra Python packages, just enable it",
         )
 
     installer, why = resolve_installer()
@@ -109,7 +109,7 @@ def install_plugin(req_id: int, name: str, emit, cancel_gen, gen: int) -> None:
     # pip 做两次依赖解析，第二次可能把第一次的结果降级。
     cmd = [*installer, "install", "--disable-pip-version-check", *spec.packages]
     emit({"type": "pluginProgress", "session": session, "stage": "pluginInstall",
-          "message": f"安装 {' '.join(spec.packages)}"})
+          "message": f"installing {' '.join(spec.packages)}"})
     try:
         proc = subprocess.Popen(
             cmd,
@@ -123,7 +123,7 @@ def install_plugin(req_id: int, name: str, emit, cancel_gen, gen: int) -> None:
         )
     except OSError as e:
         raise protocol.ProtocolError(
-            protocol.E_INTERNAL, "pluginInstall", f"启动安装器失败: {e}"
+            protocol.E_INTERNAL, "pluginInstall", f"failed to start the installer: {e}"
         ) from e
 
     # v2 积弊修复：取消必须能杀掉 pip。旧实现阻塞在 `for line in proc.stdout` 上，cancel 检查排在 proc.wait() 之后——卡死的 pip
@@ -162,7 +162,7 @@ def install_plugin(req_id: int, name: str, emit, cancel_gen, gen: int) -> None:
     if code != 0:
         raise protocol.ProtocolError(
             protocol.E_BEETS_ERROR, "pluginInstall",
-            f"安装退出码 {code}（详见上方输出）",
+            f"installer exit code {code} (see the output above)",
         )
 
     # 装完必须复检三态：pip 退出码 0 不等于插件可用（依赖缺、包名与插件名不一致）
@@ -172,7 +172,7 @@ def install_plugin(req_id: int, name: str, emit, cancel_gen, gen: int) -> None:
         missing = next((item["missing"] for item in report if item["name"] == name), [])
         raise protocol.ProtocolError(
             protocol.E_BEETS_ERROR, "pluginInstall",
-            f"安装完成但插件未就绪（{state}），缺：{', '.join(missing) or '未知'}",
+            f"install finished but the plugin is not ready ({state}), missing: {', '.join(missing) or 'unknown'}",
         )
 
     emit({"type": "pluginDone", "session": session, "stage": "pluginInstall",

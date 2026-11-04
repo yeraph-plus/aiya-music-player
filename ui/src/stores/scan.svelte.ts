@@ -1,4 +1,5 @@
 import { errorMessage } from '../lib/errors';
+import { t } from '../lib/i18n.svelte';
 import { events, ipc } from '../lib/ipc';
 import type { RefreshSnapshot } from '../lib/ipc/generated/RefreshSnapshot';
 import type { RefreshState } from '../lib/ipc/generated/RefreshState';
@@ -141,7 +142,9 @@ class ScanStore {
         if (snap.changed) void reload();
       } else if (type === 'libraryRefreshFailed') {
         // 整条管线失败（DB 打不开之类）：状态卡片里要看得见"库坏了"级别的信号
-        this.lastError = `曲库自动刷新失败：${String(raw.message ?? '未知原因')}`;
+        this.lastError = t('scan.autoRefreshFailed', {
+          message: String(raw.message ?? t('scan.unknownReason')),
+        });
       }
     });
   }

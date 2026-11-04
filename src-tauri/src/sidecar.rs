@@ -101,7 +101,7 @@ impl SidecarHandle {
         (
             sibling.clone(),
             Some(format!(
-                "找不到 sidecar：{} 不存在（dev 下先 cargo build -p aiya-audio-host）",
+                "sidecar not found: {} does not exist (in dev, run cargo build -p aiya-audio-host first)",
                 sibling.display()
             )),
         )
@@ -234,7 +234,7 @@ fn degrade_launch(ev_tx: &SyncSender<aiya_audio::EngineEvent>, reason: String) {
     let _ = ev_tx.send(aiya_audio::EngineEvent::Error {
         token: 0,
         kind: aiya_audio::AudioErrorKind::Internal.as_str().into(),
-        message: format!("音频引擎暂时不可用，正在后台重试：{reason}"),
+        message: format!("audio engine temporarily unavailable, retrying in the background: {reason}"),
     });
 }
 
@@ -248,7 +248,7 @@ fn connect_once(
     // spawn 前查：关闭流程开始后看门狗不该再起新进程。看门狗循环头查过一次 shutting_down，但从查到 spawn 之间隔了判死/kill/换代几步 ——
     // 关闭恰好插进来时，这里不拦就会留下无人收尸的孤儿 sidecar（shutdown 已经跑完、看门狗线程随后退出）。
     if shared.shutting_down.load(Ordering::SeqCst) {
-        return Err("正在关闭：跳过 sidecar 重连".into());
+        return Err("shutting down: skipping sidecar reconnect".into());
     }
     let pipe = format!(r"\\.\pipe\{pipe_base}-{generation}");
     let mut cmd = Command::new(host_exe);
@@ -262,7 +262,7 @@ fn connect_once(
     // Windows 会给它新建一个黑窗。这个标志是父进程侧的闸门，子进程自己改 subsystem 管不到。
     crate::proc::no_window(&mut cmd);
 
-    let child = cmd.spawn().map_err(|e| format!("启动 sidecar 失败：{e}"))?;
+    let child = cmd.spawn().map_err(|e| format!("failed to spawn sidecar: {e}"))?;
     *lock(&shared.child) = Some(child);
 
     // spawn 后再查：与 shutdown() 的窄竞态（检查在前、spawn 在后）兜底。命中就立即收尸返回 —— shutdown 的等待循环/最终
@@ -272,7 +272,7 @@ fn connect_once(
             let _ = c.kill();
             let _ = c.wait();
         }
-        return Err("正在关闭：已回收刚启动的 sidecar".into());
+        return Err("shutting down: killed the newly spawned sidecar".into());
     }
 
     // 连接 + 握手；任何失败路径都收尸（P2：spawn 后连接/握手失败曾把
@@ -307,7 +307,7 @@ fn connect_and_handshake(pipe: &str) -> Result<Connection, String> {
                 Err(_) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(100));
                 }
-                Err(e) => return Err(format!("连接 sidecar 管道超时 {pipe}：{e}")),
+                Err(e) => return Err(format!("timed out connecting to sidecar pipe {pipe}: {e}")),
             }
         }
     };
@@ -322,7 +322,7 @@ fn connect_and_handshake(pipe: &str) -> Result<Connection, String> {
     writer
         .write_all(&bytes)
         .and_then(|_| writer.flush())
-        .map_err(|e| format!("握手发送失败：{e}"))?;
+        .map_err(|e| format!("failed to send handshake: {e}"))?;
 
     // Welcome 读取挪进辅助线程 + recv_timeout：miow 的命名管道读没有超时 API，
     // 若 sidecar 卡在"已 accept、未写 Welcome"（进程僵死/杀软拦截），read_line
@@ -339,16 +339,16 @@ fn connect_and_handshake(pipe: &str) -> Result<Connection, String> {
             let result = read_welcome(&mut reader);
             let _ = tx.send((result, reader));
         })
-        .map_err(|e| format!("起握手线程失败：{e}"))?;
+        .map_err(|e| format!("failed to spawn handshake thread: {e}"))?;
     let (result, reader) = match rx.recv_timeout(HANDSHAKE_TIMEOUT) {
         Ok(pair) => pair,
         Err(mpsc::RecvTimeoutError::Timeout) => {
             return Err(format!(
-                "握手超时（{HANDSHAKE_TIMEOUT:.0?} 内未收到 Welcome）"
+                "handshake timed out (no Welcome within {HANDSHAKE_TIMEOUT:.0?})"
             ));
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
-            return Err("握手线程异常退出".into());
+            return Err("handshake thread exited unexpectedly".into());
         }
     };
     result?;
@@ -369,15 +369,15 @@ fn read_welcome(reader: &mut BufReader<File>) -> Result<(), String> {
         line.clear();
         let n = reader
             .read_line(&mut line)
-            .map_err(|e| format!("握手读取失败：{e}"))?;
+            .map_err(|e| format!("failed to read handshake: {e}"))?;
         if n == 0 {
-            return Err("sidecar 在握手中断开（可能协议不兼容或管道冲突）".into());
+            return Err("sidecar disconnected during handshake (protocol mismatch or pipe conflict)".into());
         }
         if let Ok(aiya_audio::SidecarToHost::Welcome { protocol }) =
             serde_json::from_str(line.trim())
         {
             if protocol != aiya_audio::PROTOCOL_VERSION {
-                return Err(format!("协议不兼容：sidecar v{protocol}"));
+                return Err(format!("protocol incompatible: sidecar v{protocol}"));
             }
             return Ok(());
         }

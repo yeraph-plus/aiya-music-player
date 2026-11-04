@@ -997,7 +997,7 @@ pub fn scan_roots_ext(
         .num_threads(cores.saturating_sub(1).max(1))
         .thread_name(|i| format!("aiya-parse-{i}"))
         .build()
-        .map_err(|e| DbError::Custom(format!("解析线程池创建失败: {e}")))?;
+        .map_err(|e| DbError::Custom(format!("failed to create parse thread pool: {e}")))?;
 
     let (tx, rx) = sync_channel::<Item>(CHANNEL_CAP);
 

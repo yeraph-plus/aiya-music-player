@@ -178,7 +178,7 @@ print("[3b] 空 key 跳过 OK: groups=0")
 events, rc = run([{"id": 7, "cmd": "move_items", "directory": MOVEDIR, "pretend": True}])
 failed = [e for e in events if e.get("type") == "sessionFailed"]
 assert failed, events
-assert "不一致" in failed[0]["error"]["beets_message"], failed[0]
+assert "mismatch" in failed[0]["error"]["beets_message"], failed[0]
 print("[4a] 库根不一致拒绝 OK:", failed[0]["error"]["beets_message"][:50])
 
 # 4b config 里没有 directory → 拒绝（绝不能回落到 ~/Music）
@@ -187,7 +187,7 @@ with open(os.path.join(BEETSDIR, "config.yaml"), "w", encoding="utf-8") as f:
 events, rc = run([{"id": 8, "cmd": "move_items", "directory": "", "pretend": True}])
 failed = [e for e in events if e.get("type") == "sessionFailed"]
 assert failed, events
-assert "没有 directory" in failed[0]["error"]["beets_message"], failed[0]
+assert "no directory" in failed[0]["error"]["beets_message"], failed[0]
 print("[4b] 未配置库根拒绝 OK:", failed[0]["error"]["beets_message"][:40])
 with open(os.path.join(BEETSDIR, "config.yaml"), "w", encoding="utf-8") as f:
     f.write(f"directory: {LIBDIR}\nimport://n    copy: no\n")

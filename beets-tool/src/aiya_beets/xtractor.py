@@ -85,7 +85,7 @@ def apply() -> bool:
     try:
         from beetsplug.xtractor import command as xt_command
     except Exception as e:  # noqa: BLE001 —— 导入失败的原因不重要，重要的是"没装"
-        REASON = f"beets-xtractor 没装（{type(e).__name__}: {e}）"
+        REASON = f"beets-xtractor is not installed ({type(e).__name__}: {e})"
         return False
 
     cls = xt_command.XtractorCommand
@@ -125,13 +125,13 @@ def run(argv: list[str]) -> int:
 
     if cfg.profile() != cfg.PROFILE_INDEX:
         raise XtractorError(
-            "xtractor 只在索引家（AIYA_BEETS_PROFILE=index）里跑："
-            "工作台家的 write 默认是 yes，会把 bpm 写回用户的音频文件"
+            "xtractor runs only in the index profile (AIYA_BEETS_PROFILE=index): "
+            "the workbench profile's write defaults to yes and would write bpm back into the user's audio files"
         )
     if not apply():
         raise XtractorError(
-            f"{REASON}。装法：便携套件包已预置这一项（重新解包即可）；"
-            "包内换插件用 `aiya-beets install --plugins xtractor`"
+            f"{REASON}. How to install: the portable bundle ships it (re-extract the bundle); "
+            "to change plugins inside the package use `aiya-beets install --plugins xtractor`"
         )
 
     # 提取器必须找得到：插件自己的默认值是个占位符，spawn 一个不存在的程序
@@ -140,8 +140,8 @@ def run(argv: list[str]) -> int:
 
     if plugins.exe_path("streaming_extractor_music") is None:
         raise XtractorError(
-            "没有 Essentia 提取器（streaming_extractor_music）：先跑 aiya-beets bins --only "
-            "streaming_extractor_music，或者用带它的免配置包"
+            "missing the Essentia extractor (streaming_extractor_music): run aiya-beets bins --only "
+            "streaming_extractor_music first, or use a bundle that ships it"
         )
 
     from beets import ui

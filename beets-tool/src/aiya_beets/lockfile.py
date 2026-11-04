@@ -149,11 +149,11 @@ def acquire(cmd: str) -> None:
         os.close(fd)
         holder = _read_holder()
         # holder 进 message（Display 原样带给 UI）也进 extras（机器可读）
-        who = holder or "另一个进程"
+        who = holder or "another process"
         raise ProtocolError(
             E_LIBRARY_BUSY, cmd,
-            f"beets 库正被占用：{who} 正在变更库（可能是另一个播放器实例"
-            "或外部 beet 命令）。等它完成后再试。",
+            f"beets library is busy: {who} is changing the library (possibly another player instance "
+            "or an external beet command). Try again after it finishes.",
             holder=holder,
         )
     _write_holder(cmd)

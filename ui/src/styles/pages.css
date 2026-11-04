@@ -21,6 +21,13 @@
   color: var(--text-3);
 }
 
+/* 英文模式取消装饰字：英文界面里它不是装饰，是和标题同语言的重复信息
+   （docs/64 §3.2）。data-lang 由 App 的 effect 按设置语言写在 <html> 上 */
+[data-lang='en'] .page-kicker,
+[data-lang='en'] .ch-kicker {
+  display: none;
+}
+
 .section-heading {
   display: flex;
   align-items: baseline;

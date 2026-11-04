@@ -75,7 +75,7 @@ pub fn classify(path: &Path) -> DroppedItem {
         return DroppedItem {
             path: path_str,
             kind: DroppedKind::Directory,
-            note: "文件夹".into(),
+            note: "folder".into(),
             label,
         };
     }
@@ -83,7 +83,7 @@ pub fn classify(path: &Path) -> DroppedItem {
         return DroppedItem {
             path: path_str,
             kind: DroppedKind::Unsupported,
-            note: "文件不存在".into(),
+            note: "file not found".into(),
             label,
         };
     }
@@ -98,19 +98,19 @@ pub fn classify(path: &Path) -> DroppedItem {
         "m3u8" => DroppedItem {
             path: path_str,
             kind: DroppedKind::HlsPlaylist,
-            note: "HLS 清单".into(),
+            note: "HLS playlist".into(),
             label,
         },
         "m3u" if looks_like_hls(path) => DroppedItem {
             path: path_str,
             kind: DroppedKind::HlsPlaylist,
-            note: "HLS 清单".into(),
+            note: "HLS playlist".into(),
             label,
         },
         "m3u" => DroppedItem {
             path: path_str,
             kind: DroppedKind::Playlist,
-            note: "m3u 歌单".into(),
+            note: "m3u playlist".into(),
             label,
         },
         _ if aiya_audio::decoder::SUPPORTED_AUDIO_EXT.contains(&ext.as_str()) => DroppedItem {
@@ -122,8 +122,8 @@ pub fn classify(path: &Path) -> DroppedItem {
         _ => {
             // "认识但解不了"报格式名（用户该换文件/转码，不是重试）
             let note = aiya_audio::decoder::unsupported_ext_name(path)
-                .map(|name| format!("{name} 不支持"))
-                .unwrap_or_else(|| "不支持的格式".into());
+                .map(|name| format!("{name} not supported"))
+                .unwrap_or_else(|| "unsupported format".into());
             DroppedItem {
                 path: path_str,
                 kind: DroppedKind::Unsupported,
@@ -139,7 +139,7 @@ pub fn classify(path: &Path) -> DroppedItem {
 /// 只做"列条目"这一件事：不查库、不去重、不排序。真正的分类仍由
 /// [`classify`] 逐条做——歌单里混进一个 wma 不该让整张单报废，它只是被跳过。
 pub fn expand_playlist(path: &Path) -> Result<Vec<String>, String> {
-    let text = std::fs::read(path).map_err(|e| format!("读歌单失败 {}：{e}", path.display()))?;
+    let text = std::fs::read(path).map_err(|e| format!("failed to read playlist {}: {e}", path.display()))?;
     let text = String::from_utf8_lossy(&text);
     let base = path.parent().unwrap_or_else(|| Path::new("."));
     let mut out = Vec::new();
@@ -214,7 +214,7 @@ mod tests {
         let dir = tmp();
         let item = classify(dir.path());
         assert_eq!(item.kind, DroppedKind::Directory);
-        assert_eq!(item.note, "文件夹");
+        assert_eq!(item.note, "folder");
     }
 
     #[test]
@@ -222,7 +222,7 @@ mod tests {
         let dir = tmp();
         let item = classify(&dir.path().join("nope.flac"));
         assert_eq!(item.kind, DroppedKind::Unsupported);
-        assert!(item.note.contains("不存在"));
+        assert!(item.note.contains("not found"));
     }
 
     /// 展开 m3u：相对路径按清单目录解析，注释与空行忽略，URL 原样保留

@@ -78,7 +78,7 @@ class ProtocolError(Exception):
 
     def __init__(self, code: str, stage: str, message: str, **extra):
         super().__init__(message)
-        assert code in ERROR_CODES, f"未登记的错误码：{code}"
+        assert code in ERROR_CODES, f"error code not registered: {code}"
         self.code = code
         self.stage = stage
         self.message = message
@@ -113,20 +113,20 @@ def check_client(req: dict) -> None:
     except (TypeError, ValueError):
         raise ProtocolError(
             E_PROTOCOL_MISMATCH, "handshake",
-            f"clientProtocol 不是整数：{raw!r}（本组件支持 v{PROTOCOL_VERSION}）",
+            f"clientProtocol is not an integer: {raw!r} (this component supports v{PROTOCOL_VERSION})",
         ) from None
     if client == PROTOCOL_VERSION:
         return
     if client < PROTOCOL_VERSION:
         raise ProtocolError(
             E_PROTOCOL_MISMATCH, "handshake",
-            f"播放器太老（v{client}），本组件支持 v{PROTOCOL_VERSION}：请升级播放器",
+            f"player protocol v{client} is older than the component's v{PROTOCOL_VERSION}: update the player",
             clientProtocol=client,
             serverProtocol=PROTOCOL_VERSION,
         )
     raise ProtocolError(
         E_PROTOCOL_MISMATCH, "handshake",
-        f"组件太老（v{PROTOCOL_VERSION}），播放器要求 v{client}：请升级 beets 组件",
+        f"component protocol v{PROTOCOL_VERSION} is older than the player's v{client}: update the beets component",
         clientProtocol=client,
         serverProtocol=PROTOCOL_VERSION,
     )

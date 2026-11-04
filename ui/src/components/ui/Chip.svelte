@@ -6,6 +6,7 @@
    * 外层使用 `<span>` 而非 `<button>`：可关闭的 chip 内部还有 × 按钮，button 嵌套
    * button 不合法，浏览器会静默拆分结构，导致交互随机失效。
    */
+  import { t } from '../../lib/i18n.svelte';
 
   interface Props {
     label: string;
@@ -41,8 +42,8 @@
     <button
       type="button"
       class="k-chip-x"
-      aria-label={`清除${label}`}
-      title={`清除${label}`}
+      aria-label={t('common.chipClear', { label })}
+      title={t('common.chipClear', { label })}
       onclick={() => onclear?.()}
     >
       ×

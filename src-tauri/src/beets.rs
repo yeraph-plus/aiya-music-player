@@ -501,12 +501,14 @@ fn version_mismatch(got: Option<u32>) -> Option<String> {
     match got {
         Some(v) if v == want => None,
         Some(v) if v < want => Some(format!(
-            "beets 组件协议 v{v}，播放器需要 v{want}：请升级组件",
+            "beets component protocol v{v}, player needs v{want}: update the component",
         )),
         Some(v) => Some(format!(
-            "组件协议 v{v} 比播放器支持的 v{want} 新：请升级播放器",
+            "component protocol v{v} is newer than the player's v{want}: update the player",
         )),
-        None => Some(format!("组件没有报协议版本（应为 v{want}）：请重装组件",)),
+        None => Some(format!(
+            "component did not report a protocol version (expected v{want}): reinstall the component",
+        )),
     }
 }
 
@@ -667,9 +669,9 @@ fn busy_status(entry: &ToolEntry, source: EntrySource) -> BeetsStatus {
         data_home: None,
         schema_matched: false,
         library_lock: Some("held".into()),
-        library_lock_holder: Some("本应用正在执行 beets 任务".into()),
+        library_lock_holder: Some("this app is running a beets task".into()),
         error_code: Some("E_BEETS_BUSY".into()),
-        error_message: Some("组件正在执行其它任务".into()),
+        error_message: Some("the component is running another task".into()),
     }
 }
 
@@ -678,7 +680,7 @@ pub fn probe(app: &tauri::AppHandle) -> BeetsStatus {
     let Some((entry, source)) = discover(app) else {
         return absent(
             "E_BEETS_NOT_INSTALLED",
-            Some("未找到 aiya-beets 组件。可在下方安装，或指定已有路径。".into()),
+            Some("aiya-beets component not found: install it below or point to an existing path".into()),
             None,
             None,
         );
@@ -753,7 +755,7 @@ enum AssetKind {
 impl AssetKind {
     fn label(self) -> &'static str {
         match self {
-            AssetKind::Bundle => "便携包（.zip）",
+            AssetKind::Bundle => "portable bundle (.zip)",
         }
     }
 }
@@ -775,28 +777,28 @@ fn download_to(url: &str, dest: &std::path::Path) -> Result<u64, String> {
     let resp = ureq::get(url)
         .timeout(std::time::Duration::from_secs(120))
         .call()
-        .map_err(|e| format!("下载失败（{url}）：{e}"))?;
+        .map_err(|e| format!("download failed ({url}): {e}"))?;
     if let Some(len) = resp
         .header("content-length")
         .and_then(|v| v.trim().parse::<u64>().ok())
     {
         if len > ASSET_MAX_BYTES {
             return Err(format!(
-                "下载物声明大小 {} MB，超过 {} MB 上限（地址指错了？）：{url}",
+                "download declares {} MB, over the {} MB limit (wrong address?): {url}",
                 len / 1024 / 1024,
                 ASSET_MAX_BYTES / 1024 / 1024
             ));
         }
     }
-    let mut out = std::fs::File::create(dest).map_err(|e| format!("写临时文件失败：{e}"))?;
+    let mut out = std::fs::File::create(dest).map_err(|e| format!("failed to write temp file: {e}"))?;
     // take(上限+1)：多读 1 字节用来区分"正好在上限"与"超了"
     let mut body = resp.into_reader().take(ASSET_MAX_BYTES + 1);
-    let n = std::io::copy(&mut body, &mut out).map_err(|e| format!("下载写入失败：{e}"))?;
+    let n = std::io::copy(&mut body, &mut out).map_err(|e| format!("failed to write the download: {e}"))?;
     if n > ASSET_MAX_BYTES {
         drop(out);
         let _ = std::fs::remove_file(dest);
         return Err(format!(
-            "下载物超过 {} MB 上限，已中止（地址指错了？）：{url}",
+            "download exceeded the {} MB limit, aborted (wrong address?): {url}",
             ASSET_MAX_BYTES / 1024 / 1024
         ));
     }
@@ -811,15 +813,15 @@ fn download_to(url: &str, dest: &std::path::Path) -> Result<u64, String> {
 fn verify_asset(path: &std::path::Path, kind: AssetKind) -> Result<usize, String> {
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if size == 0 {
-        return Err(format!("{} 是空文件（下载没成功）", kind.label()));
+        return Err(format!("{} is an empty file (download did not succeed)", kind.label()));
     }
-    let file = std::fs::File::open(path).map_err(|e| format!("打开{}失败：{e}", kind.label()))?;
+    let file = std::fs::File::open(path).map_err(|e| format!("failed to open {}: {e}", kind.label()))?;
     match zip::ZipArchive::new(file) {
         Ok(z) if !z.is_empty() => Ok(z.len()),
-        Ok(_) => Err(format!("{} 是空压缩包（构建有问题）", kind.label())),
+        Ok(_) => Err(format!("{} is an empty archive (build problem)", kind.label())),
         Err(_) => Err(format!(
-            "{} 不是有效的压缩包（{} 字节）——多半是下到了错误页，\
-             或这个版本的发布物还没传上去",
+            "{} is not a valid archive ({} bytes) - probably an error page, \
+             or this release asset has not been uploaded yet",
             kind.label(),
             size
         )),
@@ -846,15 +848,16 @@ fn verify_checksum(path: &std::path::Path, asset: &str, base: &str) -> Result<()
         .call()
         .map_err(|e| {
             format!(
-                "下载 SHA256SUMS 失败（{sums_url}）：{e}\n\
-                 ——发布通道没有校验清单时不允许安装。可手动下载两个发布物后，\
-                 用 AIYA_BEETS_INSTALLER / AIYA_BEETS_BUNDLE 指向本地文件"
+                "failed to download SHA256SUMS ({sums_url}): {e}\n\
+                 installing without a checksum manifest is not allowed; download both \
+                 release assets manually and point AIYA_BEETS_INSTALLER / AIYA_BEETS_BUNDLE \
+                 at the local files"
             )
         })?;
     resp.into_reader()
         .take(1 << 20) // 清单就几行，1 MiB 上限防呆
         .read_to_string(&mut sums)
-        .map_err(|e| format!("读取 SHA256SUMS 失败：{e}"))?;
+        .map_err(|e| format!("failed to read SHA256SUMS: {e}"))?;
 
     let expected = sums
         .lines()
@@ -865,15 +868,15 @@ fn verify_checksum(path: &std::path::Path, asset: &str, base: &str) -> Result<()
             (hash.len() == 64 && name.trim() == asset).then(|| hash.to_ascii_lowercase())
         })
         .next()
-        .ok_or_else(|| format!("SHA256SUMS 里没有 {asset}（发布物与清单不配套）"))?;
+        .ok_or_else(|| format!("SHA256SUMS has no entry for {asset} (asset and manifest do not match)"))?;
 
-    let mut file = std::fs::File::open(path).map_err(|e| format!("打开下载物失败：{e}"))?;
+    let mut file = std::fs::File::open(path).map_err(|e| format!("failed to open the downloaded file: {e}"))?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
         let n = file
             .read(&mut buf)
-            .map_err(|e| format!("读取下载物失败：{e}"))?;
+            .map_err(|e| format!("failed to read the downloaded file: {e}"))?;
         if n == 0 {
             break;
         }
@@ -884,8 +887,9 @@ fn verify_checksum(path: &std::path::Path, asset: &str, base: &str) -> Result<()
         // 校验不过的东西不能留给下一次安装误用
         let _ = std::fs::remove_file(path);
         return Err(format!(
-            "{asset} 的 sha256 与发布清单不符（实际 {actual}，期望 {expected}）——\
-             下载可能被截断或篡改，已删除；请重试或改用本地文件安装"
+            "sha256 of {asset} does not match the manifest (got {actual}, expected {expected}) - \
+             the download may be truncated or tampered with and was deleted; \
+             retry or install from a local file"
         ));
     }
     Ok(())
@@ -907,23 +911,26 @@ fn fetch_asset(
         if p.is_file() {
             emit(serde_json::json!({
                 "type": "progress", "stage": "prepare",
-                "message": format!("使用本地安装物：{}", p.display()),
+                "message": format!("using local asset: {}", p.display()),
             }));
             verify_asset(&p, kind)?;
             return Ok(p);
         }
-        return Err(format!("{env_key} 指向的文件不存在：{}", p.display()));
+        return Err(format!("file set in {env_key} does not exist: {}", p.display()));
     }
 
     let base = release_base();
     let url = format!("{base}/{asset}");
     emit(serde_json::json!({
         "type": "progress", "stage": "download",
-        "message": format!("下载 {asset}"),
+        "message": format!("downloading {asset}"),
     }));
     let dest = std::env::temp_dir().join(asset);
-    download_to(&url, &dest)
-        .map_err(|e| format!("{e}\n——若组件尚未发布，可手动下载后设置 {env_key} 指向该文件"))?;
+    download_to(&url, &dest).map_err(|e| {
+        format!(
+            "{e}\nif the component is not released yet, download it manually and set {env_key} to the file"
+        )
+    })?;
     verify_asset(&dest, kind)?;
     verify_checksum(&dest, asset, &base)?;
     Ok(dest)
@@ -972,21 +979,21 @@ fn run_env_manager(
     crate::proc::no_window(&mut cmd);
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("启动环境管理器失败：{e}"))?;
+        .map_err(|e| format!("failed to start the environment manager: {e}"))?;
 
     let stdout = match child.stdout.take() {
         Some(s) => s,
         None => {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("环境管理器 stdout 未捕获".into());
+            return Err("environment manager stdout was not captured".into());
         }
     };
     // 句柄唯一所有者是共享槽（AppState.beets_install_child）：本函数此后
     // 经槽 wait/kill，应用退出（RunEvent::Exit）也经槽收尸。
     let state = app
         .try_state::<crate::AppState>()
-        .ok_or_else(|| "AppState 未就绪".to_string())?;
+        .ok_or_else(|| "app state is not ready".to_string())?;
     {
         let mut slot = state
             .beets_install_child
@@ -1015,22 +1022,22 @@ fn run_env_manager(
                 }
                 let code = c
                     .wait()
-                    .map_err(|e| format!("等待环境管理器退出失败：{e}"))?;
+                    .map_err(|e| format!("failed to wait for the environment manager to exit: {e}"))?;
                 slot.take(); // 已收尸，退出路径不必再管
                 Ok(code)
             }
-            None => Err("安装被应用退出中断".to_string()),
+            None => Err("install was interrupted by app exit".to_string()),
         }
     }?;
-    let pump = pump.map_err(|e| format!("读环境管理器输出失败：{e}"))?;
+    let pump = pump.map_err(|e| format!("failed to read environment manager output: {e}"))?;
     if pump.timed_out {
         return Err(format!(
-            "环境管理器超时未完成（行间空闲 >{INSTALL_LINE_IDLE_TIMEOUT:.0?} 或整体 >{INSTALL_OVERALL_TIMEOUT:.0?}），已终止"
+            "environment manager timed out (line idle >{INSTALL_LINE_IDLE_TIMEOUT:.0?} or overall >{INSTALL_OVERALL_TIMEOUT:.0?}), terminated"
         ));
     }
     if !code.success() || !pump.saw_done {
         return Err(format!(
-            "环境管理器未成功完成（退出码 {}）",
+            "environment manager did not finish successfully (exit code {})",
             code.code().unwrap_or(-1)
         ));
     }
@@ -1075,15 +1082,15 @@ fn run_bins(
     crate::proc::no_window(&mut cmd);
     emit(serde_json::json!({
         "type": "progress", "stage": "bin",
-        "message": format!("下载外置工具（{} 需要的）", plugins.join(" / ")),
+        "message": format!("downloading external tools (needed by {})", plugins.join(" / ")),
     }));
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("启动外置工具下载失败：{e}"))?;
+        .map_err(|e| format!("failed to start the external tool download: {e}"))?;
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "外置工具下载的输出没捕获到".to_string())?;
+        .ok_or_else(|| "external tool download output was not captured".to_string())?;
 
     // 句柄进共享槽：应用退出时统一收尸，别留下一个还在下 87MB 的孤儿进程
     let guard = app.try_state::<crate::AppState>();
@@ -1118,10 +1125,10 @@ fn run_bins(
         }
         None => None,
     };
-    let pump = pump.map_err(|e| format!("读下载器输出失败：{e}"))?;
+    let pump = pump.map_err(|e| format!("failed to read the downloader output: {e}"))?;
     if pump.timed_out {
         return Err(format!(
-            "下载外置工具超时（>{BIN_LINE_IDLE_TIMEOUT:.0?} 无输出 / 整体 >{BIN_OVERALL_TIMEOUT:.0?}），已终止"
+            "external tool download timed out (>{BIN_LINE_IDLE_TIMEOUT:.0?} without output / overall >{BIN_OVERALL_TIMEOUT:.0?}), terminated"
         ));
     }
     if let Some(msg) = pump.last_error {
@@ -1129,12 +1136,12 @@ fn run_bins(
     }
     if pump.saw_done {
         emit(serde_json::json!({
-            "type": "progress", "stage": "bin", "message": "外置工具就绪",
+            "type": "progress", "stage": "bin", "message": "external tools ready",
         }));
     }
     if let Some(Some(code)) = code {
         if code != 0 {
-            return Err(format!("下载器退出码 {code}"));
+            return Err(format!("downloader exit code {code}"));
         }
     }
     Ok(())
@@ -1151,16 +1158,16 @@ fn install_bundle_to(
     emit: &dyn Fn(serde_json::Value),
 ) -> Result<ToolEntry, String> {
     if target.exists() {
-        std::fs::remove_dir_all(target).map_err(|e| format!("清理旧套件包失败：{e}"))?;
+        std::fs::remove_dir_all(target).map_err(|e| format!("failed to remove the old bundle: {e}"))?;
     }
-    std::fs::create_dir_all(target).map_err(|e| format!("创建目标目录失败：{e}"))?;
+    std::fs::create_dir_all(target).map_err(|e| format!("failed to create the target directory: {e}"))?;
     emit(serde_json::json!({
         "type": "progress", "stage": "unpack",
-        "message": format!("展开套件包到 {}", target.display()),
+        "message": format!("unpacking bundle to {}", target.display()),
     }));
 
-    let file = std::fs::File::open(zip_path).map_err(|e| format!("打开套件包失败：{e}"))?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("套件包不是有效 zip：{e}"))?;
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("failed to open the bundle: {e}"))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("bundle is not a valid zip: {e}"))?;
     extract_safely(&mut zip, target)?;
 
     let manifest = target.join("manifest.json");
@@ -1201,7 +1208,7 @@ fn install_bundle_to(
             });
         }
     }
-    Err("套件包展开后找不到入口（缺 manifest.json 且没有 aiya-beets.exe）".to_string())
+    Err("no entry point found after unpacking the bundle (missing manifest.json and no aiya-beets.exe)".to_string())
 }
 
 /// 展开套件包的一件条目该落到哪个相对路径；`None` = 拒绝。
@@ -1249,44 +1256,44 @@ fn extract_safely<R: std::io::Read + std::io::Seek>(
     for i in 0..zip.len() {
         let mut entry = zip
             .by_index(i)
-            .map_err(|e| format!("读取套件包条目失败：{e}"))?;
+            .map_err(|e| format!("failed to read a bundle entry: {e}"))?;
         // zip 9 起 `name()` 返回 Result：条目名可能是非法编码（CP437 之外的未标注原始字节），旧版默默替换成 lossy
         // 字符串——那会让路径校验对着"替换后的名字"做判断，与真实落盘名不符。宁可在这里失败。
         let name = entry
             .name()
-            .map_err(|e| format!("读取套件包条目名失败：{e}"))?
+            .map_err(|e| format!("failed to read a bundle entry name: {e}"))?
             .to_string();
         let Some(rel) = safe_relative(&name) else {
-            return Err(format!("套件包含非法路径条目，拒绝展开：{name}"));
+            return Err(format!("bundle contains an illegal path entry, refusing to unpack: {name}"));
         };
         // 0o170000 = S_IFMT，0o120000 = S_IFLNK
         if entry
             .unix_mode()
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
         {
-            return Err(format!("套件包含符号链接条目，拒绝展开：{name}"));
+            return Err(format!("bundle contains a symlink entry, refusing to unpack: {name}"));
         }
         let dest = target.join(&rel);
         if entry.is_dir() {
             std::fs::create_dir_all(&dest)
-                .map_err(|e| format!("创建目录 {} 失败：{e}", dest.display()))?;
+                .map_err(|e| format!("failed to create directory {}: {e}", dest.display()))?;
             continue;
         }
         written = written.saturating_add(entry.size());
         if written > BUNDLE_MAX_BYTES {
             return Err(format!(
-                "套件包展开超过 {} MB 上限，已中止（包可能不完整或被替换）",
+                "bundle unpack exceeded the {} MB limit, aborted (the bundle may be incomplete or replaced)",
                 BUNDLE_MAX_BYTES / 1024 / 1024
             ));
         }
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| format!("创建目录 {} 失败：{e}", parent.display()))?;
+                .map_err(|e| format!("failed to create directory {}: {e}", parent.display()))?;
         }
         let mut out = std::fs::File::create(&dest)
-            .map_err(|e| format!("写入 {} 失败：{e}", dest.display()))?;
+            .map_err(|e| format!("failed to write {}: {e}", dest.display()))?;
         std::io::copy(&mut entry, &mut out)
-            .map_err(|e| format!("展开 {} 失败：{e}", dest.display()))?;
+            .map_err(|e| format!("failed to unpack {}: {e}", dest.display()))?;
     }
     Ok(())
 }
@@ -1329,7 +1336,7 @@ pub fn start_install(app: tauri::AppHandle, plugins: Vec<String>) -> Result<(), 
     {
         let state = app
             .try_state::<crate::AppState>()
-            .ok_or_else(|| "应用状态未就绪，安装未启动".to_string())?;
+            .ok_or_else(|| "app state is not ready, install not started".to_string())?;
         if state
             .beets_installing
             .compare_exchange(
@@ -1340,7 +1347,7 @@ pub fn start_install(app: tauri::AppHandle, plugins: Vec<String>) -> Result<(), 
             )
             .is_err()
         {
-            return Err("已有一次组件安装在进行中，等它结束（或失败）后再试".to_string());
+            return Err("a component install is already running; wait for it to finish (or fail) and try again".to_string());
         }
     }
     std::thread::Builder::new()
@@ -1364,7 +1371,7 @@ pub fn start_install(app: tauri::AppHandle, plugins: Vec<String>) -> Result<(), 
                 // 起不来（实测 `UserError: replaygain initialization failed`）。
                 if !plugins.is_empty() {
                     run_bins(&app, &entry, &plugins, &emit).map_err(|e| {
-                        format!("组件已装好，但外置工具没下下来：{e}（再点一次安装即可补齐）")
+                        format!("component installed, but the external tools failed to download: {e} (click install again to fetch them)")
                     })?;
                 }
                 Ok(entry)
@@ -1395,7 +1402,7 @@ pub fn start_install(app: tauri::AppHandle, plugins: Vec<String>) -> Result<(), 
             );
         })
         .map(|_| ())
-        .map_err(|e| format!("起安装线程失败：{e}"))
+        .map_err(|e| format!("failed to spawn the install thread: {e}"))
 }
 
 /// 换插件（操作桥）：把新清单写进 settings，再 spawn 包内解释器跑
@@ -1408,7 +1415,7 @@ pub fn start_plugins_set(app: tauri::AppHandle, plugins: Vec<String>) -> Result<
     {
         let state = app
             .try_state::<crate::AppState>()
-            .ok_or_else(|| "应用状态未就绪，操作未启动".to_string())?;
+            .ok_or_else(|| "app state is not ready, operation not started".to_string())?;
         if state
             .beets_installing
             .compare_exchange(
@@ -1419,7 +1426,7 @@ pub fn start_plugins_set(app: tauri::AppHandle, plugins: Vec<String>) -> Result<
             )
             .is_err()
         {
-            return Err("已有一次组件安装在进行中，等它结束（或失败）后再试".to_string());
+            return Err("a component install is already running; wait for it to finish (or fail) and try again".to_string());
         }
     }
     std::thread::Builder::new()
@@ -1451,7 +1458,7 @@ pub fn start_plugins_set(app: tauri::AppHandle, plugins: Vec<String>) -> Result<
             );
         })
         .map(|_| ())
-        .map_err(|e| format!("起插件变更线程失败：{e}"))
+        .map_err(|e| format!("failed to spawn the plugin change thread: {e}"))
 }
 
 /* 卸载组件 */
@@ -1563,13 +1570,13 @@ fn uninstall_plan(app: &tauri::AppHandle, root: &std::path::Path) -> Result<Unin
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(format!(
-                    "卸载计划超时（dry-run {UNINSTALL_PLAN_TIMEOUT:.0?} 未完成），已终止工具侧进程"
+                    "uninstall plan timed out (dry-run {UNINSTALL_PLAN_TIMEOUT:.0?} did not finish), tool process terminated"
                 ));
             }
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("等待卸载计划失败：{e}"));
+                return Err(format!("failed to wait for the uninstall plan: {e}"));
             }
         }
     };
@@ -1640,7 +1647,7 @@ pub fn start_uninstall(app: tauri::AppHandle) -> Result<(), String> {
         // 收不了场。占位失败与 start_install 同文案（UI 在同一个进度区报错）。
         let state = app
             .try_state::<crate::AppState>()
-            .ok_or_else(|| "应用状态未就绪，卸载未启动".to_string())?;
+            .ok_or_else(|| "app state is not ready, uninstall not started".to_string())?;
         if state
             .beets_installing
             .compare_exchange(
@@ -1651,7 +1658,7 @@ pub fn start_uninstall(app: tauri::AppHandle) -> Result<(), String> {
             )
             .is_err()
         {
-            return Err("已有一次组件安装在进行中，等它结束（或失败）后再试".to_string());
+            return Err("a component install is already running; wait for it to finish (or fail) and try again".to_string());
         }
     }
     let thread_app = app.clone();
@@ -1681,7 +1688,7 @@ pub fn start_uninstall(app: tauri::AppHandle) -> Result<(), String> {
                 .beets_installing
                 .store(false, std::sync::atomic::Ordering::SeqCst);
         }
-        format!("起卸载线程失败：{e}")
+        format!("failed to spawn the uninstall thread: {e}")
     })
 }
 
@@ -1694,14 +1701,14 @@ fn uninstall_now(app: &tauri::AppHandle, emit: &dyn Fn(serde_json::Value)) -> Re
             emit(serde_json::json!({
                 "type": "warning",
                 "message": format!(
-                    "没有安装目录可删；当前组件来自 {}（PATH/环境变量），卸载不动它",
+                    "no install directory to remove; the component comes from {} (PATH/env var), uninstall leaves it alone",
                     source.as_str()
                 ),
             }));
         }
         emit(serde_json::json!({
             "type": "done", "stage": "uninstall", "removed": false,
-            "message": "没有安装目录，无需卸载",
+            "message": "no install directory, nothing to uninstall",
         }));
         return Ok(());
     }
@@ -1717,7 +1724,7 @@ fn uninstall_now(app: &tauri::AppHandle, emit: &dyn Fn(serde_json::Value)) -> Re
     emit(serde_json::json!({
         "type": "progress", "stage": "uninstall",
         "message": format!(
-            "将删除 {}（{} 个文件，{:.1} MB）", root.display(), files, bytes as f64 / 2f64.powi(20)
+            "will remove {} ({} files, {:.1} MB)", root.display(), files, bytes as f64 / 2f64.powi(20)
         ),
     }));
 
@@ -1727,8 +1734,8 @@ fn uninstall_now(app: &tauri::AppHandle, emit: &dyn Fn(serde_json::Value)) -> Re
 
     std::fs::remove_dir_all(&root).map_err(|e| {
         format!(
-            "删除失败（{e}）。如果正在索引/整理，等它结束或先退出应用再试；\
-             目录：{}",
+            "failed to remove ({e}). If indexing/organizing is running, wait for it to \
+             finish or quit the app first; directory: {}",
             root.display()
         )
     })?;
@@ -1743,7 +1750,7 @@ fn uninstall_now(app: &tauri::AppHandle, emit: &dyn Fn(serde_json::Value)) -> Re
     emit(serde_json::json!({
         "type": "done", "stage": "uninstall", "removed": true,
         "files": files, "bytes": bytes,
-        "message": "组件已卸载；整理库与分析库未改动",
+        "message": "component uninstalled; Organize library and analysis library untouched",
     }));
     Ok(())
 }
@@ -1836,7 +1843,7 @@ pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), St
         &app,
         body,
         "beets:import",
-        "已有 beets 导入任务在执行（可先取消）",
+        "a beets import task is already running (cancel it first)",
         Box::new(|| {}),
     )
 }
@@ -1887,7 +1894,7 @@ pub fn start_apply(
             "resume": resume,
         }),
         "beets:import",
-        "已有 beets 导入任务在执行（可先取消）",
+        "a beets import task is already running (cancel it first)",
         Box::new(move || {
             if let Some(params) = refresh {
                 // 自闭环：工具刚写完库就是最新权威。
@@ -1939,7 +1946,7 @@ fn start_maintenance(
         &app,
         payload,
         "beets:maintenance",
-        "已有 beets 任务在执行（可先取消）",
+        "a beets task is already running (cancel it first)",
         Box::new(move || {
             if let Some(params) = refresh {
                 crate::refresh::spawn(&exit_app, params, crate::refresh::Trigger::Action);
@@ -2007,7 +2014,7 @@ pub fn start_enrich(app: tauri::AppHandle, source: String, force: bool) -> Resul
     let (entry, _src) = discover(&app).ok_or_else(|| NOT_INSTALLED.to_string())?;
     let paths = crate::enrichment::work_paths(&app, &source, force)?;
     if paths.is_empty() {
-        return Err("工作清单为空：没有需要分析的曲目".to_string());
+        return Err("work list is empty: no tracks to analyze".to_string());
     }
     let tool = StdioTool::new(launcher_for(&app, &entry, enrich_profile()));
     let sink = Arc::new(crate::enrichment::Sink::start(app.clone())?);
@@ -2021,7 +2028,7 @@ pub fn start_enrich(app: tauri::AppHandle, source: String, force: bool) -> Resul
             "force": force,
         }),
         crate::enrichment::CHANNEL,
-        "已有 beets 任务在执行（可先取消）",
+        "a beets task is already running (cancel it first)",
         sink,
         Box::new(move || exit_sink.finish()),
     )
@@ -2091,7 +2098,7 @@ pub fn start_index_import(app: tauri::AppHandle, root: Option<String>) -> Result
         &app,
         body,
         INDEX_CHANNEL,
-        "已有 beets 任务在执行（可先取消）",
+        "a beets task is already running (cancel it first)",
         Box::new(|| {}),
     )
 }
@@ -2101,7 +2108,8 @@ pub fn start_index_import(app: tauri::AppHandle, root: Option<String>) -> Result
 /// 「组件没装」的统一文案。放在一处：三个调用点各写一句时，改一次要改三处，
 /// 而漏改的那处会让 UI 的"安装指引"分支认不出来（`map_beets_start` 靠关键词
 /// 分类，文案本身就参与判定）。
-pub const NOT_INSTALLED: &str = "未安装 beets 组件：请先在设置里安装，或指定组件路径";
+pub const NOT_INSTALLED: &str =
+    "beets component not installed: install it in Settings, or set the component path";
 
 /// 查询页的短进程超时。查询要做 `COUNT(*)` + 取一页，几万条的库也在秒级；
 /// 30 s 是给"库刚被整理过、SQLite 在补索引"留的余量。
@@ -2142,7 +2150,7 @@ pub fn query_page(
         QUERY_TIMEOUT,
     )
     .map_err(|e| e.to_string())?;
-    serde_json::from_value(data).map_err(|e| format!("查询应答形状不对（协议漂移？）: {e}"))
+    serde_json::from_value(data).map_err(|e| format!("query response has an unexpected shape (protocol drift?): {e}"))
 }
 
 /// 可查字段清单（含插件写入的 flexible 键）+ 识别源三态。
@@ -2162,7 +2170,7 @@ pub fn field_catalog(
         QUERY_TIMEOUT,
     )
     .map_err(|e| e.to_string())?;
-    serde_json::from_value(data).map_err(|e| format!("字段清单形状不对（协议漂移？）: {e}"))
+    serde_json::from_value(data).map_err(|e| format!("field catalog has an unexpected shape (protocol drift?): {e}"))
 }
 
 /* 插件市场 */
@@ -2173,7 +2181,34 @@ pub fn field_catalog(
 /// 就把"有哪些插件、各自要装什么"展示出来让用户勾选。这条路径上没有 serve
 /// 进程，只能靠编译期带一份。它和工具侧、打包脚本、安装器读的是同一个文件，
 /// 所以不存在"UI 说 A、安装器装 B"的漂移；`build.rs` 里有 rerun-if-changed。
+///
+/// 双语分支（docs/64 §3.3）：英文基名 + `plugins-zh_Hans.json` 中文变体。
+/// 两份只有 `binaries[].why` / `vendor` 这两个展示字段允许不同，结构字段
+/// （name/target/carrier/size/sha256/bundle/probe/license）逐字节一致——
+/// 由 `catalog_contract.py` 的奇偶校验与 `plugin_table_variants` 单测共同守住。
+/// 人类可读的展示字段随语言走，结构字段只有一份事实。
 const PLUGIN_TABLE_JSON: &str = include_str!("../../beets-tool/src/aiya_beets/data/plugins.json");
+const PLUGIN_TABLE_JSON_ZH_HANS: &str =
+    include_str!("../../beets-tool/src/aiya_beets/data/plugins-zh_Hans.json");
+
+/// 应用设置里的语言键（值 "zh" / "en"）。
+const LANGUAGE_KEY: &str = "language";
+
+/// 语言 → 插件表文本。值非 "zh"（空 / 未设 / 拼错）一律用英文基名——
+/// "变体缺失回退基名"的回退就落在这个 match 的默认分支。
+fn plugin_table_text(lang: &str) -> &'static str {
+    match lang {
+        "zh" => PLUGIN_TABLE_JSON_ZH_HANS,
+        _ => PLUGIN_TABLE_JSON,
+    }
+}
+
+/// 读应用设置的语言键（AppState 的 settings 内存镜像；镜像里没有 = 未设 = 英文）。
+fn settings_language(app: &tauri::AppHandle) -> String {
+    app.try_state::<crate::AppState>()
+        .and_then(|st| st.setting_str(LANGUAGE_KEY))
+        .unwrap_or_default()
+}
 
 #[derive(serde::Deserialize)]
 struct PluginTableFile {
@@ -2192,21 +2227,30 @@ struct PluginProfiles {
     index: Vec<String>,
 }
 
-/// 解析内嵌表，并把 `profiles` 里的默认启用关系注入每一条。
+/// 解析内嵌表（按设置语言选变体），并把 `profiles` 里的默认启用关系注入每一条。
 ///
 /// 默认启用**不由条目自己声明**（否则又是两份事实）：JSON 里只有
 /// `profiles.workbench` / `profiles.index` 两处列表，这里算一次。
-pub fn plugin_table() -> Result<Vec<crate::dto::beets::BeetsPluginItem>, String> {
-    let mut doc: PluginTableFile = serde_json::from_str(PLUGIN_TABLE_JSON)
-        .map_err(|e| format!("内嵌插件表解析失败（构建产物坏了？）：{e}"))?;
+pub fn plugin_table(
+    app: &tauri::AppHandle,
+) -> Result<Vec<crate::dto::beets::BeetsPluginItem>, String> {
+    plugin_table_in(&settings_language(app))
+}
+
+/// 纯函数版（可测）：语言 → 解析对应内嵌表。
+pub fn plugin_table_in(
+    lang: &str,
+) -> Result<Vec<crate::dto::beets::BeetsPluginItem>, String> {
+    let mut doc: PluginTableFile = serde_json::from_str(plugin_table_text(lang))
+        .map_err(|e| format!("failed to parse the embedded plugin table (broken build artifact?): {e}"))?;
     if doc.schema != 2 {
         return Err(format!(
-            "内嵌插件表 schema={} 不认识（本二进制只懂 2：docs/53 加了 binaries 段）",
+            "embedded plugin table schema={} not recognized (this binary only understands 2)",
             doc.schema
         ));
     }
     if doc.plugins.is_empty() {
-        return Err("内嵌插件表是空的".into());
+        return Err("embedded plugin table is empty".into());
     }
     for item in &mut doc.plugins {
         item.default = doc.profiles.workbench.contains(&item.name);
@@ -2425,7 +2469,7 @@ mod tests {
     /// 在安装页点按钮了。
     #[test]
     fn embedded_plugin_table_parses_and_marks_defaults() {
-        let rows = plugin_table().expect("内嵌插件表解析失败");
+        let rows = plugin_table_in("en").expect("内嵌插件表解析失败");
         assert!(rows.len() >= 10, "插件表条目太少：{}", rows.len());
         assert!(
             rows.iter().any(|r| r.name == "lyrics" && r.default),
@@ -2480,6 +2524,48 @@ mod tests {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// 双语奇偶（docs/64 §3.3）：zh 变体与英文基名的**结构字段**必须逐字段
+    /// 一致，只有 `binaries[].why` / `vendor` 允许不同。Python 侧
+    /// `catalog_contract.py` 守仓库文件，这里守 Rust 内嵌的两份——两边都红
+    /// 才能同时防住"改了仓库忘了重编"与"只改了一份"。
+    #[test]
+    fn plugin_table_variants_match_structurally() {
+        // 变体缺失回退基名：任何语言值（含空 / 未设 / 乱写）都必须能解析
+        for lang in ["", "en", "zh", "fr"] {
+            let rows = plugin_table_in(lang).expect("任何语言都应落到可解析的表");
+            assert!(rows.len() >= 10, "语言 {lang:?} 解析出的条目过少");
+        }
+        let en: serde_json::Value =
+            serde_json::from_str(plugin_table_text("en")).expect("基名应可解析");
+        let zh: serde_json::Value =
+            serde_json::from_str(plugin_table_text("zh")).expect("zh 变体应可解析");
+        assert_eq!(en["schema"], zh["schema"], "schema 两份必须一致");
+        assert_eq!(en["beets"], zh["beets"], "beets 段两份必须一致");
+        assert_eq!(en["profiles"], zh["profiles"], "profiles 两份必须一致");
+        assert_eq!(en["plugins"], zh["plugins"], "plugins 段没有双语字段，必须逐字节一致");
+        let (en_b, zh_b) = (
+            en["binaries"].as_array().expect("binaries 数组"),
+            zh["binaries"].as_array().expect("binaries 数组"),
+        );
+        assert_eq!(en_b.len(), zh_b.len(), "binaries 条数必须一致");
+        for (e, z) in en_b.iter().zip(zh_b.iter()) {
+            let name = e["name"].as_str().unwrap_or("?");
+            for key in ["name", "target", "size", "sha256", "bundle", "license", "probe"] {
+                assert_eq!(e[key], z[key], "{name}: binaries[].{key} 两份必须一致");
+            }
+            for key in ["kind", "url", "size", "sha256", "member"] {
+                assert_eq!(
+                    e["carrier"][key], z["carrier"][key],
+                    "{name}: carrier.{key} 两份必须一致"
+                );
+            }
+            for key in ["why", "vendor"] {
+                assert!(!e[key].as_str().unwrap_or_default().is_empty(), "{name}: 基名 {key} 非空");
+                assert!(!z[key].as_str().unwrap_or_default().is_empty(), "{name}: zh 变体 {key} 非空");
+            }
+        }
     }
 
     #[test]
@@ -2634,8 +2720,8 @@ mod tests {
         let p = dir.path().join("bundle.zip");
         std::fs::write(&p, b"<!DOCTYPE html><title>Not Found</title>").unwrap();
         let err = verify_asset(&p, AssetKind::Bundle).unwrap_err();
-        assert!(err.contains("不是有效的压缩包"), "{err}");
-        assert!(err.contains("错误页"), "要指得到原因：{err}");
+        assert!(err.contains("not a valid archive"), "{err}");
+        assert!(err.contains("error page"), "要指得到原因：{err}");
     }
 
     /// 空文件是另一种常见状态（下载被中断、写到一半）。
@@ -2645,7 +2731,7 @@ mod tests {
         let p = dir.path().join("bundle.zip");
         std::fs::write(&p, b"").unwrap();
         let err = verify_asset(&p, AssetKind::Bundle).unwrap_err();
-        assert!(err.contains("空文件"), "{err}");
+        assert!(err.contains("empty file"), "{err}");
     }
 
     /// B 轨道的展开 + 入口校验：入口由 manifest 说了算（播放器不猜布局）。
@@ -2701,7 +2787,7 @@ mod tests {
         let target = dir.path().join("bundle");
 
         let err = install_bundle_to(&target, &zip_path, &|_| {}).unwrap_err();
-        assert!(err.contains("找不到入口"), "{err}");
+        assert!(err.contains("no entry point found"), "{err}");
     }
 
     /// 形状锚点：BeetsStatus 是设置页数据源，必须 camelCase 进 IPC。
@@ -2814,7 +2900,7 @@ mod tests {
         assert_eq!(st.error_code.as_deref(), Some("E_PROTOCOL_MISMATCH"));
         let msg = st.error_message.clone().unwrap_or_default();
         assert!(
-            msg.contains("升级播放器"),
+            msg.contains("update the player"),
             "组件太新时应提示升级播放器：{msg}"
         );
         // 版本/入口照样显示：用户要能看到"我装的是什么"
@@ -2831,7 +2917,10 @@ mod tests {
             },
         );
         assert!(!old.found);
-        assert!(old.error_message.unwrap_or_default().contains("升级组件"));
+        assert!(old
+            .error_message
+            .unwrap_or_default()
+            .contains("update the component"));
 
         // 不报版本（老工具/被裁剪的输出）也要拒，不能默认信任
         let silent = status_from(&entry, EntrySource::Path, StatusReport::default());

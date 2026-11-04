@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte';
-  import { Clock3, Database, Disc3, HardDrive, ListMusic, Mic2, TriangleAlert } from '@lucide/svelte';
+  import { t, type Msg } from '../lib/i18n.svelte';
+  import { Clock3, Database, Disc3, ExternalLink, HardDrive, ListMusic, Mic2, TriangleAlert } from '@lucide/svelte';
   import type {
     AppSettings,
     AmbientScheme,
@@ -50,12 +51,27 @@ import TextTabs from './ui/TextTabs.svelte';
   let { settings, onsave }: Props = $props();
 
   /**
+   * 分段控件选项的 label 在 `lib/settings.ts` 存 i18n 键（设置项清单是该控件的
+   * 真源，不持有具体文案）；控件吃 string，在此统一收口成 `t()`。
+   */
+  function segOptions<V extends string>(
+    options: ReadonlyArray<{ value: V; label: Msg }>,
+  ): Array<{ value: V; label: string }> {
+    return options.map((option) => ({ value: option.value, label: t(option.label) }));
+  }
+
+  /**
    * 识别信息与排障数据：版本、平台、Schema 版本、数据目录、最近错误。
    *
    * 描述对象是整个应用而非某个功能，因此归入「关于」组。数据源为
    * `ui.diagnostics`，与「系统」组的集成状态共用同一份快照。
    */
   const sys = $derived(ui.diagnostics);
+
+  /** 关于段的出站链接（宿主 app_open_url 白名单内的两个地址）。 */
+  const REPO_URL = 'https://github.com/yeraph-plus/aiya-music-player';
+  const RELEASES_URL = `${REPO_URL}/releases`;
+  const AFDIAN_URL = 'https://afdian.com/a/NyaaACG';
   const recentErrors = $derived(sys?.recentErrors ?? []);
 
   /**
@@ -80,13 +96,13 @@ import TextTabs from './ui/TextTabs.svelte';
   type Section = SettingsSection;
   let active = $state<Section>('library');
 
-  const SECTIONS: Array<{ id: Section; label: string }> = [
-    { id: 'library', label: '曲库' },
-    { id: 'appearance', label: '外观' },
-    { id: 'playback', label: '播放' },
-    { id: 'system', label: '系统' },
-    { id: 'shortcuts', label: '快捷键' },
-    { id: 'about', label: '关于' },
+  const SECTIONS: Array<{ id: Section; labelKey: Msg }> = [
+    { id: 'library', labelKey: 'settings.section.library' },
+    { id: 'appearance', labelKey: 'settings.section.appearance' },
+    { id: 'playback', labelKey: 'settings.section.playback' },
+    { id: 'system', labelKey: 'settings.section.system' },
+    { id: 'shortcuts', labelKey: 'settings.section.shortcuts' },
+    { id: 'about', labelKey: 'settings.section.about' },
   ];
 
   /** 各区块根元素（bind:this 填充），tab 跳转的目标 */
@@ -187,22 +203,29 @@ import TextTabs from './ui/TextTabs.svelte';
    * 一致（`crates/aiya-audio/src/engine.rs`）。后端对未知取值按 `shared` / `auto`
    * 处理，写错不报错而是静默降级，因此此处只列后端识别的字符串，不提供别名。
    *
-   * `'null'`（静音）是后端仍识别的排查档，设置页不提供选择入口：清单里保留它
-   * 只为下方的 hint 查询能如实描述当前生效值（既有配置可能停留在该档），
-   * `OUTPUT_OPTIONS` 把它过滤出分段控件。
+   * 后端的 `'null'`（静音）排查档**刻意不列**：静音只有播放条一个入口，设置页
+   * 再给一份是双份实现（2026-11-05 拍板）。若存量配置停留在该档，hint 走
+   * `settings.output.hint.fallback` 兜底，用户随手选一档即写回合法值。
    */
-  const OUTPUT_MODES: Array<{ value: string; label: string; hint: string }> = [
-    { value: 'shared', label: '共享', hint: '与系统混音，其他程序照常出声' },
-    { value: 'exclusive', label: '独占', hint: '优先独占，设备拒绝时自动改用共享' },
-    { value: 'exclusiveRequired', label: '独占(强)', hint: '必须独占，设备拒绝时直接报错' },
-    { value: 'null', label: '静音', hint: '不开音频设备，进度照常走但不出声，仅排查时使用' },
-  ];
+  const OUTPUT_MODES: Array<{ value: string; label: string; hint: string }> = $derived([
+    { value: 'shared', label: t('settings.output.mode.shared'), hint: t('settings.output.mode.shared.hint') },
+    {
+      value: 'exclusive',
+      label: t('settings.output.mode.exclusive'),
+      hint: t('settings.output.mode.exclusive.hint'),
+    },
+    {
+      value: 'exclusiveRequired',
+      label: t('settings.output.mode.exclusiveRequired'),
+      hint: t('settings.output.mode.exclusiveRequired.hint'),
+    },
+  ]);
 
-  /** 分段控件使用 `title`，此处把 `hint` 映射过去。模块级只求值一次：
-   *  内联求值会每次渲染产生新数组引用，导致 RadioGroup 重挂并丢失键盘焦点。 */
-  const OUTPUT_OPTIONS = OUTPUT_MODES
-    .filter((m) => m.value !== 'null')
-    .map(({ value, label, hint }) => ({ value, label, title: hint }));
+  /** 分段控件使用 `title`，此处把 `hint` 映射过去。$derived 仅在语言变化时
+   *  重算（t() 依赖 locale），避免每次渲染新数组引用导致 RadioGroup 重挂。 */
+  const OUTPUT_OPTIONS = $derived(
+    OUTPUT_MODES.map(({ value, label, hint }) => ({ value, label, title: hint })),
+  );
 
   /**
    * 0 = 交由引擎按输出模式取默认值（共享 200ms，独占取设备周期）。
@@ -210,12 +233,12 @@ import TextTabs from './ui/TextTabs.svelte';
    * 值写成字符串：分段控件的值为 `string`，保留 number 会导致每次渲染都要
    * `String()` 转换，且 `'0' === 0` 恒为 false，比较更容易出错。
    */
-  const BUFFER_OPTIONS: Array<{ value: string; label: string }> = [
-    { value: '0', label: '自动' },
+  const BUFFER_OPTIONS: Array<{ value: string; label: string }> = $derived([
+    { value: '0', label: t('settings.playback.buffer.auto') },
     { value: '50', label: '50ms' },
     { value: '100', label: '100ms' },
     { value: '200', label: '200ms' },
-  ];
+  ]);
 
   /**
    * 自动刷新间隔（秒）。0 = 仅保留"切回窗口时刷新"。
@@ -223,27 +246,27 @@ import TextTabs from './ui/TextTabs.svelte';
    * 上限取 5 分钟：更长的间隔不如关闭定时（切回窗口刷新已覆盖主要场景），
    * 保留半小时级档位反而会让用户误以为定时刷新失效。
    */
-  const REFRESH_OPTIONS: Array<{ value: string; label: string }> = [
-    { value: '0', label: '关闭' },
-    { value: '30', label: '30 秒' },
-    { value: '120', label: '2 分钟' },
-    { value: '300', label: '5 分钟' },
-  ];
+  const REFRESH_OPTIONS: Array<{ value: string; label: string }> = $derived([
+    { value: '0', label: t('settings.system.refresh.off') },
+    { value: '30', label: t('settings.system.refresh.30s') },
+    { value: '120', label: t('settings.system.refresh.2m') },
+    { value: '300', label: t('settings.system.refresh.5m') },
+  ]);
 
   /** 播放记录保留周期（0 = 永久）；宿主据此裁剪 history 行 */
-  const HISTORY_DAYS_OPTIONS: Array<{ value: string; label: string }> = [
-    { value: '30', label: '30 天' },
-    { value: '90', label: '90 天' },
-    { value: '180', label: '半年' },
-    { value: '365', label: '一年' },
-    { value: '0', label: '永久' },
-  ];
+  const HISTORY_DAYS_OPTIONS: Array<{ value: string; label: string }> = $derived([
+    { value: '30', label: t('settings.system.history.30d') },
+    { value: '90', label: t('settings.system.history.90d') },
+    { value: '180', label: t('settings.system.history.halfYear') },
+    { value: '365', label: t('settings.system.history.year') },
+    { value: '0', label: t('settings.system.history.forever') },
+  ]);
 
-  const CLOCK_OPTIONS: Array<{ value: string; label: string }> = [
-    { value: 'auto', label: '自动' },
-    { value: 'events', label: '事件' },
-    { value: 'polling', label: '轮询' },
-  ];
+  const CLOCK_OPTIONS: Array<{ value: string; label: string }> = $derived([
+    { value: 'auto', label: t('settings.playback.clock.auto') },
+    { value: 'events', label: t('settings.playback.clock.events') },
+    { value: 'polling', label: t('settings.playback.clock.polling') },
+  ]);
 
   /** 分段控件的选项一律写成模块级常量：内联数组字面量每次渲染都是新引用，
    *  RadioGroup 会连同 `title` 一起重挂，键盘焦点在重挂瞬间丢掉。主题清单
@@ -258,15 +281,15 @@ import TextTabs from './ui/TextTabs.svelte';
   <div class="settings-headwrap">
     <div class="page-pad">
       <!-- 大标题固定「设置」，右侧 tab 只做跳转定位 -->
-      <Header kicker="SETTINGS" title="设置" subtitle="应用偏好与曲库管理">
+      <Header kicker="SETTINGS" title={t('settings.title')} subtitle={t('settings.subtitle')}>
         {#snippet actions()}
           <!-- 语义用 nav + aria-current，而非 role="tablist"/"tab"（同 content/Toolbar）：tab 只执行 scrollIntoView
           跳转，六个区块平铺常驻，不构成"切换面板"；套用 tab 角色会让读屏软件等待一个不存在的 tabpanel。语义与外观统一由 TextTabs 提供。 -->
           <TextTabs
-            items={SECTIONS.map((s) => ({ id: s.id, label: s.label }))}
+            items={SECTIONS.map((s) => ({ id: s.id, label: t(s.labelKey) }))}
             value={active}
             onchange={(id) => jumpTo(id as (typeof SECTIONS)[number]['id'])}
-            label="设置分组"
+            label={t('settings.nav.aria')}
           />
         {/snippet}
       </Header>
@@ -291,32 +314,49 @@ import TextTabs from './ui/TextTabs.svelte';
       不依赖页面壳）。
     -->
     <section class="settings-section" id="settings-library" bind:this={sectionEls.library}>
-      <h3 class="group-title">曲库</h3>
+      <h3 class="group-title">{t('settings.section.library')}</h3>
 
       <!-- 统计卡：图标 + 数值 + 标签。数值使用等宽数字（tabular-nums）以免更新时抖动；图标用中性描边样式，不与数值争夺视觉权重。六项铺满 3×2
       网格。索引大小与文件容量是两个量：前者为 SQLite 索引自身体积，后者为音频文件总量 -->
       {#if stats}
         <div class="lib-stats">
-          <StatBlock layout="row" value={stats.tracks} label="曲目">
+          <StatBlock layout="row" value={stats.tracks} label={t('settings.library.stats.tracks')}>
             {#snippet icon()}<ListMusic size={17} />{/snippet}
           </StatBlock>
-          <StatBlock layout="row" value={stats.albums} label="专辑">
+          <StatBlock layout="row" value={stats.albums} label={t('settings.library.stats.albums')}>
             {#snippet icon()}<Disc3 size={17} />{/snippet}
           </StatBlock>
-          <StatBlock layout="row" value={stats.artists} label="艺人">
+          <StatBlock layout="row" value={stats.artists} label={t('settings.library.stats.artists')}>
             {#snippet icon()}<Mic2 size={17} />{/snippet}
           </StatBlock>
-          <StatBlock layout="row" value={formatDurationLong(stats.totalDurationMs)} label="总时长">
+          <StatBlock
+            layout="row"
+            value={formatDurationLong(stats.totalDurationMs)}
+            label={t('settings.library.stats.totalDuration')}
+          >
             {#snippet icon()}<Clock3 size={17} />{/snippet}
           </StatBlock>
-          <StatBlock layout="row" value={formatBytes(stats.totalBytes)} label="文件容量">
+          <StatBlock
+            layout="row"
+            value={formatBytes(stats.totalBytes)}
+            label={t('settings.library.stats.fileSize')}
+          >
             {#snippet icon()}<HardDrive size={17} />{/snippet}
           </StatBlock>
-          <StatBlock layout="row" value={formatBytes(stats.dbBytes)} label="索引大小">
+          <StatBlock
+            layout="row"
+            value={formatBytes(stats.dbBytes)}
+            label={t('settings.library.stats.indexSize')}
+          >
             {#snippet icon()}<Database size={17} />{/snippet}
           </StatBlock>
           {#if stats.missingLocations > 0}
-            <StatBlock layout="row" tone="warn" value={stats.missingLocations} label="位置缺失">
+            <StatBlock
+              layout="row"
+              tone="warn"
+              value={stats.missingLocations}
+              label={t('settings.library.stats.missingLocations')}
+            >
               {#snippet icon()}<TriangleAlert size={17} />{/snippet}
             </StatBlock>
           {/if}
@@ -328,20 +368,20 @@ import TextTabs from './ui/TextTabs.svelte';
       <div class="lib-bleed"><LibraryTools /></div>
     </section>
     <section class="settings-section" bind:this={sectionEls.appearance}>
-      <h3 class="group-title">外观</h3>
+      <h3 class="group-title">{t('settings.section.appearance')}</h3>
       <div class="setting-row">
           <div>
-            <div class="setting-title">主题</div>
+            <div class="setting-title">{t('settings.appearance.theme')}</div>
             <div class="setting-hint">
               {settings.theme === 'system'
-                ? '随操作系统的深浅色模式自动切换，系统切换时即时生效'
-                : '浅色主题适合白天与投影，切换即时生效'}
+                ? t('settings.appearance.theme.hint.auto')
+                : t('settings.appearance.theme.hint.light')}
             </div>
           </div>
           <SegmentedControl
-            label="主题"
+            label={t('settings.appearance.theme')}
             value={settings.theme}
-            options={THEME_MODES}
+            options={segOptions(THEME_MODES)}
             onchange={(value) => apply({ theme: value as ThemeMode })}
           >
             {#snippet icon(value)}
@@ -352,26 +392,42 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">主题颜色</div>
-            <div class="setting-hint">渐变背景与强调色成套切换，决定整个应用的视觉基调</div>
+            <div class="setting-title">{t('settings.language.title')}</div>
+            <div class="setting-hint">{t('settings.language.hint')}</div>
           </div>
           <SegmentedControl
-            label="主题颜色"
+            label={t('settings.language.title')}
+            value={settings.language === 'en' ? 'en' : 'zh'}
+            options={[
+              { value: 'zh', label: '中文' },
+              { value: 'en', label: 'English' },
+            ]}
+            onchange={(value) => apply({ language: value })}
+          />
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <div class="setting-title">{t('settings.appearance.themeColor')}</div>
+            <div class="setting-hint">{t('settings.appearance.themeColor.hint')}</div>
+          </div>
+          <SegmentedControl
+            label={t('settings.appearance.themeColor')}
             value={settings.ambient}
-            options={AMBIENT_SCHEMES}
+            options={segOptions(AMBIENT_SCHEMES)}
             onchange={(value) => apply({ ambient: value as AmbientScheme })}
           />
         </div>
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">界面缩放</div>
+            <div class="setting-title">{t('settings.appearance.uiScale')}</div>
             <div class="setting-hint">
-              整体放大文字与间距，适配高分屏可读性，100% 为标准大小，切换即时生效
+              {t('settings.appearance.uiScale.hint')}
             </div>
           </div>
           <SegmentedControl
-            label="界面缩放"
+            label={t('settings.appearance.uiScale')}
             value={String(settings.uiScale)}
             options={UI_SCALE_OPTIONS}
             onchange={(value) => apply({ uiScale: normalizeUiScale(value) })}
@@ -380,16 +436,16 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">全局 3D 效果</div>
+            <div class="setting-title">{t('settings.appearance.glEffects')}</div>
             <div class="setting-hint">
-              关闭后三维频谱与动态背景全部停用，只留静态渐变，频谱相关设置一并失效
+              {t('settings.appearance.glEffects.hint')}
               {#if !cap.hardware}
-                <strong class="hint-warn">本机只检测到软件渲染，建议保持关闭</strong>
+                <strong class="hint-warn">{t('settings.appearance.glEffects.warn')}</strong>
               {/if}
             </div>
           </div>
           <Switch
-            label="全局 3D 效果"
+            label={t('settings.appearance.glEffects')}
             checked={settings.glEffects}
             onchange={(checked) => apply({ glEffects: checked })}
           />
@@ -397,15 +453,15 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
           <div>
-            <div class="setting-title">背景动态频谱</div>
+            <div class="setting-title">{t('settings.appearance.bgSpectrum')}</div>
             <div class="setting-hint">
               {gl
-                ? '整个应用的背景随音乐起伏，呈现山形环境光；关闭后只剩静态渐变'
-                : '已随「全局 3D 效果」关闭'}
+                ? t('settings.appearance.bgSpectrum.hint.on')
+                : t('settings.appearance.offByGl')}
             </div>
           </div>
           <Switch
-            label="背景动态频谱"
+            label={t('settings.appearance.bgSpectrum')}
             checked={settings.bgSpectrum}
             disabled={!gl}
             onchange={(checked) => apply({ bgSpectrum: checked })}
@@ -414,17 +470,17 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
           <div>
-            <div class="setting-title">背景频谱形态</div>
+            <div class="setting-title">{t('settings.appearance.bgSpectrumStyle')}</div>
             <div class="setting-hint">
               {gl
-                ? '山形：底部一团起伏的环境光；波纹：一层层等深线铺满下半屏，与「正在播放」页的形态各自独立'
-                : '已随「全局 3D 效果」关闭'}
+                ? t('settings.appearance.bgSpectrumStyle.hint.on')
+                : t('settings.appearance.offByGl')}
             </div>
           </div>
           <SegmentedControl
-            label="背景频谱形态"
+            label={t('settings.appearance.bgSpectrumStyle')}
             value={settings.bgSpectrumStyle}
-            options={BG_SPECTRUM_STYLES}
+            options={segOptions(BG_SPECTRUM_STYLES)}
             disabled={!gl}
             onchange={(value) => apply({ bgSpectrumStyle: value as BgSpectrumStyle })}
           />
@@ -432,17 +488,17 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
           <div>
-            <div class="setting-title">背景频谱光效</div>
+            <div class="setting-title">{t('settings.appearance.ridgeGlow')}</div>
             <div class="setting-hint">
               {gl
-                ? '控制光效的强度与锐度：柔雾只有形状没有光，平衡在边缘带一点光，锐光明亮清晰'
-                : '已随「全局 3D 效果」关闭'}
+                ? t('settings.appearance.ridgeGlow.hint.on')
+                : t('settings.appearance.offByGl')}
             </div>
           </div>
           <SegmentedControl
-            label="背景频谱光效"
+            label={t('settings.appearance.ridgeGlow')}
             value={settings.ridgeGlow}
-            options={RIDGE_GLOWS}
+            options={segOptions(RIDGE_GLOWS)}
             disabled={!gl}
             onchange={(value) => apply({ ridgeGlow: value as RidgeGlow })}
           />
@@ -450,15 +506,15 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
           <div>
-            <div class="setting-title">正在播放页频谱</div>
+            <div class="setting-title">{t('settings.appearance.npSpectrum')}</div>
             <div class="setting-hint">
               {gl
-                ? '只在「正在播放」页显示的可视化，与背景环境光各自独立；关掉不影响背景'
-                : '已随「全局 3D 效果」关闭'}
+                ? t('settings.appearance.npSpectrum.hint.on')
+                : t('settings.appearance.offByGl')}
             </div>
           </div>
           <Switch
-            label="正在播放页频谱"
+            label={t('settings.appearance.npSpectrum')}
             checked={settings.npSpectrum}
             disabled={!gl}
             onchange={(checked) => apply({ npSpectrum: checked })}
@@ -467,15 +523,15 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
           <div>
-            <div class="setting-title">频谱形态</div>
+            <div class="setting-title">{t('settings.appearance.spectrumStyle')}</div>
             <div class="setting-hint">
-              「正在播放」页的频谱形状：镜像沿中线对称，环带绕圆一周，残影留余波轨迹，波纹山谷交替，切换即时生效
+              {t('settings.appearance.spectrumStyle.hint')}
             </div>
           </div>
           <SegmentedControl
-            label="频谱形态"
+            label={t('settings.appearance.spectrumStyle')}
             value={settings.spectrumStyle}
-            options={SPECTRUM_STYLES}
+            options={segOptions(SPECTRUM_STYLES)}
             disabled={!gl}
             onchange={(value) => apply({ spectrumStyle: value as SpectrumStyle })}
           />
@@ -483,17 +539,17 @@ import TextTabs from './ui/TextTabs.svelte';
       </section>
 
     <section class="settings-section" bind:this={sectionEls.playback}>
-      <h3 class="group-title">播放</h3>
+      <h3 class="group-title">{t('settings.section.playback')}</h3>
       <div class="setting-row">
           <div>
-            <div class="setting-title">输出模式</div>
+            <div class="setting-title">{t('settings.output.title')}</div>
             <div class="setting-hint">
               {OUTPUT_MODES.find((m) => m.value === settings.output.mode)?.hint ??
-                '共享：与系统混音，其他程序照常出声'}
+                t('settings.output.hint.fallback')}
             </div>
           </div>
           <SegmentedControl
-            label="输出模式"
+            label={t('settings.output.title')}
             value={settings.output.mode}
             options={OUTPUT_MODES}
             onchange={(value) => apply({ output: { ...settings.output, mode: value } })}
@@ -502,13 +558,13 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">缓冲</div>
+            <div class="setting-title">{t('settings.playback.buffer')}</div>
             <div class="setting-hint">
-              缓冲越深越抗卡顿、延迟越大，自动档按输出模式取默认值
+              {t('settings.playback.buffer.hint')}
             </div>
           </div>
           <SegmentedControl
-            label="缓冲"
+            label={t('settings.playback.buffer')}
             value={String(settings.output.bufferMs)}
             options={BUFFER_OPTIONS}
             onchange={(value) => apply({ output: { ...settings.output, bufferMs: Number(value) } })}
@@ -517,13 +573,13 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">时钟</div>
+            <div class="setting-title">{t('settings.playback.clock')}</div>
             <div class="setting-hint">
-              自动：独占输出先试事件、失败再试轮询；共享输出固定用事件，更省电也更稳
+              {t('settings.playback.clock.hint')}
             </div>
           </div>
           <SegmentedControl
-            label="时钟"
+            label={t('settings.playback.clock')}
             value={settings.output.clock}
             options={CLOCK_OPTIONS}
             onchange={(value) => apply({ output: { ...settings.output, clock: value } })}
@@ -532,13 +588,13 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">暂停时释放设备</div>
+            <div class="setting-title">{t('settings.playback.releaseOnPause')}</div>
             <div class="setting-hint">
-              暂停时把独占的音频设备让回给系统，其他程序可以出声；恢复播放会重新占用，可能有短暂停顿
+              {t('settings.playback.releaseOnPause.hint')}
             </div>
           </div>
           <Switch
-            label="暂停时释放设备"
+            label={t('settings.playback.releaseOnPause')}
             checked={settings.output.releaseOnPause}
             onchange={(checked) =>
               apply({ output: { ...settings.output, releaseOnPause: checked } })}
@@ -547,11 +603,11 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">启动时自动播放</div>
-            <div class="setting-hint">打开应用就接着放上次那一首；关闭则停在暂停状态</div>
+            <div class="setting-title">{t('settings.playback.autoplayOnStart')}</div>
+            <div class="setting-hint">{t('settings.playback.autoplayOnStart.hint')}</div>
           </div>
           <Switch
-            label="启动时自动播放"
+            label={t('settings.playback.autoplayOnStart')}
             checked={settings.autoplayOnStart}
             onchange={(checked) => apply({ autoplayOnStart: checked })}
           />
@@ -559,11 +615,11 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">记住播放进度</div>
-            <div class="setting-hint">下次启动从上次停下的位置继续；关闭则每次从头开始</div>
+            <div class="setting-title">{t('settings.playback.rememberPosition')}</div>
+            <div class="setting-hint">{t('settings.playback.rememberPosition.hint')}</div>
           </div>
           <Switch
-            label="记住播放进度"
+            label={t('settings.playback.rememberPosition')}
             checked={settings.rememberPosition}
             onchange={(checked) => apply({ rememberPosition: checked })}
           />
@@ -571,11 +627,11 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">播放时阻止系统休眠</div>
-            <div class="setting-hint">只阻止系统睡眠，屏幕仍会按系统设置熄掉</div>
+            <div class="setting-title">{t('settings.playback.preventSleep')}</div>
+            <div class="setting-hint">{t('settings.playback.preventSleep.hint')}</div>
           </div>
           <Switch
-            label="播放时阻止系统休眠"
+            label={t('settings.playback.preventSleep')}
             checked={settings.preventSleep}
             onchange={(checked) => apply({ preventSleep: checked })}
           />
@@ -583,13 +639,13 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">音量归一化</div>
+            <div class="setting-title">{t('settings.playback.normalizeVolume')}</div>
             <div class="setting-hint">
-              拉平不同曲目之间的响度差异，不改变你设置的音量，只在播放时做补偿
+              {t('settings.playback.normalizeVolume.hint')}
             </div>
           </div>
           <Switch
-            label="音量归一化"
+            label={t('settings.playback.normalizeVolume')}
             checked={settings.normalizeVolume}
             onchange={(checked) => apply({ normalizeVolume: checked })}
           />
@@ -597,16 +653,16 @@ import TextTabs from './ui/TextTabs.svelte';
       </section>
 
     <section class="settings-section" bind:this={sectionEls.system}>
-      <h3 class="group-title">系统</h3>
+      <h3 class="group-title">{t('settings.section.system')}</h3>
       <div class="setting-row">
           <div>
-            <div class="setting-title">禁用系统缩放</div>
+            <div class="setting-title">{t('settings.system.disableSystemScale')}</div>
             <div class="setting-hint">
-              忽略 Windows 的显示缩放，按 100% 渲染：文字变小、一屏内容更多；与「外观 → 界面缩放」叠加生效，改后立即应用无需重启
+              {t('settings.system.disableSystemScale.hint')}
             </div>
           </div>
           <Switch
-            label="禁用系统缩放"
+            label={t('settings.system.disableSystemScale')}
             checked={settings.disableSystemScale}
             onchange={(checked) => apply({ disableSystemScale: checked })}
           />
@@ -614,13 +670,13 @@ import TextTabs from './ui/TextTabs.svelte';
 
       <div class="setting-row">
           <div>
-            <div class="setting-title">关闭窗口时最小化到托盘</div>
+            <div class="setting-title">{t('settings.system.closeToTray')}</div>
             <div class="setting-hint">
-              打开后点关闭只是隐藏窗口，播放继续；要退出请用托盘菜单
+              {t('settings.system.closeToTray.hint')}
             </div>
           </div>
           <Switch
-            label="关闭窗口时最小化到托盘"
+            label={t('settings.system.closeToTray')}
             checked={settings.closeToTray}
             onchange={(checked) => apply({ closeToTray: checked })}
           />
@@ -628,13 +684,13 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">曲库自动刷新</div>
+            <div class="setting-title">{t('settings.system.autoRefresh')}</div>
             <div class="setting-hint">
-              在别的软件里改了标签或移动了文件，播放器隔多久自己发现；关闭后仍会在切回窗口时刷一次
+              {t('settings.system.autoRefresh.hint')}
             </div>
           </div>
           <SegmentedControl
-            label="曲库自动刷新间隔"
+            label={t('settings.system.autoRefresh.control')}
             value={String(settings.refreshSeconds ?? 30)}
             options={REFRESH_OPTIONS}
             onchange={(value) => apply({ refreshSeconds: Number(value) })}
@@ -643,13 +699,13 @@ import TextTabs from './ui/TextTabs.svelte';
 
         <div class="setting-row">
           <div>
-            <div class="setting-title">最近播放保留</div>
+            <div class="setting-title">{t('settings.system.historyRetention')}</div>
             <div class="setting-hint">
-              播放记录只保留这段时间，到期自动清理；「最近播放」列表与常听都按这个范围统计
+              {t('settings.system.historyRetention.hint')}
             </div>
           </div>
           <SegmentedControl
-            label="最近播放保留周期"
+            label={t('settings.system.historyRetention.control')}
             value={String(settings.historyDays ?? 90)}
             options={HISTORY_DAYS_OPTIONS}
             onchange={(value) => apply({ historyDays: Number(value) })}
@@ -658,19 +714,24 @@ import TextTabs from './ui/TextTabs.svelte';
       </section>
 
     <section class="settings-section" bind:this={sectionEls.shortcuts}>
-      <h3 class="group-title">快捷键</h3>
+      <h3 class="group-title">{t('settings.section.shortcuts')}</h3>
 
       <!-- 录制规则与恢复默认放在组首：用户在点击绑定键之前需要知道 Esc / Backspace 的行为。外框使其读作操作须知，而非列表末尾的附注。 -->
       <div class="shortcut-foot">
-        <span class="dim">Esc 取消录制，Backspace 清空绑定；↑/↓ 与 Enter 是列表导航，不占用快捷键</span>
-        <Button size="sm" onclick={() => apply({ shortcuts: {} })}>恢复默认</Button>
+        <span class="dim">{t('settings.shortcuts.footHint')}</span>
+        <Button size="sm" onclick={() => apply({ shortcuts: {} })}>{t('settings.shortcuts.reset')}</Button>
       </div>
 
       {#if conflicts.length > 0}
           <div class="notice danger">
             {#each conflicts as conflict (conflict.binding)}
               <div>
-                「{formatBinding(conflict.binding)}」同时绑定多个动作：{conflict.actions.map((action) => SHORTCUT_LABELS[action as ShortcutAction]).join('、')}
+                {t('settings.shortcuts.conflict', {
+                  binding: formatBinding(conflict.binding),
+                  actions: conflict.actions
+                    .map((action) => SHORTCUT_LABELS[action as ShortcutAction])
+                    .join(t('settings.shortcuts.actionSep')),
+                })}
               </div>
             {/each}
           </div>
@@ -686,7 +747,7 @@ import TextTabs from './ui/TextTabs.svelte';
                 class:unset={!bindings[action]}
                 onclick={() => capture.start(action)}
               >
-                {capturing === action ? '按下新键…' : formatBinding(bindings[action])}
+                {capturing === action ? t('settings.shortcuts.pressNewKey') : formatBinding(bindings[action])}
               </button>
             </div>
           {/each}
@@ -696,28 +757,56 @@ import TextTabs from './ui/TextTabs.svelte';
     <!-- 关于组：识别信息与排障。布局与设置项一致（一行一项）。平台、Schema 版本、播放列表计数不展示：属内部信息或恒为
     0。不提供「重新读取」按钮：诊断随页面加载自动拉取。「获取更新」为占位按钮，功能未提供，恒禁用。数据目录与「打开目录」合为一行。 -->
     <section class="settings-section settings-about" bind:this={sectionEls.about}>
-      <h3 class="group-title">关于</h3>
+      <h3 class="group-title">{t('settings.section.about')}</h3>
       <div class="setting-row">
         <div>
-          <div class="setting-title">版本</div>
+          <div class="setting-title">{t('settings.about.version')}</div>
           <div class="setting-hint">{sys?.version ?? '…'}</div>
         </div>
-        <Button size="sm" disabled title="获取更新功能尚未提供">获取更新</Button>
+        <div class="about-actions">
+          <Button size="sm" onclick={() => ui.openUrl(RELEASES_URL)}
+            title={t('settings.about.releases.open')}>
+            {#snippet icon()}<ExternalLink size={14} />{/snippet}
+          </Button>
+          <Button size="sm" disabled title={t('settings.about.checkUpdates.title')}>
+            {t('settings.about.checkUpdates')}
+          </Button>
+        </div>
       </div>
 
       <div class="setting-row">
         <div class="datadir-cell">
-          <div class="setting-title">数据目录</div>
+          <div class="setting-title">{t('settings.about.dataDir')}</div>
           <!-- 完整路径可复制（user-select 豁免见样式区），过长省略、悬停给全路径 -->
           <div class="setting-hint datadir-path" title={sys?.dataDir ?? ''}>{sys?.dataDir ?? '…'}</div>
         </div>
-        <Button size="sm" onclick={() => ui.openDataDir()}>打开目录</Button>
+        <Button size="sm" onclick={() => ui.openDataDir()}>{t('settings.about.openDir')}</Button>
+      </div>
+
+      <div class="setting-row">
+          <div>
+            <div class="setting-title">{t('settings.about.repo')}</div>
+            <div class="setting-hint datadir-path" title={REPO_URL}>{REPO_URL.replace('https://', '')}</div>
+          </div>
+          <Button size="sm" onclick={() => ui.openUrl(REPO_URL)}>
+            {#snippet icon()}<ExternalLink size={14} />{/snippet}
+            {t('settings.about.open')}
+          </Button>
+      </div>
+
+      <div class="setting-row">
+          <div>
+            <div class="setting-title">{t('settings.about.license')}</div>
+            <div class="setting-hint">{t('settings.about.license.hint')}</div>
+          </div>
       </div>
 
       <div class="diag-block last-errors">
-        <div class="diag-head">最近错误<span class="dim">最多保留 30 条，新的在上</span></div>
+        <div class="diag-head">
+          {t('settings.about.recentErrors')}<span class="dim">{t('settings.about.recentErrors.note')}</span>
+        </div>
         {#if recentErrors.length === 0}
-          <div class="dim">没有错误</div>
+          <div class="dim">{t('settings.about.noErrors')}</div>
         {:else}
           <ul class="error-list">
             {#each recentErrors.slice().reverse() as item}
@@ -726,7 +815,7 @@ import TextTabs from './ui/TextTabs.svelte';
                 <span class="danger">{item.code}</span>
                 {item.message}
                 {#if item.detail}
-                  <span class="dim" title={item.detail}>有详情</span>
+                  <span class="dim" title={item.detail}>{t('settings.about.hasDetail')}</span>
                 {/if}
               </li>
             {/each}
@@ -735,12 +824,25 @@ import TextTabs from './ui/TextTabs.svelte';
       </div>
 
       <!-- 支持开发：独立区块置于「关于」末尾并居中，不配描述文案。结构按多二维码并排预留：新增平台时在 .support-items 内并列一个 .support-item
-      即可。爱发电二维码使用静态图而非外链，因为打开外部浏览器需要 shell open 能力，该基建随「获取更新」一并引入。 -->
+      即可。爱发电二维码使用静态图而非外链，因为打开外部浏览器的能力已由 app_open_url 提供（白名单出站，含爱发电主页）。 -->
       <div class="support-block">
         <div class="support-items">
           <figure class="support-item">
-            <img class="afdian-qr" src={afdianQr} alt="爱发电赞助二维码" width="160" height="160" />
-            <figcaption>支持创作，用爱发电</figcaption>
+            <button
+              class="qr-link"
+              type="button"
+              title="afdian.com/a/NyaaACG"
+              onclick={() => ui.openUrl(AFDIAN_URL)}
+            >
+              <img
+                class="afdian-qr"
+                src={afdianQr}
+                alt={t('settings.about.afdianQrAlt')}
+                width="160"
+                height="160"
+              />
+            </button>
+            <figcaption>{t('settings.about.support')}</figcaption>
           </figure>
         </div>
       </div>
@@ -758,6 +860,14 @@ import TextTabs from './ui/TextTabs.svelte';
   .error-list {
     user-select: text;
     cursor: text;
+  }
+
+  /* 版本行的双按钮（releases 图标键 + 获取更新）：setting-row 的 space-between
+     会把两个按钮拆到两端，包一层收拢到右侧 */
+  .about-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
   /* 平铺区块的组标题：比 setting-title 大一档，是 tab 跳转的落点 */
@@ -800,7 +910,21 @@ import TextTabs from './ui/TextTabs.svelte';
     font-family: var(--font-mono, ui-monospace, Consolas, monospace);
   }
 
-  /* 爱发电二维码：自带黑色底，圆角 + 细边框与卡片语言一致 */
+  /* 爱发电二维码：自带黑色底，圆角 + 细边框与卡片语言一致。
+   .qr-link 是可点外壳：重置按钮默认外观，hover 轻浮提示可点 */
+  .qr-link {
+    display: block;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+    transition: opacity var(--dur-fast) var(--ease);
+  }
+
+  .qr-link:hover {
+    opacity: 0.85;
+  }
+
   .afdian-qr {
     display: block;
     width: 160px;

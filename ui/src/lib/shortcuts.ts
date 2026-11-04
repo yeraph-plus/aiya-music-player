@@ -71,23 +71,26 @@ export function resolveShortcutBindings(
   return out;
 }
 
-export const SHORTCUT_LABELS: Record<ShortcutAction, string> = {
-  playPause: '播放 / 暂停',
-  next: '下一首',
-  prev: '上一首',
-  seekForward: '快进 5 秒',
-  seekBackward: '快退 5 秒',
-  volumeUp: '音量 +5%',
-  volumeDown: '音量 -5%',
-  rateUp: '加速 0.1×',
-  rateDown: '减速 0.1×',
-  mute: '静音切换',
-  focusSearch: '聚焦搜索框',
-  toggleQueue: '播放队列面板',
-  toggleLyrics: '歌词面板',
-  toggleShuffle: '随机播放切换',
-  cycleRepeat: '播放模式轮转（列表循环/单曲循环/随机/顺序）',
-  selectAll: '全选当前视图',
+import { t, type Msg } from './i18n.svelte';
+
+/** 动作名存 Msg 键（展示文案在 i18n 域表），渲染点调 t() 响应语言切换。 */
+export const SHORTCUT_LABELS: Record<ShortcutAction, Msg> = {
+  playPause: 'shell.keys.playPause',
+  next: 'shell.keys.next',
+  prev: 'shell.keys.prev',
+  seekForward: 'shell.keys.seekForward',
+  seekBackward: 'shell.keys.seekBackward',
+  volumeUp: 'shell.keys.volumeUp',
+  volumeDown: 'shell.keys.volumeDown',
+  rateUp: 'shell.keys.rateUp',
+  rateDown: 'shell.keys.rateDown',
+  mute: 'shell.keys.mute',
+  focusSearch: 'shell.keys.focusSearch',
+  toggleQueue: 'shell.keys.toggleQueue',
+  toggleLyrics: 'shell.keys.toggleLyrics',
+  toggleShuffle: 'shell.keys.toggleShuffle',
+  cycleRepeat: 'shell.keys.cycleRepeat',
+  selectAll: 'shell.keys.selectAll',
 };
 
 /* 解析与匹配 */
@@ -236,12 +239,12 @@ export function findConflicts<T extends string>(
  */
 export function formatBinding(binding: string): string {
   const parsed = parseBinding(binding);
-  if (!parsed) return '未设置';
+  if (!parsed) return t('shell.keys.unset');
   const parts: string[] = [];
   if (parsed.ctrl) parts.push('Ctrl');
   if (parsed.alt) parts.push('Alt');
   if (parsed.shift) parts.push('Shift');
   if (parsed.meta) parts.push('Meta');
-  parts.push(parsed.key === 'Space' ? '空格' : parsed.key);
+  parts.push(parsed.key === 'Space' ? t('shell.keys.space') : parsed.key);
   return parts.join(' + ');
 }

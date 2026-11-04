@@ -10,6 +10,7 @@
   import QueuePanel from './QueuePanel.svelte';
   import SideDrawer from './ui/SideDrawer.svelte';
   import { errorMessage } from '../lib/errors';
+  import { t } from '../lib/i18n.svelte';
   import type { AudioErrorCode } from '../lib/ipc/generated/AudioErrorCode';
   import type { SpectrumSource } from '../lib/spectrum-source';
   import { eq } from '../stores/eq.svelte';
@@ -59,12 +60,15 @@
     lastPlaybackErrorKey = key;
     if (BLOCKING_PLAYBACK_CODES.has(err.code)) {
       overlay.showAlert({
-        title: '播放失败',
-        message: `《${ps.current.title ?? '未知曲目'}》${err.message}`,
-        action: { label: '跳到下一首', run: () => player.next() },
+        title: t('shell.notify.playbackFailed'),
+        message: t('shell.notify.playbackBlocked', {
+          title: ps.current.title ?? t('shell.notify.unknownTrack'),
+          message: err.message,
+        }),
+        action: { label: t('shell.notify.skipNext'), run: () => player.next() },
       });
     } else {
-      notify.showToast(`播放失败：${err.message}`, 4000);
+      notify.showToast(t('shell.notify.playbackFailedToast', { message: err.message }), 4000);
     }
   });
 
@@ -173,7 +177,7 @@
     抽屉几何确定（贴右缘、定宽、定边距），没有测量参与。
     互斥仍由 ui store 的 setQueue/setEqDrawer 负责，这里只做壳。
   -->
-  <SideDrawer open={ui.queueOpen} label="播放队列" onclose={() => ui.closeQueue()}>
+  <SideDrawer open={ui.queueOpen} label={t('shell.drawer.queue')} onclose={() => ui.closeQueue()}>
     <QueuePanel
       ids={player.queueIds}
       transient={player.queueTransient}
@@ -187,7 +191,7 @@
     />
   </SideDrawer>
 
-  <SideDrawer open={ui.eqOpen} label="均衡器" onclose={() => ui.setEqDrawer(false)}>
+  <SideDrawer open={ui.eqOpen} label={t('shell.drawer.eq')} onclose={() => ui.setEqDrawer(false)}>
     <div class="eq-drawer-body">
       <EqPanel />
     </div>
@@ -206,8 +210,8 @@
     <div class="drop-veil">
       <div class="drop-card">
         <span class="drop-icon"><Icon name="folder" size={22} /></span>
-        <strong>松开即播放</strong>
-        <span class="drop-hint">{drop.hint ?? '音频文件 / m3u8 直播清单'}</span>
+        <strong>{t('shell.drop.title')}</strong>
+        <span class="drop-hint">{drop.hint ?? t('shell.drop.hintFallback')}</span>
       </div>
     </div>
   {/if}

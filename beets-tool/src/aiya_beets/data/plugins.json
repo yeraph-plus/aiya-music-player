@@ -21,7 +21,7 @@
       "name": "qt5core",
       "target": "Qt5Core.dll",
       "bundle": true,
-      "why": "Gaia 构建非静态链接：Qt5Core 必须与提取器同目录，缺它 spawn 起不来",
+      "why": "Gaia builds are not statically linked: Qt5Core must sit next to the extractor, and spawn fails without it",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/brendanerofeev/essentia/releases/download/gaia-win64-2/essentia-gaia-win64.zip",
@@ -34,13 +34,13 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "LGPL-3.0-or-later",
-      "vendor": "Qt5 Core（The Qt Company），随社区构建原样分发"
+      "vendor": "Qt5 Core (The Qt Company), redistributed as-is from the community build"
     },
     {
       "name": "streaming_extractor_music",
       "target": "streaming_extractor_music.exe",
       "bundle": true,
-      "why": "xtractor 调它算 bpm / danceability / mood（python 绑定在 Windows 上没有发行版）；Gaia/SVM 需要社区构建——AB 官方 win-i686 没编 Gaia2，配模型必炸（docs/50 §2.5）",
+      "why": "called by the xtractor plugin to compute bpm / danceability / mood (the Python bindings have no Windows distribution); Gaia/SVM need the community build - the official AB win-i686 build omits Gaia2 and crashes with models (docs/50 §2.5)",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/brendanerofeev/essentia/releases/download/gaia-win64-2/essentia-gaia-win64.zip",
@@ -53,13 +53,13 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "AGPL-3.0-or-later",
-      "vendor": "Essentia music extractor，带 Gaia/SVM（社区构建 brendanerofeev/essentia gaia-win64-2，源起 regorxxx 的 Actions 构建，commit 14dce99b）"
+      "vendor": "Essentia music extractor with Gaia/SVM (community build brendanerofeev/essentia gaia-win64-2, derived from regorxxx's Actions build, commit 14dce99b)"
     },
     {
       "name": "ffmpeg",
       "target": "ffmpeg.exe",
       "bundle": false,
-      "why": "replaygain 归一化、转码副本、封面写进文件都调它；缺了 replaygain 会让 beets 整个 CLI 起不来",
+      "why": "used by ReplayGain normalization, transcode copies, and cover art written into files; without it ReplayGain keeps the whole beets CLI from starting",
       "carrier": {
         "kind": "zip",
         "url": "https://files.pythonhosted.org/packages/e5/55/1d50cdd78d862a30c2ce44f01cea387f77b364b21fa2fecf1590258b215b/imageio_ffmpeg-0.7.0-py3-none-win_amd64.whl",
@@ -74,13 +74,13 @@
       ],
       "probeAllowFail": false,
       "license": "GPL-3.0-or-later",
-      "vendor": "ffmpeg 7.1 essentials (gyan.dev)，经 PyPI imageio-ffmpeg 0.7.0 分发"
+      "vendor": "ffmpeg 7.1 essentials (gyan.dev), distributed via PyPI imageio-ffmpeg 0.7.0"
     },
     {
       "name": "fpcalc",
       "target": "fpcalc.exe",
       "bundle": false,
-      "why": "chroma 插件拿它算 acoustid 指纹（PyPI 上没有可用发行版）",
+      "why": "used by the chroma plugin to compute AcoustID fingerprints (no usable distribution on PyPI)",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/acoustid/chromaprint/releases/download/v1.6.2/chromaprint-fpcalc-1.6.2-windows-x86_64.zip",
@@ -101,7 +101,7 @@
       "name": "svm-danceability",
       "target": "models/danceability.history",
       "bundle": true,
-      "why": "highlevel.danceability 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "why": "Gaia SVM model (.history) for highlevel.danceability - feeds the high-level features such as danceability/mood",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
@@ -114,13 +114,13 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG (repacked from the essentia-extractor-svm_models-v2.1_beta5 archive, self-hosted in this repository's svm-models-v2.1_beta5 release)"
     },
     {
       "name": "svm-gender",
       "target": "models/gender.history",
       "bundle": true,
-      "why": "highlevel.gender 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "why": "Gaia SVM model (.history) for highlevel.gender - feeds the high-level features such as danceability/mood",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
@@ -133,13 +133,13 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG (repacked from the essentia-extractor-svm_models-v2.1_beta5 archive, self-hosted in this repository's svm-models-v2.1_beta5 release)"
     },
     {
       "name": "svm-genre_rosamerica",
       "target": "models/genre_rosamerica.history",
       "bundle": true,
-      "why": "highlevel.genre_rosamerica 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "why": "Gaia SVM model (.history) for highlevel.genre_rosamerica - feeds the high-level features such as danceability/mood",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
@@ -152,13 +152,13 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG (repacked from the essentia-extractor-svm_models-v2.1_beta5 archive, self-hosted in this repository's svm-models-v2.1_beta5 release)"
     },
     {
       "name": "svm-mood_acoustic",
       "target": "models/mood_acoustic.history",
       "bundle": true,
-      "why": "highlevel.mood_acoustic 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "why": "Gaia SVM model (.history) for highlevel.mood_acoustic - feeds the high-level features such as danceability/mood",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
@@ -171,13 +171,13 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG (repacked from the essentia-extractor-svm_models-v2.1_beta5 archive, self-hosted in this repository's svm-models-v2.1_beta5 release)"
     },
     {
       "name": "svm-mood_aggressive",
       "target": "models/mood_aggressive.history",
       "bundle": true,
-      "why": "highlevel.mood_aggressive 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "why": "Gaia SVM model (.history) for highlevel.mood_aggressive - feeds the high-level features such as danceability/mood",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
@@ -190,13 +190,13 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG (repacked from the essentia-extractor-svm_models-v2.1_beta5 archive, self-hosted in this repository's svm-models-v2.1_beta5 release)"
     },
     {
       "name": "svm-mood_electronic",
       "target": "models/mood_electronic.history",
       "bundle": true,
-      "why": "highlevel.mood_electronic 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "why": "Gaia SVM model (.history) for highlevel.mood_electronic - feeds the high-level features such as danceability/mood",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
@@ -209,13 +209,13 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG (repacked from the essentia-extractor-svm_models-v2.1_beta5 archive, self-hosted in this repository's svm-models-v2.1_beta5 release)"
     },
     {
       "name": "svm-mood_happy",
       "target": "models/mood_happy.history",
       "bundle": true,
-      "why": "highlevel.mood_happy 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "why": "Gaia SVM model (.history) for highlevel.mood_happy - feeds the high-level features such as danceability/mood",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
@@ -228,13 +228,13 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG (repacked from the essentia-extractor-svm_models-v2.1_beta5 archive, self-hosted in this repository's svm-models-v2.1_beta5 release)"
     },
     {
       "name": "svm-mood_sad",
       "target": "models/mood_sad.history",
       "bundle": true,
-      "why": "highlevel.mood_sad 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "why": "Gaia SVM model (.history) for highlevel.mood_sad - feeds the high-level features such as danceability/mood",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
@@ -247,13 +247,13 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG (repacked from the essentia-extractor-svm_models-v2.1_beta5 archive, self-hosted in this repository's svm-models-v2.1_beta5 release)"
     },
     {
       "name": "svm-mood_party",
       "target": "models/mood_party.history",
       "bundle": true,
-      "why": "highlevel.mood_party 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "why": "Gaia SVM model (.history) for highlevel.mood_party - feeds the high-level features such as danceability/mood",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
@@ -266,13 +266,13 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG (repacked from the essentia-extractor-svm_models-v2.1_beta5 archive, self-hosted in this repository's svm-models-v2.1_beta5 release)"
     },
     {
       "name": "svm-mood_relaxed",
       "target": "models/mood_relaxed.history",
       "bundle": true,
-      "why": "highlevel.mood_relaxed 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "why": "Gaia SVM model (.history) for highlevel.mood_relaxed - feeds the high-level features such as danceability/mood",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
@@ -285,13 +285,13 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG (repacked from the essentia-extractor-svm_models-v2.1_beta5 archive, self-hosted in this repository's svm-models-v2.1_beta5 release)"
     },
     {
       "name": "svm-voice_instrumental",
       "target": "models/voice_instrumental.history",
       "bundle": true,
-      "why": "highlevel.voice_instrumental 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "why": "Gaia SVM model (.history) for highlevel.voice_instrumental - feeds the high-level features such as danceability/mood",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
@@ -304,13 +304,13 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG (repacked from the essentia-extractor-svm_models-v2.1_beta5 archive, self-hosted in this repository's svm-models-v2.1_beta5 release)"
     },
     {
       "name": "svm-moods_mirex",
       "target": "models/moods_mirex.history",
       "bundle": true,
-      "why": "highlevel.moods_mirex 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "why": "Gaia SVM model (.history) for highlevel.moods_mirex - feeds the high-level features such as danceability/mood",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip",
@@ -323,7 +323,7 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG (repacked from the essentia-extractor-svm_models-v2.1_beta5 archive, self-hosted in this repository's svm-models-v2.1_beta5 release)"
     }
   ],
   "plugins": [

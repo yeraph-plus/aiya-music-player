@@ -1,6 +1,7 @@
 import type { PlaylistSummary } from '../lib/ipc';
 import { ipc } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
+import { t } from '../lib/i18n.svelte';
 import type { SmartRule } from '../lib/smart';
 import { LIBRARY_VIEW } from '../lib/view';
 import { library } from './library.svelte';
@@ -82,7 +83,7 @@ class PlaylistsStore {
     await this.refresh();
     const view = ui.view;
     if (view.kind === 'playlist' && view.id === playlist.id) await list.reload();
-    notify.showToast('规则已保存');
+    notify.showToast(t('playlists.ruleSaved'));
     return true;
   }
 
@@ -93,7 +94,7 @@ class PlaylistsStore {
       await this.refresh();
       const view = ui.view;
       if (view.kind === 'playlist' && view.id === playlist.id) await list.reload();
-      notify.showToast(result.added > 0 ? `新增 ${result.added} 首` : '没有新增曲目');
+      notify.showToast(result.added > 0 ? t('playlists.smartAdded', { n: result.added }) : t('playlists.smartNoNew'));
     } catch (err) {
       notify.showError(errorMessage(err));
     }
@@ -130,7 +131,7 @@ class PlaylistsStore {
       ui.setView(LIBRARY_VIEW);
       await list.reload();
     }
-    notify.showToast(`已删除「${playlist.name}」`);
+    notify.showToast(t('playlists.deleted', { name: playlist.name }));
   }
 
   async clear(playlist: PlaylistSummary): Promise<void> {
@@ -143,7 +144,7 @@ class PlaylistsStore {
     await this.refresh();
     const view = ui.view;
     if (view.kind === 'playlist' && view.id === playlist.id) await list.reload();
-    notify.showToast('已清空歌单');
+    notify.showToast(t('playlists.cleared'));
   }
 
   /**
@@ -163,7 +164,7 @@ class PlaylistsStore {
       return;
     }
     await this.refresh();
-    notify.showToast(`新增 ${added} 首，跳过 ${skipped} 首`);
+    notify.showToast(t('playlists.addResult', { added, skipped }));
     selection.clear();
     const view = ui.view;
     // 正在看这个歌单：按原滚动位置重载（否则新加的歌在列表底部，
@@ -253,8 +254,10 @@ class PlaylistsStore {
       await list.reload({ restore: true });
     }
     if (failed.length > 0) {
-      const detail = failed.length === indices.length ? '移除失败' : `已移除 ${indices.length - failed.length} 首，${failed.length} 首失败`;
-      notify.showError(`${detail}：${failed[0]}`);
+      const detail = failed.length === indices.length
+        ? t('playlists.removeFailed')
+        : t('playlists.removePartial', { ok: indices.length - failed.length, failed: failed.length });
+      notify.showError(t('playlists.errorJoin', { detail, message: failed[0] }));
     }
   }
 

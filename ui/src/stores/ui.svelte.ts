@@ -14,6 +14,7 @@ import {
   type View,
 } from '../lib/view';
 import { readLook } from '../lib/look';
+import { t } from '../lib/i18n.svelte';
 import { notify } from './notify.svelte';
 
 /**
@@ -456,6 +457,11 @@ class UiStore {
     void ipc.app.openDataDir().catch((e) => console.warn('openDataDir failed:', errorMessage(e)));
   }
 
+  /** 出站链接（关于段）：URL 走宿主白名单，此处不校验 */
+  openUrl(url: string): void {
+    void ipc.app.openUrl(url).catch((e) => console.warn('openUrl failed:', errorMessage(e)));
+  }
+
   async refreshDiagnostics(): Promise<void> {
     try {
       this.diagnostics = await ipc.app.diagnostics();
@@ -537,7 +543,7 @@ class UiStore {
         // 卸载与安装共用同一条事件流，只靠 stage 区分。
         // `done` 是卸载的终态：带 removed / files / bytes / message。
         if (type === 'error') {
-          this.beetsUninstall = { running: false, message: '', error: message || '卸载失败' };
+          this.beetsUninstall = { running: false, message: '', error: message || t('beets.uninstall.failed') };
           return;
         }
         if (type === 'done') {
@@ -552,7 +558,7 @@ class UiStore {
           running: false,
           stage,
           message,
-          error: message || '安装失败',
+          error: message || t('beets.install.failed'),
         };
         return;
       }
@@ -570,7 +576,7 @@ class UiStore {
     this.beetsInstall = {
       running: true,
       stage: 'download',
-      message: '正在准备…',
+      message: t('beets.install.preparing'),
       error: null,
     };
     try {
@@ -588,7 +594,7 @@ class UiStore {
     this.beetsInstall = {
       running: true,
       stage: 'pip',
-      message: '正在准备…',
+      message: t('beets.install.preparing'),
       error: null,
     };
     try {
@@ -619,7 +625,7 @@ class UiStore {
    * 补一条 `finished` 带新 status，所以这里不需要再手动刷一次。
    */
   async uninstallBeets(): Promise<void> {
-    this.beetsUninstall = { running: true, message: '正在卸载…', error: null };
+    this.beetsUninstall = { running: true, message: t('beets.uninstallRunning'), error: null };
     try {
       await ipc.beets.uninstall();
     } catch (e) {

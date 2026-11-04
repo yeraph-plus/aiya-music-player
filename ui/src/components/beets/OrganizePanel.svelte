@@ -12,6 +12,7 @@
   import { beetsConfig } from '../../stores/beets-config.svelte';
   import { beetsSession as sess } from '../../stores/beets-session.svelte';
   import { library } from '../../stores/library.svelte';
+  import { t, type Msg } from '../../lib/i18n.svelte';
 
   /**
    * 整理子页：**待整理目录 → 预览 → 落点 → 移动或拷贝**。
@@ -40,9 +41,9 @@
 
   type FileAction = 'apply_copy' | 'apply_move';
 
-  const ACTION_LABELS: Record<FileAction, string> = {
-    apply_copy: '复制进来（原文件保留）',
-    apply_move: '移动进来（原文件不在）',
+  const ACTION_KEY: Record<FileAction, Msg> = {
+    apply_copy: 'beets.organize.actionCopy',
+    apply_move: 'beets.organize.actionMove',
   };
 
   /** 默认拷贝：移动不可逆 */
@@ -164,20 +165,20 @@
 
   /* 展示用 */
 
-  const recLabel: Record<string, string> = {
-    strong: '高置信',
-    medium: '中置信',
-    low: '低置信',
-    none: '无匹配',
+  const REC_KEY: Record<string, Msg> = {
+    strong: 'beets.organize.recStrong',
+    medium: 'beets.organize.recMedium',
+    low: 'beets.organize.recLow',
+    none: 'beets.organize.recNone',
   };
 
   /** 证据层级（协议 v2）：说明推荐理由的强度来源。自强到弱排列，
    *  similarity 最需要人工复核。 */
-  const EVIDENCE_LABELS: Record<EvidenceTier, string> = {
-    recordingId: '指纹级 · Recording ID',
-    metadataSlot: '双源印证',
-    releaseGroup: 'Release Group',
-    similarity: '仅相似度',
+  const EVIDENCE_KEY: Record<EvidenceTier, Msg> = {
+    recordingId: 'beets.organize.evidenceRecordingId',
+    metadataSlot: 'beets.organize.evidenceMetadataSlot',
+    releaseGroup: 'beets.organize.evidenceReleaseGroup',
+    similarity: 'beets.organize.evidenceSimilarity',
   };
 
   function fieldDiff(current: unknown, candidate: unknown): boolean {
@@ -199,27 +200,26 @@
   <!-- 待整理目录 -->
   <section class="beets-panel">
     <div class="beets-panel-head">
-      <strong>待整理目录</strong>
+      <strong>{t('beets.organize.inboxTitle')}</strong>
       <span class="beets-dim">
-        把还没进曲库的文件丢进这个文件夹，整理时从这里读。它必须在曲库目录**之外**
-        ——复制模式下原件会留在这里，落在曲库里就会被扫描器再扫一遍变成重复曲目。
+        {t('beets.organize.inboxDesc')}
       </span>
     </div>
     <div class="beets-row">
       {#if inbox}
         <Inbox size={14} />
         <span class="beets-path" title={inbox}>{inbox}</span>
-        <Button size="sm" onclick={() => void openInbox()} title="在资源管理器打开（往里拖文件）">
+        <Button size="sm" onclick={() => void openInbox()} title={t('beets.organize.openTip')}>
           {#snippet icon()}<FolderOpen size={13} />{/snippet}
-          打开
+          {t('beets.organize.open')}
         </Button>
-        <Button size="sm" disabled={busy} onclick={() => void chooseInbox()}>更换</Button>
-        <Button size="sm" variant="ghost" disabled={busy} onclick={() => void clearInbox()}>清除</Button>
+        <Button size="sm" disabled={busy} onclick={() => void chooseInbox()}>{t('beets.organize.change')}</Button>
+        <Button size="sm" variant="ghost" disabled={busy} onclick={() => void clearInbox()}>{t('beets.organize.clear')}</Button>
       {:else}
-        <span class="beets-dim">还没设置。选一个曲库之外的文件夹，把要整理的文件丢进去。</span>
+        <span class="beets-dim">{t('beets.organize.inboxEmpty')}</span>
         <Button variant="primary" size="sm" disabled={busy} onclick={() => void chooseInbox()}>
           {#snippet icon()}<Folder size={13} />{/snippet}
-          选择待整理目录
+          {t('beets.organize.pickInbox')}
         </Button>
       {/if}
     </div>
@@ -231,28 +231,27 @@
   <!-- 落点 -->
   <section class="beets-panel">
     <div class="beets-panel-head">
-      <strong>整理落点</strong>
+      <strong>{t('beets.organize.targetTitle')}</strong>
       <span class="beets-dim">
-        整理后的文件按「艺人/专辑/曲序 标题」落到这里（格式跟着 beets 的 path_formats）。
-        必须在曲库目录之内——落在曲库外，整理完扫描器看不见，曲库里就没有。
+        {t('beets.organize.targetDesc')}
       </span>
     </div>
     <div class="beets-row">
       {#if target}
         <span class="beets-path" title={target}>{target}</span>
         {#if beetsConfig.targetRoot === null}
-          <span class="beets-badge" title="没单独选过，跟着第一个曲库目录走">默认（第一个曲库目录）</span>
+          <span class="beets-badge" title={t('beets.organize.targetDefaultTip')}>{t('beets.organize.targetDefault')}</span>
         {/if}
       {:else}
-        <span class="beets-dim">还没有曲库目录，先到设置里加一个扫描根。</span>
+        <span class="beets-dim">{t('beets.organize.noLibraryRoots')}</span>
       {/if}
       <Button size="sm" disabled={busy || library.roots.length === 0} onclick={() => void chooseTarget()}>
-        选择子目录
+        {t('beets.organize.pickSubdir')}
       </Button>
     </div>
     {#if library.roots.length > 0}
       <div class="root-chips">
-        <span class="beets-dim">或直接用曲库目录：</span>
+        <span class="beets-dim">{t('beets.organize.useRoots')}</span>
         {#each library.roots as root (root)}
           <Chip
             label={shortenPath(root)}
@@ -272,10 +271,9 @@
   <!-- 动作与执行 -->
   <section class="beets-panel">
     <div class="beets-panel-head">
-      <strong>整理</strong>
+      <strong>{t('beets.organize.title')}</strong>
       <span class="beets-dim">
-        先预览：联网匹配候选元数据并给出逐字段差异，这一步不写任何文件。确认后才会
-        写标签并按上面的动作处理文件。
+        {t('beets.organize.desc')}
       </span>
     </div>
 
@@ -285,27 +283,28 @@
         disabled={!inbox || busy}
         loading={running}
         onclick={startPreview}
-        title={inbox ? '从待整理目录读取文件并匹配（只读）' : '先设置待整理目录'}
+        title={inbox ? t('beets.organize.startTip') : t('beets.organize.startBlockedTip')}
       >
         {#snippet icon()}<Play size={14} />{/snippet}
-        {sess.doneCount === null ? '开始整理（预览）' : '重新预览'}
+        {sess.doneCount === null ? t('beets.organize.startPreview') : t('beets.organize.repreview')}
       </Button>
 
       {#if !inbox}
-        <span class="beets-dim">设置待整理目录后才能开始。</span>
+        <span class="beets-dim">{t('beets.organize.noInboxHint')}</span>
       {/if}
 
       {#if running}
         <span class="beets-dim">
-          匹配中 {sess.progress ? `${sess.progress.current}/${sess.progress.total}` : '…'}
-          （MusicBrainz，只读不改文件）
+          {t('beets.organize.matchingPrefix')}
+          {sess.progress ? `${sess.progress.current}/${sess.progress.total}` : '…'}
+          {t('beets.organize.matchingTail')}
         </span>
       {/if}
 
       {#if busy}
-        <Button size="sm" onclick={() => void sess.cancel()} ariaLabel="取消当前整理">
+        <Button size="sm" onclick={() => void sess.cancel()} ariaLabel={t('beets.organize.cancelAria')}>
           {#snippet icon()}<X size={13} />{/snippet}
-          取消
+          {t('common.cancel')}
         </Button>
       {/if}
     </div>
@@ -313,11 +312,11 @@
     {#if sess.doneCount !== null && !busy}
       <div class="beets-row apply-bar">
         <Select
-          label="文件动作"
+          label={t('beets.organize.actionLabel')}
           value={action}
-          options={Object.entries(ACTION_LABELS).map(([value, label]) => ({ value, label }))}
+          options={(Object.keys(ACTION_KEY) as FileAction[]).map((value) => ({ value, label: t(ACTION_KEY[value]) }))}
           onchange={(v) => (action = v as FileAction)}
-          title="移动不可逆；拷贝会在待整理目录留下原件"
+          title={t('beets.organize.actionTip')}
         />
         <Button
           variant="primary"
@@ -326,16 +325,17 @@
           loading={applying}
           onclick={() => void applyAll()}
         >
-          应用所选（{willApply} 张）
+          {t('beets.organize.applyAll', { n: willApply })}
         </Button>
         {#if willApply < sess.albums.length}
           <span class="beets-dim">
-            {sess.albums.length - willApply} 张没有选中候选，按跳过处理
+            {t('beets.organize.skippedCount', { n: sess.albums.length - willApply })}
           </span>
         {/if}
         {#if applying}
           <span class="beets-dim">
-            处理中 {sess.applyProgress ? `${sess.applyProgress.current}/${sess.applyProgress.total}` : '…'}
+            {t('beets.organize.applyingPrefix')}
+            {sess.applyProgress ? `${sess.applyProgress.current}/${sess.applyProgress.total}` : '…'}
           </span>
         {/if}
       </div>
@@ -343,11 +343,11 @@
 
     {#if sess.applySummary}
       <p class="beets-dim summary" class:has-failed={sess.applySummary.failed > 0}>
-        已应用 {sess.applySummary.applied} 张 · 跳过 {sess.applySummary.skipped} 张
-        {#if sess.applySummary.moved > 0} · 文件已处理 {sess.applySummary.moved} 首{/if}
-        {#if sess.applySummary.failed > 0} · 失败 {sess.applySummary.failed} 首{/if}
+        {t('beets.organize.summary', { applied: sess.applySummary.applied, skipped: sess.applySummary.skipped })}
+        {#if sess.applySummary.moved > 0} · {t('beets.organize.summaryMoved', { n: sess.applySummary.moved })}{/if}
+        {#if sess.applySummary.failed > 0} · {t('beets.organize.summaryFailed', { n: sess.applySummary.failed })}{/if}
         {#if (sess.applySummary.resumedSkipped ?? 0) > 0}
-          · 续跑跳过（已完成）{sess.applySummary.resumedSkipped} 张
+          · {t('beets.organize.summaryResumed', { n: sess.applySummary.resumedSkipped ?? 0 })}
         {/if}
       </p>
     {/if}
@@ -355,16 +355,16 @@
     {#if sess.lastError}
       <p class="beets-danger">
         {sess.lastError}
-        <span class="beets-dim">若提示组件缺失或版本不符，到「安装」页重装。</span>
+        <span class="beets-dim">{t('beets.organize.errorHint')}</span>
       </p>
     {/if}
 
     {#if sess.canResume}
       <div class="beets-row">
-        <span class="beets-dim">上次应用有中断——已完成的专辑不会重写，只补剩余的。</span>
+        <span class="beets-dim">{t('beets.organize.resumeHint')}</span>
         <Button size="sm" disabled={busy} onclick={() => void sess.resumeLast()}>
           {#snippet icon()}<RotateCcw size={13} />{/snippet}
-          续跑上次应用
+          {t('beets.organize.resume')}
         </Button>
       </div>
     {/if}
@@ -372,20 +372,20 @@
     {#if sess.errors.length > 0}
       <div class="error-list">
         {#each sess.errors as e (e.path + e.message)}
-          <div>{e.path === 'cancel' ? e.message : `${shortenPath(e.path)}：${e.message}`}</div>
+          <div>{e.path === 'cancel' ? e.message : t('beets.organize.errorLine', { path: shortenPath(e.path), message: e.message })}</div>
         {/each}
       </div>
     {/if}
 
     {#if sess.albums.length === 0 && !running && sess.doneCount === null}
       <p class="beets-dim">
-        还没有预览。待整理目录里放好文件，点「开始整理（预览）」。
+        {t('beets.organize.noPreview')}
       </p>
     {:else if sess.albums.length === 0 && sess.doneCount !== null}
       <p class="beets-dim">
         {sess.doneCount === 0
-          ? '待整理目录里没有音频文件（或都被整理过了）。'
-          : '预览完成，但没有可展示的专辑分组。'}
+          ? t('beets.organize.inboxNoAudio')
+          : t('beets.organize.noGroups')}
       </p>
     {/if}
   </section>
@@ -394,40 +394,43 @@
   {#each sess.albums as album (album.id)}
     <section class="album-card">
       <div class="album-head">
-        <b>{album.current.album || '(未知专辑)'}</b>
+        <b>{album.current.album || t('beets.organize.unknownAlbum')}</b>
         <span class="beets-dim">
-          {album.current.artist || '(未知艺人)'} · {album.paths.length} 首
+          {album.current.artist || t('beets.organize.unknownArtist')} · {t('common.trackCount', { n: album.paths.length })}
         </span>
         <span class="beets-badge" class:accent={album.recommendation === 'strong'}>
-          {recLabel[album.recommendation] ?? album.recommendation}
+          {REC_KEY[album.recommendation] ? t(REC_KEY[album.recommendation]) : album.recommendation}
         </span>
       </div>
 
       {#if sess.results[album.id]}
         <div class="apply-result" class:has-failed={sess.results[album.id].failed.length > 0}>
-          <Check size={12} strokeWidth={2.4} aria-hidden="true" /> 已写入 {sess.results[album.id].written} 首
-          {#if sess.results[album.id].moved}· 文件已按动作处理{/if}
+          <Check size={12} strokeWidth={2.4} aria-hidden="true" /> {t('beets.organize.written', { n: sess.results[album.id].written })}
+          {#if sess.results[album.id].moved}· {t('beets.organize.filesHandled')}{/if}
           {#each sess.results[album.id].failed as f (f.path)}
             <div class="fail-line" class:conflict={f.code === 'conflict' || f.code === 'blankIdentity'}>
-              {#if f.code === 'conflict'}<TriangleAlert size={12} strokeWidth={2.4} aria-hidden="true" /> 目标冲突{:else if f.code === 'blankIdentity'}<TriangleAlert size={12} strokeWidth={2.4} aria-hidden="true" /> 身份空白{:else}<X size={12} strokeWidth={2.4} aria-hidden="true" />{/if}
-              {shortenPath(f.path)}：{f.message}
+              {#if f.code === 'conflict'}<TriangleAlert size={12} strokeWidth={2.4} aria-hidden="true" /> {t('beets.organize.conflict')}{:else if f.code === 'blankIdentity'}<TriangleAlert size={12} strokeWidth={2.4} aria-hidden="true" /> {t('beets.organize.blankIdentity')}{:else}<X size={12} strokeWidth={2.4} aria-hidden="true" />{/if}
+              {t('beets.organize.failLine', { path: shortenPath(f.path), message: f.message })}
             </div>
           {/each}
         </div>
       {:else if album.candidates.length === 0}
-        <p class="beets-dim">无候选（没联网，或这些文件匹配不上）。</p>
+        <p class="beets-dim">{t('beets.organize.noCandidates')}</p>
       {:else}
         <Select
-          label="候选匹配"
+          label={t('beets.organize.candidateLabel')}
           value={sess.picked[album.id] ?? ''}
           disabled={applying}
           options={[
-            { value: '', label: '跳过这张（保持当前标签，不写入）' },
+            { value: '', label: t('beets.organize.skipAlbum') },
             ...album.candidates.map((c) => ({
               value: c.id,
-              label:
-                `${c.album.album ?? '?'} — ${c.album.artist ?? '?'} ${c.album.year ?? ''}` +
-                `（${(c.confidence * 100).toFixed(0)}%）`,
+              label: t('beets.organize.candidateOption', {
+                album: c.album.album ?? '?',
+                artist: c.album.artist ?? '?',
+                year: c.album.year ?? '',
+                pct: (c.confidence * 100).toFixed(0),
+              }),
             })),
           ]}
           onchange={(v) => (sess.picked[album.id] = v || null)}
@@ -438,7 +441,7 @@
           {#if cand.evidence}
             <div class="evidence-line">
               <span class="beets-badge" class:accent={cand.evidence !== 'similarity'}>
-                {EVIDENCE_LABELS[cand.evidence] ?? cand.evidence}
+                {EVIDENCE_KEY[cand.evidence] ? t(EVIDENCE_KEY[cand.evidence]) : cand.evidence}
               </span>
               {#each cand.reasons ?? [] as r (r)}
                 <span class="beets-dim">{r}</span>
@@ -447,7 +450,7 @@
           {/if}
 
           <table class="diff-table">
-            <thead><tr><th>字段</th><th>当前</th><th>候选</th></tr></thead>
+            <thead><tr><th>{t('beets.organize.diffField')}</th><th>{t('beets.organize.diffCurrent')}</th><th>{t('beets.organize.diffCandidate')}</th></tr></thead>
             <tbody>
               {#each ['album', 'artist', 'albumartist', 'year', 'genre'] as f (f)}
                 <tr>
@@ -463,19 +466,19 @@
 
           <details class="track-diff">
             <summary class="beets-dim">
-              逐曲目（{Object.keys(cand.mapping).length} 首对齐）
+              {t('beets.organize.trackDiffSummary', { n: Object.keys(cand.mapping).length })}
             </summary>
-            {#each album.current.tracks as t (t.path)}
+            {#each album.current.tracks as track (track.path)}
               <div class="track-row">
-                <span class="beets-dim">{t.title || shortenPath(t.path ?? '')}</span>
-                <span>{cand.mapping[t.path ?? '']?.title ?? '(对不上)'}</span>
+                <span class="beets-dim">{track.title || shortenPath(track.path ?? '')}</span>
+                <span>{cand.mapping[track.path ?? '']?.title ?? t('beets.organize.trackUnmatched')}</span>
               </div>
             {/each}
           </details>
 
           <div class="album-actions">
             <Button size="sm" disabled={busy} onclick={() => void applyOne(album)}>
-              只应用这张（{action === 'apply_move' ? '移动' : '拷贝'}）
+              {t('beets.organize.applyOne', { action: action === 'apply_move' ? t('beets.organize.actionMoveShort') : t('beets.organize.actionCopyShort') })}
             </Button>
           </div>
         {/if}

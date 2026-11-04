@@ -23,7 +23,7 @@ PYTHON_MAX_EXCLUSIVE = (3, 15)
 
 # 声明式依赖：安装器按这个报"还缺什么"，不让用户自己猜
 REQUIRED_EXTRAS: dict[str, str] = {
-    "bs4": "歌词抓取（lyrics 插件）需要",
+    "bs4": "needed by lyrics fetching (lyrics plugin)",
 }
 
 
