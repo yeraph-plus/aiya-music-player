@@ -94,8 +94,8 @@ jobs:
       - name: 打免配置套件包
         run: beets-tool/.venv/Scripts/python beets-tool/tools/build_bundle.py --uv uv
 
-      - name: 打安装器（.pyz）
-        run: beets-tool/.venv/Scripts/python beets-tool/tools/build_installer.py
+      # A 轨安装器（build_installer.py 产 .pyz）已退役：通道契约只剩
+      # beets-portable-win-x64.zip（beets.rs AssetKind 仅 Bundle 一档）。
 
       # 名字错了宿主就 404，所以在这里硬校验一次。
       # 套件包的体积下限同时是"外置工具进没进包"的粗门禁：Essentia Gaia 构建
@@ -104,7 +104,6 @@ jobs:
       - name: 校验产物名与体积
         run: |
           $expected = @{
-            "beets-installer.pyz"        = 20KB
             "beets-portable-win-x64.zip" = 55MB
           }
           foreach ($f in $expected.Keys) {
@@ -120,7 +119,7 @@ jobs:
       # 宿主按行尾文件名精确匹配。
       - name: 生成 SHA256SUMS
         run: |
-          $files = @("beets-installer.pyz", "beets-portable-win-x64.zip")
+          $files = @("beets-portable-win-x64.zip")
           $lines = foreach ($f in $files) {
             $h = (Get-FileHash -Algorithm SHA256 "beets-tool/dist/$f").Hash.ToLower()
             "$h  $f"
@@ -181,7 +180,6 @@ jobs:
         with:
           name: aiya-beets-win-x64
           path: |
-            beets-tool/dist/beets-installer.pyz
             beets-tool/dist/beets-portable-win-x64.zip
             beets-tool/dist/SHA256SUMS
           retention-days: 14
@@ -197,7 +195,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $files = @(
-            "beets-tool/dist/beets-installer.pyz",
             "beets-tool/dist/beets-portable-win-x64.zip",
             "beets-tool/dist/SHA256SUMS"
           )
