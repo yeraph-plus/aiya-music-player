@@ -200,7 +200,10 @@ def check(names: list[str] | None = None) -> list[dict]:
             "version": None,
         }
         if path is not None:
-            ok, version = probe(path, spec)
+            # 用 _probe_ok 而不是裸 probe：DLL/模型这类非可执行条目没法"跑一次"，
+            # 在即算就绪（与 install/ensure 同一语义）。此前这里裸 probe，把
+            # 包内所有模型报成 usable=false → missing，套件包自检永远过不去。
+            ok, version = _probe_ok(path, spec)
             row["version"] = version
             row["usable"] = ok
         else:
