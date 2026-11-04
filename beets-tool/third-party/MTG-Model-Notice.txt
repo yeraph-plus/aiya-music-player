@@ -1,0 +1,9 @@
+SVM 模型说明（beets-xtractor 高层特征 12 件）
+
+来源：MTG（Music Technology Group, UPF）essentia-extractor-svm_models-v2.1_beta5
+归档，essentia.upf.edu/gaia_svm_models.html；本仓库 release svm-models-v2.1_beta5
+自托管重打包（danceability / gender / genre_rosamerica / mood_* /
+voice_instrumental / moods_mirex 共 12 件 .history）。
+
+许可：上游归档未随附许可声明（"未标注许可"）。本文件仅作来源与归属说明，
+不构成再授权；使用遵循上游发布条款。模型文件本身无修改（按 sha256 钉扎）。

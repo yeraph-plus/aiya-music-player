@@ -113,7 +113,7 @@
       "sha256": "fab3fcb7e533a2338f0adc1da4c866f1e53ff19881fafc0560adf7ea98b29c42",
       "probe": [],
       "probeAllowFail": true,
-      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "license": "MTG-Model-Notice",
       "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
@@ -132,7 +132,7 @@
       "sha256": "ed4a05f24333268ac455a9cdcb63d7d92090d384d28cd24e2ec82a70c12263be",
       "probe": [],
       "probeAllowFail": true,
-      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "license": "MTG-Model-Notice",
       "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
@@ -151,7 +151,7 @@
       "sha256": "e87288b6a42d039ffd5a68094e2d9e87a36be0ec3d4d264c1e2438af454a19de",
       "probe": [],
       "probeAllowFail": true,
-      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "license": "MTG-Model-Notice",
       "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
@@ -170,7 +170,7 @@
       "sha256": "ca1e999443270fde95fbf2a11ec83fafc372b2d4efe3a558873cf2eea46644ca",
       "probe": [],
       "probeAllowFail": true,
-      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "license": "MTG-Model-Notice",
       "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
@@ -189,7 +189,7 @@
       "sha256": "289990d094dfbe08bed411467e7d3a89b3ceff80ee4ee2d1df23f45cecc264a5",
       "probe": [],
       "probeAllowFail": true,
-      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "license": "MTG-Model-Notice",
       "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
@@ -208,7 +208,7 @@
       "sha256": "274c681a2918314afd8cb316ac104ed8c3200118efe898e1e21e2bd3345267bf",
       "probe": [],
       "probeAllowFail": true,
-      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "license": "MTG-Model-Notice",
       "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
@@ -227,7 +227,7 @@
       "sha256": "1200c52d9c96a05096f39e2b918dc1922435301df726be2ae0a0dbfaae70c53f",
       "probe": [],
       "probeAllowFail": true,
-      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "license": "MTG-Model-Notice",
       "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
@@ -246,7 +246,7 @@
       "sha256": "8416f84b5aa0201e6e3397ba8675255dd76d0c51ac76d210629233366c3b0531",
       "probe": [],
       "probeAllowFail": true,
-      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "license": "MTG-Model-Notice",
       "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
@@ -265,7 +265,7 @@
       "sha256": "7160dde2cec8b08efed5f8d6d52d66af4f686ed241dae78caba88035683d0662",
       "probe": [],
       "probeAllowFail": true,
-      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "license": "MTG-Model-Notice",
       "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
@@ -284,7 +284,7 @@
       "sha256": "16851cab57864227faffad961a8f19c2a85d2f12cd79d172def3e658d3c4ff54",
       "probe": [],
       "probeAllowFail": true,
-      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "license": "MTG-Model-Notice",
       "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
@@ -303,7 +303,7 @@
       "sha256": "ac153e3c235f6b79e732083952d22ef3bc2c999d7a6672dd595b0a0a87e2b4e4",
       "probe": [],
       "probeAllowFail": true,
-      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "license": "MTG-Model-Notice",
       "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
@@ -322,7 +322,7 @@
       "sha256": "c8991bdfa179e90dfde2d851a0400b16bebe01a450442f2212079809d60ff819",
       "probe": [],
       "probeAllowFail": true,
-      "license": "MTG 发布（未标注许可，来源 essentia.upf.edu/gaia_svm_models.html）",
+      "license": "MTG-Model-Notice",
       "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     }
   ],

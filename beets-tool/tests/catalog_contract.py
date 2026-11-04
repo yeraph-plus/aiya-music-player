@@ -170,7 +170,20 @@ def validate(doc: dict) -> list[str]:
             errs.append(f"{name}: sha256 必须是 64 位十六进制")
         if not isinstance(item.get("size"), int) or item["size"] <= 0:
             errs.append(f"{name}: size 必须是正整数")
-        for key in ("why", "license", "vendor"):
+        lic = item.get("license")
+        if not isinstance(lic, str) or not lic:
+            errs.append(f"{name}: license 必须是非空字符串")
+        else:
+            # license 字段是**许可全文文件的 id**（third-party/<license>.txt 随包
+            # 附全文，见 build_bundle.write_third_party）——含路径分隔符的整句
+            # 说明文字会把查找变成穿越路径（2026-11-05 实测：svm 条目塞了带 URL
+            # 的整句，构建在"缺许可全文"上静默退场）。出处细节归 vendor 字段。
+            if "/" in lic or "\\" in lic or lic in (".", ".."):
+                errs.append(f"{name}: license 必须是不含路径分隔符的短 id，实际 {lic!r}"
+                            f"（出处说明写进 vendor，全文放 beets-tool/third-party/{lic}.txt）")
+            elif not os.path.isfile(os.path.join(TOOL, "third-party", f"{lic}.txt")):
+                errs.append(f"{name}: 缺许可全文文件 beets-tool/third-party/{lic}.txt")
+        for key in ("why", "vendor"):
             if not isinstance(item.get(key), str) or not item.get(key):
                 errs.append(f"{name}: {key} 必须是非空字符串")
         for key in BINARY_BOOLS:
