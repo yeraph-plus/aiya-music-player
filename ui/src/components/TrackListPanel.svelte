@@ -6,7 +6,7 @@
   import TrackList from './TrackList.svelte';
   import { errorMessage } from '../lib/errors';
   import { SELECTION_CAP } from '../lib/selection';
-  import { list } from '../stores/list.svelte';
+  import { list, PAGE_SIZE } from '../stores/list.svelte';
   import { nav } from '../stores/nav.svelte';
   import { notify } from '../stores/notify.svelte';
   import { overlay } from '../stores/overlay.svelte';
@@ -189,7 +189,11 @@
     locateIndex,
     onlocated: () => (locateIndex = null),
     onlocate: locateCurrent,
-    onretry: () => void list.reload(),
+    /**
+     * 行内「重试」只重发出错的那一页（下标 → 页号换算在这里做），滚动位置
+     * 与其它缓存页不动；整页 reload 仍是兜底入口（错误条与空态里的重试键）。
+     */
+    onretry: (index: number) => list.trackWindow.retryPage(Math.floor(index / PAGE_SIZE)),
     batchMode: ui.batchMode,
     onbatchmode: setBatchMode,
     onplayall: () => void list.playAll(),

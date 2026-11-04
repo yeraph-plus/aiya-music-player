@@ -48,11 +48,6 @@ fn file_name(date: &str) -> String {
     format!("aiya-{date}.log")
 }
 
-/// 今天的日期（本地时区 YYYY-MM-DD）。诊断页要显示当天日志文件名。
-pub fn today() -> String {
-    date_of(local_now())
-}
-
 /// tracing 的时间戳（本地时间，毫秒）。
 struct LocalTime;
 
@@ -310,7 +305,7 @@ mod tests {
         let f = LogFile::new(dir.clone());
         f.write_bytes(b"2026-10-24T06:00:00.000Z  INFO first\n");
         f.write_bytes(b"2026-10-24T06:00:01.000Z  WARN second\n");
-        let today = today();
+        let today = date_of(local_now());
         let text = fs::read_to_string(dir.join(file_name(&today))).unwrap();
         assert_eq!(text.lines().count(), 2, "两行都要落盘：{text:?}");
         assert!(text.contains("first") && text.contains("second"));

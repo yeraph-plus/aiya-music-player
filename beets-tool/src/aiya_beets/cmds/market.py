@@ -62,7 +62,9 @@ def _pip_prefix(python: str) -> tuple[list[str], str] | None:
 
 def resolve_installer() -> tuple[list[str], str] | tuple[None, str]:
     """按序探测安装器：venv pip → uv pip。"""
-    python = os.environ.get("PYTHON", sys.executable)
+    # 覆盖名沿用本仓的既有约定（tests/ 一律用 AIYA_BEETS_PYTHON 指解释器）。
+    # 裸 `PYTHON` 语义太泛——谁都可能拿它装别的意思，也从不属于本工具的契约。
+    python = os.environ.get("AIYA_BEETS_PYTHON", sys.executable)
     hit = _pip_prefix(python)
     if hit is not None:
         return hit

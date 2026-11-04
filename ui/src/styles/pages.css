@@ -23,55 +23,60 @@
 
 .section-heading {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin: 24px 0 10px;
+  margin: 26px 0 10px;
 }
 
-/* 区块标题的三层装饰：英文 + 标题 + 一句产品陈述（与页面头同构，字号低一档） */
+/* 区块标题只有一行：大字标题 + 小字英文装饰 +（可选）计数。
+   此前是三行式（英文 / 标题 / 一句产品陈述），三个区块重复下来等于六行说明文字，
+   页面读起来像目录；陈述句本身没有信息量。基线对齐让小字贴着大字坐，
+   不另起一行。 */
 .section-heading .section-title {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: baseline;
+  gap: 10px;
   min-width: 0;
 }
 
 .section-heading h2 {
   margin: 0;
-  font-size: var(--fs-xl);
+  font-size: var(--fs-2xl);
   font-weight: 400;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
   color: var(--text-1);
+  white-space: nowrap;
 }
 
-.section-heading .section-desc {
-  margin: 0;
-  font-size: var(--fs-sm);
-  color: var(--text-3);
-}
-
-.section-heading > span {
-  font-size: var(--fs-sm);
-  color: var(--text-3);
-}
-
-.section-link {
+/* 标题行里的计数徽章：原先是标题行右端一行灰字"共 N 个"，贴右后与告警位争
+   同一处，读起来像导航；并入左侧后做成胶囊，与侧栏歌单计数同一处理
+   （--surface-hover 半透明底、无描边——细描边在 21px 大字旁边会抢视线）。
+   基线对齐让胶囊文字与装饰词坐在同一条基线上，胶囊底落到大字的字脚处 */
+.section-heading .section-meta {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: var(--fs-sm);
+  height: 18px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--surface-hover);
   color: var(--text-2);
-}
-
-.section-link:hover {
-  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* 首页 */
 
-/* 第一行：歌单卡片区（弹性占满）+ 统计卡（固定 30%）。对齐 flex-start：
-   卡片行比统计卡高得多，统计卡贴顶即可 */
+/* 歌单卡的尺寸常量：卡面 148px 见方（卡宽与卡高同源，滚动槽宽也吃它） */
+.home-page {
+  --pl-cover-size: 148px;
+}
+
+/* 第一行：歌单行（弹性占满）+ 播放统计（贴右），顶部对齐。
+   统计块不再与卡组互钉几何——卡组空态/加载态行高一变，钉死的常量就把
+   统计块甩到半空；现在它只按自己的内容占位 */
 .home-top {
   display: flex;
   align-items: flex-start;
@@ -83,36 +88,64 @@
   min-width: 0;
 }
 
-/* 统计卡：2×2 网格。不可点（导航归侧栏），纯事实陈述 */
-.stat-tiles {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.stat-tile {
+/* 播放统计：时段问候 + 两组"标签 + 大字号数值"，普通块顶部对齐。
+   顶部预留一个**区块标题**的盒子（上距 26 + 一行 fs-2xl 行盒 + 下距 10），
+   问候语正好落到卡面顶沿——占位的锚是固定组件（标题行），不是随数据
+   变高的卡组，卡有无、多少都不影响。::before 用同字号的不可见行盒镜像
+   h2 的行高（normal 由字体度量决定，写死像素会漂）。
+   文本**贴左**：问候带标点后右对齐的齐平边落在"？"这类轻符号上，视觉
+   重量发虚；左对齐让每行字重实的起笔落在齐平边。
+   不用小卡片：数字套圆角框在一屏里要占掉 30% 宽，读起来仍是"仪表盘
+   模板"；纯文字贴角反而更安静。不可点（导航归侧栏） */
+.home-stats {
+  flex: none;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface-2);
+  text-align: left;
 }
 
-.stat-tile .tile-value {
+/* 间距挂在统计组上而不是容器 gap 上：::before 占位盒到问候语之间要贴住
+   （问候语顶沿 == 卡面顶沿），组与组之间才留呼吸 */
+.home-stats .stat-block {
+  margin-top: 24px;
+}
+
+.home-stats::before {
+  content: '\00a0';
+  visibility: hidden;
+  margin: 26px 0 10px;
   font-size: var(--fs-2xl);
-  font-weight: 400;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-1);
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+.stat-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 时段问候：统计区的引子，压住"一上来就是两个数字"的冰冷感。
+   加粗 + 次级文本色：它是这一列的"人声"标题，比数字重的起笔更醒目 */
+.stat-greet {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  color: var(--text-2);
   white-space: nowrap;
 }
 
-.stat-tile .tile-label {
+.stat-label {
   font-size: var(--fs-sm);
   color: var(--text-3);
+}
+
+/* 数值与问候语同字号（xl）、常规字重：这列的三段是"句子 / 数字 / 数字"
+   的平铺，不靠字号分层——分层靠标签的灰与数值的黑 */
+.stat-value {
+  font-size: var(--fs-xl);
+  line-height: 1.2;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* 第二行双表：常听 | 最近播放，各占一半 */
@@ -125,6 +158,18 @@
 .home-duo .home-section {
   flex: 1;
   min-width: 0;
+}
+
+/* 短列表：表格本体（行/表头）与主列表同一套（.row/.grid-head）。
+   外壳铺一层比页面底略浅的半透明底，压住动态背景的纹理让行文字可读。
+   **零外边距**是这版的对齐前提：壳、标题文字、行左缘全部钉在列容器边上，
+   上一轮"背景收窄 8px"造成的标题/列表左缘错位就是从这里来的；
+   行与壳缘之间不另加内距（grid 自带 12px 起排，视觉已有呼吸） */
+.home-panel {
+  overflow: hidden;
+  padding-bottom: 6px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface-3) 40%, transparent);
 }
 
 /* 缺失警告：歌单区标题行右侧的动作位（唯一保留的统计位）。
@@ -141,14 +186,48 @@
 }
 
 /* 歌单卡片行：横向滚动，卡片定宽。
-   封面即播放键（点击直接起播不跳页），名字才是路由入口 */
+   封面即播放键（点击直接起播不跳页），名字才是路由入口。
+   滚动条平时透明、hover 才现形（与歌词区同一处理）：这一行是本页的主视觉，
+   常驻的横条在浅底上是一条多余的线；透明 thumb 仍占位，hover 不引起纵向跳动 */
 .playlist-row {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: 148px;
+  grid-auto-columns: var(--pl-cover-size);
   gap: 12px;
   overflow-x: auto;
-  padding-bottom: 4px;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  padding-bottom: 8px;
+  /* 槽位恒定保留：歌单多少不改变行高——右侧统计区的顶对齐靠行高可预期，
+     滚动条出现/消失时行高一跳，对齐就飘（卡少时不滚也留槽，视觉上只是
+     行右端一小段空，注意不到） */
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.playlist-row:hover,
+.playlist-row:focus-within {
+  scrollbar-color: var(--thumb) transparent;
+}
+
+.playlist-row::-webkit-scrollbar {
+  height: 8px;
+}
+
+.playlist-row::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+.playlist-row:hover::-webkit-scrollbar-thumb,
+.playlist-row:focus-within::-webkit-scrollbar-thumb {
+  background: var(--thumb);
+}
+
+/* 卡片对齐滚动停靠点：横滚停下时总有一张卡贴住左边，不会停在半张上 */
+.playlist-row > * {
+  scroll-snap-align: start;
 }
 
 .playlist-card {
@@ -161,8 +240,8 @@
 
 .pl-cover {
   position: relative;
-  width: 148px;
-  height: 148px;
+  width: var(--pl-cover-size);
+  height: var(--pl-cover-size);
   border-radius: 12px;
   overflow: hidden;
   padding: 0;

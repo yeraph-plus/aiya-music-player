@@ -186,8 +186,16 @@ class PlaylistsStore {
     if (index < 0) return;
     const target = index + delta;
     if (target < 0 || target >= library.playlists.length) return;
+    await this.reorderTo(index, target);
+  }
+
+  /** 侧栏拖动排序的落点版：from/to 都是当前顺序里的下标（后端
+   *  remove(from)+insert(to) 语义，`to` 为移除后坐标）。原地不动不发包 */
+  async reorderTo(from: number, to: number): Promise<void> {
+    if (from === to || from < 0 || to < 0) return;
+    if (from >= library.playlists.length || to >= library.playlists.length) return;
     try {
-      await library.reorderPlaylists(index, target);
+      await library.reorderPlaylists(from, to);
     } catch (err) {
       notify.showError(errorMessage(err));
     }

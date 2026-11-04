@@ -221,16 +221,18 @@ def apply_import(req_id, decisions: list[dict], resume: bool, gen: int) -> None:
            "current": 0, "total": apply_total, "path": None})
 
     applied = skipped = failed_files = moved_files = resumed_skipped = 0
-    for i, dec in enumerate(decisions):
+    active_seen = 0   # 进度序号与 total 同口径（只数 active 决策）：enumerate 的下标含 skip 项，拿它当 current 会让进度条在"有 skip 的批次"里永远到不了头
+    for dec in decisions:
         action = dec.get("action")
         op = FILE_ACTIONS.get(action)
         if action not in ("apply", "apply_move", "apply_copy"):
             skipped += 1
             continue
+        active_seen += 1
         paths = [str(p) for p in (dec.get("paths") or [])]
         cand = dec.get("candidate") or {}
         emit({"type": "progress", "session": session, "stage": "writing",
-               "current": i + 1, "total": apply_total,
+               "current": active_seen, "total": apply_total,
                "path": paths[0] if paths else None})
         key = checkpoints.decision_key(paths, cand)
         if resume and key in done_keys:
@@ -247,7 +249,7 @@ def apply_import(req_id, decisions: list[dict], resume: bool, gen: int) -> None:
             # 逐文件进度：既是 UI 的真实进度，也是看门狗的心跳
             file_done += 1
             emit({"type": "progress", "session": session, "stage": "writing",
-                   "current": i + 1, "total": apply_total,
+                   "current": active_seen, "total": apply_total,
                    "fileCurrent": file_done, "fileTotal": file_total, "path": p})
             try:
                 item = Item.from_path(p)

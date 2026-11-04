@@ -94,6 +94,21 @@ export class TrackWindow {
     return this.errors.get(page) ?? null;
   }
 
+  /**
+   * 重试某一页：清掉该页错误并重发这一页的请求。
+   *
+   * 行内「重试」按钮走这里，而不是让调用方整页 reload——别的页与滚动位置
+   * 都不该被一次单页失败牵连。非错误页调用是 no-op：调用方只会从错误行进来，
+   * 防御性判断避免误清已缓存的页。
+   */
+  retryPage(pageIndex: number): void {
+    if (!this.errors.has(pageIndex)) return;
+    this.errors.delete(pageIndex);
+    // 先通知再请求：错误行要立刻回到骨架态，而不是等响应回来才变
+    this.notify();
+    this.requestPage(pageIndex);
+  }
+
   /** 保证某个区间落在缓存里（越界自动裁剪） */
   ensureRange(start: number, end: number): void {
     if (this.totalValue === 0) return;

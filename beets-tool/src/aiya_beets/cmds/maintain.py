@@ -61,6 +61,17 @@ def norm(v) -> str:
     return str(v).strip()
 
 
+def _field_norm(item, key: str) -> str:
+    """取字段并归一；未知字段当空串。**不是报错**：flexible 键集合随插件装没装
+    而变，拿它当门禁会制造"昨天的分组键今天报错"。与 query._match 同一条口径
+    （未知字段在 beets 里可能直接抛，防御也同款）。
+    """
+    try:
+        return norm(item.get(key))
+    except Exception:  # noqa: BLE001 —— 未知字段在 beets 里可能直接抛
+        return ""
+
+
 def item_brief(item) -> dict:
     """单条曲目的展示数据（查重与整理结果共用）。
 
@@ -266,13 +277,13 @@ def find_duplicates(req_id, keys: list[str], gen: int) -> None:
         if cancel_gen() != gen:
             emit({"type": "cancelled", "session": session, "stage": "duplicates"})
             return
-        vals = tuple(norm(item.get(k)).lower() for k in keys)
+        vals = tuple(_field_norm(item, k).lower() for k in keys)
         if not any(vals):
             continue  # 全空：无从比较（与 _group_by 的 not strict 分支一致）
         if vals not in groups:
             # 分组 key 用小写归一值（大小写不同算重复），但**展示**要用首条的原始大小写——否则 UI 上会看到 "曲目a"
             # 这种被压平的值，用户对着库里的 "曲目A" 找不到对应行
-            labels[vals] = [norm(item.get(k)) for k in keys]
+            labels[vals] = [_field_norm(item, k) for k in keys]
         groups.setdefault(vals, []).append(item)
         if (i + 1) % (MAINT_PROGRESS_STEP * 5) == 0 or i + 1 == total:
             emit({"type": "progress", "session": session, "stage": "duplicates",

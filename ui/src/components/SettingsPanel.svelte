@@ -417,7 +417,7 @@ import TextTabs from './ui/TextTabs.svelte';
             <div class="setting-title">背景频谱形态</div>
             <div class="setting-hint">
               {gl
-                ? '山形：底部一团起伏的环境光；波纹：层层截面铺满下半屏的水面，与「正在播放」页的形态各自独立'
+                ? '山形：底部一团起伏的环境光；波纹：一层层等深线铺满下半屏，与「正在播放」页的形态各自独立'
                 : '已随「全局 3D 效果」关闭'}
             </div>
           </div>
@@ -616,8 +616,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <div>
             <div class="setting-title">关闭窗口时最小化到托盘</div>
             <div class="setting-hint">
-              打开后点关闭只是隐藏窗口，播放继续；要退出请用托盘菜单或 Ctrl+Q
-              {#if sys}<span class="state-tail">当前：{sys.tray ? '已生效' : '未生效'}</span>{/if}
+              打开后点关闭只是隐藏窗口，播放继续；要退出请用托盘菜单
             </div>
           </div>
           <Switch
@@ -654,29 +653,6 @@ import TextTabs from './ui/TextTabs.svelte';
             value={String(settings.historyDays ?? 90)}
             options={HISTORY_DAYS_OPTIONS}
             onchange={(value) => apply({ historyDays: Number(value) })}
-          />
-        </div>
-
-        <div class="setting-row">
-          <div>
-            <div class="setting-title">系统媒体键</div>
-            <div class="setting-hint">
-              播放器的标题、封面与播放状态同步到系统媒体面板，媒体键由系统路由，失焦也生效
-              {#if sys}
-                <span class="state-tail">
-                  当前：{!sys.mediaKeys.enabled
-                    ? '已关闭'
-                    : sys.mediaKeys.active.length > 0
-                      ? '已生效'
-                      : '未生效，还没有播放会话'}
-                </span>
-              {/if}
-            </div>
-          </div>
-          <Switch
-            label="系统媒体键"
-            checked={settings.mediaKeys}
-            onchange={(checked) => apply({ mediaKeys: checked })}
           />
         </div>
       </section>

@@ -111,9 +111,6 @@ export function runShortcut(action: ShortcutAction): void {
     case 'selectAll':
       selection.selectAll(list.total);
       return;
-    case 'openSettings':
-      nav.go({ kind: 'page', page: 'settings' });
-      return;
   }
 }
 

@@ -216,7 +216,19 @@
     flex: none;
   }
 
+  /* 表头不要主列表那条半透明滚动带（首页不吸顶、没有滚过亮封面的问题）：
+     一条下横线标出列表顶界即可 */
   .tt-head {
     position: static;
+    background: none;
+    backdrop-filter: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  /* 最后一列（次数/时长/入库/最近播放这类短数值）居中：列宽只有 56-80px，
+     右对齐时数字贴壳缘、左对齐时贴封面列，居中在窄列里最稳 */
+  .tt-head span:last-child,
+  .preview-list .row > span:last-child {
+    text-align: center;
   }
 </style>

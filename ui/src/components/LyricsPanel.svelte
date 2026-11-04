@@ -3,6 +3,7 @@
   import EmptyState from './ui/EmptyState.svelte';
   import { findActiveLine } from '../lib/lyrics';
   import { anchorAt, projectPosition } from '../lib/lyrics-clock';
+  import { subscribeRender } from '../lib/render/scheduler';
 
   interface Props {
     lyrics: Lyrics | null;
@@ -20,7 +21,7 @@
   let userScrolledAt = 0;
 
   /* 高亮位置自己走时钟，不等主进程的状态广播。位置上报是 500ms 一次（进度条够用），直接拿它算高亮，每句歌词最多会晚半秒才对上 —— 验收要求 <
-     200ms，靠上报频率是做不到的。所以：每次收到新位置就重新"对时"，播放中再用 rAF 按真实时间外推，误差落在一帧（~16ms）内；暂停时停表，不虚走。 */
+     200ms，靠上报频率是做不到的。所以：每次收到新位置就重新"对时"，播放中再按真实时间外推（逐帧回调见下方订阅的调度器），误差落在一帧（~16ms）内；暂停时停表，不虚走。 */
   let clockMs = $state(0);
   let anchor = anchorAt(0, 0);
 
@@ -34,15 +35,16 @@
     reanchor(positionMs);
   });
 
+  // 时钟并入全应用唯一的 rAF 调度器（lib/render/scheduler）：项目约束 rAF
+  // 只能有一个。开销不增反降——播放中本组件只是调度器里多一个 tick；
+  // 暂停即退订，调度器无订阅者时整帧停摆；页面隐藏时调度器整体暂停，
+  // 歌词高亮本就不可见，停摆正是想要的。rAF 时间戳与 performance.now()
+  // 同源，外推精度不变。
   $effect(() => {
     if (!playing) return;
-    let frame = 0;
-    const tick = (): void => {
-      clockMs = projectPosition(anchor, performance.now(), durationMs);
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    return subscribeRender((now) => {
+      clockMs = projectPosition(anchor, now, durationMs);
+    });
   });
 
   function seekTo(ms: number): void {

@@ -353,7 +353,7 @@ assert all(v is None for v in marks_after.values()), (
 print(f"[4] force 幂等 OK：{done2['succeeded']} 条 ok / {done2['skipped']} 条 skipped")
 
 # 场景 5：未知源 / 空路径 / xtractor 就绪门 want=["xtractor"] 在批 5 后是**合法源名**：就绪（bins 齐）→ 真跑一遍提取并返回 ok；未就绪 →
-# E_INVALID_ARG 且带原因。两种结果都合规，按机器实况分支—— 但无论哪条路，"静默当成功"和"静默当失败"都不许出现。
+# E_CONFIG 且带原因（环境问题用户可修，不是参数拼错）。两种结果都合规，按机器实况分支—— 但无论哪条路，"静默当成功"和"静默当失败"都不许出现。
 L5 = [
     json.dumps({"id": 10, "cmd": "enrich", "paths": PATHS[:1], "want": ["no_such_source"]}),
     json.dumps({"id": 11, "cmd": "enrich", "paths": PATHS[:1], "want": ["xtractor"]}),
@@ -369,7 +369,7 @@ if XTR_OK:
     assert codes == {10: P.E_INVALID_ARG, 12: P.E_INVALID_ARG}, codes
 else:
     # 拒绝信封已过 schema（classify 验过）；原因文本不再重复断言。
-    assert codes == {10: P.E_INVALID_ARG, 11: P.E_INVALID_ARG, 12: P.E_INVALID_ARG}, codes
+    assert codes == {10: P.E_INVALID_ARG, 11: P.E_CONFIG, 12: P.E_INVALID_ARG}, codes
 print(f"[5] 拒绝路径 OK：{codes}（xtractor 就绪={XTR_OK}）")
 
 # 场景 6：文件一个字节都没动

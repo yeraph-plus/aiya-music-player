@@ -49,7 +49,7 @@ const md = [
   "生成命令：`node tools/gen-notices.mjs`",
   "",
   "本仓库自有的 " + own.size + " 个 crate（" + [...own].sort().join("、") + "）以 GPL-3.0-or-later 发布，",
-  "不在此表内。下表为 crates.io 上的第三方依赖，均已静态链接进 `aiya.exe`",
+  "不在此表内。下表为 crates.io 上的第三方依赖，均已静态链接进 `aiya-music.exe`",
   "或 `aiya-audio-host.exe`。",
   "",
   "## 许可分布",

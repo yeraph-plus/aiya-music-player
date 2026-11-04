@@ -291,6 +291,12 @@ fn connect_once(
     Ok(conn)
 }
 
+/// Welcome 读取的硬上限。此前 3s 的 deadline 只在"read_line 返回了行"之后才
+/// 检查，管不住"已 accept、一个字节都不写"的僵死；这里要兜的正是那种情况，
+/// 取值与 CONNECT_TIMEOUT 同级：慢启动（杀软扫描）可能拖过秒级，但绝不允许
+/// 无界等下去。
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
 fn connect_and_handshake(pipe: &str) -> Result<Connection, String> {
     // 连接重试（子进程创建管道需要一点时间）
     let client = {
@@ -308,7 +314,7 @@ fn connect_and_handshake(pipe: &str) -> Result<Connection, String> {
 
     // 握手：Hello → Welcome（版本不匹配由 sidecar 侧 exit(2)，这里同样校验）
     let mut writer = BufWriter::new(client.try_clone().map_err(|e| e.to_string())?);
-    let mut reader = BufReader::new(client);
+    let reader = BufReader::new(client);
     let bytes = aiya_audio::encode_line(&aiya_audio::HostToSidecar::Hello {
         protocol: aiya_audio::PROTOCOL_VERSION,
     })
@@ -318,7 +324,46 @@ fn connect_and_handshake(pipe: &str) -> Result<Connection, String> {
         .and_then(|_| writer.flush())
         .map_err(|e| format!("握手发送失败：{e}"))?;
 
-    let deadline = Instant::now() + Duration::from_secs(3);
+    // Welcome 读取挪进辅助线程 + recv_timeout：miow 的命名管道读没有超时 API，
+    // 若 sidecar 卡在"已 accept、未写 Welcome"（进程僵死/杀软拦截），read_line
+    // 会在调用线程无限阻塞 —— 看门狗线程跟着卡死，此后再也不会有换代重试，
+    // 音频就此永久失联。辅助线程让本函数的等待有界；超时后 connect_once 会
+    // kill 子进程，管道服务端随之关闭，阻塞中的 read_line 以 EOF 返回、线程
+    // 退出，不泄漏。模块风格"所有等待都有界"靠这一步维持。
+    let (tx, rx) = mpsc::channel::<(Result<(), String>, BufReader<File>)>();
+    std::thread::Builder::new()
+        .name("sidecar-handshake".into())
+        .spawn(move || {
+            // reader 随结果一起送回：成功路径上调用方还要拿它继续读事件流
+            let mut reader = reader;
+            let result = read_welcome(&mut reader);
+            let _ = tx.send((result, reader));
+        })
+        .map_err(|e| format!("起握手线程失败：{e}"))?;
+    let (result, reader) = match rx.recv_timeout(HANDSHAKE_TIMEOUT) {
+        Ok(pair) => pair,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            return Err(format!(
+                "握手超时（{HANDSHAKE_TIMEOUT:.0?} 内未收到 Welcome）"
+            ));
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            return Err("握手线程异常退出".into());
+        }
+    };
+    result?;
+
+    let reader_file = reader.into_inner();
+    let writer_file = writer.into_inner().map_err(|e| e.to_string())?;
+    Ok(Connection {
+        reader: reader_file,
+        writer: writer_file,
+    })
+}
+
+/// 读 Welcome 帧并校验协议版本（跑在辅助线程里，见 [`connect_and_handshake`]
+/// 的超时说明）。非 Welcome 的行跳过（协议内容之前可能有别的输出）。
+fn read_welcome(reader: &mut BufReader<File>) -> Result<(), String> {
     let mut line = String::new();
     loop {
         line.clear();
@@ -334,19 +379,9 @@ fn connect_and_handshake(pipe: &str) -> Result<Connection, String> {
             if protocol != aiya_audio::PROTOCOL_VERSION {
                 return Err(format!("协议不兼容：sidecar v{protocol}"));
             }
-            break;
-        }
-        if Instant::now() > deadline {
-            return Err("握手超时（未收到 Welcome）".into());
+            return Ok(());
         }
     }
-
-    let reader_file = reader.into_inner();
-    let writer_file = writer.into_inner().map_err(|e| e.to_string())?;
-    Ok(Connection {
-        reader: reader_file,
-        writer: writer_file,
-    })
 }
 
 /// 事件接收线程（每代一个）：管道 → ev_tx。EOF/错误即退出，不碰 alive（看门狗按超时判）。

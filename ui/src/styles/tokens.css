@@ -109,7 +109,7 @@
   --blur-pop: 18px;
   --blur-modal: 28px;
 
-  /* 层叠（发布前 UI 审查 P1-3）之前 14 个裸值靠各文件注释维系、Toast=Menu=Select 同值谁在上看 DOM 顺序。阶梯契约：背景 0 < 内容 1 < 吸顶 3 < 拖拽插线 5 < 播放条 20 < 模态 50/51 < 浮层
+  /* 层叠（发布前 UI 审查 P1-3）之前 14 个裸值靠各文件注释维系、Toast=Menu=Select 同值谁在上看 DOM 顺序。阶梯契约：背景 0 < 内容 1 < 吸顶 3 < 拖拽插线 5 < 播放条 20 < 直播舞台浮层 40 < 模态 50/51 < 浮层
      55 < 抽屉 56 < 菜单 61 < 下拉 62 < toast 65 < tooltip 70。z-index 必须取自本梯（check-ui-layers.mjs 守）。 */
   --z-under: -1;
   --z-bg: 0;
@@ -117,6 +117,7 @@
   --z-sticky: 3;
   --z-dropline: 5;
   --z-dock: 20;
+  --z-stage: 40;
   --z-modal: 50;
   --z-modal-content: 51;
   --z-pop: 55;

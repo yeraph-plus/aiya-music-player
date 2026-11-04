@@ -154,6 +154,12 @@ const EVENT_CHANNEL_CAP: usize = 256;
 /// 这些静默容错以 **panic=abort 为前提**（tools/build-sidecar.mjs）：sidecar
 /// 里消费端死亡必然伴随进程死亡 → 看门狗换代重建，静默只是不重复报错，不是
 /// 无条件掩盖。绕过该脚本裸跑（示例/调试）时只是诊断降级，不改变音频行为。
+///
+/// 已知风险（登记）：这条"最多等 100ms"的重试跑在**渲染线程**上——消费端
+/// 停顿 100ms 就阻塞渲染线程 100ms（共享模式事件流下表现为少喂一拍缓冲）。
+/// sidecar 形态下宿主泵死 = 进程死，有看门狗兜底，等不到 100ms 就换代；裸跑
+/// （非 sidecar，示例/调试）模式下没有这层保护，宿主停顿会直接卡音频节拍，
+/// 这是接受已知风险换"发送端永不丢关键事件"的取舍。
 #[derive(Clone)]
 struct EventTx(SyncSender<EngineEvent>);
 
@@ -1316,7 +1322,7 @@ fn play_file(
         // 每轮渲染心跳都上报位置（泵侧再做 500ms 节流；写满瞬间 available 不会为 0）位置要扣掉设备缓冲里还没播的部分，否则进度条领先耳朵最多 200ms。独占事件下 padding 恒等于
         // buffer，正好等于"在途一整个缓冲"的估值，所以这条公式在两个模式下都成立（不必换成 IAudioClock，它比写入超前 5%）。
         let position_now = |decoder: &DecodedStream, pool: &[f32], latency: u32| -> u64 {
-            play_position(decoder, pool).saturating_sub(padding_ms(decoder, latency))
+            play_position(decoder, pool).saturating_sub(padding_ms(decoder.sample_rate(), latency))
         };
         send(EngineEvent::Position {
             token,
@@ -1447,7 +1453,9 @@ fn play_file(
             // 尾巴明明已经播完）。改用"在途 = 一整个缓冲"的时长估算。
             let deadline = std::time::Instant::now() + Duration::from_millis(500);
             let drained_at = std::time::Instant::now()
-                + Duration::from_millis(padding_ms(&decoder, out.buffer_frames).clamp(10, 500));
+                + Duration::from_millis(
+                    padding_ms(decoder.sample_rate(), out.buffer_frames).clamp(10, 500),
+                );
             loop {
                 match cmd_rx.try_recv() {
                     Ok(EngineCommand::Shutdown) => {
@@ -1723,6 +1731,13 @@ enum OutFormat {
     F32,
     /// 4 字节容器、高 24 bit 有效（WAVEFORMATEXTENSIBLE wValidBitsPerSample=24）
     I24In32,
+    /// 4 字节整数、全部 32 bit 有效（wValidBitsPerSample=32）
+    ///
+    /// 只有独占协商明确报 32/32 整数时才用：此时若仍按 I24In32 的 `<<8`
+    /// 左对齐编码，DAC 会按 32 位全量程解释，24 位内容幅度没错、但白白丢掉
+    /// 8 bit 精度；显式拒绝这类候选则会让"只有 32/32 整数一档"的设备跌到
+    /// i16。多一条编码路径（与 I16 同构，十几行）换来整档设备不降级。
+    I32,
     /// 2 字节整数
     I16,
 }
@@ -1730,7 +1745,7 @@ enum OutFormat {
 impl OutFormat {
     fn bytes_per_sample(self) -> usize {
         match self {
-            OutFormat::F32 | OutFormat::I24In32 => 4,
+            OutFormat::F32 | OutFormat::I24In32 | OutFormat::I32 => 4,
             OutFormat::I16 => 2,
         }
     }
@@ -1739,6 +1754,7 @@ impl OutFormat {
         match self {
             OutFormat::F32 => "f32",
             OutFormat::I24In32 => "i24-in-32",
+            OutFormat::I32 => "i32",
             OutFormat::I16 => "i16",
         }
     }
@@ -1752,6 +1768,39 @@ const EXCLUSIVE_CANDIDATES: [(OutFormat, usize, usize, SampleType); 3] = [
     (OutFormat::I24In32, 32, 24, SampleType::Int),
     (OutFormat::I16, 16, 16, SampleType::Int),
 ];
+
+/// 协商结果 → 实际送设备的样本格式（纯函数，测试锚点）。
+///
+/// `bits` / `valid` 是 WAVEFORMATEXTENSIBLE 的 wBitsPerSample（容器宽）与
+/// wValidBitsPerSample（有效位），`sub` 是子格式。**必须读 valid bits**：
+/// 只看容器宽会把"32 位容器、24 位有效"与"32/32 全有效"混为一谈——前者
+/// 要左对齐的 I24In32 编码，后者要完整的 I32 编码。两者混用的实际后果是
+/// 精度损失而非幅度错误（左对齐 24 bit 在 32/32 流上满量程近似正确，只丢
+/// 8 bit；真正差 256 倍的是"该左移却没左移"的右对齐数据）。wasapi 0.26
+/// 的 `WaveFormat::get_validbitspersample()` 暴露该字段（`to_waveformatex`
+/// 的 quirk 路径也会原样带过去），这里显式判定而不是假设请求的 24 就一定
+/// 回来 24：驱动折算成别的组合时按实际位宽走，位宽不支持就拒绝该候选
+/// 回落共享，绝不按猜的位宽喂设备。
+fn out_format_from_negotiated(
+    bits: u16,
+    valid: u16,
+    sub: Option<SampleType>,
+) -> Result<OutFormat, String> {
+    match (bits, sub) {
+        (32, Some(SampleType::Float)) => Ok(OutFormat::F32),
+        (32, Some(SampleType::Int)) => match valid {
+            // 20/24 有效位都在高 24 bit 左对齐约定内（20 有效位只是 DAC
+            // 少转 4 bit，容器布局相同），沿用 I24In32 的 `<<8` 编码
+            20 | 24 => Ok(OutFormat::I24In32),
+            32 => Ok(OutFormat::I32),
+            v => Err(format!(
+                "设备独占要求 32 bit 整数容器但有效位为 {v}（支持 20/24/32），为保位宽正确拒绝该格式"
+            )),
+        },
+        (16, _) => Ok(OutFormat::I16),
+        (b, _) => Err(format!("设备独占要求 {b} bit 格式，暂不支持")),
+    }
+}
 
 /// 打开好的输出流状态。设备失效时整体重建（换默认设备后 mix format 可能变，
 /// autoconvert 需要重新协商）。
@@ -1853,6 +1902,11 @@ fn finish_stream(
     let render = client.get_audiorenderclient().map_err(wasapi_err)?;
     let buffer_frames = client.get_buffer_size().map_err(wasapi_err)?;
     let sample_bytes = vec![0u8; buffer_frames as usize * channels * fmt.bytes_per_sample()];
+    // rate 参数的语义是"这套帧计数的时钟"：共享 autoconvert 下就是**传给
+    // Initialize 的源格式采样率**，不是设备 mix 采样率——实测（Realtek，
+    // mix 48kHz）96k 源开 200ms 流 GetBufferSize=19200、写 9600 帧 padding
+    // 立刻=9600 且 150ms 后归零，帧计数全程按源格式走；独占下无转换，设备
+    // 率==源率。按 mix 率换算反而会把 buffer_ms/延迟估算翻倍，见 padding_ms。
     let buffer_ms = (buffer_frames as u64 * 1000 / rate.max(1) as u64) as u32;
     client.start_stream().map_err(wasapi_err)?;
     Ok(Output(Some(OutputInner {
@@ -2094,16 +2148,16 @@ fn open_exclusive(decoder: &DecodedStream, cfg: &OutputConfig) -> Result<Output,
             });
             continue;
         }
-        // 以协商回来的实际位深为准（driver 可能把 i24-in-32 折成别的东西）
-        let actual = match (
+        // 以协商回来的实际位深为准（driver 可能把 i24-in-32 折成别的东西）：
+        // 容器宽 + 有效位 + 子格式三者一起判定，见 [`out_format_from_negotiated`]
+        let actual = match out_format_from_negotiated(
             negotiated.get_bitspersample(),
+            negotiated.get_validbitspersample(),
             negotiated.get_subformat().ok(),
         ) {
-            (32, Some(SampleType::Float)) => OutFormat::F32,
-            (32, Some(SampleType::Int)) => OutFormat::I24In32,
-            (16, _) => OutFormat::I16,
-            (b, _) => {
-                best_reason.get_or_insert_with(|| format!("设备独占要求 {b} bit 格式，暂不支持"));
+            Ok(f) => f,
+            Err(reason) => {
+                best_reason.get_or_insert(reason);
                 continue;
             }
         };
@@ -2141,11 +2195,18 @@ fn open_exclusive(decoder: &DecodedStream, cfg: &OutputConfig) -> Result<Output,
                     .map_err(|e| e.to_string());
                 }
                 Err(e) => {
-                    best_reason = Some(format!(
-                        "{} 独占流初始化失败（{}：{e}）",
-                        actual.label(),
-                        att.label()
-                    ));
+                    // 只保留**首个**根因：走到这里是候选格式已通过探测、初始化
+                    // 却失败，后续尝试（换时钟/换更低位深）只会叠加更远离根源的
+                    // 次要失败——比如"f32 被拒"才是根因，最后一条"i16 也被拒"
+                    // 会把用户引向位深方向排查。get_or_insert 也与上面候选循环
+                    // 各分支的语义对齐（首个失败者负责解释）。
+                    best_reason.get_or_insert_with(|| {
+                        format!(
+                            "{} 独占流初始化失败（{}：{e}）",
+                            actual.label(),
+                            att.label()
+                        )
+                    });
                 }
             }
         }
@@ -2294,8 +2355,15 @@ fn play_position(decoder: &DecodedStream, pool: &[f32]) -> u64 {
 /// 设备缓冲区里尚未播出的时长（毫秒）。docs/04 §3.5：
 /// position = base + frames_written - latency_ms。不扣这段，进度条会比
 /// 耳朵超前最多一个缓冲深度（200ms），暂停瞬间停在"超前 200ms"处。
-fn padding_ms(decoder: &DecodedStream, padding_frames: u32) -> u64 {
-    (padding_frames as u64 * 1000) / (decoder.sample_rate() as u64).max(1)
+///
+/// `sample_rate` 必须传**解码器（源）采样率**而不是设备 mix 采样率：共享
+/// 模式 autoconvert 下 GetBuffer/GetCurrentPadding/GetBufferSize 的帧单位
+/// 就是传给 Initialize 的源格式（实测 96k 源 @48k 设备：GetBufferSize=
+/// 19200 = 200ms×96k；写 9600 帧后 padding 立刻=9600、播完归零，全程源率）。
+/// 独占模式无转换，设备率==源率。若改成按 mix 率除，96k 源的延迟/排空
+/// 估算会全部翻倍，曲尾会多等一倍才报 EOF。
+fn padding_ms(sample_rate: u32, padding_frames: u32) -> u64 {
+    (padding_frames as u64 * 1000) / (sample_rate as u64).max(1)
 }
 
 /// 本轮可写帧数。
@@ -2410,6 +2478,16 @@ fn encode_frames(fmt: OutFormat, src: &[f32], dst: &mut [u8]) {
                     .round()
                     .clamp(-8_388_608.0, 8_388_607.0);
                 c.copy_from_slice(&((x as i32) << 8).to_le_bytes());
+            }
+        }
+        OutFormat::I32 => {
+            // 32/32 全有效位：与 I16 同构的就近取整，无左对齐位移（位移会
+            // 白白丢 8 bit——这正是它与 I24In32 分开存在的原因）
+            for (c, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src) {
+                let x = (s.clamp(-1.0, 1.0) * 2_147_483_648.0)
+                    .round()
+                    .clamp(-2_147_483_648.0, 2_147_483_647.0);
+                c.copy_from_slice(&(x as i32).to_le_bytes());
             }
         }
         OutFormat::I16 => {
@@ -2679,6 +2757,81 @@ mod tests {
         let mut dst = vec![0u8; 4]; // 只装得下 2 个 i16
         encode_frames(OutFormat::I16, &src, &mut dst);
         assert_eq!(read_i16(&dst), vec![32767, 32767]);
+    }
+
+    #[test]
+    fn encode_i32_uses_full_container() {
+        // 32/32 全有效位：满刻度 ±1.0 落在 ±2^31 边界，且高位字节非零
+        // （若错用 I24In32 的 <<8 左对齐，幅度虽近似但丢 8 bit 精度）
+        let src = [0.0f32, 1.0, -1.0, 0.25, -0.25];
+        let mut dst = vec![0u8; src.len() * 4];
+        encode_frames(OutFormat::I32, &src, &mut dst);
+        let back: Vec<i32> = dst
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        assert_eq!(
+            back,
+            vec![0, 2_147_483_647, -2_147_483_648, 536_870_912, -536_870_912]
+        );
+        // 与 I24In32 必须可区分：同一个 0.25，I32 版本低位字节非零
+        let mut dst24 = vec![0u8; 4];
+        encode_frames(OutFormat::I24In32, &[0.25], &mut dst24);
+        assert_eq!(dst[8], 0, "I32 的最低字节按 32 位量化不恒为 0");
+        assert_eq!(dst24[0], 0, "I24In32 的最低字节恒为 0（左对齐）");
+    }
+
+    // 独占协商结果的格式判定（含 wValidBitsPerSample）
+
+    #[test]
+    fn negotiated_32bit_int_maps_by_valid_bits() {
+        use wasapi::SampleType;
+        // 32 位容器按有效位分流：20/24 → I24In32（左对齐约定内），32 → I32
+        assert_eq!(
+            out_format_from_negotiated(32, 24, Some(SampleType::Int)).unwrap(),
+            OutFormat::I24In32
+        );
+        assert_eq!(
+            out_format_from_negotiated(32, 20, Some(SampleType::Int)).unwrap(),
+            OutFormat::I24In32
+        );
+        assert_eq!(
+            out_format_from_negotiated(32, 32, Some(SampleType::Int)).unwrap(),
+            OutFormat::I32,
+            "驱动折成 32/32 时必须走完整 I32 编码，不能按 I24In32 丢 8 bit"
+        );
+        // 有效位不在支持范围：拒绝该候选（回落共享），绝不按错的位宽喂设备
+        let err = out_format_from_negotiated(32, 16, Some(SampleType::Int)).unwrap_err();
+        assert!(err.contains("16"), "拒绝理由要带实际有效位：{err}");
+        // float / 16 bit / 24 bit 容器行为不变
+        assert_eq!(
+            out_format_from_negotiated(32, 32, Some(SampleType::Float)).unwrap(),
+            OutFormat::F32
+        );
+        assert_eq!(
+            out_format_from_negotiated(16, 16, Some(SampleType::Int)).unwrap(),
+            OutFormat::I16
+        );
+        assert!(out_format_from_negotiated(24, 24, Some(SampleType::Int)).is_err());
+    }
+
+    // 帧数 ↔ 毫秒换算的采样率基准
+
+    #[test]
+    fn padding_ms_converts_by_source_rate() {
+        // autoconvert 共享流的帧单位是源格式（实测 96k 源 @48k 设备
+        // GetBufferSize=19200=200ms×96k、写 9600 帧 padding 立刻=9600），
+        // 所以换算必须用解码器采样率。这两个断言把"按源率"钉死：若有人
+        // 改成按设备 mix 率换算，96k 流的 9600 帧会算成 200ms，延迟/排空
+        // 估算全部翻倍。
+        assert_eq!(padding_ms(96_000, 19_200), 200);
+        assert_eq!(padding_ms(48_000, 9600), 200);
+        assert_eq!(padding_ms(44_100, 8820), 200);
+        // 0 采样率防御：max(1) 兜底除 1 而不是 panic（正常路径不可达——
+        // rate 恒来自解码器，这里只锁"绝不除零崩溃"）
+        assert_eq!(padding_ms(0, 9600), 9_600_000);
     }
 
     #[test]

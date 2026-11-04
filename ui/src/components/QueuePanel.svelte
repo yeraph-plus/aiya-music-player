@@ -154,6 +154,20 @@ import Button from './ui/Button.svelte';
       });
   });
 
+  // 队列更替（重新播放 / 移除 / 逐首推进使头部滑出）后按当前 ids 过滤两张表：
+  // 只保留仍在队列中的条目。两张表都是普通 Map、不会自动失效，抽屉开着的
+  // 整场会话里没有这一步就会只增不减，已移出队列的曲目还占着负缓存名额。
+  // 竞态下的迟到响应会把已删条目写回来，下一次 ids 变化时这里会再滤掉。
+  $effect(() => {
+    const live = new Set(ids);
+    for (const id of meta.keys()) {
+      if (!live.has(id)) meta.delete(id);
+    }
+    for (const id of failedAttempts.keys()) {
+      if (!live.has(id)) failedAttempts.delete(id);
+    }
+  });
+
   // 队列换了（重新播放）时把面板滚回当前曲目附近
   $effect(() => {
     const target = index;
@@ -178,9 +192,12 @@ import Button from './ui/Button.svelte';
   }
 </script>
 
-<!-- 职责边界：本组件只渲染内容。定位、Esc、外点关闭、焦点还原与 aria-expanded 由 PlayerBar 中队列键所用的 kit `Popover` 提供。自行处理这五件事需要在
-`<svelte:window>` 上挂两套监听，并且要额外用 `closest('[data-queue-trigger]')` 阻止触发键的点击被自己派发的关闭逻辑吞掉。 -->
-<div class="queue-panel queue-float" aria-label="播放队列">
+<!-- 职责边界：本组件只渲染内容。定位、Esc、外点关闭、焦点还原、可访问名称与
+aria-expanded 都由外层 SideDrawer 的 role=dialog 提供——aria-label 不允许落在
+无角色的 generic 容器上，写了读屏也会忽略。行内交互语义是 button（Enter/Space
+= 播放、Delete = 移除），子元素因此不得再标 grid 的 cell 角色（button 子树里
+的 cell 对读屏是坏表；列语义由 TrackList 的 grid→row→cell 结构承担）。 -->
+<div class="queue-panel queue-float">
   <header>
     <strong>播放队列</strong>
     <span class="dim">{ids.length} 首{totalMs > 0 ? ` · ${formatDurationLong(totalMs)}` : ''}</span>
@@ -226,7 +243,7 @@ import Button from './ui/Button.svelte';
           }}
         >
           <span class="q-grip" aria-hidden="true"><Icon name="grip" size={13} /></span>
-          <span class="q-index" role="cell">
+          <span class="q-index">
             {#if row.index === index}
               <span class="bars" class:animated={playing === true} aria-label="正在播放">
                 <i></i><i></i><i></i>

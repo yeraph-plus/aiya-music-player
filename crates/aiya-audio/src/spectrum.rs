@@ -11,7 +11,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// 环容量（样本数，2 的幂）。48kHz 混单声道后 ≈ 170ms 余量（96kHz ≈ 85ms）。
 const RING_CAP: usize = 8192;
@@ -303,10 +303,44 @@ pub fn compute_bands(samples: &[f32; FFT_SIZE], sample_rate: f32) -> Vec<u8> {
     bands
 }
 
-/// 就地 radix-2 FFT（输入长度须为 2 的幂）。
+/// 旋转因子表：`TWIDDLE[k] = e^{-2πik/FFT_SIZE}`，k ∈ [0, FFT_SIZE/2)。
+///
+/// 惰性初始化（OnceLock）：只在第一次真正的 FFT 时算一次——而 FFT 只发生在
+/// tap 启用且有数据的消费线程里，生产端（渲染线程的 push 路径）与 tap 关闭态
+/// 完全不触碰它，"tap 关闭零开销"性质不变。表 8KB（f32×2×1024），一次性成本
+/// 可忽略。
+///
+/// 为什么查表而不是蝶形内自乘递推（cur *= w）：递推每级连续自乘最多 1024 次，
+/// 舍入误差随步数累积（f32 下最外级相对误差可到 1e-4 量级，表现为频谱底噪
+/// 抬高）；查表每个因子只做一次 cos/sin，误差停在单次三角函数的精度上。
+static TWIDDLE: OnceLock<(Vec<f32>, Vec<f32>)> = OnceLock::new();
+
+fn twiddle_table() -> &'static (Vec<f32>, Vec<f32>) {
+    TWIDDLE.get_or_init(|| {
+        let n = FFT_SIZE / 2;
+        let mut re = Vec::with_capacity(n);
+        let mut im = Vec::with_capacity(n);
+        for k in 0..n {
+            let ang = -2.0 * std::f32::consts::PI * k as f32 / FFT_SIZE as f32;
+            re.push(ang.cos());
+            im.push(ang.sin());
+        }
+        (re, im)
+    })
+}
+
+/// 就地 radix-2 FFT。
+///
+/// `n` 必须是 FFT_SIZE 的 2 的幂因子（生产路径恒等于 FFT_SIZE）。旋转因子
+/// 按下标 `k·FFT_SIZE/len` 直接查表：对任何整除 FFT_SIZE 的 n，该下标都
+/// 精确落在表内且数学上与 e^{-2πik/n} 相等（e^{-2πi·m/n} = e^{-2πi·(m·FFT_SIZE/n)/FFT_SIZE}）。
 fn fft_inplace(re: &mut [f32], im: &mut [f32]) {
     let n = re.len();
     debug_assert!(n.is_power_of_two());
+    debug_assert!(
+        n <= FFT_SIZE && FFT_SIZE.is_multiple_of(n),
+        "旋转因子表按 FFT_SIZE 预生成，n 必须整除 FFT_SIZE（n={n}）"
+    );
     // 位反转重排
     let mut j = 0usize;
     for i in 0..n {
@@ -321,26 +355,25 @@ fn fft_inplace(re: &mut [f32], im: &mut [f32]) {
         }
         j |= m;
     }
-    // 蝶形
+    // 蝶形（查表代替逐次自乘递推，见 TWIDDLE 注释）
+    let (tw_re, tw_im) = twiddle_table();
     let mut len = 2;
     while len <= n {
-        let ang = -2.0 * std::f32::consts::PI / len as f32;
-        let (w_re, w_im) = (ang.cos(), ang.sin());
+        let half = len / 2;
+        let stride = FFT_SIZE / len;
         let mut base = 0;
         while base < n {
-            let (mut cur_re, mut cur_im) = (1.0f32, 0.0f32);
-            for k in 0..len / 2 {
+            for k in 0..half {
+                let w = k * stride;
+                let (cur_re, cur_im) = (tw_re[w], tw_im[w]);
                 let a = base + k;
-                let b = a + len / 2;
+                let b = a + half;
                 let t_re = re[b] * cur_re - im[b] * cur_im;
                 let t_im = re[b] * cur_im + im[b] * cur_re;
                 re[b] = re[a] - t_re;
                 im[b] = im[a] - t_im;
                 re[a] += t_re;
                 im[a] += t_im;
-                let next = cur_re * w_re - cur_im * w_im;
-                cur_im = cur_re * w_im + cur_im * w_re;
-                cur_re = next;
             }
             base += len;
         }
@@ -401,6 +434,65 @@ mod tests {
             "峰值带应有足够强度: {}",
             bands[peak_band]
         );
+    }
+
+    #[test]
+    fn fft_main_bin_matches_analytic_amplitude() {
+        // 主 bin 能量对比解析值：整 bin 正弦（幅度 A，bin k0）的谱线高度是
+        // A·N/2。0.5 @43 → 512。查表实现误差停在单次三角函数精度（~1e-4），
+        // 远小于断言容差；若有人改回蝶形内自乘递推，1024 次累积误差仍在此
+        // 容差内——所以另有 fft_matches_naive_dft 对拍把数值精度钉死。
+        let mut arr = [0f32; FFT_SIZE];
+        for (i, s) in arr.iter_mut().enumerate() {
+            let t = i as f64 / FFT_SIZE as f64;
+            *s = (0.5 * (2.0 * std::f64::consts::PI * 43.0 * t).sin()) as f32;
+        }
+        let mut re = arr.to_vec();
+        let mut im = vec![0.0f32; FFT_SIZE];
+        fft_inplace(&mut re, &mut im);
+        let mag = ((re[43] * re[43] + im[43] * im[43]) as f64).sqrt();
+        assert!(
+            (mag - 512.0).abs() < 0.5,
+            "主 bin 幅值 {mag} 应 ≈ A·N/2 = 512"
+        );
+        // 整 bin 正弦正交：其他 bin 的泄漏应为 0（容差 = f32 噪声底）
+        for k in [1usize, 100, 500, 1000] {
+            let leak = (re[k] * re[k] + im[k] * im[k]).sqrt();
+            assert!(leak < 1e-2, "bin {k} 泄漏 {leak} 应为数值噪声级");
+        }
+    }
+
+    #[test]
+    fn fft_matches_naive_dft() {
+        // 与 O(N²) 朴素 DFT（f64 基准）对拍：含非整 bin 分量，泄漏铺满全谱，
+        // 三个远离 bin 都有能量可对。相对误差 1e-3 远低于自乘递推在最外级
+        // （连续 1024 次复乘）能积出的 1e-4~1e-3 偏差——这条把"查表"的
+        // 数值收益锁住，防止退回递推实现时静默劣化。
+        let mut arr = [0f32; FFT_SIZE];
+        for (i, s) in arr.iter_mut().enumerate() {
+            let t = i as f64 / FFT_SIZE as f64;
+            *s = (0.5 * (2.0 * std::f64::consts::PI * 43.0 * t).sin()
+                + 0.3 * (2.0 * std::f64::consts::PI * 500.0 * t).sin()
+                + 0.2 * (2.0 * std::f64::consts::PI * 73.5 * t).sin()) as f32;
+        }
+        let mut re = arr.to_vec();
+        let mut im = vec![0.0f32; FFT_SIZE];
+        fft_inplace(&mut re, &mut im);
+        for &k in &[43usize, 100, 500] {
+            let (mut sum_re, mut sum_im) = (0f64, 0f64);
+            for (i, &s) in arr.iter().enumerate() {
+                let ang = -2.0 * std::f64::consts::PI * i as f64 * k as f64 / FFT_SIZE as f64;
+                sum_re += s as f64 * ang.cos();
+                sum_im += s as f64 * ang.sin();
+            }
+            let fft_mag = ((re[k] * re[k] + im[k] * im[k]) as f64).sqrt();
+            let ref_mag = (sum_re * sum_re + sum_im * sum_im).sqrt();
+            let rel = ((fft_mag - ref_mag) / ref_mag).abs();
+            assert!(
+                rel < 1e-3,
+                "bin {k}: fft={fft_mag} ref={ref_mag} 相对误差 {rel}"
+            );
+        }
     }
 
     #[test]

@@ -74,7 +74,7 @@ export function normalizeUiScale(value: unknown): UiScale {
  *
  * 取值：`mirror` 镜像、`radial` 环带、`ripple` 残影（中轴单线 + 反馈式残影
  * 缓冲）、`wave` 波纹（频谱曲线逐带交替成山与谷，振幅跨中线上下两段）。
- * `ripple` 在页内只画一条居中曲线：深度切片的水面形态（多层截面铺满下半屏）
+ * `ripple` 在页内只画一条居中曲线：等深线地形形态（多层等深线铺满下半屏）
  * 与背景层 `bgSpectrumStyle = 'ripple'` 重复，且页内只覆盖内容区，水面会在
  * 画布边缘断开，因此水面仅用于背景。
  *
@@ -117,7 +117,7 @@ export const RIDGE_GLOWS: Array<{ value: RidgeGlow; label: string }> = [
  * 页内试形态而改动背景。
  *
  * - `ridge` 山形：闭合填充的环境光，边界柔和（默认）
- * - `ripple` 波纹：同一波场的深度切片铺向下半屏，结构感强
+ * - `ripple` 波纹：等深线层叠铺向下半屏，结构感强
  */
 export type BgSpectrumStyle = 'ridge' | 'ripple';
 
@@ -168,13 +168,6 @@ export interface AppSettings {
   bgSpectrumStyle: BgSpectrumStyle;
   /** 背景山形光晕档位（审美开关，见 `RidgeGlow`；只对山形形态有效） */
   ridgeGlow: RidgeGlow;
-  /**
-   * 系统媒体控制（Windows SMTC / 锁屏 / 蓝牙耳机）。
-   *
-   * 开启后媒体键交由系统路由，因此不注册全局快捷键：`globalShortcut` 占用媒体键
-   * 会使 Chromium 不再向系统发布媒体会话，系统媒体面板随之消失（实测）。
-   */
-  mediaKeys: boolean;
   /** 应用启动后自动播放上次的曲目 */
   autoplayOnStart: boolean;
   /** 记住上次播放进度；关闭则每次都从头开始 */
@@ -201,7 +194,8 @@ export interface AppSettings {
   /** 只存覆盖项：没写的动作走 `DEFAULT_SHORTCUTS`（改默认值不冲用户自定义） */
   shortcuts: Partial<Record<ShortcutAction, string>>;
   /**
-   * 输出偏好（请求值）。设备实际给出的模式见诊断页 `audioMode`，两者分开：请求
+   * 输出偏好（请求值）。设备实际给出的模式经 `audio:mode` 事件实时下发
+   * （输出设置区展示），两者分开：请求
    * 独占而设备拒绝时，本字段仍为 `exclusive`。
    */
   output: DesiredOutput;
@@ -216,9 +210,31 @@ export interface AppSettings {
 
 /** 直播页最近打开的一条 */
 export interface LiveRecentEntry {
+  /**
+   * 稳定身份：与 URL 解耦——推流服务的容器重启可能换地址，流还是那条流。
+   * UI 的 key / 移除 / 将来与服务端的同步都以它为准；URL 只承担"连哪里"。
+   * 旧数据缺 id 时由 `normalizeLiveRecent` 按 URL 派生确定性 id 补齐。
+   */
+  id: string;
   url: string;
-  /** 用户手改过的标题；缺省由宿主按 URL 推（`default_stream_title`） */
+  /** 用户手改过的流名；缺省由宿主按 URL 推（`default_stream_title`） */
   title?: string;
+  /** 副标题：悬浮信息层流名下的一行小字；缺省不显示 */
+  subtitle?: string;
+  /** 描述文本：悬浮信息层的说明（超三行截断，≤200 字） */
+  description?: string;
+  /**
+   * 封面图（http(s) URL）：有则铺满卡面替代图标。暂无录入入口（不做内置
+   * 上传，本地文件路径也未支持），为服务端站单与将来"选图存路径"预留
+   */
+  cover?: string;
+  /**
+   * 入库途径。manual = 手工添加；推流服务上线后其站单走 'service'，
+   * 同步方向与覆盖优先级都以它判别。老数据缺省按 manual 归一。
+   */
+  source: 'manual';
+  /** 入库时间（毫秒）。重开/补元数据不改变它——它是"何时进库"不是"何时最后听" */
+  addedAtMs: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -242,7 +258,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   bgSpectrumStyle: 'ridge',
   // 平衡档：柔雾（无光）与锐光之间的中点，有光效但不刺眼
   ridgeGlow: 'balanced',
-  mediaKeys: true,
   // 默认关：启动即出声需由用户显式开启
   autoplayOnStart: false,
   // 进度记忆默认开：播放器的通行行为

@@ -25,40 +25,59 @@ class FacetsStore {
   loading = $state(false);
 
   /**
+   * 请求代次，按字段各持一个（与 stores/list 的 reload 同一模式）。
+   * 不共用一个计数的原因：搜索页同一轮会**并发**调 loadAlbums 与
+   * loadArtists，共享代次会让先发出的那个响应被误判过期丢弃。
+   */
+  private albumsGeneration = 0;
+  private artistsGeneration = 0;
+
+  /**
    * 拉专辑宫格。空白 search = 全量（前 500，total 可大于 items）。
    * 失败走全局错误条（宫格页没有 InlineError 位），返回 [] 让页面渲染空态。
    */
   async loadAlbums(search?: string): Promise<AlbumFacet[]> {
+    const generation = (this.albumsGeneration += 1);
     this.loading = true;
     try {
       const page = await ipc.library.albums(search);
-      this.albums = page.items;
-      this.albumsTotal = page.total;
+      if (generation === this.albumsGeneration) {
+        this.albums = page.items;
+        this.albumsTotal = page.total;
+      }
       return page.items;
     } catch (err) {
-      notify.showError(errorMessage(err));
-      this.albums = [];
-      this.albumsTotal = 0;
+      if (generation === this.albumsGeneration) {
+        notify.showError(errorMessage(err));
+        this.albums = [];
+        this.albumsTotal = 0;
+      }
       return [];
     } finally {
-      this.loading = false;
+      // 过期响应不碰 loading：新一轮还在飞行中，提前清掉会闪一帧空态
+      if (generation === this.albumsGeneration) this.loading = false;
     }
   }
 
   async loadArtists(search?: string): Promise<ArtistFacet[]> {
+    const generation = (this.artistsGeneration += 1);
     this.loading = true;
     try {
       const page = await ipc.library.artists(search);
-      this.artists = page.items;
-      this.artistsTotal = page.total;
+      if (generation === this.artistsGeneration) {
+        this.artists = page.items;
+        this.artistsTotal = page.total;
+      }
       return page.items;
     } catch (err) {
-      notify.showError(errorMessage(err));
-      this.artists = [];
-      this.artistsTotal = 0;
+      if (generation === this.artistsGeneration) {
+        notify.showError(errorMessage(err));
+        this.artists = [];
+        this.artistsTotal = 0;
+      }
       return [];
     } finally {
-      this.loading = false;
+      if (generation === this.artistsGeneration) this.loading = false;
     }
   }
 

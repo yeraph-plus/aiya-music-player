@@ -573,34 +573,13 @@ fn beets_status_protocol_version_is_number() {
     assert_eq!(v["libraryLockHolder"], "pid=4321,cmd=apply_import");
 }
 
-/// 诊断页两张表的 wire 形状。
+/// "最近错误"表的 wire 形状。
 ///
-/// 这两个数组以前是 `Vec<serde_json::Value>`（恒空），UI 只能靠本地视图类型 +
-/// 一次 `as` 转换硬顶。现在有真 DTO 了，字段名必须锁住：`tookMs`/`dbTookMs`
-/// 少一个下划线都变 `took_ms`，TS 侧就是 `undefined`，而类型检查看不出来。
+/// 这个数组以前是 `Vec<serde_json::Value>`（恒空），UI 只能靠本地视图类型 +
+/// 一次 `as` 转换硬顶。现在有真 DTO 了，字段名必须锁住：少一个下划线
+/// TS 侧就是 `undefined`，而类型检查看不出来。
 #[test]
-fn diagnostics_timing_and_error_wire_shape() {
-    let timing = aiya_lib::dto::ListTiming {
-        at_ms: 1_700_000_000_000,
-        source: "library".into(),
-        rows: 50,
-        total: 50_000,
-        took_ms: 2.6,
-        db_took_ms: 2.3,
-        cursor: None,
-    };
-    let v = serde_json::to_value(&timing).unwrap();
-    assert_eq!(
-        keys(&v),
-        sorted(&["atMs", "source", "rows", "total", "tookMs", "dbTookMs", "cursor"])
-    );
-    assert!(
-        v["atMs"].is_number(),
-        "i64 必须发 number（不是 bigint/string）"
-    );
-    assert!(v["tookMs"].is_f64(), "耗时是小数毫秒，别退化成整数");
-    assert!(v["cursor"].is_null(), "首屏游标是 null 而不是缺字段");
-
+fn diagnostics_error_wire_shape() {
     let err = aiya_lib::dto::RecentError {
         at_ms: 1_700_000_000_001,
         code: aiya_lib::dto::ApiErrorCode::Io,
@@ -611,6 +590,38 @@ fn diagnostics_timing_and_error_wire_shape() {
     assert_eq!(keys(&v), sorted(&["atMs", "code", "message", "detail"]));
     assert_eq!(v["code"], serde_json::json!("io"), "枚举走 camelCase");
     assert!(v["detail"].is_string());
+}
+
+/// `Diagnostics` 压平后的 wire 形状：只有三个有消费方的字段。
+///
+/// 这条防两头：把压平审计删掉的占位字段（统计/流计数/耗时表/audioMode/
+/// mediaKeys）"顺手加回来"。mediaKeys 随"系统媒体键"开关退役——SMTC
+/// 常开无开关，健康走"最近错误"台账，诊断不再报会话状态。
+#[test]
+fn diagnostics_flat_wire_shape() {
+    let d = aiya_lib::dto::Diagnostics {
+        version: "0.1.0".into(),
+        data_dir: "D:/data".into(),
+        recent_errors: Vec::new(),
+    };
+    let v = serde_json::to_value(&d).unwrap();
+    assert_eq!(keys(&v), sorted(&["version", "dataDir", "recentErrors"]));
+
+    let src = include_str!("../../src-tauri/src/dto/app.rs");
+    for dead in [
+        "pub electron",
+        "pub streams",
+        "pub list_timings",
+        "pub power",
+        "pub audio_mode",
+        "pub db_bytes",
+        "pub media_keys",
+    ] {
+        assert!(
+            !src.contains(dead),
+            "Diagnostics 压平时删掉的 `{dead}` 不该回来"
+        );
+    }
 }
 
 /// `Diagnostics` 不再有 `shortcutConflicts`（改由前端 `findConflicts` 算）。

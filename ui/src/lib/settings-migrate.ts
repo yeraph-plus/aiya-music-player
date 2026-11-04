@@ -13,6 +13,7 @@
  */
 
 import { devValidate, settingsSchema } from './ipc/schema';
+import { normalizeLiveRecent } from './live';
 import {
   DEFAULT_SETTINGS,
   BG_SPECTRUM_STYLES,
@@ -22,6 +23,7 @@ import {
   normalizeUiScale,
   type AppSettings,
 } from './settings';
+import { SHORTCUT_ACTIONS } from './shortcuts';
 
 const SPECTRUM_STYLE_VALUES: ReadonlySet<string> = new Set(SPECTRUM_STYLES.map((s) => s.value));
 const BG_SPECTRUM_STYLE_VALUES: ReadonlySet<string> = new Set(BG_SPECTRUM_STYLES.map((s) => s.value));
@@ -35,10 +37,18 @@ const THEME_VALUES: ReadonlySet<string> = new Set(THEME_MODES.map((m) => m.value
  * 用户修改任一设置时这些死键随 `setSettings` 再写回磁盘一次，"停写"实际未停。
  *
  * `spectrum` / `spectrumEngine` / `accentFromArtwork` 来自频谱与封面取色的旧方案；
- * `density` 因行高只保留一套；`glass` 无消费方（壳层不做玻璃）。写回路径是整个
- * 对象快照，残留一个死键即永久写回。
+ * `density` 因行高只保留一套；`glass` 无消费方（壳层不做玻璃）；
+ * `mediaKeys` 退役：SMTC 常开无开关（2026-11-04 拍板），"系统媒体键"开关连同
+ * 其后端消费方一并删除。写回路径是整个对象快照，残留一个死键即永久写回。
  */
-const RETIRED_KEYS = ['spectrum', 'spectrumEngine', 'accentFromArtwork', 'density', 'glass'] as const;
+const RETIRED_KEYS = [
+  'spectrum',
+  'spectrumEngine',
+  'accentFromArtwork',
+  'density',
+  'glass',
+  'mediaKeys',
+] as const;
 
 /**
  * 动态 JSON → `AppSettings`：以默认值为底合并，并迁移旧键。
@@ -83,9 +93,21 @@ export function mergeSettings(raw: unknown): AppSettings {
     merged.theme = DEFAULT_SETTINGS.theme;
   }
 
-  // 「最近打开」是新键：老配置里没有它（`...DEFAULT_SETTINGS` 兜成空表），这里只负责挡住被手改成别的形状的值——`AppSettings`
-  // 说是数组，运行期从磁盘 JSON 强转来的可能是个对象，下游 `.length` 会静默变成 undefined。
-  if (!Array.isArray(merged.liveRecent)) merged.liveRecent = DEFAULT_SETTINGS.liveRecent;
+  // 「最近打开」逐条归一：老配置缺地基字段（id/addedAtMs/source）按确定性
+  // 规则补齐，坏条目（url 缺失/非对象）丢弃。归一化是**幂等**的——已合规的
+  // 条目原样通过，重复调用不产生新 id（legacy id 由 URL 派生、新 id 已落盘）。
+  merged.liveRecent = normalizeLiveRecent(merged.liveRecent);
+
+  // 快捷键覆盖只留**现役动作**：动作清单退役了键（如 openSettings）时，
+  // 老配置里的对应覆盖键在这里剔除——mergeSettings 的产物是写盘快照，
+  // 残留死键就会每次改设置都原样写回（与顶层 RETIRED_KEYS 同一纪律）。
+  if (merged.shortcuts && typeof merged.shortcuts === 'object') {
+    for (const key of Object.keys(merged.shortcuts)) {
+      if (!(SHORTCUT_ACTIONS as readonly string[]).includes(key)) {
+        delete merged.shortcuts[key as keyof typeof merged.shortcuts];
+      }
+    }
+  }
 
   if (typeof legacySpectrum === 'boolean') {
     if (typeof rest.bgSpectrum !== 'boolean') merged.bgSpectrum = legacySpectrum;

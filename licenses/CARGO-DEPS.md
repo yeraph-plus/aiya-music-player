@@ -1,10 +1,10 @@
 # Rust 依赖清单（自动生成，勿手改）
 
-生成时间：2026-10-29　条目数：567
+生成时间：2026-11-04　条目数：568
 生成命令：`node tools/gen-notices.mjs`
 
-本仓库自有的 6 个 crate（aiya-audio-host@0.1.0、aiya-audio@0.1.0、aiya-beets-client@0.1.0、aiya-data@0.1.0、aiya-player@0.1.0、aiya@0.1.0）以 GPL-3.0-or-later 发布，
-不在此表内。下表为 crates.io 上的第三方依赖，均已静态链接进 `aiya.exe`
+本仓库自有的 7 个 crate（aiya-audio-host@0.1.0、aiya-audio@0.1.0、aiya-beets-client@0.1.0、aiya-beets-store@0.1.0、aiya-data@0.1.0、aiya-player@0.1.0、aiya@0.1.0）以 GPL-3.0-or-later 发布，
+不在此表内。下表为 crates.io 上的第三方依赖，均已静态链接进 `aiya-music.exe`
 或 `aiya-audio-host.exe`。
 
 ## 许可分布
@@ -13,7 +13,7 @@
 |---|---|
 | MIT OR Apache-2.0 | 253 |
 | MIT | 133 |
-| Apache-2.0 OR MIT | 49 |
+| Apache-2.0 OR MIT | 50 |
 | MIT/Apache-2.0 | 19 |
 | MPL-2.0 | 18 |
 | Unicode-3.0 | 18 |
@@ -81,8 +81,8 @@
 | block-buffer | 0.10.4 | MIT OR Apache-2.0 | github.com/RustCrypto/utils |
 | block2 | 0.6.2 | MIT | github.com/madsmtm/objc2 |
 | blocking | 1.7.0 | Apache-2.0 OR MIT | github.com/smol-rs/blocking |
-| brotli | 9.0.0 | BSD-3-Clause AND MIT | github.com/dropbox/rust-brotli |
-| brotli-decompressor | 6.0.1 | BSD-3-Clause/MIT | github.com/dropbox/rust-brotli-decompressor |
+| brotli | 9.1.1 | BSD-3-Clause AND MIT | github.com/dropbox/rust-brotli |
+| brotli-decompressor | 6.2.0 | BSD-3-Clause/MIT | github.com/dropbox/rust-brotli-decompressor |
 | bs58 | 0.5.1 | MIT/Apache-2.0 | github.com/Nullus157/bs58-rs |
 | bumpalo | 3.20.3 | MIT OR Apache-2.0 | github.com/fitzgen/bumpalo |
 | bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT | github.com/Lokathor/bytemuck |
@@ -95,7 +95,7 @@
 | cargo_metadata | 0.19.2 | MIT | github.com/oli-obk/cargo_metadata |
 | cargo_toml | 1.0.1 | Apache-2.0 OR MIT | gitlab.com/lib.rs/cargo_toml |
 | cargo-platform | 0.1.9 | MIT OR Apache-2.0 | github.com/rust-lang/cargo |
-| cc | 1.9.0 | MIT OR Apache-2.0 | github.com/rust-lang/cc-rs |
+| cc | 1.10.0 | MIT OR Apache-2.0 | github.com/rust-lang/cc-rs |
 | cesu8 | 1.1.0 | Apache-2.0/MIT | github.com/emk/cesu8-rs |
 | cfb | 0.14.0 | MIT | github.com/mdsteele/rust-cfb |
 | cfg_aliases | 0.2.2 | MIT | github.com/katharostech/cfg_aliases |
@@ -155,12 +155,12 @@
 | either | 1.19.0 | MIT OR Apache-2.0 | github.com/rayon-rs/either |
 | embed_plist | 1.2.2 | MIT OR Apache-2.0 | github.com/nvzqz/embed-plist-rs |
 | embed-resource | 3.0.12 | MIT | github.com/nabijaczleweli/rust-embed-resource |
-| encoding_rs | 0.8.42 | (Apache-2.0 OR MIT) AND BSD-3-Clause | github.com/hsivonen/encoding_rs |
+| encoding_rs | 0.8.44 | (Apache-2.0 OR MIT) AND BSD-3-Clause | github.com/hsivonen/encoding_rs |
 | endi | 1.1.1 | MIT | github.com/zeenix/endi |
 | enumflags2 | 0.7.12 | MIT OR Apache-2.0 | github.com/meithecatte/enumflags2 |
 | enumflags2_derive | 0.7.12 | MIT OR Apache-2.0 | github.com/meithecatte/enumflags2 |
 | equivalent | 1.0.3 | Apache-2.0 OR MIT | github.com/indexmap-rs/equivalent |
-| erased-serde | 0.4.10 | MIT OR Apache-2.0 | github.com/dtolnay/erased-serde |
+| erased-serde | 0.4.11 | MIT OR Apache-2.0 | github.com/dtolnay/erased-serde |
 | errno | 0.3.14 | MIT OR Apache-2.0 | github.com/lambda-fairy/rust-errno |
 | event-listener | 5.4.2 | Apache-2.0 OR MIT | github.com/smol-rs/event-listener |
 | event-listener-strategy | 0.5.4 | Apache-2.0 OR MIT | github.com/smol-rs/event-listener-strategy |
@@ -257,7 +257,7 @@
 | jni-sys | 0.3.1 | MIT OR Apache-2.0 | github.com/jni-rs/jni-sys |
 | jni-sys | 0.4.1 | MIT OR Apache-2.0 | github.com/jni-rs/jni-sys |
 | jni-sys-macros | 0.4.1 | MIT OR Apache-2.0 | github.com/jni-rs/jni-sys |
-| js-sys | 0.3.106 | MIT OR Apache-2.0 | github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys |
+| js-sys | 0.3.107 | MIT OR Apache-2.0 | github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys |
 | json-patch | 4.2.0 | MIT/Apache-2.0 | github.com/idubrov/json-patch |
 | jsonptr | 0.7.1 | MIT OR Apache-2.0 | github.com/chanced/jsonptr |
 | keyboard-types | 0.8.3 | MIT OR Apache-2.0 | github.com/rust-windowing/keyboard-types |
@@ -272,9 +272,9 @@
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | github.com/sunfishcode/linux-raw-sys |
 | litemap | 0.8.3 | Unicode-3.0 | github.com/unicode-org/icu4x |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 | github.com/Amanieu/parking_lot |
-| lofty | 0.25.4 | MIT OR Apache-2.0 | github.com/Serial-ATA/lofty-rs |
+| lofty | 0.25.5 | MIT OR Apache-2.0 | github.com/Serial-ATA/lofty-rs |
 | lofty_attr | 0.13.0 | MIT OR Apache-2.0 | github.com/Serial-ATA/lofty-rs |
-| log | 0.4.34 | MIT OR Apache-2.0 | github.com/rust-lang/log |
+| log | 0.4.35 | MIT OR Apache-2.0 | github.com/rust-lang/log |
 | malloc_buf | 0.0.6 | MIT | github.com/SSheldon/malloc_buf |
 | markup5ever | 0.39.0 | MIT OR Apache-2.0 | github.com/servo/html5ever |
 | matchers | 0.2.0 | MIT | github.com/hawkw/matchers |
@@ -319,7 +319,7 @@
 | objc2-ui-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | github.com/madsmtm/objc2 |
 | objc2-user-notifications | 0.3.2 | Zlib OR Apache-2.0 OR MIT | github.com/madsmtm/objc2 |
 | objc2-web-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | github.com/madsmtm/objc2 |
-| ogg_pager | 0.7.2 | MIT OR Apache-2.0 | github.com/Serial-ATA/lofty-rs |
+| ogg_pager | 0.8.0 | MIT OR Apache-2.0 | github.com/Serial-ATA/lofty-rs |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 | github.com/matklad/once_cell |
 | option-ext | 0.2.0 | MPL-2.0 | github.com/soc/option-ext.git |
 | ordered-stream | 0.2.0 | MIT OR Apache-2.0 | github.com/danieldg/ordered-stream |
@@ -370,14 +370,14 @@
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 | github.com/rust-lang/regex |
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 | github.com/rust-lang/regex |
 | reqwest | 0.13.5 | MIT OR Apache-2.0 | github.com/seanmonstar/reqwest |
-| rfd | 0.16.1 | MIT | github.com/PolyMeilex/rfd |
+| rfd | 0.17.2 | MIT | github.com/PolyMeilex/rfd |
 | ring | 0.17.14 | Apache-2.0 AND ISC | github.com/briansmith/ring |
 | rsqlite-vfs | 0.1.1 | MIT |  |
 | rusqlite | 0.40.2 | MIT | github.com/rusqlite/rusqlite |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 | github.com/djc/rustc-version-rs |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT | github.com/rust-lang/rustc-hash |
 | rustfft | 6.4.1 | MIT OR Apache-2.0 | github.com/ejmahler/RustFFT |
-| rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | github.com/bytecodealliance/rustix |
+| rustix | 1.1.6 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | github.com/bytecodealliance/rustix |
 | rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT | github.com/rustls/rustls |
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 | github.com/rustls/pki-types |
 | rustls-webpki | 0.103.16 | ISC | github.com/rustls/webpki |
@@ -413,7 +413,7 @@
 | simdutf8 | 0.1.5 | MIT OR Apache-2.0 | github.com/rusticstuff/simdutf8 |
 | siphasher | 1.0.4 | MIT OR Apache-2.0 | github.com/jedisct1/rust-siphash |
 | slab | 0.4.12 | MIT | github.com/tokio-rs/slab |
-| smallvec | 1.16.3 | MIT OR Apache-2.0 | github.com/servo/rust-smallvec |
+| smallvec | 1.16.4 | MIT OR Apache-2.0 | github.com/servo/rust-smallvec |
 | socket2 | 0.6.5 | MIT OR Apache-2.0 | github.com/rust-lang/socket2 |
 | softbuffer | 0.4.8 | MIT OR Apache-2.0 | github.com/rust-windowing/softbuffer |
 | soup3 | 0.5.0 | MIT | gitlab.gnome.org/World/Rust/soup3-rs |
@@ -447,7 +447,7 @@
 | sync_wrapper | 1.0.2 | Apache-2.0 | github.com/Actyx/sync_wrapper |
 | synstructure | 0.14.0 | MIT | github.com/mystor/synstructure |
 | system-deps | 6.2.2 | MIT OR Apache-2.0 | github.com/gdesmott/system-deps |
-| tao | 0.37.1 | Apache-2.0 | github.com/tauri-apps/tao |
+| tao | 0.37.2 | Apache-2.0 | github.com/tauri-apps/tao |
 | tao-macros | 0.1.4 | MIT OR Apache-2.0 | github.com/tauri-apps/tao |
 | target-lexicon | 0.12.16 | Apache-2.0 WITH LLVM-exception | github.com/bytecodealliance/target-lexicon |
 | tauri | 2.12.5 | Apache-2.0 OR MIT | github.com/tauri-apps/tauri |
@@ -455,9 +455,9 @@
 | tauri-codegen | 2.7.4 | Apache-2.0 OR MIT | github.com/tauri-apps/tauri |
 | tauri-macros | 2.7.4 | Apache-2.0 OR MIT | github.com/tauri-apps/tauri |
 | tauri-plugin | 2.7.2 | Apache-2.0 OR MIT | github.com/tauri-apps/tauri |
-| tauri-plugin-dialog | 2.8.3 | Apache-2.0 OR MIT | github.com/tauri-apps/plugins-workspace |
+| tauri-plugin-dialog | 2.8.4 | Apache-2.0 OR MIT | github.com/tauri-apps/plugins-workspace |
 | tauri-plugin-fs | 2.7.1 | Apache-2.0 OR MIT | github.com/tauri-apps/plugins-workspace |
-| tauri-plugin-single-instance | 2.5.4 | Apache-2.0 OR MIT | github.com/tauri-apps/plugins-workspace |
+| tauri-plugin-single-instance | 2.5.5 | Apache-2.0 OR MIT | github.com/tauri-apps/plugins-workspace |
 | tauri-runtime | 2.12.2 | Apache-2.0 OR MIT | github.com/tauri-apps/tauri |
 | tauri-runtime-wry | 2.12.3 | Apache-2.0 OR MIT | github.com/tauri-apps/tauri |
 | tauri-utils | 2.10.2 | Apache-2.0 OR MIT | github.com/tauri-apps/tauri |
@@ -510,8 +510,9 @@
 | ureq | 2.12.1 | MIT OR Apache-2.0 | github.com/algesten/ureq |
 | url | 2.5.8 | MIT OR Apache-2.0 | github.com/servo/rust-url |
 | urlpattern | 0.6.0 | MIT | github.com/denoland/rust-urlpattern |
-| utf8_iter | 1.0.4 | Apache-2.0 OR MIT | github.com/hsivonen/utf8_iter |
-| uuid | 1.28.0 | Apache-2.0 OR MIT | github.com/uuid-rs/uuid |
+| utf_types | 1.0.0 | Apache-2.0 OR MIT | github.com/hsivonen/utf_types |
+| utf8_iter | 1.1.0 | Apache-2.0 OR MIT | github.com/hsivonen/utf8_iter |
+| uuid | 1.29.0 | Apache-2.0 OR MIT | github.com/uuid-rs/uuid |
 | valuable | 0.1.1 | MIT | github.com/tokio-rs/valuable |
 | vcpkg | 0.2.15 | MIT/Apache-2.0 | github.com/mcgoo/vcpkg-rs |
 | version_check | 0.9.5 | MIT/Apache-2.0 | github.com/SergioBenitez/version_check |
@@ -523,14 +524,14 @@
 | wasapi | 0.26.0 | MIT | github.com/HEnquist/wasapi-rs |
 | wasi | 0.11.1+wasi-snapshot-preview1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | github.com/bytecodealliance/wasi |
 | wasip2 | 1.0.4+wasi-0.2.12 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | github.com/bytecodealliance/wasi-rs |
-| wasm-bindgen | 0.2.129 | MIT OR Apache-2.0 | github.com/wasm-bindgen/wasm-bindgen |
-| wasm-bindgen-futures | 0.4.79 | MIT OR Apache-2.0 | github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/futures |
-| wasm-bindgen-macro | 0.2.129 | MIT OR Apache-2.0 | github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro |
-| wasm-bindgen-macro-support | 0.2.129 | MIT OR Apache-2.0 | github.com/wasm-bindgen/wasm-bindgen/tree/main/crates/macro-support |
-| wasm-bindgen-shared | 0.2.129 | MIT OR Apache-2.0 | github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared |
+| wasm-bindgen | 0.2.130 | MIT OR Apache-2.0 | github.com/wasm-bindgen/wasm-bindgen |
+| wasm-bindgen-futures | 0.4.80 | MIT OR Apache-2.0 | github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/futures |
+| wasm-bindgen-macro | 0.2.130 | MIT OR Apache-2.0 | github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro |
+| wasm-bindgen-macro-support | 0.2.130 | MIT OR Apache-2.0 | github.com/wasm-bindgen/wasm-bindgen/tree/main/crates/macro-support |
+| wasm-bindgen-shared | 0.2.130 | MIT OR Apache-2.0 | github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared |
 | wasm-streams | 0.5.0 | MIT OR Apache-2.0 | github.com/MattiasBuelens/wasm-streams/ |
 | web_atoms | 0.2.6 | MIT OR Apache-2.0 | github.com/servo/html5ever |
-| web-sys | 0.3.106 | MIT OR Apache-2.0 | github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys |
+| web-sys | 0.3.107 | MIT OR Apache-2.0 | github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys |
 | web-time | 1.1.0 | MIT OR Apache-2.0 | github.com/daxpedda/web-time |
 | webkit2gtk | 2.0.2 | MIT | github.com/tauri-apps/webkit2gtk-rs |
 | webkit2gtk-sys | 2.0.2 | MIT | github.com/tauri-apps/webkit2gtk-rs |
@@ -593,7 +594,7 @@
 | winreg | 0.56.0 | MIT | github.com/gentoo90/winreg-rs |
 | wit-bindgen | 0.57.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | github.com/bytecodealliance/wit-bindgen |
 | writeable | 0.6.4 | Unicode-3.0 | github.com/unicode-org/icu4x |
-| wry | 0.57.0 | Apache-2.0 OR MIT | github.com/tauri-apps/wry |
+| wry | 0.57.1 | Apache-2.0 OR MIT | github.com/tauri-apps/wry |
 | x11 | 2.21.0 | MIT | github.com/AltF02/x11-rs.git |
 | x11-dl | 2.21.0 | MIT | github.com/AltF02/x11-rs.git |
 | yoke | 0.8.4 | Unicode-3.0 | github.com/unicode-org/icu4x |
@@ -601,7 +602,7 @@
 | zbus | 5.19.0 | MIT | github.com/z-galaxy/zbus/ |
 | zbus_macros | 5.19.0 | MIT | github.com/z-galaxy/zbus/ |
 | zbus_names | 4.3.5 | MIT | github.com/z-galaxy/zbus/ |
-| zcheapstr | 1.1.0 | MIT | github.com/z-galaxy/zcheapstr/ |
+| zcheapstr | 1.2.0 | MIT | github.com/z-galaxy/zcheapstr/ |
 | zerofrom | 0.1.8 | Unicode-3.0 | github.com/unicode-org/icu4x |
 | zerofrom-derive | 0.1.8 | Unicode-3.0 | github.com/unicode-org/icu4x |
 | zeroize | 1.9.1 | Apache-2.0 OR MIT | github.com/RustCrypto/utils |

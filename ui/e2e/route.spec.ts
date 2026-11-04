@@ -185,7 +185,7 @@ test('2026-10-30：首页「位置缺失」告警 → 设置页曲库组（滚�
   await page.goto('/?missing=2');
   const warn = page.locator('.stat-warn');
   await expect(warn).toContainText('2 个位置缺失');
-  // 文案压缩后不再复述入口路径（2026-11-03）：动作语义保留
+  // 文案压缩后只保动作语义（"去处理"），不复述入口路径——盯动作别盯文案
   await expect(warn).toContainText('去处理');
   await warn.click();
 

@@ -5,13 +5,11 @@ import { artworkObjectUrl } from './artwork-blob.js';
 /**
  * Media Session：系统媒体中心 / 锁屏 / 蓝牙耳机的显示与控制。
  *
- * 它和主进程的全局媒体键不是一回事，也不是重复实现：
- * - 媒体键负责"按键 → 播放器"，全局生效，主进程注册
- * - Media Session 负责"播放器 → 系统 UI"，显示歌名封面、进度，
- *   并让蓝牙耳机、锁屏这类系统控件能发指令
- *
- * 两者同时注册不会冲突：Chromium 只在窗口有焦点时把媒体键交给页面，
- * 失焦时走主进程的 globalShortcut。
+ * **SMTC 常开无开关**（2026-11-04 拍板）：本层是标准 Web 通道，全量注册
+ * 元数据与控制键；Windows 侧真正的系统集成由后端 `smtc.rs`（souvlaki）承担
+ * ——面板显示与失焦媒体键都走它，本层是否触达系统面板随 WebView2 而定，
+ * 不作为任何承诺的依据。历史上这里写过"失焦时走主进程的 globalShortcut"，
+ * 主进程从未注册过 globalShortcut，那是失真注释。
  *
  * 封面必须是 blob:/data: 之类的"标准" scheme —— `media://` 会被 Blink 拒绝，
  * 所以这里走 artwork-blob 转一次。标题等信息先同步落到系统 UI，
@@ -37,24 +35,9 @@ export interface MediaSessionBridge {
 
 const NOOP: MediaSessionBridge = { update: () => undefined, dispose: () => undefined };
 
-export interface MediaSessionOptions {
-  /**
-   * 是否允许系统控制（播放/暂停、上一首、下一首、进度）。
-   *
-   * 关掉时仍然发布标题与封面——系统媒体面板照常显示，但按键不生效。
-   * 这对应设置里的"系统媒体键"：不想让本应用接管系统媒体控制的人，
-   * 依然能看到当前在放什么。
-   */
-  actions?: boolean;
-}
-
-export function createMediaSession(
-  handlers: MediaSessionHandlers,
-  options: MediaSessionOptions = {},
-): MediaSessionBridge {
+export function createMediaSession(handlers: MediaSessionHandlers): MediaSessionBridge {
   const session = typeof navigator !== 'undefined' ? navigator.mediaSession : undefined;
   if (!session) return NOOP;
-  const withActions = options.actions !== false;
 
   /** 每次 update 自增；异步封面回来时用它丢弃过期结果（快速切歌时的竞态） */
   let generation = 0;
@@ -92,7 +75,6 @@ export function createMediaSession(
   ];
 
   for (const [action, handler] of handlersMap) {
-    if (!withActions) break;
     try {
       session.setActionHandler(action, handler);
     } catch {

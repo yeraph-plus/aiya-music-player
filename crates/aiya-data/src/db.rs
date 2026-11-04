@@ -24,21 +24,13 @@ pub enum DbError {
     Custom(String),
 }
 
-// 迁移链：v1 压平基线（项目未发布无存量库，0001+0002+0003 曾是三个编号，
-// 已合并进 0001，见 migrations/0001_init.sql 头注）；0002 起是真增量。
-const MIGRATIONS: &[&str] = &[
-    include_str!("../migrations/0001_init.sql"),
-    include_str!("../migrations/0002_playlist_order.sql"),
-    include_str!("../migrations/0003_smart_playlist.sql"),
-    include_str!("../migrations/0004_history_retention.sql"),
-    include_str!("../migrations/0005_facet_norm_indexes.sql"),
-    include_str!("../migrations/0006_entity_artwork.sql"),
-    include_str!("../migrations/0007_dynamic_materialized.sql"),
-    include_str!("../migrations/0008_track_enrichment.sql"),
-    include_str!("../migrations/0009_drop_track_enrichment.sql"),
-    include_str!("../migrations/0010_queue_transient.sql"),
-    include_str!("../migrations/0011_artwork_ref_indexes.sql"),
-];
+// 迁移链：v1 压平基线，单一文件。项目未发布无存量库，历史上两次压平：
+// 0001+0002+0003 曾是三个编号（第一次），0002..0011 十个增量第二次吸收进
+// 0001（列按 ALTER 追加序折叠，结构等价有验证脚本背书）——见
+// migrations/0001_init.sql 头注的吸收清单。今后加表加列：改 0001 本体
+// （开发库用"改基线 + 手动 PRAGMA user_version 回拨/删库重扫"消化），
+// 正式发布后再恢复"0001 冻结 + 增量递增"的纪律。
+const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
 
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
 

@@ -69,8 +69,6 @@ pub enum Trigger {
     Focus,
     /// 某条 beets 命令刚结束（apply / adopt / move）：只触发扫描段
     Action,
-    /// 用户手点的"立即刷新"
-    Manual,
 }
 
 impl Trigger {
@@ -79,12 +77,12 @@ impl Trigger {
             Trigger::Timer => "timer",
             Trigger::Focus => "focus",
             Trigger::Action => "action",
-            Trigger::Manual => "manual",
         }
     }
 
     /// 自动触发（定时/聚焦）。自动触发撞上忙时**静默**放弃：用户没在等，
-    /// 下一轮还会来。手动触发才需要告诉他"没跑成"。
+    /// 下一轮还会来。非自动（Action，beets 命令收尾）才需要让界面看到
+    /// "这次没跑成"——用户刚操作完，毫无回应会像按钮坏了。
     fn is_auto(self) -> bool {
         matches!(self, Trigger::Timer | Trigger::Focus)
     }
@@ -94,7 +92,10 @@ impl Trigger {
 ///
 /// 历史上 scan 链路里任一 panic 让 `scanning` 永真，之后所有扫描报 `E_SCAN_BUSY`，
 /// 用户只能重启应用。Drop 兜底保证退出路径（含 unwind）必复位。
-struct FlagGuard(Arc<AtomicBool>);
+/// `pub(crate)` 是因为 `library_scan`（手动扫描）与这条自动刷新管线共用**同一个**
+/// `scanning` 标志，也就必须共用同一套兜底——那边任何提前 return / 闭包 panic
+/// 同样会把标志留死。
+pub(crate) struct FlagGuard(pub(crate) Arc<AtomicBool>);
 
 impl Drop for FlagGuard {
     fn drop(&mut self) {
@@ -196,8 +197,9 @@ pub fn run(app: &tauri::AppHandle, params: &RefreshParams, trigger: Trigger) {
                 "library refresh"
             );
 
-            // 无变化不发 bump；手动触发例外（用户点了按钮，必须看到回应）
-            if changed || trigger == Trigger::Manual {
+            // 无变化不发 bump：界面不该为"什么都没发生"重拉一次列表；
+            // 最近一次结果（含无变化）始终可从 refresh_state 的快照查到
+            if changed {
                 match serde_json::to_value(&snapshot) {
                     Ok(mut v) => {
                         if let Some(obj) = v.as_object_mut() {
@@ -531,13 +533,12 @@ mod tests {
         assert!(roots[0].ends_with("Music"), "{:?}", roots[0]);
     }
 
-    /// 自动触发撞忙要静默（用户没在等），手动触发要报。
+    /// 自动触发撞忙要静默（用户没在等），命令收尾（Action）要报。
     #[test]
-    fn only_manual_and_action_report_skips() {
+    fn only_action_reports_skips() {
         assert!(Trigger::Timer.is_auto());
         assert!(Trigger::Focus.is_auto());
         assert!(!Trigger::Action.is_auto());
-        assert!(!Trigger::Manual.is_auto());
     }
 
     fn scan(imported: usize, updated: usize, missing: usize) -> aiya_data::scanner::ScanResult {

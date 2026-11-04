@@ -32,7 +32,6 @@ export const SHORTCUT_ACTIONS = [
   'toggleShuffle',
   'cycleRepeat',
   'selectAll',
-  'openSettings',
 ] as const;
 
 export type ShortcutAction = (typeof SHORTCUT_ACTIONS)[number];
@@ -58,7 +57,6 @@ export const DEFAULT_SHORTCUTS: Record<ShortcutAction, string> = {
   toggleShuffle: 'S',
   cycleRepeat: 'R',
   selectAll: 'Ctrl+A',
-  openSettings: 'Ctrl+,',
 };
 
 /** 覆盖项合并到默认键位；空字符串表示用户主动禁用该动作 */
@@ -90,7 +88,6 @@ export const SHORTCUT_LABELS: Record<ShortcutAction, string> = {
   toggleShuffle: '随机播放切换',
   cycleRepeat: '播放模式轮转（列表循环/单曲循环/随机/顺序）',
   selectAll: '全选当前视图',
-  openSettings: '打开设置',
 };
 
 /* 解析与匹配 */

@@ -13,7 +13,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aiya_beets_client::{BeetsTool, EventSink, Launcher, StatusReport, StdioTool, ToolError};
 use tauri::{Emitter, Manager};
@@ -643,8 +643,8 @@ fn query_sidecar(
 /// 会话槽被占时的状态：组件**在**，只是这一刻读不到细节。
 ///
 /// 不能复用 [`absent`]：那条会把 `found` 置 false，UI 于是显示「未安装 beets」
-/// 并把用户踹到安装页——而真相是"你刚点的预览/整理还在跑"。
-/// 一张专辑要发很多次），期间页面自己跳去了安装页，看起来像组件凭空没了。
+/// 并把用户踹到安装页——而真相是"你刚点的预览/整理还在跑"（整理一个批次
+/// 要发很多次查询），期间页面自己跳去了安装页，看起来像组件凭空没了。
 ///
 /// `schema_matched` 保持 false（没拿到报告就谈不上契约匹配），UI 因此会禁用
 /// 写操作——这正合适：槽被占时本来也发不出写命令。
@@ -1503,6 +1503,11 @@ enum UninstallPlan {
     Refused(String),
 }
 
+/// `uninstall --all --dry-run` 的超时。dry-run 只做目录遍历与账目计算，
+/// 本地大目录也在秒级；30 s 还没完 = 子进程卡死（杀软锁文件 / 进程僵死），
+/// 与 [`QUERY_TIMEOUT`] 同一量级的保守取值。
+const UNINSTALL_PLAN_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// 让工具侧出卸载计划：`uninstall --all --dry-run --target <root>`。
 ///
 /// ## 为什么只借 `--dry-run`，不把删除交出去
@@ -1518,9 +1523,16 @@ enum UninstallPlan {
 /// 退出码 2 是工具侧的闸门约定。它说"不该删"时宿主若自己删，闸门就成了装饰。
 /// 只有"跑不起来"（没有入口、spawn 失败、输出里没有 done 帧）才回落自算，
 /// 因为那种情况闸门根本没被执行过，不该让它阻断卸载。
-fn uninstall_plan(app: &tauri::AppHandle, root: &std::path::Path) -> UninstallPlan {
+///
+/// ## 超时语义
+///
+/// 返回 `Err` 仅发生在**超时/等待失败**——此时子进程已被 kill 并 wait 回收。
+/// 超时按错误上报而不是回落"宿主自算"（[`UninstallPlan::Unavailable`]）：
+/// 回落 = 没过四道闸就直接删目录树，比多等几十秒危险得多；"跑不起来回落"
+/// 的宽限只属于 spawn 失败那种"闸门根本没机会执行"的情况。
+fn uninstall_plan(app: &tauri::AppHandle, root: &std::path::Path) -> Result<UninstallPlan, String> {
     let Some((entry, _source)) = discover(app) else {
-        return UninstallPlan::Unavailable;
+        return Ok(UninstallPlan::Unavailable);
     };
     let mut cmd = std::process::Command::new(&entry.program);
     cmd.args(&entry.args)
@@ -1532,10 +1544,47 @@ fn uninstall_plan(app: &tauri::AppHandle, root: &std::path::Path) -> UninstallPl
         .stderr(std::process::Stdio::null())
         .envs(tool_env(app, Profile::Workbench));
     crate::proc::no_window(&mut cmd);
-    let Ok(out) = cmd.output() else {
-        return UninstallPlan::Unavailable;
+    // 此前这里是全文件唯一无超时的子进程调用（`cmd.output()` 无限等退出）：
+    // dry-run 卡住时整个卸载线程永久挂在"有 progress 帧、永远等不到终态"。
+    // 改 spawn + 轮询 try_wait + 超时 kill，所有等待有界（其余子进程交互走
+    // StdioTool / pump_frames 的两级看门狗，不适用单次 output() 这种一问一答）。
+    let Ok(mut child) = cmd.spawn() else {
+        return Ok(UninstallPlan::Unavailable);
     };
-    plan_from_output(out.status.code(), &String::from_utf8_lossy(&out.stdout))
+    let mut stdout = child.stdout.take();
+    let deadline = Instant::now() + UNINSTALL_PLAN_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "卸载计划超时（dry-run {UNINSTALL_PLAN_TIMEOUT:.0?} 未完成），已终止工具侧进程"
+                ));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("等待卸载计划失败：{e}"));
+            }
+        }
+    };
+    // 子进程已退出（写端随之关闭），read_to_end 必然返回；dry-run 输出只有
+    // 账目一帧，远小于管道缓冲，轮询期间不存在写满阻塞。
+    let mut text = Vec::new();
+    if let Some(out) = stdout.as_mut() {
+        use std::io::Read;
+        let _ = out.read_to_end(&mut text);
+    }
+    let _ = child.wait();
+    Ok(plan_from_output(
+        status.code(),
+        &String::from_utf8_lossy(&text),
+    ))
 }
 
 /// 把工具侧的输出翻成 [`UninstallPlan`]（纯函数，好测）。
@@ -1576,6 +1625,8 @@ fn extract_message(v: &serde_json::Value) -> Option<String> {
 
 /// 卸载：删 `{data_root}/beets-tool`（venv / bundle / 下载缓存），清设置里的入口。
 ///
+/// 与安装/换插件共用同一把互斥（`beets_installing`）：两边动的是同一棵目录树，
+/// 并发必然互相拆台。占位在起线程**之前**做，线程内的释放走 [`InstallGuard`]。
 ///
 /// 卸载是**安装的反向操作**：安装往里放了 venv 解释器、beets 本体、pip 依赖、
 /// 插件，全在 `beets-tool/` 里，删它就等于全部撤回。
@@ -1583,23 +1634,55 @@ fn extract_message(v: &serde_json::Value) -> Option<String> {
 /// 也在同一个数据根下，但它们是用户资产、不是安装产物，**这里一个字节都不动**
 /// ——那些由应用自己的清理入口管。顺手删掉 1850 首的分析结果，是用户没让你做的事。
 pub fn start_uninstall(app: tauri::AppHandle) -> Result<(), String> {
-    std::thread::Builder::new()
+    {
+        // 与安装/换插件共用同一把互斥（beets_installing）：卸载删的正是安装
+        // 写的那个目录树，两边并发 = 一边在 pip 装、一边在 rmtree，半成品谁也
+        // 收不了场。占位失败与 start_install 同文案（UI 在同一个进度区报错）。
+        let state = app
+            .try_state::<crate::AppState>()
+            .ok_or_else(|| "应用状态未就绪，卸载未启动".to_string())?;
+        if state
+            .beets_installing
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_err()
+        {
+            return Err("已有一次组件安装在进行中，等它结束（或失败）后再试".to_string());
+        }
+    }
+    let thread_app = app.clone();
+    let spawned = std::thread::Builder::new()
         .name("beets-uninstall".into())
         .spawn(move || {
+            // 互斥占位在返回/panic 时由 Drop 复位
+            let install_state = thread_app.state::<crate::AppState>();
+            let _guard = InstallGuard(&install_state.beets_installing);
             let emit = |v: serde_json::Value| {
-                let _ = app.emit("beets:install", v);
+                let _ = thread_app.emit("beets:install", v);
             };
-            if let Err(e) = uninstall_now(&app, &emit) {
+            if let Err(e) = uninstall_now(&thread_app, &emit) {
                 emit(serde_json::json!({ "type": "error", "message": e }));
             }
-            let status = probe(&app);
-            let _ = app.emit(
+            let status = probe(&thread_app);
+            let _ = thread_app.emit(
                 "beets:install",
                 serde_json::json!({ "type": "finished", "status": status }),
             );
-        })
-        .map(|_| ())
-        .map_err(|e| format!("起卸载线程失败：{e}"))
+        });
+    spawned.map(|_| ()).map_err(|e| {
+        // 线程没起来，guard 永远不会执行：占位必须在这里手工释放，
+        // 否则之后所有安装/卸载都报 busy
+        if let Some(state) = app.try_state::<crate::AppState>() {
+            state
+                .beets_installing
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        format!("起卸载线程失败：{e}")
+    })
 }
 
 fn uninstall_now(app: &tauri::AppHandle, emit: &dyn Fn(serde_json::Value)) -> Result<(), String> {
@@ -1625,7 +1708,8 @@ fn uninstall_now(app: &tauri::AppHandle, emit: &dyn Fn(serde_json::Value)) -> Re
 
     // 先问工具侧：它过四道闸、算账。明确拒绝就停（闸门的意义就在这儿），
     // 只有"跑不起来"才回落到宿主自己算——那时闸门根本没被执行过。
-    let (files, bytes) = match uninstall_plan(app, &root) {
+    // 计划超时（Err）直接上抛：见 uninstall_plan 的超时说明。
+    let (files, bytes) = match uninstall_plan(app, &root)? {
         UninstallPlan::Ready { files, bytes } => (files, bytes),
         UninstallPlan::Refused(why) => return Err(why),
         UninstallPlan::Unavailable => measure_dir(&root),

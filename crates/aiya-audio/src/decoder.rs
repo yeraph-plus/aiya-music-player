@@ -98,6 +98,11 @@ struct SymphoniaStream {
     /// seek 目标（毫秒）。Ogg 按页、MP4 按 chunk 落点，seek 之后的第一批
     /// 包里可能有**早于目标**的音频，吐出去就是"拖到 5:00 先听到 4:59"。
     seek_target_ms: Option<u64>,
+    /// 流规格已被首包确认（[`Self::peek_first_packet`] 之后为 true）。
+    /// 确认后再检出规格变化就是"中途变化"，必须报错而不是静默换算——
+    /// engine 的输出流/EQ/音量斜坡/频谱分带都按打开时的规格建，继续喂
+    /// 会变调（与 hls.rs 的跨段校验同一口径）。
+    spec_confirmed: bool,
     eof: bool,
 }
 
@@ -306,6 +311,7 @@ impl SymphoniaStream {
             first_packet: None,
             first_served: false,
             seek_target_ms: None,
+            spec_confirmed: false,
             eof: false,
         };
         // 探一包：拿到真实规格（ALAC/AAC 的通道数）并把这一包存起来还给它。engine 拿到流之后马上要 sample_rate/channels
@@ -321,6 +327,9 @@ impl SymphoniaStream {
         // 探包不算播放位置：engine 拿到流之后从 0 开始
         self.position_ms = 0;
         self.eof = false;
+        // 首包之后规格即视为已确认（无论它是否覆盖了容器占位值）：此前的
+        // 规格对齐是 open 阶段的正常补救，此后的变化见 next_packet 的报错
+        self.spec_confirmed = true;
         Ok(())
     }
 
@@ -352,6 +361,21 @@ impl SymphoniaStream {
                                 && spec.rate > 0
                                 && spec.channels.count() > 0
                             {
+                                // 首包确认之后的规格变化不是"以解码器为准"能吞
+                                // 下的：engine 的 WASAPI 流、EQ 滤波器、音量斜坡、
+                                // 频谱分带全部按打开时的规格建立，静默换算等于
+                                // 变调播放（96k→48k 内容慢一倍）。对照 hls.rs 的
+                                // 跨段校验：参数中途变化一律明确报错，经 engine
+                                // 统一的 Error 事件出口上报，让宿主换曲或提示。
+                                if self.spec_confirmed {
+                                    return Err(AudioError::Decode(format!(
+                                        "解码中途参数变化：{}Hz×{} → {}Hz×{}（输出流按原规格打开，继续播放会变调）",
+                                        self.sample_rate,
+                                        self.channels,
+                                        spec.rate,
+                                        spec.channels.count()
+                                    )));
+                                }
                                 tracing::debug!(
                                     "解码规格以解码器为准：{}Hz × {}ch（容器报 {}Hz × {}ch）",
                                     spec.rate,
@@ -532,7 +556,198 @@ pub fn is_hls_playlist_path(path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::AudioErrorKind;
+    use std::borrow::Cow;
+    use symphonia::core::audio::{AudioBuffer, AudioBufferRef, Signal};
     use symphonia::core::codecs::*;
+    use symphonia::core::formats::{Cue, Packet, SeekedTo, Track};
+    use symphonia::core::meta::{Metadata, MetadataLog};
+
+    /* 中途变参合成流（mock FormatReader/Decoder，见规格变化报错测试） */
+
+    /// 合成容器：按预排的时间戳逐包吐出，吐完报 UnexpectedEof（与真实
+    /// demuxer 的 EOF 形态一致）。测试直接构造，不走 probe/try_new。
+    struct MockFormat {
+        packets: Vec<(u64, u64)>, // (ts, dur)，时间基 1Hz：ts=帧号
+        next: usize,
+        track_id: u32,
+        log: MetadataLog,
+    }
+
+    impl FormatReader for MockFormat {
+        fn try_new(
+            _src: MediaSourceStream,
+            _opts: &FormatOptions,
+        ) -> symphonia::core::errors::Result<Self> {
+            unreachable!("测试直接构造 MockFormat，不经过 probe")
+        }
+
+        fn cues(&self) -> &[Cue] {
+            &[]
+        }
+
+        fn metadata(&mut self) -> Metadata<'_> {
+            self.log.metadata()
+        }
+
+        fn seek(
+            &mut self,
+            _mode: SeekMode,
+            _to: SeekTo,
+        ) -> symphonia::core::errors::Result<SeekedTo> {
+            unreachable!("规格变化测试不 seek")
+        }
+
+        fn tracks(&self) -> &[Track] {
+            &[]
+        }
+
+        fn next_packet(&mut self) -> symphonia::core::errors::Result<Packet> {
+            let Some(&(ts, dur)) = self.packets.get(self.next) else {
+                return Err(SymphoniaError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "mock eof",
+                )));
+            };
+            self.next += 1;
+            Ok(Packet::new_from_slice(self.track_id, ts, dur, &[]))
+        }
+
+        fn into_inner(self: Box<Self>) -> MediaSourceStream {
+            unreachable!("规格变化测试不回收底层流")
+        }
+    }
+
+    /// 合成解码器：第 `change_at` 个包起换返回另一组 SignalSpec，其余返回
+    /// spec_a。每包 1000 帧静音（内容无关紧要，走的是规格判定路径）。
+    struct MockDecoder {
+        spec_a: SignalSpec,
+        spec_b: SignalSpec,
+        change_at: usize,
+        decode_idx: usize,
+        frames: u64,
+        params: CodecParameters,
+    }
+
+    impl Decoder for MockDecoder {
+        fn try_new(
+            _params: &CodecParameters,
+            _options: &DecoderOptions,
+        ) -> symphonia::core::errors::Result<Self> {
+            unreachable!("测试直接构造 MockDecoder")
+        }
+
+        fn supported_codecs() -> &'static [CodecDescriptor] {
+            &[]
+        }
+
+        fn reset(&mut self) {}
+
+        fn codec_params(&self) -> &CodecParameters {
+            &self.params
+        }
+
+        fn decode(
+            &mut self,
+            _packet: &Packet,
+        ) -> symphonia::core::errors::Result<AudioBufferRef<'_>> {
+            let spec = if self.decode_idx < self.change_at {
+                self.spec_a
+            } else {
+                self.spec_b
+            };
+            self.decode_idx += 1;
+            let mut buf = AudioBuffer::new(self.frames, spec);
+            buf.render_silence(Some(self.frames as usize));
+            Ok(AudioBufferRef::F32(Cow::Owned(buf)))
+        }
+
+        fn finalize(&mut self) -> FinalizeResult {
+            FinalizeResult { verify_ok: None }
+        }
+
+        fn last_decoded(&self) -> AudioBufferRef<'_> {
+            let mut buf = AudioBuffer::new(self.frames, self.spec_a);
+            buf.render_silence(Some(self.frames as usize));
+            AudioBufferRef::F32(Cow::Owned(buf))
+        }
+    }
+
+    /// 造一条 6 包的合成流，占位规格故意与首包真规格错开（复刻 ALAC/AAC
+    /// "容器不报真实规格"的场景），让首包对齐路径真实工作。
+    fn mock_stream(change_at: usize) -> DecodedStream {
+        let spec_a = SignalSpec::new(48_000, Channels::FRONT_LEFT);
+        let spec_b = SignalSpec::new(44_100, Channels::FRONT_LEFT | Channels::FRONT_RIGHT);
+        let packets: Vec<(u64, u64)> = (0..6).map(|i| (i * 1000, 1000)).collect();
+        let mut stream = SymphoniaStream {
+            format: Box::new(MockFormat {
+                packets,
+                next: 0,
+                track_id: 1,
+                log: MetadataLog::default(),
+            }),
+            decoder: Box::new(MockDecoder {
+                spec_a,
+                spec_b,
+                change_at,
+                decode_idx: 0,
+                frames: 1000,
+                params: CodecParameters::new(),
+            }),
+            track_id: 1,
+            sample_rate: 44_100, // 占位：必须被首包对齐成 48k/1ch
+            channels: 2,
+            duration_ms: 0,
+            codec_n_frames: None,
+            position_ms: 0,
+            sample_buf: SampleBuffer::<f32>::new(65_535, spec_a),
+            max_frames: 65_535,
+            first_packet: None,
+            first_served: false,
+            seek_target_ms: None,
+            spec_confirmed: false,
+            eof: false,
+        };
+        // open() 的最后一步就是探首包：mock 与真实打开流程对齐
+        stream.peek_first_packet().expect("peek 首包");
+        DecodedStream {
+            inner: Inner::Symphonia(stream),
+        }
+    }
+
+    /// 规格中途变化必须明确报错而不是静默换算：engine 的输出流/EQ/音量
+    /// 斜坡/频谱分带都按打开时的规格建，静默换算等于变调播放。
+    /// 对照路径：hls.rs 的跨段校验（同口径报 Decode 错误）。
+    #[test]
+    fn mid_stream_spec_change_is_an_error_not_silent_resample() {
+        let mut dec = mock_stream(2); // 第 3 包起 48k/1ch → 44.1k/2ch
+                                      // 首包对齐：占位规格被首包真规格覆盖（这是 open 阶段的正常补救）
+        assert_eq!(dec.sample_rate(), 48_000, "首包对齐后应是解码器真规格");
+        assert_eq!(dec.channels(), 1);
+        // 缓存的首包 + 第 2 包规格一致，正常交出
+        assert!(dec.next_packet().unwrap().is_some(), "缓存首包应原样交出");
+        assert!(dec.next_packet().unwrap().is_some());
+        // 第 3 包规格变化 → 明确报错，带前后两组规格
+        let err = dec.next_packet().unwrap_err();
+        assert_eq!(err.kind(), AudioErrorKind::Decode, "实际错误：{err}");
+        let msg = err.to_string();
+        assert!(msg.contains("48000"), "错误要带旧规格：{msg}");
+        assert!(msg.contains("44100"), "错误要带新规格：{msg}");
+        assert!(msg.contains("2"), "错误要带新声道数：{msg}");
+    }
+
+    /// 规格全程一致的合成流不受影响：读到底正常 EOF（回归锚，防止报错
+    /// 误伤 ALAC/AAC 的首包对齐或常规流）。
+    #[test]
+    fn mock_stream_without_spec_change_reads_to_eof() {
+        let mut dec = mock_stream(usize::MAX); // 永不变规格
+        let mut packets = 0;
+        while let Some(s) = dec.next_packet().unwrap() {
+            assert_eq!(s.len(), 1000, "每包 1000 帧（1ch）");
+            packets += 1;
+        }
+        assert_eq!(packets, 6, "6 包全部交出，EOF 不报错");
+        assert!(dec.next_packet().unwrap().is_none(), "EOF 后稳定返回 None");
+    }
 
     #[test]
     fn unsupported_codecs_have_readable_names() {

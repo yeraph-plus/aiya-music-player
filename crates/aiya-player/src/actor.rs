@@ -146,6 +146,15 @@ impl PlayerActor {
         }
     }
 
+    /// 装载窗口的暂停意图（true = 装载完成后应处于暂停）。
+    ///
+    /// 命令路径在归约**之后**读它决定引擎侧 Pause/Resume：引擎在 autoplay
+    /// 装载的开流期就开始出声，意图只落 Actor 不下发引擎，就会"UI 已暂停、
+    /// 声音继续放"，随后的 Resume 又被引擎 `Resume if paused` 守卫吞掉。
+    pub fn pending_pause(&self) -> bool {
+        self.pending_pause
+    }
+
     pub fn take_pending_load(&mut self) -> Option<(u64, String, u64, bool)> {
         self.pending_load.take()
     }
@@ -394,9 +403,14 @@ impl PlayerActor {
                         self.instruct_load(true, 0);
                     }
                 }
-                // Loading 中按暂停不再静默吞掉：记下来，Loaded 到达时直接落 Paused
+                // Loading 中按暂停/恢复不再静默吞掉：意图**翻转**入 pending_pause，
+                // Loaded 到达时按它落终态。翻转而不是置 true：装载窗口里按了又按
+                // （暂停→恢复）要回到"装载完接着放"，置 true 会把恢复意图卡死。
+                // 引擎此刻可能已在出声（autoplay 装载的开流期），意图必须同时
+                // 到达引擎——命令路径归约后读 pending_pause 翻译成 Pause/Resume，
+                // 只记不发就会出现"UI 已暂停、声音继续放"。
                 PlaybackStatus::Loading => {
-                    self.pending_pause = true;
+                    self.pending_pause = !self.pending_pause;
                 }
             },
 
@@ -527,6 +541,15 @@ impl PlayerActor {
                         self.order.insert(first_new + k, queue_idx);
                     }
                     self.bump_queue_version();
+                    // 与 Append 同一条空队列自动起播分支（写法照抄，语义对齐）：
+                    // PlayNext 的"下一首"只是插入位置依赖当前曲，没有当前曲时
+                    // 插入的这首就是播放起点——Idle 下不自动起播的话，用户点了
+                    // "下一首播放"却毫无反应，曲目静躺在队列里，和空队列 Append
+                    // 的行为也不一致。
+                    if self.status == PlaybackStatus::Idle && !self.order.is_empty() {
+                        self.cursor = self.order.iter().position(|&i| i == first_new).unwrap_or(0);
+                        self.instruct_load(true, 0);
+                    }
                 }
                 QueueOp::Remove { indices } => {
                     let was_playing = self.status == PlaybackStatus::Playing;
@@ -1175,6 +1198,76 @@ mod tests {
         assert!(autoplay);
     }
 
+    /// 空队列下 PlayNext 也要自动起播（与 Append 对齐）：没有当前曲时，
+    /// "下一首播放"插入的就是播放起点。此前 Idle 下插入后静躺不播，
+    /// 用户点了没反应。
+    #[test]
+    fn play_next_to_empty_autoplays() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::PlayNext {
+            tracks: vec![track("a"), track("b")],
+        }));
+        let (_, path, _, autoplay) = p.take_pending_load().unwrap();
+        assert_eq!(path, "D:/m/a.flac", "起播的是插入曲的第一首");
+        assert!(autoplay);
+        let s = p.state();
+        assert_eq!(s.cursor, Some(0));
+        assert_eq!(s.index, Some(0));
+        assert_eq!(p.queue_snapshot().ids, vec!["a", "b"], "插入次序保持");
+    }
+
+    /// 队尾自然停住（Idle）后再 PlayNext：从插入曲继续起播——与空队列
+    /// 同一条分支的另一半语义（Idle 且队列非空）。
+    #[test]
+    fn play_next_after_queue_end_autoplays() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![track("a")],
+            start: 0,
+        }));
+        let (tok, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded {
+            token: tok,
+            duration_ms: 1,
+        });
+        p.reduce(PlayerCommand::Ended { token: tok });
+        assert_eq!(p.state().status, PlaybackStatus::Idle, "队尾停住");
+
+        p.reduce(PlayerCommand::Queue(QueueOp::PlayNext {
+            tracks: vec![track("x")],
+        }));
+        let (_, path, _, autoplay) = p.take_pending_load().expect("Idle 下 PlayNext 应起播");
+        assert_eq!(path, "D:/m/x.flac", "从新插入曲继续");
+        assert!(autoplay);
+        assert_eq!(p.queue_snapshot().ids, vec!["a", "x"]);
+    }
+
+    /// 播放中 PlayNext 行为不变：只插入、不打断当前曲（回归锚）。
+    #[test]
+    fn play_next_while_playing_does_not_restart() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![track("a")],
+            start: 0,
+        }));
+        let (tok, ..) = p.take_pending_load().unwrap();
+        p.reduce(PlayerCommand::Loaded {
+            token: tok,
+            duration_ms: 1,
+        });
+        assert_eq!(p.state().status, PlaybackStatus::Playing);
+
+        p.reduce(PlayerCommand::Queue(QueueOp::PlayNext {
+            tracks: vec![track("x")],
+        }));
+        assert!(
+            p.take_pending_load().is_none(),
+            "播放中 PlayNext 不得重新装载"
+        );
+        assert_eq!(p.state().status, PlaybackStatus::Playing);
+        assert_eq!(p.state().current.unwrap().id, "a", "当前曲不受影响");
+    }
+
     /* 洗牌中的 Append（不整队重洗） */
 
     /// 洗牌中 Append：已有曲目的相对顺序不动，新曲只出现在未播区段
@@ -1483,6 +1576,45 @@ mod tests {
             PlaybackStatus::Playing,
             "停止后暂停意图不得复活"
         );
+    }
+
+    /// 装载窗口的暂停意图是**翻转**语义：按一次 = 装载完落暂停，按两次 =
+    /// 回到"接着放"。旧实现置 true 不翻转，把"按了又按"卡死在暂停上；
+    /// 且意图必须能被命令路径读走下发引擎（pending_pause()），否则装载期
+    /// 按暂停会"UI 落 Paused 而引擎继续出声"。
+    #[test]
+    fn loading_pause_intent_toggles_and_lands_on_loaded() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![track("a")],
+            start: 0,
+        }));
+        let (tok, ..) = p.take_pending_load().unwrap();
+        assert!(!p.pending_pause(), "autoplay 装载的初始意图是播放");
+
+        p.reduce(PlayerCommand::TogglePause);
+        assert!(p.pending_pause(), "按一次：装载完应落暂停");
+        p.reduce(PlayerCommand::Loaded {
+            token: tok,
+            duration_ms: 1,
+        });
+        assert_eq!(p.state().status, PlaybackStatus::Paused);
+
+        // 再来一轮：装载中按两次 = 翻回播放
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![track("b")],
+            start: 0,
+        }));
+        let (tok2, ..) = p.take_pending_load().unwrap();
+        assert!(!p.pending_pause(), "新装载清除旧意图");
+        p.reduce(PlayerCommand::TogglePause);
+        p.reduce(PlayerCommand::TogglePause);
+        assert!(!p.pending_pause(), "按两次：意图翻回播放");
+        p.reduce(PlayerCommand::Loaded {
+            token: tok2,
+            duration_ms: 1,
+        });
+        assert_eq!(p.state().status, PlaybackStatus::Playing);
     }
 
     /* 洗牌种子熵 */

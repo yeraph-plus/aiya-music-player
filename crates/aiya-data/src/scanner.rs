@@ -527,6 +527,10 @@ fn upsert(
         }
     });
 
+    // codec 占位是 NULL：编码名是 beets 同步的领地（`rescan_does_not_wipe_codec`），
+    // 扫描器只有 lofty 的 FileType（写 container 列）。此前 VALUES 里少占了这一位，
+    // container..channels 五个参数整体左移一格——bitrate 列吃到声道数，
+    // 全库恒为 2（UI 症状：比特率徽章永远是 "2 kbps"）。
     conn.execute(
         "INSERT INTO tracks (
             id, title, title_norm, artist_id, album_id, duration_ms, track_no, disc_no, year,
@@ -534,7 +538,7 @@ fn upsert(
             codec, container, sample_rate, bits_per_sample, bitrate, channels,
             play_count, last_played_at,
             path, path_lower, size_bytes, mtime, availability
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,NULL,?14,?15,?16,?17,?18,NULL,0,NULL,?19,?20,?21,?22,'online')
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,NULL,NULL,?14,?15,?16,?17,?18,0,NULL,?19,?20,?21,?22,'online')
          ON CONFLICT(path_lower) DO UPDATE SET
            title = excluded.title, title_norm = excluded.title_norm,
            artist_id = excluded.artist_id, album_id = excluded.album_id,
@@ -1536,6 +1540,46 @@ mod tests {
             Some("MP3"),
             "重扫不得把 beets 写的 codec 冲回 NULL"
         );
+    }
+
+    /// 音频规格六列必须各归各位。回归点：INSERT 的 VALUES 少占一个 codec
+    /// 占位，container..channels 五个参数整体左移一格——库里 bitrate 列
+    /// 存的是声道数，UI 的码率徽章于是永远显示 "2 kbps"。此前没有任何
+    /// 测试读过这六列（title/artist 错位一眼可见，数值列错位无声）。
+    #[test]
+    fn scan_writes_audio_columns_in_their_own_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        // 测试帧是手工拼的 MPEG-1 Layer3：44.1kHz / 128kbps / mono
+        write_test_mp3(dir.path(), "a.mp3", "A", "B");
+        let mut conn = open_in_memory().unwrap();
+        scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
+        let (codec, container, rate, depth, bitrate, channels) = conn
+            .query_row(
+                "SELECT codec, container, sample_rate, bits_per_sample, bitrate, channels
+                 FROM tracks",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<String>>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<i64>>(2)?,
+                        r.get::<_, Option<i64>>(3)?,
+                        r.get::<_, Option<i64>>(4)?,
+                        r.get::<_, Option<i64>>(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(codec, None, "codec 归 beets 同步写，扫描器留 NULL");
+        assert_eq!(
+            container.as_deref(),
+            Some("Mpeg"),
+            "lofty FileType 写 container"
+        );
+        assert_eq!(rate, Some(44_100), "采样率不能落到 container 列");
+        assert_eq!(depth, None, "MP3 无位深概念，不得吃到码率值");
+        assert_eq!(bitrate, Some(128), "bitrate 列必须是码率，不是声道数");
+        assert_eq!(channels, Some(1), "声道数（mono=1）不能落到 NULL 位");
     }
 
     /// docs/29 批 A：多根并集单库。两根各一首都要入库；missing 对账只作用

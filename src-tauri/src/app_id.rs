@@ -59,6 +59,9 @@ pub enum Outcome {
 
 static OUTCOME: OnceLock<Outcome> = OnceLock::new();
 
+/// 快捷方式 AUMID 自愈的结果摘要（log_outcome 时打出来）。
+static SHORTCUT_HEAL: OnceLock<&'static str> = OnceLock::new();
+
 /// 设置应用身份。幂等；**必须在任何 UI 出现之前**调用。
 pub fn install() -> &'static Outcome {
     OUTCOME.get_or_init(imp::install)
@@ -74,6 +77,7 @@ pub fn log_outcome() {
             aumid = %readback,
             display_name = DISPLAY_NAME,
             registry = registered,
+            shortcut_heal = SHORTCUT_HEAL.get().copied().unwrap_or("skipped"),
             "应用身份已设置"
         ),
         Outcome::Mismatch { got } => tracing::warn!(
@@ -115,6 +119,7 @@ mod imp {
             return Outcome::Mismatch { got: readback };
         }
         let registered = register();
+        let _ = SHORTCUT_HEAL.set(heal_shortcut_aumid());
         Outcome::Applied {
             readback,
             registered,
@@ -194,6 +199,139 @@ mod imp {
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// 快捷方式 AUMID 自愈：对已存在的开始菜单快捷方式补写
+    /// `System.AppUserModel.ID` 属性。
+    ///
+    /// 为什么需要：壳层解析媒体浮层/任务栏的应用名，认的是**快捷方式上的
+    /// 这个属性**——进程级 AUMID 与注册表登记（上面两步）都补不了它。NSIS
+    /// 的 `CreateShortCut` 不写属性，所以装出来的版本浮层显示「未知应用」
+    /// （docs/35 P2-15 的判据分支被实测踩中）。
+    ///
+    /// 为什么在运行期做而不是 NSIS hook：属性写入要 IPropertyStore COM 调用，
+    /// NSIS 里得手拼 vtable 或引插件；在 Rust 里写有类型、有日志、可测试，
+    /// 且升级重装出新的无属性快捷方式时能再次自愈。便携版没有快捷方式，
+    /// 候选路径都不存在 → no-op（「未知应用」是便携版的已知取舍，见 P2-15）。
+    ///
+    /// 只对**已经存在**的 .lnk 补属性，绝不创建文件；失败一律 warn 不中断。
+    fn heal_shortcut_aumid() -> &'static str {
+        use windows::core::{Interface, PCWSTR};
+        use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
+        use windows::Win32::System::Com::StructuredStorage::{
+            PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
+        };
+        use windows::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, CoTaskMemFree, IPersistFile, CLSCTX_INPROC_SERVER,
+            COINIT_APARTMENTTHREADED, STGM_READ,
+        };
+        use windows::Win32::System::Variant::VT_LPWSTR;
+        use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+        use windows::Win32::UI::Shell::{
+            FOLDERID_CommonStartMenu, FOLDERID_StartMenu, IShellLinkW, SHGetKnownFolderPath,
+            KNOWN_FOLDER_FLAG,
+        };
+        // ShellLink 的 CLSID（{00021401-...}）windows 0.62 没有常量，就地定义。
+        const CLSID_SHELL_LINK: windows::core::GUID =
+            windows::core::GUID::from_u128(0x00021401_0000_0000_c000_000000000046);
+
+        // 主线程多半已被 tao 初始化为 STA；重复初始化返回 S_FALSE 也无害。
+        // 不配对 CoUninitialize：进程生命周期与 COM 相同，省掉配对账目。
+        let _com = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+
+        // 候选 = 两种开始菜单（当前用户 / 所有用户）下的 Programs\<产品名>.lnk。
+        // installMode 现为 currentUser，Common 一支是给将来换档留的。
+        let mut candidates: Vec<String> = Vec::new();
+        for folder in [FOLDERID_StartMenu, FOLDERID_CommonStartMenu] {
+            let base = unsafe { SHGetKnownFolderPath(&folder, KNOWN_FOLDER_FLAG(0), None) };
+            let base = match base {
+                Ok(p) => {
+                    let s = String::from_utf16_lossy(unsafe { wide_ptr_to_slice(p.as_ptr()) });
+                    unsafe { CoTaskMemFree(Some(p.as_ptr() as *const _)) };
+                    if s.is_empty() {
+                        continue;
+                    }
+                    s
+                }
+                Err(_) => continue,
+            };
+            candidates.push(format!("{base}\\Programs\\{DISPLAY_NAME}.lnk"));
+        }
+
+        for path in &candidates {
+            let path_w = wide(path);
+            if !std::path::Path::new(path).is_file() {
+                continue;
+            }
+            let result = (|| -> Result<(), windows::core::Error> {
+                unsafe {
+                    let link: IShellLinkW =
+                        CoCreateInstance(&CLSID_SHELL_LINK, None, CLSCTX_INPROC_SERVER)?;
+                    let persist: IPersistFile = link.cast()?;
+                    persist.Load(PCWSTR(path_w.as_ptr()), STGM_READ)?;
+                    let store: IPropertyStore = link.cast()?;
+
+                    // 已是目标值就跳过写盘：保持幂等静默，不碰修改时间。
+                    let current = store.GetValue(&PKEY_AppUserModel_ID)?;
+                    if current.Anonymous.Anonymous.vt == VT_LPWSTR
+                        && !current.Anonymous.Anonymous.Anonymous.pwszVal.is_null()
+                    {
+                        let have = String::from_utf16_lossy(wide_ptr_to_slice(
+                            current.Anonymous.Anonymous.Anonymous.pwszVal.as_ptr(),
+                        ));
+                        CoTaskMemFree(Some(
+                            current.Anonymous.Anonymous.Anonymous.pwszVal.as_ptr() as *const _
+                        ));
+                        if have == AUMID {
+                            return Ok(());
+                        }
+                    }
+
+                    // IPropertyStore::SetValue 按契约**拷贝**值，调用方保留
+                    // 所有权——value 在 Commit 后正常 drop，不 forget 也不需要
+                    // PropVariantClear（缓冲区是我们自己分配的，不是 COM 的）。
+                    let value = wide(AUMID);
+                    // 中间层在 windows 0.62 里是 ManuallyDrop 包裹（union 字段）。
+                    let pv = PROPVARIANT {
+                        Anonymous: PROPVARIANT_0 {
+                            Anonymous: std::mem::ManuallyDrop::new(PROPVARIANT_0_0 {
+                                vt: VT_LPWSTR,
+                                wReserved1: 0,
+                                wReserved2: 0,
+                                wReserved3: 0,
+                                Anonymous: PROPVARIANT_0_0_0 {
+                                    pwszVal: windows::core::PWSTR(value.as_ptr() as *mut _),
+                                },
+                            }),
+                        },
+                    };
+                    store.SetValue(&PKEY_AppUserModel_ID, &pv)?;
+                    store.Commit()?;
+                    drop(pv);
+                    Ok(())
+                }
+            })();
+            match result {
+                Ok(()) => return "fixed",
+                Err(e) => {
+                    tracing::warn!(path = %path, error = %e, "快捷方式 AUMID 写入失败");
+                }
+            }
+        }
+        if candidates.iter().any(|p| std::path::Path::new(p).is_file()) {
+            "failed"
+        } else {
+            "no-shortcut"
+        }
+    }
+
+    /// 读 NUL 结尾的 UTF-16（属性值取回用）。
+    unsafe fn wide_ptr_to_slice<'a>(p: *const u16) -> &'a [u16] {
+        let mut len = 0usize;
+        while unsafe { *p.add(len) } != 0 {
+            len += 1;
+        }
+        unsafe { std::slice::from_raw_parts(p, len) }
     }
 }
 

@@ -35,13 +35,24 @@
    */
   const BLOCKING_PLAYBACK_CODES: ReadonlySet<AudioErrorCode> = new Set(['deviceLost', 'unknown']);
 
-  /** 去重键：error 状态会随状态帧持续存在，同一次失败只报一遍 */
+  /**
+   * 去重键：error 状态会随状态帧持续存在，同一次失败只报一遍。
+   * 状态离开 error 时清空（见下方 effect）：键本身没有时间维度，
+   * 不复位的话同曲同错重试后再失败会被当成上一笔旧账吞掉。
+   */
   let lastPlaybackErrorKey: string | null = null;
 
   $effect(() => {
     // 先落到局部量再判空：$derived 是 getter，每次访问重新求值，TS 无法跨访问收窄
     const ps = playerState;
-    if (ps?.status !== 'error' || !ps.error || !ps.current) return;
+    // 播放器任何一次离开 error（重试起播必经 loading/playing/paused）都复位
+    // 去重键，下一段同名错误才有机会再次提示；持续 error 的状态帧不进这个
+    // 分支，同一次失败仍只报一遍。
+    if (ps?.status !== 'error') {
+      lastPlaybackErrorKey = null;
+      return;
+    }
+    if (!ps.error || !ps.current) return;
     const err = ps.error;
     const key = `${ps.current.id}|${err.code}|${err.message}`;
     if (key === lastPlaybackErrorKey) return;

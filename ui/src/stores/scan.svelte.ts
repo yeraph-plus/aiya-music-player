@@ -130,19 +130,47 @@ class ScanStore {
     return events.beetsImport((raw) => {
       const type = typeof raw.type === 'string' ? raw.type : '';
       if (type === 'libraryRefreshed') {
-        const changed = raw.changed === true;
+        const snap = readRefreshSnapshot(raw);
+        // 载荷形状不对：整条丢弃，卡片保留上一次的结果，不拿 undefined 填充
+        if (!snap) return;
         this.refresh = {
           intervalSecs: this.refresh?.intervalSecs ?? 30,
           focused: this.refresh?.focused ?? true,
-          last: raw as unknown as RefreshSnapshot,
+          last: snap,
         };
-        if (changed) void reload();
+        if (snap.changed) void reload();
       } else if (type === 'libraryRefreshFailed') {
         // 整条管线失败（DB 打不开之类）：状态卡片里要看得见"库坏了"级别的信号
         this.lastError = `曲库自动刷新失败：${String(raw.message ?? '未知原因')}`;
       }
     });
   }
+}
+
+/**
+ * 动态 JSON → `RefreshSnapshot`：逐字段 typeof 收口（与 ui store 的
+ * `readBeetsStatus` 同一方式）。
+ *
+ * 载荷来自宿主的自动刷新管线，形状随版本演化；`atMs` 是判别字段：
+ * 不是 number 时整包丢弃（返回 null = 状态卡片保留上一次的结果）。
+ */
+function readRefreshSnapshot(raw: unknown): RefreshSnapshot | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.atMs !== 'number') return null;
+  const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
+  return {
+    trigger: typeof o.trigger === 'string' ? o.trigger : '',
+    atMs: o.atMs,
+    changed: o.changed === true,
+    scanned: num(o.scanned),
+    imported: num(o.imported),
+    updated: num(o.updated),
+    missing: num(o.missing),
+    failed: num(o.failed),
+    elapsedMs: num(o.elapsedMs),
+    error: typeof o.error === 'string' ? o.error : null,
+  };
 }
 
 export const scan = new ScanStore();

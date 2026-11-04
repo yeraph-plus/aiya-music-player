@@ -10,6 +10,8 @@
 3. **实跑**：起真的 `serve` 会话，把 14 种事件 + 3 种应答各自走一遍，
    逐行按 `$defs` 校验。剩下的 `album` / `albumError` / `done` 要联网匹配
    MusicBrainz，默认跳过；`AIYA_BEETS_ONLINE=1` 时一并验。
+4. **安装器帧**：跑一次 `install --plugins all --dry-run`，stdout 逐行喂进
+   `InstallerEvent` 校验器——serve 之外唯一的第二套词汇表，也靠真帧防漂移。
 
 隔离：独立临时 BEETSDIR + 独立库目录，不碰 dev 库和真实 Music 目录。
 """
@@ -113,6 +115,29 @@ with open(os.path.join(BEETSDIR, "config.yaml"), "w", encoding="utf-8") as f:
 
 ENV = dict(os.environ, BEETSDIR=BEETSDIR, PYTHONIOENCODING="utf-8", PYTHONPATH=TOOL_SRC)
 ENV.pop("AIYA_BEETS_HOME", None)   # 别让外部环境把 BEETSDIR 顶掉
+
+
+# 场景 2b：安装器帧（InstallerEvent 组）。
+# dry-run 在 pip / 外置工具 / 配置同步之前就返回（install.py 的 dry_run 分支只
+# 打印计划），所以这一跑对环境零写入，可以安全地放进契约测试。逐行喂进校验器
+# 是防漂移的实线：安装器改了帧形状而 schema 没跟上，这里立刻红。
+INSTALL_ENV = dict(os.environ, PYTHONPATH=TOOL_SRC, PYTHONIOENCODING="utf-8")
+INSTALL_ENV.pop("AIYA_BEETS_HOME", None)   # 同上：别让外部环境顶掉 BEETSDIR
+_inst = subprocess.run(
+    [PYTHON, "-m", "aiya_beets", "install", "--plugins", "all", "--dry-run"],
+    capture_output=True, text=True, encoding="utf-8", env=INSTALL_ENV, timeout=120,
+)
+assert _inst.returncode == 0, (
+    f"install --dry-run 退出码 {_inst.returncode}\n{_inst.stderr[-2000:]}"
+)
+_inst_frames = [json.loads(x) for x in _inst.stdout.splitlines() if x.strip()]
+assert _inst_frames, "安装器 dry-run 没有任何输出帧"
+for _f in _inst_frames:
+    check("InstallerEvent", _f, "安装器帧")
+assert [_f["type"] for _f in _inst_frames] == ["dryRun", "done"], (
+    f"dry-run 契约是计划帧 + 收尾帧各一条，实际：{[_f['type'] for _f in _inst_frames]}"
+)
+print(f"[2b] 安装器帧 OK：{len(_inst_frames)} 条 dry-run 帧过 InstallerEvent 校验")
 
 
 def fresh_src(dirname):

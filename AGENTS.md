@@ -29,7 +29,6 @@ AIYA_MUSIC_TAURI/
 ├── ui/                    # Svelte 5 + Vite：views / stores / 组件分 content·shell·ui
 ├── protocol/              # beets 协议 v1 schema 的本仓镜像（字节副本 + sha256）
 ├── tools/                 # 类型生成、依赖图、CDP 探针、notice 生成、打包辅助、run.mjs
-├── bindings/              # ts-rs 原始导出目录（cargo test 时写出）
 ├── contracts/             # 契约说明 README
 └── licenses/              # 随包分发的许可材料（npm run notices 生成部分）
 ```
@@ -126,9 +125,10 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
   独立线程发出、不等引擎初始化完成（初始化慢不等于进程死）；sidecar 不打开
   SQLite、不依赖 Tauri 类型。
 - **C4 契约以 Rust 为源**（原 ADR-0004）：命令、事件、错误、DTO 定义在 Rust，
-  `#[derive(TS)]`（ts-rs，经 `cargo test` 导出）由 `npm run gen:types` 维护到
-  `ui/src/lib/ipc/generated/`（原始导出目录为 `bindings/`）；不手改生成物，
-  `gen:types:check` 校验一致。UI 只走 `lib/ipc/client.ts` 一层访问 IPC；参数侧
+  `#[derive(TS)]`（ts-rs，经 `cargo test` 导出）由 `npm run gen:types` 直接写进
+  `ui/src/lib/ipc/generated/`（`TS_RS_EXPORT_DIR` 指向该目录，桶文件 index.ts
+  同脚本生成）；不手改生成物，`gen:types:check` 校验一致。UI 只走
+  `lib/ipc/client.ts` 一层访问 IPC；参数侧
   复合对象收 `Json` 手动解析（否则参数不合法会绕开 `ApiError` 分类）。事件/命令
   用 tagged enum；sidecar 协议独立定义，不复用 Tauri 类型。
 - **C5 自定义协议仅保留封面**（原 ADR-0005）：`aiya-artwork` 协议只接受
@@ -147,19 +147,20 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
   不碰宿主库。
 - **C8 全新 schema v1，无历史迁移链**（docs/02）：不迁移旧库、不兼容 Electron
   时代的 `media://` 与 IPC。
-- **C9 beets 是增强能力，不是播放依赖**（docs/33）：协议 v1 已冻结，真源在
-  `beets-tool/protocol/v1.schema.json`，本仓镜像 `protocol/aiya-beets-v1.json`
-  （字节副本 + sha256）。三条守线各管一面：`smoke:proto`（工具输出合 schema）、
+- **C9 beets 是增强能力，不是播放依赖**（docs/33）：协议 v2 已冻结，真源在
+  `beets-tool/protocol/v2.schema.json`，本仓镜像 `protocol/aiya-beets-v2.json`
+  （字节副本 + sha256）。守线各管一面：`smoke:proto`（工具输出合 schema）、
   `cargo test -p aiya-beets-client`（serde 形状对齐镜像）、`proto:check`（镜像
-  未被单方面修改；改镜像只能经 `proto:sync`）。beets 为写权威，自有表是读模型，
+  未被单方面修改；改镜像只能经 `proto:sync`）、运行时 `schemaHash` 比对
+  （宿主与工具必须是同一版契约字节，见 `beets.rs`）。beets 为写权威，自有表是读模型，
   不用 beets 查询语法替代内置索引（docs/29）。
 - **C10 分发形态**（docs/33/35/53/54/58）：安装包（NSIS，当前用户级）不含 beets；
-  beets 独立两条轨道——`.pyz` 安装器（需系统 Python 3.10–3.14，建 venv）与
-  免安装套件包（自带 embeddable 解释器，整目录复制可用；与 venv 相反，venv 的
-  `pyvenv.cfg` 硬指针使其不可搬移）。播放器侧安装流程：下载 → 展开 → 记入口 →
-  跑一次 `status` 验证；**成功判据是探测到的 `found`，不是退出码**。下载物按
-  zip 容器形状校验（GitHub 未发布资产时返回 200 的 HTML 错误页）。不做代码
-  签名（2026-10-27），SmartScreen 提示为预期，以便携版 zip 作为补偿轨道。
+  beets 单轨分发——免安装套件包（自带 embeddable 解释器，整目录复制可用；
+  曾经的 `.pyz` 安装器/A 轨 venv 随单轨化退役，见 docs/58 §5）。播放器侧安装
+  流程：下载 → 展开 → 记入口 → 跑一次 `status` 验证；**成功判据是探测到的
+  `found`，不是退出码**。下载物按 zip 容器形状校验（GitHub 未发布资产时返回
+  200 的 HTML 错误页）。不做代码签名（2026-10-27），SmartScreen 提示为预期，
+  以便携版 zip 作为补偿轨道。
 - **C11 数据位置唯一真源**（`src-tauri/src/paths.rs`）：便携判定只看 exe 同目录
   有无 `portable.txt`（不探测目录可写性）；命中则数据根为 `<exe目录>/data`，
   否则 `%APPDATA%\dev.aiya.music`。全仓只有 `paths.rs` 回答"数据放哪"。

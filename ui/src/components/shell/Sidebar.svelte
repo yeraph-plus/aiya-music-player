@@ -99,6 +99,62 @@
   function playlistActive(id: string): boolean {
     return ui.page === 'playlist' && ui.playlistId === id;
   }
+
+  /* 侧栏歌单拖动排序（HTML5 DnD）。排序真源是 `sort_position`，落点走
+     `playlists.reorderTo`；键盘路径是右键菜单的「上移/下移」。
+     自定义 MIME 类型：文件拖入（drop.rs 那条链）与这里的内部拖动互不误认。 */
+  const DRAG_TYPE = 'application/x-aiya-playlist';
+  /** 被拖项在当前顺序里的下标；-1 = 没有进行中的拖动 */
+  let dragFrom = $state(-1);
+  /** 插入位（原坐标 0..n，第 i 项上半 = i、下半 = i+1）；-1 = 原位，不亮指示 */
+  let dropAt = $state(-1);
+
+  function onItemDragStart(event: DragEvent, index: number): void {
+    dragFrom = index;
+    dropAt = -1;
+    const dt = event.dataTransfer;
+    if (!dt) return;
+    dt.effectAllowed = 'move';
+    // setData 必须有：没有数据的 dragstart 在 Chromium 里干脆不启动拖拽
+    dt.setData(DRAG_TYPE, String(index));
+  }
+
+  function onItemDragOver(event: DragEvent, index: number): void {
+    const dt = event.dataTransfer;
+    if (dragFrom < 0 || !dt || !dt.types.includes(DRAG_TYPE)) return;
+    event.preventDefault();
+    dt.dropEffect = 'move';
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const at = index + (event.clientY < rect.top + rect.height / 2 ? 0 : 1);
+    // 原位（自己/自己后面一格）不亮指示，落下去也是空操作
+    dropAt = at === dragFrom || at === dragFrom + 1 ? -1 : at;
+  }
+
+  /** 列表级 dragover：拖到容器上下边缘时步进滚动——20 个歌单滚出屏后，
+   *  没有它就拖不进屏幕外的位置 */
+  function onListDragOver(event: DragEvent): void {
+    if (dragFrom < 0) return;
+    const list = event.currentTarget as HTMLElement;
+    const rect = list.getBoundingClientRect();
+    if (event.clientY < rect.top + 28) list.scrollTop -= 10;
+    else if (event.clientY > rect.bottom - 28) list.scrollTop += 10;
+  }
+
+  function onListDrop(event: DragEvent): void {
+    if (dragFrom < 0) return;
+    event.preventDefault();
+    const from = dragFrom;
+    const at = dropAt;
+    resetDrag();
+    if (at < 0) return;
+    // 后端 remove(from)+insert(to)：插入位在原坐标 from 之后时要减一
+    void playlists.reorderTo(from, at > from ? at - 1 : at);
+  }
+
+  function resetDrag(): void {
+    dragFrom = -1;
+    dropAt = -1;
+  }
 </script>
 
 <aside class="sidebar">
@@ -128,14 +184,26 @@
       </IconButton>
     </div>
 
-    <div class="playlist-list">
-      {#each playlists.items as playlist (playlist.id)}
+    <div
+      class="playlist-list"
+      role="group"
+      ondragover={onListDragOver}
+      ondrop={onListDrop}
+    >
+      {#each playlists.items as playlist, i (playlist.id)}
         <button
           class="nav-item playlist-item"
           class:active={playlistActive(playlist.id)}
+          class:dragging={dragFrom === i}
+          class:drop-above={dropAt === i}
+          class:drop-below={dropAt === i + 1}
           aria-current={playlistActive(playlist.id) ? 'page' : undefined}
           title={`${playlist.name} · ${playlist.trackCount} 首`}
+          draggable="true"
           onclick={() => nav.go({ kind: 'playlist', id: playlist.id })}
+          ondragstart={(event) => onItemDragStart(event, i)}
+          ondragover={(event) => onItemDragOver(event, i)}
+          ondragend={resetDrag}
           oncontextmenu={(event) => {
             event.preventDefault();
             overlay.openPlaylistMenu(event.clientX, event.clientY, playlist);
@@ -270,12 +338,32 @@
     gap: 8px;
     /* 行内要放 22px 封面，纵向 padding 比导航项小 */
     padding: 4px 8px;
-    min-height: 0;
+    /* 歌单列表是纵滚容器，子项必须有固定高度才能"溢出→滚动"：
+       默认的 flex-shrink:1 会把所有行压扁塞进视口（歌单一多每行挤成
+       一条细线，滚动永远不出现） */
+    flex-shrink: 0;
+  }
+
+  /* 拖动排序的视觉：被拖项半透明（"提起"），落点用 accent 细线标在
+   * 上/下边界。inset box-shadow 不占布局，行高在拖动全程不变 */
+  .playlist-item.dragging {
+    opacity: 0.45;
+  }
+
+  .playlist-item.drop-above {
+    box-shadow: inset 0 2px 0 var(--accent);
+  }
+
+  .playlist-item.drop-below {
+    box-shadow: inset 0 -2px 0 var(--accent);
   }
 
   .pl-name {
     flex: 1;
     font-size: var(--fs-base);
+    /* 压回常规字重：pages.css 的 .pl-name（首页卡名档，600）是全局规则，
+       会漏进这里把侧栏歌单名一起带粗——侧栏文本与导航项同档，用常规 */
+    font-weight: 400;
   }
 
   /* 动态歌单徽标：activity 图标（心电波形=随规则动的曲目），主题色。
@@ -316,5 +404,9 @@
     flex-direction: column;
     gap: 2px;
     margin-top: 6px;
+    /* 与上方歌单区分隔：Beets/设置是应用级入口，和内容导航不是一个族
+       （线比空行可靠——歌单列表滚到底时内容贴着 footer，空行分不开） */
+    border-top: 1px solid var(--line);
+    padding-top: 8px;
   }
 </style>

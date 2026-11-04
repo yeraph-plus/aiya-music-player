@@ -2,10 +2,10 @@
 #
 # 与本地 `npm run verify` 在"UI 行为也要被门禁看着"这一层已对齐（e2e 本来就在
 # 这里，2026-10-30 起本地 verify 也纳入了），但**不是逐条相同**：
-#   · 两个 job 合起来 = verify 的 test:all + clippy + gen:types:check + e2e
-#     + smoke:beets / smoke:maint / smoke:proto
-#   · 本地 verify 还有 `check:fmt` 与 `smoke:lock / smoke:config / smoke:enrich`，
-#     这里没有对应步骤 —— 已知缺口，补步骤是另一件事（2026-10-30 记下）。
+#   · beets job = verify 链里的全部 9 个 beets smoke（2026-11-04 补齐 lock /
+#     config / enrich——此前缺口真的咬过人：uninstall 的 ImportError 与 bins
+#     的过期断言都发生在不在 CI 的套件里，本地 verify 红而 CI 绿）
+#   · 本地 verify 还有 `check:fmt` 与 `check:style:strict`，这里没有对应步骤。
 #
 # 为什么是 windows-latest 而不是 ubuntu：
 #   · 本体只在 Windows 上发布（WASAPI / NSIS），跨平台绿灯没有意义
@@ -159,7 +159,7 @@ jobs:
 
       # 59 条消息的协议契约。联网场景（album / albumError / done）默认跳过，
       # 要跑得设 AIYA_BEETS_ONLINE=1——CI 里不开，避免受网络与 MusicBrainz 限流影响
-      - name: protocol contract（协议 v1）
+      - name: protocol contract（协议 v2）
         run: |
           $log = "smoke-proto.log"
           npm run smoke:proto 2>&1 | Tee-Object -FilePath $log | Write-Host
@@ -207,5 +207,44 @@ jobs:
             $lines = Get-Content $log | Select-Object -Last 25
             $tail = ($lines | ForEach-Object { $_ -replace '%', '%25' }) -join '%0A'
             Write-Host "::error title=uninstall contract 失败::$tail"
+            exit 1
+          }
+
+      # 库文件锁（v2）：跨进程互斥、holder 上报、持锁进程被杀后 OS 立即释放。
+      # 独立临时 AIYA_BEETS_HOME，不碰真实数据目录。
+      - name: lock smoke（库文件锁）
+        run: |
+          $log = "smoke-lock.log"
+          npm run smoke:lock 2>&1 | Tee-Object -FilePath $log | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            $lines = Get-Content $log | Select-Object -Last 25
+            $tail = ($lines | ForEach-Object { $_ -replace '%', '%25' }) -join '%0A'
+            Write-Host "::error title=lock smoke 失败::$tail"
+            exit 1
+          }
+
+      # 双家隔离契约：索引家与用户库各过各的，负向用例验"闸不是装饰"。
+      # 只用临时目录；jsonschema 由上面 [dev] extra 装好。
+      - name: config contract（双家隔离）
+        run: |
+          $log = "smoke-config.log"
+          npm run smoke:config 2>&1 | Tee-Object -FilePath $log | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            $lines = Get-Content $log | Select-Object -Last 25
+            $tail = ($lines | ForEach-Object { $_ -replace '%', '%25' }) -join '%0A'
+            Write-Host "::error title=config contract 失败::$tail"
+            exit 1
+          }
+
+      # 索引增强全链路：协议逐行过 schema、音频文件字节不变、子进程不偷 stdin、
+      # 幂等。假源靠套件自设的 AIYA_BEETS_ENRICH_PROBE=1，不联网。
+      - name: enrich smoke（索引增强）
+        run: |
+          $log = "smoke-enrich.log"
+          npm run smoke:enrich 2>&1 | Tee-Object -FilePath $log | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            $lines = Get-Content $log | Select-Object -Last 25
+            $tail = ($lines | ForEach-Object { $_ -replace '%', '%25' }) -join '%0A'
+            Write-Host "::error title=enrich smoke 失败::$tail"
             exit 1
           }

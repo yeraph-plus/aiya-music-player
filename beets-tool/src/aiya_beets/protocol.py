@@ -30,7 +30,7 @@ MIN_CLIENT = PROTOCOL_VERSION
 # 影响它能不能自报身份**。播放器把镜像里的 sha256 与本值一比，立刻知道
 # 对面是同一版契约还是旧组件——不需要读文件、不需要额外命令。
 # 改了 schema 忘了改这里？`tests/protocol_contract.py` 会红（它手上真有文件）。
-SCHEMA_SHA256 = "ef2232d596a0028bd58f9b7b99ba4cde53564822ac6ede8b6bd1f2756ca82ed4"
+SCHEMA_SHA256 = "a55c22f5fc59d65bd36edffb67791fb7c21c0443a65f1d73e8404f4f471bffbd"
 
 # 错误码（v1 冻结 10 个，v2 加 E_LIBRARY_BUSY）
 #
@@ -45,7 +45,7 @@ E_NOT_INSTALLED = "E_NOT_INSTALLED"              # 这个解释器里没有 beet
 E_NO_LIBRARY_DIR = "E_NO_LIBRARY_DIR"            # 没配库根，move 拒绝执行
 E_LIBRARY_DIR_MISMATCH = "E_LIBRARY_DIR_MISMATCH"  # 传入根 ≠ 配置根，拒绝（不猜）
 E_BEETS_ERROR = "E_BEETS_ERROR"                  # beets 自己抛的（展示原文）
-E_CONFIG = "E_CONFIG"                            # 配置读写失败
+E_CONFIG = "E_CONFIG"                            # 环境没就绪且用户可修（配置写不了/目录不可访问/缺 pip/缺提取器模型），不是 bug
 E_INTERNAL = "E_INTERNAL"                        # 工具自身 bug（带 trace，请反馈）
 E_LIBRARY_BUSY = "E_LIBRARY_BUSY"                # v2：库文件锁被另一进程持有（双开/外部 beet 写库）
 

@@ -43,21 +43,18 @@
 
   /**
    * 系统媒体中心：只订阅 PlayerState，与音频出口无关（出声在 Rust 侧）。
-   * `actions` 决定是否接管系统媒体键——开关变化时必须**重建**，
-   * 因为处理器只能在创建时注册。
+   * SMTC 常开无开关（2026-11-04 拍板）：标题/封面同步与面板控制键全量注册，
+   * 不再有"按键接管与否"的运行期变化，创建一次活到卸载。
    */
   function buildMediaSession(): MediaSessionBridge {
-    return createMediaSession(
-      {
-        toggle: () => player.toggle(),
-        next: () => player.next(),
-        prev: () => player.prev(),
-        seek: (ms) => player.seek(ms),
-        skip: (seconds) => player.seek((player.state?.positionMs ?? 0) + seconds * 1000),
-        stop: () => player.clear(),
-      },
-      { actions: ui.settings.mediaKeys },
-    );
+    return createMediaSession({
+      toggle: () => player.toggle(),
+      next: () => player.next(),
+      prev: () => player.prev(),
+      seek: (ms) => player.seek(ms),
+      skip: (seconds) => player.seek((player.state?.positionMs ?? 0) + seconds * 1000),
+      stop: () => player.clear(),
+    });
   }
 
   // 主题/主题颜色/界面缩放：前两者写在 <html> 的 data 属性上，缩放写内联 font-size，CSS 变量随之切换，无需重建组件。同时写一份
@@ -81,23 +78,6 @@
     return watchSystemTheme(() => applyLook(look));
   });
 
-  /**
-   * 系统媒体键开关。（ReplayGain 归一化**不在这里**：增益在 Rust DSP 链内
-   * 应用，开关由 `app_set_settings` 的设置标志驱动。）
-   *
-   * `mediaSessionActions` 记录当前生效值，避免设置对象每次变化都重建
-   * （比如只改主题）。
-   */
-  let mediaSessionActions: boolean | null = null;
-  $effect(() => {
-    const enabled = ui.settings.mediaKeys;
-    if (mediaSessionActions === null || mediaSessionActions === enabled) return;
-    mediaSessionActions = enabled;
-    mediaSession?.dispose();
-    mediaSession = buildMediaSession();
-    mediaSession.update(player.state);
-  });
-
   // 正在播放页打开且换歌时重新取词；离开页面不预取，省一次读盘。
   $effect(() => {
     const trackId = player.state?.current?.id ?? null;
@@ -107,7 +87,6 @@
 
   onMount(() => {
     mediaSession = buildMediaSession();
-    mediaSessionActions = ui.settings.mediaKeys;
 
     const disposeBoot = boot({ onState: (next) => mediaSession?.update(next) });
     // 壳级拖放：整窗都是落点，不分页面

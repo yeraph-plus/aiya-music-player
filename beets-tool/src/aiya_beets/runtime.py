@@ -34,17 +34,22 @@ _OUT_LOCK = threading.Lock()
 
 
 def force_utf8_stdio() -> None:
-    """把 stdin/stdout 钉成 UTF-8（行协议的唯一编码）。
+    """把 stdin/stdout/stderr 钉成 UTF-8（行协议的唯一编码）。
 
     为什么必须显式设置：Windows 上 Python 对管道用**本地编码**（简中 = cp936），
     `json.dumps(..., ensure_ascii=False)` 出来的中文会以 GBK 字节写出，宿主按
     UTF-8 读 → 非法字节 → 旧 reader 直接 break，整个会话无声死掉（用户看到的是
     "导入没反应"）。ensure_ascii=True 能绕过，但会把路径/标题全变 \\uXXXX，
     日志与断点调试都失去可读性，所以选择在协议层钉编码。
+
+    stderr 也要钉：协议帧不走它，但诊断文本走（beets 迁移提示、插件报错），
+    宿主会把它收进日志。`errors="replace"` 保底——诊断文本炸了编码不能反过来
+    把进程写崩。
     """
     for stream, kwargs in (
         (sys.stdin, {"errors": "replace"}),
         (sys.stdout, {"errors": "replace", "newline": "\n"}),
+        (sys.stderr, {"errors": "replace"}),
     ):
         try:
             stream.reconfigure(encoding="utf-8", **kwargs)

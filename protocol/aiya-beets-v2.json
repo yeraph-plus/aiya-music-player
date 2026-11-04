@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:aiya-beets:protocol:v2",
   "title": "aiya-beets 协议 v2",
-  "description": "AIYA Music 播放器 ⇄ aiya-beets 工具的 NDJSON 契约（docs/33 §4）。\n\n这是**真源**：本文件随 beets-tool 发版，播放器仓库镜像一份\n（`protocol/aiya-beets-v2.json`，字节相同，`npm run proto:check` 守着）。\n\n四个入口（本文件根的 oneOf 覆盖前三个，安装器流单列）：\n  · Request        客户端 → 服务端，一行一个 JSON，`cmd` 判别\n  · Response       一次性应答，有 `ok` 字段。`ok:false` 时若带 `type`，它同时是会话终止事件\n  · Event          会话事件，`type` 判别，无 `id`\n  · InstallerEvent A 轨道安装器的 stdout 帧（`type` 判别），与 serve 会话是不同的词汇表\n\n三条硬规则：\n  1. stdout 只允许 JSON 行（beets 首写杂音走 stderr 或被 reader 过滤）\n  2. 请求的 `id` 必须原样回带\n  3. 会话式命令必须先发终态（`*Done` / `cancelled` / 带 `type` 的错误信封），客户端才关 stdin\n\nv2 变更（2026-10-29，docs/41 §6）：\n  · ErrorCode += E_LIBRARY_BUSY（库文件锁被其他进程持有）\n  · StatusData += libraryLock / libraryLockHolder\n  · Candidate += evidence / reasons（证据分层，借鉴 beets-web-manager ADR 0002/0007）\n  · apply_import += resume（断点续跑）与 options.searchIds（钉死 Release 重刮）\n  · apply_import / adopt_library / update_library / move_items += requestId（幂等键，可选）\n  · applyDone += resumedSkipped\n  · Candidate/AlbumPreview 的 id pattern 放宽到任意位数（999+ 专辑组不再破坏契约）\n  拍板升版（docs/41 §6.1）：新字段在 v2 内定为 required（生产端总是计算），\n  版本协商边界兜住旧端；升版同时接线 schemaHash 运行时比对（闭合 docs/35 P1-4）。\n\n2026-10-30 加法（docs/45 §4.2，**不升版**：全是新命令/新事件，既有形状一字未改）：\n  · Request += enrich / query / fields；$defs += QueryRule\n  · Event += enrichItem / enrichDone\n  · Stage += enrich；Session 前缀 += enr\n  边界不变：enrich 只在**索引家**里产出结构化数据，写库的是宿主。\n\n2026-10-31 补登（**不升版**，纯加法；此前 index_import 链路实际在跑却漏在契约之外——发布前审查 P0-2）：宿主真在发 `index_import`、工具真在发 `indexDone`，但两份 schema 都没有它们，proto:check / protocol_contract / proto_mirror 对这条链全失明。\n  · Request += index_import（可选 root）\n  · Event += indexDone\n  · Stage += import；Session 前缀 += idx\n  · 客户端终态集合（TERMINAL_EVENTS）同步补：adoptDone / updateDone / duplicatesDone / moveDone / dumpDone / indexDone——此前维护四件套成功后客户端等不到终态，会话空转 600 s 被看门狗误杀（发布前审查 P0-1）。",
+  "description": "AIYA Music 播放器 ⇄ aiya-beets 工具的 NDJSON 契约（docs/33 §4）。\n\n这是**真源**：本文件随 beets-tool 发版，播放器仓库镜像一份\n（`protocol/aiya-beets-v2.json`，字节相同，`npm run proto:check` 守着）。\n\n四个入口（本文件根的 oneOf 覆盖前三个，安装器流单列）：\n  · Request        客户端 → 服务端，一行一个 JSON，`cmd` 判别\n  · Response       一次性应答，有 `ok` 字段。`ok:false` 时若带 `type`，它同时是会话终止事件\n  · Event          会话事件，`type` 判别，无 `id`\n  · InstallerEvent 包内环境管理器（`install` 命令）的 stdout 帧（`type` 判别），与 serve 会话是不同的词汇表\n\n三条硬规则：\n  1. stdout 只允许 JSON 行（beets 首写杂音走 stderr 或被 reader 过滤）\n  2. 请求的 `id` 必须原样回带\n  3. 会话式命令必须先发终态（`*Done` / `cancelled` / 带 `type` 的错误信封），客户端才关 stdin\n\nv2 变更（2026-10-29，docs/41 §6）：\n  · ErrorCode += E_LIBRARY_BUSY（库文件锁被其他进程持有）\n  · StatusData += libraryLock / libraryLockHolder\n  · Candidate += evidence / reasons（证据分层，借鉴 beets-web-manager ADR 0002/0007）\n  · apply_import += resume（断点续跑）与 options.searchIds（钉死 Release 重刮）\n  · apply_import / adopt_library / update_library / move_items += requestId（幂等键，可选）\n  · applyDone += resumedSkipped\n  · Candidate/AlbumPreview 的 id pattern 放宽到任意位数（999+ 专辑组不再破坏契约）\n  拍板升版（docs/41 §6.1）：新字段在 v2 内定为 required（生产端总是计算），\n  版本协商边界兜住旧端；升版同时接线 schemaHash 运行时比对（闭合 docs/35 P1-4）。\n\n2026-10-30 加法（docs/45 §4.2，**不升版**：全是新命令/新事件，既有形状一字未改）：\n  · Request += enrich / query / fields；$defs += QueryRule\n  · Event += enrichItem / enrichDone\n  · Stage += enrich；Session 前缀 += enr\n  边界不变：enrich 只在**索引家**里产出结构化数据，写库的是宿主。\n\n2026-10-31 补登（**不升版**，纯加法；此前 index_import 链路实际在跑却漏在契约之外——发布前审查 P0-2）：宿主真在发 `index_import`、工具真在发 `indexDone`，但两份 schema 都没有它们，proto:check / protocol_contract / proto_mirror 对这条链全失明。\n  · Request += index_import（可选 root）\n  · Event += indexDone\n  · Stage += import；Session 前缀 += idx\n  · 客户端终态集合（TERMINAL_EVENTS）同步补：adoptDone / updateDone / duplicatesDone / moveDone / dumpDone / indexDone——此前维护四件套成功后客户端等不到终态，会话空转 600 s 被看门狗误杀（发布前审查 P0-1）。",
   "oneOf": [
     { "$ref": "#/$defs/Request" },
     { "$ref": "#/$defs/Response" },
@@ -43,7 +43,7 @@
         "E_INTERNAL",
         "E_LIBRARY_BUSY"
       ],
-      "description": "错误码表（docs/33 §4.5 冻结于 v1 的 10 个；v2 加 E_LIBRARY_BUSY）。宿主按 code 分类给 UX，**不按 beets_message 文本匹配**。\n\n有意没有 E_CANCELLED：取消是正常路径，用 `cancelled` 事件表达，不是失败。\n\nE_LIBRARY_BUSY（v2）：库文件锁被另一进程持有（双开播放器、外部 beet 写库），holder 详情在信封 extras。"
+      "description": "错误码表（docs/33 §4.5 冻结于 v1 的 10 个；v2 加 E_LIBRARY_BUSY）。宿主按 code 分类给 UX，**不按 beets_message 文本匹配**。\n\n有意没有 E_CANCELLED：取消是正常路径，用 `cancelled` 事件表达，不是失败。\n\nE_CONFIG：环境没就绪且**用户可修**（配置写不了、目录不可访问、缺 pip/uv、缺提取器或模型）——宿主把它当\"给指引\"而不是\"报故障\"。\n\nE_LIBRARY_BUSY（v2）：库文件锁被另一进程持有（双开播放器、外部 beet 写库），holder 详情在信封 extras。"
     },
     "EnvelopeError": {
       "type": "object",
@@ -613,7 +613,7 @@
 
     "_comment_events": {
       "type": "object",
-      "description": "21 种纯事件。终态错误信封（带 `type`）在 Response 里，不放这里——它有 `ok` 字段，属于应答的形状。2026-10-31 补登：indexDone（index_import 的终态，此前实际在发但漏在契约外）。"
+      "description": "20 种会话事件，外加 cancelAck 回执（无 session：取消可能发生在任何会话开始之前，故不按会话事件计）。终态错误信封（带 `type`）在 Response 里，不放这里——它有 `ok` 字段，属于应答的形状。2026-10-31 补登：indexDone（index_import 的终态，此前实际在发但漏在契约外）。"
     },
     "Event": {
       "oneOf": [
@@ -1028,7 +1028,7 @@
 
     "_comment_installer": {
       "type": "object",
-      "description": "A 轨道安装器（`aiya-beets install --target …`）的 stdout 帧。与 serve 是**两套词汇表**：这里没有 session/id，`done` 的形状也不同。宿主逐行读、转成 `beets:install` 进度事件。"
+      "description": "包内环境管理器（`python -m aiya_beets install --plugins …`，脚本随便携包分发，宿主用包内解释器 spawn）的 stdout 帧。与 serve 是**两套词汇表**：这里没有 session/id，`done` 的形状也不同。宿主逐行读、转成 `beets:install` 进度事件；人工在包目录里跑也能直接读。"
     },
     "InstallerEvent": {
       "oneOf": [
@@ -1057,20 +1057,78 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "stage", "python", "beetsVersion"],
+          "required": ["type", "message"],
+          "properties": {
+            "type": { "const": "warning" },
+            "message": { "type": "string" }
+          },
+          "description": "非致命问题（目前只有一处：配置同步失败）。安装器继续跑、最终仍可能 done——宿主展示原文，但不据此判失败。没有 stage：它发生在阶段框架之外。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "stage", "plugins", "installPackages", "uninstallPackages", "checkModules", "binaries"],
+          "properties": {
+            "type": { "const": "dryRun" },
+            "stage": { "const": "prepare" },
+            "plugins": { "type": "array", "items": { "type": "string" }, "description": "目标插件清单（`all` 已展开成表内全部名字）。" },
+            "installPackages": { "type": "array", "items": { "type": "string" }, "description": "要 pip 安装的要求（`pkg>=ver` 形式）。" },
+            "uninstallPackages": { "type": "array", "items": { "type": "string" }, "description": "差量卸载的包（前一集 − 目标集）。" },
+            "checkModules": { "type": "array", "items": { "type": "string" }, "description": "装完要逐个试 import 的模块名。" },
+            "binaries": { "type": "array", "items": { "type": "string" }, "description": "要补的外置工具名（binaries 表的名字）。" }
+          },
+          "description": "--dry-run 的计划帧（第一条输出）：只打印将做什么，不动环境。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "stage", "beetsVersion", "installedPlugins", "uninstalledPackages", "binaries"],
           "properties": {
             "type": { "const": "done" },
             "stage": { "const": "done" },
-            "python": { "type": "string", "description": "venv 里的解释器绝对路径。" },
-            "beetsVersion": { "type": "string", "description": "真 import 一次拿到的版本（只看 pip 退出码不够——装到一半的依赖也能返回 0）。" }
+            "beetsVersion": { "type": "string", "description": "真 import 一次拿到的版本（只看 pip 退出码不够——装到一半的依赖也能返回 0）。" },
+            "installedPlugins": { "type": "array", "items": { "type": "string" }, "description": "本次的目标插件清单（与 --plugins 一致）。" },
+            "uninstalledPackages": { "type": "array", "items": { "type": "string" }, "description": "实际卸载的包（无差量时为空数组）。" },
+            "binaries": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "path", "version", "bytes"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "path": { "type": "string" },
+                  "version": { "type": ["string", "null"] },
+                  "bytes": { "type": "integer", "minimum": 0 },
+                  "skipped": { "type": "boolean", "description": "true = 盘上已有且探针通过，本次没有重下。" }
+                }
+              },
+              "description": "外置工具的逐件结果（bins.ensure 的返回值）。"
+            }
           },
           "description": "装完且自检通过。宿主见到它才认\"安装器成功\"，随后仍要跑一次 status 才算装好。"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "stage", "dryRun", "plugins", "installPackages", "uninstallPackages", "checkModules", "binaries"],
+          "properties": {
+            "type": { "const": "done" },
+            "stage": { "const": "done" },
+            "dryRun": { "const": true, "description": "标记这是 dry-run 的收尾帧：计划字段代替结果字段。" },
+            "plugins": { "type": "array", "items": { "type": "string" } },
+            "installPackages": { "type": "array", "items": { "type": "string" } },
+            "uninstallPackages": { "type": "array", "items": { "type": "string" } },
+            "checkModules": { "type": "array", "items": { "type": "string" } },
+            "binaries": { "type": "array", "items": { "type": "string" }, "description": "dry-run 时是要补的工具**名**清单（真跑的 done 里是逐件结果对象，两形不同名同——所以 done 拆成两支）。" }
+          },
+          "description": "--dry-run 的收尾帧（与 dryRun 帧成对出现）：环境一个字节没动。"
         }
       ]
     },
     "InstallerStage": {
-      "enum": ["prepare", "download", "venv", "install", "pip", "verify", "done"],
-      "description": "`download` 由宿主自己发（下载阶段在宿主侧），其余来自安装器。"
+      "enum": ["prepare", "pip", "bin", "verify", "done"],
+      "description": "安装器 stdout 帧的阶段。宿主在同一 UI 事件流上还会发自己的 download/unpack 等阶段（下载与展开套件包发生在宿主侧），但那些不经安装器 stdout，不在本枚举。"
     }
   }
 }

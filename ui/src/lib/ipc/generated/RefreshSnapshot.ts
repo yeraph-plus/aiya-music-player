@@ -5,7 +5,7 @@
  */
 export type RefreshSnapshot = { 
 /**
- * timer / focus / action / manual
+ * timer / focus / action（宿主内部 Trigger 枚举的小写串；无"手动"触发点）
  */
 trigger: string, 
 /**

@@ -130,8 +130,8 @@ def run(argv: list[str]) -> int:
         )
     if not apply():
         raise XtractorError(
-            f"{REASON}。装法：aiya-beets install --target … --plugins xtractor"
-            "（免配置包已预置这一项）"
+            f"{REASON}。装法：便携套件包已预置这一项（重新解包即可）；"
+            "包内换插件用 `aiya-beets install --plugins xtractor`"
         )
 
     # 提取器必须找得到：插件自己的默认值是个占位符，spawn 一个不存在的程序

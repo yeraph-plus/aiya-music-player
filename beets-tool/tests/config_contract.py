@@ -16,7 +16,7 @@
   [9] workbench directory 外科式同步（应用事实跟着变，别的行不动）
   [10] workbench plugins 外科式同步（选中 / 缺键 / 空数组三向）
   [11] 缺外部工具即剔除（索引家整条不写 / 用户库只留可用的 / 闸兜底变红）
-  [12] xtractor 提取档位（highlevel.compute 必须 0，打开或缺失都变红）
+  [12] xtractor 提取档位（highlevel.compute 钉 1 / svm_models 逐件实存，缺失都变红）
 
 只用临时目录，不碰真实数据目录。
 """

@@ -178,7 +178,7 @@ export const ipc = {
    * 自动刷新管线。
    *
    * 只有查询：触发是宿主自己的事（定时 30 s / 窗口聚焦 / 命令收尾），
-   * 宿主不会替用户"点按钮"。手动立即刷新走 `beets.sync`。
+   * 宿主不会替用户"点按钮"。
    */
   refresh: {
     /** 间隔 + 是否在前台 + 最近一次结果（诊断区读） */
@@ -368,12 +368,7 @@ export const ipc = {
     /** 记录已成功导入的源路径（preview 排除表，FIFO 2000，幂等） */
     inboxImportedAdd: (paths: string[]) =>
       call<BeetsConfig>('beets_inbox_imported_add', { paths }),
-    /**
-     * 手动触发一次完整刷新（增量扫描 + beets 对齐）。
-     *
-     * 与自动定时跑的是**同一条管线**：结果走 `libraryRefreshed`
-     * （无变化时手动也会发一条，好让界面有回应）。
-     */
+
     /**
      * 安装/更新便携包（单轨）。
      *
@@ -524,7 +519,8 @@ export const ipc = {
   },
 };
 
-/** UI 处理约定（docs/17 §2.5）：只在这里判"能不能重试"，组件不重复判断。 */
-export function isRetryable(e: unknown): boolean {
-  return toApiError(e).retryable;
-}
+// 「能不能重试」的判定收敛在 lib/errors.ts（错误呈现的唯一映射点，
+// errorMessage / isNotFound / isBusy 都在那边），实现只保留一份。
+// 本文件不再转发：errors.ts 本就 import 本文件的 toApiError，这里再
+// 反向引它会成环（依赖图门禁会红）。lib/ipc/index.ts 直接从那里导出，
+// 旧导入路径不受影响。

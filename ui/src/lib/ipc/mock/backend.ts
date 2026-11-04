@@ -11,7 +11,7 @@
  *   `logDir` / `audioMode`）—— 少一个字段 TS 就红，这正是"生成类型当唯一来源"
  *   的好处。
  */
-import type { AppSettings, ThemeMode } from '../../settings';
+import type { AppSettings, LiveRecentEntry, ThemeMode } from '../../settings';
 import { DEFAULT_SETTINGS } from '../../settings';
 import type { TrackQuery, TrackQueryParsed } from '../../query';
 import { parseTrackQuery } from '../../query';
@@ -42,7 +42,6 @@ import type {
   HistoryStats,
   LibraryRoots,
   LibraryStats,
-  ListTiming,
   Lyrics,
   OpenPathsReceipt,
   PlayerState,
@@ -224,11 +223,38 @@ function buildPlaylistSeed(tracks: TrackRow[]): {
   items: Map<string, string[]>;
 } {
   const now = Date.now();
-  const names = ['华语偏爱', '深夜自习室', '运动节拍', '通勤路上'];
+  // 前 4 张是原始种子（id/名/内容都被 e2e 与旧 localStorage 依赖，不动）；
+  // 后 8 张是滚动压测的增补：首页歌单行的横滚与侧栏歌单区的纵滚都要有
+  // 足够的卡片才滚得起来。曲目区间与原 4 张错开，允许重叠（真实歌单也重叠）。
+  const names = [
+    '华语偏爱',
+    '深夜自习室',
+    '运动节拍',
+    '通勤路上',
+    '雨天爵士',
+    '北欧电波',
+    '咖啡因',
+    '午夜公路',
+    '粤语时代',
+    '器乐全集',
+    '白噪音',
+    '夏日电台',
+    '晨间人声',
+    '后摇长途',
+    '弦乐夜话',
+    '城市漫步',
+    '旧磁带',
+    '失重系列',
+    '车舱低音',
+    '月末精选',
+  ];
   const items = new Map<string, string[]>();
   const summaries = names.map((name, i) => {
     const id = `pl-${i + 1}`;
-    const slice = tracks.slice(i * 23, i * 23 + 12 + i * 5);
+    const slice =
+      i < 4
+        ? tracks.slice(i * 23, i * 23 + 12 + i * 5)
+        : tracks.slice(100 + ((i - 4) * 9) % 120, 100 + ((i - 4) * 9) % 120 + 10 + (i % 3) * 4);
     items.set(
       id,
       slice.map((t) => t.id),
@@ -259,6 +285,52 @@ function loadJson<T>(key: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+/* 预览用假电台：浏览器里没有"最近打开"，空卡组只剩一张加号卡，轮播、
+   切换动效与信息块都没东西可看。seed 三张台，**只对没有保存过设置的全新
+   预览生效**——保存过的状态（哪怕 liveRecent 是空数组）一律尊重，
+   否则用户删光的台会在下次启动复活，e2e 写进去的空态也会被顶掉 */
+const PREVIEW_STATIONS: LiveRecentEntry[] = [
+  {
+    id: 'st-preview-lounge',
+    url: 'https://stream.example.com/lounge/index.m3u8',
+    title: 'Late Night Lounge',
+    subtitle: 'Chill · 24 小时',
+    description: '深夜律动与低温 house，适合亮着一半的灯。',
+    source: 'manual',
+    addedAtMs: Date.now() - 86_400_000 * 3,
+  },
+  {
+    id: 'st-preview-city',
+    url: 'https://radio.example.com/city/live/hls.m3u8',
+    title: 'City FM',
+    subtitle: '城市早高峰',
+    description: '路况、天气和不太吵的歌。',
+    source: 'manual',
+    addedAtMs: Date.now() - 86_400_000 * 2,
+  },
+  {
+    id: 'st-preview-jazz',
+    url: 'https://cast.example.net/jazz/playlist.m3u8',
+    title: 'Blue Note Radio',
+    subtitle: 'Jazz · Classic',
+    description: '从 hard bop 到 cool jazz，一整天不重样。',
+    source: 'manual',
+    addedAtMs: Date.now() - 86_400_000,
+  },
+];
+
+function loadSettings(): AppSettings {
+  const raw = localStorage.getItem('aiya.settings');
+  if (raw) {
+    try {
+      return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as AppSettings) };
+    } catch {
+      /* 损坏的存档按全新预览处理，落到下面的种子 */
+    }
+  }
+  return { ...DEFAULT_SETTINGS, liveRecent: PREVIEW_STATIONS };
 }
 
 function saveJson(key: string, value: unknown): void {
@@ -304,7 +376,7 @@ export class MockBackend {
   private playlists: PlaylistSummary[] = this.playlistSeed.summaries;
   /** 歌单内容（真实库对应 playlist_items 表） */
   private playlistItems: Map<string, string[]> = new Map(this.playlistSeed.items);
-  private settings: AppSettings = loadJson('aiya.settings', DEFAULT_SETTINGS);
+  private settings: AppSettings = loadSettings();
   private uiState: UiState = loadJson('aiya.uiState', {} as UiState);
   private look: { theme: ThemeMode } = loadJson('aiya.look', {
     theme: 'dark' as ThemeMode,
@@ -342,12 +414,6 @@ export class MockBackend {
    * 10Hz 上报同频），整秒变化才 emit `player:state`——暂停/空闲即停。
    */
   private stateTimer: ReturnType<typeof setInterval> | null = null;
-  /**
-   * 列表耗时环（诊断页）。真记录而不是塞假数据：预览里翻两页就能看到
-   * 来源/行数/耗时列有值，验收"表格接上真值"这件事。
-   * 最多 20 条，与宿主侧 `TIMING_LIMIT` 同口径。
-   */
-  private timings: ListTiming[] = [];
 
   /* library */
 
@@ -385,18 +451,6 @@ export class MockBackend {
         ? encodeCursorId(items[items.length - 1]!.id)
         : null;
     const tookMs = performance.now() - started;
-    this.pushTiming({
-      atMs: Date.now(),
-      source: q.source.kind,
-      rows: items.length,
-      total,
-      tookMs,
-      // 预览没有 DB，SQL 耗时按六成编一个**成比例**的值（保持"排队成本"这一列
-      // 有意义的形状），并在 UI 上无从区分——所以这段只在 mock chunk 里。
-      dbTookMs: tookMs * 0.6,
-      // 游标只在 cursor 模式的判别联合里存在（offset 模式没有这个字段）
-      cursor: q.mode === 'cursor' ? (q.cursor ?? null) : null,
-    });
     return {
       items,
       total,
@@ -407,11 +461,6 @@ export class MockBackend {
       offset: q.mode === 'offset' ? q.offset : null,
       tookMs: Math.max(1, Math.round(tookMs)),
     };
-  }
-
-  private pushTiming(timing: ListTiming): void {
-    if (this.timings.length >= 20) this.timings.shift();
-    this.timings.push(timing);
   }
 
   libraryTracks(ids: string[]): TrackDetail[] {
@@ -2036,11 +2085,8 @@ export class MockBackend {
     return this.look;
   }
 
-  appInfo(): { version: string; electron: string; platform: string; dataDir: string } {
+  appInfo(): { dataDir: string } {
     return {
-      version: '0.1.0-preview',
-      electron: 'n/a（Tauri 2 浏览器预览）',
-      platform: navigator.platform || 'web',
       dataDir: '（浏览器预览：localStorage）',
     };
   }
@@ -2124,37 +2170,10 @@ export class MockBackend {
   }
 
   diagnostics(): Diagnostics {
-    const stats = this.libraryStats();
     return {
       version: '0.1.0-preview',
-      electron: 'n/a（Tauri 2 浏览器预览）',
-      platform: navigator.platform || 'web',
       dataDir: '（浏览器预览：localStorage）',
-      logDir: null,
-      logFile: null,
-      schemaVersion: stats.schemaVersion,
-      dbBytes: 0,
-      tracks: stats.tracks,
-      albums: stats.albums,
-      artists: stats.artists,
-      playlists: this.playlists.length,
-      historyRows: 0,
-      totalDurationMs: stats.totalDurationMs,
-      streams: { opened: 0, closed: 0, active: 0 },
-      listTimings: this.timings,
       recentErrors: [],
-      mediaKeys: { enabled: false, active: [], failed: [] },
-      power: { active: false, type: null },
-      tray: false,
-      audioMode: {
-        requested: 'shared',
-        mode: 'shared',
-        clock: 'events',
-        bufferMs: 200,
-        format: 'n/a（预览无音频）',
-        note: '浏览器预览不建音频流',
-        desired: { mode: 'shared', bufferMs: 200, clock: 'auto', releaseOnPause: false },
-      },
     };
   }
 

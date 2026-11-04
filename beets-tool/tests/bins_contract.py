@@ -50,7 +50,9 @@ def make_zip(path: str, members: dict) -> str:
 try:
     # 1. 体检形状
     rows = bins.check()
-    assert [r["name"] for r in rows] == ["ffmpeg", "streaming_extractor_music", "fpcalc"], rows
+    # 覆盖蓝图全集且顺序一致（表会扩，别把总数钉死）；三个核心工具必须一直在场
+    assert [r["name"] for r in rows] == [s.name for s in plugins.BINARIES], rows
+    assert {"ffmpeg", "streaming_extractor_music", "fpcalc"} <= {r["name"] for r in rows}
     for r in rows:
         assert r["present"] is False and r["usable"] is False, r
         for key in ("target", "downloadBytes", "bytes", "license", "path", "version"):
@@ -229,7 +231,10 @@ try:
         return code, frames
 
     assert plugins.binaries_for(["replaygain", "lyrics"]) == ["ffmpeg"]
-    assert plugins.binaries_for(["xtractor"]) == ["streaming_extractor_music"]
+    # xtractor 随 Essentia 批次带上了运行库与 SVM 模型（exe 清单在插件声明里）：
+    # 推导结果必须以提取器打头且不止一个，别把成员数钉死
+    xt = plugins.binaries_for(["xtractor"])
+    assert xt[0] == "streaming_extractor_music" and len(xt) > 1, xt
     assert plugins.binaries_for([]) == [], "空清单不该凭空推出工具"
     # 三个插件都要同一个工具时只下一次（去重保序）
     assert plugins.binaries_for(["replaygain", "convert", "chroma"]) == ["ffmpeg", "fpcalc"], \

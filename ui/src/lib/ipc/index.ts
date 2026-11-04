@@ -10,7 +10,12 @@
  */
 export * from './generated';
 
-export { ipc, toApiError, isRetryable } from './client';
+export { ipc, toApiError } from './client';
+/**
+ * 重试判定与 errorMessage / isNotFound / isBusy 同住 lib/errors.ts（错误呈现的
+ * 唯一映射点），client.ts 不再持有第二份实现；这里保留原有导出路径。
+ */
+export { isRetryable } from '../errors';
 export type {
   /** 命令参数里的查询形状（Rust 侧收 `Json` 再解析，故不出生成类型） */
   TrackQueryInput,

@@ -21,8 +21,9 @@ pyz 物化依赖清单）随单轨化退役——应用不再探测、不再构�
   （脚本不维护第二份依赖表，未知名字直接报错）
 - 前一集 = `--previous`（宿主在改写 settings.json 之前传进来的旧启用清单）
 - 安装 = 目标集全集（pip 幂等，已满足的要求秒过）
-- 卸载 = 前一集 − 目标集（其它插件仍共享的包不会被误删；beets 本体两集都
-  不含，永远不动）
+- 卸载 = 前一集 − 目标集；卸载前再查一遍 `pip show` 的 Required-by，仍是现
+  环境里谁的依赖（保留插件的透传依赖、beets 本体）就跳过——两张插件包清单
+  的差量比不出这种共享。beets 本体两集都不含，永远不动
 
 ## 帧
 
@@ -35,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -43,6 +45,10 @@ from . import bins, cfg, plugins
 # 从 GUI 子系统经 CREATE_NO_WINDOW 拉起的进程自己没有控制台，而 pip 是控制台
 # 程序——不补这个参数，每次 pip 都会给用户弹一个黑窗（POSIX 无此参数，空 dict）。
 _NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+
+# 要求串（`beets-xtractor>=0.4.2,<0.5` / `pkg[extra]>=1`）→ 裸发行名。pip show
+# 只认名字，不认版本约束。
+_DIST_NAME = re.compile(r"^[A-Za-z0-9._-]+")
 
 
 def emit(obj: dict) -> None:
@@ -125,8 +131,32 @@ def main(argv: list[str] | None = None) -> int:
     # 1) 差量卸载（先卸后装，腾出被替换的包）。失败不阻断：残留一个"装而未用"
     #    的包无害，不能让它挡住下面的安装。
     if drop_pkgs:
-        say(f"pip uninstall {', '.join(drop_pkgs)}")
-        _pip(["uninstall", "-y", *drop_pkgs], say)
+        # 差集里的包仍可能是**保留插件**（或 beets 本体）的透传依赖——只比两张
+        # 插件包清单发现不了这种共享。卸载前用 `pip show` 的 Required-by 查一遍
+        # 现环境（本地查询，离线可行）：还有依赖者就跳过并发帧说明原因。代价是
+        # 最多残留几个"装而未用"的包（无害，下次会话还能再试）；卸了却会让保留
+        # 的插件当场 import 不动，严重得多。
+        real_drop: list[str] = []
+        for req in drop_pkgs:
+            name = _DIST_NAME.match(req).group(0)
+            shown = subprocess.run(
+                [sys.executable, "-m", "pip", "--disable-pip-version-check", "show", name],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                **_NO_WINDOW,
+            )
+            required_by = ""
+            if shown.returncode == 0:
+                for line in shown.stdout.splitlines():
+                    if line.startswith("Required-by:"):
+                        required_by = line.removeprefix("Required-by:").strip()
+                        break
+            if required_by:
+                say(f"{name} 仍被 {required_by} 依赖，跳过卸载")
+            else:
+                real_drop.append(req)
+        if real_drop:
+            say(f"pip uninstall {', '.join(real_drop)}")
+            _pip(["uninstall", "-y", *real_drop], say)
 
     # 2) 安装目标集全集
     emit({"type": "progress", "stage": "pip", "message": "pip install 开始"})

@@ -9,7 +9,6 @@
   import { artworkUrl } from '../lib/artwork';
   import { errorMessage } from '../lib/errors';
   import { formatDurationLong, formatPlays } from '../lib/format';
-  import { history } from '../stores/history.svelte';
   import { library } from '../stores/library.svelte';
   import { nav } from '../stores/nav.svelte';
   import { notify } from '../stores/notify.svelte';
@@ -19,14 +18,26 @@
   /**
    * 推荐页：仪表盘形态，三行布局。
    *
-   * - 第一行 歌单卡片行（约 70%）+ 统计小卡（约 30%）：封面即播放键
-   *   （点击直接起播，不跳页），卡片名点击才进歌单视图；统计卡只陈述
-   *   事实（曲库规模与收听累计），**不可点**——一级导航在侧栏，卡片
-   *   变按钮就是二次修订撤销过的视觉冗余。
+ * - 第一行 歌单行（横向滚动）+ 播放统计：封面即播放键（点击直接起播，不跳页），
+ *   卡片名点击才进歌单视图；统计以时段问候打头，下面两组"标签 + 大字号
+ *   数值"，顶部预留一个区块标题的高度与卡面顶沿齐平（pages.css
+ *   `.home-stats::before` 占位），不与卡组几何互钉——卡组空态/加载态不影响它，
+ *   **不可点**——一级导航在侧栏，统计变按钮就是二次修订撤销过的视觉冗余。
    * - 第二行 双表（常听 | 最近播放）：同一 TrackTable 组件、同列数，
    *   一个回答"你最常听什么"，一个回答"你刚听过什么"，数据源同为
    *   播放历史，放一行成对出现。
    * - 第三行 最近添加：整页宽单列表（多一列专辑），新入库曲目的出口。
+   *
+   * 区块标题只有一行：大字标题 + 小字英文装饰 +（歌单区一枚计数徽章）。原先的
+   * 三行式（英文 / 标题 / 一句产品陈述）在三个区块重复，页面上等于六行说明文字，
+   * 读起来像目录而不像仪表盘；陈述句本身没有信息量，去掉不损失任何东西。
+   *
+   * 首页不放"清空播放历史"这类**破坏性**入口：仪表盘是浏览的地方，清理动作归
+   * 设置与曲库页（两处都已具备）。此前这里挂过一个 `.section-link` 按钮，
+   * 相当于在只读面板上开一个不可撤销的洞。
+   *
+ * 三个短列表区块的标题行是纯文字；区块的视觉边界落在表格表头的下横线上，
+ * 行本体与主列表同构、直接浮在动态背景上。
    *
    * 不设页标题（Header）与「全部曲目」路由卡：侧栏已是全局导航。
    * 「最近播放 / 最近添加」在曲库页也有 tab，首页给的是免切换的快照。
@@ -86,12 +97,6 @@
     void load();
   });
 
-  /** 清空播放历史（常听/最近播放的输入都是播放历史，清空后两表同步变空） */
-  async function clearHistory(): Promise<void> {
-    await history.clear();
-    void load();
-  }
-
   async function play(rows: TrackRow[], index: number): Promise<void> {
     try {
       await player.playTracks(rows.map((row) => row.id), index);
@@ -117,41 +122,48 @@
     }
   }
 
-  /** 统计卡展示值。library.stats / playStats 谁没到就显示 —，不各自转圈 */
-  const tiles = $derived.by(() => {
-    const s = library.stats;
-    return [
-      { label: '曲目', value: s ? String(s.tracks) : '—' },
-      { label: '专辑', value: s ? String(s.albums) : '—' },
-      { label: '累计播放', value: playStats ? formatPlays(playStats.totalPlays) : '—' },
-      {
-        label: '收听时长',
-        value: playStats ? formatDurationLong(playStats.totalMs) : '—',
-      },
-    ];
-  });
+  /**
+   * 统计区只有两项：播放数与收听时长（曲目/专辑数撤掉——曲库规模在侧栏与曲库页
+   * 都能看到，摆在首页统计位上是重复）。未加载到之前显示 `—`，不转圈：
+   * 两行数字很快到，骨架反而闪。
+   */
+  const totalPlays = $derived(
+    playStats && playStats.totalPlays > 0 ? `${formatPlays(playStats.totalPlays)} 次` : '—',
+  );
+  const totalSpan = $derived(playStats ? formatDurationLong(playStats.totalMs) : '—');
+
+  /**
+   * 时段问候，按系统小时分四段（5/11/13/18 为界）。组件装载时求值一次就够：
+   * 问候跨段差几分钟没人会在意，为它挂一个时钟定时器不值得。
+   */
+  function timeGreeting(hour: number): string {
+    if (hour < 5) return '夜深了';
+    if (hour < 11) return '早上好';
+    if (hour < 13) return '中午好';
+    if (hour < 18) return '下午好';
+    return '晚上好';
+  }
+  const greeting = $derived(`${timeGreeting(new Date().getHours())}，今天听点什么？`);
 </script>
 
 <div class="page-scroll home-page">
   {#if loadError}<InlineError message={loadError} ondismiss={() => (loadError = '')} />{/if}
 
-  <!-- 第一行：歌单（约 70%）+ 统计小卡（约 30%） -->
+  <!-- 第一行：歌单（横向滚动）+ 播放统计 -->
   <div class="home-top">
     <section class="home-section">
       <div class="section-heading">
         <div class="section-title">
-          <span class="page-kicker">PLAYLISTS</span>
           <h2>歌单</h2>
-          <p class="section-desc">自己编排的收听合集</p>
+          <span class="page-kicker">PLAYLISTS</span>
+          <span class="section-meta">{playlists.items.length} 个</span>
         </div>
-        <!-- 缺失警告的唯一的统计位：有缺失时顶掉计数（两者同占标题行右侧，
-             点击去设置→曲库处理；性质是告警不是导航） -->
+        <!-- 缺失警告的唯一的统计位：有缺失时出现在标题行右侧，点击去设置→
+             曲库处理；性质是告警不是导航 -->
         {#if library.stats && library.stats.missingLocations > 0}
           <button class="stat-warn" onclick={() => nav.settingsAt('library')}>
             {library.stats.missingLocations} 个位置缺失，去处理
           </button>
-        {:else}
-            <span>共 {playlists.items.length} 个</span>
         {/if}
       </div>
       <div class="playlist-row">
@@ -183,15 +195,17 @@
       </div>
     </section>
 
-    <!-- 统计卡：只陈述事实，不可点（导航归侧栏） -->
-    <aside class="home-stats" aria-label="曲库与收听统计">
-      <div class="stat-tiles">
-        {#each tiles as tile (tile.label)}
-          <div class="stat-tile">
-            <span class="tile-value">{tile.value}</span>
-            <span class="tile-label">{tile.label}</span>
-          </div>
-        {/each}
+    <!-- 播放统计：时段问候 + 两组"标签 + 大字号数值"，顶部占位一个标题组件
+         高度后与卡面顶沿齐平（不随卡组行高变）。不可点（导航归侧栏） -->
+    <aside class="home-stats" aria-label="播放统计">
+      <p class="stat-greet">{greeting}</p>
+      <div class="stat-block">
+        <span class="stat-label">累计播放</span>
+        <span class="stat-value">{totalPlays}</span>
+      </div>
+      <div class="stat-block">
+        <span class="stat-label">收听时长</span>
+        <span class="stat-value">{totalSpan}</span>
       </div>
     </aside>
   </div>
@@ -201,42 +215,43 @@
     <section class="home-section">
       <div class="section-heading">
         <div class="section-title">
-          <span class="page-kicker">MOST PLAYED</span>
           <h2>常听</h2>
-          <p class="section-desc">播放次数排出来的曲目榜单</p>
+          <span class="page-kicker">MOST PLAYED</span>
         </div>
-        <button class="section-link" onclick={() => void clearHistory()}>清空播放历史</button>
       </div>
-      <TrackTable
-        rows={frequent}
-        columns={['cover', 'title', 'artist', 'plays']}
-        {loading}
-        empty="播放次数积累后，这里会长出你的常听曲目。"
-        currentId={player.state?.current?.id ?? null}
-        onplay={(index) => void play(frequent, index)}
-        onopenartist={(id) => nav.go({ kind: 'artist', id })}
-        onopenalbum={(id) => nav.go({ kind: 'album', id })}
-      />
+      <div class="home-panel">
+        <TrackTable
+          rows={frequent}
+          columns={['cover', 'title', 'artist', 'plays']}
+          {loading}
+          empty="播放次数积累后，这里会长出你的常听曲目。"
+          currentId={player.state?.current?.id ?? null}
+          onplay={(index) => void play(frequent, index)}
+          onopenartist={(id) => nav.go({ kind: 'artist', id })}
+          onopenalbum={(id) => nav.go({ kind: 'album', id })}
+        />
+      </div>
     </section>
 
     <section class="home-section">
       <div class="section-heading">
         <div class="section-title">
-          <span class="page-kicker">RECENTLY PLAYED</span>
           <h2>最近播放</h2>
-          <p class="section-desc">播放历史里最近的轨迹</p>
+          <span class="page-kicker">RECENTLY PLAYED</span>
         </div>
       </div>
-      <TrackTable
-        rows={recentPlayed}
-        columns={['cover', 'title', 'artist', 'lastPlayed']}
-        {loading}
-        empty="播放后，这里会留下最近的轨迹。"
-        currentId={player.state?.current?.id ?? null}
-        onplay={(index) => void play(recentPlayed, index)}
-        onopenartist={(id) => nav.go({ kind: 'artist', id })}
-        onopenalbum={(id) => nav.go({ kind: 'album', id })}
-      />
+      <div class="home-panel">
+        <TrackTable
+          rows={recentPlayed}
+          columns={['cover', 'title', 'artist', 'lastPlayed']}
+          {loading}
+          empty="播放后，这里会留下最近的轨迹。"
+          currentId={player.state?.current?.id ?? null}
+          onplay={(index) => void play(recentPlayed, index)}
+          onopenartist={(id) => nav.go({ kind: 'artist', id })}
+          onopenalbum={(id) => nav.go({ kind: 'album', id })}
+        />
+      </div>
     </section>
   </div>
 
@@ -244,20 +259,21 @@
   <section class="home-section">
     <div class="section-heading">
       <div class="section-title">
-        <span class="page-kicker">RECENTLY ADDED</span>
         <h2>最近添加</h2>
-        <p class="section-desc">最新入库的曲目</p>
+        <span class="page-kicker">RECENTLY ADDED</span>
       </div>
     </div>
-    <TrackTable
-      rows={recentAdded}
-      columns={['cover', 'title', 'artist', 'album', 'added']}
-      {loading}
-      empty="扫描入库后，最新的曲目会出现在这里。"
-      currentId={player.state?.current?.id ?? null}
-      onplay={(index) => void play(recentAdded, index)}
-      onopenartist={(id) => nav.go({ kind: 'artist', id })}
-      onopenalbum={(id) => nav.go({ kind: 'album', id })}
-    />
+    <div class="home-panel">
+      <TrackTable
+        rows={recentAdded}
+        columns={['cover', 'title', 'artist', 'album', 'added']}
+        {loading}
+        empty="扫描入库后，最新的曲目会出现在这里。"
+        currentId={player.state?.current?.id ?? null}
+        onplay={(index) => void play(recentAdded, index)}
+        onopenartist={(id) => nav.go({ kind: 'artist', id })}
+        onopenalbum={(id) => nav.go({ kind: 'album', id })}
+      />
+    </div>
   </section>
 </div>

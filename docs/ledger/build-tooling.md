@@ -7,4 +7,9 @@
 
 <!-- 每条一行：- YYYY-MM-DD · 代码位置 · 事实/取舍 · 来龙去脉（可选） -->
 
+
+
+- 2026-11-04 · .github/workflows/ci.yml · 9 个 beets smoke 全量进 CI（原 6 个）· 两个真实破坏（uninstall 的 ImportError、bins 的过期断言）恰好都发生在缺席的套件里，本地 verify 红而 CI 绿；tools/check-style-allowlist.json 同批落位（AGENTS.md 早已引用它）。
+
+
 - 2026-11-03 · tools/check-boundary.mjs · beets-client 词边界门禁的三条取舍：pythonVersion 例外（它是协议线上字段名，改名即换协议）；beets 不作禁用词（包名与协议字段必然带它，禁的是内部概念）；大小写敏感 + 词边界（否则 Stdio::piped 命中 pip、library_path 命中 Library，门禁变噪音就会被关掉）

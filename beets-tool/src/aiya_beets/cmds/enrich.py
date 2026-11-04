@@ -38,7 +38,7 @@ import sys
 import tempfile
 
 from ..beetslib import open_library
-from ..protocol import E_INVALID_ARG, ProtocolError
+from ..protocol import E_CONFIG, E_INVALID_ARG, ProtocolError
 from ..runtime import cancel_gen, emit
 
 _STAGE = "enrich"
@@ -297,8 +297,11 @@ def default_root() -> str | None:
     return cfg.scan_root() or configured_directory()
 
 
-def _import_paths(paths: list[str]) -> None:
+def _import_paths(paths: list[str], gen: int) -> bool:
     """补登：把路径导进当前家的库。失败不抛——逐个 status 由后面的读库决定。
+
+    返回 False = 批间发现被取消（剩余批次不跑；已导的保留，入库幂等，
+    下次请求重跑无副作用）。
 
     **必须先剔掉不存在的路径**：`beet import` 把 argv 里的路径一起校验，
     只要有一个不存在就 `error: no such file or directory` 并**整批不导**
@@ -321,35 +324,64 @@ def _import_paths(paths: list[str]) -> None:
         print(f"[aiya-beets] enrich 跳过 {missing} 个不存在的路径（不剔会毁掉整批）",
               file=sys.stderr)
     if not real:
-        return
+        return True
     chunk: list[str] = []
     size = 0
     for p in real:
+        if cancel_gen() != gen:
+            return False
         if chunk and size + len(p) + 3 > _ARG_CHUNK_CHARS:
-            _run_import(chunk)
+            _run_import(chunk, gen)
             chunk, size = [], 0
         chunk.append(p)
         size += len(p) + 3
     if chunk:
-        _run_import(chunk)
+        _run_import(chunk, gen)
+    return True
 
 
-def _run_import(chunk: list[str]) -> None:
+def _run_import(chunk: list[str], gen: int) -> None:
+    """跑一批补登。轮询取消代数而不是干等子进程：一批最长 1800s，取消若只能
+    等它自然结束就名存实亡。与 market.py 的泵线程同一条思路，这里更简单——
+    stdout 已掐掉、stderr 收尾才读，不需要输出泵，靠 `communicate(timeout)`
+    的超时轮询就能在等的同时检查取消。
+    """
     cmd = [sys.executable, "-m", "beets", "import", *_IMPORT_FLAGS, *chunk]
     try:
-        subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
-            timeout=1800,
-            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             **_NO_WINDOW,
         )
-    except (OSError, subprocess.TimeoutExpired) as e:
+    except OSError as e:
         # 补登失败不是"整体失败"：没进库的路径会在后面以 skipped 逐条报出来，
         # 宿主据此保留工作清单，下次重试。
         print(f"[aiya-beets] enrich 补登失败：{e}", file=sys.stderr)
+        return
+    waited = 0.0
+    while True:
+        try:
+            _, err = proc.communicate(timeout=0.5)
+            break
+        except subprocess.TimeoutExpired:
+            if cancel_gen() != gen:
+                proc.kill()
+                proc.communicate()
+                return
+            waited += 0.5
+            if waited >= 1800:
+                proc.kill()
+                proc.communicate()
+                print("[aiya-beets] enrich 补登超时（1800s），本批中止", file=sys.stderr)
+                return
+    if proc.returncode != 0:
+        print(f"[aiya-beets] enrich 补登失败（退出码 {proc.returncode}）："
+              f"{(err or '').strip()[-300:]}", file=sys.stderr)
 
 
 def _index_by_path(lib) -> dict[str, object]:
@@ -501,18 +533,29 @@ def enrich(req_id: int, paths: list[str], want, force: bool, gen: int) -> None:
     if any(spec.name == "xtractor" for spec in sources):
         ok, exe_or_why = xtractor_ready()
         if not ok:
-            raise ProtocolError(E_INVALID_ARG, _STAGE, f"增强源 xtractor 未就绪：{exe_or_why}")
+            # E_CONFIG 而不是 E_INVALID_ARG：参数本身没错，错的是环境（缺提取器/
+            # 模型），且用户可修（重下便携包 / aiya-beets bins 补齐）。E_INVALID_ARG
+            # 的语义是"请求拼错了"，宿主拿它区分"该改请求"还是"该修环境"。
+            raise ProtocolError(E_CONFIG, _STAGE, f"增强源 xtractor 未就绪：{exe_or_why}")
         exe = exe_or_why
         profile = os.path.join(work, "profile.yaml")
+        models_dir = os.path.join(os.path.dirname(exe), "models")
         with open(profile, "w", encoding="utf-8", newline="\n") as f:
             f.write("highlevel:\n  compute: 1\n  svm_models:\n")
             for name in cfg.XTRACTOR_MODEL_FILES:
-                f.write(f"    - {os.path.join(os.path.dirname(exe), 'models', f'{name}.history')}\n")
+                # 与 cfg.yaml_path 同款单引号包裹：Windows 路径的反斜杠在双引号
+                # YAML 里是转义序列，裸标量则会被当成坏行——提取器拿到坏路径
+                # 的症状是"字段全空且退出码 0"。
+                f.write(f"    - {cfg.yaml_path(os.path.join(models_dir, f'{name}.history'))}\n")
 
     lib = open_library()
     if force:
         _detach(lib, paths)
-    _import_paths(paths)
+    if not _import_paths(paths, gen):
+        # 补登中途被取消：与主循环同款收尾——cancelled 是唯一终态，
+        # 不再发 enrichDone（两个终态会让客户端重复收尾）
+        emit({"type": "cancelled", "session": session, "stage": _STAGE})
+        return
     # 重新开库：补登是子进程写的，当前连接看到的是旧页缓存
     lib = open_library()
     by_path = _index_by_path(lib)

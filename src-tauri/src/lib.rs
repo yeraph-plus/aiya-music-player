@@ -17,7 +17,6 @@
 //! `playlist_import`/`playlist_export` 于 docs/22 G2 加入。
 
 use std::borrow::Cow;
-use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -420,21 +419,14 @@ pub struct AppState {
     smtc_tx: Mutex<Option<std::sync::mpsc::Sender<smtc::SmtcUpdate>>>,
     /// 上次推给 SMTC 的曲目 id（换曲才重发 metadata + 查封面）
     smtc_track_id: Mutex<String>,
-    /// SMTC 可用性（诊断页）
-    smtc_active: AtomicBool,
-    /// 当前是否在防系统睡眠（诊断页；事件泵线程维护）
-    sleep_prevented: AtomicBool,
-    /// 托盘是否已创建（诊断页）
-    tray_active: AtomicBool,
+    /// 托盘是否创建成功。给关窗逻辑用：托盘不在时"关闭到托盘"不能隐藏
+    /// 窗口——藏了就没有唤回的入口（退出是唯一出路，用户得自己重启）。
+    /// 健康检查本身不做指示器：正常静默，失败走 ApiError::record_background。
+    tray_ready: AtomicBool,
     /// 实际生效的输出状态（诊断页/设置页展示"设备到底给了什么"）。
     /// 与设置里的"请求值"分开：设备可能拒绝独占而回落共享，也可能因为
     /// 缓冲太深而跑不出数据（引擎会自动降级并把原因写进 reason）。
     audio_state: Mutex<AudioStateSnapshot>,
-    /// 列表查询耗时环（诊断页"最近查询"）。
-    ///
-    /// 为什么是固定 20 条：这张表只用来判断"最近是不是变慢了"，不是审计。
-    /// 留多了要滚动、要分页，反而没人看。
-    timings: Mutex<VecDeque<dto::ListTiming>>,
     /// app_settings 的内存镜像。
     ///
     /// 为什么必须有：事件泵每 25ms 跑一拍，`preventSleep` / `normalizeVolume`
@@ -459,9 +451,6 @@ pub struct AppState {
     enrich_store: std::sync::OnceLock<std::sync::Arc<aiya_beets_store::Store>>,
 }
 
-/// 列表耗时环的容量。UI 只展示最近 8 条，留 20 条给"翻两页才看出趋势"。
-const TIMING_LIMIT: usize = 20;
-
 /// 保留天数 → 裁剪下限（纯计算，可测）。`None` = 永久保留。
 ///
 /// `days <= 0` 视为永久；上限 3650（约 10 年）：极端大值在 release 下
@@ -476,28 +465,6 @@ fn history_cutoff_days(days: i64, now_secs: i64) -> Option<i64> {
 }
 
 impl AppState {
-    /// 记一条列表耗时（环形，满了丢最旧）。
-    fn push_timing(&self, timing: dto::ListTiming) {
-        let mut cell = self
-            .timings
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if cell.len() == TIMING_LIMIT {
-            cell.pop_front();
-        }
-        cell.push_back(timing);
-    }
-
-    /// 诊断页快照（旧 → 新）。
-    fn timings_recent(&self) -> Vec<dto::ListTiming> {
-        self.timings
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .cloned()
-            .collect()
-    }
-
     fn db(&self) -> std::sync::MutexGuard<'_, aiya_data::DbHandle> {
         self.db
             .lock()
@@ -680,6 +647,13 @@ fn setting_set(conn: &rusqlite::Connection, key: &str, value: &Value) -> rusqlit
 /// 批量收集 ID 的硬上限（防极端库把队列撑爆；超限会记 warn）。
 const ID_COLLECT_CAP: usize = 50_000;
 
+/// 批量 IN 查询的分块大小（`track_refs_by_ids_db` 用）。
+///
+/// SQLite 的变量上限是 32766（编译期可配更低），留足余量取 900/批：
+/// 5 万首（[`ID_COLLECT_CAP`]）约 56 个往返，既不撞上限，也不至于为
+/// 一次点播拼出上万占位符的巨型 SQL。
+const TRACK_REF_IN_CHUNK: usize = 900;
+
 const DEFAULT_SETTINGS: &str = r#"{
   "theme": "dark",
   "ambient": "aurora",
@@ -689,7 +663,6 @@ const DEFAULT_SETTINGS: &str = r#"{
   "npSpectrum": false,
   "spectrumStyle": "mirror",
   "ridgeGlow": "balanced",
-  "mediaKeys": true,
   "output": { "mode": "shared", "bufferMs": 0, "clock": "auto", "releaseOnPause": true },
   "autoplayOnStart": false,
   "rememberPosition": true,
@@ -705,9 +678,6 @@ const DEFAULT_SETTINGS: &str = r#"{
 #[tauri::command]
 fn app_info(state: State<'_, AppState>) -> Result<dto::AppInfo, dto::ApiError> {
     Ok(dto::AppInfo {
-        version: env!("CARGO_PKG_VERSION").into(),
-        electron: "tauri".into(),
-        platform: std::env::consts::OS.into(),
         data_dir: state
             .db_path
             .parent()
@@ -946,99 +916,23 @@ fn app_set_settings(
     Ok(settings)
 }
 
-/// 诊断页。v1 第一切：统计字段真实，引擎/系统字段为占位（P2/P4 回填）。
+/// 诊断快照（设置→系统/关于）。只装**有消费方**的字段：UI 读什么就发什么。
+/// v1 时代这里塞过 20 个字段，大半没有任何页面读过（统计与 LibraryStats
+/// 重复、流计数恒 0、audioMode 的真实出口是 `audio:mode` 事件），每次拉取
+/// 还要白跑一轮 COUNT 查询——压平就是删到只剩被读的。
+/// media_keys 字段随后退役："系统媒体键"开关取消、SMTC 常开（2026-11-04），
+/// SMTC 健康走"最近错误"台账，诊断里不再报会话状态。
 #[tauri::command]
 fn app_diagnostics(state: State<'_, AppState>) -> Result<dto::Diagnostics, dto::ApiError> {
     let db_path = state.db_path.clone();
-    let smtc_active = state.smtc_active.load(Ordering::Relaxed);
-    let sleep_prevented = state.sleep_prevented.load(Ordering::Relaxed);
-    let tray_active = state.tray_active.load(Ordering::Relaxed);
-    let audio = state
-        .audio_state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
-    // 必须在进入 db 闭包之前读（同一个 DB 线程，闭包里再 send 会死锁）
-    let desired = state.setting_output();
-    // 同样必须在 db 闭包之前取：闭包跑在 DB 单 worker 上，不能再回头锁别的
-    let timings = state.timings_recent();
-    let recent = dto::recent_errors();
-    state
-        .db()
-        .send(move |conn| {
-            let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
-            let db_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0) as i64
-                + std::fs::metadata(db_path.with_extension("sqlite-wal"))
-                    .map(|m| m.len())
-                    .unwrap_or(0) as i64;
-            Ok(dto::Diagnostics {
-                version: env!("CARGO_PKG_VERSION").into(),
-                electron: "tauri".into(),
-                platform: std::env::consts::OS.into(),
-                data_dir: db_path
-                    .parent()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                // 日志位置：出问题时让用户直接把这两个路径发过来
-                log_dir: logging::dir().map(|p| p.to_string_lossy().into_owned()),
-                log_file: logging::dir().map(|p| {
-                    p.join(format!("aiya-{}.log", logging::today()))
-                        .to_string_lossy()
-                        .into_owned()
-                }),
-                schema_version: conn
-                    .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-                    .unwrap_or(0),
-                db_bytes,
-                tracks: count("SELECT COUNT(*) FROM tracks"),
-                albums: count("SELECT COUNT(*) FROM albums"),
-                artists: count("SELECT COUNT(*) FROM artists"),
-                playlists: count("SELECT COUNT(*) FROM playlists"),
-                history_rows: count("SELECT COUNT(*) FROM history"),
-                total_duration_ms: count("SELECT COALESCE(SUM(duration_ms),0) FROM tracks"),
-                // 引擎侧目前只暴露 written_frames，没有流计数；保留结构不编数字
-                streams: dto::StreamsInfo {
-                    opened: 0,
-                    closed: 0,
-                    active: 0,
-                },
-                list_timings: timings,
-                recent_errors: recent,
-                media_keys: dto::MediaKeysInfo {
-                    enabled: smtc_active,
-                    active: if smtc_active {
-                        vec!["SMTC".into()]
-                    } else {
-                        Vec::new()
-                    },
-                    failed: if smtc_active {
-                        Vec::new()
-                    } else {
-                        vec!["SMTC 初始化失败".into()]
-                    },
-                },
-                power: dto::PowerInfo {
-                    active: sleep_prevented,
-                    kind: sleep_prevented.then(|| "SetThreadExecutionState".into()),
-                },
-                tray: tray_active,
-                audio_mode: dto::AudioModeInfo {
-                    requested: audio.requested,
-                    mode: audio.mode,
-                    clock: audio.clock,
-                    buffer_ms: audio.buffer_ms,
-                    format: audio.format,
-                    note: Some(audio.reason).filter(|s| !s.is_empty()),
-                    desired: dto::DesiredOutput {
-                        mode: desired.mode.as_str().into(),
-                        buffer_ms: desired.buffer_ms,
-                        clock: desired.clock.as_str().into(),
-                        release_on_pause: desired.release_on_pause,
-                    },
-                },
-            })
-        })
-        .map_err(dto::ApiError::from)
+    Ok(dto::Diagnostics {
+        version: env!("CARGO_PKG_VERSION").into(),
+        data_dir: db_path
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        recent_errors: dto::recent_errors(),
+    })
 }
 
 /// 在资源管理器中打开数据目录。打不开也不算失败（用户就是想看看文件在哪，
@@ -1221,9 +1115,7 @@ fn beets_set_inbox(
     let roots = roots_of(&app)?;
     if let Some(p) = trimmed {
         if path_conflicts_with_roots(p, &roots) {
-            return Err(dto::ApiError::invalid_arg(
-                "待整理目录不能与曲库目录重叠",
-            ));
+            return Err(dto::ApiError::invalid_arg("待整理目录不能与曲库目录重叠"));
         }
     }
     let inbox = trimmed.map(str::to_string);
@@ -1250,9 +1142,7 @@ fn beets_set_target(
     let p = path.trim().to_string();
     let roots = roots_of(&app)?;
     if !path_within_roots(&p, &roots) {
-        return Err(dto::ApiError::invalid_arg(
-            "整理落点必须在曲库目录内",
-        ));
+        return Err(dto::ApiError::invalid_arg("整理落点必须在曲库目录内"));
     }
     let saved = p;
     beets::update_settings(&app, move |s| s.target_root = Some(saved))
@@ -1724,15 +1614,10 @@ async fn library_list(
     state: State<'_, AppState>,
     query: Json,
 ) -> Result<aiya_data::repo::TrackPage, dto::ApiError> {
-    // 端到端计时起点：含 DB 线程排队（TrackPage::took_ms 只含 SQL）
-    let started = std::time::Instant::now();
     // 参数仍然是 Value + 手动反序列化：形状不对时由我们给出 `invalidArg`
     // 分类，而不是把 Tauri 自己的反序列化文案抛给 UI（分类权要留在自己手里）。
     let q: TrackWindowQuery = serde_json::from_value(query)
         .map_err(|e| dto::ApiError::invalid_arg(format!("查询参数不合法：{e}")))?;
-    // 埋点要用的元信息必须在 `q` 被 move 进闭包之前取出
-    let source = source_label(&q.source);
-    let cursor = q.cursor.clone();
     // P2：此命令曾是同步——Tauri 2 的同步命令跑在主线程，每页
     // 都要在主线程干等 DB 线程回包（5 万行深页 10–35ms），快速滚动时多页
     // 请求在主线程排成连续冻结段。改 async + spawn_blocking：等待发生在
@@ -1744,41 +1629,22 @@ async fn library_list(
     .await
     .map_err(dto::ApiError::internal)?
     .map_err(dto::ApiError::from)?;
-    state.push_timing(dto::ListTiming {
-        at_ms: now_ms_u64() as i64,
-        source,
-        rows: page.items.len() as i64,
-        total: page.total,
-        took_ms: started.elapsed().as_secs_f64() * 1000.0,
-        db_took_ms: page.took_ms as f64,
-        cursor,
-    });
     Ok(page)
-}
-
-/// `TrackSource` → 诊断页"来源"那一列的短标签。
-///
-/// 不走 serde：序列化出来是 `{"kind":"playlist","playlistId":"..."}` 一整坨，
-/// 而这张表只留一列。歌单视图下知道"是 playlist"就够，具体哪个看界面。
-fn source_label(source: &aiya_data::repo::TrackSource) -> String {
-    use aiya_data::repo::TrackSource;
-    match source {
-        TrackSource::Library => "library".into(),
-        TrackSource::Playlist { .. } => "playlist".into(),
-        TrackSource::Recent => "recent".into(),
-        TrackSource::MostPlayed => "mostPlayed".into(),
-    }
 }
 
 /// 单曲/多曲查询（播放条数据源）：带出音频规格。列表查询不带（契约约定）。
 #[tauri::command]
-fn library_tracks(
+async fn library_tracks(
     state: State<'_, AppState>,
     ids: Vec<String>,
 ) -> Result<Vec<dto::TrackDetail>, dto::ApiError> {
-    state
-        .db()
-        .send(move |conn| {
+    // P2：此命令曾是同步——Tauri 2 的同步命令跑在主线程，每次都要在主线程
+    // 干等 DB 线程回包（逐 id 点查，几十首就是几十次点查的串行时长）。
+    // 改 async + spawn_blocking：等待发生在 tokio 池，主线程全程空闲。
+    // DbHandle 是克隆型句柄（db.rs §161）。
+    let db = state.db().clone();
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        db.send(move |conn| {
             let mut out = Vec::with_capacity(ids.len());
             for id in &ids {
                 // 列顺序必须与 `aiya_data::repo::row_to_track`
@@ -1827,7 +1693,11 @@ fn library_tracks(
             }
             Ok(out)
         })
-        .map_err(dto::ApiError::from)
+    })
+    .await
+    .map_err(dto::ApiError::internal)?
+    .map_err(dto::ApiError::from)?;
+    Ok(out)
 }
 
 #[tauri::command]
@@ -1934,6 +1804,12 @@ async fn library_scan_body(
     if state.scanning.swap(true, Ordering::SeqCst) {
         return Err(dto::ApiError::busy("已有扫描在进行"));
     }
+    // 置位成功即挂 RAII 兜底：本函数此后有多个提前 return（DB 故障、根全无效、
+    // spawn_blocking 的 join 失败），spawn_blocking 闭包里还可能 panic —— 此前
+    // 置位/复位全是手工 store，任何一条路径漏掉复位，`scanning` 就永真，
+    // 之后所有扫描报 busy，用户只能重启应用。FlagGuard 的 Drop（含 unwind）
+    // 保证所有退出路径必复位（教训同 refresh.rs 的同名 guard）。
+    let _scanning_guard = refresh::FlagGuard(Arc::clone(&state.scanning));
 
     // 根列表优先级：
     // 显式 options.roots > 设置里的根。
@@ -1957,16 +1833,13 @@ async fn library_scan_body(
         list
     } else {
         // DB 故障要如实报 internal，不能吞成"未配置扫描目录"（那会把用户
-        // 引去改配置，而配置根本没坏）。scanning 已置位，提前返回前先复位。
+        // 引去改配置，而配置根本没坏）。
         match state
             .db()
             .send(|conn| Ok(refresh::roots_from_settings(conn)))
         {
             Ok(roots) => roots,
-            Err(e) => {
-                state.scanning.store(false, Ordering::SeqCst);
-                return Err(dto::ApiError::internal(e));
-            }
+            Err(e) => return Err(dto::ApiError::internal(e)),
         }
     };
 
@@ -1979,7 +1852,6 @@ async fn library_scan_body(
         .collect();
     roots.retain(|r| r.is_dir());
     if roots.is_empty() {
-        state.scanning.store(false, Ordering::SeqCst);
         let detail = if invalid.is_empty() {
             "未配置任何扫描目录".to_string()
         } else {
@@ -2031,8 +1903,8 @@ async fn library_scan_body(
     .await
     .map_err(dto::ApiError::internal)?;
 
-    // 无论成功失败都要放开互斥，否则一次失败之后整个会话都扫不了库
-    state.scanning.store(false, Ordering::SeqCst);
+    // 互斥的放开由 `_scanning_guard` 的 Drop 负责：成功、失败、panic 三条路
+    // 走的都是同一个出口，不存在"漏复位"分支。
     result
 }
 
@@ -2283,26 +2155,42 @@ fn library_roots_count(
 /// （前缀已删空再删是 0 行）。
 #[tauri::command]
 fn library_roots_prune(
+    app: AppHandle,
     state: State<'_, AppState>,
     paths: Vec<String>,
 ) -> Result<dto::library::RemoveTracks, dto::ApiError> {
-    let removed = state
+    let (removed, deleted) = state
         .db()
         .send(move |conn| {
             let mut removed = 0i64;
+            let mut deleted = Vec::new();
             for p in &paths {
                 let prefix = root_prefix_lower(p);
                 if prefix == "\\" {
                     continue;
+                }
+                // 先取将被删除的 id 再删：外键 CASCADE 删完就查不到了，
+                // 而队列同步（prune_queue_for_deleted）需要这份名单
+                {
+                    let mut stmt =
+                        conn.prepare("SELECT id FROM tracks WHERE substr(path_lower, 1, ?2) = ?1")?;
+                    deleted.extend(
+                        stmt.query_map(
+                            rusqlite::params![prefix, prefix.chars().count() as i64],
+                            |r| r.get::<_, String>(0),
+                        )?
+                        .collect::<Result<Vec<_>, _>>()?,
+                    );
                 }
                 removed += conn.execute(
                     "DELETE FROM tracks WHERE substr(path_lower, 1, ?2) = ?1",
                     rusqlite::params![prefix, prefix.chars().count() as i64],
                 )? as i64;
             }
-            Ok(removed)
+            Ok((removed, deleted))
         })
         .map_err(|e| dto::ApiError::internal(format!("清除目录曲目失败：{e}")))?;
+    prune_queue_for_deleted(&state, &app, &deleted);
     Ok(dto::library::RemoveTracks { removed })
 }
 
@@ -2310,14 +2198,22 @@ fn library_roots_prune(
 /// 历史靠外键级联清空，歌单壳（名称/规则）保留。用户重建曲库的入口：
 /// 目录换盘、索引损坏重扫，都比逐目录删除省事。
 #[tauri::command]
-fn library_clear(state: State<'_, AppState>) -> Result<dto::library::RemoveTracks, dto::ApiError> {
-    let removed = state
+fn library_clear(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<dto::library::RemoveTracks, dto::ApiError> {
+    let (removed, deleted) = state
         .db()
         .send(|conn| {
+            let ids: Vec<String> = conn
+                .prepare("SELECT id FROM tracks")?
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<Vec<_>, _>>()?;
             let n = conn.execute("DELETE FROM tracks", [])? as i64;
-            Ok(n)
+            Ok((n, ids))
         })
         .map_err(|e| dto::ApiError::internal(format!("清空曲库失败：{e}")))?;
+    prune_queue_for_deleted(&state, &app, &deleted);
     Ok(dto::library::RemoveTracks { removed })
 }
 
@@ -2380,7 +2276,7 @@ struct SelectionRequest {
 
 /// 批量选择 → ID。indices 为字符串 "all" 或下标数组。
 #[tauri::command]
-fn library_ids_for_selection(
+async fn library_ids_for_selection(
     state: State<'_, AppState>,
     request: Json,
 ) -> Result<Vec<String>, dto::ApiError> {
@@ -2399,9 +2295,13 @@ fn library_ids_for_selection(
         Some(SelectionIndices::List(v)) => (false, v),
     };
 
-    state
-        .db()
-        .send(move |conn| {
+    // P2：此命令曾是同步——Tauri 2 的同步命令跑在主线程，"全选"要在主线程
+    // 干等 DB 线程把最多 5 万个 id 收完（几十毫秒量级，叠加排序还会更长），
+    // 期间整个界面冻结。改 async + spawn_blocking：等待发生在 tokio 池。
+    // DbHandle 是克隆型句柄（db.rs §161）。
+    let db = state.db().clone();
+    let ids = tauri::async_runtime::spawn_blocking(move || {
+        db.send(move |conn| {
             // 批量取全量 ID 统一走 collect_track_ids：它按来源选择推进方式 （library=游标 / 歌单等=offset）。此前这里只写 `q.cursor`，而 UI 传进来的 query 恒为
             // offset 模式 → cursor 被忽略 → 每轮同一页 → 死循环占死 DB 线程，任何一次多选批量操作都会冻死整个 App。
             let collected = repo::collect_track_ids(conn, &query, ID_COLLECT_CAP)?;
@@ -2417,26 +2317,42 @@ fn library_ids_for_selection(
                     .collect()
             })
         })
-        .map_err(dto::ApiError::from)
+    })
+    .await
+    .map_err(dto::ApiError::internal)?
+    .map_err(dto::ApiError::from)?;
+    Ok(ids)
 }
 
+/// 从曲库移除这些曲目（**只删索引，不动磁盘文件**）。playlist_items /
+/// history 靠外键级联清理；队列不同——Actor 内存里还拿着这些 id，写回会
+/// 外键违规，所以删完立刻 `prune_queue_for_deleted` 同步摘除。
 #[tauri::command]
 fn library_remove_tracks(
+    app: AppHandle,
     state: State<'_, AppState>,
     track_ids: Vec<String>,
 ) -> Result<dto::library::RemoveTracks, dto::ApiError> {
-    state
+    let (removed, deleted) = state
         .db()
         .send(move |conn| {
             let mut removed = 0i64;
+            let mut deleted = Vec::new();
             for id in &track_ids {
-                removed += conn
-                    .execute("DELETE FROM tracks WHERE id = ?1", [id])
-                    .unwrap_or(0) as i64;
+                match conn.execute("DELETE FROM tracks WHERE id = ?1", [id]) {
+                    Ok(n) if n > 0 => {
+                        removed += n as i64;
+                        deleted.push(id.clone());
+                    }
+                    // 已不存在：幂等重试，不算删也不进队列同步
+                    _ => {}
+                }
             }
-            Ok(dto::library::RemoveTracks { removed })
+            Ok((removed, deleted))
         })
-        .map_err(dto::ApiError::from)
+        .map_err(dto::ApiError::from)?;
+    prune_queue_for_deleted(&state, &app, &deleted);
+    Ok(dto::library::RemoveTracks { removed })
 }
 
 /* 路径解析：另一个库的路径 → 本库曲目 id */
@@ -3214,6 +3130,48 @@ fn persist_queue_state_handle(state: &AppState, actor: &aiya_player::PlayerActor
     }
 }
 
+/// 曲库删除后同步 Actor 队列：把指向已删曲目的条目从播放队列里摘掉。
+///
+/// queue_items 对 tracks 有外键（ON DELETE CASCADE 只级联库内行），Actor 内存
+/// 队列若还持有已删 id，下一次 save_queue_full 原样重插就外键违规、整个事务
+/// 回滚——此后每次切歌的队列/进度落库都静默失败，重启后回退到很久以前的
+/// 快照。摘除走既有 Remove 归约（与队列面板删行同一坐标系）：删到当前曲时
+/// Actor 自会"跳下一首/回 Idle"，队列面板也同步看到曲目消失。
+fn prune_queue_for_deleted(state: &AppState, app: &AppHandle, deleted: &[String]) {
+    if deleted.is_empty() {
+        return;
+    }
+    let gone: std::collections::HashSet<&str> = deleted.iter().map(String::as_str).collect();
+    let mut actor = state
+        .player
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // 快照与归约同临界区：并发改队（SMTC 切歌等）会让算出的下标错位删错歌。
+    let indices: Vec<usize> = actor
+        .queue_snapshot()
+        .ids
+        .iter()
+        .enumerate()
+        .filter(|(_, id)| gone.contains(id.as_str()))
+        .map(|(i, _)| i)
+        .collect();
+    if indices.is_empty() {
+        return;
+    }
+    actor.reduce(aiya_player::PlayerCommand::Queue(
+        aiya_player::QueueOp::Remove { indices },
+    ));
+    // 引擎意图照常出口（删到当前曲 → 换曲/停止）。落库**不按 acted 门控**
+    // （drive_and_emit_inner 的规则在这里不适用）：队列本身变了就必须写，
+    // 否则 CASCADE 后的库内行与内存队列不一致，重启恢复丢布局。
+    let _ = apply_engine_intents(state, &mut actor);
+    let snap = queue_full_persist_snapshot(state, &actor);
+    let snapshot = actor.state();
+    drop(actor);
+    persist_queue_full_snapshot(state, snap);
+    emit_player_state(app, &snapshot);
+}
+
 /// 把 Actor 的"装载/停止"意图下发到引擎。
 ///
 /// 三个调用点（命令路径 / 事件泵 / 启动恢复）此前各抄一遍，且都 `let _ = start_ms`
@@ -3286,14 +3244,27 @@ fn engine_send(state: &AppState, cmd: aiya_audio::EngineCommand) {
 /// 第 2 条是**队列面板点播**必须的：面板回传的是队列里的原 id，里面可能混着
 /// 临时项。只查 `tracks` 会把它们静默丢掉 —— 于是"点第 3 行播的是第 1 行"，
 /// 而且队列里只要有一首直播流，整个点播都会因为空列表直接报"没有可播放的曲目"。
-fn track_refs_by_ids(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_player::TrackRef> {
+///
+/// 拿 `State<'_>` 的命令直接调这层；async 命令（spawn_blocking 里）调
+/// [`track_refs_by_ids_db`]，避免把命令参数的生命期带进闭包。
+fn track_refs_by_ids(state: &AppState, ids: &[String]) -> Vec<aiya_player::TrackRef> {
+    track_refs_by_ids_db(&state.db().clone(), ids)
+}
+
+/// [`track_refs_by_ids`] 的 DB 层：持有 `DbHandle` 克隆即可跑（克隆是廉价句柄，
+/// db.rs §161）。
+fn track_refs_by_ids_db(db: &aiya_data::DbHandle, ids: &[String]) -> Vec<aiya_player::TrackRef> {
     let ids = ids.to_vec();
-    state
-        .db()
-        .send(move |conn| {
-            // 临时项先一次读完建映射：条数是个位数，比按 id 逐条回查省事。
-            // 读失败按"没有临时项"处理——库内曲目那条路不该被它带塌。
-            let transient: std::collections::HashMap<String, aiya_player::TrackRef> =
+    db.send(move |conn| {
+        // 临时项映射：**仅当请求里真有 file:/stream: 前缀 id** 才读队列。
+        // 此前无条件 load_queue 整张表，只为解析临时 id —— 纯库内点播（绝大多数
+        // 调用）为一张用不上的映射付全队列往返。读失败按"没有临时项"处理——
+        // 库内曲目那条路不该被它带塌。
+        let transient: std::collections::HashMap<String, aiya_player::TrackRef> =
+            if ids.iter().any(|id| {
+                id.starts_with(aiya_player::FILE_ID_PREFIX)
+                    || id.starts_with(aiya_player::STREAM_ID_PREFIX)
+            }) {
                 aiya_data::queue::load_queue(conn)
                     .ok()
                     .flatten()
@@ -3306,66 +3277,86 @@ fn track_refs_by_ids(state: &State<'_, AppState>, ids: &[String]) -> Vec<aiya_pl
                             })
                             .collect()
                     })
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+            } else {
+                Default::default()
+            };
 
+        // 库内行分批 IN 一次查回：此前逐 id query_row，"播放全部"5 万首就是
+        // 5 万次点查占死 DB 单 worker。900/批远低于 SQLite 变量上限（32766），
+        // 5 万首约 56 个往返。命中进映射后按**入参顺序**出——缺失跳过、重复 id
+        // 重复出现，与原逐条查询语义一致。
+        let mut by_id: std::collections::HashMap<String, aiya_player::TrackRef> =
+            std::collections::HashMap::new();
+        let wanted: Vec<&String> = ids
+            .iter()
+            .filter(|id| !transient.contains_key(id.as_str()))
+            .collect();
+        for chunk in wanted.chunks(TRACK_REF_IN_CHUNK) {
             // 音频规格列一并带出：PlayerState.current 是播放条唯一数据源，
             // 徽章/规格/Hi-Res 判定都靠 current.audio（contracts Track.audio）
-            let mut stmt = conn.prepare(
+            let placeholders = (1..=chunk.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
                 "SELECT t.id, t.title, ar.name, al.title, t.duration_ms, t.artwork_id, t.gain_db, t.path,
                         t.codec, t.container, t.sample_rate, t.bits_per_sample, t.bitrate, t.channels,
                         t.artist_id, t.album_id
                  FROM tracks t
                  LEFT JOIN artists ar ON ar.id = t.artist_id
                  LEFT JOIN albums al ON al.id = t.album_id
-                 WHERE t.id = ?1",
-            )?;
-            let mut out = Vec::with_capacity(ids.len());
-            for id in &ids {
-                if let Some(hit) = transient.get(id) {
-                    out.push(hit.clone());
-                    continue;
-                }
-                let row = stmt.query_row([id], |r| {
-                    let codec: Option<String> = r.get(8)?;
-                    let container: Option<String> = r.get(9)?;
-                    let audio = if codec.is_some() || container.is_some() {
-                        let lossless = aiya_player::TrackAudio::infer_lossless(
-                            codec.as_deref(),
-                            container.as_deref(),
-                        );
-                        Some(aiya_player::TrackAudio {
-                            codec,
-                            container,
-                            sample_rate: r.get(10)?,
-                            bits_per_sample: r.get(11)?,
-                            bitrate: r.get(12)?,
-                            channels: r.get(13)?,
-                            lossless,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok(aiya_player::TrackRef {
-                        id: r.get(0)?,
-                        title: r.get(1)?,
-                        artist: r.get(2)?,
-                        album: r.get(3)?,
-                        artist_id: r.get(14)?,
-                        album_id: r.get(15)?,
-                        duration_ms: r.get(4)?,
-                        artwork_id: r.get(5)?,
-                        gain_db: r.get(6)?,
-                        audio,
-                        path: r.get(7)?,
+                 WHERE t.id IN ({placeholders})"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |r| {
+                let codec: Option<String> = r.get(8)?;
+                let container: Option<String> = r.get(9)?;
+                let audio = if codec.is_some() || container.is_some() {
+                    let lossless =
+                        aiya_player::TrackAudio::infer_lossless(codec.as_deref(), container.as_deref());
+                    Some(aiya_player::TrackAudio {
+                        codec,
+                        container,
+                        sample_rate: r.get(10)?,
+                        bits_per_sample: r.get(11)?,
+                        bitrate: r.get(12)?,
+                        channels: r.get(13)?,
+                        lossless,
                     })
-                });
-                if let Ok(t) = row {
-                    out.push(t);
-                }
+                } else {
+                    None
+                };
+                Ok(aiya_player::TrackRef {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    artist: r.get(2)?,
+                    album: r.get(3)?,
+                    artist_id: r.get(14)?,
+                    album_id: r.get(15)?,
+                    duration_ms: r.get(4)?,
+                    artwork_id: r.get(5)?,
+                    gain_db: r.get(6)?,
+                    audio,
+                    path: r.get(7)?,
+                })
+            })?;
+            for row in rows {
+                let t = row?;
+                by_id.insert(t.id.clone(), t);
             }
-            Ok(out)
-        })
-        .unwrap_or_default()
+        }
+        let mut out = Vec::with_capacity(ids.len());
+        for id in &ids {
+            if let Some(hit) = transient.get(id) {
+                out.push(hit.clone());
+            } else if let Some(t) = by_id.get(id.as_str()) {
+                out.push(t.clone());
+            }
+        }
+        Ok(out)
+    })
+    .unwrap_or_default()
 }
 
 /// 队列恢复：多态条目 → `TrackRef` 列表（docs/52 §6.3）。
@@ -3425,13 +3416,21 @@ fn player_queue(state: State<'_, AppState>) -> Result<aiya_player::QueueSnapshot
 }
 
 #[tauri::command]
-fn player_play_tracks(
+async fn player_play_tracks(
     app: AppHandle,
     state: State<'_, AppState>,
     track_ids: Vec<String>,
     start_index: Option<usize>,
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
-    let tracks = track_refs_by_ids(&state, &track_ids);
+    // P2：此命令曾是同步——Tauri 2 的同步命令跑在主线程，点播要在主线程
+    // 干等 DB 逐 id 回查（队列面板整队重播时是几十上百次点查）。改 async +
+    // spawn_blocking：等待发生在 tokio 池，主线程全程空闲。
+    // track_refs_by_ids 的 DB 层拿 DbHandle 克隆即可跑（db.rs §161）。
+    let db = state.db().clone();
+    let tracks =
+        tauri::async_runtime::spawn_blocking(move || track_refs_by_ids_db(&db, &track_ids))
+            .await
+            .map_err(dto::ApiError::internal)?;
     if tracks.is_empty() {
         return Err(dto::ApiError::not_found("没有可播放的曲目"));
     }
@@ -3450,7 +3449,7 @@ fn player_play_tracks(
 
 /// 按 TrackWindowQuery 语义播放查询结果（UI 的"播放全部/播放专辑"）。
 #[tauri::command]
-fn player_play_query(
+async fn player_play_query(
     app: AppHandle,
     state: State<'_, AppState>,
     query: Json,
@@ -3458,22 +3457,31 @@ fn player_play_query(
 ) -> Result<aiya_player::PlayerState, dto::ApiError> {
     let q: aiya_data::TrackWindowQuery = serde_json::from_value(query)
         .map_err(|e| dto::ApiError::invalid_arg(format!("查询参数不合法：{e}")))?;
-    // 拉全量 id：list_tracks 的 limit 硬钳 500（窗口化列表的正确行为），
-    // 此前把 limit 写成 10000 以为能拿全，实际只播了前 500 首。
-    let (ids, truncated): (Vec<String>, bool) = state
-        .db()
-        .send(move |conn| {
-            let c = aiya_data::repo::collect_track_ids(conn, &q, ID_COLLECT_CAP)?;
-            Ok((c.ids, c.truncated))
-        })
-        .map_err(dto::ApiError::from)?;
-    if truncated {
-        tracing::warn!(cap = ID_COLLECT_CAP, "播放全部：曲目数超过上限，已截断");
-    }
-    if ids.is_empty() {
-        return Err(dto::ApiError::not_found("查询结果为空"));
-    }
-    let tracks = track_refs_by_ids(&state, &ids);
+    // P2：此命令曾是同步——Tauri 2 的同步命令跑在主线程，"播放全部"要在
+    // 主线程先后等两次 DB：收最多 5 万个 id，再逐 id 回查 TrackRef（5 万次
+    // 点查）。主线程被占住的时间以秒计。改 async + spawn_blocking：两次
+    // DB 往返都在阻塞池里完成，主线程只在归约/落库那几步参与。
+    // DbHandle 是克隆型句柄（db.rs §161）。
+    let db = state.db().clone();
+    let tracks = tauri::async_runtime::spawn_blocking(move || -> Result<_, dto::ApiError> {
+        // 拉全量 id：list_tracks 的 limit 硬钳 500（窗口化列表的正确行为），
+        // 此前把 limit 写成 10000 以为能拿全，实际只播了前 500 首。
+        let (ids, truncated) = db
+            .send(move |conn| {
+                let c = aiya_data::repo::collect_track_ids(conn, &q, ID_COLLECT_CAP)?;
+                Ok((c.ids, c.truncated))
+            })
+            .map_err(dto::ApiError::from)?;
+        if truncated {
+            tracing::warn!(cap = ID_COLLECT_CAP, "播放全部：曲目数超过上限，已截断");
+        }
+        if ids.is_empty() {
+            return Err(dto::ApiError::not_found("查询结果为空"));
+        }
+        Ok(track_refs_by_ids_db(&db, &ids))
+    })
+    .await
+    .map_err(dto::ApiError::internal)??;
     let start = start_index.unwrap_or(0);
     {
         let mut actor = state
@@ -3488,36 +3496,45 @@ fn player_play_query(
 }
 
 /// 播放/暂停切换的内部实现（tauri command 与 SMTC 回调共用）。
+///
+/// 读状态、归约、定引擎命令在**同一临界区**内完成：此前读-发-写三段分离，
+/// SMTC 媒体键与 UI 按钮同帧触发时都读到 Playing → 引擎收两条 Pause（幂等，
+/// 停住），Actor 却被归约两次回到 Playing → UI 显示播放中、引擎暂停、进度
+/// 冻结；泵对引擎状态回显不做对齐，分叉不自愈。归约在前、命令按归约后的
+/// 语义定，并发第二次进入读到的已是新状态，天然收敛。
 fn cmd_toggle(state: &AppState, app: &AppHandle) -> aiya_player::PlayerState {
-    let (status_before, source_before) = {
-        let actor = state
-            .player
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let s = actor.state();
-        (s.status, s.source)
-    };
     use aiya_player::PlaybackStatus as PS;
-    // 直播流：暂停 = 断开、播放 = 重连，**都不走 Pause/Resume**。
-    // 这两个意图由 Actor 转成 pending_stop / pending_load，和其余引擎意图同一
-    // 出口下发——在这里直接发 Pause 会把流留在连着的状态（暂停 30 秒回来听到的
-    // 是 30 秒前），直接发 Resume 则根本没有流可放。
-    let is_stream = source_before == aiya_player::AudioSource::Stream;
-    if !is_stream {
-        match status_before {
-            PS::Playing => engine_send(state, aiya_audio::EngineCommand::Pause),
-            PS::Paused => engine_send(state, aiya_audio::EngineCommand::Resume),
-            _ => {
-                // Idle/Error：从当前位置重播（Actor 决定 load）
-            }
-        }
-    }
-    {
+    let engine_cmd = {
         let mut actor = state
             .player
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let status_before = actor.state().status;
+        let source_before = actor.state().source;
         actor.reduce(aiya_player::PlayerCommand::TogglePause);
+        match (status_before, source_before) {
+            // 直播流：暂停 = 断开、播放 = 重连，**都不走 Pause/Resume**。
+            // 这两个意图由 Actor 转成 pending_stop / pending_load，和其余引擎
+            // 意图同一出口下发——在这里直接发 Pause 会把流留在连着的状态
+            // （暂停 30 秒回来听到的是 30 秒前），直接发 Resume 则没有流可放。
+            (PS::Playing | PS::Paused, aiya_player::AudioSource::Stream) => None,
+            (PS::Playing, _) => Some(aiya_audio::EngineCommand::Pause),
+            (PS::Paused, _) => Some(aiya_audio::EngineCommand::Resume),
+            // 装载窗口（autoplay 装载已在开流期出声）：意图已翻转入
+            // pending_pause，必须同步给引擎——否则 Loaded 落 Paused 后引擎还在
+            // 放，用户再按播放又被引擎 `Resume if paused` 守卫吞掉（"暂停键
+            // 失灵一次"）。
+            (PS::Loading, _) => Some(if actor.pending_pause() {
+                aiya_audio::EngineCommand::Pause
+            } else {
+                aiya_audio::EngineCommand::Resume
+            }),
+            // Idle/Error：从当前位置重播（Actor 决定 load，走 pending_load 出口）
+            (PS::Idle | PS::Error, _) => None,
+        }
+    };
+    if let Some(cmd) = engine_cmd {
+        engine_send(state, cmd);
     }
     drive_and_emit_inner(state, app)
 }
@@ -3614,10 +3631,11 @@ fn player_set_volume(
             .player
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        actor.reduce(aiya_player::PlayerCommand::SetVolume {
-            volume,
-            muted: false,
-        });
+        // 调音量不动静音开关：此前硬写 muted:false，静音中拖音量条会**静默
+        // 解除静音**（UI 上静音图标还亮着，声音却出来了）。当前 muted 必须在
+        // 同一把锁里先读再用——分两次锁，中间夹进 toggle_mute 就会互相覆盖。
+        let (_, muted) = actor.volume();
+        actor.reduce(aiya_player::PlayerCommand::SetVolume { volume, muted });
         let v = actor.engine_volume();
         engine_send(&state, aiya_audio::EngineCommand::SetVolume(v));
     }
@@ -3897,81 +3915,91 @@ fn classify_paths(paths: Vec<String>) -> Vec<dto::DroppedItem> {
 /// 已在曲库里的音频文件走库内行（封面/艺人/时长齐全），不在库里的按临时项
 /// （`file:` 前缀）进队列——两种混在同一个队列里，next/prev/队列面板零分支。
 #[tauri::command]
-fn player_open_paths(
+async fn player_open_paths(
     app: AppHandle,
     state: State<'_, AppState>,
     paths: Vec<String>,
 ) -> Result<dto::OpenPathsReceipt, dto::ApiError> {
-    let mut skipped: Vec<String> = Vec::new();
-    let candidates = expand_dropped(&paths, &mut skipped);
-    if candidates.is_empty() {
-        // 全部跳过时说清为什么（比"没有可播放的文件"有用）
-        return Err(dto::ApiError::invalid_arg(if skipped.is_empty() {
-            "没有可播放的文件".to_string()
-        } else {
-            format!("没有可播放的文件：{}", skipped.join("；"))
-        }));
-    }
+    // P2：此命令曾是同步——Tauri 2 的同步命令跑在主线程，拖一把文件要在
+    // 主线程依次做：读 m3u 展开列表（磁盘 IO，网络盘/杀软下几十毫秒起步）、
+    // 两次 DB 往返（路径解析 + TrackRef 回查）。改 async + spawn_blocking：
+    // 以上全部发生在阻塞池，主线程只在归约/落库那几步参与。
+    // DbHandle 是克隆型句柄（db.rs §161）。
+    let db = state.db().clone();
+    let (tracks, opened, skipped) = tauri::async_runtime::spawn_blocking(
+        move || -> Result<(Vec<aiya_player::TrackRef>, usize, Vec<String>), dto::ApiError> {
+            let mut skipped: Vec<String> = Vec::new();
+            let candidates = expand_dropped(&paths, &mut skipped);
+            if candidates.is_empty() {
+                // 全部跳过时说清为什么（比"没有可播放的文件"有用）
+                return Err(dto::ApiError::invalid_arg(if skipped.is_empty() {
+                    "没有可播放的文件".to_string()
+                } else {
+                    format!("没有可播放的文件：{}", skipped.join("；"))
+                }));
+            }
 
-    // 库内解析一次问完（逐条查库是 N 次往返，曲子多的歌单会明显卡）
-    let audio_paths: Vec<String> = candidates
-        .iter()
-        .filter_map(|c| match c {
-            DropCandidate::Audio(p) => Some(p.clone()),
-            DropCandidate::Hls(_) => None,
-        })
-        .collect();
-    let resolved: Vec<Option<String>> = if audio_paths.is_empty() {
-        Vec::new()
-    } else {
-        state
-            .db()
-            .send(move |conn| aiya_data::repo::resolve_paths_aligned(conn, &audio_paths))
-            .map_err(dto::ApiError::from)?
-    };
-    let library_ids: Vec<String> = resolved.iter().flatten().cloned().collect();
-    let library = if library_ids.is_empty() {
-        Vec::new()
-    } else {
-        track_refs_by_ids(&state, &library_ids)
-    };
+            // 库内解析一次问完（逐条查库是 N 次往返，曲子多的歌单会明显卡）
+            let audio_paths: Vec<String> = candidates
+                .iter()
+                .filter_map(|c| match c {
+                    DropCandidate::Audio(p) => Some(p.clone()),
+                    DropCandidate::Hls(_) => None,
+                })
+                .collect();
+            let resolved: Vec<Option<String>> = if audio_paths.is_empty() {
+                Vec::new()
+            } else {
+                db.send(move |conn| aiya_data::repo::resolve_paths_aligned(conn, &audio_paths))
+                    .map_err(dto::ApiError::from)?
+            };
+            let library_ids: Vec<String> = resolved.iter().flatten().cloned().collect();
+            let library = if library_ids.is_empty() {
+                Vec::new()
+            } else {
+                track_refs_by_ids_db(&db, &library_ids)
+            };
 
-    let mut tracks: Vec<aiya_player::TrackRef> = Vec::with_capacity(candidates.len());
-    let mut audio_i = 0usize;
-    for candidate in candidates {
-        match candidate {
-            DropCandidate::Audio(path) => {
-                let hit = resolved.get(audio_i).and_then(|o| o.as_ref()).cloned();
-                audio_i += 1;
-                match hit {
-                    Some(id) => {
-                        if let Some(r) = library.iter().find(|r| r.id == id) {
-                            tracks.push(r.clone());
+            let mut tracks: Vec<aiya_player::TrackRef> = Vec::with_capacity(candidates.len());
+            let mut audio_i = 0usize;
+            for candidate in candidates {
+                match candidate {
+                    DropCandidate::Audio(path) => {
+                        let hit = resolved.get(audio_i).and_then(|o| o.as_ref()).cloned();
+                        audio_i += 1;
+                        match hit {
+                            Some(id) => {
+                                if let Some(r) = library.iter().find(|r| r.id == id) {
+                                    tracks.push(r.clone());
+                                }
+                            }
+                            None => {
+                                let title = std::path::Path::new(&path)
+                                    .file_stem()
+                                    .map(|s| s.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|| path.clone());
+                                tracks.push(aiya_player::TrackRef::transient_file(&path, title));
+                            }
                         }
                     }
-                    None => {
+                    DropCandidate::Hls(path) => {
                         let title = std::path::Path::new(&path)
                             .file_stem()
                             .map(|s| s.to_string_lossy().into_owned())
                             .unwrap_or_else(|| path.clone());
-                        tracks.push(aiya_player::TrackRef::transient_file(&path, title));
+                        tracks.push(aiya_player::TrackRef::transient_stream(&path, title));
                     }
                 }
             }
-            DropCandidate::Hls(path) => {
-                let title = std::path::Path::new(&path)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path.clone());
-                tracks.push(aiya_player::TrackRef::transient_stream(&path, title));
+            if tracks.is_empty() {
+                return Err(dto::ApiError::not_found("队列为空"));
             }
-        }
-    }
-    if tracks.is_empty() {
-        return Err(dto::ApiError::not_found("队列为空"));
-    }
-
-    let opened = tracks.len();
+            let opened = tracks.len();
+            Ok((tracks, opened, skipped))
+        },
+    )
+    .await
+    .map_err(dto::ApiError::internal)??;
     {
         let mut actor = state
             .player
@@ -4092,29 +4120,38 @@ fn record_history(state: &AppState, track_id: &str, seconds_played: u64) {
 /// 歌词（P4）：同目录同名 .lrc → 解析。没找到回 `found=false`（UI 显示"暂无"，
 /// 不当错误）。trackId 是自有库的 tracks.id。
 #[tauri::command]
-fn lyrics_get(
+async fn lyrics_get(
     state: State<'_, AppState>,
     track_id: String,
 ) -> Result<dto::lyrics::Lyrics, dto::ApiError> {
-    let path: Option<String> = state
-        .db()
-        .send(move |conn| {
-            Ok(conn
-                .query_row("SELECT path FROM tracks WHERE id = ?1", [&track_id], |r| {
-                    r.get(0)
-                })
-                .ok())
-        })
-        .map_err(dto::ApiError::from)?;
-    let Some(path) = path else {
-        return Ok(dto::lyrics::Lyrics::empty());
-    };
-    Ok(
-        match aiya_data::lyrics::read_lyrics(std::path::Path::new(&path)) {
-            Some(parsed) => parsed.into(),
-            None => dto::lyrics::Lyrics::empty(),
-        },
-    )
+    // P2：此命令曾是同步——Tauri 2 的同步命令跑在主线程，每次切曲要在主线程
+    // 干等一次 DB 往返（查 path）加一次 .lrc 文件读（磁盘 IO，网络盘/杀软下
+    // 几十毫秒起步），换曲瞬间主线程正好忙着渲染。改 async + spawn_blocking。
+    // DbHandle 是克隆型句柄（db.rs §161）。
+    let db = state.db().clone();
+    let lyrics = tauri::async_runtime::spawn_blocking(move || -> Result<_, dto::ApiError> {
+        let path: Option<String> = db
+            .send(move |conn| {
+                Ok(conn
+                    .query_row("SELECT path FROM tracks WHERE id = ?1", [&track_id], |r| {
+                        r.get(0)
+                    })
+                    .ok())
+            })
+            .map_err(dto::ApiError::from)?;
+        let Some(path) = path else {
+            return Ok(dto::lyrics::Lyrics::empty());
+        };
+        Ok(
+            match aiya_data::lyrics::read_lyrics(std::path::Path::new(&path)) {
+                Some(parsed) => parsed.into(),
+                None => dto::lyrics::Lyrics::empty(),
+            },
+        )
+    })
+    .await
+    .map_err(dto::ApiError::internal)??;
+    Ok(lyrics)
 }
 
 #[tauri::command]
@@ -4251,14 +4288,24 @@ fn artwork_protocol(
         return not_found();
     };
 
-    // 3) 缩略图：size 指定且 ≤512 才缩（防滥用大尺寸请求），否则原图直出
+    // 3) 缩略图：size 指定且 ≤512 才缩（防滥用大尺寸请求），否则原图直出。
+    //    拼 thumbs 路径前对 cache_key 做**同款 basename 防御**（原图读取那边
+    //    已有）：cache_key 万一混进路径分隔符，直接 join 会越出缓存目录——
+    //    同一个洞只堵读文件那半边，缩略图这边照样能绕。
     let mut thumb_used = false;
     let data: Cow<'static, [u8]> = if (1..=512).contains(&size) && mime.starts_with("image/") {
-        let thumb = state.artwork_dir.join("thumbs").join(format!(
-            "{}_{}.jpg",
-            cache_key.split('.').next().unwrap_or("x"),
-            size
-        ));
+        let cache_stem = std::path::Path::new(&cache_key)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .split('.')
+            .next()
+            .unwrap_or("x")
+            .to_string();
+        let thumb = state
+            .artwork_dir
+            .join("thumbs")
+            .join(format!("{cache_stem}_{size}.jpg"));
         if let Ok(cached) = std::fs::read(&thumb) {
             thumb_used = true;
             Cow::Owned(cached)
@@ -4323,10 +4370,16 @@ pub fn run() {
                 return;
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // "关闭到托盘"必须以托盘存在为前提：托盘缺席时隐藏窗口，
+                // 用户就没有任何唤回的入口（只能任务管理器杀进程）。此时
+                // 宁可违反开关的语义直接退出——退出是可预期的、可再启动的。
                 let hide_to_tray = window
                     .app_handle()
                     .try_state::<AppState>()
-                    .map(|state| state.setting_flag("closeToTray", false))
+                    .map(|state| {
+                        state.setting_flag("closeToTray", false)
+                            && state.tray_ready.load(Ordering::Relaxed)
+                    })
                     .unwrap_or(false);
                 if hide_to_tray {
                     api.prevent_close();
@@ -4423,11 +4476,8 @@ pub fn run() {
                 last_persist_ms: std::sync::atomic::AtomicU64::new(0),
                 smtc_tx: Mutex::new(None),
                 smtc_track_id: Mutex::new(String::new()),
-                smtc_active: AtomicBool::new(false),
-                sleep_prevented: AtomicBool::new(false),
-                tray_active: AtomicBool::new(false),
+                tray_ready: AtomicBool::new(false),
                 audio_state: Mutex::new(AudioStateSnapshot::default()),
-                timings: Mutex::new(VecDeque::with_capacity(TIMING_LIMIT)),
                 settings: Mutex::new(settings0),
                 beets_install_child: Mutex::new(None),
                 beets_installing: AtomicBool::new(false),
@@ -4506,16 +4556,30 @@ pub fn run() {
                 state.prune_history();
             }
 
-            // SMTC：主窗口 HWND（COM 对象要求）；失败只记日志，不影响播放
-            if let Some(main) = app.get_webview_window("main") {
-                if let Ok(hwnd) = main.hwnd() {
-                    if let Some(tx) = smtc::spawn(app.handle().clone(), hwnd.0 as isize) {
-                        if let Some(state) = app.try_state::<AppState>() {
-                            *state.smtc_tx.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tx);
-                            state.smtc_active.store(true, Ordering::SeqCst);
+            // SMTC：主窗口 HWND（COM 对象要求）。健康口径与托盘一致：
+            // 正常静默，失败记日志 + 进"最近错误"台账，不影响播放。
+            let smtc_result = match app.get_webview_window("main") {
+                Some(main) => match main.hwnd() {
+                    Ok(hwnd) => match smtc::spawn(app.handle().clone(), hwnd.0 as isize) {
+                        Some(tx) => {
+                            if let Some(state) = app.try_state::<AppState>() {
+                                *state
+                                    .smtc_tx
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                    Some(tx);
+                            }
+                            Ok(())
                         }
-                    }
-                }
+                        None => Err("SMTC 会话创建失败".to_string()),
+                    },
+                    Err(e) => Err(format!("取主窗口 HWND 失败：{e}")),
+                },
+                None => Err("主窗口不存在".to_string()),
+            };
+            if let Err(detail) = smtc_result {
+                tracing::error!("{detail}");
+                dto::ApiError::record_background("SMTC 不可用，系统媒体面板与媒体键不生效", detail);
             }
 
             // 启动恢复：queue_state + queue_items → Actor hydrate →
@@ -4585,37 +4649,54 @@ pub fn run() {
 
             // 托盘：左键显示主窗口；菜单 [显示主窗口 / 退出]。
             // 关窗 = 隐藏到托盘（播放不中断）；真正退出走托盘菜单（退出前 flush 队列）。
+            //
+            // 健康检查口径：正常**静默通过**，失败进"最近错误"台账 + 日志，
+            // 应用照常跑——此前 `?` 会把 setup 炸掉，托盘建不成等于整个应用
+            // 起不来，播放器没有播放器必须的功能时不该判死刑。托盘缺席的
+            // 实际后果由 `tray_ready` 在关窗时兜住（不能藏进一个唤不回的
+            // 隐藏态）。
             {
                 use tauri::menu::{Menu, MenuItem};
-                let show_item =
-                    MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-                let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-                let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
-                let mut tray = tauri::tray::TrayIconBuilder::with_id("aiya-tray")
-                    .menu(&menu)
-                    .show_menu_on_left_click(false)
-                    .tooltip("AIYA Music")
-                    .on_menu_event(|app, event| match event.id().as_ref() {
-                        "show" => show_main_window(app),
-                        "quit" => quit_app(app),
-                        _ => {}
-                    })
-                    .on_tray_icon_event(|tray, event| {
-                        if let tauri::tray::TrayIconEvent::Click {
-                            button: tauri::tray::MouseButton::Left,
-                            button_state: tauri::tray::MouseButtonState::Up,
-                            ..
-                        } = event
-                        {
-                            show_main_window(tray.app_handle());
+                let tray_result = (|| -> tauri::Result<()> {
+                    let show_item =
+                        MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+                    let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+                    let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+                    let mut tray = tauri::tray::TrayIconBuilder::with_id("aiya-tray")
+                        .menu(&menu)
+                        .show_menu_on_left_click(false)
+                        .tooltip("AIYA Music")
+                        .on_menu_event(|app, event| match event.id().as_ref() {
+                            "show" => show_main_window(app),
+                            "quit" => quit_app(app),
+                            _ => {}
+                        })
+                        .on_tray_icon_event(|tray, event| {
+                            if let tauri::tray::TrayIconEvent::Click {
+                                button: tauri::tray::MouseButton::Left,
+                                button_state: tauri::tray::MouseButtonState::Up,
+                                ..
+                            } = event
+                            {
+                                show_main_window(tray.app_handle());
+                            }
+                        });
+                    if let Some(icon) = app.default_window_icon() {
+                        tray = tray.icon(icon.clone());
+                    }
+                    tray.build(app)?;
+                    Ok(())
+                })();
+                match tray_result {
+                    Ok(()) => {
+                        if let Some(state) = app.try_state::<AppState>() {
+                            state.tray_ready.store(true, Ordering::Relaxed);
                         }
-                    });
-                if let Some(icon) = app.default_window_icon() {
-                    tray = tray.icon(icon.clone());
-                }
-                tray.build(app)?;
-                if let Some(state) = app.try_state::<AppState>() {
-                    state.tray_active.store(true, Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        tracing::error!("托盘图标创建失败：{e}");
+                        dto::ApiError::record_background("托盘不可用，关闭窗口将直接退出", e);
+                    }
                 }
             }
 
@@ -4660,9 +4741,6 @@ pub fn run() {
                     if playing_now != prevent_sleep_last {
                         prevent_sleep_flag.store(playing_now, Ordering::Relaxed);
                         prevent_sleep_last = playing_now;
-                        engine
-                            .sleep_prevented
-                            .store(playing_now, Ordering::Relaxed);
                     }
                     let events: Vec<aiya_audio::EngineEvent> = {
                         let engine_guard = engine.engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

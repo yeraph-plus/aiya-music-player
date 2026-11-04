@@ -33,7 +33,12 @@ def handle(req: dict, gen: int) -> dict | None:
     `gen` = 该请求入队时的取消代数：主循环据此判断"排队期间是否被取消过"。
     """
     cmd = req.get("cmd")
-    req_id = int(req.get("id") or 0)
+    try:
+        req_id = int(req.get("id") or 0)
+    except (TypeError, ValueError):
+        # 与 serve 主循环同款归零：乱 id（"abc" / [1]）是调用方拼错，该按参数
+        # 问题给可读应答，而不是崩成 E_INTERNAL 的"工具 bug"
+        req_id = 0
 
     # v2：幂等重放 / 登记（在锁与执行之前）重放不触碰库、不加锁：它只是把上次的账本再念一遍。次序必须是 重放 → 锁 → 登记
     # running：被锁拒绝的请求不该在登记簿里留下 running 残留。

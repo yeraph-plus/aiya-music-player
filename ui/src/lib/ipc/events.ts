@@ -59,6 +59,10 @@ export const events = {
    * beets 曲库维护：progress / moveItem / duplicateGroup /
    * adoptDone / updateDone / duplicatesDone / moveDone / cancelled / sessionFailed。
    *
+   * **当前没有消费者**：维护四件套的 UI 入口已下线，没有触发者就没有事件，
+   * 这里保留订阅器只是给恢复时省一次重写。恢复维护 UI 时订阅要一并回来
+   * （挂进 boot 的清理链），否则界面永远等不到进度与终态。
+   *
    * 与 `beets:import` **分通道**：导入面板在听那条，混在一起会让"导入进度"
    * 突然收到"整理文件"的事件。维护任务的对账结果仍走 `beets:import` 的
    * `librarySynced`（那是读模型的事，与哪个命令触发无关）。
@@ -74,7 +78,9 @@ export const events = {
    * 必须能分开看。UI 判"这一轮结束"要等 `enrichPersisted`——只等 `enrichDone`
    * 会在落库线程还在写的时候就把进度条收起来，用户看到"100% 但统计没变"。
    *
-   * 之前这条通道只有 mock 在发（`events.ts` 里没有订阅），等于对着空房间演练。
+   * **当前没有消费者**：分析页下线后无人订阅这条通道，分析命令也没有
+   * UI 触发者，现在只有 mock 在演练它。恢复分析 UI 时订阅要一并回来，
+   * 并且按上面的口径等 `enrichPersisted` 判"这一轮结束"。
    */
   beetsEnrich: (cb: (e: DynamicJson) => void) => sub<DynamicJson>('beets:enrich', cb),
 

@@ -1,4 +1,5 @@
 import type { BeetsStatus, Diagnostics } from '../lib/ipc';
+import type { BeetsPluginHealth, BeetsPluginSummary } from '../lib/ipc';
 import type { TrackSort } from '../lib/query';
 import type { AppSettings } from '../lib/settings';
 import { DEFAULT_SETTINGS } from '../lib/settings';
@@ -120,8 +121,9 @@ class UiStore {
    * 拼出自相矛盾的组合（如 `page=home` 而 `view=playlist`），而读取方只检查其中
    * 一部分。
    *
-   * 返回值**引用稳定**：同一个路由恒得到同一个对象。否则 `$derived(ui.view)`
-   * 每次求值都产生新对象，下游按引用做的记忆失效。
+   * 返回值**引用稳定**：playlist 对象由 `setRoute` 在写入时缓存（见下），
+   * getter 只读不写——getter 里做记忆化会让每次读取都可能改私有字段，
+   * `$derived` 求值路径上出现写副作用是隐患。
    */
   get view(): View {
     switch (this.page) {
@@ -132,19 +134,29 @@ class UiStore {
         // 专辑/艺人详情页的曲目列表 = 曲库查询 + albumId/artistId 筛选，搜索页 = 曲库查询 + search 过滤 ——
         // 数据形状与曲库页完全相同 （见类头注释"参数复用筛选字段"）
         return LIBRARY_VIEW;
-      case 'playlist': {
-        const id = this.playlistId ?? '';
-        if (this.playlistView?.id !== id) this.playlistView = { kind: 'playlist', id };
-        return this.playlistView;
-      }
+      case 'playlist':
+        // page/playlistId 只经 setRoute 写入，缓存恒同步；?? 右侧仅是
+        // 防御性兜底（正常到不了），容忍它产生一个一次性新对象
+        return this.playlistView ?? { kind: 'playlist', id: this.playlistId ?? '' };
       default:
         // 非列表页：查询没有意义，给一个稳定的兜底（不必是当前路由）
         return LIBRARY_VIEW;
     }
   }
 
-  /** `playlist` 视图的缓存对象，保证 getter 引用稳定 */
+  /** `playlist` 视图的缓存对象，保证 getter 引用稳定；唯一写入点是 `setRoute` */
   private playlistView: { kind: 'playlist'; id: string } | null = null;
+
+  /**
+   * 路由的**唯一写入点**：page、playlistId 与 playlist 视图缓存三者在同一处
+   * 变更。缓存若靠读取方（getter）惰性补写，读取就成了写副作用；改由写入方
+   * 维护后，三者天然一致，getter 保持纯读。
+   */
+  private setRoute(page: AppPage, playlistId: string | null): void {
+    this.page = page;
+    this.playlistId = playlistId;
+    this.playlistView = playlistId === null ? null : { kind: 'playlist', id: playlistId };
+  }
   /**
    * 列表行高（px）。**不是设置项**，是 `--row-h` 的运行时镜像 ——
    * 虚拟列表要一个数字，而唯一出处是 CSS（见 `lib/look.ts: readRowHeight`）。
@@ -274,16 +286,14 @@ class UiStore {
 
     if (rawPage && rawPage !== ('home' as string)) {
       // 新形状（或旧形状的一级页）
-      this.page = rawPage as AppPage;
-      this.playlistId = data.playlistId ?? null;
+      this.setRoute(rawPage as AppPage, data.playlistId ?? null);
     } else if (data.libraryDetail) {
       // 旧形状：home + libraryDetail=true 表示某个列表视图
       //（parseViewKey 对 retired 的 'recent'/'mostPlayed' 键同样回落曲库）
       const legacy = parseViewKey(data.view);
       this.applyView(legacy);
     } else {
-      this.page = 'home';
-      this.playlistId = null;
+      this.setRoute('home', null);
     }
 
     // 启动即落在设置页时不经过 openPage，诊断块会保持空值（显示"正在读取…"
@@ -294,8 +304,9 @@ class UiStore {
   /* 一级页面与队列抽屉 */
 
   openPage(page: AppPage): void {
-    this.page = page;
-    if (page !== 'playlist') this.playlistId = null;
+    // 与旧实现同语义：openPage('playlist') 保留现有 playlistId（playlist
+    // 的进入走 openPlaylist/enterList，这里只兜住直呼的情况）
+    this.setRoute(page, page === 'playlist' ? this.playlistId : null);
     this.queueOpen = false;
     this.eqOpen = false;
     this.scheduleUiSave();
@@ -329,8 +340,7 @@ class UiStore {
    * 导航，旧搜索词不保留。
    */
   enterHome(): void {
-    this.page = 'home';
-    this.playlistId = null;
+    this.setRoute('home', null);
     this.search = '';
     this.artistId = null;
     this.albumId = null;
@@ -345,8 +355,7 @@ class UiStore {
    * 旧筛选与歌单参数不随搜索词带入：在歌单内搜索得到全库结果，歌单上下文至此结束。
    */
   enterSearch(): void {
-    this.page = 'search';
-    this.playlistId = null;
+    this.setRoute('search', null);
     this.artistId = null;
     this.albumId = null;
     this.queueOpen = false;
@@ -366,8 +375,7 @@ class UiStore {
     this.search = '';
     this.artistId = kind === 'artist' ? id : null;
     this.albumId = kind === 'album' ? id : null;
-    this.page = kind;
-    this.playlistId = null;
+    this.setRoute(kind, null);
     this.queueOpen = false;
     this.eqOpen = false;
   }
@@ -387,8 +395,7 @@ class UiStore {
   }
 
   private applyView(view: View): void {
-    this.page = view.kind;
-    this.playlistId = view.kind === 'playlist' ? view.id : null;
+    this.setRoute(view.kind, view.kind === 'playlist' ? view.id : null);
   }
 
   toggleQueue(): void {
@@ -459,12 +466,24 @@ class UiStore {
     void this.refreshBeets();
   }
 
-  /** beets 环境探测（低频：设置页打开/手动刷新时；最坏 ~30s，必须容错） */
+  /**
+   * beets 环境探测（低频：设置页打开/手动刷新时；最坏 ~30s，必须容错）。
+   *
+   * 请求代次：探测期间再次打开设置页/手动刷新会并发第二条，慢的旧响应
+   * 晚到会把状态区盖回上一次的结果（"已检测"变回"未检测"）。只有最新
+   * 一次的响应允许落到 store 上（与 applySettings 同一模式）。
+   */
+  private beetsGeneration = 0;
+
   async refreshBeets(): Promise<void> {
+    const generation = (this.beetsGeneration += 1);
     this.beets = null;
     try {
-      this.beets = await ipc.beets.status();
+      const status = await ipc.beets.status();
+      if (generation !== this.beetsGeneration) return;
+      this.beets = status;
     } catch (e) {
+      // 失败保持 null（显示"未检测"），不打断设置页；日志留痕
       console.warn('beets.status failed:', errorMessage(e));
     }
   }
@@ -663,8 +682,8 @@ function readBeetsStatus(raw: unknown): BeetsStatus | null {
     libraryExists: bool(o.libraryExists),
     libraryDirectory: str(o.libraryDirectory),
     plugins: strArr(o.plugins),
-    pluginHealth: Array.isArray(o.pluginHealth) ? (o.pluginHealth as BeetsStatus['pluginHealth']) : null,
-    pluginSummary: (o.pluginSummary ?? null) as BeetsStatus['pluginSummary'],
+    pluginHealth: readPluginHealth(o.pluginHealth),
+    pluginSummary: readPluginSummary(o.pluginSummary),
     configDir: str(o.configDir),
     dataHome: str(o.dataHome),
     // v2：schemaMatched 是宿主算好的 boolean（缺字段 = 老工具，按不匹配处理）；
@@ -675,6 +694,52 @@ function readBeetsStatus(raw: unknown): BeetsStatus | null {
     errorCode: str(o.errorCode),
     errorMessage: str(o.errorMessage),
   };
+}
+
+/**
+ * 动态 JSON → `BeetsPluginHealth[]`：逐条逐字段 typeof 收口。
+ *
+ * 列表里混进一条坏项就整条跳过，而不是让 `name: undefined` 混进卡片——
+ * 渲染层拿到的是"每条都完整"的数组，不必再防缺字段。
+ */
+function readPluginHealth(raw: unknown): BeetsPluginHealth[] | null {
+  if (!Array.isArray(raw)) return null;
+  return raw.flatMap((item): BeetsPluginHealth[] => {
+    if (!item || typeof item !== 'object') return [];
+    const h = item as Record<string, unknown>;
+    if (
+      typeof h.name !== 'string' ||
+      typeof h.state !== 'string' ||
+      typeof h.enabled !== 'boolean'
+    ) {
+      return [];
+    }
+    return [
+      {
+        name: h.name,
+        state: h.state,
+        enabled: h.enabled,
+        missing: Array.isArray(h.missing)
+          ? h.missing.filter((m): m is string => typeof m === 'string')
+          : [],
+        note: typeof h.note === 'string' ? h.note : '',
+      },
+    ];
+  });
+}
+
+/** 动态 JSON → `BeetsPluginSummary`：三个计数字段齐才收，缺一按没有处理 */
+function readPluginSummary(raw: unknown): BeetsPluginSummary | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as Record<string, unknown>;
+  if (
+    typeof s.ready !== 'number' ||
+    typeof s.missingDeps !== 'number' ||
+    typeof s.unavailable !== 'number'
+  ) {
+    return null;
+  }
+  return { ready: s.ready, missingDeps: s.missingDeps, unavailable: s.unavailable };
 }
 
 export const ui = new UiStore();

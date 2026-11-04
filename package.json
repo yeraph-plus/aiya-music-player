@@ -9,7 +9,7 @@
     "dev": "node tools/run.mjs ui/node_modules/@tauri-apps/cli/tauri.js dev",
     "dev:ui": "npm --prefix ui run dev",
     "build": "npm run bundle",
-    "bundle": "node tools/run.mjs ui/node_modules/@tauri-apps/cli/tauri.js build",
+    "bundle": "node tools/run.mjs ui/node_modules/@tauri-apps/cli/tauri.js build && node tools/rename-installer.mjs",
     "portable": "node tools/build-portable.mjs",
     "build:ui": "npm --prefix ui run build",
     "build:sidecar": "node tools/run.mjs tools/build-sidecar.mjs",

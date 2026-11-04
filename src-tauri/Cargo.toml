@@ -11,6 +11,13 @@ edition = "2021"
 name = "aiya_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# 产物名 aiya-music.exe（2026-11-05 拍板）：包名保持 aiya（`-p aiya` 类引用
+# 零变化），只改 bin 名；分发名仍是 productName 的 "AIYA Music.exe"（安装版
+# 与便携版都由打包器/脚本改名，见 build-portable.mjs）。
+[[bin]]
+name = "aiya-music"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -59,4 +66,15 @@ windows-sys = { version = "0.60", features = [
     "Win32_Security",
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+] }
+# windows（带类型的 COM 封装）：app_id.rs 的快捷方式 AUMID 自愈需要
+# IShellLinkW/IPropertyStore 接口——windows-sys 不出 COM 接口类型。crate 本体
+# 已在依赖树里（souvlaki 经 windows 0.62 引入），这里只是声明 features。
+windows = { version = "0.62", features = [
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_Storage_EnhancedStorage",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
 ] }

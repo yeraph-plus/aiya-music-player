@@ -3,8 +3,9 @@
 /**
  * `audio:mode` 事件的载荷：设备实际给了什么。
  *
- * 单独立一个类型而不是复用 `AudioModeInfo`：诊断页要连带 `desired`（用户设置），
- * 事件只报"现在这一秒的实际状态"，不带期望值——否则每帧都要读一次设置。
+ * 只走事件不走快照：设置页的输出状态随事件实时刷新（"独占 50ms 轮询"和
+ * "共享 200ms 事件"的听感差异远小于配置差异，用户靠这里判断实际生效的
+ * 是什么），诊断快照不再重复携带一份。
  */
 export type AudioModeEvent = { requested: string, mode: string, clock: string, bufferMs: number, format: string, 
 /**

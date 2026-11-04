@@ -51,20 +51,31 @@ test('启动装配：顶栏四件 + 仪表盘三级 + 播放条空态', async ({
   // 宽 TitleBar：搜索框在位、返回键此时无历史所以 disabled
   await expect(page.locator('.titlebar .tb-search input')).toBeVisible();
   await expect(page.getByRole('button', { name: '返回上一页' })).toBeDisabled();
-  // 首页无页标题（侧栏已是一级导航）；统计是纯事实卡（stat-tile），
-  // 不可点——曾以可点统计卡做导航（.stat-card）被二次修订撤销，守这里
+  // 首页无页标题（侧栏已是一级导航）；统计是纯文字两块（播放数 + 时长），
+  // 原先是可点的统计卡（.stat-card），后改 2×2 小卡（.stat-tile），
+  // 现在只剩文字——两次都因"首页像模板"撤销，守这里
   await expect(page.locator('.main h1')).toHaveCount(0);
   await expect(page.locator('.main .playlist-row .playlist-card').first()).toBeVisible();
-  await expect(page.locator('.main .stat-tile')).toHaveCount(4);
+  await expect(page.locator('.main .stat-block')).toHaveCount(2);
+  await expect(page.locator('.main .stat-tile')).toHaveCount(0);
   await expect(page.locator('.main .stat-card')).toHaveCount(0);
+  // 区块标题只有一行（大字标题 + 小字英文装饰 + 歌单计数徽章），描述行已撤；
+  // 三个短列表各有一层半透明底
+  await expect(page.locator('.main .section-desc')).toHaveCount(0);
+  await expect(page.locator('.main .home-panel')).toHaveCount(3);
+  await expect(page.locator('.main .section-heading .section-meta')).toBeVisible();
+  // 首页不放破坏性入口：清空播放历史只在曲库页（动作行）与设置页。
+  // 它曾挂在"常听"标题行右端（.section-link），与"仪表盘是浏览的地方"相悖
+  await expect(page.locator('.main .section-link')).toHaveCount(0);
   // 三行仪表盘：常听|最近播放双表 + 最近添加整宽表
   await expect(page.locator('.main .home-duo .preview-list')).toHaveCount(2);
   await expect(page.locator('.main .home-duo + .home-section .preview-list')).toHaveCount(1);
   await expect(page.locator('.main .list')).toHaveCount(0);
   await expect(page.locator('footer')).toContainText('未在播放');
   // 歌单摘要的加载链路：boot → playlists.refresh() → library.playlists → 侧栏。
-  // 断言在这里是为了「挪完还接得上」——mock 种子固定 4 张。
-  await expect(page.locator('.sidebar .playlist-item')).toHaveCount(4);
+  // 断言在这里是为了「挪完还接得上」——数量不钉死（mock 种子为滚动演示
+  // 扩过编），只要有歌单渲染进侧栏就算链路通
+  await expect(page.locator('.sidebar .playlist-item')).not.toHaveCount(0);
   // 背景四层是全应用的——推荐页也有背景渐变层；
   // 沉浸档：可读性遮罩 veil 整层删除（不再有 .ambient-veil），断言其缺席。
   await expect(page.locator('.ambient-art')).toHaveCount(1);
@@ -163,7 +174,7 @@ test('设置页：单页平铺 + tab 跳转定位 + 主题切换生效', async (
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
   await expect(page.locator('.main h1')).toHaveText('设置');
-  // 三层装饰全站统一后设置页也有装饰英文（2026-11-03）
+  // 三层装饰全站统一，设置页也有 kicker 装饰英文——别当成漏翻
   await expect(page.locator('.main .ch-kicker')).toHaveText('SETTINGS');
 
   // 初始高亮第一组；六个区块全部渲染（含小标题）。

@@ -443,14 +443,12 @@
             onchange={(v) => (editKind = v ? 'smart' : 'manual')}
           />
           <span class="edit-kind-label">动态歌单</span>
-          <span class="dim">按条件收录曲目，「刷新」追加新命中，其余与普通歌单一致</span>
         </div>
       {/if}
       {#if editKind === 'smart'}
         <div class="rule-editor">
           <div class="rule-head">
-            <span class="rule-title">满足以下全部条件</span>
-            <Button variant="link" onclick={addCond}>+ 添加条件</Button>
+            <Button variant="ghost" onclick={addCond}>+ 添加条件</Button>
           </div>
           {#each editRule.all as cond, i (i)}
             {@const spec = COND_MODES[modeOfCond(cond)]}
@@ -490,15 +488,15 @@
                   />
                 </div>
               {/if}
-              <Button variant="link" ariaLabel="删除条件" onclick={() => removeCond(i)}>×</Button>
+              <Button variant="ghost" ariaLabel="删除条件" onclick={() => removeCond(i)}>删除</Button>
             </div>
           {:else}
-            <p class="rule-empty dim">无条件 = 匹配整个曲库</p>
+            <div class="rule-empty">无条件</div>
+            <p class="rule-foot">如果不设置查询条件，将匹配整个曲库</p>
           {/each}
-          <div class="rule-row rule-meta">
-            <span class="rule-title">排序</span>
-            <span class="dim">入库顺序按标题排；在歌单里可拖拽重排，刷新只追加新命中的曲目</span>
-          </div>
+          {#if editRule.all.length > 0}
+            <p class="rule-foot">满足查询条件的曲目自动加入歌单，按标题排序</p>
+          {/if}
         </div>
       {/if}
     </div>
@@ -662,7 +660,7 @@
     padding: 14px 16px 2px;
   }
 
-  /* 动态歌单开关行 */
+  /* 动态歌单开关行：开关 + 可见标题（Switch 的 label 只供读屏，可见文本在这里） */
   .edit-kind {
     margin-top: 12px;
     display: flex;
@@ -675,8 +673,11 @@
     color: var(--text-1);
   }
 
+  /* 规则编辑区：上分隔线与名称/开关区分开；添加条件按钮靠左 */
   .rule-editor {
     margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -685,12 +686,6 @@
   .rule-head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-  }
-
-  .rule-title {
-    font-size: var(--fs-base);
-    color: var(--text-2);
   }
 
   .rule-row {
@@ -710,15 +705,22 @@
     min-width: 0;
   }
 
-
+  /* 无条件占位块 + 下方一句说明（复用 .rule-foot 的样式，与有条件态的
+     收尾说明同一观感）：语义说明放在块外，块本身只留占位文本 */
   .rule-empty {
-    margin: 0;
+    display: grid;
+    place-items: center;
+    padding: 14px 0;
+    border: 1px dashed var(--line-strong);
+    border-radius: var(--radius-md);
     font-size: var(--fs-base);
+    color: var(--text-3);
   }
 
-  .rule-meta {
-    margin-top: 4px;
-    gap: 12px;
+  .rule-foot {
+    margin: 0;
+    font-size: var(--fs-sm);
+    color: var(--text-3);
   }
 
 

@@ -15,7 +15,7 @@ use ts_rs::TS;
 #[ts(export)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshSnapshot {
-    /// timer / focus / action / manual
+    /// timer / focus / action（宿主内部 Trigger 枚举的小写串；无"手动"触发点）
     pub trigger: String,
     /// 完成时刻（unix 毫秒）
     #[ts(type = "number")]

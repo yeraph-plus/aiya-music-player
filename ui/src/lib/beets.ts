@@ -85,12 +85,12 @@ export type BeetsImportEvent =
   /**
    * 一次刷新完成（扫描 → 对齐 → 单 bump）。
    *
-   * 发出条件：确有写入变化；手动触发例外（用户操作需要可见反馈）。未收到该事件
-   * 仅表示无变化，最近一次结果见 `refresh_state` 返回的快照。
+   * 发出条件：确有写入变化。未收到该事件仅表示无变化，最近一次结果见
+   * `refresh_state` 返回的快照。
    */
   | {
       type: 'libraryRefreshed';
-      trigger: 'timer' | 'focus' | 'action' | 'manual';
+      trigger: 'timer' | 'focus' | 'action';
       atMs: number;
       changed: boolean;
       scanned: number;

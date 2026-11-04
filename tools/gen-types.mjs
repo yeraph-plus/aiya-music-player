@@ -8,8 +8,9 @@
 // 生成物**入库**：`npm run gen:types:check` 先生成到临时目录再逐文件比对现有产物，
 // "改了 Rust 忘了更新类型"会直接红，而不是等到运行期字段对不上。
 //
-// 注意：仓库目前**没有 CI**（`.github/` 不存在），这条门禁只在本地 `npm run verify`
-// 里跑。接入 CI 后应把 verify（含本检查）设为 PR 必过项 ——。
+// 门禁双通道：本地链在 `npm run verify` 里，CI 侧 `.github/workflows/ci.yml`
+// 的「契约生成物一致」步骤跑的就是本脚本的 --check——改了 Rust 忘了重新
+// 生成，本地与 CI 都会红。
 //
 // 用法：node tools/gen-types.mjs [--check]
 //   --check  生成到临时目录并与现有文件比较，不写工作区（CI 用）

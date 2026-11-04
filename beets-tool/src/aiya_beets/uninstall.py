@@ -54,7 +54,15 @@ import shutil
 import sys
 from pathlib import Path
 
-from .install import venv_python
+def _venv_python(target: Path) -> Path:
+    """venv 里的解释器路径（Windows 是 Scripts，其他平台是 bin）。
+
+    单轨化后 install.py 不再建 venv，这里只为识别**旧版 A 轨安装器**留下的
+    环境（有的 venv 缺 pyvenv.cfg，靠解释器落点兜一层）。
+    """
+    if os.name == "nt":
+        return target / "Scripts" / "python.exe"
+    return target / "bin" / "python"
 
 
 def emit(obj: dict) -> None:
@@ -122,7 +130,7 @@ def _looks_like_install(target: Path, everything: bool) -> str | None:
         return f"不像 beets-tool 安装目录（既不是 beets-tool，也没有 venv/bundle/bin）：{target}"
     # 只认 venv 形态：`pyvenv.cfg` 是 venv 的定义文件。没有它就不是安装器
     # 造出来的东西，删掉等于替用户决定他的目录该不该留。
-    if (target / "pyvenv.cfg").is_file() or venv_python(target).is_file():
+    if (target / "pyvenv.cfg").is_file() or _venv_python(target).is_file():
         return None
     return f"不像是安装器建的环境（没有 pyvenv.cfg）：{target}"
 

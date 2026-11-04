@@ -45,11 +45,9 @@ pub mod output;
 pub mod playlist;
 pub mod refresh;
 
-pub use app::{AppInfo, Diagnostics, ListTiming, RecentError, SpectrumToggle};
+pub use app::{AppInfo, Diagnostics, RecentError, SpectrumToggle};
 pub use library::{LibraryStats, TrackDetail};
-pub use output::{
-    AudioModeEvent, AudioModeInfo, DesiredOutput, EqSettings, MediaKeysInfo, PowerInfo, StreamsInfo,
-};
+pub use output::{AudioModeEvent, DesiredOutput, EqSettings};
 pub use refresh::{RefreshSnapshot, RefreshState};
 
 // 拖放分类结果。形状定义跟着分类器走（`src/drop.rs`，纯函数 +
@@ -166,6 +164,20 @@ impl ApiError {
         };
         record(&err);
         err
+    }
+
+    /// 后台组件（托盘这类启动期/常驻设施）的健康上报：正常时**静默**——
+    /// 调用方根本不该调它；异常时与命令错误进同一本"最近错误"台账。
+    /// 与构造器的区别：它不返回错误值（调用方不失败，应用照常跑），
+    /// 只负责记账，UI 在 设置→系统→最近错误 可见。
+    pub fn record_background(message: impl std::fmt::Display, detail: impl std::fmt::Display) {
+        let err = Self {
+            code: ApiErrorCode::Internal,
+            message: message.to_string(),
+            detail: Some(detail.to_string()),
+            retryable: false,
+        };
+        record(&err);
     }
 }
 

@@ -173,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not env.is_available():
         print(f"beets 不可用（这个解释器：{sys.executable}）", file=sys.stderr)
-        print("安装：aiya-beets install --target <dir>，或 pip install beets", file=sys.stderr)
+        print("安装：重新获取便携套件包（自带 beets），或往这个解释器 pip install beets", file=sys.stderr)
         return 1
 
     if ns.cmd == "status":

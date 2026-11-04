@@ -73,6 +73,22 @@ export function resampleCatmullRom(src: Float32Array, dst: Float32Array): void {
   }
 }
 
+/**
+ * 把重采样结果压回 [0,1]。
+ *
+ * Catmull-Rom 在"平台贴地"处会下冲：相邻两点都是 0、而外侧一点还有值时（安静段
+ * 低频残余、其余带归零的典型形状），过渡段最低到 −0.125 × 外侧值。幅度再小也是
+ * 负数，而波纹层对它取 `pow(curve, 0.6)`——负底数的幂在 GLSL 里未定义，那几个
+ * 像素整列失效，画面上是一道贯穿水面的竖直断口。上界同理只是补齐值域：山形与
+ * 波纹都按 0–1 的高度消费这条曲线。
+ */
+function clampCurve(values: Float32Array): void {
+  for (let i = 0; i < values.length; i += 1) {
+    const v = values[i] as number;
+    values[i] = v < 0 ? 0 : v > 1 ? 1 : v;
+  }
+}
+
 export class RidgeCurve {
   readonly near: Float32Array;
   readonly far: Float32Array;
@@ -131,10 +147,12 @@ export class RidgeCurve {
       this.shape[i] = Math.min(1, (this.smoothed[i] as number) * NEAR_AMP);
     }
     resampleCatmullRom(this.shape, this.near);
+    clampCurve(this.near);
 
     for (let i = 0; i < n; i += 1) {
       this.shape[i] = Math.min(1, (this.smoothed[n - 1 - i] as number) * FAR_AMP);
     }
     resampleCatmullRom(this.shape, this.far);
+    clampCurve(this.far);
   }
 }
