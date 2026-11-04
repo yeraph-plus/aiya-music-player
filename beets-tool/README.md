@@ -55,6 +55,7 @@ PYTHONPATH=src python -m aiya_beets capabilities  # 机器读的能力三态
 唯一发布物是**免安装便携套件包** `dist/beets-portable-win-x64.zip`：
 
 ```bash
+`python tools/selfhost_svm_models.py [--publish]`  # SVM 模型自托管（换模型版本才跑；upf 慢源 → 12 件重打包 → 挂固定 release `svm-models-<版本>`，plugins.json 的 svm-* 条目从这里下载）
 npm run beets:bundle    # = beets-tool/.venv 的解释器跑 tools/build_bundle.py
 ```
 
