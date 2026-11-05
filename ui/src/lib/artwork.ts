@@ -31,5 +31,12 @@ export function artworkUrl(artworkId: string | null, size: number = DEFAULT_SIZE
   const safe = (ARTWORK_SIZES as readonly number[]).includes(size) ? size : DEFAULT_SIZE;
   // Tauri 2 的自定义协议在 Windows 上经 `http://<scheme>.localhost` 暴露。处理器返回 `Access-Control-Allow-Origin:
   // *`，`artwork-blob` 的 fetch 与 canvas 取色依赖该响应头。当前仅发布 Windows；跨平台时按平台切换 URL 前缀。
+  // Web 版第三形态：同源相对路径（aiya-server 的 /artwork 路由），凭据随
+  // `?token=` 查询参数（<img> 是元素级 GET，无法带请求头）。
+  const web = (globalThis as { __AIYA_WEB__?: { token?: string } }).__AIYA_WEB__;
+  if (web) {
+    const token = web.token ? `&token=${encodeURIComponent(web.token)}` : '';
+    return `/artwork/${encodeURIComponent(artworkId)}?size=${safe}${token}`;
+  }
   return `http://aiya-artwork.localhost/artwork/${encodeURIComponent(artworkId)}?size=${safe}`;
 }

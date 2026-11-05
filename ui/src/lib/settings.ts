@@ -259,11 +259,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // 背景/页面频谱：背景默认开（山形环境光是应用的主视觉之一），页面默认关
   bgSpectrum: true,
   npSpectrum: false,
-  // 默认环带（2026-11-05 拍板）
+  // 默认环带
   spectrumStyle: 'radial',
   // 背景默认山形：常驻图层，不因新增形态而改变既有观感
   bgSpectrumStyle: 'ridge',
-  // 默认柔雾：有氛围不刺眼（2026-11-05 拍板）
+  // 默认柔雾：有氛围不刺眼
   ridgeGlow: 'soft',
   // 默认关：启动即出声需由用户显式开启
   autoplayOnStart: false,

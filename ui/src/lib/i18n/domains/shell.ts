@@ -22,6 +22,11 @@ export const shellKeysZh = {
   'shell.keys.selectAll': '全选当前视图',
   'shell.keys.unset': '未设置',
   'shell.keys.space': '空格',
+  'gate.title': 'AIYA Music',
+  'gate.hint': '此实例已开启访问保护，请输入管理员口令。',
+  'gate.enter': '进入',
+  'gate.wrong': '口令不对，再试一次。',
+  'gate.failed': '登录失败（{status}）',
 } as const;
 
 export const shellKeysEn: Record<keyof typeof shellKeysZh, string> = {
@@ -43,6 +48,11 @@ export const shellKeysEn: Record<keyof typeof shellKeysZh, string> = {
   'shell.keys.selectAll': 'Select all in view',
   'shell.keys.unset': 'Unset',
   'shell.keys.space': 'Space',
+  'gate.title': 'AIYA Music',
+  'gate.hint': 'This instance is protected. Enter the admin password.',
+  'gate.enter': 'Enter',
+  'gate.wrong': 'Wrong password, try again.',
+  'gate.failed': 'Login failed ({status})',
 };
 export const shellZh = {
   /* TitleBar */

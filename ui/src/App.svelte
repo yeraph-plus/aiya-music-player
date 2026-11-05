@@ -18,6 +18,7 @@
   import { onMount } from 'svelte';
   import { Tooltip } from 'bits-ui';
   import AppShell from './components/AppShell.svelte';
+  import LoginView from './components/LoginView.svelte';
   import OverlayHost from './components/OverlayHost.svelte';
   import AlbumView from './views/AlbumView.svelte';
   import ArtistView from './views/ArtistView.svelte';
@@ -41,6 +42,15 @@
   import { isListPage, ui } from './stores/ui.svelte';
 
   let mediaSession: MediaSessionBridge | null = null;
+
+  // 登录门：http transport 收到 401 时派发 `aiya:gate`（auth.rs 的登录门）。
+  // 事件驱动而非 store——lib 层不得反向依赖 stores（dep-graph 门禁口径）。
+  let gate = $state(false);
+  $effect(() => {
+    const on = () => (gate = true);
+    window.addEventListener('aiya:gate', on);
+    return () => window.removeEventListener('aiya:gate', on);
+  });
 
   /**
    * 系统媒体中心：只订阅 PlayerState，与音频出口无关（出声在 Rust 侧）。
@@ -80,7 +90,7 @@
   });
 
   // 界面语言：设置值驱动 i18n locale 与 <html data-lang>（装饰字取消等纯 CSS
-  // 分支靠它）。首启语言由宿主按系统语言写库（docs/64 §3.1），前端只跟随；
+  // 分支靠它）。首启语言由宿主按系统语言写库，前端只跟随；
   // 空值（mock 预览）按 zh 兜底。t() 读 i18n.svelte.ts 的 $state，模板自动重渲染。
   $effect(() => {
     const lang = ui.settings.language === 'en' ? 'en' : 'zh';
@@ -117,6 +127,9 @@
 
 <!-- `Tooltip.Provider` **只放这一处**：它统一 `delayDuration`，并让相邻 tooltip
 之间共享"刚从别的按钮移过来就不用再等"的计时。每个 Tooltip 自带一份的话，鼠标横扫一排图标每次都要等满延迟。 -->
+{#if gate}
+<LoginView />
+{:else}
 <Tooltip.Provider delayDuration={400} skipDelayDuration={300}>
   <AppShell>
     <!--
@@ -149,3 +162,4 @@
 
   <OverlayHost />
 </Tooltip.Provider>
+{/if}

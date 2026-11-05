@@ -20,19 +20,29 @@ import { startDpiDiagnostics } from './lib/dpi-diagnostics';
  * 唯一还能证明"跳过去确实落在了曲库组"的方式）。
  */
 if (!('__TAURI_INTERNALS__' in window)) {
-  const { installMock } = await import('./lib/ipc/mock');
   const params = new URLSearchParams(window.location.search);
-  const failCmd = params.get('failCmd');
-  const missing = Number(params.get('missing'));
-  const live = params.get('live');
-  installMock({
-    ...(failCmd ? { failCommands: [failCmd] } : {}),
-    ...(params.get('beets') === 'absent' ? { beetsFound: false } : {}),
-    ...(Number.isFinite(missing) && missing > 0 ? { missingLocations: missing } : {}),
-    // `?live=<url>`：启动即进"正在播一个直播流"，用来验播放条的直播三态
-    // 这条渲染分支没有别的入口能稳定复现
-    ...(live ? { liveStream: live } : {}),
-  });
+  const mode = params.get('backend');
+  // 宿主三态：tauri（默认）/ http（server 注入的 __AIYA_BOOT__ 标志，或
+  // ?backend=http）/ mock（预览与 e2e；?backend=mock 强制）。无标志不探测——
+  // 探测的 404 会在 e2e 的运行期错误收集器里记账。
+  const useHttp = mode === 'http' || (window as { __AIYA_BOOT__?: string }).__AIYA_BOOT__ === 'http';
+  if (useHttp) {
+    const { installHttpTransport } = await import('./lib/ipc/http');
+    installHttpTransport();
+  } else {
+    const { installMock } = await import('./lib/ipc/mock');
+    const failCmd = params.get('failCmd');
+    const missing = Number(params.get('missing'));
+    const live = params.get('live');
+    installMock({
+      ...(failCmd ? { failCommands: [failCmd] } : {}),
+      ...(params.get('beets') === 'absent' ? { beetsFound: false } : {}),
+      ...(Number.isFinite(missing) && missing > 0 ? { missingLocations: missing } : {}),
+      // `?live=<url>`：启动即进"正在播一个直播流"，用来验播放条的直播三态
+      // 这条渲染分支没有别的入口能稳定复现
+      ...(live ? { liveStream: live } : {}),
+    });
+  }
 }
 
 const target = document.getElementById('app');
