@@ -1,6 +1,7 @@
 name: build-essentia-linux
 
 # beets-tool Linux 提取器测试构建（essentia + Gaia/SVM 路线验证）。
+# 记录：docs/67（调研结论 / 验证证据 / 三轮坑 / 转正清单）。
 #
 # 要验证的唯一风险点：带 Gaia 的 Linux x86_64 streaming_extractor_music——
 # Windows 侧靠社区 Gaia 构建解决（docs/58 §5），Linux 没有任何现成 release

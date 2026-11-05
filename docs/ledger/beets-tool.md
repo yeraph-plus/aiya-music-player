@@ -1,11 +1,13 @@
 # ledger · beets 工具侧（beets-tool）
 
 > 代码位置：beets-tool/
-> 相关档案：docs/33、51、53、54、58
+> 相关档案：docs/33、51、53、54、58、67
 
 ## 条目（新→旧）
 
 <!-- 每条一行：- YYYY-MM-DD · 代码位置 · 事实/取舍 · 来龙去脉（可选） -->
+
+- 2026-11-06 · .github/workflows/build-essentia-linux.yml（main 7ef3f0f）· Linux x86_64 提取器测试构建链路落地并验证：MTG essentia-builds 容器（manylinux_2_28）waf --with-gaia --build-static --static-dependencies --with-examples 静态构建，两次全绿 run 冒烟与 win 实测一致（正弦波 not_danceable/happy，highlevel 12 键全出）· Linux 侧唯一风险点（带 Gaia 的提取器无现成 release，只能构建）排除；静态/动态边界 = 仅 Qt5 双 so 动态（对应 win 附 Qt5Core.dll 的载体模式）；三轮机械坑（tar.gz 配 unzip、缺 --with-examples、essentia_ 前缀）只记录在 docs/67 §3；产物仅 artifact 不碰发布通道，转正接线见 docs/67 §4
 
 - 2026-11-05 · data/plugins.json svm-* 条目、tests/catalog_contract.py、bins.py check、release-beets.yml · beets-portable 通道首跑暴露连环 latent bug 全修：①svm 条目 license 字段塞整句出处（含 URL）→ 许可全文查找按路径穿越失败，改短 id MTG-Model-Notice（出处归 vendor）；②third-party 缺 5 份 GNU 全文（AGPL/GPL/LGPL-2.1/LGPL-3.0-or-later + LGPL-3.0）补齐；③bins --check 的 usable 口径漏走 _probe_ok——DLL/模型非可执行条目裸 probe 全报 missing，套件包自检永远过不去，对齐"在即就绪"；④release-beets.yml 还在引用已退役的 build_installer.py（.pyz 轨道），对齐单 zip 通道契约 · 三个教训：plugins.json 新增条目必须过 catalog_contract（本次加了 license 短 id + 全文存在两条门禁）；SystemExit 文案在 runner 上可能被吞（本地复现是排障正道）；通道从没建过 ≠ 被删——beets-portable tag 一直没推过线上
 - 2026-11-04 · cmds/enrich.py · "提取器未就绪"报 `E_CONFIG`（用户可修的环境问题），不再用 `E_INVALID_ARG`（语义是开发者问题）· smoke_enrich 断言与 schema 错误码描述同批更新。
