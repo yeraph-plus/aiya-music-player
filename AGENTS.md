@@ -21,10 +21,12 @@ AIYA_MUSIC_TAURI/
 ├── crates/
 │   ├── aiya-player/       # 纯领域：队列、状态归约、命令/事件；不依赖 tauri/rusqlite/windows
 │   ├── aiya-data/         # SQLite v1、Repository、扫描、封面缓存、设置；不依赖 tauri
-│   ├── aiya-audio/        # 原生引擎：Symphonia 解码 + wasapi-rs 输出 + DSP/频谱/EQ
-│   ├── aiya-audio-host/   # 音频 sidecar 进程入口（命名管道行 JSON，不传 PCM）
+│   ├── aiya-dto/          # IPC DTO 与拖放 DTO 的共享契约源（ts-rs 导出）；桌面壳与 server 共用
+│   ├── aiya-audio/        # 原生引擎：Symphonia 解码 + wasapi-rs 输出 + DSP/频谱/EQ（桌面独占）
+│   ├── aiya-audio-host/   # 音频 sidecar 进程入口（命名管道行 JSON，不传 PCM；桌面独占）
 │   ├── aiya-beets-client/ # beets 协议客户端：发现/起进程/说协议；零环境知识
-│   └── aiya-beets-store/  # beets 索引增强的派生数据：独立 SQLite 文件，不认识应用曲库
+│   ├── aiya-beets-store/  # beets 索引增强的派生数据：独立 SQLite 文件，不认识应用曲库
+│   └── aiya-server/       # Web 版服务端壳（docs/65）：axum 命令路由 + Range 流式 + 静态托管
 ├── beets-tool/            # beets 侧全部能力（独立发布单元，Python 包 aiya-beets）
 ├── src-tauri/             # Tauri 宿主：命令、事件桥、协议注册、窗口、日志
 ├── ui/                    # Svelte 5 + Vite：views / stores / 组件分 content·shell·ui
@@ -44,14 +46,19 @@ AIYA_MUSIC_TAURI/
 ui ── lib/ipc/client.ts ──▶ src-tauri(aiya) ──┬─▶ aiya-data
                                              ├─▶ aiya-player ──▶ aiya-audio
                                              ├─▶ aiya-beets-store
+                                             ├─▶ aiya-dto
                                              └─▶ aiya-audio      ⇠ 同一 crate 也被 sidecar 用
+浏览器 ── HTTP/SSE ──▶ aiya-server ──┬─▶ aiya-data / aiya-player / aiya-dto / aiya-beets-store
+                                    └─▶ aiya-audio 不得进其编译图
 src-tauri ⇠ 命名管道行 JSON ⇢ aiya-audio-host
 src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立安装，可能根本没装）
 ```
 
 - `aiya-player` 不依赖 `tauri`、`tokio`、`rusqlite`、`windows`；`aiya-data`
-  不依赖 `tauri` 与音频平台；`aiya-beets-store` 不依赖应用曲库（`aiya-data`）。
-  违反视为结构破坏，合并前必须修正。
+  不依赖 `tauri` 与音频平台；`aiya-beets-store` 不依赖应用曲库（`aiya-data`）；
+  `aiya-dto` 不依赖 tauri 与音频平台（桌面壳与 server 共用的契约源）；
+  `aiya-server` 不依赖 `aiya-audio`/`src-tauri`（音频侧不进 server 编译图，
+  Linux 容器 cargo check 为证）。违反视为结构破坏，合并前必须修正。
 - 核心链路 `aiya-audio` / `aiya-audio-host` / `aiya-player` / `aiya-data` 不依赖
   `aiya-beets-client`，"没装 beets 也能完整播放"是编译期事实。门禁：
   `npm run check:boundary`。
