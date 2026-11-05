@@ -60,7 +60,9 @@ beets 模块 = beets helper GUI。2026-11-01 单轨化（推翻本文件初稿�
 
 为什么模型要自托管：upf.edu 对家用宽带 ~17KB/s 且频繁断流（实测 beta1 归档
 拉了 35 分钟、两次截断）；runner 上 3 秒拉完。所以 CI 抽 12 件重打包挂到本仓库
-固定 release（`svm-models-selfhost.yml`，幂等），载体走 GitHub。
+固定 release（重打包由维护脚本 `tools/selfhost_svm_models.py` 产出，幂等；
+原 `svm-models-selfhost.yml` workflow 已于 2026-11-05 退役移入该脚本），
+载体走 GitHub。
 
 ## 5 · Gaia/SVM 模型的来龙去脉（为什么换二进制）
 
