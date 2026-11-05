@@ -279,27 +279,37 @@ fn parse_conds(arr: &[Value]) -> DbResult<Vec<(String, Value)>> {
         let field = Field::parse(c.get("field").and_then(Value::as_str).unwrap_or_default())?;
         let op = Op::parse(c.get("op").and_then(Value::as_str).unwrap_or_default())?;
         if !field.allows(&op) {
-            return Err(DbError::Custom(format!("field {field:?} does not support this operator")));
+            return Err(DbError::Custom(format!(
+                "field {field:?} does not support this operator"
+            )));
         }
         let raw_value = c.get("value").unwrap_or(&Value::Null);
         let value = match (field, raw_value) {
             // 文本字段：转字符串并非空（空串条件 = UI 没填，直接拒绝）
             (Field::Genre | Field::Artist | Field::Album, Value::String(s)) => {
                 if s.trim().is_empty() {
-                    return Err(DbError::Custom("text condition value cannot be empty".into()));
+                    return Err(DbError::Custom(
+                        "text condition value cannot be empty".into(),
+                    ));
                 }
                 CondValue::Text(s.trim().to_string())
             }
             (Field::Year | Field::PlayCount, Value::Number(n)) => {
-                let i = n
-                    .as_i64()
-                    .ok_or_else(|| DbError::Custom("number condition value must be an integer".into()))?;
+                let i = n.as_i64().ok_or_else(|| {
+                    DbError::Custom("number condition value must be an integer".into())
+                })?;
                 CondValue::Int(i)
             }
             (Field::Year | Field::PlayCount, _) => {
-                return Err(DbError::Custom("number condition value must be an integer".into()));
+                return Err(DbError::Custom(
+                    "number condition value must be an integer".into(),
+                ));
             }
-            (_, _) => return Err(DbError::Custom("text condition value must be a string".into())),
+            (_, _) => {
+                return Err(DbError::Custom(
+                    "text condition value must be a string".into(),
+                ))
+            }
         };
         clauses.push(build_clause(field, op, &value));
     }

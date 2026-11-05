@@ -158,7 +158,9 @@ pub fn set_rule(
     };
     match kind.as_deref() {
         None => Ok(false),
-        Some("manual") => Err(DbError::Custom("manual playlists do not support rules".into())),
+        Some("manual") => Err(DbError::Custom(
+            "manual playlists do not support rules".into(),
+        )),
         Some(_) => {
             let matched = plan.matched_ids(conn)?;
             let tx = write_tx(conn)?;
@@ -203,7 +205,9 @@ pub fn refresh_smart(
         return Ok(None);
     };
     if kind != "smart" {
-        return Err(DbError::Custom("only smart playlists support refresh".into()));
+        return Err(DbError::Custom(
+            "only smart playlists support refresh".into(),
+        ));
     }
     let plan = crate::smart::SmartPlan::parse(rule_json.as_deref())?;
     let matched = plan.matched_ids(conn)?;

@@ -158,7 +158,9 @@ pub fn strip(bytes: &[u8], st: &mut TsState) -> Result<(Vec<u8>, TsAudio), Audio
         } else {
             "no audio packets in this segment"
         };
-        return Err(AudioError::Decode(format!("TS segment has no audio data: {why}")));
+        return Err(AudioError::Decode(format!(
+            "TS segment has no audio data: {why}"
+        )));
     }
     Ok((out, kind))
 }

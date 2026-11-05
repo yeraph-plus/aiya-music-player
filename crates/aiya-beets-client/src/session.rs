@@ -389,7 +389,9 @@ fn recv_first_json(
             Ok(l) => l,
             Err(RecvTimeoutError::Timeout) => return Err(ToolError::Timeout { timeout }),
             Err(RecvTimeoutError::Disconnected) => {
-                return Err(ToolError::Protocol("tool process exited before responding".into()));
+                return Err(ToolError::Protocol(
+                    "tool process exited before responding".into(),
+                ));
             }
         };
         let trimmed = line.trim();

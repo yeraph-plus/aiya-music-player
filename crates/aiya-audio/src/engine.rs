@@ -1250,7 +1250,9 @@ fn play_file(
         if !out.is_live() {
             // 独占暂停释放了设备：这是正常静止态，无需重建
             if !paused {
-                stream_err = Some(AudioError::Device("output stream unexpectedly empty".into()));
+                stream_err = Some(AudioError::Device(
+                    "output stream unexpectedly empty".into(),
+                ));
             }
             continue;
         }

@@ -127,10 +127,11 @@ const SEGMENT_MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// 违约，不是网络抖动）。
 fn read_capped(reader: impl Read, url: &str, cap: u64, what: &str) -> Result<Vec<u8>, AudioError> {
     let mut bytes = Vec::new();
-    reader
-        .take(cap + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| AudioError::Io(std::io::Error::other(format!("failed to read response body {url}: {e}"))))?;
+    reader.take(cap + 1).read_to_end(&mut bytes).map_err(|e| {
+        AudioError::Io(std::io::Error::other(format!(
+            "failed to read response body {url}: {e}"
+        )))
+    })?;
     if bytes.len() as u64 > cap {
         return Err(AudioError::Decode(format!(
             "{what} exceeds the byte limit {cap} B ({url}); refusing as a protocol error"
@@ -211,9 +212,9 @@ fn parse_media_playlist(text: &str, base: &Url) -> Result<ParsedMedia, AudioErro
         if let Some(rest) = line.strip_prefix("#EXTINF:") {
             // EXTINF:<duration(s)>,[title] — 时长是小数秒
             let dur_str = rest.split(',').next().unwrap_or("").trim();
-            let secs: f64 = dur_str
-                .parse()
-                .map_err(|_| AudioError::Decode(format!("EXTINF duration is not a number: {dur_str:?}")))?;
+            let secs: f64 = dur_str.parse().map_err(|_| {
+                AudioError::Decode(format!("EXTINF duration is not a number: {dur_str:?}"))
+            })?;
             pending_duration_ms = Some((secs.max(0.0) * 1000.0).round() as u64);
             continue;
         }
@@ -258,7 +259,9 @@ fn parse_media_playlist(text: &str, base: &Url) -> Result<ParsedMedia, AudioErro
         // 判定推迟到打开段时的内容嗅探，报错时机才和真实原因对齐。
         let resolved = base
             .join(line)
-            .map_err(|e| AudioError::Decode(format!("failed to resolve segment URI {line:?}: {e}")))?
+            .map_err(|e| {
+                AudioError::Decode(format!("failed to resolve segment URI {line:?}: {e}"))
+            })?
             .to_string();
         let index = segments.len() as u64;
         segments.push(RawSegment {
@@ -696,7 +699,9 @@ impl HlsStream {
             &hint,
             DecodeBackend::Symphonia,
         )
-        .map_err(|e| AudioError::Decode(format!("failed to decode HLS segment ({}): {e}", seg.uri)))?;
+        .map_err(|e| {
+            AudioError::Decode(format!("failed to decode HLS segment ({}): {e}", seg.uri))
+        })?;
         if let Some((rate, ch)) = expected {
             if stream.sample_rate() != rate || stream.channels() != ch {
                 return Err(AudioError::Decode(format!(
@@ -1346,7 +1351,10 @@ mod tests {
             }
         }
         let e = err.expect("预算耗尽必须最终报错");
-        assert!(e.to_string().contains("interrupted"), "报错要说清是流中断：{e}");
+        assert!(
+            e.to_string().contains("interrupted"),
+            "报错要说清是流中断：{e}"
+        );
         assert!(
             sleeps.load(Ordering::Relaxed) >= OUTAGE_BUDGET.as_millis() as u64 / 2,
             "退避必须真的发生（且不超过预算）：{}ms",
@@ -1629,7 +1637,10 @@ mod tests {
             }
         }
         let e = err.expect("停滞的直播流必须报错而不是永远轮询");
-        assert!(e.to_string().contains("stopped updating"), "报错要说清是停滞：{e}");
+        assert!(
+            e.to_string().contains("stopped updating"),
+            "报错要说清是停滞：{e}"
+        );
     }
 
     /* 审查修复回归 */

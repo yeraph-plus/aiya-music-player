@@ -29,7 +29,9 @@ pub enum AudioError {
     /// 与 `Decode` 分开的理由（docs/22 D3）：这不是"文件坏了"而是"格式没编进来"——
     /// 用户换文件/转码有用，重试没用。`codec` 是用户可读的格式名（如 "Opus"），
     /// 消息会原样进 UI 横幅，所以说人话。
-    #[error("unsupported audio codec ({codec}): the player has no built-in decoder for this format")]
+    #[error(
+        "unsupported audio codec ({codec}): the player has no built-in decoder for this format"
+    )]
     CodecUnsupported { codec: String },
     #[error("wasapi: {0}")]
     Wasapi(String),

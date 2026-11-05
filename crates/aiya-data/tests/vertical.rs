@@ -339,14 +339,22 @@ fn vertical_smart_playlist_rule_query() {
                 .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
         })
         .unwrap_err();
-    assert!(err.to_string().contains("manual playlists do not support rules"), "实际错误：{err}");
+    assert!(
+        err.to_string()
+            .contains("manual playlists do not support rules"),
+        "实际错误：{err}"
+    );
     let err = db
         .send(|conn| {
             aiya_data::playlist::refresh_smart(conn, "p_manual", 12)
                 .map_err(|e| aiya_data::DbError::Custom(e.to_string()))
         })
         .unwrap_err();
-    assert!(err.to_string().contains("only smart playlists support refresh"), "实际错误：{err}");
+    assert!(
+        err.to_string()
+            .contains("only smart playlists support refresh"),
+        "实际错误：{err}"
+    );
     // 上一步 set_rule 替换重算后表内只剩 Track B → Track A 不在表内，
     // 手动加歌应命中 1 首
     let track_a: String = db

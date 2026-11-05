@@ -142,8 +142,12 @@ fn set_aside_files(path: &Path, tag: &str) -> DbResult<()> {
         .unwrap_or_default()
         .as_secs();
     let backup = path.with_file_name(format!("{file_name}.{tag}-{stamp}.bak"));
-    std::fs::rename(path, &backup)
-        .map_err(|e| DbError::Custom(format!("failed to set aside database file ({e}): {}", path.display())))?;
+    std::fs::rename(path, &backup).map_err(|e| {
+        DbError::Custom(format!(
+            "failed to set aside database file ({e}): {}",
+            path.display()
+        ))
+    })?;
     for suffix in ["-wal", "-shm"] {
         let side = path.with_file_name(format!("{file_name}{suffix}"));
         if side.exists() {
