@@ -31,7 +31,7 @@
 #      （本文件已声明 permissions: contents: write，但组织策略可能更严）
 #   2. `licenses/SOURCE-OFFER.txt` 里的源码地址已换成真实仓库地址（docs/35 P0-2）
 
-name: Release
+name: Release · 播放器发布
 
 on:
   push:

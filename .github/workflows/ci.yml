@@ -22,7 +22,7 @@
 #   · beets：三个 smoke 把音源写死成开发机的 `D:\MUSIC_Player\test-music`
 #     → 改为 `beets-tool/tests/_testmusic.py`，没有真音源就现场合成
 
-name: CI
+name: CI · 常规校验
 
 on:
   push:

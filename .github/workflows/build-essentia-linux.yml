@@ -1,4 +1,4 @@
-name: build-essentia-linux
+name: beets-tool · Linux 提取器构建
 
 # beets-tool Linux 提取器测试构建（essentia + Gaia/SVM 路线验证）。
 # 记录：docs/67（调研结论 / 验证证据 / 三轮坑 / 转正清单）。
@@ -54,6 +54,7 @@ env:
 
 jobs:
   build-extractor:
+    name: Linux 提取器构建 + Gaia/SVM 冒烟
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:

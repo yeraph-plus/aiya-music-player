@@ -31,7 +31,7 @@
 # ## 签名：不做（2026-10-27 拍板）
 # 与播放器一致：未签名，用户首次运行由 SmartScreen 提示"未知发布者"。
 
-name: Release beets
+name: Release · beets 套件包
 
 on:
   workflow_dispatch:
