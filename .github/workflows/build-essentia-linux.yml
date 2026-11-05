@@ -1,0 +1,176 @@
+name: build-essentia-linux
+
+# beets-tool Linux 提取器测试构建（essentia + Gaia/SVM 路线验证）。
+#
+# 要验证的唯一风险点：带 Gaia 的 Linux x86_64 streaming_extractor_music——
+# Windows 侧靠社区 Gaia 构建解决（docs/58 §5），Linux 没有任何现成 release
+# 可下（官方/社区均无），只能构建。路线 = MTG 官方 wheel CI 的同款基建：
+#   - 镜像 mtgupf/essentia-builds:manylinux_2_28_x86_64（Docker Hub 主源，
+#     ghcr.io/mtg/essentia-builds 同 tag 兜底）；manylinux_2_28 = glibc 2.28
+#     下限。静态第三方依赖（Gaia、静态 Qt、ffmpeg、fftw、taglib 等）已预编译
+#     进镜像，钉扎版本 ESSENTIA_3RDPARTY_VERSION=v2.1_beta5-1555-g33108c70
+#     ——本工作流不再自己编依赖，源码取同一 commit；
+#   - 构建命令与 MTG 官方 travis/build_wheels.sh 一致：
+#     waf configure --with-gaia --build-static --static-dependencies；
+#   - 冒烟口径复刻 beets-tool/tools/essentia_smoke.py：sha256 钉扎的自托管
+#     beta5 载体解出 12 件 .history → 正弦波 → 退出 0 且
+#     highlevel.danceability 出现（模型缺失/不配时 highlevel 整段消失，
+#     "跑完了但字段全空"正是这道闸门要堵的坑，docs/54 §1.3）。
+#
+# 边界（测试构建，不碰发布通道与本地打包代码）：
+#   - 产物只进 workflow artifact（二进制/smoke.json/ldd.txt/SHA256SUMS），
+#     不写 release、不动 beets-portable 通道；
+#   - 触发：手动 dispatch（测试构建工具，不挂 push/发布通道）；零引用仓库内
+#     打包代码（冒烟逻辑内联，后续接 build_bundle.py 平台化时再重构）；
+#   - glibc 2.28 下限按"路线验证"口径接受；转正时再评估 manylinux2014
+#     （glibc 2.17）底座或自建精简镜像；
+#   - 镜像 tag 是浮动 tag（未 digest 钉扎），二进制 sha256 会随镜像更新漂移
+#     ——每次构建以产物 SHA256SUMS 为准。
+#
+# 路线已于 2026-11-06 验证通过：12 件 beta5 模型加载、highlevel 12 键全出、
+# 正弦波判 not_danceable/happy（与 Windows 侧实测一致）；ffmpeg/fftw/taglib/
+# chromaprint/gaia 静态链入，仅 Qt5Core/Qt5Concurrent 动态（随包附 so 即可，
+# 与 win 附 Qt5Core.dll 同款模式）。
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-essentia-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 与镜像内静态依赖同源的 essentia commit（= v2.1_beta5-1555-g33108c70）
+  ESS_SHA: 33108c70929684ed14091dfb671a30264cf8bb84
+  # 与 plugins.json svm-* 载体条目同一钉扎（docs/58 §4）
+  SVM_URL: https://github.com/yeraph-plus/aiya-music-player/releases/download/svm-models-v2.1_beta5/svm-models.zip
+  SVM_SHA256: 312067548931436b48abad98dc663c0f7dcb7ddcdcf01b38db347e266bb2d9e3
+  IMAGE: mtgupf/essentia-builds:manylinux_2_28_x86_64
+  IMAGE_FALLBACK: ghcr.io/mtg/essentia-builds:manylinux_2_28_x86_64
+
+jobs:
+  build-extractor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: 写容器内构建与冒烟脚本（口径复刻 essentia_smoke.py）
+        run: |
+          cat > "$RUNNER_TEMP/svm_prep.py" <<'PY_EOF'
+          import glob
+          import math
+          import struct
+          import wave
+
+          with wave.open("/work/svm/probe.wav", "w") as w:
+              w.setnchannels(1)
+              w.setsampwidth(2)
+              w.setframerate(44100)
+              w.writeframes(b"".join(
+                  struct.pack("<h", int(12000 * math.sin(2 * math.pi * 440 * i / 44100)))
+                  for i in range(44100 * 3)))
+
+          models = sorted(glob.glob("/work/svm/models/*.history"))
+          if len(models) != 12:
+              raise SystemExit("FAIL 模型应 12 件，实际 %d" % len(models))
+          with open("/work/svm/profile.yaml", "w", newline="\n") as f:
+              f.write("highlevel:\n  compute: 1\n  svm_models:\n")
+              for m in models:
+                  f.write("    - " + m + "\n")
+          PY_EOF
+          cat > "$RUNNER_TEMP/assert_smoke.py" <<'PY_EOF'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as f:
+              j = json.load(f)
+          hl = j.get("highlevel", {})
+          if "danceability" not in hl:
+              raise SystemExit("FAIL highlevel 缺 danceability（模型没被加载？）"
+                               + str(list(hl)[:8]))
+          v = hl["danceability"]
+          v = v.get("value") if isinstance(v, dict) else v
+          print("SMOKE OK highlevel 键数 %d，danceability = %s" % (len(hl), v))
+          print("SMOKE OK 键清单：", sorted(hl))
+          PY_EOF
+          cat > "$RUNNER_TEMP/extractor-build.sh" <<'SH_EOF'
+          #!/bin/bash
+          set -euxo pipefail
+          IO="$1"
+          OUT="$IO/dist-linux"
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+
+          # 1) essentia 源码：zip 免 git（镜像内依赖构建同款方式），
+          #    commit 与镜像静态依赖钉扎（ESSENTIA_3RDPARTY_VERSION）同源
+          mkdir -p /work
+          curl -fsSLo /work/essentia-src.zip \
+            "https://github.com/MTG/essentia/archive/${ESS_SHA}.zip"
+          unzip -q /work/essentia-src.zip -d /work
+          ESS_DIR=$(find /work -maxdepth 1 -type d -name "essentia-${ESS_SHA:0:7}*")
+          test -n "$ESS_DIR"
+          echo "essentia commit: ${ESS_SHA}" > "$OUT/version.txt"
+
+          # 2) waf 静态构建（命令同 MTG 官方 wheel CI + --with-examples：
+          #    wheel 不编 examples，而提取器正是 examples 目标，缺它只有 libessentia.a）
+          : "${PKG_CONFIG_PATH:?镜像 ENV 缺 PKG_CONFIG_PATH}"
+          cd "$ESS_DIR"
+          python3 waf configure --with-gaia --build-static --static-dependencies \
+            --with-examples --pkg-config-path="${PKG_CONFIG_PATH}"
+          python3 waf
+
+          # wscript 会给 examples 加 essentia_ 前缀（src/examples/wscript L157），
+          # 提取器实际名为 essentia_streaming_extractor_music——按尾部通配取
+          BIN=$(find build -type f -name "*streaming_extractor_music" -print -quit)
+          if [ -z "$BIN" ]; then
+            echo "FAIL 没找到提取器产物，build/ 顶层内容："
+            find build -maxdepth 3 -type f | head -40
+            exit 2
+          fi
+          echo "extractor at: $BIN"
+          cp "$BIN" "$OUT/streaming_extractor_music"
+
+          # 3) 冒烟：钉扎载体解 12 件模型 → 正弦波 → highlevel.danceability
+          mkdir -p /work/svm/models
+          curl -fsSLo /work/svm/svm-models.zip "$SVM_URL"
+          echo "${SVM_SHA256}  /work/svm/svm-models.zip" | sha256sum -c -
+          unzip -q /work/svm/svm-models.zip -d /work/svm/models
+          find /work/svm/models -mindepth 2 -name "*.history" \
+            -exec mv -t /work/svm/models {} +
+          python3 /host-scripts/svm_prep.py
+
+          "$OUT/streaming_extractor_music" /work/svm/probe.wav "$OUT/smoke.json" \
+            /work/svm/profile.yaml
+          test -f "$OUT/smoke.json"
+          python3 /host-scripts/assert_smoke.py "$OUT/smoke.json"
+
+          # 4) 取数：动态依赖清单与钉扎（转正时据此定载体与体积门禁）
+          ldd "$OUT/streaming_extractor_music" > "$OUT/ldd.txt" 2>&1 || true
+          cat "$OUT/ldd.txt"
+          (cd "$OUT" && sha256sum streaming_extractor_music > SHA256SUMS && ls -la)
+          SH_EOF
+
+      - name: 拉取 MTG 构建镜像（Hub 主源，ghcr 兜底）
+        run: |
+          docker pull "$IMAGE" > /dev/null || docker pull "$IMAGE_FALLBACK" > /dev/null
+
+      - name: 容器内构建 + 冒烟
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/io" \
+            -v "$RUNNER_TEMP/svm_prep.py:/host-scripts/svm_prep.py:ro" \
+            -v "$RUNNER_TEMP/assert_smoke.py:/host-scripts/assert_smoke.py:ro" \
+            -v "$RUNNER_TEMP/extractor-build.sh:/host-scripts/extractor-build.sh:ro" \
+            -e ESS_SHA -e SVM_URL -e SVM_SHA256 \
+            "$IMAGE" bash /host-scripts/extractor-build.sh /io
+
+      - name: 上传产物（二进制/冒烟/依赖清单/钉扎）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: essentia-extractor-linux-x86_64-test
+          path: dist-linux/
+          if-no-files-found: warn
+          retention-days: 14
