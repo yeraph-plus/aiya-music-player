@@ -67,15 +67,15 @@ jobs:
       PYTHONIOENCODING: utf-8
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       # uv 是**打包工具**不是运行时：它按 embeddable 解释器解析 wheel
       # （实测 numpy 拿到 cp314 tag），比 pip 快一个量级。
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
 
@@ -176,7 +176,7 @@ jobs:
           "BEETS_VERSION=$pkg" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       # 手动触发的默认产物：不发布也能拿到文件去真机试
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: aiya-beets-win-x64
           path: |

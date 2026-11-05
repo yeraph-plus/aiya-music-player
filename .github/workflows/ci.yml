@@ -47,9 +47,9 @@ jobs:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
@@ -92,7 +92,7 @@ jobs:
 
       - name: 失败时留存 e2e 报告
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: ui/playwright-report/
@@ -110,13 +110,13 @@ jobs:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -248,3 +248,17 @@ jobs:
             Write-Host "::error title=enrich smoke 失败::$tail"
             exit 1
           }
+
+  # 依赖安全通告（RustSec advisory-db）：2026-11-06 盘点确认全仓从未跑过
+  # advisory 扫描，bundled SQLite 等是周期性 CVE 源。失败 = 存在已知漏洞记录，
+  # 先升级或收录ignore再合；无告警时这是纯只读检查（约 1 分钟）。
+  audit:
+    name: cargo-audit（RustSec 通告）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit

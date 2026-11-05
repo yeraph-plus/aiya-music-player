@@ -169,7 +169,7 @@ jobs:
 
       - name: 上传产物（二进制/冒烟/依赖清单/钉扎）
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: essentia-extractor-linux-x86_64-test
           path: dist-linux/
