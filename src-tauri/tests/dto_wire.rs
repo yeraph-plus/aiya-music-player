@@ -607,7 +607,7 @@ fn diagnostics_flat_wire_shape() {
     let v = serde_json::to_value(&d).unwrap();
     assert_eq!(keys(&v), sorted(&["version", "dataDir", "recentErrors"]));
 
-    let src = include_str!("../../src-tauri/src/dto/app.rs");
+    let src = include_str!("../../crates/aiya-dto/src/app.rs");
     for dead in [
         "pub electron",
         "pub streams",
@@ -630,7 +630,7 @@ fn diagnostics_flat_wire_shape() {
 fn diagnostics_has_no_shortcut_conflicts_field() {
     // 两侧都查：DTO 源码（它是真相）与已入库的 TS 生成物（漂移会被看见）
     // 查字段声明而不是任意出现：注释里解释"为什么删掉"时会写出这个词
-    let src = include_str!("../../src-tauri/src/dto/app.rs");
+    let src = include_str!("../../crates/aiya-dto/src/app.rs");
     assert!(
         !src.contains("pub shortcut_conflicts"),
         "shortcut_conflicts 已从 Diagnostics 删除（改由前端 findConflicts 算），别加回来"

@@ -28,6 +28,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 aiya-data = { path = "../crates/aiya-data" }
 aiya-player = { path = "../crates/aiya-player" }
+# 命令 DTO 与拖放分类（自本 crate 迁出为共享层，server 复用同一契约源）
+aiya-dto = { path = "../crates/aiya-dto" }
+# beets/enrichment 编排共享层（BeetsHost 注入桌面环境）
+aiya-host-core = { path = "../crates/aiya-host-core" }
 aiya-audio = { path = "../crates/aiya-audio" }
 # 外部整理工具 client（docs/33 M1）：进程生命周期与 NDJSON 协议都在那里，
 # 宿主这里只负责「怎么找到它」和「结果怎么入库」。

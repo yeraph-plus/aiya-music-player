@@ -52,7 +52,6 @@ pub use refresh::{RefreshSnapshot, RefreshState};
 
 // 拖放分类结果。形状定义跟着分类器走（`src/drop.rs`，纯函数 +
 // 单测在那里），这里只做出口——命令签名与 ts-rs 都从 `dto::` 拿，与其余 DTO 一致。
-pub use crate::drop::{DroppedItem, DroppedKind};
 
 /// 拖入 / 打开一批文件的回执（docs/52 §5.3）。
 ///

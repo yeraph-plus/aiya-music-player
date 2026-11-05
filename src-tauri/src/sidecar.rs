@@ -234,7 +234,9 @@ fn degrade_launch(ev_tx: &SyncSender<aiya_audio::EngineEvent>, reason: String) {
     let _ = ev_tx.send(aiya_audio::EngineEvent::Error {
         token: 0,
         kind: aiya_audio::AudioErrorKind::Internal.as_str().into(),
-        message: format!("audio engine temporarily unavailable, retrying in the background: {reason}"),
+        message: format!(
+            "audio engine temporarily unavailable, retrying in the background: {reason}"
+        ),
     });
 }
 
@@ -262,7 +264,9 @@ fn connect_once(
     // Windows 会给它新建一个黑窗。这个标志是父进程侧的闸门，子进程自己改 subsystem 管不到。
     crate::proc::no_window(&mut cmd);
 
-    let child = cmd.spawn().map_err(|e| format!("failed to spawn sidecar: {e}"))?;
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to spawn sidecar: {e}"))?;
     *lock(&shared.child) = Some(child);
 
     // spawn 后再查：与 shutdown() 的窄竞态（检查在前、spawn 在后）兜底。命中就立即收尸返回 —— shutdown 的等待循环/最终
@@ -371,7 +375,9 @@ fn read_welcome(reader: &mut BufReader<File>) -> Result<(), String> {
             .read_line(&mut line)
             .map_err(|e| format!("failed to read handshake: {e}"))?;
         if n == 0 {
-            return Err("sidecar disconnected during handshake (protocol mismatch or pipe conflict)".into());
+            return Err(
+                "sidecar disconnected during handshake (protocol mismatch or pipe conflict)".into(),
+            );
         }
         if let Ok(aiya_audio::SidecarToHost::Welcome { protocol }) =
             serde_json::from_str(line.trim())

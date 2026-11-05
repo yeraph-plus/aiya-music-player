@@ -10,6 +10,8 @@
 | `aiya-audio-host` | sidecar 二进制：v1 原生引擎入口；mpv supervisor 仅作对照/逃生 | DB / Tauri（只依赖 `aiya-audio`） |
 | `aiya-beets-client` | beets 协议客户端：发现/起进程/清点协议；**零环境知识** | DB / Tauri / 任何插件名 |
 | `aiya-beets-store` | beets 模块自有的派生数据（索引增强结论）：独立 SQLite 文件，不认识应用曲库 | 应用曲库（`aiya-data`）/ Tauri / `aiya-beets-client` |
+| `aiya-dto` | IPC 命令/事件 DTO 与拖放 DTO 的共享契约源（`derive(TS)` 导出）；从桌面壳迁出供 server 复用 | tauri / 音频平台 |
+| `aiya-server` | Web 版服务端壳（docs/65）：axum 命令路由、Range 流式、静态托管、SSE；浏览器出声 | tauri / `aiya-audio` / 音频平台 |
 
 早期规划中的 `aiya-audio-client`（管道/JSON IPC 客户端）、`aiya-app`（PlayerActor
 编排）、`aiya-system`（SMTC、托盘、单实例）没有单独成 crate，职责落到现有单元：

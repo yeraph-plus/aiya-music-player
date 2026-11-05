@@ -21,6 +21,7 @@
 //! 就会因为磁盘 IO 停顿而被反压（管道只有 64 KB），进而在对面的
 //! `SESSION_IDLE_TIMEOUT` 里表现为"工具卡死"。所以职责拆开：事件线程只往
 //! 内存队列里 push（微秒级），落库线程按行数/时间攒批。
+use crate::BeetsHost;
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -28,9 +29,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aiya_beets_client::EventSink;
 use aiya_beets_store::{Arena, Item, Store};
-use tauri::{Emitter, Manager};
 
-use crate::dto::enrichment::{EnrichmentGc, EnrichmentMatch, EnrichmentWorklist};
+use aiya_dto::enrichment::{EnrichmentGc, EnrichmentMatch, EnrichmentWorklist};
 
 /// 事件通道。索引增强有自己的一条：混进 `beets:import` 会让导入面板的进度条
 /// 突然开始跳"分析第 N 首"。
@@ -77,24 +77,18 @@ pub fn normalize_source(raw: Option<String>) -> Result<String, String> {
 
 /* 存储与快照 */
 
-fn store_of(app: &tauri::AppHandle) -> Result<Arc<Store>, String> {
-    app.try_state::<crate::AppState>()
-        .ok_or_else(|| "app state not ready".to_string())?
-        .enrich_store(app)
+fn store_of(host: &dyn BeetsHost) -> Result<Arc<Store>, String> {
+    host.enrich_store()
 }
 
 /// 曲库当前在线文件的快照（`path_lower → path/size/mtime`）。
 ///
 /// 一次会话只取一次：会话中途曲库变了，宁可这一轮少算几首（下一轮自然补），
 /// 也不要让同一批里的行忽快忽慢地失效。
-fn arena_of(app: &tauri::AppHandle) -> Result<Arena, String> {
-    let state = app
-        .try_state::<crate::AppState>()
-        .ok_or_else(|| "app state not ready".to_string())?;
-    let files = state
-        .db()
-        .send(|conn| aiya_data::repo::online_files(conn))
-        .map_err(|e| e.to_string())?;
+fn arena_of(host: &dyn BeetsHost) -> Result<Arena, String> {
+    let files = host
+        .online_files()
+        .ok_or_else(|| "host state not ready".to_string())?;
     Ok(Arena::from_rows(
         files
             .into_iter()
@@ -106,13 +100,13 @@ fn arena_of(app: &tauri::AppHandle) -> Result<Arena, String> {
 
 /// 一张卡需要的全部数字 + 清单预览。
 pub fn worklist(
-    app: &tauri::AppHandle,
+    host: &dyn BeetsHost,
     source: &str,
     include_empty: bool,
 ) -> Result<EnrichmentWorklist, String> {
     let (stats, preview) = {
-        let store = store_of(app)?;
-        let arena = arena_of(app)?;
+        let store = store_of(host)?;
+        let arena = arena_of(host)?;
         let stats = store.stats(source, &arena).map_err(|e| e.to_string())?;
         let preview = store
             .worklist(source, &arena, include_empty, PREVIEW)
@@ -120,7 +114,7 @@ pub fn worklist(
         (stats, preview)
     };
 
-    let available = crate::beets::available(app);
+    let available = crate::beets::available(host);
     let note = (!available)
         .then(|| "aiya-beets component not found: install the component first, or check the component path in settings".to_string());
     Ok(EnrichmentWorklist {
@@ -144,12 +138,12 @@ pub fn worklist(
 /// `limit` 传 `i64::MAX` 而不是 `usize::MAX`：后者 `as i64` 会变成 `-1`，
 /// 而 SQLite 恰好把 `LIMIT -1` 当"不限"——那是个会让"清单只剩一条"的巧合。
 pub fn work_paths(
-    app: &tauri::AppHandle,
+    host: &dyn BeetsHost,
     source: &str,
     include_empty: bool,
 ) -> Result<Vec<String>, String> {
-    let store = store_of(app)?;
-    let arena = arena_of(app)?;
+    let store = store_of(host)?;
+    let arena = arena_of(host)?;
     store
         .worklist(source, &arena, include_empty, i64::MAX as usize)
         .map_err(|e| e.to_string())
@@ -160,22 +154,18 @@ pub fn work_paths(
 /// 结论库不认识 `track_id`，所以这里要回曲库换一次。没换到的行**直接丢**：
 /// 结论还在（等 GC 收），但"点开已经没有的曲目"出现在结果里只是噪音。
 pub fn find(
-    app: &tauri::AppHandle,
+    host: &dyn BeetsHost,
     filter: aiya_beets_store::Filter,
 ) -> Result<Vec<EnrichmentMatch>, String> {
-    let store = store_of(app)?;
+    let store = store_of(host)?;
     let rows = store.find(&filter).map_err(|e| e.to_string())?;
     if rows.is_empty() {
         return Ok(Vec::new());
     }
     let keys: Vec<String> = rows.iter().map(|r| r.path_lower.clone()).collect();
-    let state = app
-        .try_state::<crate::AppState>()
-        .ok_or_else(|| "app state not ready".to_string())?;
-    let ids = state
-        .db()
-        .send(move |conn| aiya_data::repo::track_ids_by_paths(conn, &keys))
-        .map_err(|e| e.to_string())?;
+    let ids = host
+        .track_ids_by_paths(&keys)
+        .ok_or_else(|| "host state not ready".to_string())?;
     Ok(rows
         .into_iter()
         .filter_map(|r| {
@@ -194,9 +184,9 @@ pub fn find(
 }
 
 /// 清理残留行（曲库里已经没有对应曲目且 N 天没更新过）。
-pub fn gc(app: &tauri::AppHandle, source: &str, keep_days: u32) -> Result<EnrichmentGc, String> {
-    let store = store_of(app)?;
-    let arena = arena_of(app)?;
+pub fn gc(host: &dyn BeetsHost, source: &str, keep_days: u32) -> Result<EnrichmentGc, String> {
+    let store = store_of(host)?;
+    let arena = arena_of(host)?;
     let removed = store
         .gc(source, now_secs(), keep_days, &arena)
         .map_err(|e| e.to_string())?;
@@ -240,7 +230,7 @@ struct Shared {
 /// `finish()` 幂等（`finished` 标志）：正常路径调一次、`Drop` 再兜一次，
 /// `enrichPersisted` 只会发一条。
 pub struct Sink {
-    app: tauri::AppHandle,
+    host: Arc<dyn BeetsHost>,
     shared: Arc<Shared>,
     flusher: Mutex<Option<std::thread::JoinHandle<()>>>,
     finished: AtomicBool,
@@ -248,9 +238,9 @@ pub struct Sink {
 
 impl Sink {
     /// 起一个落库线程，返回可以直接交给会话的 sink。
-    pub fn start(app: tauri::AppHandle) -> Result<Self, String> {
-        let store = store_of(&app)?;
-        let alive = Arc::new(arena_of(&app)?);
+    pub fn start(host: Arc<dyn BeetsHost>) -> Result<Self, String> {
+        let store = store_of(&*host)?;
+        let alive = Arc::new(arena_of(&*host)?);
 
         let shared = Arc::new(Shared {
             pending: Mutex::new(Vec::new()),
@@ -260,13 +250,13 @@ impl Sink {
         let worker = Arc::clone(&shared);
         let store_ref = Arc::clone(&store);
         let alive_ref = Arc::clone(&alive);
-        let emit_app = app.clone();
+        let emit_app = host.clone();
         let flusher = std::thread::Builder::new()
             .name("aiya-enrich-writer".into())
-            .spawn(move || flush_loop(&worker, &store_ref, &alive_ref, &emit_app))
+            .spawn(move || flush_loop(&worker, &store_ref, &alive_ref, &*emit_app))
             .map_err(|e| format!("failed to start enrichment writer thread: {e}"))?;
         Ok(Sink {
-            app,
+            host,
             shared,
             flusher: Mutex::new(Some(flusher)),
             finished: AtomicBool::new(false),
@@ -292,7 +282,7 @@ impl Sink {
             let _ = handle.join();
         }
         let t = &self.shared.tally;
-        let _ = self.app.emit(
+        self.host.emit(
             CHANNEL,
             serde_json::json!({
                 "type": "enrichPersisted",
@@ -317,7 +307,7 @@ impl Drop for Sink {
 impl EventSink for Sink {
     fn emit(&self, channel: &'static str, payload: serde_json::Value) {
         // 先转发：UI 的进度不能等落库（落库是批量的，转发是逐条的）
-        let _ = self.app.emit(channel, payload.clone());
+        self.host.emit(channel, payload.clone());
         if payload.get("type").and_then(|t| t.as_str()) != Some("enrichItem") {
             return;
         }
@@ -354,12 +344,7 @@ fn item_from_event(v: &serde_json::Value) -> Option<Item> {
     })
 }
 
-fn flush_loop(
-    shared: &Arc<Shared>,
-    store: &Arc<Store>,
-    alive: &Arc<Arena>,
-    app: &tauri::AppHandle,
-) {
+fn flush_loop(shared: &Arc<Shared>, store: &Arc<Store>, alive: &Arc<Arena>, host: &dyn BeetsHost) {
     loop {
         let batch = take_batch(&shared.pending, FLUSH_ROWS);
         if batch.is_empty() {
@@ -377,7 +362,7 @@ fn flush_loop(
                 t.not_in_library
                     .fetch_add(saved.not_in_library, Ordering::SeqCst);
                 t.batches.fetch_add(1, Ordering::SeqCst);
-                let _ = app.emit(
+                host.emit(
                     CHANNEL,
                     serde_json::json!({
                         "type": "enrichPersist",

@@ -34,8 +34,9 @@ if (!(env.PATH || '').toLowerCase().includes(cargoBin.toLowerCase())) {
 const target = check ? mkdtempSync(join(tmpdir(), 'aiya-types-')) : outDir;
 mkdirSync(target, { recursive: true });
 
-// 三个 crate 都有导出：aiya（命令 DTO）、aiya-player（播放状态）、aiya-data（曲目）
-const crates = ['aiya', 'aiya-player', 'aiya-data'];
+// 四个 crate 都有导出：aiya-dto（命令 DTO 主体）、aiya（命令侧少量自有形状）、
+// aiya-player（播放状态）、aiya-data（曲目）
+const crates = ['aiya-dto', 'aiya', 'aiya-player', 'aiya-data'];
 const args = ['test', '--quiet'];
 for (const c of crates) args.push('-p', c);
 args.push('export_bindings');

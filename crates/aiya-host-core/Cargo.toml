@@ -1,0 +1,21 @@
+[package]
+name = "aiya-host-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aiya-data = { path = "../aiya-data" }
+aiya-player = { path = "../aiya-player" }
+aiya-dto = { path = "../aiya-dto" }
+aiya-beets-client = { path = "../aiya-beets-client" }
+aiya-beets-store = { path = "../aiya-beets-store" }
+rusqlite.workspace = true
+ureq.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+sha2.workspace = true
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+
+[dev-dependencies]
+tempfile = "3"

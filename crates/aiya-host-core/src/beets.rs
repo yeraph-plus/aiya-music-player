@@ -10,17 +10,17 @@
 //! 唯一共享的东西是数据目录约定 `{app_data}/beets`（docs/33 §3.1）。
 //!
 //! **未安装时核心播放功能必须全通**——beets 是增强能力，不是依赖。
+use crate::{BeetsHost, InstallGuard};
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use aiya_beets_client::{BeetsTool, EventSink, Launcher, StatusReport, StdioTool, ToolError};
-use tauri::{Emitter, Manager};
 
 /// 设置页 beets 状态区数据源。形状定义搬去 `dto::beets`（契约归 dto），
 /// 这里 `pub use` 回来，本文件其余调用点不用改。
-pub use crate::dto::beets::BeetsStatus;
+pub use aiya_dto::beets::BeetsStatus;
 
 /* 发现 */
 
@@ -61,8 +61,8 @@ impl EntrySource {
 /// 这是播放器与工具**唯一共享的约定**（docs/33 §3.1）：播放器决定"数据放哪"
 /// （应用数据目录归宿主管），工具决定"里面怎么摆"。不传的话，工具会去
 /// `%APPDATA%\beets`，与用户自己的 beets 抢同一个库。
-pub fn data_home(app: &tauri::AppHandle) -> PathBuf {
-    crate::paths::data_root(app).join("beets")
+pub fn data_home(host: &dyn BeetsHost) -> PathBuf {
+    host.data_root().join("beets")
 }
 
 /// beets 的"双家"（docs/45 §4）：工作台家与索引家。
@@ -94,10 +94,10 @@ impl Profile {
         }
     }
 
-    fn home(self, app: &tauri::AppHandle) -> PathBuf {
+    fn home(self, host: &dyn BeetsHost) -> PathBuf {
         match self {
-            Profile::Workbench => data_home(app),
-            Profile::Index => index_home(app),
+            Profile::Workbench => data_home(host),
+            Profile::Index => index_home(host),
         }
     }
 }
@@ -107,16 +107,16 @@ impl Profile {
 /// 与工作台家并列，**不是**它的子目录：beets 会往 home 里放 `config.yaml`、
 /// `library.db`、`state.pickle`，两个家共用父目录只会让"手滑清了工作台"
 /// 顺带清掉索引。
-pub fn index_home(app: &tauri::AppHandle) -> PathBuf {
-    crate::paths::data_root(app).join("beets-index")
+pub fn index_home(host: &dyn BeetsHost) -> PathBuf {
+    host.data_root().join("beets-index")
 }
 
 /// beets 模块自有的派生数据（索引增强结论）。
 ///
 /// 放在索引家里而不是应用库里：见 `crates/aiya-beets-store` 的头注。一句话，
 /// 它是 beets 的中间产物，应用的数据模型里不该有它。
-pub fn enrich_db(app: &tauri::AppHandle) -> PathBuf {
-    index_home(app).join("enrich.db")
+pub fn enrich_db(host: &dyn BeetsHost) -> PathBuf {
+    index_home(host).join("enrich.db")
 }
 
 /* 模块自有配置：不在应用 settings 表里 */
@@ -163,14 +163,14 @@ pub struct Settings {
 /// 到达时丢掉其中一次的改动（用户看到的是"设置保存了又变回去"）。
 static SETTINGS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-pub fn settings_path(app: &tauri::AppHandle) -> PathBuf {
-    data_home(app).join("settings.json")
+pub fn settings_path(host: &dyn BeetsHost) -> PathBuf {
+    data_home(host).join("settings.json")
 }
 
 /// 读配置。任何读取失败（不存在、坏 JSON、权限）都回落默认值：
 /// 一份坏掉的配置文件不该让 beets 模块整体不可用——用户重填一次就好。
-pub fn load_settings(app: &tauri::AppHandle) -> Settings {
-    load_at(&settings_path(app))
+pub fn load_settings(host: &dyn BeetsHost) -> Settings {
+    load_at(&settings_path(host))
 }
 
 /// 路径版（可测）：坏文件 / 不存在 / 权限不足一律回落默认值。
@@ -186,8 +186,8 @@ fn load_at(path: &std::path::Path) -> Settings {
 /// 直接覆盖写有两个失败模式：写到一半断电得到半个 JSON（下次读回落默认值，
 /// 用户的配置静默消失），以及并发读到空文件。rename 在 Windows 上同名替换
 /// 是原子的（同卷）。
-fn write_settings(app: &tauri::AppHandle, s: &Settings) -> Result<(), String> {
-    write_at(&settings_path(app), s)
+fn write_settings(host: &dyn BeetsHost, s: &Settings) -> Result<(), String> {
+    write_at(&settings_path(host), s)
 }
 
 /// 路径版（可测）。临时文件名带进程号：两个实例同时写时，共用 `.tmp`
@@ -207,15 +207,15 @@ fn write_at(path: &std::path::Path, s: &Settings) -> Result<(), String> {
 
 /// 读 → 改 → 写。返回值是闭包的返回值，便于"改完把新视图给调用方"。
 pub fn update_settings<R>(
-    app: &tauri::AppHandle,
+    host: &dyn BeetsHost,
     f: impl FnOnce(&mut Settings) -> R,
 ) -> Result<R, String> {
     let _guard = SETTINGS_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut s = load_settings(app);
+    let mut s = load_settings(host);
     let out = f(&mut s);
-    write_settings(app, &s)?;
+    write_settings(host, &s)?;
     Ok(out)
 }
 
@@ -228,8 +228,8 @@ pub const INBOX_IMPORTED_CAP: usize = 2000;
 /// 记下"已成功导入的源文件"（排除表，防 copy 模式重复入库）。
 ///
 /// 幂等：同一路径（大小写/分隔符不敏感）只留一条。
-pub fn remember_imported(app: &tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
-    update_settings(app, move |s| {
+pub fn remember_imported(host: &dyn BeetsHost, paths: Vec<String>) -> Result<(), String> {
+    update_settings(host, move |s| {
         for p in paths {
             let p = p.trim();
             if p.is_empty() {
@@ -252,8 +252,8 @@ pub fn remember_imported(app: &tauri::AppHandle, paths: Vec<String>) -> Result<(
 /// `roots` 由调用方给（应用知道用户的曲库目录，本模块不该自己查）：
 /// `effective_target` 就是"用户勾的和曲库现状对不上时该用哪个"这条规则，
 /// 规则在这里，事实从外面来。
-pub fn config_view(app: &tauri::AppHandle, roots: &[String]) -> crate::dto::beets::BeetsConfig {
-    config_view_of(&load_settings(app), roots)
+pub fn config_view(host: &dyn BeetsHost, roots: &[String]) -> aiya_dto::beets::BeetsConfig {
+    config_view_of(&load_settings(host), roots)
 }
 
 /// 纯函数版（可测）：配置 + 曲库目录 → 视图。
@@ -261,10 +261,10 @@ pub fn config_view(app: &tauri::AppHandle, roots: &[String]) -> crate::dto::beet
 /// 落点合法性走 [`pick_dest`]，与 `beets_set_target` 的校验、`tool_env` 的
 /// 下发**同一套判据**。这三处曾经各写一遍，放宽子目录时漏掉其中一处就会
 /// 还留着严格相等，UI 显示曲库根而 `tool_env` 已经下发子目录）。
-fn config_view_of(s: &Settings, roots: &[String]) -> crate::dto::beets::BeetsConfig {
+fn config_view_of(s: &Settings, roots: &[String]) -> aiya_dto::beets::BeetsConfig {
     let target = trimmed(s.target_root.clone());
     let effective = pick_dest(target.clone(), roots);
-    crate::dto::beets::BeetsConfig {
+    aiya_dto::beets::BeetsConfig {
         inbox: trimmed(s.inbox_path.clone()),
         target_root: target,
         effective_target: effective,
@@ -278,12 +278,12 @@ fn config_view_of(s: &Settings, roots: &[String]) -> crate::dto::beets::BeetsCon
 /// 再用旧值覆盖他等于"每次启动都回滚一次设置"。
 ///
 /// 返回 `true` 表示真的搬过（调用方据此清掉旧键）。
-pub fn adopt_legacy_settings(app: &tauri::AppHandle, legacy: Settings) -> bool {
-    let path = settings_path(app);
+pub fn adopt_legacy_settings(host: &dyn BeetsHost, legacy: Settings) -> bool {
+    let path = settings_path(host);
     if path.exists() {
         return false;
     }
-    write_settings(app, &legacy).is_ok()
+    write_settings(host, &legacy).is_ok()
 }
 
 /// 一次取两个事实：**曲库根**（索引家的分析对象）与**整理落点**（整理家的
@@ -297,11 +297,10 @@ pub fn adopt_legacy_settings(app: &tauri::AppHandle, legacy: Settings) -> bool {
 /// * 曲库根 = **第一个扫描根**，永远不取勾选的落点；
 /// * 落点 = 勾选值（若它仍是某个扫描根）否则退回第一个扫描根——与"勾选框出现
 ///   之前"的行为一致（docs/40 十三轮），老配置零迁移。
-fn roots_for_tools(app: &tauri::AppHandle) -> (Option<String>, Option<String>) {
+fn roots_for_tools(host: &dyn BeetsHost) -> (Option<String>, Option<String>) {
     // 勾选值来自**本模块自己的配置**，扫描根来自**应用**（用户事实）。两者分开取：配置和应用库各有各的写者，混在一次读里会让"谁的目录算数" 这个问题有两个答案。
-    let target = trimmed(load_settings(app).target_root);
-    app.try_state::<crate::AppState>()
-        .and_then(|st| st.db().send(|conn| Ok(crate::read_roots(conn))).ok())
+    let target = trimmed(load_settings(host).target_root);
+    host.library_roots()
         .map(|roots| (roots.first().cloned(), pick_dest(target, &roots)))
         .unwrap_or((None, None))
 }
@@ -382,7 +381,7 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 ///
 /// **刻意没有"猜 venv 布局"这一条**：A 轨道的入口是安装器**写进设置**的，
 /// 不是探测出来的。播放器不知道 venv 长什么样（P1 禁止），它只记住"入口在哪"。
-pub fn discover(app: &tauri::AppHandle) -> Option<(ToolEntry, EntrySource)> {
+pub fn discover(host: &dyn BeetsHost) -> Option<(ToolEntry, EntrySource)> {
     if let Ok(program) = std::env::var("AIYA_BEETS_BIN") {
         if !program.trim().is_empty() {
             let args = std::env::var("AIYA_BEETS_BIN_ARGS")
@@ -392,7 +391,7 @@ pub fn discover(app: &tauri::AppHandle) -> Option<(ToolEntry, EntrySource)> {
         }
     }
 
-    let cfg = load_settings(app);
+    let cfg = load_settings(host);
     if let Some(program) = trimmed(cfg.tool_path) {
         let args = trimmed(cfg.tool_args)
             .map(|s| split_args(&s))
@@ -434,9 +433,9 @@ pub fn discover(app: &tauri::AppHandle) -> Option<(ToolEntry, EntrySource)> {
 /// 于是出现"beets 写 A 家、锁建在 B 家"：双家隔离静默失效，症状是"索引跑完了
 /// 却查不到"。现在两侧都钉死：宿主显式覆盖（`env()` 优先于继承值），
 /// 工具侧再在两者不等时 fail-fast。
-fn tool_env(app: &tauri::AppHandle, profile: Profile) -> Vec<(String, String)> {
-    let (root, dest) = roots_for_tools(app);
-    env_pairs(&profile.home(app), root, dest, profile)
+fn tool_env(host: &dyn BeetsHost, profile: Profile) -> Vec<(String, String)> {
+    let (root, dest) = roots_for_tools(host);
+    env_pairs(&profile.home(host), root, dest, profile)
 }
 
 /// `tool_env` 的纯函数部分：给定事实 → 环境键值对（可单测，不需要 AppHandle）。
@@ -470,24 +469,16 @@ fn env_pairs(
 }
 
 /// 入口 + 环境 → 可直接起进程的描述。
-fn launcher_for(app: &tauri::AppHandle, entry: &ToolEntry, profile: Profile) -> Launcher {
+fn launcher_for(host: &dyn BeetsHost, entry: &ToolEntry, profile: Profile) -> Launcher {
     Launcher::new(&entry.program)
         .args(entry.args.clone())
-        .envs(tool_env(app, profile))
+        .envs(tool_env(host, profile))
 }
 
 /// 事件出口：把 client 抽象出来的通道接到 Tauri 事件上。
 ///
 /// 这层适配只有一行实质代码，但它把「crate 不依赖 Tauri」变成硬约束——
-/// client 里再也写不出 `app.emit(...)`，宿主形态也就不会渗回协议层。
-struct TauriSink(tauri::AppHandle);
-
-impl EventSink for TauriSink {
-    fn emit(&self, channel: &'static str, payload: serde_json::Value) {
-        let _ = self.0.emit(channel, payload);
-    }
-}
-
+/// client 里再也写不出 `host.emit(...)`，宿主形态也就不会渗回协议层。
 /// 协议版本闸门：`None` = 兼容；`Some(文案)` = 拒用，并在文案里说清升哪一边。
 ///
 /// 为什么不做自动协商（docs/33 §4.4）：协商会产生"一半功能能用一半不能"的
@@ -561,7 +552,7 @@ fn expected_schema_sha256() -> &'static str {
     static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     HASH.get_or_init(|| {
         serde_json::from_str::<serde_json::Value>(include_str!(
-            "../../protocol/aiya-beets-v2.meta.json"
+            "../../../protocol/aiya-beets-v2.meta.json"
         ))
         .ok()
         .and_then(|m| m.get("sha256").and_then(|v| v.as_str()).map(str::to_string))
@@ -618,12 +609,12 @@ fn absent(
 ///   这是"有诊断信息"的正常结果，设置页要原样显示那段诊断。
 /// - 起不来 / 超时 / 协议乱 → `Err`，由 `probe` 包成不可达。
 fn query_sidecar(
-    app: &tauri::AppHandle,
+    host: &dyn BeetsHost,
     entry: &ToolEntry,
     source: EntrySource,
     timeout: Duration,
 ) -> Result<BeetsStatus, ToolError> {
-    let tool = StdioTool::new(launcher_for(app, entry, Profile::Workbench));
+    let tool = StdioTool::new(launcher_for(host, entry, Profile::Workbench));
     match tool.status(timeout) {
         Ok(report) => Ok(status_from(entry, source, report)),
         // 工具自己回了 ok:false —— 那是"真的不可用"，带着它给的码
@@ -669,23 +660,26 @@ fn busy_status(entry: &ToolEntry, source: EntrySource) -> BeetsStatus {
         data_home: None,
         schema_matched: false,
         library_lock: Some("held".into()),
-        library_lock_holder: Some("this app is running a beets task".into()),
+        library_lock_holder: Some("this host is running a beets task".into()),
         error_code: Some("E_BEETS_BUSY".into()),
         error_message: Some("the component is running another task".into()),
     }
 }
 
 /// 当前状态。找不到入口 → not_installed（UI 显示安装指引，播放功能不受影响）。
-pub fn probe(app: &tauri::AppHandle) -> BeetsStatus {
-    let Some((entry, source)) = discover(app) else {
+pub fn probe(host: &dyn BeetsHost) -> BeetsStatus {
+    let Some((entry, source)) = discover(host) else {
         return absent(
             "E_BEETS_NOT_INSTALLED",
-            Some("aiya-beets component not found: install it below or point to an existing path".into()),
+            Some(
+                "aiya-beets component not found: install it below or point to an existing path"
+                    .into(),
+            ),
             None,
             None,
         );
     };
-    match query_sidecar(app, &entry, source, Duration::from_secs(10)) {
+    match query_sidecar(host, &entry, source, Duration::from_secs(10)) {
         Ok(status) => status,
         // 会话槽被占：组件在，只是这一刻问不到明细。**不能**当成不可达，
         // 否则"正在跑整理"会被 UI 读成"beets 没装"。
@@ -741,8 +735,8 @@ fn release_base() -> String {
     raw.trim().trim_end_matches('/').to_string()
 }
 
-fn install_root(app: &tauri::AppHandle) -> PathBuf {
-    crate::paths::data_root(app).join("beets-tool")
+fn install_root(host: &dyn BeetsHost) -> PathBuf {
+    host.data_root().join("beets-tool")
 }
 
 /// 发布物的形状：zip 容器。
@@ -790,10 +784,12 @@ fn download_to(url: &str, dest: &std::path::Path) -> Result<u64, String> {
             ));
         }
     }
-    let mut out = std::fs::File::create(dest).map_err(|e| format!("failed to write temp file: {e}"))?;
+    let mut out =
+        std::fs::File::create(dest).map_err(|e| format!("failed to write temp file: {e}"))?;
     // take(上限+1)：多读 1 字节用来区分"正好在上限"与"超了"
     let mut body = resp.into_reader().take(ASSET_MAX_BYTES + 1);
-    let n = std::io::copy(&mut body, &mut out).map_err(|e| format!("failed to write the download: {e}"))?;
+    let n = std::io::copy(&mut body, &mut out)
+        .map_err(|e| format!("failed to write the download: {e}"))?;
     if n > ASSET_MAX_BYTES {
         drop(out);
         let _ = std::fs::remove_file(dest);
@@ -813,12 +809,19 @@ fn download_to(url: &str, dest: &std::path::Path) -> Result<u64, String> {
 fn verify_asset(path: &std::path::Path, kind: AssetKind) -> Result<usize, String> {
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if size == 0 {
-        return Err(format!("{} is an empty file (download did not succeed)", kind.label()));
+        return Err(format!(
+            "{} is an empty file (download did not succeed)",
+            kind.label()
+        ));
     }
-    let file = std::fs::File::open(path).map_err(|e| format!("failed to open {}: {e}", kind.label()))?;
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("failed to open {}: {e}", kind.label()))?;
     match zip::ZipArchive::new(file) {
         Ok(z) if !z.is_empty() => Ok(z.len()),
-        Ok(_) => Err(format!("{} is an empty archive (build problem)", kind.label())),
+        Ok(_) => Err(format!(
+            "{} is an empty archive (build problem)",
+            kind.label()
+        )),
         Err(_) => Err(format!(
             "{} is not a valid archive ({} bytes) - probably an error page, \
              or this release asset has not been uploaded yet",
@@ -868,9 +871,12 @@ fn verify_checksum(path: &std::path::Path, asset: &str, base: &str) -> Result<()
             (hash.len() == 64 && name.trim() == asset).then(|| hash.to_ascii_lowercase())
         })
         .next()
-        .ok_or_else(|| format!("SHA256SUMS has no entry for {asset} (asset and manifest do not match)"))?;
+        .ok_or_else(|| {
+            format!("SHA256SUMS has no entry for {asset} (asset and manifest do not match)")
+        })?;
 
-    let mut file = std::fs::File::open(path).map_err(|e| format!("failed to open the downloaded file: {e}"))?;
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("failed to open the downloaded file: {e}"))?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
@@ -916,7 +922,10 @@ fn fetch_asset(
             verify_asset(&p, kind)?;
             return Ok(p);
         }
-        return Err(format!("file set in {env_key} does not exist: {}", p.display()));
+        return Err(format!(
+            "file set in {env_key} does not exist: {}",
+            p.display()
+        ));
     }
 
     let base = release_base();
@@ -958,7 +967,7 @@ const BIN_OVERALL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 /// （install.py），宿主只负责拉起进程、转事件、看门狗收尸。两级超时与
 /// 安装器时代同款（pip 冷装几分钟；行间空闲 60s = 卡死）。
 fn run_env_manager(
-    app: &tauri::AppHandle,
+    host: &dyn BeetsHost,
     entry: &ToolEntry,
     plugins: &[String],
     previous: &[String],
@@ -974,7 +983,7 @@ fn run_env_manager(
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .envs(tool_env(app, Profile::Workbench));
+        .envs(tool_env(host, Profile::Workbench));
     // 要跑几十秒，黑框会一直杵在那儿——比一闪而过更难看
     crate::proc::no_window(&mut cmd);
     let mut child = cmd
@@ -991,12 +1000,10 @@ fn run_env_manager(
     };
     // 句柄唯一所有者是共享槽（AppState.beets_install_child）：本函数此后
     // 经槽 wait/kill，应用退出（RunEvent::Exit）也经槽收尸。
-    let state = app
-        .try_state::<crate::AppState>()
-        .ok_or_else(|| "app state is not ready".to_string())?;
+    let registry = host.install_registry();
     {
-        let mut slot = state
-            .beets_install_child
+        let mut slot = registry
+            .child
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *slot = Some(child);
@@ -1011,8 +1018,8 @@ fn run_env_manager(
         emit,
     );
     let code = {
-        let mut slot = state
-            .beets_install_child
+        let mut slot = registry
+            .child
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match slot.as_mut() {
@@ -1020,13 +1027,13 @@ fn run_env_manager(
                 if pump.as_ref().map(|p| p.timed_out).unwrap_or(true) {
                     let _ = c.kill();
                 }
-                let code = c
-                    .wait()
-                    .map_err(|e| format!("failed to wait for the environment manager to exit: {e}"))?;
+                let code = c.wait().map_err(|e| {
+                    format!("failed to wait for the environment manager to exit: {e}")
+                })?;
                 slot.take(); // 已收尸，退出路径不必再管
                 Ok(code)
             }
-            None => Err("install was interrupted by app exit".to_string()),
+            None => Err("install was interrupted by host exit".to_string()),
         }
     }?;
     let pump = pump.map_err(|e| format!("failed to read environment manager output: {e}"))?;
@@ -1046,11 +1053,11 @@ fn run_env_manager(
 
 /// B 轨道：展开套件包到 `{app_data}/beets-tool/bundle`。
 fn install_via_bundle(
-    app: &tauri::AppHandle,
+    host: &dyn BeetsHost,
     zip_path: &std::path::Path,
     emit: &dyn Fn(serde_json::Value),
 ) -> Result<ToolEntry, String> {
-    install_bundle_to(&install_root(app).join("bundle"), zip_path, emit)
+    install_bundle_to(&install_root(host).join("bundle"), zip_path, emit)
 }
 
 /// 下载外置工具：`<入口> bins --from-plugins a,b`（docs/53）。
@@ -1065,7 +1072,7 @@ fn install_via_bundle(
 /// 症状是"装了插件却没下工具"，而这条正是让 beets 全线起不来的那种故障。
 /// 内嵌表里已经不再有 `binaries` 段，宿主没有能力算，也就不可能算错。
 fn run_bins(
-    app: &tauri::AppHandle,
+    host: &dyn BeetsHost,
     entry: &ToolEntry,
     plugins: &[String],
     emit: &dyn Fn(serde_json::Value),
@@ -1078,7 +1085,7 @@ fn run_bins(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .envs(tool_env(app, Profile::Workbench));
+        .envs(tool_env(host, Profile::Workbench));
     crate::proc::no_window(&mut cmd);
     emit(serde_json::json!({
         "type": "progress", "stage": "bin",
@@ -1093,10 +1100,10 @@ fn run_bins(
         .ok_or_else(|| "external tool download output was not captured".to_string())?;
 
     // 句柄进共享槽：应用退出时统一收尸，别留下一个还在下 87MB 的孤儿进程
-    let guard = app.try_state::<crate::AppState>();
-    if let Some(state) = guard.as_ref() {
-        let mut slot = state
-            .beets_install_child
+    let registry = host.install_registry();
+    {
+        let mut slot = registry
+            .child
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         // 槽里可能是上一次安装的僵尸：先清掉，避免把它一直挂着
@@ -1114,16 +1121,13 @@ fn run_bins(
     );
 
     // 从槽里取回来 wait：进程可能已经被退出流程收尸了，那就没有句柄可等
-    let code = match guard.as_ref() {
-        Some(state) => {
-            let mut slot = state
-                .beets_install_child
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            slot.take()
-                .map(|mut c| c.wait().ok().and_then(|s| s.code()))
-        }
-        None => None,
+    let code = {
+        let mut slot = registry
+            .child
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        slot.take()
+            .map(|mut c| c.wait().ok().and_then(|s| s.code()))
     };
     let pump = pump.map_err(|e| format!("failed to read the downloader output: {e}"))?;
     if pump.timed_out {
@@ -1158,16 +1162,20 @@ fn install_bundle_to(
     emit: &dyn Fn(serde_json::Value),
 ) -> Result<ToolEntry, String> {
     if target.exists() {
-        std::fs::remove_dir_all(target).map_err(|e| format!("failed to remove the old bundle: {e}"))?;
+        std::fs::remove_dir_all(target)
+            .map_err(|e| format!("failed to remove the old bundle: {e}"))?;
     }
-    std::fs::create_dir_all(target).map_err(|e| format!("failed to create the target directory: {e}"))?;
+    std::fs::create_dir_all(target)
+        .map_err(|e| format!("failed to create the target directory: {e}"))?;
     emit(serde_json::json!({
         "type": "progress", "stage": "unpack",
         "message": format!("unpacking bundle to {}", target.display()),
     }));
 
-    let file = std::fs::File::open(zip_path).map_err(|e| format!("failed to open the bundle: {e}"))?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("bundle is not a valid zip: {e}"))?;
+    let file =
+        std::fs::File::open(zip_path).map_err(|e| format!("failed to open the bundle: {e}"))?;
+    let mut zip =
+        zip::ZipArchive::new(file).map_err(|e| format!("bundle is not a valid zip: {e}"))?;
     extract_safely(&mut zip, target)?;
 
     let manifest = target.join("manifest.json");
@@ -1264,14 +1272,18 @@ fn extract_safely<R: std::io::Read + std::io::Seek>(
             .map_err(|e| format!("failed to read a bundle entry name: {e}"))?
             .to_string();
         let Some(rel) = safe_relative(&name) else {
-            return Err(format!("bundle contains an illegal path entry, refusing to unpack: {name}"));
+            return Err(format!(
+                "bundle contains an illegal path entry, refusing to unpack: {name}"
+            ));
         };
         // 0o170000 = S_IFMT，0o120000 = S_IFLNK
         if entry
             .unix_mode()
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
         {
-            return Err(format!("bundle contains a symlink entry, refusing to unpack: {name}"));
+            return Err(format!(
+                "bundle contains a symlink entry, refusing to unpack: {name}"
+            ));
         }
         let dest = target.join(&rel);
         if entry.is_dir() {
@@ -1299,10 +1311,10 @@ fn extract_safely<R: std::io::Read + std::io::Seek>(
 }
 
 /// 记下入口，下次 `discover` 直接命中（设置优先于 PATH）。
-fn remember_entry(app: &tauri::AppHandle, entry: &ToolEntry) -> Result<(), String> {
+fn remember_entry(host: &dyn BeetsHost, entry: &ToolEntry) -> Result<(), String> {
     let program = entry.program.clone();
     let args = entry.args.join(" ");
-    update_settings(app, move |s| {
+    update_settings(host, move |s| {
         s.tool_path = Some(program);
         s.tool_args = Some(args);
     })
@@ -1310,14 +1322,6 @@ fn remember_entry(app: &tauri::AppHandle, entry: &ToolEntry) -> Result<(), Strin
 
 /// 安装互斥的 panic 兜底（同 refresh 的 FlagGuard 教训）：
 /// 任一退出路径（含 unwind）都必须复位，否则之后所有安装报 busy。
-struct InstallGuard<'a>(&'a std::sync::atomic::AtomicBool);
-
-impl Drop for InstallGuard<'_> {
-    fn drop(&mut self) {
-        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
 /// 安装（异步）：立刻返回，进度走 `beets:install`，结束时补一条 finished。
 ///
 /// `plugins` 是用户在 UI 里勾的**启用清单**：安装器据此装额外依赖，
@@ -1332,37 +1336,29 @@ impl Drop for InstallGuard<'_> {
 /// `beets_install_child` 这个单槽里塞句柄，两条线程并发时第二个会顶掉第一个
 /// ——收尾 kill/wait 错对象、误报"被退出中断"，pip 被中途杀还可能留半个
 /// venv。占位失败直接返回错误，UI 以 error 事件呈现。
-pub fn start_install(app: tauri::AppHandle, plugins: Vec<String>) -> Result<(), String> {
-    {
-        let state = app
-            .try_state::<crate::AppState>()
-            .ok_or_else(|| "app state is not ready, install not started".to_string())?;
-        if state
-            .beets_installing
-            .compare_exchange(
-                false,
-                true,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-            )
-            .is_err()
-        {
-            return Err("a component install is already running; wait for it to finish (or fail) and try again".to_string());
-        }
+pub fn start_install(
+    host: std::sync::Arc<dyn BeetsHost>,
+    plugins: Vec<String>,
+) -> Result<(), String> {
+    if !host.try_set_installing() {
+        return Err(
+            "a component install is already running; wait for it to finish (or fail) and try again"
+                .to_string(),
+        );
     }
     std::thread::Builder::new()
         .name("beets-install".into())
         .spawn(move || {
             // 互斥占位在返回/panic 时由 Drop 复位
-            let install_state = app.state::<crate::AppState>();
-            let _guard = InstallGuard(&install_state.beets_installing);
+            let registry = host.install_registry();
+            let _guard = InstallGuard::new(&registry.installing);
             let emit = |v: serde_json::Value| {
-                let _ = app.emit("beets:install", v);
+                host.emit("beets:install", v);
             };
             let result = (|| -> Result<ToolEntry, String> {
                 let path =
                     fetch_asset("AIYA_BEETS_BUNDLE", BUNDLE_ASSET, AssetKind::Bundle, &emit)?;
-                let entry = install_via_bundle(&app, &path, &emit)?;
+                let entry = install_via_bundle(&*host, &path, &emit)?;
                 // 外置工具：两个轨道都跑，但缺的东西不一样 —— B 轨道
                 // 自带 Essentia 提取器，`exe_path` 会在包内 `bundle/bin`
                 // 里找到它；A 轨道没有，得现下。清单由**工具侧按插件名**自己算，
@@ -1370,7 +1366,7 @@ pub fn start_install(app: tauri::AppHandle, plugins: Vec<String>) -> Result<(), 
                 // 为什么非做不可：缺 ffmpeg 时 replaygain 会让 beets 整个 CLI
                 // 起不来（实测 `UserError: replaygain initialization failed`）。
                 if !plugins.is_empty() {
-                    run_bins(&app, &entry, &plugins, &emit).map_err(|e| {
+                    run_bins(&*host, &entry, &plugins, &emit).map_err(|e| {
                         format!("component installed, but the external tools failed to download: {e} (click install again to fetch them)")
                     })?;
                 }
@@ -1380,13 +1376,13 @@ pub fn start_install(app: tauri::AppHandle, plugins: Vec<String>) -> Result<(), 
                 Ok(entry) => {
                     // 记不住也不算彻底失败：PATH 入口仍可能命中，
                     // 只是下次启动要多一次探测。如实报给 UI。
-                    if let Err(e) = remember_entry(&app, &entry) {
+                    if let Err(e) = remember_entry(&*host, &entry) {
                         emit(serde_json::json!({ "type": "warning", "message": e }));
                     }
                     // 勾选写进设置——装了不启用等于白装（cfg 渲染 plugins 行读它）
                     if !plugins.is_empty() {
                         let want = plugins.clone();
-                        if let Err(e) = update_settings(&app, move |s| {
+                        if let Err(e) = update_settings(&*host, move |s| {
                             s.plugins = Some(want);
                         }) {
                             emit(serde_json::json!({ "type": "warning", "message": e }));
@@ -1395,8 +1391,8 @@ pub fn start_install(app: tauri::AppHandle, plugins: Vec<String>) -> Result<(), 
                 }
                 Err(message) => emit(serde_json::json!({ "type": "error", "message": message })),
             }
-            let status = probe(&app);
-            let _ = app.emit(
+            let status = probe(&*host);
+            host.emit(
                 "beets:install",
                 serde_json::json!({ "type": "finished", "status": status }),
             );
@@ -1411,48 +1407,40 @@ pub fn start_install(app: tauri::AppHandle, plugins: Vec<String>) -> Result<(), 
 ///
 /// 与安装共用同一把互斥（beets_installing）与同一个事件通道（beets:install）：
 /// pip 改 site-packages 与解压套件包都不能并发，UI 也共用同一块进度区。
-pub fn start_plugins_set(app: tauri::AppHandle, plugins: Vec<String>) -> Result<(), String> {
-    {
-        let state = app
-            .try_state::<crate::AppState>()
-            .ok_or_else(|| "app state is not ready, operation not started".to_string())?;
-        if state
-            .beets_installing
-            .compare_exchange(
-                false,
-                true,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-            )
-            .is_err()
-        {
-            return Err("a component install is already running; wait for it to finish (or fail) and try again".to_string());
-        }
+pub fn start_plugins_set(
+    host: std::sync::Arc<dyn BeetsHost>,
+    plugins: Vec<String>,
+) -> Result<(), String> {
+    if !host.try_set_installing() {
+        return Err(
+            "a component install is already running; wait for it to finish (or fail) and try again"
+                .to_string(),
+        );
     }
     std::thread::Builder::new()
         .name("beets-plugins-set".into())
         .spawn(move || {
-            let install_state = app.state::<crate::AppState>();
-            let _guard = InstallGuard(&install_state.beets_installing);
+            let registry = host.install_registry();
+            let _guard = InstallGuard::new(&registry.installing);
             let emit = |v: serde_json::Value| {
-                let _ = app.emit("beets:install", v);
+                host.emit("beets:install", v);
             };
             let result = (|| -> Result<(), String> {
                 // 旧清单要在改写 settings 之前取——它是差量卸载的依据
-                let previous = load_settings(&app).plugins.clone().unwrap_or_default();
+                let previous = load_settings(&*host).plugins.clone().unwrap_or_default();
                 let want = plugins.clone();
-                update_settings(&app, move |s| {
+                update_settings(&*host, move |s| {
                     s.plugins = Some(want);
                 })?;
-                let (entry, _) = discover(&app).ok_or_else(|| NOT_INSTALLED.to_string())?;
-                run_env_manager(&app, &entry, &plugins, &previous, &emit)
+                let (entry, _) = discover(&*host).ok_or_else(|| NOT_INSTALLED.to_string())?;
+                run_env_manager(&*host, &entry, &plugins, &previous, &emit)
             })();
             match result {
                 Ok(()) => {}
                 Err(message) => emit(serde_json::json!({ "type": "error", "message": message })),
             }
-            let status = probe(&app);
-            let _ = app.emit(
+            let status = probe(&*host);
+            host.emit(
                 "beets:install",
                 serde_json::json!({ "type": "finished", "status": status }),
             );
@@ -1537,8 +1525,8 @@ const UNINSTALL_PLAN_TIMEOUT: Duration = Duration::from_secs(30);
 /// 超时按错误上报而不是回落"宿主自算"（[`UninstallPlan::Unavailable`]）：
 /// 回落 = 没过四道闸就直接删目录树，比多等几十秒危险得多；"跑不起来回落"
 /// 的宽限只属于 spawn 失败那种"闸门根本没机会执行"的情况。
-fn uninstall_plan(app: &tauri::AppHandle, root: &std::path::Path) -> Result<UninstallPlan, String> {
-    let Some((entry, _source)) = discover(app) else {
+fn uninstall_plan(host: &dyn BeetsHost, root: &std::path::Path) -> Result<UninstallPlan, String> {
+    let Some((entry, _source)) = discover(host) else {
         return Ok(UninstallPlan::Unavailable);
     };
     let mut cmd = std::process::Command::new(&entry.program);
@@ -1549,7 +1537,7 @@ fn uninstall_plan(app: &tauri::AppHandle, root: &std::path::Path) -> Result<Unin
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .envs(tool_env(app, Profile::Workbench));
+        .envs(tool_env(host, Profile::Workbench));
     crate::proc::no_window(&mut cmd);
     // 此前这里是全文件唯一无超时的子进程调用（`cmd.output()` 无限等退出）：
     // dry-run 卡住时整个卸载线程永久挂在"有 progress 帧、永远等不到终态"。
@@ -1640,42 +1628,30 @@ fn extract_message(v: &serde_json::Value) -> Option<String> {
 /// `beets/`（整理家 library.db + ops.jsonl）与 `beets-index/`（分析库）虽然
 /// 也在同一个数据根下，但它们是用户资产、不是安装产物，**这里一个字节都不动**
 /// ——那些由应用自己的清理入口管。顺手删掉 1850 首的分析结果，是用户没让你做的事。
-pub fn start_uninstall(app: tauri::AppHandle) -> Result<(), String> {
+pub fn start_uninstall(host: std::sync::Arc<dyn BeetsHost>) -> Result<(), String> {
     {
         // 与安装/换插件共用同一把互斥（beets_installing）：卸载删的正是安装
         // 写的那个目录树，两边并发 = 一边在 pip 装、一边在 rmtree，半成品谁也
         // 收不了场。占位失败与 start_install 同文案（UI 在同一个进度区报错）。
-        let state = app
-            .try_state::<crate::AppState>()
-            .ok_or_else(|| "app state is not ready, uninstall not started".to_string())?;
-        if state
-            .beets_installing
-            .compare_exchange(
-                false,
-                true,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-            )
-            .is_err()
-        {
+        if !host.try_set_installing() {
             return Err("a component install is already running; wait for it to finish (or fail) and try again".to_string());
         }
     }
-    let thread_app = app.clone();
+    let thread_host = host.clone();
     let spawned = std::thread::Builder::new()
         .name("beets-uninstall".into())
         .spawn(move || {
             // 互斥占位在返回/panic 时由 Drop 复位
-            let install_state = thread_app.state::<crate::AppState>();
-            let _guard = InstallGuard(&install_state.beets_installing);
+            let registry = thread_host.install_registry();
+            let _guard = InstallGuard::new(&registry.installing);
             let emit = |v: serde_json::Value| {
-                let _ = thread_app.emit("beets:install", v);
+                thread_host.emit("beets:install", v);
             };
-            if let Err(e) = uninstall_now(&thread_app, &emit) {
+            if let Err(e) = uninstall_now(&*thread_host, &emit) {
                 emit(serde_json::json!({ "type": "error", "message": e }));
             }
-            let status = probe(&thread_app);
-            let _ = thread_app.emit(
+            let status = probe(&*thread_host);
+            thread_host.emit(
                 "beets:install",
                 serde_json::json!({ "type": "finished", "status": status }),
             );
@@ -1683,21 +1659,21 @@ pub fn start_uninstall(app: tauri::AppHandle) -> Result<(), String> {
     spawned.map(|_| ()).map_err(|e| {
         // 线程没起来，guard 永远不会执行：占位必须在这里手工释放，
         // 否则之后所有安装/卸载都报 busy
-        if let Some(state) = app.try_state::<crate::AppState>() {
-            state
-                .beets_installing
+        if true {
+            host.install_registry()
+                .installing
                 .store(false, std::sync::atomic::Ordering::SeqCst);
         }
         format!("failed to spawn the uninstall thread: {e}")
     })
 }
 
-fn uninstall_now(app: &tauri::AppHandle, emit: &dyn Fn(serde_json::Value)) -> Result<(), String> {
-    let root = install_root(app);
+fn uninstall_now(host: &dyn BeetsHost, emit: &dyn Fn(serde_json::Value)) -> Result<(), String> {
+    let root = install_root(host);
     if !root.exists() {
         // 幂等：没有安装目录就算成功。但要提醒"当前入口可能来自别处"，
         // 否则 PATH/环境变量入口的机器上点卸载会毫无反应、还报成功。
-        if let Some((_, source)) = discover(app) {
+        if let Some((_, source)) = discover(host) {
             emit(serde_json::json!({
                 "type": "warning",
                 "message": format!(
@@ -1716,7 +1692,7 @@ fn uninstall_now(app: &tauri::AppHandle, emit: &dyn Fn(serde_json::Value)) -> Re
     // 先问工具侧：它过四道闸、算账。明确拒绝就停（闸门的意义就在这儿），
     // 只有"跑不起来"才回落到宿主自己算——那时闸门根本没被执行过。
     // 计划超时（Err）直接上抛：见 uninstall_plan 的超时说明。
-    let (files, bytes) = match uninstall_plan(app, &root)? {
+    let (files, bytes) = match uninstall_plan(host, &root)? {
         UninstallPlan::Ready { files, bytes } => (files, bytes),
         UninstallPlan::Refused(why) => return Err(why),
         UninstallPlan::Unavailable => measure_dir(&root),
@@ -1735,14 +1711,14 @@ fn uninstall_now(app: &tauri::AppHandle, emit: &dyn Fn(serde_json::Value)) -> Re
     std::fs::remove_dir_all(&root).map_err(|e| {
         format!(
             "failed to remove ({e}). If indexing/organizing is running, wait for it to \
-             finish or quit the app first; directory: {}",
+             finish or quit the host first; directory: {}",
             root.display()
         )
     })?;
 
     // 设置里的入口必须清掉：否则 discover 会一直指着一个不存在的 exe，
     // 症状是"卸载了但状态页仍显示组件在、只是起不来"。
-    update_settings(app, |s| {
+    update_settings(host, |s| {
         s.tool_path = None;
         s.tool_args = None;
     })?;
@@ -1761,10 +1737,10 @@ fn uninstall_now(app: &tauri::AppHandle, emit: &dyn Fn(serde_json::Value)) -> Re
 ///
 /// 找不到入口时的文案要能指导用户下一步（去扫描入库页装组件），
 /// 而不是一句 "no beets interpreter available"。
-fn tool_or_err(app: &tauri::AppHandle) -> Result<StdioTool, String> {
-    let (entry, _source) = discover(app).ok_or_else(|| NOT_INSTALLED.to_string())?;
+fn tool_or_err(host: &dyn BeetsHost) -> Result<StdioTool, String> {
+    let (entry, _source) = discover(host).ok_or_else(|| NOT_INSTALLED.to_string())?;
     Ok(StdioTool::new(launcher_for(
-        app,
+        host,
         &entry,
         Profile::Workbench,
     )))
@@ -1790,13 +1766,13 @@ pub fn cancel_session() -> bool {
 /// "导入任务"，维护卡片说"任务"），保留原样免得 UI 提示语义变糊。
 fn run_session(
     tool: StdioTool,
-    app: &tauri::AppHandle,
+    host: Arc<dyn BeetsHost>,
     request: serde_json::Value,
     channel: &'static str,
     busy: &str,
     on_exit: Box<dyn FnOnce() + Send + 'static>,
 ) -> Result<(), String> {
-    let sink: Arc<dyn EventSink> = Arc::new(TauriSink(app.clone()));
+    let sink: Arc<dyn EventSink> = crate::event_sink(host.clone());
     run_session_with(tool, request, channel, busy, sink, on_exit)
 }
 
@@ -1824,14 +1800,17 @@ fn run_session_with(
 ///
 /// 低频操作，不值得养常驻会话；每命令 ~300ms 的启动开销可接受。
 /// 返回 Err 表示没找到可用解释器（UI 显示指引）。
-pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
-    let tool = tool_or_err(&app)?;
+pub fn start_preview(
+    host: std::sync::Arc<dyn BeetsHost>,
+    paths: Vec<String>,
+) -> Result<(), String> {
+    let tool = tool_or_err(&*host)?;
 
     // 排除表是**播放器侧事实**（哪些 inbox 源文件已成功导入过），在这里注入
     // 进协议预留的 options 对象：待整理目录固定后，copy 应用的
     // 原件一直留在 inbox，不排除的话下次整理会把同一批文件再导一遍。UI 不用
     // 搬运这份数据，preview 命令签名保持不变。
-    let exclude: Vec<String> = load_settings(&app).inbox_imported;
+    let exclude: Vec<String> = load_settings(&*host).inbox_imported;
 
     let mut body = serde_json::json!({ "id": 1, "cmd": "preview_import", "paths": paths });
     if !exclude.is_empty() {
@@ -1840,7 +1819,7 @@ pub fn start_preview(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), St
 
     run_session(
         tool,
-        &app,
+        host.clone(),
         body,
         "beets:import",
         "a beets import task is already running (cancel it first)",
@@ -1871,22 +1850,21 @@ fn new_request_id(cmd: &str) -> String {
 /// `resume`（v2）：中断后续跑——重发同一批 decisions，sidecar 按内容指纹
 /// 跳过已完成的（move/copy 中断后源文件已移走，不 resume 的重跑必报错）。
 pub fn start_apply(
-    app: tauri::AppHandle,
+    host: std::sync::Arc<dyn BeetsHost>,
     decisions: Vec<serde_json::Value>,
     resume: bool,
-    refresh: Option<Arc<crate::refresh::RefreshParams>>,
 ) -> Result<(), String> {
-    let tool = tool_or_err(&app)?;
+    let tool = tool_or_err(&*host)?;
 
     // 整理写入的落点。apply 结束后要按它补一次索引 —— 见下面 on_exit 的说明。在**发命令前**取：落点是被 `apply`
     // 正在使用的那个（`tool_env` 同一个来源），结束后再取可能已经被用户改掉，补索引就会扫错目录。
-    let dest = roots_for_tools(&app).1;
+    let dest = roots_for_tools(&*host).1;
 
-    // on_exit 里拿一份 AppHandle（会话线程要能独立跑，不能借用 &app）
-    let exit_app = app.clone();
+    // on_exit 里拿一份 AppHandle（会话线程要能独立跑，不能借用 &host）
+    let exit_host = host.clone();
     run_session(
         tool,
-        &app,
+        host.clone(),
         serde_json::json!({
             "id": 1, "cmd": "apply_import",
             "decisions": decisions,
@@ -1896,11 +1874,11 @@ pub fn start_apply(
         "beets:import",
         "a beets import task is already running (cancel it first)",
         Box::new(move || {
-            if let Some(params) = refresh {
+            {
                 // 自闭环：工具刚写完库就是最新权威。
                 // 走完整刷新管线而不是只 dump+sync —— apply 会写标签改 mtime，
                 // 扫描段正好把这些文件的 mtime/size 与标签一起还原。
-                crate::refresh::spawn(&exit_app, params, crate::refresh::Trigger::Action);
+                host.kick_library_refresh();
             }
             // 上面那条只管**应用曲库**（扫描器是它自己的，unchanged 预筛让整库
             // 增量很廉价）。索引家是**另一个库文件**，apply 写的是整理家，它不会
@@ -1912,7 +1890,7 @@ pub fn start_apply(
                 dest = dest.as_deref().unwrap_or("-"),
                 "整理完成：应用曲库交给 refresh(action)，索引家按落点补扫"
             );
-            if let Err(e) = start_index_import(exit_app.clone(), dest) {
+            if let Err(e) = start_index_import(exit_host.clone(), dest) {
                 // 补索引失败**不影响整理结果**（文件已经搬好了），所以只记日志。
                 // 用户仍可手动「重建索引」——那是这条路的兜底，不是主路径。
                 tracing::warn!(error = %e, "整理后补索引未能启动（整理结果不受影响）");
@@ -1934,22 +1912,22 @@ pub fn start_apply(
 /// 立刻跟随，不能等用户下次扫描。update 只改标签（路径不变）、duplicates
 /// 纯只读，都不需要自动对账。
 fn start_maintenance(
-    app: tauri::AppHandle,
+    host: std::sync::Arc<dyn BeetsHost>,
     payload: serde_json::Value,
-    refresh: Option<Arc<crate::refresh::RefreshParams>>,
+    refresh_after: bool,
 ) -> Result<(), String> {
-    let tool = tool_or_err(&app)?;
+    let tool = tool_or_err(&*host)?;
 
-    let exit_app = app.clone();
+    let _exit_host = host.clone();
     run_session(
         tool,
-        &app,
+        host.clone(),
         payload,
         "beets:maintenance",
         "a beets task is already running (cancel it first)",
         Box::new(move || {
-            if let Some(params) = refresh {
-                crate::refresh::spawn(&exit_app, params, crate::refresh::Trigger::Action);
+            if refresh_after {
+                host.kick_library_refresh();
             }
         }),
     )
@@ -1958,38 +1936,41 @@ fn start_maintenance(
 /// 建 beets 库基线：把自有库里的文件按现状登记进 beets 库。
 /// `paths` 为空 = 由宿主取自有库全部在线路径（UI 不该为了这个传 1800 个路径）。
 pub fn start_adopt(
-    app: tauri::AppHandle,
+    host: std::sync::Arc<dyn BeetsHost>,
     paths: Vec<String>,
-    refresh: Option<Arc<crate::refresh::RefreshParams>>,
+    refresh_after: bool,
 ) -> Result<(), String> {
     start_maintenance(
-        app,
+        host,
         serde_json::json!({
             "id": 1, "cmd": "adopt_library", "paths": paths,
             "requestId": new_request_id("adopt_library"),
         }),
-        refresh,
+        refresh_after,
     )
 }
 
 /// 用文件标签刷新 beets 库（`pretend` = 只报 diff 不写库）。
-pub fn start_update(app: tauri::AppHandle, pretend: bool) -> Result<(), String> {
+pub fn start_update(host: std::sync::Arc<dyn BeetsHost>, pretend: bool) -> Result<(), String> {
     start_maintenance(
-        app,
+        host,
         serde_json::json!({
             "id": 1, "cmd": "update_library", "pretend": pretend,
             "requestId": new_request_id("update_library"),
         }),
-        None,
+        false,
     )
 }
 
 /// 按字段组查重（只读）。
-pub fn start_duplicates(app: tauri::AppHandle, keys: Vec<String>) -> Result<(), String> {
+pub fn start_duplicates(
+    host: std::sync::Arc<dyn BeetsHost>,
+    keys: Vec<String>,
+) -> Result<(), String> {
     start_maintenance(
-        app,
+        host,
         serde_json::json!({ "id": 1, "cmd": "find_duplicates", "keys": keys }),
-        None,
+        false,
     )
 }
 
@@ -2010,14 +1991,18 @@ pub fn start_duplicates(app: tauri::AppHandle, keys: Vec<String>) -> Result<(), 
 ///    那个库不与应用库共享文件，所以**不需要** `scanning`——分析再久也不会
 ///    挡住用户的扫描。
 /// 4. **不触发读模型对账**：增强只往自己的结论库写，`tracks` 一个字节不变。
-pub fn start_enrich(app: tauri::AppHandle, source: String, force: bool) -> Result<(), String> {
-    let (entry, _src) = discover(&app).ok_or_else(|| NOT_INSTALLED.to_string())?;
-    let paths = crate::enrichment::work_paths(&app, &source, force)?;
+pub fn start_enrich(
+    host: std::sync::Arc<dyn BeetsHost>,
+    source: String,
+    force: bool,
+) -> Result<(), String> {
+    let (entry, _src) = discover(&*host).ok_or_else(|| NOT_INSTALLED.to_string())?;
+    let paths = crate::enrichment::work_paths(&*host, &source, force)?;
     if paths.is_empty() {
         return Err("work list is empty: no tracks to analyze".to_string());
     }
-    let tool = StdioTool::new(launcher_for(&app, &entry, enrich_profile()));
-    let sink = Arc::new(crate::enrichment::Sink::start(app.clone())?);
+    let tool = StdioTool::new(launcher_for(&*host, &entry, enrich_profile()));
+    let sink = Arc::new(crate::enrichment::Sink::start(host.clone())?);
     let exit_sink = Arc::clone(&sink);
     run_session_with(
         tool,
@@ -2086,16 +2071,19 @@ pub const INDEX_CHANNEL: &str = "beets:index";
 /// 传子目录**不会被 `-R` 误跳过**：beets 的增量记忆（`statefile: state.pickle`
 /// 的 `taghistory`）记的是「一个导入任务的那批 paths 元组」，新文件组成新元组；
 /// 实测新目录只扫该目录 → 索引库 1849 → 1850。
-pub fn start_index_import(app: tauri::AppHandle, root: Option<String>) -> Result<(), String> {
-    let (entry, _src) = discover(&app).ok_or_else(|| NOT_INSTALLED.to_string())?;
-    let tool = StdioTool::new(launcher_for(&app, &entry, Profile::Index));
+pub fn start_index_import(
+    host: std::sync::Arc<dyn BeetsHost>,
+    root: Option<String>,
+) -> Result<(), String> {
+    let (entry, _src) = discover(&*host).ok_or_else(|| NOT_INSTALLED.to_string())?;
+    let tool = StdioTool::new(launcher_for(&*host, &entry, Profile::Index));
     let mut body = serde_json::json!({ "id": 1, "cmd": "index_import" });
     if let Some(r) = trimmed(root) {
         body["root"] = serde_json::Value::String(r);
     }
     run_session(
         tool,
-        &app,
+        host.clone(),
         body,
         INDEX_CHANNEL,
         "a beets task is already running (cancel it first)",
@@ -2130,14 +2118,14 @@ const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 /// `rules` 与 `raw` 互斥（工具侧会拒）：不猜优先级，两个都给等于让调用方
 /// 把"我到底想要什么"外包给一个 if。
 pub fn query_page(
-    app: &tauri::AppHandle,
+    host: &dyn BeetsHost,
     rules: Option<serde_json::Value>,
     raw: Option<String>,
     fields: Option<Vec<String>>,
     limit: Option<usize>,
-) -> Result<crate::dto::beets::BeetsQueryPage, String> {
-    let (entry, _source) = discover(app).ok_or_else(|| NOT_INSTALLED.to_string())?;
-    let launcher = launcher_for(app, &entry, query_profile());
+) -> Result<aiya_dto::beets::BeetsQueryPage, String> {
+    let (entry, _source) = discover(host).ok_or_else(|| NOT_INSTALLED.to_string())?;
+    let launcher = launcher_for(host, &entry, query_profile());
     let data = aiya_beets_client::session::request_data(
         &launcher,
         &serde_json::json!({
@@ -2150,7 +2138,8 @@ pub fn query_page(
         QUERY_TIMEOUT,
     )
     .map_err(|e| e.to_string())?;
-    serde_json::from_value(data).map_err(|e| format!("query response has an unexpected shape (protocol drift?): {e}"))
+    serde_json::from_value(data)
+        .map_err(|e| format!("query response has an unexpected shape (protocol drift?): {e}"))
 }
 
 /// 可查字段清单（含插件写入的 flexible 键）+ 识别源三态。
@@ -2159,18 +2148,17 @@ pub fn query_page(
 /// **必须和 `query_page` 跑同一个家**：字段清单来自哪个库，查询就得查哪个库，
 /// 否则 UI 会拿索引库的字段去查用户库（或反过来），症状是"能选 bpm 但一查就报
 /// 未知字段"。
-pub fn field_catalog(
-    app: &tauri::AppHandle,
-) -> Result<crate::dto::beets::BeetsFieldCatalog, String> {
-    let (entry, _source) = discover(app).ok_or_else(|| NOT_INSTALLED.to_string())?;
-    let launcher = launcher_for(app, &entry, query_profile());
+pub fn field_catalog(host: &dyn BeetsHost) -> Result<aiya_dto::beets::BeetsFieldCatalog, String> {
+    let (entry, _source) = discover(host).ok_or_else(|| NOT_INSTALLED.to_string())?;
+    let launcher = launcher_for(host, &entry, query_profile());
     let data = aiya_beets_client::session::request_data(
         &launcher,
         &serde_json::json!({ "id": 1, "cmd": "fields" }),
         QUERY_TIMEOUT,
     )
     .map_err(|e| e.to_string())?;
-    serde_json::from_value(data).map_err(|e| format!("field catalog has an unexpected shape (protocol drift?): {e}"))
+    serde_json::from_value(data)
+        .map_err(|e| format!("field catalog has an unexpected shape (protocol drift?): {e}"))
 }
 
 /* 插件市场 */
@@ -2187,9 +2175,10 @@ pub fn field_catalog(
 /// （name/target/carrier/size/sha256/bundle/probe/license）逐字节一致——
 /// 由 `catalog_contract.py` 的奇偶校验与 `plugin_table_variants` 单测共同守住。
 /// 人类可读的展示字段随语言走，结构字段只有一份事实。
-const PLUGIN_TABLE_JSON: &str = include_str!("../../beets-tool/src/aiya_beets/data/plugins.json");
+const PLUGIN_TABLE_JSON: &str =
+    include_str!("../../../beets-tool/src/aiya_beets/data/plugins.json");
 const PLUGIN_TABLE_JSON_ZH_HANS: &str =
-    include_str!("../../beets-tool/src/aiya_beets/data/plugins-zh_Hans.json");
+    include_str!("../../../beets-tool/src/aiya_beets/data/plugins-zh_Hans.json");
 
 /// 应用设置里的语言键（值 "zh" / "en"）。
 const LANGUAGE_KEY: &str = "language";
@@ -2204,10 +2193,8 @@ fn plugin_table_text(lang: &str) -> &'static str {
 }
 
 /// 读应用设置的语言键（AppState 的 settings 内存镜像；镜像里没有 = 未设 = 英文）。
-fn settings_language(app: &tauri::AppHandle) -> String {
-    app.try_state::<crate::AppState>()
-        .and_then(|st| st.setting_str(LANGUAGE_KEY))
-        .unwrap_or_default()
+fn settings_language(host: &dyn BeetsHost) -> String {
+    host.setting_str(LANGUAGE_KEY).unwrap_or_default()
 }
 
 #[derive(serde::Deserialize)]
@@ -2216,7 +2203,7 @@ struct PluginTableFile {
     #[serde(default)]
     profiles: PluginProfiles,
     #[serde(default)]
-    plugins: Vec<crate::dto::beets::BeetsPluginItem>,
+    plugins: Vec<aiya_dto::beets::BeetsPluginItem>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -2231,18 +2218,15 @@ struct PluginProfiles {
 ///
 /// 默认启用**不由条目自己声明**（否则又是两份事实）：JSON 里只有
 /// `profiles.workbench` / `profiles.index` 两处列表，这里算一次。
-pub fn plugin_table(
-    app: &tauri::AppHandle,
-) -> Result<Vec<crate::dto::beets::BeetsPluginItem>, String> {
-    plugin_table_in(&settings_language(app))
+pub fn plugin_table(host: &dyn BeetsHost) -> Result<Vec<aiya_dto::beets::BeetsPluginItem>, String> {
+    plugin_table_in(&settings_language(host))
 }
 
 /// 纯函数版（可测）：语言 → 解析对应内嵌表。
-pub fn plugin_table_in(
-    lang: &str,
-) -> Result<Vec<crate::dto::beets::BeetsPluginItem>, String> {
-    let mut doc: PluginTableFile = serde_json::from_str(plugin_table_text(lang))
-        .map_err(|e| format!("failed to parse the embedded plugin table (broken build artifact?): {e}"))?;
+pub fn plugin_table_in(lang: &str) -> Result<Vec<aiya_dto::beets::BeetsPluginItem>, String> {
+    let mut doc: PluginTableFile = serde_json::from_str(plugin_table_text(lang)).map_err(|e| {
+        format!("failed to parse the embedded plugin table (broken build artifact?): {e}")
+    })?;
     if doc.schema != 2 {
         return Err(format!(
             "embedded plugin table schema={} not recognized (this binary only understands 2)",
@@ -2262,19 +2246,19 @@ pub fn plugin_table_in(
 /// 按 path_formats 整理文件（`pretend` = 只出清单不搬文件）。
 /// `directory` 是校验值：与 config.yaml 的 directory 不一致会被 sidecar 拒绝。
 pub fn start_move(
-    app: tauri::AppHandle,
+    host: std::sync::Arc<dyn BeetsHost>,
     directory: String,
     pretend: bool,
-    refresh: Option<Arc<crate::refresh::RefreshParams>>,
+    refresh_after: bool,
 ) -> Result<(), String> {
     start_maintenance(
-        app,
+        host,
         serde_json::json!({
             "id": 1, "cmd": "move_items",
             "directory": directory, "pretend": pretend,
             "requestId": new_request_id("move_items"),
         }),
-        refresh,
+        refresh_after,
     )
 }
 
@@ -2285,8 +2269,8 @@ pub fn start_move(
 /// "有没有入口"，有入口之后让 dump 自己失败（那时候的错误才值得报告）。
 ///
 /// 索引增强卡片也用它：`available=false` 时按钮直接禁用，不必等一次探测。
-pub fn available(app: &tauri::AppHandle) -> bool {
-    discover(app).is_some()
+pub fn available(host: &dyn BeetsHost) -> bool {
+    discover(host).is_some()
 }
 
 #[cfg(test)]
@@ -2544,7 +2528,10 @@ mod tests {
         assert_eq!(en["schema"], zh["schema"], "schema 两份必须一致");
         assert_eq!(en["beets"], zh["beets"], "beets 段两份必须一致");
         assert_eq!(en["profiles"], zh["profiles"], "profiles 两份必须一致");
-        assert_eq!(en["plugins"], zh["plugins"], "plugins 段没有双语字段，必须逐字节一致");
+        assert_eq!(
+            en["plugins"], zh["plugins"],
+            "plugins 段没有双语字段，必须逐字节一致"
+        );
         let (en_b, zh_b) = (
             en["binaries"].as_array().expect("binaries 数组"),
             zh["binaries"].as_array().expect("binaries 数组"),
@@ -2552,7 +2539,9 @@ mod tests {
         assert_eq!(en_b.len(), zh_b.len(), "binaries 条数必须一致");
         for (e, z) in en_b.iter().zip(zh_b.iter()) {
             let name = e["name"].as_str().unwrap_or("?");
-            for key in ["name", "target", "size", "sha256", "bundle", "license", "probe"] {
+            for key in [
+                "name", "target", "size", "sha256", "bundle", "license", "probe",
+            ] {
                 assert_eq!(e[key], z[key], "{name}: binaries[].{key} 两份必须一致");
             }
             for key in ["kind", "url", "size", "sha256", "member"] {
@@ -2562,8 +2551,14 @@ mod tests {
                 );
             }
             for key in ["why", "vendor"] {
-                assert!(!e[key].as_str().unwrap_or_default().is_empty(), "{name}: 基名 {key} 非空");
-                assert!(!z[key].as_str().unwrap_or_default().is_empty(), "{name}: zh 变体 {key} 非空");
+                assert!(
+                    !e[key].as_str().unwrap_or_default().is_empty(),
+                    "{name}: 基名 {key} 非空"
+                );
+                assert!(
+                    !z[key].as_str().unwrap_or_default().is_empty(),
+                    "{name}: zh 变体 {key} 非空"
+                );
             }
         }
     }

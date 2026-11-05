@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>aiya-server spike</title>
+<script src="/__spike/hls.js"></script>
+<style>
+  body { font: 13px/1.6 system-ui, sans-serif; margin: 16px; background: #111; color: #ddd; }
+  section { border: 1px solid #333; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+  button { margin: 2px 6px 2px 0; padding: 4px 10px; }
+  input[type=text] { width: 60%; }
+  #log { white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace; color: #9f9; max-height: 320px; overflow: auto; }
+  .row { margin: 4px 0; }
+</style>
+</head>
+<body>
+<h2>aiya-server W0 spike</h2>
+
+<section>
+  <b>A · /audio Range 播放（WAV）</b>
+  <div class="row">
+    <input id="file" type="text" value="/audio/%E4%B8%AD%E9%9F%B3%E6%B5%8B%E8%AF%95%20440Hz.wav">
+    <button onclick="loadAudio()">加载</button>
+    <button onclick="rangeProbe()">Range 探针</button>
+    <span id="astate"></span>
+  </div>
+  <audio id="a" controls style="width:100%"></audio>
+  <div class="row">
+    seek 到 <input id="seekto" type="number" value="3" style="width:60px"> s
+    <button onclick="doSeek()">seek</button>
+    <span id="seekinfo"></span>
+  </div>
+</section>
+
+<section>
+  <b>B · /stream 代理 + hls.js</b>
+  <div class="row">
+    <input id="hlsurl" type="text" value="/stream?u=http%3A%2F%2F127.0.0.1%3A8787%2Ffixtures%2Fvod.m3u8">
+    <button onclick="loadHls()">播放</button>
+    <button onclick="stopHls()">停止</button>
+  </div>
+  <div class="row">
+    直播（rolling，需先跑 roll.py）:
+    <button onclick="loadHls('/stream?u=http%3A%2F%2F127.0.0.1%3A8787%2Ffixtures%2Frolling%2Flive.m3u8')">rolling</button>
+    <button onclick="loadHls('/stream?u=http%3A%2F%2F127.0.0.1%3A8787%2Ffixtures%2Fmaster.m3u8')">master</button>
+  </div>
+  <audio id="h" controls style="width:100%"></audio>
+  <span id="hstate"></span>
+</section>
+
+<section>
+  <b>B2 · 自建频道 /hls/ch1（Authorization 头路径）</b>
+  <div class="row">
+    <button onclick="loadHls('/hls/ch1/live.m3u8', true)">频道播放</button>
+    <span>凭据走 hls.js xhrSetup 注入 Authorization 头（对比 B 的查询参数路径）</span>
+  </div>
+</section>
+
+<section>
+  <b>C · SSE /events</b>
+  <button onclick="watchSse()">监听</button>
+  <button onclick="stopSse()">停</button>
+  <span id="sseinfo"></span>
+</section>
+
+<section>
+  <b>D · /ipc 形状</b>
+  <button onclick="ipc('app_info')">app_info</button>
+  <button onclick="ipc('nope')">未知命令</button>
+</section>
+
+<pre id="log"></pre>
+<script>
+const qs = new URLSearchParams(location.search);
+const TOKEN = qs.get('token') || '';
+const withToken = u => TOKEN ? u + (u.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(TOKEN) : u;
+const log = (...a) => { const el = document.getElementById('log');
+  el.textContent += a.map(x => typeof x === 'object' ? JSON.stringify(x) : x).join(' ') + '\n';
+  el.scrollTop = el.scrollHeight; };
+log('token =', TOKEN ? '(set)' : '(none)');
+
+// A
+function loadAudio() {
+  const a = document.getElementById('a');
+  a.src = withToken(document.getElementById('file').value);
+  a.onloadedmetadata = () => log('[A] metadata: duration=' + a.duration.toFixed(2));
+  a.onerror = () => log('[A] error', a.error && a.error.code);
+  a.play().catch(e => log('[A] play blocked:', e.message));
+}
+async function rangeProbe() {
+  const r = await fetch(withToken(document.getElementById('file').value),
+    { headers: { Range: 'bytes=0-99' } });
+  log('[A] Range:', r.status, 'CR:', r.headers.get('content-range'),
+      'AR:', r.headers.get('accept-ranges'), 'len:', (await r.arrayBuffer()).byteLength);
+}
+async function doSeek() {
+  const a = document.getElementById('a');
+  const t = +document.getElementById('seekto').value;
+  const t0 = performance.now();
+  a.currentTime = t;
+  await new Promise(r => a.onseeked = r);
+  document.getElementById('seekinfo').textContent =
+    `seek->${a.currentTime.toFixed(2)}s in ${(performance.now()-t0).toFixed(0)}ms`;
+  log('[A] seek 完成', a.currentTime.toFixed(2) + 's');
+}
+document.getElementById('a').addEventListener('timeupdate', e => {
+  document.getElementById('astate').textContent =
+    e.target.currentTime.toFixed(1) + 's / ' + (e.target.duration||0).toFixed(1) + 's';
+});
+
+// B
+let hls = null;
+function loadHls(url, useHeader) {
+  const u = url || document.getElementById('hlsurl').value;
+  const a = document.getElementById('h');
+  stopHls();
+  if (window.Hls && Hls.isSupported()) {
+    hls = new Hls(useHeader ? {
+      xhrSetup: (xhr) => { if (TOKEN) xhr.setRequestHeader('Authorization', 'Bearer ' + TOKEN); }
+    } : undefined);
+    hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) log('[B] fatal', d.type, d.details); });
+    hls.on(Hls.Events.MANIFEST_PARSED, () => log('[B] manifest parsed, levels=' + hls.levels.length));
+    hls.loadSource(withToken(u));
+    hls.attachMedia(a);
+    a.play().catch(e => log('[B] play blocked:', e.message));
+  } else if (a.canPlayType('application/vnd.apple.mpegurl')) {
+    a.src = withToken(u); a.play().catch(e => log('[B] play blocked:', e.message));
+  } else { log('[B] no HLS support'); }
+}
+function stopHls() { if (hls) { hls.destroy(); hls = null; }
+  document.getElementById('h').removeAttribute('src'); }
+document.getElementById('h').addEventListener('timeupdate', e => {
+  document.getElementById('hstate').textContent =
+    't=' + e.target.currentTime.toFixed(1) + 's buf=' +
+    ((e.target.buffered.length ? e.target.buffered.end(0) : 0) - e.target.currentTime).toFixed(1) + 's';
+});
+
+// C
+let es = null;
+function watchSse() {
+  stopSse();
+  es = new EventSource(withToken('/events'));
+  es.addEventListener('scan:progress', e => {
+    document.getElementById('sseinfo').textContent = 'scan:progress ' + e.data;
+  });
+  es.onopen = () => log('[C] SSE open');
+  es.onerror = () => log('[C] SSE error (auto-reconnect)');
+}
+function stopSse() { if (es) { es.close(); es = null; } }
+
+// D
+async function ipc(cmd) {
+  const r = await fetch(withToken('/ipc/' + cmd), {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  log('[D]', cmd, r.status, await r.text());
+}
+</script>
+</body>
+</html>

@@ -30,13 +30,12 @@ use aiya_data::repo::{self, TrackWindowQuery};
 use aiya_data::scanner;
 
 mod app_id;
-mod beets;
 mod drop;
-pub mod dto;
-mod enrichment;
+pub use aiya_dto as dto;
+pub use aiya_host_core::proc;
+pub use aiya_host_core::{beets, enrichment};
 mod logging;
 mod paths;
-mod proc;
 mod pump;
 mod refresh;
 mod sidecar;
@@ -436,13 +435,8 @@ pub struct AppState {
     /// 正在运行的 beets 安装子进程句柄（A 轨道安装线程存入，
     /// `RunEvent::Exit` 收尾处 kill+wait——安装器可能卡在 pip 阶段好几分钟，
     /// 不能让它在主进程退出后变孤儿）。
-    beets_install_child: Mutex<Option<std::process::Child>>,
-    /// beets 安装互斥（发布前审查 P1-1）：安装线程往 `beets_install_child`
-    /// 这个**单槽**里塞句柄，两条安装线程并发时第二个会顶掉第一个——收尾时
-    /// kill/wait 错对象、误报"被退出中断"，pip 被中途杀还可能留半个 venv。
-    /// compare_exchange 占位，失败返回 busy；Drop 兜底复位（同 refresh 的
-    /// FlagGuard 教训：panic 路径不能把开关留死）。
-    beets_installing: AtomicBool,
+    /// 安装登记表（host-core）：子进程收尸槽 + 占位互斥
+    beets_install: std::sync::Arc<aiya_host_core::InstallRegistry>,
     /// beets 模块自有的结论库（`{beets-index}/enrich.db`）。
     ///
     /// 懒打开：绝大多数用户从不点"分析"，为一个可能永不使用的 SQLite 文件
@@ -464,6 +458,88 @@ fn history_cutoff_days(days: i64, now_secs: i64) -> Option<i64> {
     Some(now_secs - days.clamp(1, MAX_HISTORY_DAYS).saturating_mul(86_400))
 }
 
+/// beets/enrichment 编排的桌面宿主环境：Tauri 事件出口 + paths + AppState。
+struct TauriBeetsHost {
+    app: tauri::AppHandle,
+    registry: std::sync::Arc<aiya_host_core::InstallRegistry>,
+}
+
+impl aiya_host_core::BeetsHost for TauriBeetsHost {
+    fn emit(&self, channel: &'static str, payload: serde_json::Value) {
+        let _ = self.app.emit(channel, payload);
+    }
+    fn data_root(&self) -> PathBuf {
+        crate::paths::data_root(&self.app)
+    }
+    fn library_roots(&self) -> Option<Vec<String>> {
+        self.app.try_state::<AppState>().and_then(|st| {
+            st.db()
+                .send(|conn| Ok(aiya_host_core::read_roots(conn)))
+                .ok()
+        })
+    }
+    fn online_files(&self) -> Option<Vec<aiya_data::repo::FileFact>> {
+        self.app.try_state::<AppState>().and_then(|st| {
+            st.db()
+                .send(|conn| aiya_data::repo::online_files(conn))
+                .ok()
+        })
+    }
+    fn track_ids_by_paths(
+        &self,
+        paths: &[String],
+    ) -> Option<std::collections::HashMap<String, String>> {
+        let paths = paths.to_vec();
+        self.app.try_state::<AppState>().and_then(|st| {
+            st.db()
+                .send(move |conn| aiya_data::repo::track_ids_by_paths(conn, &paths))
+                .ok()
+        })
+    }
+    fn setting_str(&self, key: &str) -> Option<String> {
+        self.app
+            .try_state::<AppState>()
+            .and_then(|st| st.setting_str(key))
+    }
+    fn install_registry(&self) -> &aiya_host_core::InstallRegistry {
+        &self.registry
+    }
+    fn try_set_installing(&self) -> bool {
+        self.app
+            .state::<AppState>()
+            .beets_install
+            .installing
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_ok()
+    }
+    fn enrich_store(&self) -> Result<std::sync::Arc<aiya_beets_store::Store>, String> {
+        let state = self.app.state::<AppState>();
+        state.enrich_store(&self.app)
+    }
+    fn kick_library_refresh(&self) {
+        let state = self.app.state::<AppState>();
+        crate::refresh::spawn(
+            &self.app,
+            state.refresh.clone(),
+            crate::refresh::Trigger::Action,
+        );
+    }
+}
+
+/// 一次性宿主句柄（Arc<dyn BeetsHost>，长任务线程要独立持有）。
+fn beets_host(app: &tauri::AppHandle) -> std::sync::Arc<dyn aiya_host_core::BeetsHost> {
+    let registry = app.state::<AppState>().beets_install.clone();
+    std::sync::Arc::new(TauriBeetsHost {
+        app: app.clone(),
+        registry,
+    })
+}
+
 impl AppState {
     fn db(&self) -> std::sync::MutexGuard<'_, aiya_data::DbHandle> {
         self.db
@@ -483,7 +559,7 @@ impl AppState {
         if let Some(s) = self.enrich_store.get() {
             return Ok(std::sync::Arc::clone(s));
         }
-        let path = beets::enrich_db(app);
+        let path = beets::enrich_db(&*beets_host(app));
         let store = std::sync::Arc::new(
             aiya_beets_store::Store::open(&path).map_err(|e| format!("{}: {e}", path.display()))?,
         );
@@ -1007,7 +1083,7 @@ fn app_open_url(url: String) -> Result<(), dto::ApiError> {
 /// `error_code` / `error_message` 字段），这里唯一的错误源是工作线程崩了。
 #[tauri::command]
 async fn beets_status(app: AppHandle) -> Result<dto::beets::BeetsStatus, dto::ApiError> {
-    tauri::async_runtime::spawn_blocking(move || beets::probe(&app))
+    tauri::async_runtime::spawn_blocking(move || beets::probe(&*beets_host(&app)))
         .await
         .map_err(dto::ApiError::internal)
 }
@@ -1020,7 +1096,7 @@ async fn beets_preview(
     app: AppHandle,
     paths: Vec<String>,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    tauri::async_runtime::spawn_blocking(move || beets::start_preview(app, paths))
+    tauri::async_runtime::spawn_blocking(move || beets::start_preview(beets_host(&app), paths))
         .await
         .map_err(dto::ApiError::internal)?
         .map_err(dto::ApiError::beets_missing)?;
@@ -1042,13 +1118,9 @@ async fn beets_apply(
     decisions: Vec<Json>,
     resume: Option<bool>,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    let Some(state) = app.try_state::<AppState>() else {
-        return Err(dto::ApiError::internal("app state unavailable"));
-    };
-    let refresh = state.refresh.clone();
     let resume = resume.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        beets::start_apply(app, decisions, resume, Some(refresh))
+        beets::start_apply(beets_host(&app), decisions, resume)
     })
     .await
     .map_err(dto::ApiError::internal)?
@@ -1152,7 +1224,7 @@ fn roots_of(app: &tauri::AppHandle) -> Result<Vec<String>, dto::ApiError> {
 #[tauri::command]
 fn beets_config_get(app: AppHandle) -> Result<dto::beets::BeetsConfig, dto::ApiError> {
     let roots = roots_of(&app)?;
-    Ok(beets::config_view(&app, &roots))
+    Ok(beets::config_view(&*beets_host(&app), &roots))
 }
 
 /// 设置待整理目录。`None` = 清除（顺带清空已导入记录——旧记录对新目录无意义）。
@@ -1173,12 +1245,12 @@ fn beets_set_inbox(
         }
     }
     let inbox = trimmed.map(str::to_string);
-    beets::update_settings(&app, move |s| {
+    beets::update_settings(&*beets_host(&app), move |s| {
         s.inbox_path = inbox;
         s.inbox_imported.clear();
     })
     .map_err(dto::ApiError::internal)?;
-    Ok(beets::config_view(&app, &roots))
+    Ok(beets::config_view(&*beets_host(&app), &roots))
 }
 
 /// 勾选整理落点（docs/49 §4：落点单独选，可以是曲库目录本身，也可以是它
@@ -1201,15 +1273,15 @@ fn beets_set_target(
         ));
     }
     let saved = p;
-    beets::update_settings(&app, move |s| s.target_root = Some(saved))
+    beets::update_settings(&*beets_host(&app), move |s| s.target_root = Some(saved))
         .map_err(dto::ApiError::internal)?;
-    Ok(beets::config_view(&app, &roots))
+    Ok(beets::config_view(&*beets_host(&app), &roots))
 }
 
 /// 在资源管理器打开待整理目录（用户往里拖文件的入口）。
 #[tauri::command]
 fn beets_open_inbox(app: AppHandle) -> Result<(), dto::ApiError> {
-    let inbox = beets::load_settings(&app)
+    let inbox = beets::load_settings(&*beets_host(&app))
         .inbox_path
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
@@ -1226,9 +1298,9 @@ fn beets_inbox_imported_add(
     app: AppHandle,
     paths: Vec<String>,
 ) -> Result<dto::beets::BeetsConfig, dto::ApiError> {
-    beets::remember_imported(&app, paths).map_err(dto::ApiError::internal)?;
+    beets::remember_imported(&*beets_host(&app), paths).map_err(dto::ApiError::internal)?;
     let roots = roots_of(&app)?;
-    Ok(beets::config_view(&app, &roots))
+    Ok(beets::config_view(&*beets_host(&app), &roots))
 }
 
 /// 单元测试：路径重叠校验是这套入库模型的安全边界（inbox 混进扫描根 =
@@ -1340,7 +1412,7 @@ async fn beets_install(
     app: AppHandle,
     plugins: Option<Vec<String>>,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    beets::start_install(app, plugins.unwrap_or_default())
+    beets::start_install(beets_host(&app), plugins.unwrap_or_default())
         .map(|_| dto::beets::JobStarted { started: true })
         .map_err(dto::ApiError::internal)
 }
@@ -1352,7 +1424,7 @@ async fn beets_plugins_set(
     app: AppHandle,
     plugins: Option<Vec<String>>,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    beets::start_plugins_set(app, plugins.unwrap_or_default())
+    beets::start_plugins_set(beets_host(&app), plugins.unwrap_or_default())
         .map(|_| dto::beets::JobStarted { started: true })
         .map_err(dto::ApiError::internal)
 }
@@ -1365,7 +1437,7 @@ async fn beets_plugins_set(
 async fn beets_plugin_table(
     app: AppHandle,
 ) -> Result<Vec<dto::beets::BeetsPluginItem>, dto::ApiError> {
-    tauri::async_runtime::spawn_blocking(move || beets::plugin_table(&app))
+    tauri::async_runtime::spawn_blocking(move || beets::plugin_table(&*beets_host(&app)))
         .await
         .map_err(dto::ApiError::internal)?
         .map_err(dto::ApiError::internal)
@@ -1376,7 +1448,7 @@ async fn beets_plugin_table(
 /// 进度复用 `beets:install` 事件流，结束时补 `finished` 带新 status。
 #[tauri::command]
 async fn beets_uninstall(app: AppHandle) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    beets::start_uninstall(app)
+    beets::start_uninstall(beets_host(&app))
         .map(|_| dto::beets::JobStarted { started: true })
         .map_err(dto::ApiError::internal)
 }
@@ -1443,7 +1515,6 @@ async fn beets_adopt(
     let Some(state) = app.try_state::<AppState>() else {
         return Err(dto::ApiError::internal("app state unavailable"));
     };
-    let refresh = state.refresh.clone();
     let paths = if paths.is_empty() {
         state
             .db()
@@ -1452,7 +1523,7 @@ async fn beets_adopt(
     } else {
         paths
     };
-    tauri::async_runtime::spawn_blocking(move || beets::start_adopt(app, paths, Some(refresh)))
+    tauri::async_runtime::spawn_blocking(move || beets::start_adopt(beets_host(&app), paths, true))
         .await
         .map_err(dto::ApiError::internal)?
         .map_err(map_beets_start)?;
@@ -1465,7 +1536,7 @@ async fn beets_update(
     app: AppHandle,
     pretend: bool,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    tauri::async_runtime::spawn_blocking(move || beets::start_update(app, pretend))
+    tauri::async_runtime::spawn_blocking(move || beets::start_update(beets_host(&app), pretend))
         .await
         .map_err(dto::ApiError::internal)?
         .map_err(map_beets_start)?;
@@ -1478,7 +1549,7 @@ async fn beets_duplicates(
     app: AppHandle,
     keys: Vec<String>,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    tauri::async_runtime::spawn_blocking(move || beets::start_duplicates(app, keys))
+    tauri::async_runtime::spawn_blocking(move || beets::start_duplicates(beets_host(&app), keys))
         .await
         .map_err(dto::ApiError::internal)?
         .map_err(map_beets_start)?;
@@ -1496,12 +1567,8 @@ async fn beets_move(
     directory: String,
     pretend: bool,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    let Some(state) = app.try_state::<AppState>() else {
-        return Err(dto::ApiError::internal("app state unavailable"));
-    };
-    let refresh = state.refresh.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        beets::start_move(app, directory, pretend, Some(refresh))
+        beets::start_move(beets_host(&app), directory, pretend, true)
     })
     .await
     .map_err(dto::ApiError::internal)?
@@ -1524,7 +1591,13 @@ async fn beets_query(
 ) -> Result<dto::beets::BeetsQueryPage, dto::ApiError> {
     let raw = raw.filter(|s| !s.trim().is_empty());
     tauri::async_runtime::spawn_blocking(move || {
-        beets::query_page(&app, rules, raw, fields, limit.map(|v| v as usize))
+        beets::query_page(
+            &*beets_host(&app),
+            rules,
+            raw,
+            fields,
+            limit.map(|v| v as usize),
+        )
     })
     .await
     .map_err(dto::ApiError::internal)?
@@ -1538,7 +1611,7 @@ async fn beets_query(
 /// 字段固定是 xtractor 的那 20 个）。查询页用这条，智能歌单用那条。
 #[tauri::command]
 async fn beets_fields(app: AppHandle) -> Result<dto::beets::BeetsFieldCatalog, dto::ApiError> {
-    tauri::async_runtime::spawn_blocking(move || beets::field_catalog(&app))
+    tauri::async_runtime::spawn_blocking(move || beets::field_catalog(&*beets_host(&app)))
         .await
         .map_err(dto::ApiError::internal)?
         .map_err(map_beets_start)
@@ -1558,10 +1631,12 @@ async fn enrichment_worklist(
 ) -> Result<dto::enrichment::EnrichmentWorklist, dto::ApiError> {
     let source = enrichment::normalize_source(source).map_err(dto::ApiError::invalid_arg)?;
     let include_empty = include_empty.unwrap_or(false);
-    tauri::async_runtime::spawn_blocking(move || enrichment::worklist(&app, &source, include_empty))
-        .await
-        .map_err(dto::ApiError::internal)?
-        .map_err(dto::ApiError::internal)
+    tauri::async_runtime::spawn_blocking(move || {
+        enrichment::worklist(&*beets_host(&app), &source, include_empty)
+    })
+    .await
+    .map_err(dto::ApiError::internal)?
+    .map_err(dto::ApiError::internal)
 }
 
 /// 起一次分析（清单为空就不起进程）。
@@ -1582,10 +1657,12 @@ async fn beets_enrich_start(
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
     let source = enrichment::normalize_source(source).map_err(dto::ApiError::invalid_arg)?;
     let force = force.unwrap_or(false);
-    tauri::async_runtime::spawn_blocking(move || beets::start_enrich(app, source, force))
-        .await
-        .map_err(dto::ApiError::internal)?
-        .map_err(map_beets_start)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        beets::start_enrich(beets_host(&app), source, force)
+    })
+    .await
+    .map_err(dto::ApiError::internal)?
+    .map_err(map_beets_start)?;
     Ok(dto::beets::JobStarted { started: true })
 }
 
@@ -1603,7 +1680,7 @@ async fn beets_index_import(
     app: AppHandle,
     root: Option<String>,
 ) -> Result<dto::beets::JobStarted, dto::ApiError> {
-    tauri::async_runtime::spawn_blocking(move || beets::start_index_import(app, root))
+    tauri::async_runtime::spawn_blocking(move || beets::start_index_import(beets_host(&app), root))
         .await
         .map_err(dto::ApiError::internal)?
         .map_err(map_beets_start)?;
@@ -1645,7 +1722,7 @@ async fn enrichment_query(
         bpm_max: args.bpm_max,
         limit: args.limit,
     };
-    tauri::async_runtime::spawn_blocking(move || enrichment::find(&app, filter))
+    tauri::async_runtime::spawn_blocking(move || enrichment::find(&*beets_host(&app), filter))
         .await
         .map_err(dto::ApiError::internal)?
         .map_err(dto::ApiError::internal)
@@ -1663,10 +1740,12 @@ async fn enrichment_gc(
 ) -> Result<dto::enrichment::EnrichmentGc, dto::ApiError> {
     let source = enrichment::normalize_source(source).map_err(dto::ApiError::invalid_arg)?;
     let keep_days = keep_days.unwrap_or(30).clamp(1, 3650);
-    tauri::async_runtime::spawn_blocking(move || enrichment::gc(&app, &source, keep_days))
-        .await
-        .map_err(dto::ApiError::internal)?
-        .map_err(dto::ApiError::internal)
+    tauri::async_runtime::spawn_blocking(move || {
+        enrichment::gc(&*beets_host(&app), &source, keep_days)
+    })
+    .await
+    .map_err(dto::ApiError::internal)?
+    .map_err(dto::ApiError::internal)
 }
 
 #[tauri::command]
@@ -2053,8 +2132,8 @@ async fn library_choose_root(
         setting_set(conn, "library.roots.paused", &json!(paused))?;
         Ok((roots, paused))
     });
-    let (roots, paused) =
-        saved.map_err(|e| dto::ApiError::internal(format!("failed to save library folders: {e}")))?;
+    let (roots, paused) = saved
+        .map_err(|e| dto::ApiError::internal(format!("failed to save library folders: {e}")))?;
     Ok(Some(dto::library::ChosenRoot {
         path: path_str,
         roots,
@@ -2562,7 +2641,9 @@ fn playlist_create(
             Ok(Some(
                 playlist_summary_by_id(conn, &pid)
                     .map_err(aiya_data::DbError::Sql)?
-                    .ok_or_else(|| aiya_data::DbError::Custom("playlist not readable after creation".into()))?,
+                    .ok_or_else(|| {
+                        aiya_data::DbError::Custom("playlist not readable after creation".into())
+                    })?,
             ))
         })
     } else {
@@ -2574,7 +2655,9 @@ fn playlist_create(
             Ok(Some(
                 playlist_summary_by_id(conn, &pid_for_db)
                     .map_err(aiya_data::DbError::Sql)?
-                    .ok_or_else(|| aiya_data::DbError::Custom("playlist not readable after creation".into()))?,
+                    .ok_or_else(|| {
+                        aiya_data::DbError::Custom("playlist not readable after creation".into())
+                    })?,
             ))
         })
     }
@@ -2685,7 +2768,9 @@ fn playlist_add_tracks(
         };
         let summary = playlist_summary_by_id(conn, &id)
             .map_err(aiya_data::DbError::Sql)?
-            .ok_or_else(|| aiya_data::DbError::Custom("playlist row missing after transaction".into()))?;
+            .ok_or_else(|| {
+                aiya_data::DbError::Custom("playlist row missing after transaction".into())
+            })?;
         Ok(Some(dto::playlist::PlaylistAddResult {
             added: outcome.added,
             skipped: outcome.skipped,
@@ -2880,7 +2965,9 @@ async fn playlist_import(
             let outcome = playlist_repo::create(conn, &pid, &name, &matched_ids, now)?;
             let summary = playlist_summary_by_id(conn, &pid)
                 .map_err(aiya_data::DbError::Sql)?
-                .ok_or_else(|| aiya_data::DbError::Custom("playlist not readable after import".into()))?;
+                .ok_or_else(|| {
+                    aiya_data::DbError::Custom("playlist not readable after import".into())
+                })?;
             Ok(dto::playlist::PlaylistImportResult {
                 playlist: Some(summary),
                 matched: outcome.added,
@@ -2978,7 +3065,10 @@ async fn playlist_export(
     let text = aiya_data::playlist_io::render_playlist(&items, &base_dir, relative);
     let count = items.len() as i64;
     std::fs::write(&out_path, text).map_err(|e| {
-        dto::ApiError::new(dto::ApiErrorCode::Io, format!("failed to write export file: {e}"))
+        dto::ApiError::new(
+            dto::ApiErrorCode::Io,
+            format!("failed to write export file: {e}"),
+        )
     })?;
     Ok(dto::playlist::PlaylistExportResult { path, count })
 }
@@ -3930,17 +4020,19 @@ fn expand_dropped(paths: &[String], skipped: &mut Vec<String>) -> Vec<DropCandid
     for path in paths {
         let item = drop::classify(std::path::Path::new(path));
         match item.kind {
-            dto::DroppedKind::Audio => out.push(DropCandidate::Audio(item.path)),
-            dto::DroppedKind::HlsPlaylist => out.push(DropCandidate::Hls(item.path)),
-            dto::DroppedKind::Playlist => {
+            drop::DroppedKind::Audio => out.push(DropCandidate::Audio(item.path)),
+            drop::DroppedKind::HlsPlaylist => out.push(DropCandidate::Hls(item.path)),
+            drop::DroppedKind::Playlist => {
                 // 歌单展开一层（不再递归：歌单套歌单是病，且容易成环）
                 match drop::expand_playlist(std::path::Path::new(&item.path)) {
                     Ok(entries) => {
                         for entry in entries {
                             let sub = drop::classify(std::path::Path::new(&entry));
                             match sub.kind {
-                                dto::DroppedKind::Audio => out.push(DropCandidate::Audio(sub.path)),
-                                dto::DroppedKind::HlsPlaylist => {
+                                drop::DroppedKind::Audio => {
+                                    out.push(DropCandidate::Audio(sub.path))
+                                }
+                                drop::DroppedKind::HlsPlaylist => {
                                     out.push(DropCandidate::Hls(sub.path))
                                 }
                                 _ => skipped.push(format!("{} ({})", sub.label, sub.note)),
@@ -3950,13 +4042,11 @@ fn expand_dropped(paths: &[String], skipped: &mut Vec<String>) -> Vec<DropCandid
                     Err(e) => skipped.push(format!("{} ({e})", item.label)),
                 }
             }
-            dto::DroppedKind::Directory => {
-                skipped.push(format!(
-                    "{} (folders are not expanded, import them via Settings > Library)",
-                    item.label
-                ))
-            }
-            dto::DroppedKind::Unsupported => {
+            drop::DroppedKind::Directory => skipped.push(format!(
+                "{} (folders are not expanded, import them via Settings > Library)",
+                item.label
+            )),
+            drop::DroppedKind::Unsupported => {
                 skipped.push(format!("{}（{}）", item.label, item.note))
             }
         }
@@ -3969,7 +4059,7 @@ fn expand_dropped(paths: &[String], skipped: &mut Vec<String>) -> Vec<DropCandid
 /// UI 用它决定 overlay 上显示什么、跳过项怎么提示——**判定不重复写一份**，
 /// 这是这个仓在 `is_http_url` 上吃过亏之后的既定做法。
 #[tauri::command]
-fn classify_paths(paths: Vec<String>) -> Vec<dto::DroppedItem> {
+fn classify_paths(paths: Vec<String>) -> Vec<drop::DroppedItem> {
     paths
         .iter()
         .map(|p| drop::classify(std::path::Path::new(p)))
@@ -4507,8 +4597,8 @@ pub fn run() {
                 let mut blob = db
                     .send(move |conn| Ok(setting_get(conn, "app_settings").unwrap_or(def)))
                     .unwrap_or_else(|_| fallback());
-                // 语言首启（docs/64 §3.1）：空/缺失 = 未定 → 按系统 UI 语言探测
-                // 写库，此后恒按设置值。空值不会到达前端。
+                // 语言首启：空/缺失 = 未定 → 按系统 UI 语言探测写库，此后恒按
+                // 设置值。空值不会到达前端。
                 let unset = blob
                     .get("language")
                     .and_then(Value::as_str)
@@ -4565,8 +4655,7 @@ pub fn run() {
                 tray_ready: AtomicBool::new(false),
                 audio_state: Mutex::new(AudioStateSnapshot::default()),
                 settings: Mutex::new(settings0),
-                beets_install_child: Mutex::new(None),
-                beets_installing: AtomicBool::new(false),
+                beets_install: std::sync::Arc::new(aiya_host_core::InstallRegistry::new()),
                 enrich_store: std::sync::OnceLock::new(),
             });
 
@@ -4597,7 +4686,7 @@ pub fn run() {
                     })
                 });
                 if let Ok(legacy) = legacy {
-                    if beets::adopt_legacy_settings(app.handle(), legacy) {
+                    if beets::adopt_legacy_settings(&*beets_host(app.handle()), legacy) {
                         let _ = st.db().send(|conn| {
                             for key in [
                                 "beets.toolPath",
@@ -5073,7 +5162,8 @@ pub fn run() {
                     // beets 安装子进程（A 轨道）：安装线程可能正卡在 pip 阶段，
                     // 退出时收尸 —— 槽被 take 走后安装线程自行报"被退出中断"。
                     if let Some(mut c) = state
-                        .beets_install_child
+                        .beets_install
+                        .child
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .take()

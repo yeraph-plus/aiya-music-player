@@ -1,0 +1,11 @@
+[package]
+name = "aiya-dto"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aiya-data = { path = "../aiya-data" }
+aiya-player = { path = "../aiya-player" }
+serde.workspace = true
+serde_json.workspace = true
+ts-rs.workspace = true
