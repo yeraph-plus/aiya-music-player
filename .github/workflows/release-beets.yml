@@ -75,7 +75,7 @@ jobs:
 
       # uv 是**打包工具**不是运行时：它按 embeddable 解释器解析 wheel
       # （实测 numpy 拿到 cp314 tag），比 pip 快一个量级。
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
