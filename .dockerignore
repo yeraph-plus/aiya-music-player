@@ -1,0 +1,32 @@
+# 构建上下文瘦身：镜像构建只需要 crates/、src-tauri 的清单、前端源码与
+# host-core 的 include_str 数据（beets-tool 的插件表、protocol 镜像）。
+target/
+ui/node_modules/
+ui/dist/
+ui/test-results/
+ui/playwright-report/
+node_modules/
+.git/
+.github/
+docs/
+test-results/
+beets-tool/.venv/
+beets-tool/dist/
+beets-tool/third-party/
+beets-tool/tests/
+beets-tool/tools/
+beets-tool/src/aiya_beets/data/*.bin
+sidecars/
+scripts/
+fixtures/
+hls-fixtures/
+*.md
+!README.md
+*.log
+Dockerfile
+compose.yaml
+.dockerignore
+LIVE_STATION_FIELDS.md
+licenses/
+.afdian*
+afdian.com.png

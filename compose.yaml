@@ -1,0 +1,27 @@
+# Web 版部署样例（docs/65 W5）：`docker compose up -d --build` 后浏览器打开
+# http://<host>:8787。曲库目录按只读挂载；数据（SQLite/封面缓存）进命名卷。
+# 鉴权可选：设置 AIYA_TOKEN 后，命令面走 Authorization 头、<audio>/SSE 走
+# `?token=` 查询参数（浏览器会话内自动携带）。
+services:
+  aiya-server:
+    build: .
+    image: aiya-server:latest
+    container_name: aiya-server
+    ports:
+      - "8787:8787"
+    volumes:
+      - /path/to/music:/music:ro
+      - aiya-data:/data
+    environment:
+      # 登录门：单管理员口令（必填才开闸；留空 = 局域网无鉴权）
+      - AIYA_ADMIN_PASSWORD=
+      # 可选静态令牌（脚本/curl 场景；与登录会话并行的第二凭据）
+      - AIYA_TOKEN=
+      # 数据根（SQLite + 封面缓存 + beets 索引目录的父级）
+      - AIYA_DATA_ROOT=/data
+      # 曲库目录（容器内路径；多个根用 library_roots_set 或后续批次扩展）
+      - AIYA_MUSIC_DIR=/music
+    restart: unless-stopped
+
+volumes:
+  aiya-data:
