@@ -11,7 +11,7 @@
 services:
   aiya-server:
     build: .
-    image: aiya-server:latest
+    image: aiya-music:latest
     container_name: aiya-server
     ports:
       - "8787:8787"
