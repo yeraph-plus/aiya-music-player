@@ -16,6 +16,7 @@
   import { Play } from '@lucide/svelte';
   import type { TrackRow } from '../lib/ipc';
   import { artworkUrl } from '../lib/artwork';
+  import { browserCanPlay } from '../lib/browser-codecs';
   import { formatDateTime, formatDay, formatPlays, formatTime } from '../lib/format';
   import { t } from '../lib/i18n.svelte';
   import { player } from '../stores/player.svelte';
@@ -112,6 +113,8 @@
     <div
       class="row"
       class:active={currentId === track.id}
+      class:unsupported={!browserCanPlay(track.container)}
+      title={browserCanPlay(track.container) ? undefined : t('tracks.codecUnsupported')}
       role="row"
       tabindex="0"
       style:grid-template-columns={gridStyle}

@@ -205,6 +205,10 @@ function buildLibrary(): TrackRow[] {
           // 假数据全部"在线"：预览里不需要模拟灰标，那要看真库的 missing 状态
           availability: 'online',
           genre: GENRE_POOL[Math.floor(rand() * GENRE_POOL.length)],
+          // 容器按真实扫描的分布写（lofty FileType Debug 串）：预览里保持
+          // 真实分布；灰标只在 http 实机出现（browser-codecs 以 __AIYA_WEB__
+          // 为判据，mock/预览保持桌面能力——e2e 形态口径）
+          container: ['Mpeg', 'Flac', 'Mpeg', 'Mp4', 'Flac', 'Aiff'][n % 6],
         });
       }
     });

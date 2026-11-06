@@ -31,16 +31,45 @@ impl ScanCtl {
 /// 起一次后台扫描（timer / action）。已在扫描中则跳过（与桌面管线的合并语义
 /// 一致：正在跑的增量扫描会看到最新的盘面，不需要排队第二次）。
 pub fn spawn_scan(st: &Arc<ServerState>, trigger: &'static str) {
-    if st.scan.scanning.swap(true, Ordering::SeqCst) {
+    let Some(guard) = ScanFlagGuard::acquire(st) else {
         return;
-    }
+    };
     st.scan.cancel.store(false, Ordering::SeqCst);
     let st = Arc::clone(st);
     let trigger = trigger.to_string();
     std::thread::Builder::new()
         .name("aiya-server-scan".into())
-        .spawn(move || run_scan(&st, &trigger))
+        .spawn(move || {
+            // guard 进闭包：run_scan 的任何早退/panic 都经 Drop 复位；
+            // spawn 本身失败时闭包被丢弃，Drop 同样触发
+            let _guard = guard;
+            run_scan(&st, &trigger);
+        })
         .expect("spawn scan thread");
+}
+
+/// 扫描标志守卫（桌面壳 refresh.rs 的 FlagGuard 同型）：构造即置位、Drop
+/// 复位。审查复盘：run_scan 的早退分支（DB 读失败/根集为空）曾只 finish 不
+/// 复位——无根 server 的第一个 timer tick 就能把标志永久卡死（所有后续
+/// 扫描静默跳过、library_scan 恒 busy），这类路径必须共用同一套兜底。
+struct ScanFlagGuard {
+    st: Arc<ServerState>,
+}
+
+impl ScanFlagGuard {
+    /// 置位成功返回守卫；已在扫描中返回 None（调用方跳过本轮）。
+    fn acquire(st: &Arc<ServerState>) -> Option<Self> {
+        if st.scan.scanning.swap(true, Ordering::SeqCst) {
+            return None;
+        }
+        Some(Self { st: Arc::clone(st) })
+    }
+}
+
+impl Drop for ScanFlagGuard {
+    fn drop(&mut self) {
+        self.st.scan.scanning.store(false, Ordering::SeqCst);
+    }
 }
 
 /// 定时器线程：按 refreshSeconds 间隔自动增量扫描（0 = 只保留手动/action 触发）。
@@ -142,7 +171,9 @@ fn run_scan(st: &Arc<ServerState>, trigger: &str) {
             RefreshSnapshot::skipped(trigger, elapsed, Some(e.to_string())),
         ),
     }
-    st.scan.scanning.store(false, Ordering::SeqCst);
+    // 标志复位由闭包里的 ScanFlagGuard Drop 负责（早退/panic 全路径兜底），
+    // 这里不得手动 store(false)：guard 仍存活时误复位会放行下一个扫描、
+    // 随后 guard Drop 又把它误杀
 }
 
 fn finish(st: &Arc<ServerState>, trigger: &str, snap: RefreshSnapshot) {
@@ -171,13 +202,15 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// 同步扫描（library_scan 命令体）：busy 闸由调用方置位，本函数负责复位并返回
-/// 完整结果（进度事件与 spawn_scan 共用一条路径）。
+/// 同步扫描（library_scan 命令体）：自持 busy 闸（已在扫描中返回 busy 错误），
+/// 复位交给 ScanFlagGuard Drop；返回完整结果（进度事件与 spawn_scan 共用一条路径）。
 pub fn run_scan_inline(
     st: &Arc<ServerState>,
     _trigger: &'static str,
 ) -> Result<aiya_data::scanner::ScanResult, String> {
-    let _started = Instant::now();
+    let _guard =
+        ScanFlagGuard::acquire(st).ok_or_else(|| "a scan is already in progress".to_string())?;
+    st.scan.cancel.store(false, Ordering::SeqCst);
     let roots: Vec<std::path::PathBuf> = match db_lock(st)
         .send(|conn| Ok((read_roots(conn), read_paused_roots(conn))))
         .map_err(|e| e.to_string())
@@ -193,12 +226,10 @@ pub fn run_scan_inline(
             })
             .collect(),
         Err(e) => {
-            st.scan.scanning.store(false, Ordering::SeqCst);
             return Err(e);
         }
     };
     if roots.is_empty() {
-        st.scan.scanning.store(false, Ordering::SeqCst);
         return Err("no scan folders configured".to_string());
     }
     let art = st.artwork_dir.clone();
@@ -218,6 +249,5 @@ pub fn run_scan_inline(
             },
         )
     });
-    st.scan.scanning.store(false, Ordering::SeqCst);
     result.map_err(|e| e.to_string())
 }

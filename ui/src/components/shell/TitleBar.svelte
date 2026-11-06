@@ -95,40 +95,37 @@
 
   <div class="tb-drag"></div>
 
-  <div class="window-controls">
-    <Tooltip label={t('shell.titlebar.minimize')}>
-      {#snippet trigger(props)}
-        <button {...props} aria-label={t('shell.titlebar.minimize')} disabled={!isNative} onclick={minimizeWindow}>
-          <Minus size={15} />
-        </button>
-      {/snippet}
-    </Tooltip>
-    <Tooltip label={maximized ? t('shell.titlebar.restore') : t('shell.titlebar.maximize')}>
-      {#snippet trigger(props)}
-        <button
-          {...props}
-          aria-label={maximized ? t('shell.titlebar.restore') : t('shell.titlebar.maximize')}
-          disabled={!isNative}
-          onclick={toggleMaximizeWindow}
-        >
-          {#if maximized}<Copy size={13} />{:else}<Square size={12} />{/if}
-        </button>
-      {/snippet}
-    </Tooltip>
-    <Tooltip label={t('common.close')}>
-      {#snippet trigger(props)}
-        <button
-          {...props}
-          class="window-close"
-          aria-label={t('common.close')}
-          disabled={!isNative}
-          onclick={closeWindow}
-        >
-          <X size={15} />
-        </button>
-      {/snippet}
-    </Tooltip>
-  </div>
+  <!-- 窗口三键是壳的能力（W6 裁剪）：浏览器里没有窗口语义，整组不渲染——
+  此前是 disabled 摆着，占位又暗示可点。拖拽区属性在 web 下是惰性属性，无需分支 -->
+  {#if isNative}
+    <div class="window-controls">
+      <Tooltip label={t('shell.titlebar.minimize')}>
+        {#snippet trigger(props)}
+          <button {...props} aria-label={t('shell.titlebar.minimize')} onclick={minimizeWindow}>
+            <Minus size={15} />
+          </button>
+        {/snippet}
+      </Tooltip>
+      <Tooltip label={maximized ? t('shell.titlebar.restore') : t('shell.titlebar.maximize')}>
+        {#snippet trigger(props)}
+          <button
+            {...props}
+            aria-label={maximized ? t('shell.titlebar.restore') : t('shell.titlebar.maximize')}
+            onclick={toggleMaximizeWindow}
+          >
+            {#if maximized}<Copy size={13} />{:else}<Square size={12} />{/if}
+          </button>
+        {/snippet}
+      </Tooltip>
+      <Tooltip label={t('common.close')}>
+        {#snippet trigger(props)}
+          <button {...props} class="window-close" aria-label={t('common.close')} onclick={closeWindow}>
+            <X size={15} />
+          </button>
+        {/snippet}
+      </Tooltip>
+    </div>
+  {/if}
 </header>
 
 <style>
@@ -303,9 +300,5 @@
   .window-controls .window-close:hover:not(:disabled) {
     background: var(--close-hover);
     color: var(--close-fg);
-  }
-
-  .window-controls button:disabled {
-    opacity: 0.35;
   }
 </style>

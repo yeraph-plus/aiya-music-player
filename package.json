@@ -33,6 +33,8 @@
     "test:app": "node tools/run.mjs cargo test -p aiya",
     "test:all": "npm run build:sidecar && npm run test && npm run check && npm run check:deps && npm run check:boundary && npm run check:ui-layers && npm run proto:check && npm run build:ui",
     "test:e2e": "npm --prefix ui run test:e2e",
+    "test:e2e:http": "npm --prefix ui run test:e2e:http",
+    "test:e2e:firefox": "npm --prefix ui run test:e2e:firefox",
     "smoke:engine": "node tools/run.mjs cargo run -q -p aiya-audio --example engine_smoke",
     "smoke:offset": "node tools/run.mjs cargo run -q -p aiya-audio --example start_offset_smoke",
     "smoke:switch": "node tools/run.mjs cargo run -q -p aiya-audio --example switch_smoke",

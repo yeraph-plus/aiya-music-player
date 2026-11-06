@@ -1,24 +1,52 @@
 <script lang="ts">
   /**
-   * 登录闸：http 后端开启访问保护（AIYA_ADMIN_PASSWORD）时的唯一入口视图。
+   * 登录闸：http 后端开启访问保护（AIYA_ADMIN_PASSWORD / AIYA_TOKEN）时的
+   * 唯一入口视图。
    *
-   * 触发链：transport 收到 401 → 派发 `aiya:gate` 事件 → App 切到此视图。
+   * 触发链：transport 收到 401 → 派发 `aiya:gate` 事件 → App 切到此视图；
+   * mount 前 /auth/state 预检直接落闸（首帧即登录卡，主界面不闪现）。
    * 登录成功后整页重载——引导/订阅/引擎以新会话重建，不做半套状态续用。
    * 背景与卡片沿用主应用的层（AmbientBackdrop 的固定渐变层 + k-dlg 的
    * token 口径），不另造一套视觉。
+   *
+   * 凭据形态由 /auth/state 的 mode 决定：password（login 端点换会话）或
+   * token（只发静态令牌的部署没有 login 端点，令牌即凭据直接入保险库）。
    */
+  import { onMount } from 'svelte';
   import AmbientBackdrop from './AmbientBackdrop.svelte';
   import { t } from '../lib/i18n.svelte';
 
   let password = $state('');
+  let mode = $state<'password' | 'token'>('password');
   let err = $state('');
   let busy = $state(false);
   let inputEl = $state<HTMLInputElement | null>(null);
+
+  onMount(async () => {
+    try {
+      const r = await fetch('/auth/state');
+      const s = (await r.json()) as { mode?: string };
+      if (s.mode === 'token') mode = 'token';
+    } catch {
+      /* 探测失败保持口令形态：login 401 错误文案会兜底 */
+    }
+    inputEl?.focus();
+  });
 
   async function submit() {
     if (busy) return;
     busy = true;
     err = '';
+    if (mode === 'token') {
+      // 静态令牌部署：令牌即凭据（校验交给首次 API 调用），入保险库重载
+      try {
+        localStorage.setItem('aiya.authToken', password.trim());
+      } catch {
+        /* 隐私模式：仅本次会话内存持有 */
+      }
+      location.reload();
+      return;
+    }
     try {
       const r = await fetch('/auth/login', {
         method: 'POST',
@@ -54,7 +82,7 @@
       <strong>AIYA</strong>
       <span class="sub">MUSIC</span>
     </h1>
-    <p>{t('gate.hint')}</p>
+    <p>{mode === 'token' ? t('gate.tokenHint') : t('gate.hint')}</p>
     <input
       bind:this={inputEl}
       bind:value={password}

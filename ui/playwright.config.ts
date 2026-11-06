@@ -13,6 +13,9 @@ import { defineConfig } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
+  // http 形态用例（e2e/http，真 aiya-server）归 playwright.http.config.ts：
+  // mock 套件没有服务端可连，捡到必挂
+  testIgnore: '**/e2e/http/**',
   timeout: 30_000,
   retries: 0,
   workers: 1, // mock 后端是单实例内存态，禁并发

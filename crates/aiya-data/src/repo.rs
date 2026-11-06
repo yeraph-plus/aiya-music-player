@@ -162,6 +162,12 @@ pub struct TrackRow {
     pub availability: String,
     /// 流派（0003 迁移，beets 同步带来）。列表不显示，筛选器 conds 用。
     pub genre: Option<String>,
+    /// 容器名（lofty FileType 的 Debug 串：Mpeg / Flac / Aiff / Mp4 / Wav / Vorbis…），
+    /// 扫描即写、不依赖 beets。桌面引擎全格式自解，此字段只服务 Web 宿主：
+    /// 浏览器解码集合因浏览器而异，列表据此给解不了的行打灰标（W6 真机矩阵
+    /// 项）。编码名列（codec）仍是 beets 同步的领地，这里刻意不取。
+    /// 未知为 null，UI 按可播处理。
+    pub container: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -304,7 +310,7 @@ fn decode_cursor(cursor: &str) -> DbResult<(Value, String)> {
 
 const SELECT_COLS: &str = "t.id, t.title, t.artist_id, ar.name, t.album_id, al.title, al_ar.name, \
      t.duration_ms, t.track_no, t.disc_no, t.year, t.added_at, t.artwork_id, \
-     t.play_count, t.last_played_at, t.gain_db, t.availability, t.genre";
+     t.play_count, t.last_played_at, t.gain_db, t.availability, t.genre, t.container";
 
 /// artist/album 展示列的两个 JOIN（页查询必带；COUNT 只在搜索时带）
 const JOIN_ARTIST_ALBUM: &str = "LEFT JOIN artists ar ON ar.id = t.artist_id \
@@ -579,6 +585,7 @@ pub fn row_to_track(r: &Row<'_>) -> rusqlite::Result<TrackRow> {
         gain_db: r.get(15)?,
         availability: r.get(16)?,
         genre: r.get(17)?,
+        container: r.get(18)?,
     })
 }
 

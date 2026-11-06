@@ -34,6 +34,7 @@ pub const ROUTED: &[&str] = &[
     "app_get_ui_state",
     "app_set_ui_state",
     "app_get_settings",
+    "app_set_settings",
     "app_diagnostics",
     // enrichment
     "enrichment_query",
@@ -245,7 +246,10 @@ async fn dispatch(
             ok(blob)
         }
         "app_set_settings" => {
-            // W1 口径：只落库 + 更新内存镜像；diff 副作用（扫描重排）随 W3 下沉
+            // W1 口径：只落库 + 更新内存镜像；diff 副作用（扫描重排）随 W3 下沉。
+            // 返回值与桌面壳同形（Ok(settings)）：client 成功分支会
+            // mergeSettings(响应)——返回 null 会把本地设置打回默认值
+            //（语言切 English 后又被顶回 zh 的实测事故）
             let v = a.get("settings").cloned().unwrap_or_else(|| a.clone());
             let v_for_db = v.clone();
             db_lock(st)
@@ -253,8 +257,8 @@ async fn dispatch(
                     setting_set(conn, "app_settings", &v_for_db).map_err(aiya_data::DbError::Sql)
                 })
                 .map_err(ApiError::from)?;
-            *crate::state::settings_lock(st) = v;
-            ok(json!(null))
+            *crate::state::settings_lock(st) = v.clone();
+            ok(v)
         }
         "app_diagnostics" => ok(json!({
             "version": env!("CARGO_PKG_VERSION"),
@@ -326,7 +330,7 @@ async fn dispatch(
                             let row = conn.query_row(
                                 "SELECT t.id, t.title, t.artist_id, ar.name, t.album_id, al.title, al_ar.name,
                                         t.duration_ms, t.track_no, t.disc_no, t.year, t.added_at, t.artwork_id,
-                                        t.play_count, t.last_played_at, t.gain_db, t.availability,
+                                        t.play_count, t.last_played_at, t.gain_db, t.availability, t.genre,
                                         t.codec, t.container, t.sample_rate, t.bits_per_sample, t.bitrate, t.channels
                                  FROM tracks t
                                  LEFT JOIN artists ar ON ar.id = t.artist_id
@@ -335,10 +339,14 @@ async fn dispatch(
                                  WHERE t.id = ?1",
                                 [id],
                                 |r| {
+                                    // 列序契约：0..=18 与 aiya_data::repo::row_to_track
+                                    // 逐位对齐（genre@17、container@18），音频规格接在
+                                    // 19..=24——任何一漏列就是 scanner.rs:530 记载过的
+                                    // "参数整体错位"同类事故
                                     let track = aiya_data::repo::row_to_track(r)?;
-                                    let codec: Option<String> = r.get(17)?;
-                                    let container: Option<String> = r.get(18)?;
-                                    let sample_rate: Option<i64> = r.get(19)?;
+                                    let codec: Option<String> = r.get(18)?;
+                                    let container: Option<String> = r.get(19)?;
+                                    let sample_rate: Option<i64> = r.get(20)?;
                                     let audio = if codec.is_none() && sample_rate.is_none() {
                                         None
                                     } else {
@@ -350,9 +358,9 @@ async fn dispatch(
                                             codec,
                                             container,
                                             sample_rate,
-                                            bits_per_sample: r.get::<_, Option<i64>>(20)?,
-                                            bitrate: r.get::<_, Option<i64>>(21)?,
-                                            channels: r.get::<_, Option<i64>>(22)?,
+                                            bits_per_sample: r.get::<_, Option<i64>>(21)?,
+                                            bitrate: r.get::<_, Option<i64>>(22)?,
+                                            channels: r.get::<_, Option<i64>>(23)?,
                                             lossless,
                                         })
                                     };
@@ -995,8 +1003,9 @@ async fn dispatch(
         "player_report" => {
             let kind = s_arg(a, "kind").unwrap_or_default();
             let token = num_arg::<u64>(a, "token").unwrap_or(0);
-            // 记账数据源：最近一次位置回报（曲终秒数的估算源）
-            if kind == "position" {
+            // 记账数据源：最近一次位置回报（曲终秒数的估算源）。令牌不符的
+            // 迟到帧一并跳过——旧标签页的位置不能当新曲的记账源
+            if kind == "position" && token == player_lock(st).state().token {
                 let pos = num_arg::<u64>(a, "positionMs").unwrap_or(0);
                 let track = player_lock(st)
                     .state()
@@ -1014,9 +1023,15 @@ async fn dispatch(
                         token,
                         duration_ms: num_arg::<u64>(a, "durationMs").unwrap_or(0),
                     }),
-                    "position" => actor.reduce(aiya_player::PlayerCommand::Position {
-                        position_ms: num_arg::<u64>(a, "positionMs").unwrap_or(0),
-                    }),
+                    "position" => {
+                        // 迟到帧丢弃（Loaded/Ended 同口径）：web 多客户端下旧标签页
+                        // 的位置不能写进新曲状态，否则记账把 A 曲秒数记到 B 曲头上
+                        if token == actor.state().token {
+                            actor.reduce(aiya_player::PlayerCommand::Position {
+                                position_ms: num_arg::<u64>(a, "positionMs").unwrap_or(0),
+                            });
+                        }
+                    }
                     "ended" => actor.reduce(aiya_player::PlayerCommand::Ended { token }),
                     "failed" => {
                         let code = s_arg(a, "code").unwrap_or_else(|| "io".into());
@@ -1100,13 +1115,7 @@ async fn dispatch(
             }))
         }
         "library_scan" => {
-            if st
-                .scan
-                .scanning
-                .swap(true, std::sync::atomic::Ordering::SeqCst)
-            {
-                return Err(ApiError::busy("a scan is already in progress"));
-            }
+            // busy 闸在 run_scan_inline 内自持（ScanFlagGuard：早退/panic 全路径复位）
             st.scan
                 .cancel
                 .store(false, std::sync::atomic::Ordering::SeqCst);

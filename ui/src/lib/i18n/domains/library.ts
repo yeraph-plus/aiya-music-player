@@ -74,6 +74,9 @@ export const libraryZh = {
   /* LibraryTools：目录卡头部 */
   'library.tools.rootsTitle': '曲库目录',
   'library.tools.addFolder': '添加目录',
+  // Web 宿主：无系统选择器，路径手输（容器把宿主目录挂进来，应用内配路径）
+  'library.tools.rootPlaceholder': '容器内绝对路径，如 /music',
+  'library.tools.noticeRootExists': '该目录已在曲库根里',
   'library.tools.indexing': '索引中…',
   'library.tools.indexNow': '立即索引',
   'library.tools.clearLibrary': '清空曲库',
@@ -131,6 +134,8 @@ export const libraryZh = {
 
   /* TrackTable：列头与行内动作（非虚拟化快照表） */
   'tracks.colTitle': '标题',
+  // Web 宿主列表灰标（browser-codecs 探测解不了的容器）
+  'tracks.codecUnsupported': '当前浏览器不支持解码此格式',
   'tracks.colArtist': '歌手',
   'tracks.colAlbum': '专辑',
   'tracks.colPlays': '次数',
@@ -275,6 +280,8 @@ export const libraryEn: Record<keyof typeof libraryZh, string> = {
 
   'library.tools.rootsTitle': 'Library folders',
   'library.tools.addFolder': 'Add folder',
+  'library.tools.rootPlaceholder': 'Absolute in-container path, e.g. /music',
+  'library.tools.noticeRootExists': 'This path is already a library root',
   'library.tools.indexing': 'Indexing…',
   'library.tools.indexNow': 'Index now',
   'library.tools.clearLibrary': 'Clear library',
@@ -327,6 +334,7 @@ export const libraryEn: Record<keyof typeof libraryZh, string> = {
   'library.tools.noIndexRecord': 'No index runs yet',
 
   'tracks.colTitle': 'Title',
+  'tracks.codecUnsupported': 'The current browser cannot decode this format',
   'tracks.colArtist': 'Artist',
   'tracks.colAlbum': 'Album',
   'tracks.colPlays': 'Plays',

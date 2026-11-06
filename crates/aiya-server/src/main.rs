@@ -31,7 +31,11 @@ use crate::state::ServerState;
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            // 与全仓惯例对齐（src-tauri/logging.rs、audio-host）：AIYA_LOG 优先，
+            // RUST_LOG 兜底
+            tracing_subscriber::EnvFilter::try_from_env("AIYA_LOG")
+                .or_else(|_| tracing_subscriber::EnvFilter::try_from_default_env())
+                .unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -75,8 +79,13 @@ async fn main() {
         let _ = std::fs::create_dir_all(dir);
     }
 
-    // 启动扫描（可选）：AIYA_MUSIC_DIR 指向的目录增量入库后再监听
-    if let Ok(music) = std::env::var("AIYA_MUSIC_DIR") {
+    // 启动扫描（可选）：AIYA_MUSIC_DIR 仅作首启种子（曲库根权威在应用内配置），
+    // 全新库时写进设置并增量入库；既有库一律按设置里的根扫描。空串视为未设
+    //（容器里显式 `AIYA_MUSIC_DIR=` 是"零根启动"的合法表达，不能把空路径写进种子）
+    if let Some(music) = std::env::var("AIYA_MUSIC_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
         match state::bootstrap_scan(&st, PathBuf::from(music).as_path()) {
             Ok(()) => {}
             Err(e) => tracing::error!("bootstrap scan failed: {e}"),
@@ -114,10 +123,33 @@ async fn main() {
         Some(dir) => app.fallback_service(ServeDir::new(dir)),
         None => app.fallback_service(get(|| async { "aiya-server: no UI (set AIYA_STATIC_DIR)" })),
     };
-    let app = app
-        .layer(middleware::from_fn_with_state(st.clone(), auth::middleware))
-        .layer(CorsLayer::permissive())
-        .with_state(st);
+    // CORS：默认**不挂**——浏览器同源访问不需要 CORS，permissive 等于把整张
+    // 命令面（含无门时的 library_clear）开放给任意网页的 drive-by 读取。
+    // 跨域场景（反代域不同源、开发期 vite dev server）用 AIYA_CORS_ORIGIN
+    // 显式开白名单（逗号分隔 origin 列表）。
+    let cors_origins: Vec<_> = std::env::var("AIYA_CORS_ORIGIN")
+        .ok()
+        .map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| s.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let app = if cors_origins.is_empty() {
+        app.layer(middleware::from_fn_with_state(st.clone(), auth::middleware))
+            .with_state(st)
+    } else {
+        tracing::info!("CORS allowlist enabled: {:?}", cors_origins);
+        app.layer(middleware::from_fn_with_state(st.clone(), auth::middleware))
+            .layer(
+                CorsLayer::new()
+                    .allow_origin(cors_origins)
+                    .allow_methods([axum::http::Method::GET, axum::http::Method::POST]),
+            )
+            .with_state(st)
+    };
 
     let listener = tokio::net::TcpListener::bind((bind.as_str(), port))
         .await
@@ -156,7 +188,13 @@ async fn events_sse(
     tokio::spawn(async move {
         let mut rx = st.events.subscribe();
         loop {
-            match rx.recv().await {
+            // 客户端断连不再依赖"下一个事件到达"才察觉：tx.closed() 在
+            // 响应体被 drop 时立刻就绪，静默期任务也能退出（审查 P2）
+            let ev = tokio::select! {
+                ev = rx.recv() => ev,
+                _ = tx.closed() => break,
+            };
+            match ev {
                 Ok((channel, data)) => {
                     let ev = axum::response::sse::Event::default()
                         .event(channel)

@@ -19,4 +19,12 @@ availability: string,
 /**
  * 流派（0003 迁移，beets 同步带来）。列表不显示，筛选器 conds 用。
  */
-genre: string | null, };
+genre: string | null, 
+/**
+ * 容器名（lofty FileType 的 Debug 串：Mpeg / Flac / Aiff / Mp4 / Wav / Vorbis…），
+ * 扫描即写、不依赖 beets。桌面引擎全格式自解，此字段只服务 Web 宿主：
+ * 浏览器解码集合因浏览器而异，列表据此给解不了的行打灰标（W6 真机矩阵
+ * 项）。编码名列（codec）仍是 beets 同步的领地，这里刻意不取。
+ * 未知为 null，UI 按可播处理。
+ */
+container: string | null, };

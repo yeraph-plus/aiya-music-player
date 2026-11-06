@@ -30,6 +30,7 @@ import TextTabs from './ui/TextTabs.svelte';
     type ShortcutAction,
   } from '../lib/shortcuts';
   import { bindingFromEvent } from '../lib/keys';
+  import { backendCaps } from '../lib/backend-caps';
   import { detectCapability } from '../lib/render/capability';
   import { formatBytes, formatDateTime, formatDurationLong } from '../lib/format';
   import afdianQr from '../assets/afdian-qr.png';
@@ -169,6 +170,9 @@ import TextTabs from './ui/TextTabs.svelte';
    * 建议关闭。
    */
   const cap = detectCapability();
+  // 后端能力面（lib/backend-caps）：Web 宿主下隐藏桌面专属段落（输出/EQ/
+  // 防休眠/窗口壳），设置字段照常落库，只是不画。
+  const caps = backendCaps();
 
   function setShortcut(action: ShortcutAction, binding: string): void {
     const shortcuts = { ...settings.shortcuts };
@@ -540,6 +544,8 @@ import TextTabs from './ui/TextTabs.svelte';
 
     <section class="settings-section" bind:this={sectionEls.playback}>
       <h3 class="group-title">{t('settings.section.playback')}</h3>
+      <!-- 输出段整组是桌面引擎的事，Web 宿主换成一条静态说明 -->
+      {#if caps.output}
       <div class="setting-row">
           <div>
             <div class="setting-title">{t('settings.output.title')}</div>
@@ -600,6 +606,14 @@ import TextTabs from './ui/TextTabs.svelte';
               apply({ output: { ...settings.output, releaseOnPause: checked } })}
           />
         </div>
+      {:else}
+        <div class="setting-row">
+          <div>
+            <div class="setting-title">{t('settings.output.webDecode.title')}</div>
+            <div class="setting-hint">{t('settings.output.webDecode.hint')}</div>
+          </div>
+        </div>
+      {/if}
 
         <div class="setting-row">
           <div>
@@ -625,17 +639,19 @@ import TextTabs from './ui/TextTabs.svelte';
           />
         </div>
 
-        <div class="setting-row">
-          <div>
-            <div class="setting-title">{t('settings.playback.preventSleep')}</div>
-            <div class="setting-hint">{t('settings.playback.preventSleep.hint')}</div>
+        {#if caps.preventSleep}
+          <div class="setting-row">
+            <div>
+              <div class="setting-title">{t('settings.playback.preventSleep')}</div>
+              <div class="setting-hint">{t('settings.playback.preventSleep.hint')}</div>
+            </div>
+            <Switch
+              label={t('settings.playback.preventSleep')}
+              checked={settings.preventSleep}
+              onchange={(checked) => apply({ preventSleep: checked })}
+            />
           </div>
-          <Switch
-            label={t('settings.playback.preventSleep')}
-            checked={settings.preventSleep}
-            onchange={(checked) => apply({ preventSleep: checked })}
-          />
-        </div>
+        {/if}
 
         <div class="setting-row">
           <div>
@@ -654,6 +670,8 @@ import TextTabs from './ui/TextTabs.svelte';
 
     <section class="settings-section" bind:this={sectionEls.system}>
       <h3 class="group-title">{t('settings.section.system')}</h3>
+      <!-- 窗口壳两行（托盘/缩放补偿）只对 Tauri 宿主有意义；浏览器没有这些语义 -->
+      {#if caps.shell}
       <div class="setting-row">
           <div>
             <div class="setting-title">{t('settings.system.disableSystemScale')}</div>
@@ -681,6 +699,7 @@ import TextTabs from './ui/TextTabs.svelte';
             onchange={(checked) => apply({ closeToTray: checked })}
           />
         </div>
+      {/if}
 
         <div class="setting-row">
           <div>

@@ -665,6 +665,27 @@
   gap: 8px;
 }
 
+/* Web 宿主的路径输入（无系统选择器时的添加目录形态）：与按钮同高同圆角 */
+.roots-actions .root-input {
+  width: 220px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-input);
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  outline: none;
+}
+
+.roots-actions .root-input:focus-visible {
+  border-color: var(--accent);
+}
+
+.roots-actions .root-input::placeholder {
+  color: var(--text-2);
+}
+
 /* 目录条目列表：整行一个目录（等宽字体 + 悬停出标题），右侧移除钮 */
 .root-list {
   margin: 0;

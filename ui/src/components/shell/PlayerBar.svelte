@@ -15,6 +15,7 @@
   import { formatTime, isTransientId, repeatLabel, transientOrigin } from '../../lib/format';
   import { t } from '../../lib/i18n.svelte';
   import { livePhase } from '../../lib/live';
+  import { backendCaps } from '../../lib/backend-caps';
   import { overlay } from '../../stores/overlay.svelte';
   import { ChevronUp, SlidersHorizontal } from '@lucide/svelte';
   import Icon from '../Icon.svelte';
@@ -85,6 +86,9 @@
     onshownowplaying,
     npOpen,
   }: Props = $props();
+
+  // Web 宿主无 EQ（引擎 DSP 专属）：触发键整键隐去（lib/backend-caps）
+  const caps = backendCaps();
 
   /**
    * 拖动中的进度镜像。
@@ -344,7 +348,8 @@
       队列 / EQ 抽屉触发键：内容宿主是 AppShell 的 SideDrawer
       （窗口右缘滑出，几何确定不抖）。这里只是普通开关键：开合态走 IconButton
       的 expanded（aria-expanded + accent 底），外点/Esc/焦点还原全部由抽屉负责。
-      EQ 的"生效中"打点走 dot。
+      EQ 的"生效中"打点走 dot。EQ 是引擎 DSP，Web 宿主整键隐去——
+      抽屉唯一入口就是此键，键不渲染抽屉即不可达。
     -->
     <IconButton
       label={t('shell.player.queue', { n: player?.queueLength ?? 0 })}
@@ -353,14 +358,16 @@
     >
       <Icon name="queue" />
     </IconButton>
-    <IconButton
-      label={eqEnabled ? t('shell.player.eqOn') : t('shell.player.eqOff')}
-      expanded={eqOpen}
-      dot={eqEnabled}
-      onclick={() => oneqopen(!eqOpen)}
-    >
-      <SlidersHorizontal size={16} />
-    </IconButton>
+    {#if caps.eq}
+      <IconButton
+        label={eqEnabled ? t('shell.player.eqOn') : t('shell.player.eqOff')}
+        expanded={eqOpen}
+        dot={eqEnabled}
+        onclick={() => oneqopen(!eqOpen)}
+      >
+        <SlidersHorizontal size={16} />
+      </IconButton>
+    {/if}
 
     <!-- 倍速：保持气泡（小面板贴键无抖动问题），不进抽屉 -->
     <Popover

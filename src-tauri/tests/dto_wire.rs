@@ -92,6 +92,7 @@ fn track_row_has_no_path_and_uses_ms() {
         gain_db: None,
         availability: "online".into(),
         genre: Some("流行".into()),
+        container: Some("Mpeg".into()),
     };
     let v = serde_json::to_value(&row).unwrap();
     let ks = keys(&v);
@@ -99,6 +100,8 @@ fn track_row_has_no_path_and_uses_ms() {
     assert!(ks.contains(&"addedAtMs".to_string()), "键：{ks:?}");
     assert!(ks.contains(&"lastPlayedAtMs".to_string()), "键：{ks:?}");
     assert!(ks.contains(&"genre".to_string()), "键：{ks:?}");
+    // Web 宿主浏览器解码标灰的数据源（W6）：容器扫描即有，不依赖 beets
+    assert!(ks.contains(&"container".to_string()), "键：{ks:?}");
     assert!(
         !ks.contains(&"addedAt".to_string()),
         "秒级旧字段必须消失：{ks:?}"

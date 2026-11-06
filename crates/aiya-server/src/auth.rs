@@ -45,7 +45,8 @@ impl AuthGate {
         }
     }
 
-    /// 登录：口令核验（固定延时抗时序/暴破）→ 签发会话令牌。
+    /// 登录：口令核验（常数时间比较）→ 签发会话令牌。失败延时由 handler
+    /// 以 tokio sleep 承担（本函数是同步路径，std sleep 会睡死 tokio worker）。
     pub fn login(&self, password: &str) -> Result<(String, i64), ()> {
         let Some(expected) = &self.admin_password else {
             return Err(());
@@ -57,7 +58,6 @@ impl AuthGate {
                 .fold(0u8, |acc, (a, b)| acc | (a ^ b))
                 == 0;
         if !ok {
-            std::thread::sleep(Duration::from_millis(FAIL_DELAY_MS));
             return Err(());
         }
         let token = new_token();
@@ -109,17 +109,11 @@ fn now_ms() -> i64 {
 }
 
 fn new_token() -> String {
-    // 进程内随机（熵源：地址/时间/原子序）。浏览器侧会话配合 HTTPS 反代使用，
-    // 这里不追求密码学熵——口令才是凭据本体，会话只是门票。
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let t = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let a = &t as *const _ as usize;
-    let s = SEQ.fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed);
-    format!("{:016x}{:016x}{:016x}", t as u64, a as u64 ^ s, s)
+    // OS 熵源（getrandom）：会话令牌在 7 天滑动期内等价 API 凭据本体，
+    // 不再用时间/地址/原子序拼凑（审查 P1：可预测性）
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).expect("OS entropy unavailable");
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// 提取凭据：`Authorization: Bearer X` 优先，其次 `?token=X`。
@@ -184,24 +178,42 @@ pub async fn login(
             axum::Json(json!({ "token": token, "expiresAtMs": expires_at_ms })),
         )
             .into_response(),
-        Err(()) => (
-            StatusCode::UNAUTHORIZED,
-            axum::Json(json!({ "code": "unauthorized", "message": "wrong password" })),
-        )
-            .into_response(),
+        Err(()) => {
+            // 失败回落：tokio sleep（不占 worker 线程）。抗时序/暴破的唯一
+            // 限速就在这里，不能挪进同步路径（std sleep 会睡死 worker）
+            tokio::time::sleep(Duration::from_millis(FAIL_DELAY_MS)).await;
+            (
+                StatusCode::UNAUTHORIZED,
+                axum::Json(json!({ "code": "unauthorized", "message": "wrong password" })),
+            )
+                .into_response()
+        }
     }
 }
 
-/// 登录状态预检（公开）：UI 据此决定进闸还是直接启动。
+/// 登录状态预检（公开）：UI 据此决定进闸还是直接启动。`mode` 告知闸的
+/// 凭据形态（password / token），登录卡据此切换输入语义——只发静态令牌
+/// 的部署里口令输入是死路（login 端点恒 401）。
 pub async fn state_probe(
     axum::extract::State(st): axum::extract::State<std::sync::Arc<crate::state::ServerState>>,
     req: Request,
 ) -> Response {
     let required = st.auth.required();
     let authenticated = st.auth.authenticated(credential(&req).as_deref());
+    let mode = if !required {
+        None
+    } else if st.auth.admin_password.is_some() {
+        Some("password")
+    } else {
+        Some("token")
+    };
     (
         StatusCode::OK,
-        axum::Json(json!({ "required": required, "authenticated": authenticated })),
+        axum::Json(json!({
+            "required": required,
+            "authenticated": authenticated,
+            "mode": mode,
+        })),
     )
         .into_response()
 }

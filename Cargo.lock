@@ -170,6 +170,7 @@ dependencies = [
  "aiya-host-core",
  "aiya-player",
  "axum",
+ "getrandom 0.3.4",
  "rusqlite",
  "serde",
  "serde_json",

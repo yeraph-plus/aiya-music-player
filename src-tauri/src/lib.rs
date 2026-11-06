@@ -1786,12 +1786,14 @@ async fn library_tracks(
         db.send(move |conn| {
             let mut out = Vec::with_capacity(ids.len());
             for id in &ids {
-                // 列顺序必须与 `aiya_data::repo::row_to_track`
-                // 一致（0..=16），音频规格接在后面（17..=22）。此前这里是手拼 17 个字段的 json!，列一改就静默错位。
+                // 列顺序必须与 `aiya_data::repo::row_to_track` 逐位对齐
+                // （0..=18：genre@17、container@18），音频规格接在 19..=24——
+                // 漏一列就是 scanner.rs:530 记载过的"参数整体错位"同类事故。
+                // 此前这里是手拼 17 个字段的 json!，列一改就静默错位。
                 let row = conn.query_row(
                     "SELECT t.id, t.title, t.artist_id, ar.name, t.album_id, al.title, al_ar.name,
                             t.duration_ms, t.track_no, t.disc_no, t.year, t.added_at, t.artwork_id,
-                            t.play_count, t.last_played_at, t.gain_db, t.availability,
+                            t.play_count, t.last_played_at, t.gain_db, t.availability, t.genre,
                             t.codec, t.container, t.sample_rate, t.bits_per_sample, t.bitrate, t.channels
                      FROM tracks t
                      LEFT JOIN artists ar ON ar.id = t.artist_id
@@ -1801,9 +1803,9 @@ async fn library_tracks(
                     [id],
                     |r| {
                         let track = aiya_data::repo::row_to_track(r)?;
-                        let codec: Option<String> = r.get(17)?;
-                        let container: Option<String> = r.get(18)?;
-                        let sample_rate: Option<i64> = r.get(19)?;
+                        let codec: Option<String> = r.get(18)?;
+                        let container: Option<String> = r.get(19)?;
+                        let sample_rate: Option<i64> = r.get(20)?;
                         // 全空 → None（标签里没有规格信息），而不是发一堆 null
                         let audio = if codec.is_none() && sample_rate.is_none() {
                             None
@@ -1814,9 +1816,9 @@ async fn library_tracks(
                                 codec,
                                 container,
                                 sample_rate,
-                                bits_per_sample: r.get::<_, Option<i64>>(20)?,
-                                bitrate: r.get::<_, Option<i64>>(21)?,
-                                channels: r.get::<_, Option<i64>>(22)?,
+                                bits_per_sample: r.get::<_, Option<i64>>(21)?,
+                                bitrate: r.get::<_, Option<i64>>(22)?,
+                                channels: r.get::<_, Option<i64>>(23)?,
                                 lossless,
                             })
                         };

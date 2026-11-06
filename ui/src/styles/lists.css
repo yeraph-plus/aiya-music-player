@@ -237,6 +237,13 @@
   font-size: var(--fs-sm);
 }
 
+/* 浏览器解不了的容器（W6 真机矩阵项）：整行降透明示意"点了多半白点"。
+   灰标是提示不是禁令——双击仍可尝试，浏览器解码失败走播放条报错兜底。
+   桌面宿主 browserCanPlay 恒真，该类不会出现 */
+.row.unsupported .cell {
+  opacity: 0.45;
+}
+
 .shimmer {
   display: block;
   height: 12px;

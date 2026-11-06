@@ -40,23 +40,6 @@ function withToken(url: string): string {
   return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(authToken);
 }
 
-/** 探测同源是否有 aiya-server：POST /ipc/app_info，JSON 形状命中（含 401）才算。 */
-export async function detectHttpBackend(): Promise<boolean> {
-  try {
-    const resp = await fetch(withToken('/ipc/app_info'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}',
-    });
-    if (!(resp.ok || resp.status === 401)) return false;
-    // 判据是 content-type 而不是字段形状：AppInfo 的字段集会被压平批次改，
-    // 探测别耦合它（首版判 version 字符串 → server 的 AppInfo 只剩 dataDir，恒 false）
-    return (resp.headers.get('content-type') ?? '').includes('application/json');
-  } catch {
-    return false;
-  }
-}
-
 type StateListener = (s: PlayerState) => void;
 
 class WebPlayerEngine {
@@ -85,6 +68,10 @@ class WebPlayerEngine {
   constructor() {
     this.audio = new Audio();
     this.audio.preload = 'auto';
+    // 挂进 DOM（隐藏）：new Audio() 是游离元素，e2e 与排障从 document 上
+    // 摸不到真实音频状态；挂载不改变行为（MediaElementSource 照常接线）
+    this.audio.style.display = 'none';
+    document.body.appendChild(this.audio);
     this.audio.addEventListener('loadedmetadata', () => {
       this.consumePendingSeek();
       const token = this.base?.token ?? 0;
@@ -100,9 +87,14 @@ class WebPlayerEngine {
       void this.report({ kind: 'ended', token });
     });
     this.audio.addEventListener('error', () => {
-      if (this.base) {
-        this.emit({ ...this.base, error: { code: 'io', message: 'audio element error' } });
-      }
+      // 真失败三件事一起做（审查 P1：此前只 emit error 字段——不带 status，
+      // AppShell 报错通道不认；且 100ms 内被快照冲掉；且从不回报 failed，
+      // 服务端 Actor 停在 playing、队列不推进，"点解不了的文件"成了假播放）
+      if (!this.base) return;
+      const detail = { code: 'io' as const, message: 'browser audio element error' };
+      this.base = { ...this.base, status: 'error', error: detail };
+      this.emit(this.base);
+      void this.report({ kind: 'failed', token: this.base.token, ...detail });
     });
   }
 
@@ -191,7 +183,6 @@ class WebPlayerEngine {
     } else if (s.status === 'paused' || s.status === 'idle') {
       this.audio.pause();
     }
-    this.updateMediaSession(s);
     this.ensureTicker();
     this.emit(this.snapshot());
     if (s.status !== 'playing' && this.ticker) {
@@ -258,7 +249,8 @@ class WebPlayerEngine {
       const pos = Math.round(this.audio.currentTime * 1000);
       if (now - this.lastPositionReport > 1000) {
         this.lastPositionReport = now;
-        void this.report({ kind: 'position', positionMs: pos });
+        // 带 token：服务端按 Loaded/Ended 同口径丢弃旧标签页的迟到帧
+        void this.report({ kind: 'position', token: this.base?.token ?? 0, positionMs: pos });
       }
     }, 100);
   }
@@ -271,25 +263,40 @@ class WebPlayerEngine {
     }
   }
 
-  private updateMediaSession(s: PlayerState): void {
-    if (!('mediaSession' in navigator)) return;
-    const cur = s.current;
-    if (cur && navigator.mediaSession.metadata === null) {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: cur.title,
-        artist: cur.artist ?? '',
-        album: cur.album ?? '',
-      });
-    }
-    navigator.mediaSession.setActionHandler('play', () => void transport().invoke('player_toggle'));
-    navigator.mediaSession.setActionHandler('pause', () => void transport().invoke('player_toggle'));
-    navigator.mediaSession.setActionHandler('previoustrack', () => void transport().invoke('player_prev'));
-    navigator.mediaSession.setActionHandler('nexttrack', () => void transport().invoke('player_next'));
-  }
 }
 
 /** 命令面 player_report 与 mock 一样属于 transport 内部通道（不在 client.ts 的 ipc.* 面）。 */
 export const TRANSPORT_INTERNAL_COMMANDS = ['player_report'] as const;
+
+/**
+ * 登录闸预检（/auth/state 公开端点）：门开启且未持有效凭据时在 mount 之前
+ * 落闸——否则首帧先渲染主界面，等第一批 401 回来才切登录卡（闪一帧）。
+ * 结果写入 `__AIYA_GATE__` 供 App 初始化读取；预检失败不拦启动，401 链路
+ * 仍在兜底（会话过期/撤销的运行期进闸不受影响）。
+ */
+export async function probeAuthGate(): Promise<boolean> {
+  // 4s 超时：server 半死（TCP 收下不回）时不能把 mount 无限吊住——
+  // 预检失败按"无门"处理，401 链路仍在兜底
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    // 预检必须携带已存令牌：裸查会把"持有效会话"误判成未认证，
+    // 让已登录用户刷新后被拦回登录卡（restart 实测踩中）
+    const resp = await fetch('/auth/state', {
+      headers: authToken ? { authorization: `Bearer ${authToken}` } : {},
+      signal: ctrl.signal,
+    });
+    if (!resp.ok) return false;
+    const state = (await resp.json()) as { required?: boolean; authenticated?: boolean };
+    const gated = state.required === true && state.authenticated !== true;
+    (globalThis as { __AIYA_GATE__?: boolean }).__AIYA_GATE__ = gated;
+    return gated;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export function installHttpTransport(): void {
   const params = new URLSearchParams(window.location.search);
@@ -297,6 +304,14 @@ export function installHttpTransport(): void {
   // artwork.ts 的第三前缀判定（同源 /artwork + 查询参数凭据）
   (globalThis as { __AIYA_WEB__?: { token?: string } }).__AIYA_WEB__ = { token: authToken };
   const engine = new WebPlayerEngine();
+
+  // SSE 共享连接（多路复用，见 listen 内注释）
+  let sseSourceRef: EventSource | null = null;
+  const sseChannels = new Map<string, Set<(data: unknown) => void>>();
+  const sseSource = (): EventSource => {
+    if (sseSourceRef === null) sseSourceRef = new EventSource(withToken('/events'));
+    return sseSourceRef;
+  };
 
   const http: Transport = {
     invoke: async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
@@ -358,16 +373,38 @@ export function installHttpTransport(): void {
         // 输出模式是桌面专属：空订阅
         return () => {};
       }
-      const es = new EventSource(withToken('/events'));
-      es.addEventListener(event, (e: MessageEvent) => {
-        try {
-          cb(JSON.parse(e.data) as T);
-        } catch {
-          cb(e.data as T);
-        }
-      });
+      // SSE 多路复用：全部事件通道共享一条 EventSource（审查 P2）——浏览器
+      // HTTP/1.1 每主机 6 连接上限，<audio> 的 Range 长连接还要占一条，
+      // 每通道各开会在 beets 页 + 设置页同开时挤占并发槽
+      let set = sseChannels.get(event);
+      if (!set) {
+        set = new Set();
+        sseChannels.set(event, set);
+        sseSource().addEventListener(event, (e) => {
+          const data = (e as MessageEvent).data as string;
+          let payload: unknown;
+          try {
+            payload = JSON.parse(data);
+          } catch {
+            payload = data;
+          }
+          for (const fn of sseChannels.get(event) ?? []) fn(payload);
+        });
+      }
+      set.add(cb as (data: unknown) => void);
       // EventSource 自带重连；服务端连接建立即推首帧快照
-      return () => es.close();
+      return () => {
+        const cur = sseChannels.get(event);
+        if (!cur) return;
+        cur.delete(cb as (data: unknown) => void);
+        if (cur.size === 0) {
+          sseChannels.delete(event);
+          if (sseChannels.size === 0 && sseSourceRef !== null) {
+            sseSourceRef.close();
+            sseSourceRef = null;
+          }
+        }
+      };
     },
   };
 

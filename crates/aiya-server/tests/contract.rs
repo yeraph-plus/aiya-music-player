@@ -53,6 +53,31 @@ fn parse_routed(src: &str) -> BTreeSet<String> {
 /// transport 内部通道（客户端引擎直接 invoke，不经 client.ts 的 ipc.* 面）。
 const TRANSPORT_INTERNAL: &[&str] = &["player_report"];
 
+/// 迁移矩阵 C 桶 + W3 未下沉域（桌面专属/编排未就绪）：合法地不在 ROUTED 的
+/// UI 调用（web 形态不提供，桌面壳承载）。
+const DESKTOP_ONLY: &[&str] = &[
+    "pick_folder",
+    "library_choose_root",
+    "library_reveal_track",
+    "spectrum_set",
+    "player_set_eq",
+    "player_get_eq",
+    "app_open_data_dir",
+    "app_open_url",
+    "classify_paths",
+    "player_open_paths",
+    "live_open",
+    "live_pick_playlist",
+    // 歌单导入/导出走系统文件选择器（导出写盘 / 导入读文件）；web 形态需要
+    // 上传/下载 API 承接，随 W4+ 批次评估
+    "playlist_export",
+    "playlist_import",
+    // W3 未路由的 beets 域余量（open_inbox/reveal 是桌面专属；enrich_index
+    // 系列随长任务批次逐条评估进 ROUTED）
+    "beets_open_inbox",
+    "beets_reveal",
+];
+
 #[test]
 fn every_routed_command_is_called_by_the_ui() {
     let routed = parse_routed(IPC_RS);
@@ -72,29 +97,28 @@ fn every_routed_command_is_called_by_the_ui() {
     );
 }
 
+/// 反向覆盖：UI 调用的每条命令要么在 ROUTED、要么显式登记为桌面专属——
+/// 缺席即 web 形态 404（app_set_settings 漏路由事故的回归闸）。
+#[test]
+fn every_ui_command_is_routed_or_desktop_only() {
+    let routed = parse_routed(IPC_RS);
+    let client = parse_client_calls(CLIENT_TS);
+    let missing: Vec<_> = client
+        .difference(&routed)
+        .filter(|c| !TRANSPORT_INTERNAL.contains(&c.as_str()))
+        .filter(|c| !DESKTOP_ONLY.contains(&c.as_str()))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "UI 调用了未路由且非桌面专属的命令（web 形态 404）: {missing:?}"
+    );
+}
+
 #[test]
 fn desktop_only_commands_are_not_routed() {
     let routed = parse_routed(IPC_RS);
-    // 迁移矩阵 C 桶 + W3 未下沉域（桌面专属/编排未就绪）：出现在 ROUTED 即越界
-    let desktop_only = [
-        "pick_folder",
-        "library_choose_root",
-        "library_reveal_track",
-        "spectrum_set",
-        "player_set_eq",
-        "player_get_eq",
-        "app_open_data_dir",
-        "app_open_url",
-        "classify_paths",
-        "player_open_paths",
-        "live_open",
-        "live_pick_playlist",
-        // W3 未路由的 beets 域余量（open_inbox/reveal 是桌面专属；enrich_index
-        // 系列随长任务批次逐条评估进 ROUTED）
-        "beets_open_inbox",
-        "beets_reveal",
-    ];
-    let leaked: Vec<_> = desktop_only
+    // 出现在 ROUTED 即越界
+    let leaked: Vec<_> = DESKTOP_ONLY
         .iter()
         .filter(|c| routed.contains(**c))
         .collect();

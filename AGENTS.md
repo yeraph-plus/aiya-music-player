@@ -22,6 +22,7 @@ AIYA_MUSIC_TAURI/
 │   ├── aiya-player/       # 纯领域：队列、状态归约、命令/事件；不依赖 tauri/rusqlite/windows
 │   ├── aiya-data/         # SQLite v1、Repository、扫描、封面缓存、设置；不依赖 tauri
 │   ├── aiya-dto/          # IPC DTO 与拖放 DTO 的共享契约源（ts-rs 导出）；桌面壳与 server 共用
+│   ├── aiya-host-core/    # 宿主编排共享层：BeetsHost trait + beets/enrichment/proc（桌面壳与 server 共用）
 │   ├── aiya-audio/        # 原生引擎：Symphonia 解码 + wasapi-rs 输出 + DSP/频谱/EQ（桌面独占）
 │   ├── aiya-audio-host/   # 音频 sidecar 进程入口（命名管道行 JSON，不传 PCM；桌面独占）
 │   ├── aiya-beets-client/ # beets 协议客户端：发现/起进程/说协议；零环境知识
@@ -47,8 +48,10 @@ ui ── lib/ipc/client.ts ──▶ src-tauri(aiya) ──┬─▶ aiya-data
                                              ├─▶ aiya-player ──▶ aiya-audio
                                              ├─▶ aiya-beets-store
                                              ├─▶ aiya-dto
+                                             ├─▶ aiya-host-core（beets/enrichment 编排）
                                              └─▶ aiya-audio      ⇠ 同一 crate 也被 sidecar 用
 浏览器 ── HTTP/SSE ──▶ aiya-server ──┬─▶ aiya-data / aiya-player / aiya-dto / aiya-beets-store
+                                    ├─▶ aiya-host-core（与桌面壳共用同一份编排）
                                     └─▶ aiya-audio 不得进其编译图
 src-tauri ⇠ 命名管道行 JSON ⇢ aiya-audio-host
 src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立安装，可能根本没装）
@@ -57,8 +60,10 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 - `aiya-player` 不依赖 `tauri`、`tokio`、`rusqlite`、`windows`；`aiya-data`
   不依赖 `tauri` 与音频平台；`aiya-beets-store` 不依赖应用曲库（`aiya-data`）；
   `aiya-dto` 不依赖 tauri 与音频平台（桌面壳与 server 共用的契约源）；
-  `aiya-server` 不依赖 `aiya-audio`/`src-tauri`（音频侧不进 server 编译图，
-  Linux 容器 cargo check 为证）。违反视为结构破坏，合并前必须修正。
+  `aiya-host-core` 不依赖 `tauri`/`aiya-audio`（编排层被两壳共用，宿主差异
+  走 `BeetsHost` trait 注入）；`aiya-server` 不依赖 `aiya-audio`/`src-tauri`
+  （音频侧不进 server 编译图，Linux 容器 cargo check 为证）。违反视为结构
+  破坏，合并前必须修正。
 - 核心链路 `aiya-audio` / `aiya-audio-host` / `aiya-player` / `aiya-data` 不依赖
   `aiya-beets-client`，"没装 beets 也能完整播放"是编译期事实。门禁：
   `npm run check:boundary`。
@@ -91,6 +96,8 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 | `npm run test:data` / `test:audio` / `test:player` / `test:app` | 单 crate 测试 |
 | `npm run test:all` | 先编 sidecar → Rust 全量 + UI 类型检查 + 依赖/边界/分层/协议门禁 + UI 构建 |
 | `npm run test:e2e` | Playwright（mock 后端 + 系统 Edge） |
+| `npm run test:e2e:http` | Playwright × 真 aiya-server（8799，cargo 增量构建 + 临时曲库，登录闸/播放/隐身清单） |
+| `npm run test:e2e:firefox` | 同 test:e2e 跑 Playwright bundled Firefox（真机矩阵；需先 `npx playwright install firefox`） |
 | `npm run verify` | `test:all` + `test:e2e` + `check:fmt` + `check:clippy`（-D warnings）+ `gen:types:check` + `check:style:strict` + beets 九项冒烟（apply/maint/proto/config/catalog/bins/uninstall/lock/enrich） |
 | `npm run gen:types` / `gen:types:check` | 从 Rust 生成 TS 类型 / 只校验不写盘 |
 | `npm run smoke:engine` / `smoke:offset` / `smoke:switch` / `smoke:rate` / `smoke:mode` | 真机 WASAPI 出声冒烟（需要声卡） |

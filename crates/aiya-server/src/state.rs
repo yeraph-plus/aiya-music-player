@@ -518,19 +518,17 @@ pub fn history_stats_from(
 
 /* ---- 启动：扫描入库 + 队列恢复 ---- */
 
-/// 启动扫描：AIYA_MUSIC_DIR 指向的目录并进曲库根并增量扫描（mtime 对账）。
-/// 桌面壳的定时刷新管线（进度事件/取消/暂停窗）属 W3，这里只落"数据进库"。
+/// 启动扫描：`AIYA_MUSIC_DIR` 只作**首启种子**——曲库根的权威一直在设置里
+/// （应用内增删，常规容器应用口径：宿主把任何目录挂进容器，路径在应用里配）。
+/// 仅当 `library.roots` 键尚不存在（全新库）时写入；此后容器重启不回填，
+/// 用户在应用内删掉的根不会"复活"。无 `AIYA_MUSIC_DIR` 且库全新 = 零根启动，
+/// 等应用内添加。扫描本身始终对设置里的根做（mtime 对账）。
 pub fn bootstrap_scan(st: &ServerState, music_dir: &Path) -> Result<(), String> {
     let dir = music_dir.to_string_lossy().into_owned();
     let artwork_dir = st.artwork_dir.clone();
     let result = db_lock(st).send(move |conn| {
-        let mut roots = read_roots(conn);
-        if !roots
-            .iter()
-            .any(|r| r.trim_end_matches(['/', '\\']) == dir.trim_end_matches(['/', '\\']))
-        {
-            roots.push(dir.clone());
-            setting_set(conn, "library.roots", &serde_json::json!(roots))?;
+        if setting_get(conn, "library.roots").is_none() {
+            setting_set(conn, "library.roots", &serde_json::json!([dir]))?;
         }
         let roots = read_roots(conn);
         let paths: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();

@@ -24,6 +24,7 @@ import Cover from './ui/Cover.svelte';
 import CheckCell from './ui/CheckCell.svelte';
   import ListToolbar from './ListToolbar.svelte';
   import { formatTime, highlight } from '../lib/format';
+  import { browserCanPlay } from '../lib/browser-codecs';
   import type { TrackWindow } from '../lib/track-window';
   import { SELECTION_CAP } from '../lib/selection';
   import { t } from '../lib/i18n.svelte';
@@ -305,6 +306,8 @@ import CheckCell from './ui/CheckCell.svelte';
             class:active={row.track.id === currentId}
             class:selected={selection.has(row.index)}
             class:focus={row.index === selectedIndex}
+            class:unsupported={!browserCanPlay(row.track.container)}
+            title={browserCanPlay(row.track.container) ? undefined : t('tracks.codecUnsupported')}
             style={`height:${rowHeight}px`}
             role="row"
             tabindex={row.index === focusAnchor ? 0 : -1}

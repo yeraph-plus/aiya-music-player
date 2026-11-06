@@ -27,8 +27,10 @@ if (!('__TAURI_INTERNALS__' in window)) {
   // 探测的 404 会在 e2e 的运行期错误收集器里记账。
   const useHttp = mode === 'http' || (window as { __AIYA_BOOT__?: string }).__AIYA_BOOT__ === 'http';
   if (useHttp) {
-    const { installHttpTransport } = await import('./lib/ipc/http');
+    const { installHttpTransport, probeAuthGate } = await import('./lib/ipc/http');
     installHttpTransport();
+    // 进闸预检必须先于 mount：登录卡首帧即渲染，主界面不再闪一帧
+    await probeAuthGate();
   } else {
     const { installMock } = await import('./lib/ipc/mock');
     const failCmd = params.get('failCmd');

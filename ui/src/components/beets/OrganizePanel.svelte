@@ -13,6 +13,7 @@
   import { beetsSession as sess } from '../../stores/beets-session.svelte';
   import { library } from '../../stores/library.svelte';
   import { t, type Msg } from '../../lib/i18n.svelte';
+  import { backendCaps } from '../../lib/backend-caps';
 
   /**
    * 整理子页：**待整理目录 → 预览 → 落点 → 移动或拷贝**。
@@ -48,6 +49,10 @@
 
   /** 默认拷贝：移动不可逆 */
   let action = $state<FileAction>('apply_copy');
+
+  // 文件选择器是窗口壳能力：web 下隐藏入口（mock/e2e 保持桌面能力形态）
+  const caps = backendCaps();
+
 
   let inboxError = $state<string | null>(null);
   let targetError = $state<string | null>(null);
@@ -209,18 +214,22 @@
       {#if inbox}
         <Inbox size={14} />
         <span class="beets-path" title={inbox}>{inbox}</span>
-        <Button size="sm" onclick={() => void openInbox()} title={t('beets.organize.openTip')}>
-          {#snippet icon()}<FolderOpen size={13} />{/snippet}
-          {t('beets.organize.open')}
-        </Button>
-        <Button size="sm" disabled={busy} onclick={() => void chooseInbox()}>{t('beets.organize.change')}</Button>
+        {#if caps.pickFolder}
+          <Button size="sm" onclick={() => void openInbox()} title={t('beets.organize.openTip')}>
+            {#snippet icon()}<FolderOpen size={13} />{/snippet}
+            {t('beets.organize.open')}
+          </Button>
+          <Button size="sm" disabled={busy} onclick={() => void chooseInbox()}>{t('beets.organize.change')}</Button>
+        {/if}
         <Button size="sm" variant="ghost" disabled={busy} onclick={() => void clearInbox()}>{t('beets.organize.clear')}</Button>
       {:else}
         <span class="beets-dim">{t('beets.organize.inboxEmpty')}</span>
-        <Button variant="primary" size="sm" disabled={busy} onclick={() => void chooseInbox()}>
-          {#snippet icon()}<Folder size={13} />{/snippet}
-          {t('beets.organize.pickInbox')}
-        </Button>
+        {#if caps.pickFolder}
+          <Button variant="primary" size="sm" disabled={busy} onclick={() => void chooseInbox()}>
+            {#snippet icon()}<Folder size={13} />{/snippet}
+            {t('beets.organize.pickInbox')}
+          </Button>
+        {/if}
       {/if}
     </div>
     {#if inboxError}
@@ -245,9 +254,11 @@
       {:else}
         <span class="beets-dim">{t('beets.organize.noLibraryRoots')}</span>
       {/if}
-      <Button size="sm" disabled={busy || library.roots.length === 0} onclick={() => void chooseTarget()}>
-        {t('beets.organize.pickSubdir')}
-      </Button>
+      {#if caps.pickFolder}
+        <Button size="sm" disabled={busy || library.roots.length === 0} onclick={() => void chooseTarget()}>
+          {t('beets.organize.pickSubdir')}
+        </Button>
+      {/if}
     </div>
     {#if library.roots.length > 0}
       <div class="root-chips">

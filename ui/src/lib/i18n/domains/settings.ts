@@ -66,6 +66,9 @@ export const settingsZh = {
   'settings.output.mode.exclusive.hint': '优先独占，设备拒绝时自动改用共享',
   'settings.output.mode.exclusiveRequired': '独占(强)',
   'settings.output.mode.exclusiveRequired.hint': '必须独占，设备拒绝时直接报错',
+  // Web 宿主静态说明行（backend-caps 隐掉输出整组后交代声音从哪来）
+  'settings.output.webDecode.title': '音频输出',
+  'settings.output.webDecode.hint': '由浏览器解码播放（HTTP Range + Web Audio），服务端不解码音频',
 
   // 播放
   'settings.playback.buffer': '缓冲',
@@ -225,6 +228,9 @@ export const settingsEn: Record<keyof typeof settingsZh, string> = {
   'settings.output.mode.exclusiveRequired': 'Exclusive (forced)',
   'settings.output.mode.exclusiveRequired.hint':
     'Requires exclusive mode; errors out when the device refuses',
+  'settings.output.webDecode.title': 'Audio output',
+  'settings.output.webDecode.hint':
+    'Decoded and played by the browser (HTTP Range + Web Audio); the server never touches audio',
 
   'settings.playback.buffer': 'Buffer',
   'settings.playback.buffer.hint':

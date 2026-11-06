@@ -200,3 +200,119 @@ web 端频谱已可用——W4 计划项里的 AnalyserSpectrumSource 部分提�
   立即 `ctx.resume()` + playing 态兜底恢复。
 - **实测**：实播中背景山形随 880Hz 测试音隆起（截图），进度正常推进；
   e2e 回归见后台记录。EQ/ReplayGain 的 WebAudio 复刻仍留 W4。
+
+## 10 · W6 前端收尾：后端能力面与桌面专属段落的隐身（2026-11-06）
+
+共用 UI 按"宿主能力"收窄入口，而不是让 web 用户对着死开关：
+
+- **能力 API**：`lib/backend-caps.ts`（eq / output / preventSleep / shell 四面；
+  判据 = `__AIYA_WEB__`，与 boot 三态同源，tauri/mock 恒为桌面能力——e2e 的
+  桌面形态断言不受影响）。设置字段照常落库（§8.2 原则），只是不渲染。
+- **设置页隐身清单**（web 下不渲染）：播放组——输出模式 / 缓冲 / 时钟 /
+  暂停释放（WASAPI 与引擎专属），整组换成一条静态说明「由浏览器解码播放」；
+  防休眠（SetThreadExecutionState 桌面专属）。系统组——禁用系统缩放（webview
+  补偿）、关闭到托盘（浏览器无窗口壳）。**保留且核实有效**：自动回放 / 记忆
+  位置（服务端 restore）、音量归一（增益在 Actor 折进音量，浏览器引擎只收
+  音量值）、自动刷新 / 历史保留（服务端定时器与清理）、外观全组（频谱为 §9
+  的 AnalyserNode 复刻）、快捷键与语言主题。
+- **EQ 入口**：播放条 EQ 触发键整键隐去——抽屉唯一入口即此键，键不渲染抽屉
+  即不可达（无快捷键入口）。EQ 的 WebAudio 复刻仍是 W4 可选项。
+- **登录门桌面不触发**：唯一派发点是 http 传输的 401 处理（动态 chunk，桌面
+  永不加载）；LoginView 再改为 `{#await import()}` 动态分包，桌面构建里该
+  chunk 不进主包也不加载，"桌面没有门禁实现"由装载路径钉死。顺带把 W5 建好
+  却一直没接线的 `/auth/state` 预检接上：main.ts 在 mount 前探测，门开启时
+  登录卡首帧即渲染（此前主界面先闪一帧、等 401 才切闸）。实测踩中并修掉一个
+  预检缺陷——探测请求必须携带已存令牌，否则持有效会话刷新会被误拦回登录卡。
+- **门禁**：svelte-check 0 错 / e2e 44/44（mock=桌面能力，形态不变）/
+  style:strict 阻断 0 / web 实机四态核验：无令牌→登录卡首帧渲染（主界面
+  不闪现）、口令进闸→应用、有效会话刷新→直进应用、无口令实例→无闸直进；
+  登录后设置页隐身清单生效、播放条无 EQ 键。
+
+## 11 · W6 收尾二：真机矩阵、http e2e、多根种子（2026-11-06）
+
+§10 之后把 W6 清单剩余项做完：
+
+- **window-chrome 裁剪**：顶栏窗控三键此前在 web 下是 disabled 摆着，改为
+  `isNative` 分支整组不渲染（与 `backend-caps.shell` 同源的壳能力判定）。
+- **浏览器解码灰标**：`lib/browser-codecs.ts`——`canPlayType` 按容器名探测
+  （lofty FileType Debug 串），未登记容器与未知值一律按可播，不给未知格式
+  判死刑；桌面 `isNative` 短路恒真，灰标随宿主形态自动消失。数据面给
+  `TrackRow` 加 `container` 列（扫描即写、不依赖 beets；codec 列仍是 beets
+  同步的领地，刻意不动）。已知盲区：ALAC 藏在 Mp4 容器里与 AAC 无从区分，
+  列表层标不了灰，点播时由浏览器解码失败走播放条报错兜底。
+- **web 添加目录**：曲库卡在 web 宿主没有系统选择器，换绝对路径手输入
+  （`library.saveRoots` 追加 + 立即索引），与桌面选目录追加同语义。
+- **多根种子语义（拍板对齐）**：`AIYA_MUSIC_DIR` 降级为**首启种子**——仅
+  `library.roots` 键不存在（全新库）时写入；此后容器重启不回填，应用内
+  删掉的根不会复活。曲库根的权威一直在设置里（应用内配置），宿主把任何
+  目录挂进容器后在应用里配路径——常规容器应用口径。无种子且全新库 =
+  零根启动。
+- **http 形态 e2e**（`npm run test:e2e:http`）：`tools/http-e2e-server.mjs`
+  拉起真 aiya-server（cargo 增量构建 + fixtures 临时曲库 + 口令 8799），
+  5 用例全绿：登录闸首帧（主界面不闪现）/ 种子根入库 3 首 + AIFF 行灰标
+  恰 1 / `<audio>` 真装载走表（/src=/audio/，hidden append 进 DOM 才可
+  观测）/ 设置页 web 形态（隐身清单 + webDecode + 路径手输）/ 会话刷新
+  直进 + English 切换。mock 套件主配置 `testIgnore` 掉 http 目录，两套
+  互不串。
+- **Firefox 真机矩阵**（`npm run test:e2e:firefox`）：mock 套件 44/44 全绿
+  （bundled Firefox 首跑，3.3 分钟）。Safari 需要 macOS/iOS 设备，Windows
+  本机无法回归，清单上保持未测。
+- **实测坑**：headless Edge 的 `Accept-Language` 是 en-US，服务端首启写库
+  后整库 UI 是英文——e2e 的文案断言要么双语兜底要么先点语言钮固定语向；
+  语言切换控件是 RadioGroup（role=radio），不是 button。`new Audio()` 是
+  游离元素，querySelector 摸不到——引擎构造时 hidden append 进 DOM。
+
+## 12 · 全量审查与修复批（三路子代理，2026-11-06）
+
+web 分支增量（基线 10f6000，含工作区）由三路子代理并行全量审查（后端 web 面 /
+前端 / 部署与数据面），发现 2 项 P0、6 项 P1、约 10 项 P2，全部修复（beets
+venv 与 liquidsoap 继续延期除外）：
+
+- **扫描标志卡死悬案破案（P0，已复现条件明确）**：`run_scan` 的两个早退分支
+  （DB 读失败 / **根集为空**）只 finish 不复位 `scanning`——无根 server 的
+  第一个 timer tick 即把标志永久卡死（打一条 scanned=0 日志后全部扫描静默
+  跳过、`library_scan` 恒 busy），与此前"发生一次、三次复现失败"的现场逐项
+  吻合（复现失败是因为三次都带了种子根，走了会复位的全路径）。修复：桌面壳
+  refresh.rs 的 FlagGuard 同型 **ScanFlagGuard**（构造置位 / Drop 复位），
+  spawn_scan 与 run_scan_inline 共用，早退/panic/spawn 失败全路径兜底；
+  run_scan_inline 的 busy 闸收归守卫自持。
+- **`app_set_settings` 漏路由（P0）**：dispatch 有实现、ROUTED 缺席——web
+  形态每次改设置 404 且永不落库。补路由之外，contract.rs 增**反向契约闸**
+  （UI 调用集 − transport 内部 − 桌面专属 ⊆ ROUTED），首跑即再抓到两条漏网
+  （`playlist_export`/`playlist_import`，需文件选择器/上传下载 API，登记桌面
+  专属待 W4+）。
+- **P1 批**：web 播放失败零反馈（audio error 只 emit error 字段、被 10Hz
+  快照冲掉、`failed` 回报从不发出 → server Actor 死分支）——error 监听改为
+  落 `status:'error'` + 上报 failed，与桌面引擎归约同径；两壳 `library_tracks`
+  手拼 SELECT 漏 `t.genre`（row_to_track 的 genre 位吃到 codec 的哑雷，
+  TrackDetail 不搬 genre 故暂无 wire 影响）——补列并把音频规格索引顺移
+  19..=24，列序契约写进两侧注释；登录失败延时移出同步路径（std sleep 睡死
+  tokio worker → handler 内 tokio sleep）；`CorsLayer::permissive` 撤销，
+  默认不挂 CORS（同源不需要），跨域走 `AIYA_CORS_ORIGIN` 白名单；
+  `/stream` 加固（scheme 白名单 + 环回/私网/CGNAT/组播目标拒绝 + 段读取
+  64MB 上限 + 清单判定按路径）；会话令牌换 `getrandom`（OS 熵）；镜像 ENV
+  摘除 `AIYA_MUSIC_DIR`（种子语义归运行者，compose 删行即零根；空串 env
+  不再写 `[""]` 坏根）。
+- **P2 批**：SSE 改单条 EventSource 多路复用（HTTP/1.1 每主机 6 连接上限，
+  `<audio>` Range 长连接再占一条）+ 转发任务 `tx.closed()` 断连退出；position
+  回报带 token、服务端与 Loaded/Ended 同口径丢弃迟到帧（多标签互相污染）；
+  `/auth/state` 增 `mode`（password/token），登录卡据此切换凭据语义——只发
+  静态令牌的部署此前是死路；gate 态跳过整条启动链（登录卡背后不再 1Hz 401
+  噪音）；预检加 4s 超时；整理库 OrganizePanel 的文件选择器动作套 `isNative`
+  门控（web 上曾是死按钮）；browser-codecs 判据统一到 `__AIYA_WEB__`（mock/
+  预览保持桌面能力口径）并补 Ape/WavPack/Mpc/Speex 四个已知不可解容器键；
+  删两处死代码（detectHttpBackend、引擎内 updateMediaSession——媒体会话全权
+  归 App 层）。
+- **live_open / player_open_paths 未路由落账（W4 已知断点）**：web Live 页
+  点外部流"连接"会 404（路由面无此二命令，浏览器引擎 stream 播放也未建），
+  此前 docs/66 漏记这笔降级——现明确为 W4 直播线遗留（与推流同批）。
+- 结构文档对账：AGENTS 树/依赖图/边界句、crates/README 补 `aiya-host-core`
+  行并重写"只有一条库间依赖"的失真陈述（现依赖网逐条按 Cargo.toml 核实）；
+  docs/65 头部状态改 closed；README 修 crate 计数与 beets 三态位置。
+
+- **验证期追加**：`app_set_settings` 补路由后揭出返回值形状差——桌面壳返回
+  `Ok(settings)`（client 成功分支 `mergeSettings(响应)`），server 一直返回
+  `null`；此前被 404 掩盖（走 catch 保住本地值），路由修好后语言切换被
+  mergeSettings(null) 顶回默认。server 改为返回落库后的设置，与桌面同形。
+  教训：命令面的响应形状也是契约（dto_wire 只锁 DTO 结构，不锁"命令返回
+  什么"），跨壳对账要连同返回值一起比。

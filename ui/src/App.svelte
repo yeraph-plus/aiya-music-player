@@ -18,7 +18,6 @@
   import { onMount } from 'svelte';
   import { Tooltip } from 'bits-ui';
   import AppShell from './components/AppShell.svelte';
-  import LoginView from './components/LoginView.svelte';
   import OverlayHost from './components/OverlayHost.svelte';
   import AlbumView from './views/AlbumView.svelte';
   import ArtistView from './views/ArtistView.svelte';
@@ -44,8 +43,10 @@
   let mediaSession: MediaSessionBridge | null = null;
 
   // 登录门：http transport 收到 401 时派发 `aiya:gate`（auth.rs 的登录门）。
+  // 首帧值来自进闸预检（main.ts 在 mount 前跑 /auth/state，写入
+  // `__AIYA_GATE__`）——门开启时登录卡首帧即渲染，主界面不闪一帧。
   // 事件驱动而非 store——lib 层不得反向依赖 stores（dep-graph 门禁口径）。
-  let gate = $state(false);
+  let gate = $state(!!(window as { __AIYA_GATE__?: boolean }).__AIYA_GATE__);
   $effect(() => {
     const on = () => (gate = true);
     window.addEventListener('aiya:gate', on);
@@ -106,6 +107,9 @@
   });
 
   onMount(() => {
+    // 登录闸打开时跳过整条启动链（审查 P2 降噪）：过期会话不再在登录卡背后
+    // 打 1Hz 的 401 回报与 SSE 心跳。登录成功 = 整页重载，mount 自然重走
+    if (gate) return;
     mediaSession = buildMediaSession();
 
     const disposeBoot = boot({ onState: (next) => mediaSession?.update(next) });
@@ -128,7 +132,12 @@
 <!-- `Tooltip.Provider` **只放这一处**：它统一 `delayDuration`，并让相邻 tooltip
 之间共享"刚从别的按钮移过来就不用再等"的计时。每个 Tooltip 自带一份的话，鼠标横扫一排图标每次都要等满延迟。 -->
 {#if gate}
-<LoginView />
+  <!-- 动态分包：登录门只有 http 传输会进（401 → `aiya:gate`），桌面构建里该
+  chunk 永不加载——"桌面没有令牌门禁实现"由装载路径钉死，与 http 传输 chunk
+  同机制。 -->
+  {#await import('./components/LoginView.svelte') then { default: LoginView }}
+    <LoginView />
+  {/await}
 {:else}
 <Tooltip.Provider delayDuration={400} skipDelayDuration={300}>
   <AppShell>

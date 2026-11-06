@@ -7,6 +7,7 @@
   import Icon from './Icon.svelte';
   import { errorMessage } from '../lib/errors';
   import { t } from '../lib/i18n.svelte';
+  import { isNative } from '../lib/window-chrome';
   import { history } from '../stores/history.svelte';
   import { library } from '../stores/library.svelte';
   import { scan } from '../stores/scan.svelte';
@@ -174,6 +175,33 @@
     await scan.pickRootAndScan();
   }
 
+  /**
+   * Web 宿主没有系统目录选择器：绝对路径文本输入，追加进曲库根后立即索引。
+   * 语义与桌面的选目录追加一致（`library.saveRoots` 全量写回 + `scan.start()`）；
+   * 容器部署里宿主把任意目录挂进容器，路径在应用内配——输入容器内路径。
+   */
+  let rootDraft = $state('');
+  const normPath = (p: string): string => p.trim().replace(/[\\/]+$/, '');
+  async function addRootByPath(): Promise<void> {
+    const path = normPath(rootDraft);
+    if (!path || saving || clearing || library.scanning) return;
+    if (displayRoots.some((r) => normPath(r).toLowerCase() === path.toLowerCase())) {
+      showNotice(t('library.tools.noticeRootExists'));
+      return;
+    }
+    saving = true;
+    rootsError = null;
+    try {
+      await library.saveRoots([...library.roots, path], library.pausedRoots);
+      rootDraft = '';
+      await scan.start();
+    } catch (err) {
+      rootsError = errorMessage(err);
+    } finally {
+      saving = false;
+    }
+  }
+
   /* 清空曲库 */
 
   async function doClear(): Promise<void> {
@@ -216,10 +244,28 @@
     <div class="roots-head">
       <strong>{t('library.tools.rootsTitle')}</strong>
       <div class="roots-actions">
-        <Button size="sm" onclick={() => void addRoot()} disabled={saving || clearing || library.scanning}>
-          {#snippet icon()}<FolderOpen size={14} />{/snippet}
-          {t('library.tools.addFolder')}
-        </Button>
+        {#if isNative}
+          <Button size="sm" onclick={() => void addRoot()} disabled={saving || clearing || library.scanning}>
+            {#snippet icon()}<FolderOpen size={14} />{/snippet}
+            {t('library.tools.addFolder')}
+          </Button>
+        {:else}
+          <!-- Web 宿主：无系统选择器，绝对路径手输（容器部署把宿主目录挂进容器，
+               路径在应用内配——AIYA_MUSIC_DIR 只是首启种子） -->
+          <input
+            class="root-input"
+            type="text"
+            bind:value={rootDraft}
+            placeholder={t('library.tools.rootPlaceholder')}
+            aria-label={t('library.tools.addFolder')}
+            spellcheck="false"
+            onkeydown={(e) => e.key === 'Enter' && void addRootByPath()}
+          />
+          <Button size="sm" onclick={() => void addRootByPath()} disabled={saving || clearing || library.scanning}>
+            {#snippet icon()}<FolderOpen size={14} />{/snippet}
+            {t('library.tools.addFolder')}
+          </Button>
+        {/if}
         <Button variant="primary" size="sm" onclick={() => void scan.start()} disabled={library.scanning || clearing}>
           {#snippet icon()}<ScanSearch size={14} />{/snippet}
           {library.scanning ? t('library.tools.indexing') : t('library.tools.indexNow')}

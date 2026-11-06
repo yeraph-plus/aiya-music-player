@@ -54,7 +54,7 @@ npm run verify
 
 ## 架构简述
 
-项目本体为 Rust workspace（5 个库 crate + Tauri 宿主与音频 sidecar 两个二进制）
+项目本体为 Rust workspace（7 个库 crate + Tauri 宿主、音频 sidecar、web 服务端三个二进制）
 + TypeScript 前端；beets 侧为独立 Python 包（aiya-beets）。
 
 ```
