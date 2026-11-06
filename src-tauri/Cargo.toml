@@ -1,6 +1,6 @@
 [package]
 name = "aiya"
-version = "0.1.0"
+version.workspace = true
 description = "AIYA Music — 本地优先的桌面音乐播放器（Tauri 2）"
 edition = "2021"
 
