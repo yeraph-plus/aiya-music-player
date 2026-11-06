@@ -1,0 +1,89 @@
+# Web 版镜像的线上构建与发布（docs/65 W5 + docs/67 beets Linux 轨转正后补齐）。
+#
+# 产物：ghcr.io/yeraph-plus/aiya-music —— 名称与 mainBinaryName / 根包名 /
+# compose.yaml（2026-11-07 起）同一口径；镜像内容与本地 `docker build -t
+# aiya-music .` 完全同一条 Dockerfile（四阶段：ui → rust → beets-bundle →
+# runtime），不在此处另写一份构建逻辑。
+#
+# tag 策略：
+#   - push main / 手动 dispatch → latest + sha-<short>（滚动部署位 + 可回溯位）
+#   - push tag v*               → <版本号>（semver 取自 tag）+ latest
+#
+# 决策记录：
+#   - 仅 linux/amd64：beets 套件包与 Essentia 提取器只有 x64 载体（docs/67，
+#     catalog platforms 维度也是按平台分的），arm64 无从谈起；
+#   - 版本号不在此注入：app_diagnostics 的 version 来自 CARGO_PKG_VERSION，
+#     跟着 workspace 单一来源（Cargo.toml 0.2.0 起）自动进镜像；
+#   - cargo 依赖编译层在代码变更后必然全量重编（Dockerfile 的 cache mount
+#     不入 gha 层缓存），冷构建约 20–30 分钟，timeout 放 60；层缓存仍覆盖
+#     apt / npm ci / beets 套件打包三个重层（其输入不变时直接命中）；
+#   - ghcr 首推的包默认 private：部署机拉取要么 docker login ghcr.io（PAT 带
+#     read:packages），要么到 GitHub → Packages → aiya-music 改 public；
+#   - 文档类提交（docs/**、**.md）不触发构建——镜像内容与文档零关联。
+#
+# CI 网络与本地不同：Dockerfile 内钉的 npmmirror / rsproxy / aliyun 都是
+# 公网源，海外 runner 可达（略慢可接受），不为 CI 单开一套无镜像源的
+# Dockerfile——两条构建路线漂移比慢更危险。
+
+name: Docker · 镜像构建与发布
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.gitignore'
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/yeraph-plus/aiya-music
+
+jobs:
+  build-push:
+    name: 构建 aiya-music 并推 ghcr
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 登录 ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 计算 tag 集合
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          # latest 两个来源：main 滚动位 + v* 发布位；sha 位恒出，便于回溯
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref_name == 'main' || startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # 个人项目不需要 provenance 附加层（会多出 unknown/unknown 架构条目）
+          provenance: false
