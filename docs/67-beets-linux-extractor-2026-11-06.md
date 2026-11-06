@@ -92,3 +92,37 @@
 
 - 本批不触 win 轨、不触 release 通道；web/Docker 批（docs/65/66）只按 manifest
   entry/args 消费本产物，宿主零改动（docs/65 §3 拍板 1）。
+
+## 6 · 转正接线与容器集成（2026-11-07，全部落地）
+
+§4 清单逐项完成，状态改 closed：
+
+- **build_bundle.py 平台化**：`--platform linux`（PBS tag 20261026，cpython
+  3.14.10 与 win 包同版本，sha `1b3802…` 钉扎）；产物 `beets-portable-linux-x64.zip`；
+  manifest `entry` → `bin/python3`；`_pth` 平台分支、site-packages 由解释器
+  sysconfig 报告。三个预置件走 `--extractor/--pbs-tarball/--models-zip`（docker
+  构建离线）。**实测坑：PBS install_only tar 带顶层 `python/` 目录，解压后须归位**。
+- **plugins.json 平台维度**：`binaries[].platforms`（qt5core/ffmpeg/fpcalc =
+  windows-only；提取器与 12 件模型双平台）；`plugins.py` 按运行平台过滤
+  `exe_deps`/`BUNDLE_BINARIES`/`binaries_for`——linux 的 Qt5 视为系统提供
+  （容器 apt libqt5core5a/libqt5concurrent5/libdrm2 **实测 libdrm 必须显式装**，
+  docs/67 §0 的"待宿主实测"就此定案）。catalog_contract 增 platforms 取值闸 +
+  zh 变体奇偶同步。
+- **工具侧**：`_probe_ok` linux 语义（.history/.so 存在即就绪，无后缀可执行
+  照跑 probe）；`cli.main` 挂 `ensure_loader_path`（LD_LIBRARY_PATH 前插包内
+  bin/，子进程继承）；`essentia_smoke` 保持契约名（.exe 后缀跨平台不变——
+  linux 不看后缀）。
+- **宿主**：`BUNDLE_ASSET` 按 target_os 分档；`extract_safely` **还原 zip 条目
+  unix_mode**（linux 上 bin/python3 无执行位 = 装完即坏，首启实测踩中）；解压
+  上限 512MB → 1.5GB（linux 套件是完整运行时，未压缩 700MB+，libpython 一项
+  137MB——首启实测被旧闸拦半，错误帧只进事件总线）。
+- **容器集成**：Dockerfile 增 beets-bundle 阶段（debian 脚手架 + uv，离线构建）
+  → 运行层带 zip + `AIYA_BEETS_BUNDLE` env；安装走 UI「整理库」点一次（与桌面
+  同一条 install_via_bundle 路径，套件展开进 /data 卷）。
+- **容器冒烟全绿**：安装 → status found / beets 2.14.1 / python 3.14.10 /
+  protocol v2 **schemaMatched true** / xtractor ready（12 模型齐）/ apply 链
+  端到端（decisions → 逐条 blankIdentity 正确拒无标签 fixtures → applyDone
+  记账）。**实测坑：catalog 提取器 target 是 `.exe` 契约名，linux 包内若改
+  无后缀名会让 bins 去拉 win 载体、经 Docker Desktop 的 WSL interop 把
+  Windows 二进制跑起来（WSL init 解析含空格 comm 的 /proc/1/stat 失败刷屏），
+  probe 输出被污染判死——包内命名必须沿用 catalog 契约。**

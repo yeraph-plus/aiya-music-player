@@ -121,7 +121,8 @@ class BinarySpec:
     license: str = ""
     vendor: str = ""
     why: str = ""
-    bundle: bool = False  # 随免配置包发布（见类注释）
+    bundle: bool = False
+    platforms: tuple[str, ...] = ("windows", "linux")  # 随免配置包发布（见类注释）
 
 
 @dataclass(frozen=True)
@@ -170,6 +171,31 @@ def catalog_text() -> str:
     return files("aiya_beets").joinpath("data/plugins.json").read_text(encoding="utf-8")
 
 
+# 运行平台（工具跑在哪，exe 依赖就按哪份清单算）。docs/67 转正：binaries 带
+# platforms 维度——不在运行平台的依赖（如 linux 的 Qt5）由宿主系统提供，
+# 不进 exe 清单、不进免配置包、bins 也不去下载它。
+RUNNING_OS = "windows" if os.name == "nt" else "linux"
+
+
+_CATALOG_BINARIES_BY_NAME: dict[str, dict[str, Any]] = {
+    b.get("name"): b for b in (catalog().get("binaries") or ())
+}
+
+
+def _exe_deps_of(item: dict[str, Any]) -> tuple[str, ...]:
+    """插件的 exe 依赖，按运行平台过滤（binaries.platforms，docs/67 转正）。
+
+    直读原始 catalog（本函数运行在模块装载期，binary()/BINARIES 还没成型）。
+    表里没声明的名字保持原样（exe_path 对未知名字有裸查找分支）。"""
+    out: list[str] = []
+    for dep in item.get("exe", ()):
+        b = _CATALOG_BINARIES_BY_NAME.get(dep)
+        if b is not None and RUNNING_OS not in (b.get("platforms") or ("windows", "linux")):
+            continue
+        out.append(dep)
+    return tuple(out)
+
+
 def entries() -> list[dict[str, Any]]:
     """目录条目（顺序 = JSON 里的顺序 = UI 展示顺序）。"""
     return list(catalog()["plugins"])
@@ -191,7 +217,7 @@ MARKET_CATALOG: tuple[MarketSpec, ...] = tuple(
         note=item.get("note", ""),
         packages=tuple(item.get("packages", ())),
         py_deps=tuple(item.get("imports", ())),
-        exe_deps=tuple(item.get("exe", ())),
+        exe_deps=_exe_deps_of(item),
     )
     for item in entries()
 )
@@ -200,7 +226,7 @@ DEFAULT_PLUGINS: tuple[PluginSpec, ...] = tuple(
     PluginSpec(
         name=name,
         py_deps=tuple((entry(name) or {}).get("imports", ())),
-        exe_deps=tuple((entry(name) or {}).get("exe", ())),
+        exe_deps=_exe_deps_of(entry(name) or {}),
         note=(entry(name) or {}).get("note", ""),
     )
     for name in (catalog()["profiles"]["workbench"])
@@ -243,15 +269,22 @@ BINARIES: tuple[BinarySpec, ...] = tuple(
         vendor=item.get("vendor", ""),
         why=item.get("why", ""),
         bundle=bool(item.get("bundle", False)),
+        platforms=tuple(item.get("platforms") or ("windows", "linux")),
     )
     for item in (catalog().get("binaries") or ())
 )
+
 
 # 随免配置包一起发布的二进制（`binaries[].bundle`）。
 # 与 `BUNDLE_PLUGINS` 是两件事：一个是"包里有哪个 exe"，一个是"包里预装了哪个插件的
 # Python 依赖"。两者可以不一致，但**带 exe 的 bundle 插件必须落在 BINARIES 里**，
 # 否则包里的插件一启动就被渲染侧剔掉（契约测试盯着这条）。
-BUNDLE_BINARIES: tuple[str, ...] = tuple(spec.name for spec in BINARIES if spec.bundle)
+BUNDLE_BINARIES: tuple[str, ...] = tuple(
+    spec.name for spec in BINARIES
+    if spec.bundle and RUNNING_OS in spec.platforms
+)
+
+
 
 
 def binary(name: str) -> BinarySpec | None:
@@ -275,9 +308,12 @@ def binaries_for(names: list[str]) -> list[str]:
         if item is None:
             raise KeyError(name)
         for dep in item.get("exe", ()):
+            spec = binary(dep)
+            if spec is None:
+                raise KeyError(dep)
+            if RUNNING_OS not in spec.platforms:
+                continue  # 系统提供的平台差（如 linux 的 Qt5），不算我们的依赖
             if dep not in out:
-                if binary(dep) is None:
-                    raise KeyError(dep)
                 out.append(dep)
     return out
 
@@ -450,7 +486,7 @@ def capability_report(enabled: list[str] | None = None) -> list[dict]:
             note=item.get("note", ""),
             packages=tuple(item.get("packages", ())),
             py_deps=tuple(item.get("imports", ())),
-            exe_deps=tuple(item.get("exe", ())),
+            exe_deps=_exe_deps_of(item),
         )
         state, missing = _state_of(spec.py_deps, spec.exe_deps, spec.name)
         report.append(

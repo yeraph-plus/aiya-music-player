@@ -1,7 +1,13 @@
 # Web 版部署样例（docs/65 W5）：`docker compose up -d --build` 后浏览器打开
 # http://<host>:8787。曲库目录按只读挂载；数据（SQLite/封面缓存）进命名卷。
-# 鉴权可选：设置 AIYA_TOKEN 后，命令面走 Authorization 头、<audio>/SSE 走
-# `?token=` 查询参数（浏览器会话内自动携带）。
+#
+# 鉴权可选：设置 AIYA_ADMIN_PASSWORD 后浏览器进闸登录（单管理员）；AIYA_TOKEN
+# 是脚本/curl 的第二凭据（命令面走 Authorization 头，<audio>/SSE 走 `?token=`）。
+# ⚠ 无门（两个变量都留空）= 局域网无鉴权：命令面与 /stream 外部代理对局域网
+# 全开，口令以明文 env 存在（docker inspect 可见）——公网部署务必开闸并交给
+# HTTPS 反代，反代日志注意脱敏 `?token=` 查询参数（媒体面凭据在 URL 上）。
+# 跨域场景（反代与应用不同源）设 AIYA_CORS_ORIGIN=逗号分隔的 origin 白名单；
+# 同源访问不需要，默认不挂 CORS 层。
 services:
   aiya-server:
     build: .
@@ -13,13 +19,15 @@ services:
       - /path/to/music:/music:ro
       - aiya-data:/data
     environment:
-      # 登录门：单管理员口令（必填才开闸；留空 = 局域网无鉴权）
+      # 登录门：单管理员口令（必填才开闸；留空 = 局域网无鉴权，见上风险提示）
       - AIYA_ADMIN_PASSWORD=
       # 可选静态令牌（脚本/curl 场景；与登录会话并行的第二凭据）
       - AIYA_TOKEN=
       # 数据根（SQLite + 封面缓存 + beets 索引目录的父级）
       - AIYA_DATA_ROOT=/data
-      # 曲库目录（容器内路径；多个根用 library_roots_set 或后续批次扩展）
+      # 曲库首启种子（仅全新库写入一次；此后曲库根以应用内配置为准，
+      # 应用内增删的根重启不回填）。宿主把任意目录挂进容器后在应用里配路径；
+      # 不设此行 = 零根启动，等应用内添加
       - AIYA_MUSIC_DIR=/music
     restart: unless-stopped
 

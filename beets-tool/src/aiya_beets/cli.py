@@ -50,6 +50,10 @@ def main(argv: list[str] | None = None) -> int:
     # spawn，只有 PATH 一条路；晚一步就是"装了却找不到"。
     from . import bins
 
+    # linux：免配置包 bin/ 前插进 LD_LIBRARY_PATH（提取器的 Qt5 动态依赖，
+    # 子进程继承）。挂在 bins 导入之后、PATH 注入之前：bin 目录从数据根推导。
+    bins.ensure_loader_path()
+
     bins.inject_path()
 
     args = list(sys.argv[1:] if argv is None else argv)

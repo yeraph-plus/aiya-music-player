@@ -404,10 +404,37 @@ def install_one(
 
 def _probe_ok(path: Path, spec: BinarySpec) -> tuple[bool, str | None]:
     """落盘体检：.exe 跑一次 probe 参数；DLL / 模型等非可执行文件没法"跑一次"
-    ——完整性由下载侧的 sha256 钉扎保证，文件在即算就绪。"""
+    ——完整性由下载侧的 sha256 钉扎保证，文件在即算就绪。
+
+    linux 轨（docs/67 转正清单）：`.exe` 后缀是 Windows 口径。linux 下提取器
+    是无后缀可执行文件，照样跑 probe；`.history` 是数据（模型），维持
+    "文件在即就绪"；`.so` 也跑不了（共享库），同模型口径。"""
+    import sys
+
     if not spec.target.lower().endswith(".exe"):
+        if sys.platform.startswith("linux") and not spec.target.lower().endswith((".history", ".so")):
+            return probe(path, spec)
         return True, None
     return probe(path, spec)
+
+
+def ensure_loader_path() -> None:
+    """linux：把免配置包 `bin/` 前插进 LD_LIBRARY_PATH（本进程改，子进程继承）。
+
+    提取器动态链接 Qt5（docs/67 ldd 实测）：win 靠"DLL 在 exe 旁边"的搜索
+    规则天然成立，linux 必须显式路径。容器里 Qt5 由系统包提供时这一步是
+    no-op（bin/ 里没有 so，等 A 轨道"随包附 so"的载体化后自动生效）。
+    """
+    import sys
+
+    if not sys.platform.startswith("linux"):
+        return
+    d = bundle_bin_dir()
+    if d is None or not d.is_dir():
+        return
+    cur = os.environ.get("LD_LIBRARY_PATH", "")
+    if str(d) not in cur.split(os.pathsep):
+        os.environ["LD_LIBRARY_PATH"] = str(d) + (os.pathsep + cur if cur else "")
 
 
 def ensure(names: list[str], on_progress=None, carriers: dict[str, Path] | None = None) -> list[dict]:

@@ -94,3 +94,7 @@ tools/comment-gov/reports/
 
 .install-shot.png
 .state-shot.png
+
+# beets-tool 的 linux 套件构建缓存：build_bundle.py 测试期从 PBS 下载的
+# tar 缓存（约 76MB），与 .runtime/ 同类——现生成不入库
+beets-tool/.runtime-linux/

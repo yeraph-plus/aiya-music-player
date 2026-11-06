@@ -66,6 +66,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import zipfile
 from pathlib import Path
@@ -132,6 +133,20 @@ EMBED_URL = (
 )
 RUNTIME_DEFAULT = TOOL / ".runtime" / f"python-{EMBED_VERSION}-embed-amd64"
 
+# Linux 轨（docs/67 §4 转正清单）：解释器换 python-build-standalone（标准 prefix
+# 布局，bin/python3 + lib/python3.x，没有 Windows embeddable 的 _pth 机制）。
+# 版本与 win 包的 embeddable 同为 3.14.10；tag 与 sha 钉扎，%2B 是 URL 里
+# `+` 的编码。缓存优先用 .runtime-linux/ 下已下载的 tar.gz（离线重建）。
+PBS_TAG = "20261026"
+PBS_ASSET = f"cpython-3.14.10+{PBS_TAG}-x86_64-unknown-linux-gnu-install_only.tar.gz"
+PBS_URL = (
+    "https://github.com/astral-sh/python-build-standalone/releases/download/"
+    f"{PBS_TAG}/{PBS_ASSET.replace('+', '%2B')}"
+)
+PBS_SHA256 = "1b38024924eb7f4cf0cab45d7b871d1f1991354190fccd2625ac7529a43786e2"
+RUNTIME_LINUX_DEFAULT = TOOL / ".runtime-linux" / "runtime"
+BUNDLE_LINUX_NAME = "beets-portable-linux-x64.zip"
+
 
 def _sha256(path: Path) -> str:
     import hashlib
@@ -143,7 +158,11 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def ensure_runtime(runtime: Path) -> None:
+def ensure_runtime(
+    runtime: Path,
+    platform_name: str = "windows",
+    pbs_tarball: Path | None = None,
+) -> None:
     """准备自带解释器目录（缺什么补什么，已存在就复用）。
 
     这一步以前由播放器仓的 `tools/pack-beets-runtime.mjs` 干，M2 把它删了
@@ -154,6 +173,42 @@ def ensure_runtime(runtime: Path) -> None:
     不含 `Lib/site-packages`，而 `_pth` 存在时 Python **忽略 PYTHONPATH**
     ——包放哪都 import 不到（这个坑 M2 踩过一次，写进 README 了）。
     """
+    if platform_name == "linux":
+        # PBS install_only：解压根就是 prefix（bin/python3 + lib/python3.x）。
+        # 无 _pth，site-packages 属标准布局，无需写路径文件。
+        if not (runtime / "bin" / "python3").is_file():
+            runtime.parent.mkdir(parents=True, exist_ok=True)
+            print(f"下载自带解释器（PBS {PBS_TAG}）→ {runtime}")
+            import urllib.request
+
+            # 预置 tar 包优先（docker 构建离线路径，--pbs-tarball 指定），
+            # 其次本地缓存，最后联网下载——三条路都要过 sha 钉扎
+            tmp = pbs_tarball if pbs_tarball and pbs_tarball.is_file() else None
+            if tmp is None:
+                cache = TOOL / ".runtime-linux" / "pbs.tar.gz"
+                tmp = runtime.parent / PBS_ASSET
+                if cache.is_file():
+                    tmp = cache
+                elif not tmp.is_file():
+                    urllib.request.urlretrieve(PBS_URL, tmp)
+            actual = _sha256(tmp)
+            if actual != PBS_SHA256:
+                raise SystemExit(
+                    f"PBS 解释器 sha256 不符（实际 {actual}，期望 {PBS_SHA256}）"
+                    "——已拒绝进入发布物（预置/缓存文件不删，交给构建者处置）。"
+                )
+            with tarfile.open(tmp) as tf:
+                tf.extractall(runtime)
+            # install_only 布局带顶层 python/ 目录（bin/lib/share 全在其下），
+            # 归位到解压根才是标准 prefix
+            inner = runtime / "python"
+            if inner.is_dir():
+                for child in inner.iterdir():
+                    shutil.move(str(child), str(runtime / child.name))
+                inner.rmdir()
+            (runtime / "bin" / "python3").chmod(0o755)
+        return
+
     if not (runtime / "python.exe").is_file():
         runtime.parent.mkdir(parents=True, exist_ok=True)
         print(f"下载自带解释器 {EMBED_VERSION} → {runtime}")
@@ -187,12 +242,31 @@ def ensure_runtime(runtime: Path) -> None:
     )
 
 
-def _importable(runtime: Path, modules: list[str]) -> list[str]:
+def py_exe(runtime: Path, platform_name: str) -> Path:
+    """包内解释器：win 在根（python.exe），linux 在 bin/（python3）。"""
+    return runtime / "bin" / "python3" if platform_name == "linux" else runtime / "python.exe"
+
+
+def site_dir(runtime: Path, platform_name: str) -> Path:
+    """site-packages：win 是固定 Lib/site-packages；linux 问解释器要（版本号在路径里）。"""
+    if platform_name == "linux":
+        out = subprocess.run(
+            [str(py_exe(runtime, platform_name)), "-c",
+             "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        if out.returncode != 0 or not out.stdout.strip():
+            raise SystemExit(f"查 site-packages 失败：{out.stderr[:300]}")
+        return Path(out.stdout.strip())
+    return runtime / "Lib" / "site-packages"
+
+
+def _importable(runtime: Path, modules: list[str], platform_name: str = "windows") -> list[str]:
     """用**包里的**解释器试 import，返回失败的模块名。"""
     bad: list[str] = []
     for mod in modules:
         got = subprocess.run(
-            [str(runtime / "python.exe"), "-c", f"import {mod}"],
+            [str(py_exe(runtime, platform_name)), "-c", f"import {mod}"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
         )
@@ -208,14 +282,14 @@ def find_uv(explicit: str | None) -> str | None:
     return shutil.which("uv")
 
 
-def install_deps(runtime: Path, extra: list[str], uv: str | None) -> None:
+def install_deps(runtime: Path, extra: list[str], uv: str | None, platform_name: str = "windows") -> None:
     """按 lock 装 beets 基础依赖 + 预置插件的额外包（已就位就跳过）。
 
     增量判断看两件事：`site-packages/beets` 在不在，以及预置插件的模块能不能
     import。只看前者会让"上一版包没有 lyrics"的缓存永远不补 bs4——那种包
     打出来是哑的，而构建日志一片绿。
     """
-    site = runtime / "Lib" / "site-packages"
+    site = site_dir(runtime, platform_name)
     need_mods = plugins.imports_for(list(plugins.BUNDLE_PLUGINS))
     # pip 也在必装清单里：单轨化后"换插件"就是包内解释器跑 `python -m pip`，
     # 包里没有 pip 模块，安装页的勾选就永远是死按钮。
@@ -240,9 +314,11 @@ def install_deps(runtime: Path, extra: list[str], uv: str | None) -> None:
     env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     try:
         if uv:
-            # --python 指 embeddable：让 uv 按它的版本/平台解析 wheel（cp314, win_amd64）--link-mode=copy：`--target` 默认会 hardlink
-            # 到 uv 缓存，跨盘时 uv 自己也会回落 copy（还打一条 warning）。发布物应当自包含，统一 copy 更省事。
-            cmd = [uv, "pip", "install", "--python", str(runtime / "python.exe"),
+            # --python 指包内解释器：让 uv 按它的版本/平台解析 wheel
+            # （win: cp314/win_amd64；linux: cp314/manylinux）。--link-mode=copy：
+            # `--target` 默认 hardlink 到 uv 缓存，跨盘时 uv 自己也会回落 copy
+            # （还打一条 warning）。发布物应当自包含，统一 copy 更省事。
+            cmd = [uv, "pip", "install", "--python", str(py_exe(runtime, platform_name)),
                    "--target", str(staging), "--link-mode=copy", "-r", str(req), *extra, "pip"]
             print(f"安装依赖（uv）→ 合并进 {site}")
         else:
@@ -275,7 +351,9 @@ def bundle_binary_plan() -> list[str]:
     wanted = list(plugins.BUNDLE_BINARIES)
     need: list[str] = []
     for name in plugins.BUNDLE_PLUGINS:
-        for dep in (plugins.entry(name) or {}).get("exe", ()):
+        # 平台过滤后的 exe 依赖（binaries.platforms，docs/67）：linux 上
+        # Qt5 由系统提供，不在 need/wanted 里
+        for dep in plugins.binaries_for([name]):
             if dep not in need:
                 need.append(dep)
     missing = [n for n in need if n not in wanted]
@@ -287,12 +365,82 @@ def bundle_binary_plan() -> list[str]:
     return wanted
 
 
-def stage_binaries(work: Path, names: list[str]) -> list[dict]:
+def stage_binaries(
+    work: Path,
+    names: list[str],
+    platform_name: str = "windows",
+    extractor: Path | None = None,
+    models_zip: Path | None = None,
+) -> list[dict]:
     """下载 → 校验 → 落到包内 `bin/`，返回写进 manifest 的清单。
 
-    落盘后 `bins.install_one` 会跑一次 probe：构建机上都跑不起来的 exe 不该被
+    落盘后 `bins.stage` 自带 sha 校验 + probe：构建机上都跑不起来的 exe 不该被
     发出去（32 位 exe 靠 WoW64，构建机缺它就是一个"发出去才发现"的坑）。
+
+    linux 轨的差异：提取器来自本地文件（CI artifact，`--extractor` 指定）——
+    它没有发布通道载体（docs/67：产物只进 artifact）；构建时改名成与 catalog
+    exe 清单一致的 `streaming_extractor_music`（无 .exe 后缀），工具侧
+    `exe_path` 按名字找，平台无关。Qt5 两个 so 不进包：容器路线由运行时层
+    apt 提供（docs/67 §4 的"随包附 so"留给 A 轨道载体化时再做）。
     """
+    if platform_name == "linux":
+        want = [n for n in names if n != "streaming_extractor_music"]
+        carriers: dict[str, Path] | None = None
+        if models_zip is not None:
+            if not models_zip.is_file():
+                raise SystemExit(f"--models-zip 文件不存在：{models_zip}")
+            url = next(
+                (b["carrier"]["url"] for b in plugins.catalog()["binaries"]
+                 if b["name"] == "svm-danceability"),
+                None,
+            )
+            carriers = {url: models_zip} if url else None
+            print(f"模型载体用本地预置：{models_zip}")
+        print(f"准备外置工具（模型走 catalog 载体）→ {work / 'bin'}")
+        rows = bins.stage(want, work / "bin", on_progress=lambda m: print(f"  {m}"),
+                          carriers=carriers)
+        got = [r["name"] for r in rows]
+        missing = [n for n in want if n not in got]
+        if missing:
+            raise SystemExit(f"外置工具没落盘：{', '.join(missing)}")
+        out: list[dict] = []
+        for row in rows:
+            spec = plugins.binary(row["name"])
+            assert spec is not None
+            out.append({
+                "name": spec.name,
+                "target": spec.target,
+                "bytes": row["bytes"],
+                "sha256": spec.sha256,
+                "version": row["version"],
+                "license": spec.license,
+                "vendor": spec.vendor,
+                "source": spec.url,
+            })
+        if extractor is not None:
+            if not extractor.is_file():
+                raise SystemExit(f"--extractor 文件不存在：{extractor}")
+            # target 沿用 catalog 契约名（.exe 后缀）：exe_path/installed_path
+            # 按 target 找，linux 不看后缀——包内命中才不会去下 win 载体
+            # （实测：无后缀名会让 bins 去拉 win zip，经 WSL interop 跑起
+            # Windows 二进制，probe 输出被 WSL init 噪音污染判死）
+            final = work / "bin" / "streaming_extractor_music.exe"
+            shutil.copyfile(extractor, final)
+            final.chmod(0o755)
+            sha = _sha256(final)
+            out.append({
+                "name": "streaming_extractor_music",
+                "target": "streaming_extractor_music.exe",
+                "bytes": final.stat().st_size,
+                "sha256": sha,
+                "version": None,
+                "license": "AGPL-3.0-or-later",
+                "vendor": "MTG essentia-builds CI（manylinux_2_28，docs/67）",
+                "source": "workflow artifact essentia-extractor-linux-x86_64-test",
+            })
+            print(f"  提取器（本地）→ bin/streaming_extractor_music.exe（sha256 {sha[:12]}…）")
+        return out
+
     if not names:
         return []
     print(f"准备外置工具 → {work / 'bin'}")
@@ -328,7 +476,7 @@ def _license_file_id(spdx: str) -> str | None:
     return spdx.split("-or-later")[0].strip() or None
 
 
-def write_third_party(work: Path, staged: list[dict]) -> None:
+def write_third_party(work: Path, staged: list[dict], bundle_name: str = "beets-portable-win-x64.zip") -> None:
     """写清随包发布的第三方二进制来源与许可（docs/54）。
 
     ## 为什么这条不是可选项
@@ -356,7 +504,7 @@ def write_third_party(work: Path, staged: list[dict]) -> None:
     lines = [
         "# 随包发布的第三方二进制",
         "",
-        "本套件包（`beets-portable-win-x64.zip`）内含下列可执行程序。它们不是",
+        f"本套件包（`{bundle_name}`）内含下列可执行程序。它们不是",
         "本项目源码，各自遵守原始许可；我们**原样转发，未做修改**。",
         "",
         "| 文件 | 来源 | 许可 | 本包内 sha256 |",
@@ -418,30 +566,52 @@ def frozen_versions(site: Path) -> dict[str, str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="打包 aiya-beets 免配置套件包")
-    ap.add_argument("--runtime", default=str(RUNTIME_DEFAULT),
-                    help="自带解释器目录（缺就自动下载官方 embeddable 并装依赖）")
-    ap.add_argument("--out", default=str(TOOL / "dist" / "beets-portable-win-x64.zip"))
-    ap.add_argument("--work", default=str(TOOL / "dist" / "bundle"))
+    ap.add_argument("--platform", choices=("windows", "linux"), default="windows",
+                    help="目标平台：windows（embeddable）或 linux（PBS，docs/67）")
+    ap.add_argument("--runtime", default=None,
+                    help="自带解释器目录（缺就自动下载并装依赖；默认随平台）")
+    ap.add_argument("--out", default=None, help="产物 zip 路径（默认随平台）")
+    ap.add_argument("--work", default=None, help="展开目录（默认随平台）")
     ap.add_argument("--uv", default=None, help="uv 可执行文件（默认从 PATH 找）")
+    ap.add_argument("--extractor", default=None,
+                    help="linux 轨：Essentia 提取器本地文件（CI artifact，构建时改名进 bin/）")
+    ap.add_argument("--pbs-tarball", default=None,
+                    help="linux 轨：预下载的 python-build-standalone tar.gz（离线构建）")
+    ap.add_argument("--models-zip", default=None,
+                    help="linux 轨：预下载的 svm-models.zip（离线构建；catalog 载体的本地缓存）")
     ap.add_argument("--no-zip", action="store_true", help="只展开目录，不打包（调试用）")
     args = ap.parse_args()
 
-    runtime = Path(args.runtime)
-    ensure_runtime(runtime)
+    platform_name = args.platform
+    bundle_name = ("beets-portable-win-x64.zip" if platform_name == "windows"
+                   else BUNDLE_LINUX_NAME)
+    runtime = Path(args.runtime or (
+        RUNTIME_DEFAULT if platform_name == "windows" else RUNTIME_LINUX_DEFAULT))
+    out = Path(args.out or (TOOL / "dist" / bundle_name))
+    work = Path(args.work or (TOOL / "dist" / ("bundle" if platform_name == "windows" else "bundle-linux")))
+
+    if platform_name == "linux" and args.extractor is None:
+        raise SystemExit("linux 轨必须给 --extractor（CI artifact 里的提取器二进制，"
+                         "docs/67：该产物没有发布通道载体）")
+
+    ensure_runtime(
+        runtime,
+        platform_name,
+        Path(args.pbs_tarball) if args.pbs_tarball else None,
+    )
 
     plugin_names = list(plugins.BUNDLE_PLUGINS)
     extra = plugins.packages_for(plugin_names)
     uv = find_uv(args.uv)
-    install_deps(runtime, extra, uv)
+    install_deps(runtime, extra, uv, platform_name)
 
     # 装完立刻验：预置插件的模块必须真能 import。这是"免配置"的验收条件，
     # 不通过就别产出发布物（打出一个装不上插件的包比没包更糟）。
-    bad = _importable(runtime, plugins.imports_for(plugin_names))
+    bad = _importable(runtime, plugins.imports_for(plugin_names), platform_name)
     if bad:
         print(f"预置插件依赖导入失败：{', '.join(bad)}", file=sys.stderr)
         return 1
 
-    work = Path(args.work)
     if work.exists():
         shutil.rmtree(work)
     work.parent.mkdir(parents=True, exist_ok=True)
@@ -449,22 +619,29 @@ def main() -> int:
     print(f"展开运行时 → {work}")
     shutil.copytree(runtime, work, ignore=_ignore)
 
-    # 包必须进 _pth 列出的目录（见模块注释）
-    site = work / "Lib" / "site-packages"
+    # 包必须进解释器的 site-packages（win 是 _pth 列出的 Lib/site-packages，
+    # linux 是标准 prefix 布局，见 site_dir）
+    site = site_dir(work, platform_name)
     site.mkdir(parents=True, exist_ok=True)
     print("安装 aiya_beets 包 → Lib/site-packages")
     shutil.copytree(SRC / "aiya_beets", site / "aiya_beets", dirs_exist_ok=True, ignore=_ignore)
 
     # 外置工具：Essentia 提取器随包发。xtractor 没有它等于"预置了
     # 一个被渲染侧剔掉的插件"，所以这一段失败就整包失败。
-    staged = stage_binaries(work, bundle_binary_plan())
+    staged = stage_binaries(
+        work,
+        bundle_binary_plan(),
+        platform_name,
+        Path(args.extractor) if args.extractor else None,
+        Path(args.models_zip) if args.models_zip else None,
+    )
 
     frozen = frozen_versions(site)
     manifest = {
         "name": "aiya-beets",
         "version": package_version(),
         "protocolVersion": protocol_version(),
-        "entry": "python.exe",
+        "entry": "python.exe" if platform_name == "windows" else "bin/python3",
         "args": ["-m", "aiya_beets"],
         "note": "entry 相对解压根；播放器据此记下启动入口",
         # 预置了什么、具体版本多少：宿主显示"开箱即有哪些能力"、
@@ -487,12 +664,12 @@ def main() -> int:
         print("缺少 LICENSE：GPL 要求发布物内附许可全文", file=sys.stderr)
         return 1
     shutil.copyfile(lic, work / "LICENSE")
-    write_third_party(work, staged)
+    write_third_party(work, staged, bundle_name)
 
     # 自检：用**包里的**解释器跑，证明可执行（这一步在老机器上会抓出缺 DLL）。
     # pip 也在自检清单里：单轨化后"换插件"靠它（缺 pip = 安装页死按钮）。
     probe = subprocess.run(
-        [str(work / "python.exe"), "-m", "aiya_beets", "version"],
+        [str(py_exe(work, platform_name)), "-m", "aiya_beets", "version"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         # 继承当前环境（缺 SYSTEMROOT 等基础变量时解释器起不来，看起来像"包坏了"）
         env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
@@ -501,7 +678,7 @@ def main() -> int:
         print(f"套件包自检失败：{probe.stdout} {probe.stderr[:400]}", file=sys.stderr)
         return 1
     pip = subprocess.run(
-        [str(work / "python.exe"), "-m", "pip", "--version"],
+        [str(py_exe(work, platform_name)), "-m", "pip", "--version"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
     )
@@ -517,7 +694,6 @@ def main() -> int:
         print(f"OK（未打包） {work}")
         return 0
 
-    out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     print(f"压缩 → {out}（{sum(f.stat().st_size for f in work.rglob('*') if f.is_file()) / 2**20:.0f} MB 待压缩）")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:

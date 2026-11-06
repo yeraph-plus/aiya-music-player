@@ -718,7 +718,18 @@ pub fn probe(host: &dyn BeetsHost) -> BeetsStatus {
 /// 下载失败会给"下到了什么"的明确错误（见 `verify_asset`），而不是静默卡住。
 const RELEASE_BASE: &str =
     "https://github.com/yeraph-plus/aiya-music-player/releases/download/beets-portable";
-const BUNDLE_ASSET: &str = "beets-portable-win-x64.zip";
+const BUNDLE_ASSET_WIN: &str = "beets-portable-win-x64.zip";
+/// Linux 轨产物（docs/67 §4）：服务器容器走 `AIYA_BEETS_BUNDLE` 本地文件，
+/// 这个名字只在"无本地覆盖、按平台下载"时被用到。
+const BUNDLE_ASSET_LINUX: &str = "beets-portable-linux-x64.zip";
+
+fn bundle_asset() -> &'static str {
+    if cfg!(target_os = "windows") {
+        BUNDLE_ASSET_WIN
+    } else {
+        BUNDLE_ASSET_LINUX
+    }
+}
 
 /// 发布物根地址：`AIYA_BEETS_RELEASE_BASE` > 默认常量。
 ///
@@ -1239,9 +1250,12 @@ fn safe_relative(name: &str) -> Option<std::path::PathBuf> {
     (!out.as_os_str().is_empty()).then_some(out)
 }
 
-/// 解压上限：套件包实际约 30MB，留约 16 倍余量。不是防自己人，是防
+/// 解压上限：win 包实际约 30MB；linux 轨（docs/67）是完整 Python 运行时，
+/// 未压缩 700MB+（libpython 一项 137MB），留一倍余量。不是防自己人，是防
 /// "被替换过的包"把磁盘写满——那种故障现场极难归因到一次安装。
-const BUNDLE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+/// （首启实测踩过：512MB 旧闸把 linux 包解到一半按防篡改中止，错误帧只进
+/// 事件总线，表面上就是"装了没动静"。）
+const BUNDLE_MAX_BYTES: u64 = 1536 * 1024 * 1024;
 
 /// 展开套件包，**不用 `ZipArchive::extract`**。
 ///
@@ -1306,6 +1320,13 @@ fn extract_safely<R: std::io::Read + std::io::Seek>(
             .map_err(|e| format!("failed to write {}: {e}", dest.display()))?;
         std::io::copy(&mut entry, &mut out)
             .map_err(|e| format!("failed to unpack {}: {e}", dest.display()))?;
+        // unix 位随包还原（linux 轨：bin/python3 不可执行 = 组件装完即坏，
+        // spawn 全线 EACCES——首启实测踩过；win 条目没有 unix_mode，跳过）
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt as _;
+            let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(mode & 0o7777));
+        }
     }
     Ok(())
 }
@@ -1357,7 +1378,7 @@ pub fn start_install(
             };
             let result = (|| -> Result<ToolEntry, String> {
                 let path =
-                    fetch_asset("AIYA_BEETS_BUNDLE", BUNDLE_ASSET, AssetKind::Bundle, &emit)?;
+                    fetch_asset("AIYA_BEETS_BUNDLE", bundle_asset(), AssetKind::Bundle, &emit)?;
                 let entry = install_via_bundle(&*host, &path, &emit)?;
                 // 外置工具：两个轨道都跑，但缺的东西不一样 —— B 轨道
                 // 自带 Essentia 提取器，`exe_path` 会在包内 `bundle/bin`

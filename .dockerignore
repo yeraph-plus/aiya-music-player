@@ -1,5 +1,7 @@
-# 构建上下文瘦身：镜像构建只需要 crates/、src-tauri 的清单、前端源码与
-# host-core 的 include_str 数据（beets-tool 的插件表、protocol 镜像）。
+# 构建上下文瘦身：镜像构建需要 crates/、src-tauri 的清单、前端源码、
+# host-core 的 include_str 数据（beets-tool 的插件表、protocol 镜像），以及
+# beets 套件包构建阶段的全量 beets-tool 源（tools/build_bundle.py、third-party
+# 许可全文、requirements.lock）与 docker/beets/ 的提取器（docs/67）。
 target/
 ui/node_modules/
 ui/dist/
@@ -11,10 +13,10 @@ node_modules/
 docs/
 test-results/
 beets-tool/.venv/
+beets-tool/.runtime/
+beets-tool/.runtime-linux/
 beets-tool/dist/
-beets-tool/third-party/
 beets-tool/tests/
-beets-tool/tools/
 beets-tool/src/aiya_beets/data/*.bin
 sidecars/
 scripts/

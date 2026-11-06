@@ -34,7 +34,10 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "LGPL-3.0-or-later",
-      "vendor": "Qt5 Core（The Qt Company），随社区构建原样分发"
+      "vendor": "Qt5 Core（The Qt Company），随社区构建原样分发",
+      "platforms": [
+        "windows"
+      ]
     },
     {
       "name": "streaming_extractor_music",
@@ -53,7 +56,11 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "AGPL-3.0-or-later",
-      "vendor": "Essentia music extractor，带 Gaia/SVM（社区构建 brendanerofeev/essentia gaia-win64-2，源起 regorxxx 的 Actions 构建，commit 14dce99b）"
+      "vendor": "Essentia music extractor，带 Gaia/SVM（社区构建 brendanerofeev/essentia gaia-win64-2，源起 regorxxx 的 Actions 构建，commit 14dce99b）",
+      "platforms": [
+        "windows",
+        "linux"
+      ]
     },
     {
       "name": "ffmpeg",
@@ -74,7 +81,10 @@
       ],
       "probeAllowFail": false,
       "license": "GPL-3.0-or-later",
-      "vendor": "ffmpeg 7.1 essentials (gyan.dev)，经 PyPI imageio-ffmpeg 0.7.0 分发"
+      "vendor": "ffmpeg 7.1 essentials (gyan.dev)，经 PyPI imageio-ffmpeg 0.7.0 分发",
+      "platforms": [
+        "windows"
+      ]
     },
     {
       "name": "fpcalc",
@@ -95,7 +105,10 @@
       ],
       "probeAllowFail": false,
       "license": "LGPL-2.1-or-later",
-      "vendor": "chromaprint-fpcalc 1.6.2 (acoustid)"
+      "vendor": "chromaprint-fpcalc 1.6.2 (acoustid)",
+      "platforms": [
+        "windows"
+      ]
     },
     {
       "name": "svm-danceability",
@@ -114,7 +127,11 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）",
+      "platforms": [
+        "windows",
+        "linux"
+      ]
     },
     {
       "name": "svm-gender",
@@ -133,7 +150,11 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）",
+      "platforms": [
+        "windows",
+        "linux"
+      ]
     },
     {
       "name": "svm-genre_rosamerica",
@@ -152,7 +173,11 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）",
+      "platforms": [
+        "windows",
+        "linux"
+      ]
     },
     {
       "name": "svm-mood_acoustic",
@@ -171,7 +196,11 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）",
+      "platforms": [
+        "windows",
+        "linux"
+      ]
     },
     {
       "name": "svm-mood_aggressive",
@@ -190,7 +219,11 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）",
+      "platforms": [
+        "windows",
+        "linux"
+      ]
     },
     {
       "name": "svm-mood_electronic",
@@ -209,7 +242,11 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）",
+      "platforms": [
+        "windows",
+        "linux"
+      ]
     },
     {
       "name": "svm-mood_happy",
@@ -228,7 +265,11 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）",
+      "platforms": [
+        "windows",
+        "linux"
+      ]
     },
     {
       "name": "svm-mood_sad",
@@ -247,7 +288,11 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）",
+      "platforms": [
+        "windows",
+        "linux"
+      ]
     },
     {
       "name": "svm-mood_party",
@@ -266,7 +311,11 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）",
+      "platforms": [
+        "windows",
+        "linux"
+      ]
     },
     {
       "name": "svm-mood_relaxed",
@@ -285,7 +334,11 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）",
+      "platforms": [
+        "windows",
+        "linux"
+      ]
     },
     {
       "name": "svm-voice_instrumental",
@@ -304,7 +357,11 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）",
+      "platforms": [
+        "windows",
+        "linux"
+      ]
     },
     {
       "name": "svm-moods_mirex",
@@ -323,7 +380,11 @@
       "probe": [],
       "probeAllowFail": true,
       "license": "MTG-Model-Notice",
-      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
+      "vendor": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）",
+      "platforms": [
+        "windows",
+        "linux"
+      ]
     }
   ],
   "plugins": [

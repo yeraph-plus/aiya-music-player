@@ -96,7 +96,8 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（可选�
 
 同一套 Svelte UI + Rust 服务端单二进制（`aiya-server`）的容器部署形态：
 播放经浏览器（HTTP Range / `<audio>`），解码不在服务端；扫描、歌单、播放
-队列、记账与事件流（SSE）全量可用，beets 集成暂缺（Linux 套件包规划中）。
+队列、记账与事件流（SSE）全量可用。beets 集成随镜像分发（Linux 套件包，
+docs/67），首启后在「整理库」页点一次安装即可。
 
 ```sh
 docker compose up -d --build
@@ -108,8 +109,9 @@ docker compose up -d --build
 - 登录门（可选，单管理员）：设置 `AIYA_ADMIN_PASSWORD` 后浏览器进闸登录
   （静态页面公开、命令与媒体面凭据放行，会话 7 天滑动过期）；`AIYA_TOKEN`
   作为脚本/curl 的第二凭据并行可用；TLS/反代交给部署方；
-- 无 beets 时曲库/播放/歌单完整可用（编译期边界保证），设置页的 Beets 入口
-  显示未安装三态。
+- beets 随镜像内置（Linux 套件包，含 Essentia 提取器与 12 件 SVM 模型）：
+  「整理库」页点一次安装，索引增强（bpm/情绪/流派）与整理链路可用；
+  未安装时曲库/播放/歌单完整可用（编译期边界保证），页面显示三态。
 
 ## License
 

@@ -40,7 +40,7 @@ OPTIONAL_KEYS = {"indexForced"}
 BINARY_KEYS = {
     "name", "target", "bundle", "why", "carrier", "size", "sha256", "license", "vendor",
 }
-BINARY_OPTIONAL = {"probe", "probeAllowFail"}
+BINARY_OPTIONAL = {"probe", "probeAllowFail", "platforms"}
 BINARY_BOOLS = ("bundle",)
 CARRIER_KEYS = {"kind", "url", "size", "sha256", "member"}
 
@@ -147,6 +147,10 @@ def validate(doc: dict) -> list[str]:
             errs.append(f"binaries[{i}] 不是对象")
             continue
         unknown = set(item) - BINARY_KEYS - BINARY_OPTIONAL
+        if "platforms" in item:
+            pf = item["platforms"]
+            if not isinstance(pf, list) or not pf or set(pf) - {"windows", "linux"}:
+                item_errors.append("platforms 必须是非空的 windows/linux 子集")
         if unknown:
             errs.append(f"binaries[{i}] 有多余键：{sorted(unknown)}（打错字就会静默失效）")
         absent = BINARY_KEYS - set(item)
