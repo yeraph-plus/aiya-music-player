@@ -175,11 +175,18 @@
     plDlg = true;
   }
 
+  /** 搜索命中缓存（id→显示名）：已选列表用它显示非本轮命中的曲目名 */
+  let plHitNames = $state(new Map<string, string>());
+
   async function searchTracks(): Promise<void> {
     const q = plSearch.trim();
     if (!q) return;
     const page = await ipc.library.list({ search: q, offset: plSearchPage * 30, limit: 30 });
+    for (const tr of page.items) {
+      plHitNames.set(tr.id, `${tr.title}${tr.artist ? ` — ${tr.artist}` : ''}`);
+    }
     plSearchHits = page.items.map((tr) => ({ id: tr.id, title: tr.title, artist: tr.artist }));
+    plSearchPage += 1;
   }
 
   function toggleHit(id: string): void {
@@ -557,6 +564,21 @@
             {/each}
           </ul>
           <p class="st-card-meta">{t('station.plTracks', { count: plDraft.trackIds.length })}</p>
+          {#if plDraft.trackIds.length > 0}
+            <ul class="st-chosen">
+              {#each plDraft.trackIds as tid (tid)}
+                <li class="st-chosen-row">
+                  <span class="st-chosen-name">{plHitNames.get(tid) ?? tid}</span>
+                  <IconButton label={t('station.plRemoveTrack')} size="sm" onclick={() => toggleHit(tid)}>
+                    <Trash2 size={12} />
+                  </IconButton>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          {#if plSearchHits.length > 0}
+            <Button variant="ghost" onclick={() => void searchTracks()}>{t('station.plSearchMore')}</Button>
+          {/if}
         {/if}
         <div class="st-form-ops">
           <Button variant="primary" disabled={busy || !plDraft.name.trim()} onclick={() => void savePlaylist()}>
@@ -675,5 +697,8 @@
   .st-day { padding: 5px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); background: none; color: inherit; cursor: pointer; font: inherit; font-size: 12px; }
   .st-day.on { background: var(--accent, #7aa2f7); border-color: transparent; color: #10101a; }
   .st-hits { list-style: none; margin: 0; padding: 0; max-height: 180px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+  .st-chosen { list-style: none; margin: 0; padding: 0; max-height: 140px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+  .st-chosen-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .st-chosen-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .st-hit { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
 </style>

@@ -72,7 +72,9 @@ function newLiveId(): string {
  * 旧数据归一：磁盘上的历史条目缺 id / addedAtMs / source（地基字段是后补的，
  * 存储层是 schemaless JSON，读出来缺键不炸），在这里按确定性规则补齐。
  * 每次加载结果一致（legacy id 由 URL 派生），所以**不需要写回**也能稳定。
- * url 都没有的条目是彻底的坏数据，丢弃。
+ * url 都没有的条目是彻底的坏数据，丢弃。source 只补缺不覆盖——service 档
+ * （服务端站单）在写盘回程被这里抹掉的话，mergeServiceStations 的分流判据
+ * 就失效了（审查 P1-3）。
  */
 export function normalizeLiveRecent(raw: unknown): LiveRecentEntry[] {
   if (!Array.isArray(raw)) return [];
@@ -90,7 +92,7 @@ export function normalizeLiveRecent(raw: unknown): LiveRecentEntry[] {
       ...(typeof o.description === 'string' && o.description
         ? { description: o.description }
         : {}),
-      source: 'manual',
+      source: o.source === 'service' ? 'service' : 'manual',
       addedAtMs: typeof o.addedAtMs === 'number' && o.addedAtMs >= 0 ? o.addedAtMs : 0,
     });
   }
@@ -153,7 +155,8 @@ export function mergeServiceStations(
 ): LiveRecentEntry[] {
   const out = [...list];
   for (const st of summaries) {
-    const idx = out.findIndex((item) => item.id === st.id);
+    let idx = out.findIndex((item) => item.id === st.id);
+    if (idx < 0) idx = out.findIndex((item) => item.url === st.hlsUrl);
     if (idx >= 0) {
       const prev = out[idx];
       const merged: LiveRecentEntry = {
@@ -161,18 +164,29 @@ export function mergeServiceStations(
         url: st.hlsUrl, // url 可随部署变，服务端权威
         source: 'service',
       };
-      // 只补空白：prev 已有值（用户填过或上轮下发）一律保旧
+      // 字段合并按 source 分流（审查 P1-1）："用户字段赢"无法区分用户值
+      // 与上轮服务端值（首见即冻结）——service 卡的四字段直接以服务端为
+      // 准（用户的元数据编辑入口在 StationPanel），manual 卡按 id/url 命中
+      // 的才走"只补空白"。
       const server: Record<string, string | null> = {
         title: st.name,
         subtitle: st.subtitle,
         description: st.description,
         cover: st.coverUrl,
       };
-      for (const key of ['title', 'subtitle', 'description', 'cover'] as const) {
-        if (!prev[key] && server[key]) merged[key] = server[key] as string;
+      if (prev.source === 'service') {
+        for (const key of ['title', 'subtitle', 'description', 'cover'] as const) {
+          if (server[key]) merged[key] = server[key] as string;
+          else delete merged[key];
+        }
+      } else {
+        for (const key of ['title', 'subtitle', 'description', 'cover'] as const) {
+          if (!prev[key] && server[key]) merged[key] = server[key] as string;
+        }
       }
       out[idx] = merged;
     } else {
+      // 站单卡不占「最近打开」上限（频道数远小于 20；截尾会把服务端卡挤掉）
       out.push({
         id: st.id,
         url: st.hlsUrl,

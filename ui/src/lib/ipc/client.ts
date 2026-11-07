@@ -361,7 +361,7 @@ export const ipc = {
       stationId: string,
       input: { name: string; subtitle: string | null; description: string | null; coverUrl: string | null; visibility: string },
     ) => call<StationSummary>('station_update', { stationId, ...input }),
-    remove: (stationId: string) => call<Record<string, never>>('station_delete', { stationId }),
+    remove: (stationId: string) => call<void>('station_delete', { stationId }),
     /** 歌单与节目表都是整表提交（UI 发完整列表，server 事务全删全插） */
     setPlaylists: (
       stationId: string,

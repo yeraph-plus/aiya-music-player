@@ -15,6 +15,7 @@ export const stationZh = {
   'station.listSubtitle': '自建直播电台：编排歌单与节目表，开播后进入收听列表',
   'station.new': '新建频道',
   'station.empty': '还没有频道。新建一个，编排歌单与节目表后开播。',
+  'station.loadFailed': '频道列表加载失败——检查服务连接后重试。',
   'station.stateOn': '开播中',
   'station.stateOff': '已停播',
   'station.nowPlaying': '正在播：{title}',
@@ -58,6 +59,7 @@ export const stationZh = {
   'station.plSearchEmpty': '没有匹配的曲目',
   'station.plSearchMore': '加载更多',
   'station.plRemoveTrack': '移出歌单',
+  'station.plRemoveConfirm': '删除歌单「{name}」？绑定的节目表时段会一并解除。',
   'station.plRandomHint': '按曲库随机播放，自动避开近期播过的歌（防重复窗口）。',
   'station.plManualHint': '按固定列表顺序随机播放。',
 
@@ -103,6 +105,7 @@ export const stationEn: Record<keyof typeof stationZh, string> = {
   'station.listSubtitle': 'Your own radio: arrange playlists & schedules, go on air into the listen list',
   'station.new': 'New station',
   'station.empty': 'No stations yet. Create one, arrange playlists & schedules, then go on air.',
+  'station.loadFailed': 'Station list failed to load — check the server connection and retry.',
   'station.stateOn': 'On air',
   'station.stateOff': 'Stopped',
   'station.nowPlaying': 'Now playing: {title}',
@@ -144,6 +147,7 @@ export const stationEn: Record<keyof typeof stationZh, string> = {
   'station.plSearchEmpty': 'No matching tracks',
   'station.plSearchMore': 'Load more',
   'station.plRemoveTrack': 'Remove from playlist',
+  'station.plRemoveConfirm': 'Delete playlist "{name}"? Its schedule slots get unbound.',
   'station.plRandomHint': 'Random from the library, avoiding recently played tracks.',
   'station.plManualHint': 'Random play over a fixed list.',
 

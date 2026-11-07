@@ -128,10 +128,11 @@ pub struct StationCreate {
 }
 
 pub fn create_station(conn: &Connection, input: &StationCreate) -> DbResult<StationRow> {
-    let now = now_secs();
     // id 从名字 + 创建时刻派生（v5 稳定语义：一旦生成永不因改名变）；
-    // hls_dir 取 id 前 8 位，唯一索引兜底撞名（同毫秒同名理论碰撞重试一次）
+    // hls_dir 取 id 前 8 位，唯一索引兜底撞名（同毫秒同名理论碰撞重试一次）。
+    // 盐（now）在循环体内取：撞名重试必须派生出不同的 id，冻结的盐让重试恒败。
     for _ in 0..2 {
+        let now = now_secs();
         let id = ids::station_id(&input.name, now);
         let hls_dir = format!("ch{}", &id[..8.min(id.len())]);
         let dup = conn
@@ -221,13 +222,38 @@ pub fn replace_playlists(
 ) -> DbResult<Vec<StationPlaylistRow>> {
     let now = now_secs();
     let tx = conn.transaction()?;
+    // 位置继承 id：整表提交语义下 UI 保持顺序——输入第 i 项继承旧表第 i 行
+    // 的 id（未变/改名/中删后前移都自然对齐内容），station_schedules 对旧 id
+    // 的引用因此存活，不会被 ON DELETE CASCADE 连带清空。新增项才派生新 id。
+    // 改名不断节目表绑定（绑定跟随"第 i 个歌单"这个位置语义）。
+    let prev_ids: Vec<String> = {
+        let mut stmt = tx.prepare(
+            "SELECT id FROM station_playlists WHERE station_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map([station_id], |r| r.get::<_, String>(0))?;
+        let mut v = Vec::new();
+        for r in rows {
+            v.push(r?);
+        }
+        v
+    };
+    let ids_by_input: Vec<String> = inputs
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            prev_ids
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| ids::station_playlist_id(station_id, &p.name, now))
+        })
+        .collect();
     tx.execute(
         "DELETE FROM station_playlists WHERE station_id = ?1",
         [station_id],
     )?;
-    for p in inputs {
-        let id = ids::station_playlist_id(station_id, &p.name, now);
-        let track_ids = if p.track_ids.is_empty() {
+    for (p, id) in inputs.iter().zip(ids_by_input.iter()) {
+        // 位置继承的行视为"同一歌单的重建"：created_at 取 now（行级重建时刻）
+        let track_ids: Option<String> = if p.track_ids.is_empty() {
             None
         } else {
             Some(
@@ -237,8 +263,10 @@ pub fn replace_playlists(
         };
         tx.execute(
             "INSERT INTO station_playlists (id, station_id, name, kind, track_ids_json, rule_json, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
-            params![id, station_id, p.name, p.kind, track_ids, p.rule_json, now],
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(id) DO UPDATE SET name = ?3, kind = ?4, track_ids_json = ?5,
+               rule_json = ?6, updated_at = ?8",
+            params![id, station_id, p.name, p.kind, track_ids, p.rule_json, now, now],
         )?;
     }
     tx.commit()?;

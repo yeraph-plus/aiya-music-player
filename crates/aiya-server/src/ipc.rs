@@ -1337,6 +1337,8 @@ async fn dispatch(
                     )
                 })
                 .map_err(ApiError::from)?;
+            // 内存频道表快照同步：public→private 立即回收 /hls 豁免（审查 P0-2）
+            st.station.set_visibility(&row.id, &row.visibility);
             to_value(station_summary(st, &row))
         }
         "station_delete" => {
@@ -1346,9 +1348,13 @@ async fn dispatch(
             db_lock(st)
                 .send(move |conn| aiya_data::station::delete_station(conn, &row.id))
                 .map_err(ApiError::from)?;
-            // 段目录（含 conf/ON/段/日志）随频道走；失败不拦（GC 批兜底）
+            // 段目录与顶层 conf/{dir}（审查 P2-1：conf 残留会被 keeper 复活）
+            // 都随频道走；失败不拦（boot GC 兜底段目录，conf 由 GC 的孤儿检测
+            // 不覆盖——此处是唯一清理点）
             if let Some(root) = st.station.hls_root() {
                 let _ = std::fs::remove_dir_all(root.join(&row.hls_dir));
+                let dir = row.hls_dir.clone();
+                let _ = std::fs::remove_dir_all(root.join("conf").join(dir));
             }
             ok(json!({}))
         }

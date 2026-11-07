@@ -192,6 +192,8 @@ import TextTabs from '../components/ui/TextTabs.svelte';
 
   function onKeydown(event: KeyboardEvent): void {
     if (adding || event.altKey || event.ctrlKey || event.metaKey) return;
+    // 我的频道 tab 下卡组是隐藏视图：方向键不再驱动 browseIndex
+    if (tab !== 'listen') return;
     if (event.key === 'ArrowLeft') swap('left');
     else if (event.key === 'ArrowRight') swap('right');
   }

@@ -44,9 +44,20 @@ services:
 
   liquidsoap:
     image: savonet/liquidsoap:v2.4.6
-    # 1ms 镜像源可达性按部署环境替换（如 docker.1ms.run/savonet/liquidsoap）
+    # 官方 release tag 镜像可能随重建变动——生产建议 digest 钉扎：
+    # image: savonet/liquidsoap:v2.4.6@sha256:<digest>
+    # 镜像源实测（docs/68 §13.3）：1ms 对该镜像挂起、daocloud 白名单不含
+    # savonet——不可达时走 HTTP 代理手工 OCI 拉取（§13.3）或自托管 mirror。
+    # root 运行（实测要求，docs/68 §13.2）：官方镜像默认 uid 100(liquidsoap)
+    # 写不动 server(root) 建的卷目录。信任链内成立：无 ports（telnet 仅
+    # compose 内网）、卷面仅 /hls、配置仅 server 写、keeper 脚本只读挂载；
+    # 若镜像未来改默认用户，把 /hls 卷目录 chown 给该 uid 即可摘 root。
+    user: root
     volumes:
       - aiya-hls:/hls
+      # 曲库同款只读挂载（m3u 里的文件路径在 liq 侧解析，路径必须与
+      # aiya-server 侧一致——两处挂载点改要一起改）
+      - /path/to/music:/music:ro
       - ./docker/liq-keeper.sh:/keeper.sh:ro
     command: ["sh", "/keeper.sh"]
     restart: unless-stopped
