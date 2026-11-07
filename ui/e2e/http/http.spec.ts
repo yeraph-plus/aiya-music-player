@@ -127,3 +127,40 @@ test('会话刷新直进 + 双语抽查（English）', async ({ page }) => {
   await page.getByRole('radio', { name: 'English' }).click();
   await expect(page.getByText('Library folders')).toBeVisible();
 });
+
+test('推流频道：建频道进列表 + 站单卡片进收听 tab + 频道删除', async ({ page }) => {
+  await login(page);
+  // 曲库导航到直播页：双 tab（caps.streaming web 形态才渲染「我的频道」）
+  await page.locator('aside button', { hasText: /直播|Live/ }).click();
+  await expect(page.locator('.text-tab', { hasText: /我的频道|My stations/ })).toBeVisible();
+  await page.locator('.text-tab', { hasText: /我的频道|My stations/ }).click();
+  await expect(page.getByText(/还没有频道|No stations yet/)).toBeVisible();
+
+  // 新建频道（public）：保存后进详情（歌单/节目表编排入口），返回列表见卡
+  await page.getByRole('button', { name: /新建频道|New station/ }).click();
+  await page.getByPlaceholder(/如「深夜 FM」|Midnight FM/).fill('E2E Radio');
+  await page.locator('select').first().selectOption('public');
+  await page.getByRole('button', { name: /保存|Save/ }).click();
+  await expect(page.getByRole('heading', { name: 'E2E Radio' })).toBeVisible();
+  await page.locator('.st-back').click();
+  await expect(page.locator('.st-card-name', { hasText: 'E2E Radio' })).toBeVisible();
+
+  // 站单下发：切回收听 tab，service 卡片自动出现（hlsUrl 合并进 liveRecent）
+  await page.locator('.text-tab', { hasText: /收听|Listen/ }).click();
+  await expect(page.getByText('E2E Radio').first()).toBeVisible();
+
+  // 元数据编辑：改 visibility 保存 → 列表卡 meta 变「公开」
+  await page.locator('.text-tab', { hasText: /我的频道|My stations/ }).click();
+  await page.locator('.st-card-name', { hasText: 'E2E Radio' }).click();
+  await page.getByRole('button', { name: /编辑|Edit/ }).click();
+  await page.locator('select').first().selectOption('private');
+  await page.getByRole('button', { name: /保存|Save/ }).click();
+  await expect(page.getByRole('heading', { name: 'E2E Radio' })).toBeVisible();
+  await page.locator('.st-back').click();
+  await expect(page.locator('.st-card', { hasText: 'E2E Radio' })).toContainText(/私人|Private/);
+
+  // 清理：删除频道（confirm 对话框接受）
+  page.on('dialog', (d) => void d.accept());
+  await page.locator('.st-card', { hasText: 'E2E Radio' }).locator('button[aria-label*="删除"], button[aria-label*="Delete"]').click();
+  await expect(page.locator('.st-card-name', { hasText: 'E2E Radio' })).toHaveCount(0);
+});

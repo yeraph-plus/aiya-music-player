@@ -19,8 +19,9 @@ import { beetsZh, beetsEn } from './i18n/domains/beets';
 import { libZh, libEn } from './i18n/domains/lib';
 import { nowZh, nowEn } from './i18n/domains/now';
 import { eqZh, eqEn } from './i18n/domains/eq';
+import { stationZh, stationEn } from './i18n/domains/station';
 
-const zh = { ...coreZh, ...settingsZh, ...shellZh, ...libraryZh, ...liveZh, ...beetsZh, ...libZh, ...nowZh, ...eqZh };
+const zh = { ...coreZh, ...settingsZh, ...shellZh, ...libraryZh, ...liveZh, ...beetsZh, ...libZh, ...nowZh, ...eqZh, ...stationZh };
 const en: Record<keyof typeof zh, string> = {
   ...coreEn,
   ...settingsEn,
@@ -31,6 +32,7 @@ const en: Record<keyof typeof zh, string> = {
   ...libEn,
   ...nowEn,
   ...eqEn,
+  ...stationEn,
 };
 
 export type Msg = keyof typeof zh;

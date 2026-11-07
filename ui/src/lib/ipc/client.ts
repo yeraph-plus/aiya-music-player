@@ -56,6 +56,10 @@ import type {
   ScanCancel,
   ScanResult,
   SpectrumToggle,
+  StationDetail,
+  StationPlaylist,
+  StationSchedule,
+  StationSummary,
   TrackDetail,
   TrackPage,
 } from './generated';
@@ -341,6 +345,39 @@ export const ipc = {
       call<PlayerState>('live_open', { url, title: title ?? null }),
     /** 选一个本地 m3u8/m3u 文件；取消回 null（取消不是错误） */
     pick: () => call<string | null>('live_pick_playlist'),
+  },
+
+  /**
+   * 推流频道（docs/68 §6）：**server 专属面**——调用方必须以
+   * `backendCaps().streaming` 为门（桌面壳没有这些命令，invoke 会 404）。
+   * 参数是动态 Value 侧解析（与 live/history 同款），这里用结构类型。
+   */
+  station: {
+    list: () => call<StationSummary[]>('station_list', {}),
+    get: (stationId: string) => call<StationDetail>('station_get', { stationId }),
+    create: (input: { name: string; subtitle: string | null; description: string | null; coverUrl: string | null; visibility: string }) =>
+      call<StationSummary>('station_create', { ...input }),
+    update: (
+      stationId: string,
+      input: { name: string; subtitle: string | null; description: string | null; coverUrl: string | null; visibility: string },
+    ) => call<StationSummary>('station_update', { stationId, ...input }),
+    remove: (stationId: string) => call<Record<string, never>>('station_delete', { stationId }),
+    /** 歌单与节目表都是整表提交（UI 发完整列表，server 事务全删全插） */
+    setPlaylists: (
+      stationId: string,
+      playlists: { name: string; kind: string; trackIds: string[] | null; ruleJson: string | null }[],
+    ) => call<{ playlists: StationPlaylist[] }>('station_set_playlists', { stationId, playlists }),
+    setSchedules: (
+      stationId: string,
+      schedules: { playlistId: string; startHm: string; endHm: string; daysMask: number; priority: number }[],
+    ) => call<{ schedules: StationSchedule[] }>('station_set_schedules', { stationId, schedules }),
+    /** 开播/停播：先落库再起管/摘管——重启后 boot 按 active=1 批量拉起 */
+    activate: (stationId: string, active: boolean) =>
+      call<StationSummary>('station_activate', { stationId, active }),
+    skip: (stationId: string) => call<{ raw: string }>('station_skip', { stationId }),
+    /** 点歌插播（fallback 链顶，下一轨即播） */
+    push: (stationId: string, trackId: string) =>
+      call<{ raw: string }>('station_push', { stationId, trackId }),
   },
 
   history: {

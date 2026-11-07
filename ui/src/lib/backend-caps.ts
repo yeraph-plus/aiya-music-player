@@ -24,11 +24,21 @@ export interface BackendCaps {
   shell: boolean;
   /** 系统目录/文件选择器（pick_folder 系命令）：窗口壳能力，浏览器没有 */
   pickFolder: boolean;
+  /** 推流频道（docs/68）：server 专属面——频道管理、节目表、站单下发。
+   *  桌面壳不编译 station 域，web 宿主恒有（镜像内置 liquidsoap）。 */
+  streaming: boolean;
 }
 
 export function backendCaps(): BackendCaps {
   const web =
     typeof window !== 'undefined' &&
     !!(window as { __AIYA_WEB__?: unknown }).__AIYA_WEB__;
-  return { eq: !web, output: !web, preventSleep: !web, shell: !web, pickFolder: !web };
+  return {
+    eq: !web,
+    output: !web,
+    preventSleep: !web,
+    shell: !web,
+    pickFolder: !web,
+    streaming: web,
+  };
 }

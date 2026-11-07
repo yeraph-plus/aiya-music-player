@@ -129,3 +129,61 @@ export function rememberLive(
   next.unshift(merged);
   return next.slice(0, limit);
 }
+
+/**
+ * 站单下发（docs/68 §12.1/§12.3）：把服务端频道列表合并进「最近打开」。
+ *
+ * 合并方向与 rememberLive **相反**——rememberLive 是"现在带的信息优先"
+ * （开播现场带 url+name），站单是"**用户已填字段赢、服务端只补空白**"
+ * （LIVE_STATION_FIELDS 契约：服务端权威 id、url 随部署更新、用户填过的
+ * title/subtitle/描述不被覆盖）。id 用服务端权威 id（station.id），所以
+ * 同一频道换端口/换部署不会长出第二张卡。被删除的频道不再下发——已下发
+ * 的旧卡片保留（用户可以手动 forget），不做反向清除。
+ */
+export function mergeServiceStations(
+  list: readonly LiveRecentEntry[],
+  summaries: {
+    id: string;
+    name: string;
+    subtitle: string | null;
+    description: string | null;
+    coverUrl: string | null;
+    hlsUrl: string;
+  }[],
+): LiveRecentEntry[] {
+  const out = [...list];
+  for (const st of summaries) {
+    const idx = out.findIndex((item) => item.id === st.id);
+    if (idx >= 0) {
+      const prev = out[idx];
+      const merged: LiveRecentEntry = {
+        ...prev,
+        url: st.hlsUrl, // url 可随部署变，服务端权威
+        source: 'service',
+      };
+      // 只补空白：prev 已有值（用户填过或上轮下发）一律保旧
+      const server: Record<string, string | null> = {
+        title: st.name,
+        subtitle: st.subtitle,
+        description: st.description,
+        cover: st.coverUrl,
+      };
+      for (const key of ['title', 'subtitle', 'description', 'cover'] as const) {
+        if (!prev[key] && server[key]) merged[key] = server[key] as string;
+      }
+      out[idx] = merged;
+    } else {
+      out.push({
+        id: st.id,
+        url: st.hlsUrl,
+        title: st.name || undefined,
+        subtitle: st.subtitle ?? undefined,
+        description: st.description ?? undefined,
+        cover: st.coverUrl ?? undefined,
+        source: 'service',
+        addedAtMs: Date.now(),
+      });
+    }
+  }
+  return out;
+}

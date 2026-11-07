@@ -10,7 +10,16 @@
   import { formatTime } from '../lib/format';
   import { t } from '../lib/i18n.svelte';
   import { ipc } from '../lib/ipc';
-  import { LIVE_SWAP_MS, livePhase, rememberLive, streamUrlOf } from '../lib/live';
+  import { backendCaps } from '../lib/backend-caps';
+import {
+  LIVE_SWAP_MS,
+  livePhase,
+  mergeServiceStations,
+  rememberLive,
+  streamUrlOf,
+} from '../lib/live';
+import StationPanel from '../components/station/StationPanel.svelte';
+import TextTabs from '../components/ui/TextTabs.svelte';
   import { reducedMotion } from '../lib/motion.svelte';
   import type { LiveRecentEntry } from '../lib/settings';
   import { notify } from '../stores/notify.svelte';
@@ -36,6 +45,31 @@
 
   /** 两侧各最多露出的层叠深度；更深的卡整体隐去但仍占位（轮到时从原位回来） */
   const STACK_DEPTH = 3;
+
+  /** 双 tab（docs/68 §12.3）：收听（现状卡组）/ 我的频道（推流管理器）。
+   *  管理器只在 web 宿主渲染（caps.streaming——桌面壳没有 station 命令）。 */
+  let tab = $state<'listen' | 'manage'>('listen');
+  const caps = backendCaps();
+
+  /** 站单下发：服务端频道列表合并进收听列表（source='service'，用户字段赢）。
+   *  挂载时拉一次；管理器每次变更（开播/停播/元数据保存）后由 onchanged 再拉。 */
+  async function pullStations(): Promise<void> {
+    if (!caps.streaming) return;
+    try {
+      const list = await ipc.station.list();
+      ui.applySettings({
+        ...ui.settings,
+        liveRecent: mergeServiceStations(ui.settings.liveRecent ?? [], list),
+      });
+    } catch {
+      // 站单是增强面：拉不到不影响收听列表本身
+    }
+  }
+
+  const liveTabs = $derived([
+    { id: 'listen', label: t('station.tabListen') },
+    { id: 'manage', label: t('station.tabManage') },
+  ]);
 
   let browseIndex = $state(0);
   /** 换流过渡进行中：锁住箭头与方向键，卡片不叠影 */
@@ -252,6 +286,11 @@
     }
   }
 
+  // 站单首拉：web 形态挂载即拉一次（服务端频道卡片自动进收听列表）
+  $effect(() => {
+    void pullStations();
+  });
+
   /** 按稳定身份移除（不是按 URL）：将来流的地址会变，身份不变 */
   function forget(id: string): void {
     const list = ui.settings.liveRecent ?? [];
@@ -280,6 +319,23 @@
     {/snippet}
   </Header>
 
+  {#if caps.streaming}
+    <div class="live-tabs">
+      <TextTabs
+        items={liveTabs}
+        value={tab}
+        label={t('station.tabAria')}
+        onchange={(id) => {
+          tab = id as 'listen' | 'manage';
+          if (tab === 'manage') void pullStations();
+        }}
+      />
+    </div>
+  {/if}
+
+  {#if tab === 'manage'}
+    <StationPanel onchanged={() => void pullStations()} />
+  {:else}
   <section class="deck">
     <div
       class="stage"
@@ -398,6 +454,7 @@
       {/if}
     </div>
   </section>
+  {/if}
 </div>
 
 {#if adding}
@@ -453,6 +510,7 @@
 {/if}
 
 <style>
+  .live-tabs { display: flex; justify-content: center; margin-bottom: 8px; }
   .live {
     --live-card-w: 250px;
     --live-card-h: 400px;

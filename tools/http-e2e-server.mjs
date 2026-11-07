@@ -22,6 +22,18 @@ function log(msg) {
 }
 
 /* ---- 1. 构建（增量；exe 已是最新时秒过） ---- */
+log('ui build (vite) …');
+// STATIC_DIR 托管的是构建产物——UI 源码改动必须先进 dist，否则 e2e 跑的是
+// 上一轮的前端（tabs/新组件"凭空消失"就是这么来的）。
+const uiBuild = spawnSync('npm', ['--prefix', join(ROOT, 'ui'), 'run', 'build'], {
+  stdio: 'inherit',
+  shell: process.platform === 'win32', // npm 是 .cmd，win 下 spawnSync 要经 shell
+});
+if (uiBuild.status !== 0) {
+  console.error(`[http-e2e] ui build failed (${uiBuild.status})`);
+  process.exit(1);
+}
+
 log('cargo build -p aiya-server …');
 const build = spawnSync('cargo', ['build', '-p', 'aiya-server'], {
   cwd: ROOT,

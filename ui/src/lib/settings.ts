@@ -239,7 +239,9 @@ export interface LiveRecentEntry {
    * 入库途径。manual = 手工添加；推流服务上线后其站单走 'service'，
    * 同步方向与覆盖优先级都以它判别。老数据缺省按 manual 归一。
    */
-  source: 'manual';
+  /** manual = 手工添加；service = 服务端站单下发（推流频道，docs/68）。
+   *  同步方向与覆盖优先级以它判别：service 卡的字段由服务端管，用户补填优先。 */
+  source: 'manual' | 'service';
   /** 入库时间（毫秒）。重开/补元数据不改变它——它是"何时进库"不是"何时最后听" */
   addedAtMs: number;
 }
