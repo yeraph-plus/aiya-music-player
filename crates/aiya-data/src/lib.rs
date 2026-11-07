@@ -17,6 +17,7 @@ pub mod queue;
 pub mod repo;
 pub mod scanner;
 pub mod smart;
+pub mod station;
 
 pub use artwork::{find_artwork, link, save_artwork, stage, StagedArtwork, ARTWORK_SCHEME};
 pub use db::{open, open_conn, DbError, DbHandle, DbResult};

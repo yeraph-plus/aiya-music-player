@@ -1,13 +1,17 @@
-# Web 版部署样例（docs/65 W5）：`docker compose up -d --build` 后浏览器打开
-# http://<host>:8787。曲库目录按只读挂载；数据（SQLite/封面缓存）进命名卷。
+# Web 版部署样例（docs/65 W5 + docs/68 v2 双容器）：`docker compose up -d
+# --build` 后浏览器打开 http://<host>:8787。曲库目录按只读挂载；数据
+# （SQLite/封面缓存）进命名卷；推流频道由 liquidsoap 容器承担（server 写
+# 配置 + keeper.sh 对账，段与配置走 aiya-hls 共享卷——两容器同一份文件）。
 #
 # 鉴权可选：设置 AIYA_ADMIN_PASSWORD 后浏览器进闸登录（单管理员）；AIYA_TOKEN
 # 是脚本/curl 的第二凭据（命令面走 Authorization 头，<audio>/SSE 走 `?token=`）。
 # ⚠ 无门（两个变量都留空）= 局域网无鉴权：命令面与 /stream 外部代理对局域网
 # 全开，口令以明文 env 存在（docker inspect 可见）——公网部署务必开闸并交给
 # HTTPS 反代，反代日志注意脱敏 `?token=` 查询参数（媒体面凭据在 URL 上）。
-# 跨域场景（反代与应用不同源）设 AIYA_CORS_ORIGIN=逗号分隔的 origin 白名单；
-# 同源访问不需要，默认不挂 CORS 层。
+# 频道可见性：private（默认）走登录门；public 频道的 /hls/{dir}/* 免凭据
+# （docs/68 §12.4）——分享场景才开。跨域场景（反代与应用不同源）设
+# AIYA_CORS_ORIGIN=逗号分隔 origin 白名单；同源访问不需要。
+# 不想要推流：删掉 liquidsoap 服务并摘 AIYA_LIQ_HOST/AIYA_HLS_ROOT 两行。
 services:
   aiya-server:
     build: .
@@ -18,6 +22,7 @@ services:
     volumes:
       - /path/to/music:/music:ro
       - aiya-data:/data
+      - aiya-hls:/hls
     environment:
       # 登录门：单管理员口令（必填才开闸；留空 = 局域网无鉴权，见上风险提示）
       - AIYA_ADMIN_PASSWORD=
@@ -29,7 +34,23 @@ services:
       # 应用内增删的根重启不回填）。宿主把任意目录挂进容器后在应用里配路径；
       # 不设此行 = 零根启动，等应用内添加
       - AIYA_MUSIC_DIR=/music
+      # 推流双容器（docs/68 §8）：LIQ_HOST 置位 = Sidecar 形态（配置写共享
+      # 卷 + telnet 走 compose 网络）；段根与 liq 容器挂载点对齐（/hls）
+      - AIYA_LIQ_HOST=liquidsoap
+      - AIYA_HLS_ROOT=/hls
+      # 节目表按容器本地时区解释；按部署地设置
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+
+  liquidsoap:
+    image: savonet/liquidsoap:v2.4.6
+    # 1ms 镜像源可达性按部署环境替换（如 docker.1ms.run/savonet/liquidsoap）
+    volumes:
+      - aiya-hls:/hls
+      - ./docker/liq-keeper.sh:/keeper.sh:ro
+    command: ["sh", "/keeper.sh"]
     restart: unless-stopped
 
 volumes:
   aiya-data:
+  aiya-hls:

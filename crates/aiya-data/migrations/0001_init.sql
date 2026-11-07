@@ -8,6 +8,8 @@
 --   * 0005 → idx_artists_name_norm / idx_albums_title_norm
 --   * 0006/0007 → 一次性数据回填/清理，新库无数据，不吸收
 --   * 0008/0009 → track_enrichment 建后即弃的净零对，不吸收
+--   * 0012 → stations / station_playlists / station_schedules / station_history
+--     （docs/68 自动 DJ 推流频道；桌面与 server 共库不分叉）
 --   * 0010 → queue_items 重建形（kind/track_id 可空 + payload + CHECK）
 --   * 0011 → idx_albums_artwork / idx_artists_artwork
 -- 设计依据 docs/02 §5.2：
@@ -186,3 +188,64 @@ CREATE INDEX idx_artists_name_norm ON artists (name_norm, id);
 CREATE INDEX idx_albums_title_norm ON albums (title_norm, id);
 CREATE INDEX idx_albums_artwork    ON albums(artwork_id);
 CREATE INDEX idx_artists_artwork   ON artists(artwork_id);
+
+
+-- ---------------------------------------------------------------- 推流频道（docs/68 §3）
+--
+-- 自动 DJ 频道面。id 一律 uuid v5（NS_* 常量，ids.rs）：服务端权威、创建后
+-- 改名不变（LIVE_STATION_FIELDS："服务端权威 id；容器/端口变更不影响"）。
+-- 时间列 unix 秒（对齐 playlists 惯例，DTO 层转毫秒）。
+CREATE TABLE stations (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  subtitle   TEXT,
+  description TEXT,
+  cover_url  TEXT,
+  -- 段目录名（ch<id 前 8 位>），唯一：/hls/{hls_dir} 是外部收听端看到的地址
+  hls_dir    TEXT NOT NULL,
+  -- private（默认，/hls 与 ws 过鉴权）| public（免鉴权，docs/68 §12.4）
+  visibility TEXT NOT NULL DEFAULT 'private',
+  -- 0=停播 1=开播（频道级开关；停播保留段目录与配置，再开播热恢复）
+  active     INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX idx_stations_hls_dir ON stations(hls_dir);
+
+-- 频道歌单：manual（UI 挑歌集合）| random_all（全库随机 + history 防重复）；
+-- rule_json 预留规则引擎（genre/权重），MVP 不消费
+CREATE TABLE station_playlists (
+  id             TEXT PRIMARY KEY,
+  station_id     TEXT NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
+  name           TEXT NOT NULL,
+  kind           TEXT NOT NULL DEFAULT 'manual',
+  track_ids_json TEXT,
+  rule_json      TEXT,
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL
+);
+CREATE INDEX idx_station_playlists_station ON station_playlists(station_id);
+
+-- 节目表：时段 → 歌单绑定。end_hm <= start_hm 表跨零点（渲染时 or 拼接展开）；
+-- days_mask bit0=周一 … bit6=周日；重叠时段 priority 高者赢（渲染 switch 展开）
+CREATE TABLE station_schedules (
+  id          TEXT PRIMARY KEY,
+  station_id  TEXT NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
+  playlist_id TEXT NOT NULL REFERENCES station_playlists(id) ON DELETE CASCADE,
+  start_hm    TEXT NOT NULL,
+  end_hm      TEXT NOT NULL,
+  days_mask   INTEGER NOT NULL,
+  priority    INTEGER NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX idx_station_schedules_station ON station_schedules(station_id);
+
+-- 频道播放记账：独立成表不进曲库 tracks.last_played（污染用户手动播放统计）；
+-- 防重复窗口按 (station_id, played_at) 查
+CREATE TABLE station_history (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  station_id TEXT NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
+  track_id   TEXT NOT NULL,
+  played_at  INTEGER NOT NULL
+);
+CREATE INDEX idx_station_history_station ON station_history(station_id, played_at);

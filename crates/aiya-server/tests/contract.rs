@@ -15,10 +15,28 @@ fn parse_client_calls(src: &str) -> BTreeSet<String> {
     let mut i = 0usize;
     while let Some(pos) = src[i..].find(needle) {
         let mut j = i + pos + needle.len();
-        // 剥类型参数：<T> / <T, U>
+        // 剥类型参数：<T> / <Record<K, V>>（嵌套泛型按深度配对——
+        // find('>') 会在嵌套层的第一个 > 提前收口，station_delete 由此漏认）
         if src[j..].starts_with('<') {
-            let Some(gt) = src[j..].find('>') else { break };
-            j += gt + 1;
+            let mut depth = 0usize;
+            let mut matched = false;
+            for (off, ch) in src[j..].char_indices() {
+                match ch {
+                    '<' => depth += 1,
+                    '>' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            j += off + 1;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !matched {
+                break;
+            }
         }
         let rest = src[j..].trim_start();
         if let Some(after) = rest.strip_prefix('(') {

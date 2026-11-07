@@ -34,7 +34,8 @@ ts-rs = "12"
 ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
 url = "2"
 # Web 版服务端壳（docs/65）：axum HTTP + SSE，tower-http 供 Range 静态服务与 CORS
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3"
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "cors"] }

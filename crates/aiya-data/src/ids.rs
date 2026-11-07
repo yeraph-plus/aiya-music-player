@@ -14,6 +14,9 @@ pub const NS_ALBUM: Uuid = Uuid::from_u128(0xab2e_6c30_8041_4d5c_bf7e_3c4d_5e6f_
 pub const NS_PLAYLIST: Uuid = Uuid::from_u128(0xbc3f_7d41_9152_4e6d_a08f_4d5e_6f70_8192);
 pub const NS_PLAYLIST_ITEM: Uuid = Uuid::from_u128(0xcd40_8e52_a263_4f7e_b190_5e6f_7081_92a3);
 pub const NS_ARTWORK: Uuid = Uuid::from_u128(0xde51_9f63_b374_408f_a2a1_6f70_8192_a3b4);
+pub const NS_STATION: Uuid = Uuid::from_u128(0xe162_a074_c485_419f_8a3b_5d6e_7f80_9a2b);
+pub const NS_STATION_PLAYLIST: Uuid = Uuid::from_u128(0xf273_b185_d596_42a0_9b4c_6e7f_8091_ab3c);
+pub const NS_STATION_SCHEDULE: Uuid = Uuid::from_u128(0xa384_c296_e6a7_43b1_ac5d_7f80_91a2_bc4d);
 
 pub fn track_id(path: &str) -> String {
     Uuid::new_v5(&NS_TRACK, path.as_bytes()).to_string()
@@ -98,4 +101,31 @@ mod tests {
             assert!(seen.insert(playlist_item_id()), "歌单行 id 重复");
         }
     }
+}
+
+/// 频道 ID。名字 + 创建时刻派生（同毫秒同名理论碰撞由建站层重试兜底）；
+/// 生成后与名字解耦——改名不换 id（LIVE_STATION_FIELDS 稳定身份语义）。
+pub fn station_id(name: &str, created_at_secs: i64) -> String {
+    Uuid::new_v5(&NS_STATION, format!("{name}@{created_at_secs}").as_bytes()).to_string()
+}
+
+pub fn station_playlist_id(station_id: &str, name: &str, created_at_secs: i64) -> String {
+    Uuid::new_v5(
+        &NS_STATION_PLAYLIST,
+        format!("{station_id}/{name}@{created_at_secs}").as_bytes(),
+    )
+    .to_string()
+}
+
+pub fn station_schedule_id(
+    station_id: &str,
+    playlist_id: &str,
+    start_hm: &str,
+    created_at_secs: i64,
+) -> String {
+    Uuid::new_v5(
+        &NS_STATION_SCHEDULE,
+        format!("{station_id}/{playlist_id}@{start_hm}@{created_at_secs}").as_bytes(),
+    )
+    .to_string()
 }

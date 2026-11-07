@@ -96,6 +96,17 @@ pub const ROUTED: &[&str] = &[
     "beets_preview",
     "beets_apply",
     "beets_cancel",
+    // station 频道面：DB 持久化，UI 经 LiveView「我的频道」接线
+    "station_list",
+    "station_get",
+    "station_create",
+    "station_update",
+    "station_delete",
+    "station_set_playlists",
+    "station_set_schedules",
+    "station_activate",
+    "station_skip",
+    "station_push",
     "beets_config_get",
     "beets_set_inbox",
     "beets_set_target",
@@ -118,6 +129,85 @@ pub const ROUTED: &[&str] = &[
     "library_scan_cancel",
     "library_roots_set",
 ];
+
+/* ---- station 组装（docs/68 §6：repo 行 → DTO；运行时字段来自控制层） ---- */
+
+fn station_row_of(
+    st: &crate::state::ServerState,
+    id: &str,
+) -> Result<aiya_data::station::StationRow, ApiError> {
+    let owned = id.to_string();
+    db_lock(st)
+        .send(move |conn| aiya_data::station::get_station(conn, &owned))
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::not_found(format!("station not found: {id}")))
+}
+
+fn station_summary(
+    st: &crate::state::ServerState,
+    row: &aiya_data::station::StationRow,
+) -> aiya_dto::station::StationSummary {
+    let (running, now_playing) = st.station.runtime_of(&row.id);
+    aiya_dto::station::StationSummary {
+        id: row.id.clone(),
+        name: row.name.clone(),
+        subtitle: row.subtitle.clone(),
+        description: row.description.clone(),
+        cover_url: row.cover_url.clone(),
+        hls_url: format!("/hls/{}/live.m3u8", row.hls_dir),
+        visibility: row.visibility.clone(),
+        active: row.active,
+        running,
+        now_playing,
+    }
+}
+
+fn station_playlist_dto(
+    r: &aiya_data::station::StationPlaylistRow,
+) -> aiya_dto::station::StationPlaylist {
+    let track_ids: Vec<String> = r
+        .track_ids_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    aiya_dto::station::StationPlaylist {
+        id: r.id.clone(),
+        name: r.name.clone(),
+        kind: r.kind.clone(),
+        track_ids,
+        rule_json: r.rule_json.clone(),
+    }
+}
+
+fn station_schedule_dto(
+    r: &aiya_data::station::StationScheduleRow,
+) -> aiya_dto::station::StationSchedule {
+    aiya_dto::station::StationSchedule {
+        id: r.id.clone(),
+        playlist_id: r.playlist_id.clone(),
+        start_hm: r.start_hm.clone(),
+        end_hm: r.end_hm.clone(),
+        days_mask: r.days_mask,
+        priority: r.priority,
+    }
+}
+
+fn station_detail(
+    st: &crate::state::ServerState,
+    row: &aiya_data::station::StationRow,
+) -> aiya_data::DbResult<aiya_dto::station::StationDetail> {
+    let id = row.id.clone();
+    let (pls, schs) = db_lock(st).send(move |conn| {
+        let pls = aiya_data::station::list_playlists(conn, &id)?;
+        let schs = aiya_data::station::list_schedules(conn, &id)?;
+        Ok((pls, schs))
+    })?;
+    Ok(aiya_dto::station::StationDetail {
+        summary: station_summary(st, row),
+        playlists: pls.iter().map(station_playlist_dto).collect(),
+        schedules: schs.iter().map(station_schedule_dto).collect(),
+    })
+}
 
 pub async fn invoke(
     State(st): St,
@@ -1192,6 +1282,175 @@ async fn dispatch(
             ok(json!({ "started": true }))
         }
         "beets_cancel" => ok(json!({ "requested": aiya_host_core::beets::cancel_session() })),
+        /* ---- station（docs/68 §6/§12：DB 频道面，N1.3） ---- */
+        "station_list" => {
+            let rows: Vec<aiya_data::station::StationRow> = db_lock(st)
+                .send(|conn| aiya_data::station::list_stations(conn))
+                .map_err(ApiError::from)?;
+            let out: Vec<aiya_dto::station::StationSummary> =
+                rows.iter().map(|r| station_summary(st, r)).collect();
+            to_value(out)
+        }
+        "station_get" => {
+            let id = s_arg(a, "stationId").ok_or_else(|| invalid_arg("stationId required"))?;
+            let row = station_row_of(st, &id)?;
+            let detail = station_detail(st, &row).map_err(ApiError::from)?;
+            to_value(detail)
+        }
+        "station_create" => {
+            let edit: aiya_dto::station::StationEdit =
+                serde_json::from_value(a.clone()).map_err(invalid_arg)?;
+            let vis = edit.visibility_or_default().to_owned();
+            let row = db_lock(st)
+                .send(move |conn| {
+                    aiya_data::station::create_station(
+                        conn,
+                        &aiya_data::station::StationCreate {
+                            name: edit.name,
+                            subtitle: edit.subtitle,
+                            description: edit.description,
+                            cover_url: edit.cover_url,
+                            visibility: vis,
+                        },
+                    )
+                })
+                .map_err(ApiError::from)?;
+            to_value(station_summary(st, &row))
+        }
+        "station_update" => {
+            let id = s_arg(a, "stationId").ok_or_else(|| invalid_arg("stationId required"))?;
+            let edit: aiya_dto::station::StationEdit =
+                serde_json::from_value(a.clone()).map_err(invalid_arg)?;
+            let vis = edit.visibility_or_default().to_owned();
+            let row = db_lock(st)
+                .send(move |conn| {
+                    aiya_data::station::update_station(
+                        conn,
+                        &id,
+                        &aiya_data::station::StationUpdate {
+                            name: edit.name,
+                            subtitle: edit.subtitle,
+                            description: edit.description,
+                            cover_url: edit.cover_url,
+                            visibility: vis,
+                        },
+                    )
+                })
+                .map_err(ApiError::from)?;
+            to_value(station_summary(st, &row))
+        }
+        "station_delete" => {
+            let id = s_arg(a, "stationId").ok_or_else(|| invalid_arg("stationId required"))?;
+            let row = station_row_of(st, &id)?;
+            let _ = st.station.stop(&row.id); // 未在跑时静默
+            db_lock(st)
+                .send(move |conn| aiya_data::station::delete_station(conn, &row.id))
+                .map_err(ApiError::from)?;
+            // 段目录（含 conf/ON/段/日志）随频道走；失败不拦（GC 批兜底）
+            if let Some(root) = st.station.hls_root() {
+                let _ = std::fs::remove_dir_all(root.join(&row.hls_dir));
+            }
+            ok(json!({}))
+        }
+        "station_set_playlists" => {
+            let id = s_arg(a, "stationId").ok_or_else(|| invalid_arg("stationId required"))?;
+            let edits: Vec<aiya_dto::station::StationPlaylistEdit> =
+                serde_json::from_value(a.get("playlists").cloned().unwrap_or(json!([])))
+                    .map_err(invalid_arg)?;
+            let inputs: Vec<aiya_data::station::PlaylistInput> = edits
+                .into_iter()
+                .map(|e| aiya_data::station::PlaylistInput {
+                    name: e.name,
+                    kind: e.kind,
+                    track_ids: e.track_ids.unwrap_or_default(),
+                    rule_json: e.rule_json,
+                })
+                .collect();
+            let rows = db_lock(st)
+                .send(move |conn| aiya_data::station::replace_playlists(conn, &id, &inputs))
+                .map_err(ApiError::from)?;
+            let out: Vec<aiya_dto::station::StationPlaylist> =
+                rows.iter().map(station_playlist_dto).collect();
+            ok(json!({ "playlists": out }))
+        }
+        "station_set_schedules" => {
+            let id = s_arg(a, "stationId").ok_or_else(|| invalid_arg("stationId required"))?;
+            let edits: Vec<aiya_dto::station::StationScheduleEdit> =
+                serde_json::from_value(a.get("schedules").cloned().unwrap_or(json!([])))
+                    .map_err(invalid_arg)?;
+            let inputs: Vec<aiya_data::station::ScheduleInput> = edits
+                .into_iter()
+                .map(|e| aiya_data::station::ScheduleInput {
+                    playlist_id: e.playlist_id,
+                    start_hm: e.start_hm,
+                    end_hm: e.end_hm,
+                    days_mask: e.days_mask,
+                    priority: e.priority,
+                })
+                .collect();
+            let rows = db_lock(st)
+                .send(move |conn| aiya_data::station::replace_schedules(conn, &id, &inputs))
+                .map_err(ApiError::from)?;
+            let out: Vec<aiya_dto::station::StationSchedule> =
+                rows.iter().map(station_schedule_dto).collect();
+            ok(json!({ "schedules": out }))
+        }
+        "station_activate" => {
+            let id = s_arg(a, "stationId").ok_or_else(|| invalid_arg("stationId required"))?;
+            let active = a.get("active").and_then(Value::as_bool).unwrap_or(false);
+            let row = station_row_of(st, &id)?;
+            if active {
+                // 先落库再起管：重启后 boot 按 active=1 批量拉起
+                db_lock(st)
+                    .send(move |conn| aiya_data::station::set_active(conn, &row.id, true))
+                    .map_err(ApiError::from)?;
+                let row = station_row_of(st, &id)?;
+                st.station
+                    .start(st, &row)
+                    .await
+                    .map_err(ApiError::internal)?;
+            } else {
+                let _ = st.station.stop(&id);
+                db_lock(st)
+                    .send(move |conn| aiya_data::station::set_active(conn, &row.id, false))
+                    .map_err(ApiError::from)?;
+            }
+            let row = station_row_of(st, &id)?;
+            to_value(station_summary(st, &row))
+        }
+        "station_skip" => {
+            let id = s_arg(a, "stationId").ok_or_else(|| invalid_arg("stationId required"))?;
+            to_value(st.station.skip(&id).await.map_err(ApiError::internal)?)
+        }
+        "station_push" => {
+            let id = s_arg(a, "stationId").ok_or_else(|| invalid_arg("stationId required"))?;
+            let track_id = a
+                .get("trackId")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| invalid_arg("trackId required"))?
+                .to_string();
+            let path: Option<String> = db_lock(st)
+                .send(move |conn| -> aiya_data::DbResult<Option<String>> {
+                    match conn.query_row(
+                        "SELECT path FROM tracks WHERE id = ?1 AND availability = 'online'",
+                        [&track_id],
+                        |r| r.get::<_, String>(0),
+                    ) {
+                        Ok(p) => Ok(Some(p)),
+                        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                        Err(e) => Err(aiya_data::DbError::Sql(e)),
+                    }
+                })
+                .map_err(ApiError::from)?;
+            let path = path.ok_or_else(|| ApiError::internal("track not found or offline"))?;
+            to_value(
+                st.station
+                    .push_file(&id, &path)
+                    .await
+                    .map_err(ApiError::internal)?,
+            )
+        }
         "beets_config_get" => {
             let host = crate::host::beets_host(st);
             let roots = host.library_roots().unwrap_or_default();

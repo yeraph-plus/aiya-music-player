@@ -98,3 +98,6 @@ tools/comment-gov/reports/
 # beets-tool 的 linux 套件构建缓存：build_bundle.py 测试期从 PBS 下载的
 # tar 缓存（约 76MB），与 .runtime/ 同类——现生成不入库
 beets-tool/.runtime-linux/
+
+# 会话临时产物（patch 脚本/镜像拉取中间件等），与 .workbuddy 同类
+.aiya-tmp/

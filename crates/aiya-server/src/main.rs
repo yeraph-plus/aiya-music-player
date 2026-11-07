@@ -10,6 +10,7 @@ mod ipc;
 mod media;
 mod scan;
 mod state;
+mod station;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -61,6 +62,7 @@ async fn main() {
         ),
         events: events::EventBus::new(),
         scan: scan::ScanCtl::new(),
+        station: station::StationCtl::new(),
         beets_install: std::sync::Arc::new(aiya_host_core::InstallRegistry::new()),
         last_played: Mutex::new((String::new(), 0)),
         last_persist_ms: std::sync::atomic::AtomicU64::new(0),
@@ -92,6 +94,10 @@ async fn main() {
         }
     }
     state::restore_queue(&st);
+    // 推流频道 boot：失败只记账不拦启动
+    if let Err(e) = station::boot(&st, &data_root).await {
+        tracing::error!(error = %e, "station boot failed");
+    }
     scan::spawn_timer(Arc::clone(&st));
 
     let port: u16 = std::env::var("AIYA_PORT")
@@ -116,8 +122,19 @@ async fn main() {
     if let Some(dir) = std::env::var("AIYA_FIXTURES_DIR").ok().map(PathBuf::from) {
         app = app.nest_service("/fixtures", ServeDir::new(dir));
     }
-    if let Some(dir) = std::env::var("AIYA_HLS_DIR").ok().map(PathBuf::from) {
-        app = app.nest_service("/hls", ServeDir::new(dir));
+    // /hls：station 频道段根（boot 先于 router 构建）优先；
+    // AIYA_HLS_DIR 试验位兜底（W0 spike 的手动通道）。
+    let hls_dir = st
+        .station
+        .hls_root()
+        .or_else(|| std::env::var("AIYA_HLS_DIR").ok().map(PathBuf::from));
+    if let Some(dir) = hls_dir {
+        // nest 内组合：ws 精确路由 + ServeDir fallback——`/hls/{dir}/ws` 与
+        // `/hls/{*tail}`（nest_service 的内部形态）在顶层共存会路由冲突 panic
+        let hls_router = Router::new()
+            .route("/{dir}/ws", get(crate::station::StationCtl::ws_endpoint))
+            .fallback_service(ServeDir::new(dir));
+        app = app.nest("/hls", hls_router);
     }
     app = match std::env::var("AIYA_STATIC_DIR").ok().map(PathBuf::from) {
         Some(dir) => app.fallback_service(ServeDir::new(dir)),

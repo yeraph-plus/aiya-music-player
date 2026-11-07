@@ -152,6 +152,11 @@ pub async fn middleware(
     if !st.auth.required() || is_public(req.uri().path()) {
         return next.run(req).await;
     }
+    // 公开频道豁免：/hls/{dir}/* 在 stations.visibility =
+    // public 时免凭据——豁免集在内存频道表里（Mutex 一次锁，不查 DB）。
+    if is_public_station(req.uri().path(), &st.station) {
+        return next.run(req).await;
+    }
     match credential(&req) {
         Some(token) if st.auth.validate(&token) => next.run(req).await,
         _ => (
@@ -226,4 +231,13 @@ pub async fn logout(
         st.auth.revoke(&token);
     }
     (StatusCode::OK, axum::Json(json!({ "revoked": true }))).into_response()
+}
+
+/// 公开频道的流面豁免：/hls/{public_dir}/ 前缀（ws 接触点将来同挂这里）。
+fn is_public_station(path: &str, station: &crate::station::StationCtl) -> bool {
+    let Some(rest) = path.strip_prefix("/hls/") else {
+        return false;
+    };
+    let dir = rest.split('/').next().unwrap_or_default();
+    !dir.is_empty() && station.public_dirs().iter().any(|d| d == dir)
 }

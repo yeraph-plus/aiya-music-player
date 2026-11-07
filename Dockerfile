@@ -1,6 +1,8 @@
-# Web 版镜像（docs/65 W5 + docs/67 beets Linux 轨集成）：node 构建前端 →
-# cargo 构建 server → beets 套件包构建（PBS + 提取器 + 模型）→ slim 运行时。
-# liquidsoap 层延后批次。网络环境适配：npm/crates/apt 走国内镜像。
+# Web 版镜像（docs/65 W5 + docs/67 beets Linux 轨集成 + docs/68 v2）：
+# node 构建前端 → cargo 构建 server → beets 套件包构建（PBS + 提取器 + 模型）
+# → slim 运行时。liquidsoap **不在本镜像**（v2 双容器：官方 savonet 镜像
+# 外置 + 配置卷 worker——体积账见 docs/68 §8）。网络环境适配：npm/crates/apt
+# 走国内镜像。
 #
 # beets 套件（docs/67 转正）：构建阶段跑 `build_bundle.py --platform linux`
 # 产出 `beets-portable-linux-x64.zip`；运行时层只带 zip 不展开——容器首启后
@@ -63,6 +65,8 @@ RUN cd /src/beets-tool \
 FROM debian:bookworm-slim AS runtime
 # libqt5core5a / libqt5concurrent5 / libdrm2：提取器的动态依赖（docs/67 ldd
 # 实测；Qt5 同为 5.15 ABI 兼容；libdrm 是"待宿主实测"项——实测必须显式装）。
+# liquidsoap 不在本镜像（docs/68 v2 双容器：官方 savonet 镜像外置 +
+# 配置卷 worker——apt 全家依赖 ~450MB 摘除，体积账见 docs/68 §8）。
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' \
       /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null || true \
  && apt-get update \

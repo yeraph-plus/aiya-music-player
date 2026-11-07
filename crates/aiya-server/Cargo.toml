@@ -10,6 +10,7 @@ aiya-dto = { path = "../aiya-dto" }
 aiya-beets-store = { path = "../aiya-beets-store" }
 aiya-host-core = { path = "../aiya-host-core" }
 axum.workspace = true
+futures-util.workspace = true
 tokio.workspace = true
 tower.workspace = true
 tower-http.workspace = true

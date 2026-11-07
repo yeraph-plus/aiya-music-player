@@ -44,6 +44,7 @@ pub mod lyrics;
 pub mod output;
 pub mod playlist;
 pub mod refresh;
+pub mod station;
 
 pub use app::{AppInfo, Diagnostics, RecentError, SpectrumToggle};
 pub use library::{LibraryStats, TrackDetail};
