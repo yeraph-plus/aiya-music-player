@@ -121,6 +121,15 @@ fn every_routed_command_is_called_by_the_ui() {
 fn every_ui_command_is_routed_or_desktop_only() {
     let routed = parse_routed(IPC_RS);
     let client = parse_client_calls(CLIENT_TS);
+    // client 侧同样要有规模下限（routed 侧同款守卫见 every_routed_command_is_
+    // called_by_the_ui）：这条的失败方向是"missing 为空即绿"——解析正则漂移成
+    // 空集/截断时，契约判定静默空转。当前调用面 101 条（ROUTED 90 +
+    // DESKTOP_ONLY 桌面专属），低于 60 只能是解析坏了，不是 UI 真缩了。
+    assert!(
+        client.len() >= 60,
+        "client.ts 调用解析疑似漂移（解析出 {} 条，应 ~101），契约判定空转",
+        client.len()
+    );
     let missing: Vec<_> = client
         .difference(&routed)
         .filter(|c| !TRANSPORT_INTERNAL.contains(&c.as_str()))

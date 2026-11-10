@@ -65,6 +65,10 @@ RUN cd /src/beets-tool \
 FROM debian:bookworm-slim AS runtime
 # libqt5core5a / libqt5concurrent5 / libdrm2：提取器的动态依赖（docs/67 ldd
 # 实测；Qt5 同为 5.15 ABI 兼容；libdrm 是"待宿主实测"项——实测必须显式装）。
+# ffmpeg / libchromaprint-tools(fpcalc)：catalog 里这些二进制的载体只有 win
+# （bins 在 linux 不去下载），linux 侧靠系统 PATH 兜底（plugins.exe_path →
+# shutil.which）。不装则 replaygain / convert / embedart / alternatives /
+# chroma 在 web 端永远 missing 且无自助补齐路径（2026-11-09 静态审查 P1）。
 # liquidsoap 不在本镜像（docs/68 v2 双容器：官方 savonet 镜像外置 +
 # 配置卷 worker——apt 全家依赖 ~450MB 摘除，体积账见 docs/68 §8）。
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' \
@@ -72,6 +76,7 @@ RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' \
  && apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
       libqt5core5a libqt5concurrent5 libdrm2 \
+      ffmpeg libchromaprint-tools \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=rust /app/target/release/aiya-server /app/aiya-server
 COPY --from=ui /app/ui/dist /app/ui

@@ -142,6 +142,10 @@ jobs:
           Write-Host "manifest: version=$($m.version) protocol=$($m.protocolVersion) plugins=$($m.plugins -join ',') binaries=$bins"
           & $py -m aiya_beets version
           if ($LASTEXITCODE -ne 0) { throw "包内 aiya_beets 跑不起来" }
+          # beets 本体 import：aiya_beets version 只打印常量，证不了 beets
+          # 在包里是好的——依赖装齐 ≠ 能导入（2026-11-11 测试面审查补的闸）
+          & $py -c "import beets; Write-Host ('beets ' + beets.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw "包内 beets 导入失败" }
           foreach ($mod in @("bs4")) {
             & $py -c "import $mod"
             if ($LASTEXITCODE -ne 0) { throw "预置插件依赖缺失：$mod" }

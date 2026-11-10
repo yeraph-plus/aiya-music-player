@@ -22,12 +22,14 @@ monkeypatch：**不改第三方文件**，装多少份、装到哪都不打架�
 `beets-xtractor` 的取值映射（`config_default.yml` 里的 path/type）本来是对的。
 补一行取路径比复刻整个插件便宜。
 
-## 为什么必须配 `highlevel.compute: 0`（cfg.XTRACTOR_PROFILE）
+## 为什么必须配 `highlevel.compute: 1`（cfg.XTRACTOR_PROFILE）
 
-我们下发的是 AcousticBrainz 那版 **win-i686** 提取器，它没编 Gaia2：配了
-svm_models 会 `Identifier 'GaiaTransform' not found in registry` 然后**退出 1、
-一个 json 都不产出**（docs/50 §2.5）。所以档位在配置里钉死，这里再兜一次——
-`run()` 会先自检那两条键，缺了就直接报可读错误而不是让用户看一天空表。
+提取器必须是**带 Gaia2 的构建**：没有它，配了 svm_models 会
+`Identifier 'GaiaTransform' not found in registry` 然后**退出 1、一个 json 都
+不产出**（docs/50 §2.5 的踩坑记录）。catalog 两个平台都满足这一前提：win 走
+brendanerofeev 的 gaia-win64 社区构建（docs/54），linux 走 MTG essentia-builds
+的 manylinux 构建（docs/67），12 件 SVM 模型按提取器同级的 models/ 解析成
+绝对路径。高档位下 danceability / mood 等 SVM 特征由此产出。
 """
 
 from __future__ import annotations

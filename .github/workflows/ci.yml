@@ -98,6 +98,36 @@ jobs:
           path: ui/playwright-report/
           retention-days: 7
 
+  # 生产平台是 Linux（Docker 部署 aiya-server），而上面一直只有 windows：
+  # 所有 cfg(unix) 测试（host-core canon_path 的 unix 8 条、extract_safely 的
+  # unix_mode 还原路径……）从未在线上执行过——2026-11-09 canon_path 的
+  # Windows 语义漏进 Linux 恰是这一类。本 job 跑 aiya-server 的完整依赖图：
+  # {server, host-core, data, player, dto, beets-client, beets-store}，与
+  # Dockerfile `cargo build -p aiya-server` 是同一编译面（Linux 可编译性有
+  # Docker 实证）。刻意不含 src-tauri（miow/windows 系）与 aiya-audio
+  # （wasapi 无 cfg 门，非 Windows 编不过）——它们进来的前提是先做平台解耦。
+  # fmt 也挂在这里：平台无关，windows job 没这道闸（审查发现 ⑥）。
+  linux-test:
+    name: Linux · 跨平台 crate 测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: fmt（--check，平台无关）
+        run: cargo fmt --check
+
+      - name: test（aiya-server 依赖图全量，含 cfg(unix) 用例）
+        run: cargo test -p aiya-server -p aiya-host-core -p aiya-data -p aiya-player -p aiya-dto -p aiya-beets-client -p aiya-beets-store
+
   beets:
     name: beets 契约与维护 smoke
     runs-on: windows-latest

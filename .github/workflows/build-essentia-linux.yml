@@ -89,9 +89,12 @@ jobs:
           with open(sys.argv[1], encoding="utf-8") as f:
               j = json.load(f)
           hl = j.get("highlevel", {})
-          if "danceability" not in hl:
-              raise SystemExit("FAIL highlevel 缺 danceability（模型没被加载？）"
-                               + str(list(hl)[:8]))
+          # 12 = SVM 全配齐时 highlevel 的键数（danceability/gender/genre_rosamerica
+          # + mood_* 8 件 + voice_instrumental/moods_mirex）。少键 = 有模型没被
+          # 加载——danceability 一个键做金丝雀会漏"部分模型缺席"。
+          if len(hl) < 12 or "danceability" not in hl:
+              raise SystemExit("FAIL highlevel 键数 %d（应 ≥12）或缺 danceability"
+                               "（模型没被全量加载？）: %s" % (len(hl), sorted(hl)[:8]))
           v = hl["danceability"]
           v = v.get("value") if isinstance(v, dict) else v
           print("SMOKE OK highlevel 键数 %d，danceability = %s" % (len(hl), v))

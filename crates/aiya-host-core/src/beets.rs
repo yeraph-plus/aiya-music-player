@@ -1213,10 +1213,17 @@ fn install_bundle_to(
         }
     }
 
-    for name in ["aiya-beets.exe", "python.exe"] {
+    // manifest 缺失/读不动时的兜底（正常包走不到这里：入口是构建时写死的）。
+    // 三个名字覆盖两平台的布局：win 在根（python.exe）或打包产物入口，
+    // linux 在 bin/（PBS 解释器，docs/67）。兜底只保证"能起"，入口契约在 manifest。
+    for (name, with_module_arg) in [
+        ("aiya-beets.exe", false),
+        ("python.exe", true),
+        ("bin/python3", true),
+    ] {
         let p = target.join(name);
         if p.is_file() {
-            let args = if name == "python.exe" {
+            let args = if with_module_arg {
                 vec!["-m".into(), "aiya_beets".into()]
             } else {
                 Vec::new()
@@ -1227,7 +1234,7 @@ fn install_bundle_to(
             });
         }
     }
-    Err("no entry point found after unpacking the bundle (missing manifest.json and no aiya-beets.exe)".to_string())
+    Err("no entry point found after unpacking the bundle (manifest.json missing or unreadable, and no known launcher present)".to_string())
 }
 
 /// 展开套件包的一件条目该落到哪个相对路径；`None` = 拒绝。

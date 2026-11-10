@@ -1152,55 +1152,11 @@ fn beets_cancel() -> Result<dto::beets::CancelRequested, dto::ApiError> {
  * 之后原件一直躺在那——不排除的话下次"整理入库"会把同一批文件再导一遍
  * （beets 库重复条目 → dump 同步 → 曲库出现离线重复行）。应用成功后 UI
  * 把源路径记进来，preview 时带 `options.excludePaths` 让工具跳过它们。
+ *
+ * 路径比较口径（canon_path / path_overlaps_roots / path_within_roots）只有
+ * 一份，在 aiya-host-core——server 壳的同一组命令（ipc.rs）走同一个实现，
+ * 分叉过的副本会漂（2026-11-09 审查把这里收编掉）。
  */
-
-/// Windows 路径归一（**仅用于比较**，展示/落库保留用户原始输入）：
-/// 分隔符统一成 `\`、小写、去尾分隔符。
-pub(crate) fn canon_path(p: &str) -> String {
-    p.trim()
-        .replace('/', "\\")
-        .trim_end_matches('\\')
-        .to_lowercase()
-}
-
-/// 两个目录是否有重叠：相等、a 在 b 里面、b 在 a 里面，三者都算。
-///
-/// 为什么"父目录"也算：`D:\` 与 `D:\Music` 不相等也不在对方里面（反方向），
-/// 但把 `D:\` 当作待整理目录，预览会递归扫到整个曲库——同一批文件被再导一遍。
-/// 三个方向覆盖完才叫"不重叠"。
-///
-/// 分隔符边界不能省：裸 `starts_with` 会把 `D:\Music Backup` 当成 `D:\Music`
-/// 的子目录（经典前缀陷阱，单元测试 `sibling_directory_is_allowed` 钉着）。
-fn paths_overlap(a: &str, b: &str) -> bool {
-    let (a, b) = (canon_path(a), canon_path(b));
-    if a.is_empty() || b.is_empty() {
-        return false;
-    }
-    a == b || a.starts_with(&format!("{b}\\")) || b.starts_with(&format!("{a}\\"))
-}
-
-/// inbox 与扫描根重叠校验：任一方向重叠都算冲突。
-fn path_conflicts_with_roots(path: &str, roots: &[String]) -> bool {
-    if canon_path(path).is_empty() {
-        return true;
-    }
-    roots.iter().any(|r| paths_overlap(path, r))
-}
-
-/// `path` 是否落在某个根的**内部或与之相等**（不含"是根的父目录"）。
-///
-/// 整理落点用的就是这条：落点在曲库之外 → 整理完的文件扫描器看不见，用户会
-/// 看到"整理成功了，曲库里没有"。
-pub(crate) fn path_within_roots(path: &str, roots: &[String]) -> bool {
-    let c = canon_path(path);
-    if c.is_empty() {
-        return false;
-    }
-    roots.iter().any(|r| {
-        let rc = canon_path(r);
-        !rc.is_empty() && (c == rc || c.starts_with(&format!("{rc}\\")))
-    })
-}
 
 /// 从 settings 读一个字符串键（空串视为未设置）。
 fn setting_str_value(conn: &rusqlite::Connection, key: &str) -> Option<String> {
@@ -1238,7 +1194,7 @@ fn beets_set_inbox(
     let trimmed = path.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let roots = roots_of(&app)?;
     if let Some(p) = trimmed {
-        if path_conflicts_with_roots(p, &roots) {
+        if aiya_host_core::path_overlaps_roots(p, &roots) {
             return Err(dto::ApiError::invalid_arg(
                 "inbox folder must not overlap with library folders",
             ));
@@ -1267,7 +1223,7 @@ fn beets_set_target(
 ) -> Result<dto::beets::BeetsConfig, dto::ApiError> {
     let p = path.trim().to_string();
     let roots = roots_of(&app)?;
-    if !path_within_roots(&p, &roots) {
+    if !aiya_host_core::path_within_roots(&p, &roots) {
         return Err(dto::ApiError::invalid_arg(
             "organize target must be inside a library folder",
         ));
@@ -1303,76 +1259,8 @@ fn beets_inbox_imported_add(
     Ok(beets::config_view(&*beets_host(&app), &roots))
 }
 
-/// 单元测试：路径重叠校验是这套入库模型的安全边界（inbox 混进扫描根 =
-/// 重复曲目），正反例都要钉死。
-#[cfg(test)]
-mod beets_config_tests {
-    use super::{canon_path, path_conflicts_with_roots, path_within_roots};
-
-    fn roots() -> Vec<String> {
-        vec!["D:\\Music".into(), "E:\\Audio\\FLAC".into()]
-    }
-
-    #[test]
-    fn canon_unifies_separators_case_and_trailing_slash() {
-        assert_eq!(canon_path("D:/Music/"), canon_path("d:\\music"));
-        assert_eq!(canon_path(" D:\\Music "), "d:\\music");
-    }
-
-    #[test]
-    fn inbox_equal_to_root_conflicts() {
-        assert!(path_conflicts_with_roots("D:/Music", &roots()));
-    }
-
-    #[test]
-    fn inbox_inside_root_conflicts() {
-        assert!(path_conflicts_with_roots(
-            "D:\\Music\\New\\Albums",
-            &roots()
-        ));
-        assert!(path_conflicts_with_roots("d:/music/new", &roots()));
-    }
-
-    #[test]
-    fn sibling_directory_is_allowed() {
-        // 经典前缀陷阱：D:\Music Backup 不能被 D:\Music 误伤
-        assert!(!path_conflicts_with_roots("D:\\Music Backup", &roots()));
-        assert!(!path_conflicts_with_roots("E:\\Downloads", &roots()));
-    }
-
-    #[test]
-    fn parent_of_root_conflicts() {
-        // 反方向的重叠：把 D:\ 当整理源，预览会递归扫到整个曲库
-        assert!(path_conflicts_with_roots("D:\\", &roots()));
-        // 前缀但不在分隔符边界上：D:\Mu 不是 D:\Music 的祖先目录
-        assert!(!path_conflicts_with_roots("D:\\Mu", &roots()));
-    }
-
-    #[test]
-    fn empty_path_conflicts() {
-        assert!(path_conflicts_with_roots("  ", &roots()));
-    }
-
-    /* 整理落点：在内即可，不必相等 */
-
-    #[test]
-    fn target_accepts_root_and_subdirectory() {
-        assert!(path_within_roots("D:\\Music", &roots()));
-        assert!(path_within_roots("D:\\Music\\整理", &roots()));
-        assert!(path_within_roots("d:/music/a/b", &roots()));
-    }
-
-    #[test]
-    fn target_rejects_outside_and_fake_sibling() {
-        // 落点在曲库外 → 整理完扫描器看不见
-        assert!(!path_within_roots("E:\\Sorted", &roots()));
-        // 假兄弟：裸 starts_with 会把它当成 D:\Music 的子目录
-        assert!(!path_within_roots("D:\\Music2", &roots()));
-        // 父目录不是"之内"
-        assert!(!path_within_roots("D:\\", &roots()));
-        assert!(!path_within_roots("  ", &roots()));
-    }
-}
+// 单元测试：路径重叠/落点校验的判据与用例已随实现收编进 aiya-host-core
+//（`canon_path_tests`，按平台各钉一份）——这里不再留第二份会漂的副本。
 
 /// 自动刷新的当前配置与最近一次结果（诊断区读）。
 #[tauri::command]

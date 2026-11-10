@@ -70,6 +70,33 @@ pub fn artwork_id(content_hash: &str) -> String {
     Uuid::new_v5(&NS_ARTWORK, content_hash.as_bytes()).to_string()
 }
 
+/// 频道 ID。名字 + 创建时刻派生（同毫秒同名理论碰撞由建站层重试兜底）；
+/// 生成后与名字解耦——改名不换 id（LIVE_STATION_FIELDS 稳定身份语义）。
+pub fn station_id(name: &str, created_at_secs: i64) -> String {
+    Uuid::new_v5(&NS_STATION, format!("{name}@{created_at_secs}").as_bytes()).to_string()
+}
+
+pub fn station_playlist_id(station_id: &str, name: &str, created_at_secs: i64) -> String {
+    Uuid::new_v5(
+        &NS_STATION_PLAYLIST,
+        format!("{station_id}/{name}@{created_at_secs}").as_bytes(),
+    )
+    .to_string()
+}
+
+pub fn station_schedule_id(
+    station_id: &str,
+    playlist_id: &str,
+    start_hm: &str,
+    created_at_secs: i64,
+) -> String {
+    Uuid::new_v5(
+        &NS_STATION_SCHEDULE,
+        format!("{station_id}/{playlist_id}@{start_hm}@{created_at_secs}").as_bytes(),
+    )
+    .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,31 +128,4 @@ mod tests {
             assert!(seen.insert(playlist_item_id()), "歌单行 id 重复");
         }
     }
-}
-
-/// 频道 ID。名字 + 创建时刻派生（同毫秒同名理论碰撞由建站层重试兜底）；
-/// 生成后与名字解耦——改名不换 id（LIVE_STATION_FIELDS 稳定身份语义）。
-pub fn station_id(name: &str, created_at_secs: i64) -> String {
-    Uuid::new_v5(&NS_STATION, format!("{name}@{created_at_secs}").as_bytes()).to_string()
-}
-
-pub fn station_playlist_id(station_id: &str, name: &str, created_at_secs: i64) -> String {
-    Uuid::new_v5(
-        &NS_STATION_PLAYLIST,
-        format!("{station_id}/{name}@{created_at_secs}").as_bytes(),
-    )
-    .to_string()
-}
-
-pub fn station_schedule_id(
-    station_id: &str,
-    playlist_id: &str,
-    start_hm: &str,
-    created_at_secs: i64,
-) -> String {
-    Uuid::new_v5(
-        &NS_STATION_SCHEDULE,
-        format!("{station_id}/{playlist_id}@{start_hm}@{created_at_secs}").as_bytes(),
-    )
-    .to_string()
 }

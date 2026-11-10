@@ -1,7 +1,8 @@
 """Gaia/SVM 冒烟：正弦波 → 提取器（svm_models 指向包内 models/）→ 必须产出 highlevel。
 
 CI 解包自检与本地验包共用。零外部依赖：wav 用 stdlib 现造、profile 现写。
-断言只认三件事——12 件模型在位、提取器退出 0、highlevel.danceability 出现。
+断言只认四件事——12 件模型在位、提取器退出 0、highlevel 键数 ≥12（部分
+模型缺席不再漏过）、highlevel.danceability 出现。
 模型缺失或版本不配时 highlevel 整段消失（docs/50 §2.5 与 2026-10-31 实测），
 "跑完了但字段全空"正是这道冒烟要堵的坑。
 """
@@ -64,8 +65,13 @@ def main() -> int:
         return 2
     j = json.load(open(out, encoding="utf-8"))
     hl = j.get("highlevel", {})
-    if "danceability" not in hl:
-        print(f"FAIL highlevel 缺席或无 danceability（模型没被加载？）：{list(hl)[:8]}")
+    # 12 = SVM 全配齐时 highlevel 的键数（danceability/gender/genre_rosamerica
+    # + mood_* 8 件 + voice_instrumental/moods_mirex）。少键 = 有模型没被加载，
+    # 只查 danceability 会漏"部分模型缺席"。（build-essentia-linux.yml 的
+    # assert_smoke.py 同口径——两份都是手写，改这里要同步那边。）
+    if len(hl) < 12 or "danceability" not in hl:
+        print(f"FAIL highlevel 键数 {len(hl)}（应 ≥12）或缺 danceability"
+              f"（模型没被全量加载？）：{sorted(hl)[:8]}")
         return 3
     value = hl["danceability"].get("value") if isinstance(hl["danceability"], dict) else None
     print(f"OK highlevel 键数 {len(hl)}，danceability = {value}")

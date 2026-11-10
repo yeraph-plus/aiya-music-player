@@ -150,7 +150,7 @@ def validate(doc: dict) -> list[str]:
         if "platforms" in item:
             pf = item["platforms"]
             if not isinstance(pf, list) or not pf or set(pf) - {"windows", "linux"}:
-                item_errors.append("platforms 必须是非空的 windows/linux 子集")
+                errs.append("platforms 必须是非空的 windows/linux 子集")
         if unknown:
             errs.append(f"binaries[{i}] 有多余键：{sorted(unknown)}（打错字就会静默失效）")
         absent = BINARY_KEYS - set(item)
@@ -428,7 +428,7 @@ def main() -> int:
                 os.environ["AIYA_BEETS_BIN_DIR"] = saved
     print("[5b] binaries_for / exe_path / usable_plugins OK")
 
-    # [6] 负向十三连：把表改坏，校验必须变红（否则门禁是装饰）
+    # [6] 负向十五连：把表改坏，校验必须变红（否则门禁是装饰）
     def broken(mutate) -> list[str]:
         doc = copy.deepcopy(DOC)
         mutate(doc)
@@ -451,6 +451,15 @@ def main() -> int:
         ),
         "sha256 写短了": lambda d: d["binaries"][0].update({"sha256": "abc123"}),
         "载体成员留空": lambda d: d["binaries"][0]["carrier"].update({"member": ""}),
+        # platforms 是平台差的数据真源（bins 下不下、包带不带都看它），写坏
+        # 会让 linux 轨静默去拉 win 载体（2026-11-11 审查：这条分支此前
+        # 引用了未定义的 item_errors，坏值进来会 NameError 而不是变红）
+        "platforms 写了未知平台": lambda d: next(
+            b for b in d["binaries"] if b["name"] == "ffmpeg"
+        ).update({"platforms": ["windows", "macos"]}),
+        "platforms 是空数组": lambda d: next(
+            b for b in d["binaries"] if b["name"] == "ffmpeg"
+        ).update({"platforms": []}),
         "声明了却没人用的二进制": lambda d: d["binaries"].append(
             {"name": "ghost", "target": "ghost.exe", "bundle": False, "why": "x",
              "carrier": {"kind": "zip", "url": "https://e/x.zip", "size": 1,

@@ -19,6 +19,27 @@ use std::collections::{BTreeMap, BTreeSet};
 const CLIENT_TS: &str = include_str!("../../ui/src/lib/ipc/client.ts");
 const LIB_RS: &str = include_str!("../src/lib.rs");
 
+/// web 命令面专属（桌面壳**不注册**）：推流频道命令族只路由在 aiya-server
+/// 的 ROUTED（web 侧 `crates/aiya-server/tests/contract.rs` 守"UI⊆ROUTED"）。
+/// 桌面 backend-caps.streaming 恒无、StationPanel 不渲染，运行时永不调用；
+/// 但 client.ts 是静态文本，解析器分不出"运行时被 caps 门控"，只能在这里
+/// 显式豁免。双向都钉：缺席的 station 调用不报错（本表豁免），桌面壳注册了
+/// 它们 = 命令面越界，也要报（见 every_ui_invoked_command_is_registered 尾部）。
+/// 2451486 起 main 的这条测试一直红——"豁免清空"清的是 web 侧 SERVER_ONLY，
+/// 桌面侧的对称豁免漏了（2026-11-11 收尾时发现）。
+const SERVER_ONLY: &[&str] = &[
+    "station_list",
+    "station_get",
+    "station_create",
+    "station_update",
+    "station_delete",
+    "station_set_playlists",
+    "station_set_schedules",
+    "station_activate",
+    "station_skip",
+    "station_push",
+];
+
 /// UI 侧一次调用：命令名 + 入参键
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UiCall {
@@ -269,10 +290,21 @@ fn every_ui_invoked_command_is_registered() {
         .iter()
         .map(|c| &c.name)
         .filter(|n| !registered.contains(*n))
+        .filter(|n| !SERVER_ONLY.contains(&n.as_str()))
         .collect();
     assert!(
         missing.is_empty(),
         "UI 调用了未注册的命令（invoke 会直接 reject，UI 的 result.ok 分支走不到）：{missing:?}"
+    );
+    // 反向钉扎：SERVER_ONLY = web 专属，桌面壳注册了它就是命令面越界
+    // （caps.streaming 恒无的桌面不该有任何推流频道入口）。
+    let leaked: Vec<&String> = registered
+        .iter()
+        .filter(|n| SERVER_ONLY.contains(&n.as_str()))
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "桌面壳注册了 web 专属命令（caps.streaming 恒无，不该有入口）：{leaked:?}"
     );
 }
 

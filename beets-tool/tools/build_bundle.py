@@ -1,10 +1,13 @@
 #!/usr/bin/env python
-"""构建 B 轨道发布物：`beets-portable-win-x64.zip`（便携套件包）。
+"""构建 B 轨道发布物：便携套件包（`--platform windows|linux`，docs/67）。
 
 ## 它解决什么
 
 用户机器上**没有 Python**、也不该被要求去装一个。套件包把运行时整个搬过来：
 自带解释器 + 标准库 + DLL + 依赖 + 我们的包 + **用户勾选的插件依赖**。
+win 轨的解释器是官方 embeddable；linux 轨（`--platform linux`）是
+python-build-standalone，提取器来自 CI artifact（`--extractor`），模型/解释器
+可离线预置（`--models-zip` / `--pbs-tarball`）。
 
 "免配置"的含义是解压即全功能：`plugins.json` 里标了 `bundle: true` 的插件
 （当前 lyrics / fetchart / mbsync / xtractor），它们的 pip 包已经躺在
@@ -49,10 +52,15 @@ Python 官方的 embeddable 发行版用 `python3xx._pth` 列出搜索路径（�
 
 ## 输出
 
-    dist/beets-portable-win-x64.zip
+    dist/beets-portable-win-x64.zip      （--platform windows，默认）
         python.exe  python3xx._pth  Lib/site-packages/{beets,aiya_beets,bs4,…}
         bin/streaming_extractor_music.exe
         manifest.json  LICENSE  THIRD-PARTY.md  LICENSES/AGPL-3.0.txt
+
+    dist/beets-portable-linux-x64.zip    （--platform linux）
+        bin/python3（PBS prefix 平铺在包根：bin/ + lib/ + share/）
+        bin/streaming_extractor_music.exe（CI artifact 改名进包）
+        bin/models/*.history  manifest.json  LICENSE  …
 
 `manifest.json` 里的 `plugins` / `packages` / `binaries` / `selfCheck` 是给宿主和
 排障看的："这个包到底预置了什么、验过没有"必须能查，不能只凭构建日志。
@@ -156,6 +164,21 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _zip_mode(rel: str) -> int:
+    """zip 条目的 unix 权限位（external_attr 高 16 位，宿主解压时还原）。
+
+    为什么不读 st_mode：构建宿主若是 Windows，stat 没有执行位，裸 `zf.write`
+    的包解压后 `bin/python3` 没有 +x（宿主 `extract_safely` 按 unix_mode 还原，
+    缺位 = spawn 全线 EACCES）。包内布局是已知的，直接按路径给：`bin/` 顶层
+    全是可执行（python3、提取器，win 侧的 ffmpeg / fpcalc；Qt5Core.dll 无执行
+    位也能加载，755 无害），`bin/models/` 是 .history 数据，其余一律 0o644
+    （lib 下的 .so 由 dlopen 加载，不需要 +x）。
+    """
+    if rel.startswith("bin/") and "/" not in rel[4:]:
+        return 0o755
+    return 0o644
 
 
 def ensure_runtime(
@@ -685,9 +708,22 @@ def main() -> int:
     if pip.returncode != 0:
         print(f"包内 pip 自检失败：{pip.stderr[:400]}", file=sys.stderr)
         return 1
+    # beets 本体必须真能 import：`aiya_beets version` 只打印常量、pip 自检
+    # 只碰 pip，两者都证不了 beets 在包里是好的——"带 beets 的包"曾在 beets
+    # 坏掉时通过全部自检（2026-11-11 测试面审查）。依赖装齐 ≠ 能导入。
+    beets = subprocess.run(
+        [str(py_exe(work, platform_name)),
+         "-c", "import beets; print(beets.__version__)"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+    )
+    if beets.returncode != 0 or not beets.stdout.strip():
+        print(f"包内 beets 导入失败：{beets.stderr[:400]}", file=sys.stderr)
+        return 1
     print(f"自检通过：{probe.stdout.strip()}（预置 {', '.join(plugin_names)}"
           + (f" + bin/{', bin/'.join(r['target'] for r in staged)}" if staged else "")
           + f" + pip {pip.stdout.strip().split()[-1] if pip.stdout.strip() else ''}"
+          + f" + beets {beets.stdout.strip()}"
           + "）")
 
     if args.no_zip:
@@ -696,10 +732,21 @@ def main() -> int:
 
     out.parent.mkdir(parents=True, exist_ok=True)
     print(f"压缩 → {out}（{sum(f.stat().st_size for f in work.rglob('*') if f.is_file()) / 2**20:.0f} MB 待压缩）")
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+    with zipfile.ZipFile(out, "w") as zf:
         for path in sorted(work.rglob("*")):
-            if path.is_file():
-                zf.write(path, path.relative_to(work).as_posix())
+            if not path.is_file():
+                continue
+            rel = path.relative_to(work).as_posix()
+            # unix 权限位显式写（见 _zip_mode）：不依赖构建宿主的 st_mode。
+            # create_system 也必须钉成 3（unix）：宿主解压侧（zip crate 的
+            # unix_mode()）只在 create_system=3 时才读 external_attr 的权限位，
+            # from_file 在 Windows 宿主上会把它写成 0 —— 位写了也白写。
+            info = zipfile.ZipInfo.from_file(path, rel)
+            info.create_system = 3
+            info.external_attr = (_zip_mode(rel) & 0xFFFF) << 16
+            info.compress_type = zipfile.ZIP_DEFLATED
+            with open(path, "rb") as src:
+                zf.writestr(info, src.read(), compresslevel=6)
 
     # 打包后再看一眼条目：宿主按 `bin/<target>` 去找，路径被过滤掉就等于没带
     if staged:
