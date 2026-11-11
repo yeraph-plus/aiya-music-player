@@ -11,11 +11,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-/// UI 侧的**唯一**调用源（docs/17）：`call<T>('cmd', {...})`。
+/// UI 侧的**唯一**调用源：`call<T>('cmd', {...})`。
 /// 类型参数必须先剥掉，否则下面的解析器只认 `call('`。
 ///
-/// 批次 4 删掉了 `ui/src/compat/api.ts`（旧信封壳）与 `ui/contracts`，
-/// 所以这里不再需要合并两份源码——扫描面收敛成这一个文件。
+/// 扫描面就是这一个文件：`ui/src/compat/api.ts`（旧信封壳）与 `ui/contracts`
+/// 已不在仓里，无需合并多份源码。
 const CLIENT_TS: &str = include_str!("../../ui/src/lib/ipc/client.ts");
 const LIB_RS: &str = include_str!("../src/lib.rs");
 
@@ -25,8 +25,8 @@ const LIB_RS: &str = include_str!("../src/lib.rs");
 /// 但 client.ts 是静态文本，解析器分不出"运行时被 caps 门控"，只能在这里
 /// 显式豁免。双向都钉：缺席的 station 调用不报错（本表豁免），桌面壳注册了
 /// 它们 = 命令面越界，也要报（见 every_ui_invoked_command_is_registered 尾部）。
-/// 2451486 起 main 的这条测试一直红——"豁免清空"清的是 web 侧 SERVER_ONLY，
-/// 桌面侧的对称豁免漏了（2026-11-11 收尾时发现）。
+/// 豁免必须两侧对称：只清 web 侧 SERVER_ONLY、桌面侧漏配的话，
+/// 这条测试会一直红在缺席豁免上。
 const SERVER_ONLY: &[&str] = &[
     "station_list",
     "station_get",
@@ -384,9 +384,8 @@ fn registered_commands_have_callers() {
 
 /// 新 client 的**完成度**：每个注册命令都必须有 typed 入口。
 ///
-/// 这条是 docs/17 §5 勾选表的机器版。迁移是分批做的，最容易出的错不是
-/// "改错了"，而是"漏了一条没人发现"——漏掉的命令在新 UI 里等于不存在，
-/// 而老壳还能跑，所以不写这条测试就永远发现不了。
+/// 最容易出的错不是"改错了"，而是"漏了一条没人发现"——漏掉的命令在
+/// 新 UI 里等于不存在，所以不写这条测试就永远发现不了。
 ///
 /// 它同时挡住"新加命令只往 lib.rs 里写"：注册了但 client 没入口 → 这里红。
 #[test]

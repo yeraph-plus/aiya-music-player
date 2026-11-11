@@ -1,9 +1,8 @@
 //! 日志落盘：宿主日志与 sidecar 日志都留痕。
 //!
-//! 为什么必须有：此前全仓库没有 `tracing_subscriber` 初始化，`tracing::warn!`
-//! 在 release 里**写进虚空**——`windows_subsystem = "windows"` 没有控制台，
-//! 用户报"放不出声/起不来"时只能靠口述猜。sidecar 的 stderr 还被
-//! `Stdio::null()` 丢掉，引擎进程崩溃同样无痕。
+//! 为什么必须有：release 构建（`windows_subsystem = "windows"`）没有控制台，
+//! `tracing::warn!` 不落盘就是无声丢失，用户报"放不出声/起不来"时无据可查；
+//! sidecar 的 stderr 不重定向就被 `Stdio::null()` 丢掉，引擎进程崩溃同样无痕。
 //!
 //! 落点：`{app_data}/logs/aiya-YYYY-MM-DD.log`（按天分文件，保留 7 天），
 //! sidecar 的 stderr 进同目录 `sidecar.log`。

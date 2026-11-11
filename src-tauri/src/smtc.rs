@@ -37,8 +37,9 @@ pub enum SmtcUpdate {
 pub fn spawn(app: AppHandle, hwnd: isize) -> Option<Sender<SmtcUpdate>> {
     let (tx, rx) = std::sync::mpsc::channel::<SmtcUpdate>();
 
-    // P2：MediaControls 构造 + attach 全部移进专用线程——此前构造在主线程、使用在专用线程，跨 COM apartment 依赖 WinRT
-    // agility，不保证可靠。初始化结果经一次性 channel 回传，保持"失败返回 None"的对外语义。
+    // MediaControls 构造 + attach 全部在专用线程：构造在主线程、使用在专用线程
+    // 的话，跨 COM apartment 依赖 WinRT agility，不保证可靠。初始化结果经一次性
+    // channel 回传，保持"失败返回 None"的对外语义。
     let (init_tx, init_rx) = std::sync::mpsc::channel::<bool>();
     let thread_app = app.clone();
     let spawned = std::thread::Builder::new()
@@ -152,9 +153,9 @@ fn playback_state(playing: bool, position_ms: u64) -> souvlaki::MediaPlayback {
 /// StorageFile::GetFileFromPathAsync(&HSTRING::from(path))?;
 /// ```
 ///
-/// 它**不解百分号编码、也不认三斜杠形式**。所以此前用
-/// `Url::from_file_path` 生成的规范形式 `file:///C:/a%20b/x.jpg` 喂进去，
-/// trim 之后是 `/C:/a%20b/x.jpg` —— 一个在 Windows 上不存在的路径，
+/// 它**不解百分号编码、也不认三斜杠形式**：`Url::from_file_path` 生成的
+/// 规范形式 `file:///C:/a%20b/x.jpg` 喂进去，trim 之后是 `/C:/a%20b/x.jpg`
+/// —— 一个在 Windows 上不存在的路径，
 /// `GetFileFromPathAsync` 报 0x800700A1（ERROR_BAD_PATHNAME）。
 /// 更糟的是 `set_metadata` 里这一句带 `?`：缩略图失败会**直接 return**，
 /// 后面的 StartTime/EndTime/MinSeekTime/MaxSeekTime 全都没设上，

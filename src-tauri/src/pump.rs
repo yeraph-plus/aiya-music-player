@@ -1,9 +1,9 @@
 //! 引擎事件泵的纯逻辑核心。
 //!
-//! 为什么单独抽出来：泵原本整段写在 `spawn` 的 async 闭包里，任何断言都要
-//! 起整个 Tauri 运行时（AppHandle、窗口、WebView）。于是"进度节流/过期 token
-//! 丢弃/曲尾纠偏下发"这些**最容易写错且错了最不易察觉**的规则，只能靠人肉读
-//! 代码保证 —— 上一轮正是这样漏掉了节流基准恒假（进度条全程冻结）。
+//! 为什么单独抽出来：泵整段写在 `spawn` 的 async 闭包里的话，任何断言都要
+//! 起整个 Tauri 运行时（AppHandle、窗口、WebView），"进度节流/过期 token
+//! 丢弃/曲尾纠偏下发"这些**最容易写错且错了最不易察觉**的规则就只能靠
+//! 人肉读代码保证——节流基准恒假（进度条全程冻结）就是这一类错误。
 //!
 //! 抽出来后 `PumpCore::ingest` 只有三个输入：一批事件、Actor、当前时刻；
 //! 输出是"该做的旁路动作"清单 + 是否动了引擎。时钟与引擎下发出口都可注入，
@@ -14,15 +14,15 @@ use aiya_player::{PlayerActor, PlayerCommand};
 
 /// 把 Actor 的"装载/停止"意图下发到引擎。
 ///
-/// 三个调用点（命令路径 / 事件泵 / 启动恢复）此前各抄一遍，且都 `let _ = start_ms`
-/// 把起点丢弃 —— "记住播放进度"从未生效。顺序固定：
+/// 三个调用点（命令路径 / 事件泵 / 启动恢复）共用这一份实现：起点 `start_ms`
+/// 必须随 Load 下发，`let _ =` 丢掉它"记住播放进度"就不成立。顺序固定：
 /// SetRate（先落 pending_rate，首帧就用对速率）→ Load(含起点/token/**paused**)
 /// → SetVolume。
 ///
-/// `paused` 随 Load 下发（协议 v7）：此前"装载但暂停"要再发一条 Pause，而
-/// 引擎在 Load 的开流期间就开始出声、Pause 要等渲染循环第一次收命令才生效
-/// ——启动恢复必有几百毫秒残声（用户实测）。现在装载意图自带暂停态，
-/// 引擎开流前就知道不该喂数据。
+/// `paused` 随 Load 下发（协议 v7）："装载但暂停"分两条发的话，引擎在 Load
+/// 的开流期间就开始出声、Pause 要等渲染循环第一次收命令才生效——启动恢复
+/// 必有几百毫秒残声（用户实测）。装载意图自带暂停态，引擎开流前就知道
+/// 不该喂数据。
 ///
 /// `send` 是引擎出口（生产环境写进引擎通道，测试里塞进 Vec）。
 /// 返回是否真的下了命令（调用方据此决定要不要全量落库）。
@@ -33,7 +33,7 @@ where
     let mut acted = false;
     if let Some((token, path, start_ms, autoplay)) = actor.take_pending_load() {
         let rate = actor.state().rate as f32;
-        // 音量统一由 Actor 算（含 ReplayGain 归一化与静音）：此前这里把
+        // 音量统一由 Actor 算（含 ReplayGain 归一化与静音）：在这里把
         // `volume, muted` 拆开各算一遍，归一化接进来就会出现第三份口径。
         let volume = actor.engine_volume();
         send(EngineCommand::SetRate(rate));
@@ -46,7 +46,7 @@ where
         send(EngineCommand::SetVolume(volume));
         acted = true;
     }
-    // 队尾停住 / 队列清空：此前只有 pending_load，这两条迁移对引擎完全静默，
+    // 队尾停住 / 队列清空：只处理 pending_load 的话这两条迁移对引擎完全静默，
     // 表现是 UI 已显示停止而声音继续放到本曲结束。
     if actor.take_pending_stop() {
         send(EngineCommand::Stop);
@@ -81,8 +81,8 @@ pub enum PumpEffect {
 
 /// 事件泵的归约状态：两个节流/估算基准**必须是泵私有**。
 ///
-/// `last_emit_ms` 曾经取 `actor.state().updated_at`，而每次归约都会把它置成
-/// "此刻"，于是 `now >= updated_at + 500` 恒假 —— 进度条全程不动。
+/// 节流基准取 `actor.state().updated_at` 这类随归约刷新的时间戳的话，每次
+/// 归约都把它置成"此刻"，`now >= updated_at + 500` 恒假 —— 进度条全程不动。
 /// `last_position_ms` 是历史秒数的数据源（Eof 时读它，不读整曲时长）。
 #[derive(Debug, Default)]
 pub struct PumpCore {

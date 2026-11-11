@@ -11,9 +11,9 @@ edition = "2021"
 name = "aiya_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-# 产物名 aiya-music.exe（2026-11-05 拍板）：包名保持 aiya（`-p aiya` 类引用
-# 零变化），只改 bin 名；分发名仍是 productName 的 "AIYA Music.exe"（安装版
-# 与便携版都由打包器/脚本改名，见 build-portable.mjs）。
+# 产物名 aiya-music.exe：包名保持 aiya（`-p aiya` 类引用零变化），只改 bin
+# 名；分发名仍是 productName 的 "AIYA Music.exe"（安装版与便携版都由打包器/
+# 脚本改名，见 build-portable.mjs）。
 [[bin]]
 name = "aiya-music"
 path = "src/main.rs"

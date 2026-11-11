@@ -1,4 +1,4 @@
-//! 音频 sidecar supervisor（ADR-0002）。
+//! 音频 sidecar supervisor（C3：独立进程 + 命名管道）。
 //!
 //! 职责：启动 `aiya-audio-host.exe` 子进程、命名管道 JSON 行帧通信、
 //! 心跳看门狗（sidecar 每 1s 心跳，>5s 无消息 kill+重启+恢复）、崩溃隔离。
@@ -20,12 +20,12 @@ use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// 看门狗超时：>5s 无任何 sidecar 消息（心跳/事件）判定死亡（ADR-0002）。
+/// 看门狗超时：>5s 无任何 sidecar 消息（心跳/事件）判定死亡（C3）。
 const WATCHDOG_TIMEOUT_MS: u64 = 5_000;
 /// 重启时连接子进程的重试窗口。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// 恢复现场所需的最小状态（由命令/事件转发时顺手记录）。
+/// 恢复现场所需的最小状态（由命令/事件转发随带记录）。
 #[derive(Default, Clone)]
 struct TrackState {
     last_path: Option<String>,
@@ -50,8 +50,8 @@ struct Shared {
     child: Mutex<Option<Child>>,
     /// 当前代管道写端；None = 断线中（命令静默丢弃，等看门狗重启）
     writer_slot: Mutex<Option<BufWriter<File>>>,
-    /// 当前代最后消息时间（单调时钟 Instant）。此前用系统时钟毫秒：
-    /// 休眠唤醒/改系统时间后 now-last 必然 >5s，健康 sidecar 会被误杀重启。
+    /// 当前代最后消息时间（**单调**时钟 Instant）：墙钟毫秒会被休眠唤醒/
+    /// 改系统时间打穿，now-last 必然 >5s，健康 sidecar 会被误杀重启。
     alive: Mutex<Instant>,
     generation: AtomicU64,
     shutting_down: AtomicBool,
@@ -126,8 +126,11 @@ impl SidecarHandle {
             shutting_down: AtomicBool::new(false),
         });
 
-        // 首连失败走启动降级而不是 Err：此前 setup 直接失败 = release 下 （windows_subsystem，无控制台无窗口）panic 静默消失，用户双击后 "什么都不发生"。现在应用照常起，先给 UI
-        // 一条音频错误事件，再交给看门狗按代重试——杀软扫未签名 exe 拖慢冷启动的场景几十秒内自愈，sidecar 文件缺失时每轮重试留痕，文件就位后自动恢复。
+        // 首连失败走启动降级而不是 Err：setup 直接 Err 的话，release 下
+        // （windows_subsystem，无控制台无窗口）就是静默 panic，用户双击后
+        // "什么都不发生"。降级后应用照常起，先给 UI 一条音频错误事件，再交给
+        // 看门狗按代重试——杀软扫未签名 exe 拖慢冷启动的场景几十秒内自愈，
+        // sidecar 文件缺失时每轮重试留痕，文件就位后自动恢复。
         let gen = 0;
         match locate_err {
             Some(e) => degrade_launch(&ev_tx, e),
@@ -248,7 +251,7 @@ fn connect_once(
     shared: &Arc<Shared>,
 ) -> Result<Connection, String> {
     // spawn 前查：关闭流程开始后看门狗不该再起新进程。看门狗循环头查过一次 shutting_down，但从查到 spawn 之间隔了判死/kill/换代几步 ——
-    // 关闭恰好插进来时，这里不拦就会留下无人收尸的孤儿 sidecar（shutdown 已经跑完、看门狗线程随后退出）。
+    // 关闭恰好插进来时，这里不拦就会留下无人清理的孤儿 sidecar（shutdown 已经跑完、看门狗线程随后退出）。
     if shared.shutting_down.load(Ordering::SeqCst) {
         return Err("shutting down: skipping sidecar reconnect".into());
     }
@@ -257,7 +260,7 @@ fn connect_once(
     cmd.args(["--pipe", &pipe])
         .stdout(Stdio::null())
         // stderr 落 {app_data}/logs/sidecar.log：引擎进程自己的 tracing
-        // 此前被 Stdio::null() 丢掉，崩溃/设备失败完全没有痕迹
+        // 不重定向就被 Stdio::null() 丢掉，崩溃/设备失败完全没有痕迹
         .stderr(crate::logging::sidecar_stderr());
 
     // 不给子进程分配控制台：audio-host 是控制台子系统程序（为了 --selftest 能正常输出，见那个 crate 顶部注释），被 GUI 主进程拉起时
@@ -269,7 +272,7 @@ fn connect_once(
         .map_err(|e| format!("failed to spawn sidecar: {e}"))?;
     *lock(&shared.child) = Some(child);
 
-    // spawn 后再查：与 shutdown() 的窄竞态（检查在前、spawn 在后）兜底。命中就立即收尸返回 —— shutdown 的等待循环/最终
+    // spawn 后再查：与 shutdown() 的窄竞态（检查在前、spawn 在后）兜底。命中就立即 kill+wait 返回 —— shutdown 的等待循环/最终
     // kill 只认 shared.child 槽里的进程，槽被这里 take 走之后没人管它。
     if shared.shutting_down.load(Ordering::SeqCst) {
         if let Some(mut c) = lock(&shared.child).take() {
@@ -279,8 +282,8 @@ fn connect_once(
         return Err("shutting down: killed the newly spawned sidecar".into());
     }
 
-    // 连接 + 握手；任何失败路径都收尸（P2：spawn 后连接/握手失败曾把
-    // 孤儿 sidecar 进程留在后台——无看门狗线程接管它）
+    // 连接 + 握手；任何失败路径都要 kill 并 wait 子进程——spawn 后连接/
+    // 握手失败的话，孤儿 sidecar 进程会留在后台（无看门狗线程接管它）
     let result = connect_and_handshake(&pipe);
     if result.is_err() {
         if let Some(mut c) = lock(&shared.child).take() {
@@ -295,8 +298,8 @@ fn connect_once(
     Ok(conn)
 }
 
-/// Welcome 读取的硬上限。此前 3s 的 deadline 只在"read_line 返回了行"之后才
-/// 检查，管不住"已 accept、一个字节都不写"的僵死；这里要兜的正是那种情况，
+/// Welcome 读取的硬上限。deadline 只在"read_line 返回了行"之后才检查的话，
+/// 管不住"已 accept、一个字节都不写"的僵死；这里要兜的正是那种情况，
 /// 取值与 CONNECT_TIMEOUT 同级：慢启动（杀软扫描）可能拖过秒级，但绝不允许
 /// 无界等下去。
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -407,7 +410,7 @@ fn spawn_reader(
                 line.clear();
                 match reader.read_line(&mut line) {
                     // 管道断开：本代终结。这里必须留一行日志：读线程退出后**不再有人刷新 alive**，看门狗会在 5s 后把"读线程偷偷退了"报成"心跳超时"并
-                    // kill。此前这条 break 是静默的，一旦发生就只能看着一句假的超时日志猜。
+                    // kill；break 静默的话，一旦发生就只能看着一句假的超时日志猜。
                     Ok(0) => {
                         tracing::warn!(generation, "sidecar 管道 EOF，本代读取结束");
                         break;
@@ -427,7 +430,7 @@ fn spawn_reader(
                 };
                 match msg {
                     aiya_audio::SidecarToHost::Evt(evt) => {
-                        // 顺手记录恢复现场状态。按 token 归属（与命令侧记录的
+                        // 顺带记录恢复现场状态。按 token 归属（与命令侧记录的
                         // last_token 比对）：切歌瞬间旧曲的迟到回报不能写进
                         // 恢复现场，否则崩溃重启会从旧曲位置/播放态续播新曲。
                         {
@@ -446,8 +449,8 @@ fn spawn_reader(
                                 _ => {}
                             }
                         }
-                        // 有界队列：满了丢 Position（ADR 允许丢位置帧）；其余事件 （Eof/StateChanged/Error）阻塞等空位——P2：此前 Full
-                        // 静默丢任意事件，丢 Eof 会让播放器卡在播放态不切曲。泵 25ms 一轮 drain，阻塞窗口极短。
+                        // 有界队列：满了丢 Position（C3 允许丢位置帧）；其余事件 （Eof/StateChanged/Error）阻塞等空位——Full
+                        // 静默丢任意事件的话，丢 Eof 会让播放器卡在播放态不切曲。泵 25ms 一轮 drain，阻塞窗口极短。
                         match ev_tx.try_send(evt) {
                             Ok(()) => {}
                             Err(mpsc::TrySendError::Full(restage)) => {
@@ -552,8 +555,8 @@ fn spawn_watchdog(
             };
 
             // 恢复现场：音量/倍速/当前曲（带起点与代数）/播放态。
-            // 恢复字节必须在**发布 writer_slot 之前**写好：此前先发布槽再拼恢复
-            // 序列，窗口内 writer 线程会把用户命令（如 Load/Play）先送进新
+            // 恢复字节必须在**发布 writer_slot 之前**写好：先发布槽再拼恢复
+            // 序列的话，窗口内 writer 线程会把用户命令（如 Load/Play）先送进新
             // sidecar，随后被恢复序列的旧 Load 覆盖 —— 表现为"重启后跳回上一首"。
             let t = lock(&track).clone();
             let mut writer = BufWriter::new(conn.writer);

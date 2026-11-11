@@ -1,9 +1,9 @@
-//! DTO wire 快照：锁住"Rust 结构 → JSON 字段名/类型"这一层（docs/17 §6 第 2 道防线）。
+//! DTO wire 快照：锁住"Rust 结构 → JSON 字段名/类型"这一层。
 //!
 //! 为什么需要它：`ts-rs` 保证"Rust → TS 类型"一致，但**不保证 serde 实际发出去的
 //! JSON 与那个类型一致**（`rename_all`、`skip_serializing`、`Option` 的处理都在
 //! serde 侧）。这两边对不上时，类型检查全绿、运行期字段却是 `undefined` ——
-//! 历史上 `TrackWindowQuery` 嵌套形状、`exclusiveMode → output` 都属于这类。
+//! `TrackWindowQuery` 嵌套形状、`exclusiveMode → output` 都属于这类。
 //!
 //! 这里直接比对 JSON 字面量/键集合，改字段名会立刻红。
 
@@ -170,7 +170,7 @@ fn player_state_error_is_structured_and_path_is_hidden() {
 }
 
 /// 空队列的 index/cursor 必须是 `null`（而不是 -1 哨兵）——
-/// docs/17 §9.2 偏差 1 的偿还，wire 上锁死，防止有人改回 `-1`。
+/// wire 上锁死，防止有人改回 `-1`。
 #[test]
 fn player_state_empty_queue_sends_null_not_minus_one() {
     let state = aiya_player::PlayerState {
@@ -207,10 +207,9 @@ fn player_state_empty_queue_sends_null_not_minus_one() {
 
 /// 播放条的音频规格：`lossless` 必须在 payload 里，且三个值都要能表达。
 ///
-/// 这条测试是补历史的窟窿——`TrackAudio` 曾经**根本没有** `lossless` 字段，
-/// 而 UI 的规格文字/Hi-Res 高亮/tooltip 全靠它，于是徽章恒显示「未知」，
-/// 跨了一个多月没人发现：类型检查（TS 侧写成可选）和运行期（字段缺失渲染
-/// 成空）都不会报错。所以要在这里锁死 wire 形状。
+/// `lossless` 字段缺失时徽章恒显示「未知」，而 UI 的规格文字/Hi-Res 高亮/
+/// tooltip 全靠它——类型检查（TS 侧写成可选）和运行期（字段缺失渲染成空）
+/// 都不会报错，所以在这里锁死 wire 形状。
 #[test]
 fn track_audio_wire_carries_three_state_lossless() {
     use aiya_player::TrackAudio;
@@ -578,8 +577,7 @@ fn beets_status_protocol_version_is_number() {
 
 /// "最近错误"表的 wire 形状。
 ///
-/// 这个数组以前是 `Vec<serde_json::Value>`（恒空），UI 只能靠本地视图类型 +
-/// 一次 `as` 转换硬顶。现在有真 DTO 了，字段名必须锁住：少一个下划线
+/// 有真 DTO，字段名必须锁住：少一个下划线
 /// TS 侧就是 `undefined`，而类型检查看不出来。
 #[test]
 fn diagnostics_error_wire_shape() {
@@ -597,9 +595,9 @@ fn diagnostics_error_wire_shape() {
 
 /// `Diagnostics` 压平后的 wire 形状：只有三个有消费方的字段。
 ///
-/// 这条防两头：把压平审计删掉的占位字段（统计/流计数/耗时表/audioMode/
-/// mediaKeys）"顺手加回来"。mediaKeys 随"系统媒体键"开关退役——SMTC
-/// 常开无开关，健康走"最近错误"台账，诊断不再报会话状态。
+/// 这条防两头：已删除的占位字段（统计/流计数/耗时表/audioMode/mediaKeys）
+/// 不得加回来。mediaKeys 不存在——SMTC 常开无开关，健康走"最近错误"
+/// 台账，诊断不再报会话状态。
 #[test]
 fn diagnostics_flat_wire_shape() {
     let d = aiya_lib::dto::Diagnostics {
@@ -628,7 +626,7 @@ fn diagnostics_flat_wire_shape() {
 }
 
 /// `Diagnostics` 不再有 `shortcutConflicts`（改由前端 `findConflicts` 算）。
-/// 这条防的是"顺手把它加回来"——那会让同一件事有两个可能不一致的来源。
+/// 这条防的是"把它加回来"——那会让同一件事有两个可能不一致的来源。
 #[test]
 fn diagnostics_has_no_shortcut_conflicts_field() {
     // 两侧都查：DTO 源码（它是真相）与已入库的 TS 生成物（漂移会被看见）
@@ -683,7 +681,7 @@ fn playlist_export_result_wire_shape() {
     assert_eq!(v["count"], 12);
 }
 
-/// AudioSource 的 wire 值锁定（docs/22 G3）：`"file"` / `"stream"` 小写。
+/// AudioSource 的 wire 值锁定：`"file"` / `"stream"` 小写。
 /// UI 进度条按它禁拖/显示"直播中"，拼错就是静默失效。
 #[test]
 fn audio_source_wire_values() {

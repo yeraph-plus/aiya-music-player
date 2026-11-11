@@ -1,9 +1,9 @@
-//! 拖放 / 文件选择的路径分类（docs/52 §5）。
+//! 拖放 / 文件选择的路径分类。
 //!
 //! **分类器只有这一处**：UI 只负责把 `paths` 递过来并展示结果，后端（拖放、
-//! 文件对话框、命令行）共用同一套判定。理由是本仓已经吃过一次"两处各写一份
-//! 规则"的亏——`is_http_url` 在引擎里大小写不敏感、在 Actor 里只认小写，
-//! `HTTP://` 于是被当流打开却标成 File（进度条可拖，一拖报错）。
+//! 文件对话框、命令行）共用同一套判定。URL/扩展名判定口径全仓只写一份：
+//! 两处各写一份就会在大小写这类细节上分叉——`is_http_url` 两套口径下
+//! `HTTP://` 被当流打开却标成 File（进度条可拖，一拖报错）。
 //!
 //! 判定口径：
 //! - 音频扩展名表取 `aiya_audio::decoder::SUPPORTED_AUDIO_EXT`（唯一源）；
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use ts_rs::TS;
 
-/// 一个拖入条目的分类结果。wire 上是 `kind` 字符串 + 人话 `note`。
+/// 一个拖入条目的分类结果。wire 上是 `kind` 字符串 + 可读文本 `note`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -40,7 +40,7 @@ pub enum DroppedKind {
 pub struct DroppedItem {
     pub path: String,
     pub kind: DroppedKind,
-    /// 人话补充：不支持时说格式名，文件夹说"文件夹"
+    /// 可读补充：不支持时说格式名，文件夹说"文件夹"
     pub note: String,
     /// 展示名（音频取文件名，播放列表取清单名）
     pub label: String,
@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(classify(&plain).kind, DroppedKind::Playlist);
     }
 
-    /// 目录不识别（用户拍板：一次误拖不该触发递归扫描）
+    /// 目录不识别（一次误拖不该触发递归扫描）
     #[test]
     fn directory_is_not_expanded() {
         let dir = tmp();
