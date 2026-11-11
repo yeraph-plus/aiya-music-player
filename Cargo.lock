@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "aiya"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aiya-audio",
  "aiya-beets-client",
@@ -53,7 +53,7 @@ dependencies = [
 
 [[package]]
 name = "aiya-audio"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "aiya-audio-host"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aiya-audio",
  "miow",
@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "aiya-beets-client"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "aiya-beets-store"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "rusqlite",
  "serde_json",
@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "aiya-data"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.23.1",
  "encoding_rs",
@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "aiya-dto"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aiya-data",
  "aiya-player",
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "aiya-host-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aiya-beets-client",
  "aiya-beets-store",
@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "aiya-player"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "aiya-server"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aiya-beets-store",
  "aiya-data",

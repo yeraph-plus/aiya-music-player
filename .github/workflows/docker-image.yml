@@ -7,14 +7,16 @@
 #
 # 触发策略（2026-11-09 收窄：push main 不再触发——每次提交都跑 20+ 分钟
 # 构建过于频繁，容器镜像的发布节奏与代码提交解耦）：
-#   - push tag v*            → <应用版本号>（semver 取自 tag，如 0.2.0）+ latest
-#     —— 桌面发版即出容器镜像（版本对齐）；
 #   - push tag container-v*  → <容器版本号>（剥 container-v 前缀，如 1）+ latest
 #     —— 容器发布位独立递增，不跟桌面版本号走（容器有独立变更节奏时用）；
 #   - workflow_dispatch      → 手动兜底（latest + sha-*）。
 # 日常部署不追 latest 的话，compose 里钉具体版本 tag 或 sha-<short>。
 #
 # 决策记录：
+#   - 2026-11-11：v* 触发摘除——0.2.1 只发桌面版，容器侧缺口较大（测试面
+#     docs/70 §4 未清），待容器整批测试后再恢复 v* 联动（届时 tag 一打即
+#     桌面+镜像版本对齐）；此前 527cbe2 的"桌面发版即出镜像"暂停生效，
+#     桌面 release 与容器镜像回到完全解耦；
 #   - 仅 linux/amd64：beets 套件包与 Essentia 提取器只有 x64 载体（docs/67，
 #     catalog platforms 维度也是按平台分的），arm64 无从谈起；
 #   - 应用内版本显示（app_diagnostics）来自 CARGO_PKG_VERSION，跟随
@@ -36,7 +38,6 @@ name: Docker · 镜像构建与发布
 on:
   push:
     tags:
-      - 'v*'
       - 'container-v*'
   workflow_dispatch: {}
 

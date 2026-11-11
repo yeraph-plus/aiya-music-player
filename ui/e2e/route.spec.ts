@@ -320,7 +320,7 @@ test('设置页「曲库」组：统计卡 + 曲库卡片；beets 段与诊断�
   // 版本行带禁用的「获取更新」占位按钮；爱发电二维码在支持开发行
   await page.locator('.text-tab', { hasText: '关于' }).click();
   const about = page.locator('.settings-about');
-  await expect(about.locator('.setting-row', { hasText: '版本' })).toContainText('0.2.0');
+  await expect(about.locator('.setting-row', { hasText: '版本' })).toContainText('0.2.1');
   await expect(about.getByRole('button', { name: '获取更新' })).toBeDisabled();
   await expect(about.locator('.setting-row', { hasText: '数据目录' })).toBeVisible();
   await expect(about.getByRole('button', { name: '打开目录' })).toBeVisible();
