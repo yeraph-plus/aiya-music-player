@@ -151,7 +151,7 @@ pub struct TrackRef {
     pub artist: Option<String>,
     pub album: Option<String>,
     /// 艺人/专辑详情页跳转键（正在播放页的歌手/专辑行可点）。
-    /// `#[serde(default)]`：旧版持久化队列里没有这两列，反序列化补 None。
+    /// `#[serde(default)]`：早于这两个字段引入的持久化快照里没有它们，反序列化补 None。
     #[serde(default)]
     pub artist_id: Option<String>,
     #[serde(default)]
@@ -164,8 +164,8 @@ pub struct TrackRef {
     pub audio: Option<TrackAudio>,
     /// 引擎装载用；**不下发**（DTO 侧由 trackId 查询）。
     ///
-    /// 曾经只是注释这么写、代码照发：`#[serde(default)]` 会把它一起序列化，
-    /// UI 能从 `player:state.current.path` 拿到绝对路径。现在真的 skip。
+    /// 只有 `#[serde(default)]` 的话它会一起序列化，UI 能从
+    /// `player:state.current.path` 拿到绝对路径——必须真 skip。
     #[serde(default, skip_serializing)]
     #[ts(skip)]
     pub path: String,
@@ -186,7 +186,7 @@ pub enum AudioErrorCode {
     /// 解码失败：文件损坏、容器不认识
     Decode,
     /// 编码不支持：容器认识但解码器没编进来（Opus/WMA/APE/WavPack/DSD…）。
-    /// 语义与 `Decode` 分开：用户该做的是换文件/转码，不是重试（docs/22 D3）。
+    /// 语义与 `Decode` 分开：用户该做的是换文件/转码，不是重试。
     CodecUnsupported,
     /// 输出设备：打不开、断开、不消费数据
     DeviceLost,
@@ -230,7 +230,7 @@ impl AudioError {
     }
 }
 
-/// 音源类别（docs/22 G3）：本地文件 vs 网络流。UI 据此对 stream 曲目
+/// 音源类别：本地文件 vs 网络流。UI 据此对 stream 曲目
 /// 禁拖进度条、时长位显示"直播"。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[ts(export)]
@@ -242,9 +242,9 @@ pub enum AudioSource {
 
 /// 路径是不是网络流（http/https，**大小写不敏感**）。
 ///
-/// 与引擎 `engine.rs::is_http_url` 同一规则，两处必须同时改：此前引擎大小写
-/// 不敏感、Actor 只认小写，`HTTP://` 会被引擎当流打开、播放态却标 File
-/// （进度条可拖，一拖报错）。现在两边都过一遍 `eq_ignore_ascii_case`。
+/// 与引擎 `engine.rs::is_http_url` 同一规则，两处必须同时改：只改一边的话
+/// `HTTP://` 会被引擎当流打开、播放态却标 File
+/// （进度条可拖，一拖报错）。两边都过 `eq_ignore_ascii_case`。
 pub fn is_stream_path(path: &str) -> bool {
     path.get(..7)
         .is_some_and(|s| s.eq_ignore_ascii_case("http://"))
@@ -378,7 +378,7 @@ pub struct PlayerState {
     /// 洗牌开启时 order 是 queue 的一个排列，二者指向的数字不同——
     /// UI 拿 `index` 对队列原序列表，宿主拿 `cursor` 对 queue_snapshot()。
     ///
-    /// 为什么不用 -1 哨兵（docs/17 §9.2 偏差 1 的偿还）：`null` 在 TS 侧
+    /// 为什么不用 -1 哨兵：`null` 在 TS 侧
     /// 无法与合法下标 0 混淆，`-1` 可以（漏判 `>= 0` 就是越界写）。缺值
     /// 一律 `null` 是本契约的既定规则，index/cursor 是最后两个例外。
     #[ts(type = "number | null")]
@@ -389,8 +389,8 @@ pub struct PlayerState {
     pub repeat: RepeatMode,
     pub shuffle: bool,
     pub status: PlaybackStatus,
-    /// 当前曲目音源类别。本地曲库 = File；队列里出现 http(s) 路径（FM 推流，
-    /// docs/20 远程版）= Stream。Actor 在 instruct_load 时由路径前缀判定。
+    /// 当前曲目音源类别。本地曲库 = File；队列里出现 http(s) 路径（FM 推流）
+    /// = Stream。Actor 在 instruct_load 时由路径前缀判定。
     pub source: AudioSource,
     #[ts(type = "number")]
     pub position_ms: u64,
@@ -405,7 +405,7 @@ pub struct PlayerState {
     pub token: u64,
     /// 快照生成时间，**毫秒**。名字带 `Ms` 是硬要求：同结构里
     /// `positionMs`/`durationMs` 都是毫秒，只让它一个叫 `updatedAt`
-    /// 等于留个坑给下一个人猜单位（docs/17 §3.1）。
+    /// 等于留个坑给下一个人猜单位。
     #[ts(type = "number")]
     pub updated_at_ms: u64,
 }
@@ -424,7 +424,7 @@ pub struct QueueSnapshot {
     /// 为什么不把整个队列的 `TrackRef` 都给出去：一万首队列的标题/封面键是
     /// 几百 KB，而 UI 本来就要靠 `library_tracks` 批量取库内元数据（那里还
     /// 有列表字段）。临时项只有几条，**且查库必然查不到**——不给它开个口，
-    /// 队列面板就只能给它们画一行空白（docs/52 §7.2）。
+    /// 队列面板就只能给它们画一行空白。
     #[serde(default)]
     pub transient: Vec<TrackRef>,
     #[ts(type = "number")]
@@ -617,7 +617,7 @@ mod tests {
     }
 
     /// `codecUnsupported` 全链路：wire 串 → 枚举 → serde 值必须自洽
-    /// （docs/22 G1：宿主按 kind 字符串翻译，UI 按 code 判断"提示而非重试"）。
+    /// （宿主按 kind 字符串翻译，UI 按 code 判断"提示而非重试"）。
     #[test]
     fn codec_unsupported_roundtrips() {
         // 引擎侧 as_str 与 parse 互逆（两端分别定义，必须显式锁）

@@ -1,4 +1,4 @@
-//! 频谱 tap（docs/04 §5.1，ADR-0006）。
+//! 频谱 tap。
 //!
 //! 订阅制"必要采样复制"：渲染线程把**未乘音量**的插值样本混成单声道
 //! f32 推入 SPSC 无锁环（环满丢新样本并计数，不影响音频）；独立 FFT
@@ -18,7 +18,7 @@ const RING_CAP: usize = 8192;
 const RING_MASK: usize = RING_CAP - 1;
 /// FFT 窗长。48kHz 下 2048 = 43ms，频率分辨率 ~23Hz。
 const FFT_SIZE: usize = 2048;
-/// 契约分带数（docs/04 §5：48 对数分带）。
+/// 契约分带数：48 对数分带。
 pub const BANDS: usize = 48;
 /// 帧最小间隔（毫秒）≈ 30fps 上限。
 const FRAME_MIN_INTERVAL_MS: u64 = 30;
@@ -82,13 +82,9 @@ impl RingCore {
 
 /// 生产端句柄。**刻意不实现 `Clone`/`Copy`** —— 这是"单生产者"的类型级凭据。
 ///
-/// 之前这个角色由 `MonoRing::push(&self)` 承担，而 `SpectrumTap` 当时是
-/// `Clone` 的：任何一个 clone 流到别的线程（"顺手在别处也推一份"这种改动
-/// 太自然了）就会变成数据竞争，编译器与运行期都不会有半点提示，症状是
-/// 频谱偶发撕裂这种几乎无法定位的 bug。
-///
-/// 现在 push 要 `&mut RingProducer`、句柄又不可克隆 ⇒ 全局至多一个生产端
-/// 实例，第二个写者在类型层面就写不出来。
+/// 生产端唯一的写入口是 `push`（`&mut self`），句柄又不可克隆 ⇒ 全局至多
+/// 一个生产端实例，第二个写者在类型层面就写不出来。SPSC 环经不起并发写：
+/// 竞争不报错、不 panic，症状是频谱偶发撕裂这种几乎无法定位的 bug。
 struct RingProducer {
     core: Arc<RingCore>,
     dropped: Arc<AtomicU64>,
@@ -259,7 +255,7 @@ fn consume_loop(
 
 /// Hann 窗 + radix-2 FFT + 48 对数分带 → u8。
 /// `sample_rate`：实际流采样率（Hz），分带频率轴按它标定
-/// （P2：此前恒按 48kHz，44.1k 源频带偏移约 8.8%）。
+/// （恒按 48kHz 标定的话，44.1k 源频带偏移约 8.8%。）
 pub fn compute_bands(samples: &[f32; FFT_SIZE], sample_rate: f32) -> Vec<u8> {
     // 1) Hann 窗
     let mut re: Vec<f32> = samples
@@ -564,7 +560,7 @@ mod tests {
         assert!((out[1] - 0.5).abs() < 1e-6);
     }
 
-    /// 变速不改变入环速率：推 N 个输出帧就得到 N 个样本（此前推源帧，
+    /// 变速不改变入环速率：推 N 个输出帧就得到 N 个样本（推源帧的话，
     /// 2× 速每秒入环 2× 样本，环长期溢出）。
     #[test]
     fn push_mono_is_rate_independent() {

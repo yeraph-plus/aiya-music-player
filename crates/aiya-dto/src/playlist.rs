@@ -2,7 +2,7 @@
 //!
 //! 时间字段带 `Ms` 后缀：DB 里 `created_at` / `updated_at` 存的是 **unix 秒**，
 //! 而同一个对象上的 `durationMs` 是毫秒。同一个结构里混两种单位，UI 那边
-//! 只能靠记；统一成毫秒并在名字上写清楚，是把"记"变成"看"（docs/17 §3.1）。
+//! 只能靠记；统一成毫秒并在名字上写清楚，是把"记"变成"看"。
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -75,7 +75,7 @@ pub struct PlaylistDeleted {
     pub deleted: bool,
 }
 
-/// 导入时一条没匹配上的路径（m3u/m3u8 导入，docs/22 G2）。
+/// 导入时一条没匹配上的路径（m3u/m3u8 导入）。
 /// 形状对齐扫描错误报告：`line` 能指回原文件第几行，`raw` 原样展示。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]

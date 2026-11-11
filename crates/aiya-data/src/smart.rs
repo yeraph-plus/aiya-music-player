@@ -1,4 +1,4 @@
-//! 动态歌单：rule_json → SQL 计划（docs/40 §1 方案 A 拍板版）。
+//! 动态歌单：rule_json → SQL 计划。
 //!
 //! 规则**存播放器、查播放器**：`playlists.rule_json` 是唯一真源，打开歌单时
 //! 对本地 SQLite 实时查询——与推荐页"最近添加/常听榜"同款动态查询先例。
@@ -24,7 +24,7 @@ use serde_json::Value;
 use crate::db::{DbError, DbResult};
 use crate::norm::norm;
 
-/// 规则条件字段（首期四类，docs/40 §1.2）。
+/// 规则条件字段（当前四类）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
     Genre,
@@ -182,7 +182,7 @@ impl SmartPlan {
             .as_object()
             .ok_or_else(|| DbError::Custom("rule must be a JSON object".into()))?;
         let mut clauses = Vec::new();
-        // all: 条件数组，全部 AND（拍板：首期不做 OR/嵌套，UI 也只出"满足全部"）
+        // all: 条件数组，全部 AND（不做 OR/嵌套，UI 也只出"满足全部"）
         if let Some(all) = obj.get("all") {
             let arr = all
                 .as_array()

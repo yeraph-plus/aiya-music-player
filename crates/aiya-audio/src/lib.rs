@@ -1,20 +1,20 @@
 //! AIYA Music 音频引擎。
 //!
-//! 职责（ADR-0006）：Symphonia 解码 + wasapi-rs 输出，PCM 链内保留 tap 位置
-//! （解码后 → 音量前），频谱 tap 订阅制（P4 接入，关闭零开销）。
+//! 职责：Symphonia 解码 + wasapi-rs 输出，PCM 链内保留 tap 位置
+//! （解码后 → 音量前），频谱 tap 订阅制（关闭时零拷贝零分配）。
 //! 不依赖 Tauri、不依赖数据库 —— path 进，事件出。
 
 pub mod decoder;
 pub mod engine;
-/// 10 段 biquad EQ（协议 v6，docs/24 B5b）。
+/// 10 段 biquad EQ（协议 v6 起）。
 pub mod eq;
-/// HLS (m3u8) 流式源（docs/22 G3）。对 engine 透明——只以 `DecodedStream`
+/// HLS (m3u8) 流式源。对 engine 透明——只以 `DecodedStream`
 /// 的 Hls 变体出现；模块内类型不进公共 API。
 pub mod hls;
 pub mod mmcss;
 pub mod proto;
 pub mod spectrum;
-/// MPEG-TS 段剥离（docs/52 §3）：只剥 TS 包层 + PES 头，输出 ADTS / MPEG audio
+/// MPEG-TS 段剥离：只剥 TS 包层 + PES 头，输出 ADTS / MPEG audio
 /// 裸字节喂给现有 probe。不是 demuxer——不碰解码、时间轴、视频。
 pub mod ts;
 
@@ -26,9 +26,9 @@ pub enum AudioError {
     Decode(String),
     /// 容器认识、但编码不支持（Opus/WMA/APE/WavPack/DSD…）。
     ///
-    /// 与 `Decode` 分开的理由（docs/22 D3）：这不是"文件坏了"而是"格式没编进来"——
+    /// 与 `Decode` 分开：这不是"文件坏了"而是"格式没编进来"——
     /// 用户换文件/转码有用，重试没用。`codec` 是用户可读的格式名（如 "Opus"），
-    /// 消息会原样进 UI 横幅，所以说人话。
+    /// 消息原样进 UI 横幅，必须是用户可读文案。
     #[error(
         "unsupported audio codec ({codec}): the player has no built-in decoder for this format"
     )]

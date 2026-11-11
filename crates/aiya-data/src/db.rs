@@ -1,7 +1,7 @@
 //! SQLite 连接所有权与迁移。
 //!
-//! 为什么专用线程：`rusqlite::Connection` 不是 `Sync`，且 docs/02 §5.1 要求
-//! 只有宿主进程打开 SQLite。调用方拿到的是 `DbHandle`（Clone），
+//! 为什么专用线程：`rusqlite::Connection` 不是 `Sync`，且只有宿主进程打开
+//! SQLite（C7）。调用方拿到的是 `DbHandle`（Clone），
 //! 每次调用生成一个 reply channel，DB 线程串行执行闭包 —— 天然无锁。
 
 use std::path::Path;
@@ -65,7 +65,7 @@ pub fn open_conn(path: &Path) -> DbResult<Connection> {
 
 /// 打开 + 配置 + 版本体检 + 迁移，带损坏降级。
 ///
-/// 两类不可恢复的打开失败都走"留底重建"（此前只处理第一类，损坏库会让
+/// 两类不可恢复的打开失败都走"留底重建"（没有这条降级，损坏库会让
 /// App 直接起不来且没有任何恢复手段——用户只能自己去 AppData 里找文件删）：
 ///
 /// 1. **版本超前**（库比应用新，降级安装）：把库文件改名留底，新建空库。
@@ -346,8 +346,8 @@ mod tests {
                 .unwrap();
             assert_eq!(idx, 1, "{table} 的 {col} 缺失");
         }
-        // 0009 的解耦防线：**应用库里不许出现 beets 的表**。这条断言比它看起来重要。批 3 把 `track_enrichment` 建在这里，于是应用的数据模型里有一条"因为装了 beets
-        // 才有"的表——备份、回滚、第三方读库都得理解一条与它无关的记录。结论库现在在 `{beets-index}/enrich.db` （`aiya-beets-store` 自己建表）。谁哪天想"顺手在这儿建一张"，会先撞上它。
+        // 0009 的解耦防线：**应用库里不许出现 beets 的表**。这条断言比它看起来重要——beets 的表建在应用库里，应用的数据模型就多一条"因为装了 beets
+        // 才有"的表，备份、回滚、第三方读库都得理解一条与它无关的记录。beets 的结论库在 `{beets-index}/enrich.db`（`aiya-beets-store` 自己建表）；谁哪天想在这里建一张，会先撞上这条断言。
         let beets_tables: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE '%beets%'

@@ -4,16 +4,16 @@
 //! 且 AUTOCONVERTPCM 打开后引擎负责源格式 → 引擎格式转换（含 SRC）。
 //! 位置时钟：包时间戳（ts）÷ 采样率 = 毫秒，seek 后以 seek 目标为锚。
 //!
-//! # 后端扩展指南（docs/22 D4 插入缝，G1 落锤）
+//! # 后端扩展指南
 //!
 //! engine / WASAPI 输出 / 队列**永远只认 [`DecodedStream`]**：构造收敛在
 //! [`DecodedStream::open_with_backend`] 单入口，后端用 [`DecodeBackend`] 枚举
 //! 表达。engine.rs 里没有任何 probe/codec 知识。
 //!
 //! * **Symphonia 特性怎么加**：只动根 `Cargo.toml` 的 symphonia features
-//!   （docs/22 D1 只开主流格式；新格式 = 加 feature + 本文件 codec 名表补一行）。
+//!   （只开主流格式；新格式 = 加 feature + 本文件 codec 名表补一行）。
 //! * **HLS 流怎么接**：`DecodedStream::open_hls(url)` → [`crate::hls::HlsStream`]
-//!   变体（docs/22 G3，ADTS AAC 路线）。对 engine 透明：duration=0 表示直播，
+//!   变体（ADTS AAC 路线）。对 engine 透明：duration=0 表示直播，
 //!   `seekable()=false`，engine 对不可 seek 的源直接忽略 Seek 命令。
 //! * **mpv 怎么插**：将来加 `DecodeBackend::Mpv`，实现为子进程
 //!   `mpv --no-video --ao=pcm --audio-format=s32le --really-quiet <file>`
@@ -28,7 +28,7 @@
 //!   ② probe 成功但 `get_codecs().make()` 失败 → `CodecUnsupported { codec }`
 //!   （容器认、编码没编进 features）；
 //!   ③ probe 失败（坏文件/未知容器）→ `Decode`。
-//!   两种 `CodecUnsupported` 的 `codec` 都是人话格式名（见
+//!   两种 `CodecUnsupported` 的 `codec` 都是用户可读格式名（见
 //!   [`codec_display_name`] / [`known_unsupported_ext`]），UI 直接展示。
 
 use std::fs::File;
@@ -48,11 +48,11 @@ use symphonia::core::units::Time;
 use crate::hls::HlsStream;
 use crate::AudioError;
 
-/// 解码后端。今天只有 Symphonia；mpv 将来从这里插入（见模块头注释），
-/// engine 对后端无感知——这是"想引入 mpv 也可以从中插入"的全部保障。
+/// 解码后端。当前只有 Symphonia；mpv 将来从这里插入（见模块头注释），
+/// engine 对后端无感知——统一构造入口是"想引入 mpv 也可以从中插入"的全部保障。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecodeBackend {
-    /// 纯 Rust 进程内解码（docs/22 D1：主流格式，无 ffmpeg / 无内置 mpv）
+    /// 纯 Rust 进程内解码：主流格式，无 ffmpeg / 无内置 mpv
     Symphonia,
 }
 
@@ -142,7 +142,7 @@ impl DecodedStream {
         Self::open_with_backend(Box::new(src), &hint, DecodeBackend::Symphonia)
     }
 
-    /// HLS (m3u8) 流（docs/22 G3 / docs/52）：ADTS 或 MPEG-TS 段，live 轮询 /
+    /// HLS (m3u8) 流：ADTS 或 MPEG-TS 段，live 轮询 /
     /// VOD 顺序拉段都在 `HlsStream` 内部完成。直播流 duration=0、不可 seek。
     pub fn open_hls(url: &str) -> Result<Self, AudioError> {
         Ok(Self {
@@ -150,7 +150,7 @@ impl DecodedStream {
         })
     }
 
-    /// 本地 m3u8（docs/52 §4）：base = 文件所在目录，相对段地址照 URL 规则
+    /// 本地 m3u8：base = 文件所在目录，相对段地址照 URL 规则
     /// 解析。**必须在 `open_file` 之前判**——文本文件交给 symphonia probe
     /// 只会报"文件坏了"。
     pub fn open_local_hls(path: &Path) -> Result<Self, AudioError> {
@@ -159,7 +159,7 @@ impl DecodedStream {
         })
     }
 
-    /// **唯一构造入口**（docs/22 §2 D4）：engine 与未来调用方都从这里进，
+    /// **唯一构造入口**：engine 与未来调用方都从这里进，
     /// 后端选择只发生在此处。mpv 后端不吃 `MediaSource`（是子进程管道），
     /// 届时此签名会多一个入口或参数——但 `DecodedStream` 形状与 engine 不变。
     pub fn open_with_backend(
@@ -288,7 +288,7 @@ impl SymphoniaStream {
                 },
             })?;
 
-        // 复用缓冲容量：P1——此前按 100ms 固定分配，但 FLAC 允许单包最大 65535 帧，容量不足时 copy_interleaved_ref 的 assert 直接 panic
+        // 复用缓冲容量：FLAC 允许单包最大 65535 帧，容量不足时 copy_interleaved_ref 的 assert 直接 panic
         // （引擎线程死亡、音频静默中断）。统一给到 65535 帧下限 （2ch f32 ≈ 512KB，一次性分配可忽略），并尊重轨道声明的更大值。
         let max_frames = track
             .codec_params
@@ -329,8 +329,8 @@ impl SymphoniaStream {
         // 探包不算播放位置：engine 拿到流之后从 0 开始
         self.position_ms = 0;
         self.eof = false;
-        // 首包之后规格即视为已确认（无论它是否覆盖了容器占位值）：此前的
-        // 规格对齐是 open 阶段的正常补救，此后的变化见 next_packet 的报错
+        // 首包之后规格即视为已确认（无论它是否覆盖了容器占位值）：open 阶段的
+        // 规格对齐属正常补救；open 之后再有规格变化，由 next_packet 报错
         self.spec_confirmed = true;
         Ok(())
     }
@@ -458,7 +458,7 @@ impl SymphoniaStream {
     }
 }
 
-/// `CodecType` → 用户可读格式名（docs/22 D3：错误信息说人话）。
+/// `CodecType` → 用户可读格式名（错误信息面向用户展示）。
 ///
 /// 只需要覆盖"会被装进库但解码不了"的那些；能正常解码的格式永远走不到
 /// 这里。没收录的落 Debug 格式兜底，至少诊断页里能对回常量。
@@ -497,14 +497,14 @@ fn codec_display_name(codec: CodecType) -> String {
     }
 }
 
-/// "注定放不出"的扩展名 → 人话格式名。
+/// "注定放不出"的扩展名 → 用户可读格式名。
 ///
-/// 只列**扫描器会收、但 symphonia 0.5.x 根本没有 demuxer/decoder** 的格式
-/// （docs/21 §3.1 的矩阵）。这些文件在 probe 阶段就会失败，落进 `Decode`
+/// 只列**扫描器会收、但 symphonia 0.5.x 根本没有 demuxer/decoder** 的格式。
+/// 这些文件在 probe 阶段就会失败，落进 `Decode`
 /// 会让用户以为"文件坏了"——所以必须在打开前拦一次。
 ///
 /// 维护规则：symphonia 哪天补上某个 feature，对应条目必须一起删掉，
-/// 否则会被这里误拦（这是本表唯一的失效方式，改动 Cargo features 时顺手看一眼）。
+/// 否则会被这里误拦（这是本表唯一的失效方式；改动 Cargo features 时须对照本表）。
 fn known_unsupported_ext(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     Some(match ext.as_str() {
@@ -521,10 +521,10 @@ fn known_unsupported_ext(path: &Path) -> Option<&'static str> {
 
 /// 引擎（Symphonia 0.5 + 已开的 features）真的能解的扩展名。
 ///
-/// **为什么要有这张表**（docs/52 §5.2）：拖入/对话框要回答"这个文件能不能播"，
-/// 而这份知识此前散在两处——[`known_unsupported_ext`] 的"注定放不出"名单和
-/// 根 `Cargo.toml` 的 symphonia features。两边各写一份迟早漂移（本仓已经在
-/// `is_http_url` 上吃过一次大小写不一致的亏）。这里是**唯一源**：扫到这些
+/// **为什么要有这张表**：拖入/对话框要回答"这个文件能不能播"，
+/// 而这份知识牵涉两处事实——[`known_unsupported_ext`] 的"注定放不出"名单和
+/// 根 `Cargo.toml` 的 symphonia features；两处各写一份迟早漂移。
+/// 这里是**唯一源**：扫到这些
 /// 扩展名就算音频，其余一律当不支持。
 ///
 /// 与 `aiya-data::scanner` 的 14 种扩展名同集合，区别是这里剔掉了引擎解不了
@@ -754,7 +754,7 @@ mod tests {
     #[test]
     fn unsupported_codecs_have_readable_names() {
         // 这些是"会被装进库但放不出"的高频格式
-        // 名字必须说人话——UI 横幅直接展示这条消息。
+        // 名字必须用户可读——UI 横幅直接展示这条消息。
         assert_eq!(codec_display_name(CODEC_TYPE_OPUS), "Opus");
         assert_eq!(codec_display_name(CODEC_TYPE_WMA), "WMA");
         assert_eq!(
@@ -773,7 +773,7 @@ mod tests {
         );
     }
 
-    /// 扩展名预分类（docs/22 D3 的另一半）：WMA/APE/WavPack/DSD 在
+    /// 扩展名预分类的另一面：WMA/APE/WavPack/DSD 在
     /// symphonia 0.5.x 里连 demuxer 都没有，probe 必失败——不预判的话
     /// 用户看到的是"文件坏了"，而不是"这个格式不支持"。
     #[test]

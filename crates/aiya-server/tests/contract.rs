@@ -116,7 +116,7 @@ fn every_routed_command_is_called_by_the_ui() {
 }
 
 /// 反向覆盖：UI 调用的每条命令要么在 ROUTED、要么显式登记为桌面专属——
-/// 缺席即 web 形态 404（app_set_settings 漏路由事故的回归闸）。
+/// 缺席即 web 形态 404（app_set_settings 漏路由的回归闸）。
 #[test]
 fn every_ui_command_is_routed_or_desktop_only() {
     let routed = parse_routed(IPC_RS);

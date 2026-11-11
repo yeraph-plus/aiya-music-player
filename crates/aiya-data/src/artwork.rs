@@ -5,7 +5,7 @@
 //!   <cache>/thumbs/<hash24>_<size>.jpg  协议层按需生成
 //!
 //! 为什么扫描时只存原图：5 万首 × 多尺寸会产生大量用不到的缩略图，
-//! 首屏只需要可见的几十张（docs/07 §3 同口径）。
+//! 首屏只需要可见的几十张。
 //! 为什么原子写：写临时文件再 rename，目标要么不存在、要么完整，
 //! 否则配上一年的 immutable 缓存头会长期破图。
 
@@ -21,10 +21,9 @@ pub const ARTWORK_SCHEME: &str = "aiya-artwork";
 
 /// 原子写临时文件名的进程内序号。
 ///
-/// 旧实现用 `.{hash8}.{pid}.tmp`：串行扫描时同 hash 只会有一个线程写，
-/// 看着没事；docs/29 批 B 并行解析后，**同专辑多首共用一张封面**是常态，
-/// 两个 worker 同时落到同一个 tmp 路径 → 后写的截断先写的、rename 拿到半个文件。
-/// 加上序号后进程内唯一，跨进程用 pid 区分，仍然不需要锁。
+/// 临时文件名必须进程内唯一：**同专辑多首共用一张封面**是常态，
+/// 并行解析的两个 worker 会同时落到同一个 tmp 路径 → 后写的截断先写的、
+/// rename 拿到半个文件。序号保证进程内唯一，跨进程用 pid 区分，仍然不需要锁。
 static STAGE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// mime → 扩展名（只认嵌入图最常见的四种，其余兜底 .bin）
@@ -59,7 +58,7 @@ pub struct StagedArtwork {
 
 /// 算 hash + 原子落盘。**不碰数据库**，可在解析线程池里并发调用。
 ///
-/// 为什么从 `save_artwork` 里拆出来（docs/29 批 B）：SQLite 连接归入库线程
+/// 为什么从 `save_artwork` 里拆出来：SQLite 连接归入库线程
 /// 独占，解析线程没有 conn；而"hash 一张几 MB 的封面 + 写盘"正是典型的
 /// 可并行工作。拆开后解析侧就能就地完成落盘，交给入库线程的只是几十字节的
 /// `StagedArtwork`，而不是每首几百 KB 的图字节。
@@ -146,7 +145,7 @@ pub fn find_artwork(conn: &Connection, id: &str) -> DbResult<Option<(String, Str
 
 /// 扫描收尾 GC：删除不再被任何实体引用的 artwork 行及其 originals/ 原图。
 ///
-/// artworks 与 originals/ 此前只增不减——曲目删除/重扫淘汰封面后，
+/// 没有这条 GC，artworks 与 originals/ 只增不减——曲目删除/重扫淘汰封面后，
 /// 行和文件永久残留。对账口径：tracks/albums/artists 三处 `artwork_id`
 /// 引用任一命中即保留（**含 missing 行的引用**——文件离线不代表封面作废，
 /// 文件回来时列表直接有图）。调用时机：扫描全部批次提交完之后（见
@@ -173,7 +172,7 @@ pub fn gc_unreferenced(conn: &Connection, cache_dir: &Path) -> DbResult<usize> {
 
 /// 实体封面回填：albums/artists 的 `artwork_id` 从曲目聚合——取曲目中
 /// **出现次数最多**的封面（并列取 id 最小，稳定），曲目全部无封面时清 NULL。
-/// 此前 schema 里这两列从不被写入（恒 NULL），专辑宫格只能显示占位图、
+/// 没有回填时这两列恒 NULL，专辑宫格只能显示占位图、
 /// 内页走"首曲封面"回落（首曲被删则封面跳变）。调用时机：扫描收尾与
 /// beets 同步收尾各一次，对存量库等价于持续回填；迁移 0006 做首次回填。
 ///
@@ -232,11 +231,11 @@ mod tests {
         assert_eq!(mime3, "application/octet-stream");
     }
 
-    /// docs/29 批 B 回归点：**同一张封面被多个线程同时 stage**。
+    /// 回归点：**同一张封面被多个线程同时 stage**。
     ///
-    /// 旧实现 tmp 名是 `.{hash8}.{pid}.tmp`，同进程内同 hash 恒定同名 ——
-    /// 并行解析时多首同专辑曲目会同时写同一个临时文件，rename 到手的可能是
-    /// 被另一线程截断的半张图。并行版加了序号后必须零冲突。
+    /// tmp 名若进程内恒定同名，并行解析时多首同专辑曲目会同时写同一个
+    /// 临时文件，rename 到手的可能是被另一线程截断的半张图。序号命名
+    /// 下必须零冲突。
     #[test]
     fn concurrent_stage_same_bytes_does_not_corrupt_target() {
         let dir = tempfile::tempdir().unwrap();

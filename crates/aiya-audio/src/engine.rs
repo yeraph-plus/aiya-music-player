@@ -1,6 +1,6 @@
 //! WASAPI 输出（默认共享模式，事件驱动）。
 //!
-//! 关键决策（docs/04 §2）：共享模式用 `EventsShared { autoconvert: true }` ——
+//! 关键决策：共享模式用 `EventsShared { autoconvert: true }` ——
 //! 引擎自己完成 源格式→mix format 的转换与 SRC，我们只交源采样率的 f32
 //! 交错样本，v1 不自建重采样器。
 //!
@@ -24,7 +24,7 @@ use crate::{AudioError, AudioErrorKind};
 
 /// 引擎线程收到的命令。
 ///
-/// wire 侧（ADR-0002 sidecar）用相邻 tag：`{"t":"load","v":{"path":…,"startMs":…,"token":…,"paused":…}}`。
+/// wire 侧（sidecar 命名管道行 JSON）用相邻 tag：`{"t":"load","v":{"path":…,"startMs":…,"token":…,"paused":…}}`。
 /// `rename_all_fields` 与 `EngineEvent` 对齐：不加它时字段名是 Rust 原样
 /// （`start_ms`），同一份协议里出现 `start_ms` / `positionMs` 两种拼法。
 ///
@@ -40,18 +40,16 @@ use crate::{AudioError, AudioErrorKind};
 pub enum EngineCommand {
     /// 装载并从 `start_ms` 起播。
     ///
-    /// `token` 是 PlayerActor 的装载代数（ADR-0003 generation）：引擎把它
-    /// 原样回显进每个事件，宿主据此丢弃过期回报。此前事件不带身份，宿主
-    /// 只能拿"当前 token"顶替 → 曲尾按下一首会把旧曲的 Eof 记到新曲头上，
-    /// 连跳两首。
+    /// `token` 是 PlayerActor 的装载代数（generation）：引擎把它
+    /// 原样回显进每个事件，宿主据此丢弃过期回报——过期 Eof 若记到
+    /// 新曲头上，会造成连跳两首。
     ///
-    /// `start_ms` 修掉"启动恢复永远从 0 秒出声"：此前 Actor 算出起点却被
-    /// 适配层 `let _ = start_ms` 丢弃，引擎侧无从得知。
+    /// `start_ms` 让启动恢复从指定位置出声：没有它，Actor 算出的起点
+    /// 到不了引擎侧，恢复恒从 0 秒开始。
     ///
-    /// `paused`（协议 v7）修掉"启动恢复先响一下"：此前"装载但暂停"要靠
-    /// Load 后紧跟一条 Pause 实现，而引擎在 Load 的开流期间就开始出声，
-    /// Pause 要等渲染循环第一次收命令才生效——启动恢复必有几百毫秒残声。
-    /// 现在装载意图自带暂停态，开流前就知道不该出声。
+    /// `paused`（协议 v7 起）：装载意图自带暂停态，开流前就知道不该出声。
+    /// 没有它，"装载但暂停"要靠 Load 后紧跟一条 Pause 实现，而 Pause
+    /// 要等渲染循环第一次收命令才生效——开流期间的几百毫秒残声不可避免。
     Load {
         path: String,
         start_ms: u64,
@@ -76,7 +74,7 @@ pub enum EngineCommand {
     /// 取代早期的 `SetExclusive(bool)`：模式、时钟、缓冲是**一组**参数，分开
     /// 下发会出现"模式已切、缓冲还是旧的"中间态，且每次都要重建流两次。
     SetOutputConfig(OutputConfig),
-    /// 10 段 EQ 整体下发（协议 v6，docs/24 B5b）。播放中热切：系数重算、
+    /// 10 段 EQ 整体下发（协议 v6）。播放中热切：系数重算、
     /// 延迟线保留。生效值（clamp 后）经 `EngineEvent::EqApplied` 回报。
     SetEq(crate::eq::EqParams),
     /// 默认渲染设备变更（引擎内部 watcher 线程 → 命令循环）。
@@ -92,7 +90,7 @@ pub enum EngineCommand {
 /// 引擎线程发出的回报。
 ///
 /// 每个事件都带 `token`（装载代数，来自最近的 `Load`）：宿主拿它与
-/// Actor 的 token 比对，过期回报直接丢弃（ADR-0003）。装载前的命令
+/// Actor 的 token 比对，过期回报直接丢弃。装载前的命令
 /// 回应（如未 Load 时的 Stop）token 为 0。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "t", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -398,17 +396,18 @@ fn render_loop(
             None
         });
 
-    // 变速跨曲目保持：在顶层循环外声明，EOF/Stop/错误回到顶层后不重置 （P1：此前每轮 Load 周期重置
-    // 1.0，自然播完切下一曲后倍速静默丢失且 UI 仍显示旧值；SetRate 只应被显式命令修改）
+    // 变速跨曲目保持：在顶层循环外声明，EOF/Stop/错误回到顶层后不重置
+    // （SetRate 只应被显式命令修改——每轮 Load 周期重置 1.0，换曲后倍速
+    // 静默丢失且 UI 仍显示旧值）
     let mut pending_rate: f32 = 1.0;
     // 输出配置同理跨曲目保持（设置项，不随换曲回默认）
     let mut pending_cfg = OutputConfig::default();
     // EQ 参数同样跨曲目保持（协议 v6）。play_file 内部收到 SetEq 时会更新
     // 自己的实例并把最终值经 LoadExit 带回这里（与 rate/cfg 同一套账法）
     let mut pending_eq = crate::eq::EqParams::default();
-    // 音量同样跨曲目保持（对齐 pending_rate/pending_eq）。此前装载前收到的
-    // SetVolume 被静默丢弃，宿主恢复现场"先 SetVolume 后 Load"的序列里
-    // 第一首歌音量就丢了；现在暂存，装载后由 play_* 的 initial_volume 应用。
+    // 音量同样跨曲目保持（对齐 pending_rate/pending_eq）。装载前收到的
+    // SetVolume 暂存于此，装载后由 play_* 的 initial_volume 应用——
+    // "先 SetVolume 后 Load"的恢复序列不丢第一首歌的音量。
     let mut pending_volume: f32 = 1.0;
     'outer: loop {
         // 命令循环：等 Load 或 Shutdown（Load 前到的 SetVolume/SetRate/ SetSpectrum/EQ/输出配置暂存生效；Seek 丢弃——没有可
@@ -533,7 +532,7 @@ fn render_loop(
 const NULL_TICK_MS: u64 = 20;
 
 /// http(s) scheme 判定。RFC 3986 §3.1：scheme 大小写不敏感，"HTTP://"、
-/// "HtTpS://" 都是合法 URL——此前只认小写前缀，大写 scheme 会被当本地文件
+/// "HtTpS://" 都是合法 URL——只认小写前缀的话，大写 scheme 会被当本地文件
 /// 打开失败（UI 表现为莫名的"文件不存在"）。按前缀长度切片比较，零分配。
 fn is_http_url(path: &str) -> bool {
     path.get(..7)
@@ -543,8 +542,8 @@ fn is_http_url(path: &str) -> bool {
             .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
 }
 
-/// 按 Load 的 path 打开源：http(s) → HLS 流（docs/22 G3），本地 `.m3u8`/`.m3u`
-/// → 本地 HLS（docs/52 §4），其余本地文件 → 文件解码。
+/// 按 Load 的 path 打开源：http(s) → HLS 流，本地 `.m3u8`/`.m3u`
+/// → 本地 HLS，其余本地文件 → 文件解码。
 /// 判定放在 engine 入口一处，队列/UI 永远只递字符串。
 fn open_source(path: &str) -> Result<DecodedStream, AudioError> {
     if is_http_url(path) {
@@ -561,7 +560,7 @@ fn open_source(path: &str) -> Result<DecodedStream, AudioError> {
 /// 无声渲染：解码、进度、变速、seek 全部照常，只是没有音频设备参与。
 ///
 /// 用途（不是"Tauri 原生后端"——Tauri 没有音频 API，WebView `<audio>` 会是
-/// 第二条音频路径，ADR-0003/0006 已排除）：无音频设备/远程桌面下应用仍可用，
+/// 第二条音频路径，违反 C1/C6）：无音频设备/远程桌面下应用仍可用，
 /// 以及"A/B 摘掉输出段"判断爆音是否来自音频路径。
 ///
 /// 时钟用 `sleep` 而不是忙等：这个模式的价值是"和真实播放同样的节奏出现
@@ -941,8 +940,8 @@ fn play_file(
     let mut pending_switch = false;
     // 切配置期间要应用的新配置（淡出完成前 cfg 仍是旧的，避免半途按新配置判断）
     let mut pending_cfg_apply: Option<OutputConfig> = None;
-    // 频谱推的是输出帧（重采样 + 单声道混合后、乘音量前）：
-    // 此前推源帧，2× 速入环速率翻倍长期溢出丢帧，0.5× 掉到 ~12fps。
+    // 频谱推的是输出帧（重采样 + 单声道混合后、乘音量前）：推源帧的话，
+    // 2× 速入环速率翻倍长期溢出丢帧，0.5× 掉到 ~12fps。
     let mut tap_mono: Vec<f32> = Vec::new();
     // 重采样后的 f32 输出暂存（乘过增益），随后按设备位深编码成字节。
     // 独占降位深时要两趟：一趟算术、一趟取整，避免在插值内联两套写字节逻辑。
@@ -1214,8 +1213,8 @@ fn play_file(
             return Err(e);
         }
 
-        // 设备错误恢复（唯一出口）：重建输出流后继续当前曲目。位置天然连续（池与 decoder 状态都在本地）；已写入旧设备缓冲的样本随重建丢失，最多回跳 200ms，可接受。注意顺序：必须在 `if paused` 之前处理。此前 pause
-        // 分支先 continue，暂停态下 seek 的 start_stream 失败（stream_err 置位）永不处理—— 既不重建也不上报，UI 完全无感。
+        // 设备错误恢复（唯一出口）：重建输出流后继续当前曲目。位置天然连续（池与 decoder 状态都在本地）；已写入旧设备缓冲的样本随重建丢失，最多回跳 200ms，可接受。注意顺序：必须在 `if paused` 之前处理——暂停
+        // 分支先 continue 的话，暂停态下的 stream_err 永不处理：既不重建也不上报，UI 完全无感。
         if let Some(e) = stream_err.take() {
             if device_failures >= DEVICE_RECOVERY_ATTEMPTS {
                 tracing::error!(%e, attempts = device_failures, "设备恢复重试耗尽，放弃当前曲目");
@@ -1228,7 +1227,7 @@ fn play_file(
                 Ok(note) => {
                     device_failures += 1; // 写成功后归零；连续失败则退避递增
                                           // 重开成功 = 一条新流：给满哑流观察窗（与 play_file 开局同一待遇）。不重置的话，长时间退避期间的"无写入"会被 DUMB_STREAM_MS
-                                          // 记在新流头上，刚活过来就被判哑、再进恢复循环，直到重试耗尽——设备短暂抽风一次就升级成播放失败。
+                                          // 记在新流头上，刚活过来就被判哑、再进恢复循环，直到重试耗尽——设备一次短暂失灵就升级成播放失败。
                     last_write = std::time::Instant::now();
                     tracing::warn!(error = %e, attempt = device_failures, "输出设备失效，已重建（退避重试中）");
                     // 换设备后实际模式可能变（新设备不支持独占 / 反而支持）：
@@ -1306,7 +1305,7 @@ fn play_file(
         }
 
         if paused {
-            // 暂停时不喂数据。流还活着就顺手探一次设备存活（拔耳机/切默认设备），失败即置 stream_err
+            // 暂停时不喂数据。流还活着就顺带探一次设备存活（拔耳机/切默认设备），失败即置 stream_err
             // 走恢复路径；独占暂停已把设备让出去时没有句柄可探——那是正常的静止态，不是故障。
             if out.is_live() {
                 if let Err(e) = out.client.get_current_padding() {
@@ -1390,8 +1389,8 @@ fn play_file(
                 .min(out_frames as f32);
             let step = delta / span;
             let vol_end = gain_now + delta;
-            // tap 开关在这里读一次并传下去：关闭时连"重采样输出的单声道混算" 都跳过——此前只有 push_mono
-            // 内部查开关，resample_take 的混算无条件执行，两条路径不一致，"关闭零开销"名不副实。
+            // tap 开关在这里读一次并传下去：关闭时连"重采样输出的单声道混算" 都跳过——开关只在
+            // push_mono 内部查的话，resample_take 的混算仍无条件执行，两条路径不一致，"关闭零开销"名不副实。
             let tap_enabled = tap.is_enabled();
             resample_take(
                 &pool,
@@ -1451,8 +1450,8 @@ fn play_file(
 
         if eof_now {
             // 等缓冲播完再报 EOF：padding 归零或超时。等待期间必须继续消费
-            // 命令——此前只认 Shutdown，用户在曲尾 500ms 内按"下一首"的 Load
-            // 会滞留到 EOF 之后，表现是慢半拍甚至丢一次切歌。
+            // 命令——只认 Shutdown 的话，用户在曲尾 500ms 内按"下一首"的 Load
+            // 会滞留到 EOF 之后，慢半拍甚至丢一次切歌。
             //
             // 独占下不能用 `padding == 0` 判排空：实测独占事件驱动下 padding
             // 恒等于 buffer，永远等不到 0，会白等满 500ms 上限才报 EOF（歌曲
@@ -1522,7 +1521,7 @@ fn play_file(
                 } else {
                     match out.client.get_current_padding() {
                         Ok(0) => break,
-                        // P1：排空中 padding 查询失败 = 设备大概率已失效 （拔插/驱动复位）。此前 `unwrap_or(0)` 把 Err 抹成 "已排空"提前报
+                        // 排空中 padding 查询失败 = 设备大概率已失效 （拔插/驱动复位）。把 Err 抹成 "已排空"（`unwrap_or(0)`）会提前报
                         // Eof——那首歌其实没放完。置 stream_err 走统一设备恢复出口，重建流后重新排空。
                         Ok(_) => {}
                         Err(e) => {
@@ -1586,7 +1585,7 @@ pub enum ModePref {
     /// 不打开音频设备：解码、进度、歌词照常推进，只是不出声。
     ///
     /// 存在的理由不是"另一种后端"（Tauri 没有音频 API，WebView `<audio>`
-    /// 会复活第二条音频路径，ADR-0003/0006 都已排除），而是两件实事：
+    /// 会复活第二条音频路径，违反 C1/C6），而是两件实事：
     /// ① 无声卡/远程桌面的机器上应用仍可用，UI 不假死；
     /// ② 排查"爆音是音频路径还是解码/调度引起的"时，一键摘掉输出段对照。
     Null,
@@ -2364,7 +2363,7 @@ fn play_position(decoder: &DecodedStream, pool: &[f32]) -> u64 {
     decoder.position_ms().saturating_sub(pool_ms)
 }
 
-/// 设备缓冲区里尚未播出的时长（毫秒）。docs/04 §3.5：
+/// 设备缓冲区里尚未播出的时长（毫秒）。位置公式：
 /// position = base + frames_written - latency_ms。不扣这段，进度条会比
 /// 耳朵超前最多一个缓冲深度（200ms），暂停瞬间停在"超前 200ms"处。
 ///

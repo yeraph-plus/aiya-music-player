@@ -130,7 +130,7 @@ pub const ROUTED: &[&str] = &[
     "library_roots_set",
 ];
 
-/* ---- station 组装（docs/68 §6：repo 行 → DTO；运行时字段来自控制层） ---- */
+/* ---- station 组装（repo 行 → DTO；运行时字段来自控制层） ---- */
 
 fn station_row_of(
     st: &crate::state::ServerState,
@@ -339,7 +339,7 @@ async fn dispatch(
             // W1 口径：只落库 + 更新内存镜像；diff 副作用（扫描重排）随 W3 下沉。
             // 返回值与桌面壳同形（Ok(settings)）：client 成功分支会
             // mergeSettings(响应)——返回 null 会把本地设置打回默认值
-            //（语言切 English 后又被顶回 zh 的实测事故）
+            //（如语言被切回默认值的实测症状）
             let v = a.get("settings").cloned().unwrap_or_else(|| a.clone());
             let v_for_db = v.clone();
             db_lock(st)
@@ -431,8 +431,8 @@ async fn dispatch(
                                 |r| {
                                     // 列序契约：0..=18 与 aiya_data::repo::row_to_track
                                     // 逐位对齐（genre@17、container@18），音频规格接在
-                                    // 19..=24——任何一漏列就是 scanner.rs:530 记载过的
-                                    // "参数整体错位"同类事故
+                                    // 19..=24——漏列一列就是"参数整体错位"
+                                    //（scanner.rs 的音频规格六列测试锁同一契约）
                                     let track = aiya_data::repo::row_to_track(r)?;
                                     let codec: Option<String> = r.get(18)?;
                                     let container: Option<String> = r.get(19)?;
@@ -1282,7 +1282,7 @@ async fn dispatch(
             ok(json!({ "started": true }))
         }
         "beets_cancel" => ok(json!({ "requested": aiya_host_core::beets::cancel_session() })),
-        /* ---- station（docs/68 §6/§12：DB 频道面，N1.3） ---- */
+        /* ---- station（DB 频道面） ---- */
         "station_list" => {
             let rows: Vec<aiya_data::station::StationRow> = db_lock(st)
                 .send(|conn| aiya_data::station::list_stations(conn))

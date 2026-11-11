@@ -35,11 +35,11 @@ pub struct AudioModeEvent {
     pub reason: Option<String>,
 }
 
-/// EQ 设置（协议 v6，docs/24 B5b；docs/39 加音色双旋钮）。
+/// EQ 设置（协议 v6；音色双旋钮为低音/高音两个独立 shelf）。
 ///
 /// `bands` 固定 10 段（31.25 Hz → 16 kHz，见 aiya-audio `EQ_BAND_HZ`），
 /// 单位 dB，引擎侧 clamp 到 ±12；`pregain` 同单位，抗削顶预留；
-/// `bassDb`/`trebleDb`（docs/39）是独立的低音/高音 shelf 旋钮，与图示段
+/// `bassDb`/`trebleDb` 是独立的低音/高音 shelf 旋钮，与图示段
 /// 正交。持久化在 settings 表独立键 `eq` 下（不进 `app_settings`）：EQ 调整
 /// 走 `player_set_eq` 专用命令，避免与设置页的整体写互相覆盖。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

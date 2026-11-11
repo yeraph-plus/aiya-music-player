@@ -10,7 +10,7 @@ export type StationSummary = { id: string, name: string, subtitle: string | null
  */
 hlsUrl: string, 
 /**
- * private | public（docs/68 §12.4）
+ * private | public
  */
 visibility: string, 
 /**

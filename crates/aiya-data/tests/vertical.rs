@@ -11,7 +11,7 @@ fn write_mp3(dir: &std::path::Path, name: &str, title: &str, artist: &str, album
     write_mp3_tagged(dir, name, title, artist, album, None);
 }
 
-/// 带 genre（TCON）的变体：动态歌单的规则数据源（docs/40 §1）。
+/// 带 genre（TCON）的变体：动态歌单的规则数据源。
 fn write_mp3_tagged(
     dir: &std::path::Path,
     name: &str,
@@ -187,7 +187,7 @@ fn vertical_scan_query_playlist() {
     db.close();
 }
 
-/// 动态歌单纵切（docs/40 §1 方案 A）：扫描器读 genre 标签 → 规则建单 →
+/// 动态歌单纵切：扫描器读 genre 标签 → 规则建单 →
 /// Playlist 来源按 kind 自动路由到规则查询 → 手动歌单守卫仍然生效。
 #[test]
 fn vertical_smart_playlist_rule_query() {

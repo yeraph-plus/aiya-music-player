@@ -2,13 +2,14 @@
 //!
 //! 1. **手工构造 WAV**（RIFF 十几行就能拼）：验 symphonia 的 wav demuxer +
 //!    pcm 解码器 + seek 语义。
-//! 2. **错误分类**（docs/22 G1）：OGG-Opus 可以纯手工拼出来（容器页 +
+//! 2. **错误分类**：OGG-Opus 可以纯手工拼出来（容器页 +
 //!    OpusHead + OpusTags + 一页假数据，CRC32 是 15 行代码），正好走完整
 //!    probe→make 失败路径，锁定 `codecUnsupported` 的分类与格式名。
 //! 3. **真文件 fixture**（Vorbis / ALAC / AAC / MP3 / AIFF）：熵编码拼不出来，
-//!    用 `tests/fixtures/gen_fixtures.py` 一次性生成并入库（约 111KB）。这几个
-//!    格式此前"编进来了但没有任何样本跑过"——只有真解码一遍才算验过。
-//!    ALAC/AAC 那份还顺手暴露了 MP4 容器不报通道数 → SampleBuffer 除零 panic。
+//!    用 `tests/fixtures/gen_fixtures.py` 一次性生成并入库（约 111KB）。这些
+//!    格式只有真解码一遍才算验过——feature 编进来不等于能出声。
+//!    MP4 容器不报通道数 → SampleBuffer 除零 panic，由 ALAC/AAC 单声道
+//!    fixture 锁死。
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -248,8 +249,8 @@ fn fixture(name: &str) -> PathBuf {
 fn decode_stats(path: &Path) -> (usize, f32, f32) {
     let mut dec = DecodedStream::open_file(path)
         .unwrap_or_else(|e| panic!("{path:?} 打不开：{e}（kind={:?}）", e.kind()));
-    // 通道数在这里就是硬断言：MP4 容器不报通道数时，报错会变成 2ch
-    // （曾经直接除零 panic），单声道 fixture 正好锁死这条
+    // 通道数在这里就是硬断言：MP4 容器不报通道数时，缺省落到 2ch
+    // （而不是除零 panic），单声道 fixture 正好锁死这条
     assert_eq!(dec.sample_rate(), FX_SR, "{path:?} 采样率");
     assert_eq!(dec.channels(), 1, "{path:?} 声道数");
 
@@ -299,7 +300,8 @@ fn vorbis_fixture_decodes() {
 
 #[test]
 fn alac_fixture_decodes() {
-    // isomp4 demuxer + alac 解码器：这条曾经在打开阶段就 panic（容器不报通道数）
+    // isomp4 demuxer + alac 解码器：容器不报通道数路径由这条锁定（mp4 缺省
+    // 通道数必须是合法降级，不得除零）
     check_fixture("tone-alac.m4a");
 }
 

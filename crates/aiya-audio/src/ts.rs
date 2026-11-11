@@ -1,4 +1,4 @@
-//! MPEG-TS 段剥离：188 字节包 → 目标 ES 的裸字节（docs/52 §3）。
+//! MPEG-TS 段剥离：188 字节包 → 目标 ES 的裸字节。
 //!
 //! **这不是一个 demuxer**。HLS 规范要求 TS 里的 AAC 用 ADTS 封装，所以只要
 //! 剥掉 TS 包层和 PES 头，剩下的字节就是现成 `probe(hint=aac)` 认得的东西——

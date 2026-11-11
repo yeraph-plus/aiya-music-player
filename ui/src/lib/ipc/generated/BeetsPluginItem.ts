@@ -4,7 +4,7 @@
  * 插件表里的一条（**编译期内嵌**，不需要装过组件就能拿到）。
  *
  * 来源是 `beets-tool/src/aiya_beets/data/plugins.json`，与工具侧、打包脚本、
- * 安装器读的是同一份字节（docs/51 §1）。装没装、缺不缺依赖的三态由
+ * 安装器读的是同一份字节。装没装、缺不缺依赖的三态由
  * `beets_status` 的 pluginHealth 给出，不在这里。
  */
 export type BeetsPluginItem = { name: string, title: string, note: string, 
@@ -17,7 +17,7 @@ builtin: boolean,
  */
 packages: Array<string>, 
 /**
- * 外部二进制（ffmpeg / fpcalc …）：勾了这个插件就会顺带下载它（docs/53）
+ * 外部二进制（ffmpeg / fpcalc …）：勾了这个插件就会顺带下载它
  */
 exe: Array<string>, 
 /**
@@ -25,7 +25,7 @@ exe: Array<string>,
  */
 writes: boolean, network: boolean, 
 /**
- * 免配置包预置（带 `exe` 的插件，其 exe 也必须随包发，见 docs/54）
+ * 免配置包预置（带 `exe` 的插件，其 exe 也必须随包发）
  */
 bundle: boolean, 
 /**

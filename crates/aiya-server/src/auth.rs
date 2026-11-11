@@ -69,7 +69,7 @@ impl AuthGate {
         Ok((token, expires))
     }
 
-    /// 会话或静态令牌任一命中即有效；过期会话顺手清理。
+    /// 会话或静态令牌任一命中即有效；过期会话顺带清理。
     pub fn validate(&self, token: &str) -> bool {
         if self.static_token.as_deref() == Some(token) {
             return true;

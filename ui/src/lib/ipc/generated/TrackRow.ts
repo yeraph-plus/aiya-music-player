@@ -13,7 +13,7 @@ addedAtMs: number, artworkId: string | null, playCount: number,
 lastPlayedAtMs: number | null, gainDb: number | null, 
 /**
  * 文件可用性：online / offline / missing。扫描器与 beets 对账都会改它，
- * UI 用它给行打灰标（此前 DTO 里没有 → 列表看不出哪首已经找不到文件）。
+ * UI 用它给行打灰标——列表直接可见哪首已经找不到文件。
  */
 availability: string, 
 /**

@@ -1,16 +1,16 @@
 //! 曲库扫描：walkdir 遍历 + lofty 读标签 → artists/albums/tracks upsert。
 //!
-//! 设计要点（docs/02 §5.4，docs/29 §4 批 B 起为并行流水线）：
+//! 设计要点（并行流水线）：
 //!   * 失败隔离：单个文件解析失败只记 error，不中断整批
 //!   * 预筛 unchanged：mtime+size 与库内一致且在线 → **连标签都不读**（解析前判定）
 //!   * 解析并行：rayon 池（N = 逻辑核-1）读标签 + 算封面 hash + 落盘，不碰 DB
 //!   * 入库单写者：本线程独占连接，每 BATCH 个文件一个 IMMEDIATE 事务
 //!   * 稳定 ID：track id 从规范化路径派生（ids.rs），重扫不换 ID
 //!
-//! 为什么是"生产者/消费者"而不是原来的单线程 for 循环（docs/29 §4）：
-//! 旧实现的 `unchanged` 判定写在 `upsert` 里，等轮到它时 `parse_file` 早就把
-//! 整份标签和嵌入封面读完了一遍 —— 注释写着"跳过解析"，实际跳过的是"重新写库"。
-//! 并行化把这两件事一起修：预筛提前到解析之前，解析本身摊到多核上。
+//! 为什么是"生产者/消费者"：`unchanged` 预筛必须发生在解析之前——判定若
+//! 写在 `upsert` 里，轮到它时 `parse_file` 早已把整份标签和嵌入封面读完
+//! 一遍（注释写着"跳过解析"，实际跳过的是"重新写库"）。流水线把预筛提前，
+//! 解析本身摊到多核。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -57,9 +57,8 @@ const MAX_ERRORS: usize = 100;
 pub struct ScanProgress {
     /// walking | parsing | importing | done | cancelled | failed
     ///
-    /// 没有单独给"封面提取"一个阶段（旧注释里有过 `artwork`）：docs/29 批 B 起
-    /// 封面 hash/落盘发生在解析 worker 内部，与读标签同一时刻完成，对外拆开
-    /// 只会多一个永远不会稳定出现的状态。
+    /// 没有单独给"封面提取"一个阶段：封面 hash/落盘发生在解析 worker 内部，
+    /// 与读标签同一时刻完成，对外拆开只会多一个永远不会稳定出现的状态。
     pub phase: String,
     /// 已入库（或已判定 unchanged / failed 并记账）的文件数 —— 进度条按它走
     pub scanned: usize,
@@ -198,8 +197,8 @@ struct ParsedTrack {
     track_no: Option<u32>,
     disc_no: Option<u32>,
     year: Option<u32>,
-    /// genre 标签（动态歌单的规则数据源，docs/40 §1）。此前只有 beets 对账
-    /// 会写这一列；docs/43 §8-E 移除对账后，文件标签是唯一来源。
+    /// genre 标签（动态歌单的规则数据源）。文件标签是唯一来源，
+    /// beets 对账不写这一列。
     genre: Option<String>,
     duration_ms: Option<i64>,
     size_bytes: u64,
@@ -476,7 +475,7 @@ fn upsert(
     }
 
     // 行身份（主键）：更新已有行时用**行上的真实 id**——它可能是 relocate 保留下来的旧路径派生 id；用 `track_id(当前路径)` 重算会撞别的行的 PK，而 ON CONFLICT(path_lower) 不覆盖 PK 冲突，整批会失败。新文件按路径派生；若该 id 已被一条 path_lower 不同的行占用（典型场景：旧路径的文件被
-    // relocate 走后，同路径又来了一个**不同的**新文件——恢复备份、重抓轨、改名回来，都是现实操作），换盐派生。新文件本就没有历史引用，换 id 无副作用；被 relocate 的行继续持有原 id，引用不断。发布前审查 P1-4：此前该场景每次扫描都 UNIQUE 失败，文件永远进不了库。
+    // relocate 走后，同路径又来了一个**不同的**新文件——恢复备份、重抓轨、改名回来，都是现实操作），换盐派生。新文件本就没有历史引用，换 id 无副作用；被 relocate 的行继续持有原 id，引用不断。不换盐的话，该场景每次扫描都 UNIQUE 失败，文件永远进不了库。
     let tid = if let Some((row_id, _, _, _)) = &existing {
         row_id.clone()
     } else {
@@ -528,7 +527,7 @@ fn upsert(
     });
 
     // codec 占位是 NULL：编码名是 beets 同步的领地（`rescan_does_not_wipe_codec`），
-    // 扫描器只有 lofty 的 FileType（写 container 列）。此前 VALUES 里少占了这一位，
+    // 扫描器只有 lofty 的 FileType（写 container 列）。VALUES 里若少占这一位，
     // container..channels 五个参数整体左移一格——bitrate 列吃到声道数，
     // 全库恒为 2（UI 症状：比特率徽章永远是 "2 kbps"）。
     conn.execute(
@@ -587,7 +586,7 @@ fn upsert(
 ///
 /// 为什么把 `bool` 换成三态：旧接口只回答"是不是新行"，于是**重新解析并
 /// 写了行**这一档被混进 `unchanged`，扫描结果里永远看不出"标签被外部改过"。
-/// 刷新管线（docs/33 §7）要靠这个数决定"磁盘侧真的变了没有"，
+/// 刷新管线要靠这个数决定"磁盘侧真的变了没有"，
 /// 而 `unchanged` 必须是"连标签都没读"的那一批。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UpsertOutcome {
@@ -701,10 +700,10 @@ fn process_file(
 
     // 预筛：mtime+size 都没变、且行是在线状态 → 连标签都不读。
     //
-    // 这是增量重扫的绝对大头（真实曲库里 99% 的文件都会命中），也是本批次
-    // 最大的一处收益：旧实现把 unchanged 判定放在 `upsert` 里，那时
-    // `parse_file` 早把整份标签和嵌入封面读完了一遍 —— 注释写着"跳过解析"，
-    // 实际跳过的是"重新写库"。实测 1846 首的重扫从 4.9s 降到 0.2s 量级。
+    // 这是增量重扫的绝对大头（真实曲库里 99% 的文件都会命中）：判定若放在
+    // `upsert` 里，`parse_file` 早把整份标签和嵌入封面读完了一遍 ——
+    // 注释写着"跳过解析"，实际跳过的是"重新写库"。
+    // 实测 1846 首的重扫从 4.9s 降到 0.2s 量级。
     //
     // `mtime != 0`：DB 里 mtime 为 0 表示"当初没读到修改时间"，
     // 与 upsert 里 `Some(m)` 的判断一致，不能拿 0 去比。
@@ -763,7 +762,7 @@ enum CommitOutcome {
 /// 提交攒下的一批（≤ BATCH_SIZE）。
 ///
 /// 快路径整批一个 IMMEDIATE 事务；批内某条 upsert 失败时回滚整批，
-/// **再逐条重放**（每条独立事务）——旧实现整批回滚后把全批计 failed，
+/// **再逐条重放**（每条独立事务）——整批回滚后把全批计 failed 的话，
 /// 一条坏数据拖累同批 199 首无辜文件（统计失真，好文件还要等下次重扫）。
 fn commit_batch(
     conn: &mut Connection,
@@ -894,9 +893,9 @@ pub fn scan_directory(
 /// **取消路径绝不执行 mark_missing**——seen 集合不完整，此时对账会把大量在线
 /// 文件误标 missing。
 ///
-/// `+ Sync`：docs/29 批 B 起解析在线程池里跑，取消标志要被多个 worker 同时读。
+/// `+ Sync`：解析在线程池里跑，取消标志要被多个 worker 同时读。
 ///
-/// docs/29 批 A 起单根版委托 [`scan_roots_ext`]（多根并集单库）。
+/// 单根版委托 [`scan_roots_ext`]（多根并集单库）。
 pub fn scan_directory_ext(
     conn: &mut Connection,
     root: &Path,
@@ -908,7 +907,7 @@ pub fn scan_directory_ext(
     scan_roots_ext(conn, &owned, artwork_cache, should_cancel, on_progress)
 }
 
-/// 多根扫描：所有根的 walk 结果**并集**进同一个库（拍板：并集单库，无多库切换）。
+/// 多根扫描：所有根的 walk 结果**并集**进同一个库（并集单库，无多库切换）。
 ///
 /// 为什么不是"逐根调单根版"：mark_missing 按"本轮 walk 到的路径"对账，
 /// 逐根调用时第 1 根的对账会把第 2 根下的曲目全标 missing。必须先走完全部根、
@@ -1002,11 +1001,11 @@ pub fn scan_roots_ext(
     let (tx, rx) = sync_channel::<Item>(CHANNEL_CAP);
 
     // 流水线级取消标志（区别于用户的 should_cancel）：DB 侧出错（commit 失败早退）或 send 失败（消费者已走）时置位，producer 在每个条目处理**前** 检查并快速返回。没有这个标志，DB 出错后 producer 仍会把剩余整库解析完才发现
-    // channel 断了 —— 白烧几分钟 CPU/IO（此前 `let _ = tx.send` 把 Disconnected 吞掉，`std::thread::scope` 又要等 par_iter 跑完）。
+    // channel 断了 —— 白烧几分钟 CPU/IO（`let _ = tx.send` 把 Disconnected 吞掉的话，`std::thread::scope` 还要等 par_iter 跑完）。
     let pipeline_cancelled = std::sync::atomic::AtomicBool::new(false);
 
     // 进度上报口径统一收在这一个闭包里：phase 要同时看两个计数，
-    // 散在循环各处写必然走样（旧实现就是每批自己拼一份 ScanProgress）。
+    // 散在循环各处写必然走样（每批自己拼一份 ScanProgress，口径各说各话）。
     let mut report = |t: &Tally, current: Option<String>| {
         // 解析全完了但库里还有积压 → 如实说"正在入库"。
         // 没有这个状态时，用户在"解析快、入库慢"那一段看到的就是进度条不动。
@@ -1088,7 +1087,7 @@ pub fn scan_roots_ext(
                             }
                         };
                         apply_commit(&mut tally, &mut errors, outcome);
-                        // 批边界必报一次：这是用户唯一能感觉到"又前进了一批"的地方 （旧实现也是每批一次）。同时前推
+                        // 批边界必报一次：这是用户唯一能感觉到"又前进了一批"的地方。同时前推
                         // next_report，否则下面的步长判断会立刻再报一次一模一样的事件。
                         report(&tally, last_path.clone());
                         next_report = tally.scanned + PROGRESS_STEP;
@@ -1199,7 +1198,7 @@ pub fn scan_roots_ext(
 /// 重新出现的文件由 upsert 的 `availability = 'online'` 恢复；改名的文件由
 /// upsert 的 relocate 对账跟到新路径（不产生重复行）。
 ///
-/// 多根版本（docs/29 批 A）：OR 拼接各根前缀；没有任何根时**不标记**
+/// 多根版本：OR 拼接各根前缀；没有任何根时**不标记**
 /// （配置为空是"用户还没填"，把整库标 missing 是灾难）。
 fn mark_missing(
     conn: &mut Connection,
@@ -1341,8 +1340,8 @@ mod tests {
     }
 
     /// 隐藏目录 / 系统噪音目录必须**整棵子树**剪掉。
-    /// 回归点：旧实现 `for entry in WalkDir` 里对目录 `continue`，
-    /// 只跳过目录条目本身，子目录照样走进去（.git 里几万个小文件全被遍历）。
+    /// 回归点：`for entry in WalkDir` 里对目录 `continue` 只跳过目录条目本身，
+    /// 子目录照样走进去（.git 里几万个小文件全被遍历）。
     #[test]
     fn walk_prunes_hidden_and_noise_subtrees() {
         let dir = tempfile::tempdir().unwrap();
@@ -1544,8 +1543,8 @@ mod tests {
 
     /// 音频规格六列必须各归各位。回归点：INSERT 的 VALUES 少占一个 codec
     /// 占位，container..channels 五个参数整体左移一格——库里 bitrate 列
-    /// 存的是声道数，UI 的码率徽章于是永远显示 "2 kbps"。此前没有任何
-    /// 测试读过这六列（title/artist 错位一眼可见，数值列错位无声）。
+    /// 存的是声道数，UI 的码率徽章于是永远显示 "2 kbps"。数值列错位无声
+    /// （title/artist 错位一眼可见），必须有测试读全这六列。
     #[test]
     fn scan_writes_audio_columns_in_their_own_slots() {
         let dir = tempfile::tempdir().unwrap();
@@ -1582,7 +1581,7 @@ mod tests {
         assert_eq!(channels, Some(1), "声道数（mono=1）不能落到 NULL 位");
     }
 
-    /// docs/29 批 A：多根并集单库。两根各一首都要入库；missing 对账只作用
+    /// 多根并集单库。两根各一首都要入库；missing 对账只作用
     /// 于**根前缀内**的曲目——这正是不能"逐根调单根版"的原因（第 1 根的
     /// 对账会把第 2 根的曲目误标 missing）。
     #[test]
@@ -1734,9 +1733,9 @@ mod tests {
     }
 
     /// relocate 之后旧路径来了一个**不同的**新文件（恢复备份/重抓轨/改名
-    /// 回来）：按路径派生的 id 会与被 relocate 行（保留旧 id）撞主键。此前
-    /// 直接 UNIQUE 失败且此后每次扫描都失败（永远进不了库）；修复后应换盐
-    /// 入库，被 relocate 行不受影响。发布前审查 P1-4 回归。
+    /// 回来）：按路径派生的 id 会与被 relocate 行（保留旧 id）撞主键——不换盐
+    /// 则 UNIQUE 失败且此后每次扫描都失败（永远进不了库）；换盐入库，
+    /// 被 relocate 行不受影响。
     #[test]
     fn new_file_at_relocated_away_path_still_imports() {
         let dir = tempfile::tempdir().unwrap();
@@ -1820,8 +1819,8 @@ mod tests {
         assert_eq!(old_avail, "missing", "旧路径行照常标 missing");
     }
 
-    /// P2 回归：批内一条 upsert 失败，只把真正失败的行计 failed，
-    /// 同批其余文件照常入库（旧实现整批回滚 + 全批计 failed）。
+    /// 回归：批内一条 upsert 失败，只把真正失败的行计 failed，
+    /// 同批其余文件照常入库（不是整批回滚 + 全批计 failed）。
     #[test]
     fn batch_failure_replays_and_counts_only_real_failures() {
         let mut conn = open_in_memory().unwrap();
@@ -1942,11 +1941,11 @@ mod tests {
         assert_eq!(count, BATCH_SIZE as i64, "已提交批次落库");
     }
 
-    /// 多值标签（docs/43 §10）：**beets/mutagen 的写法**是单帧内 NUL 分隔
+    /// 多值标签：**beets/mutagen 的写法**是单帧内 NUL 分隔
     /// （ID3v2.4 规范的多值形态），lofty 按 NUL 拆成多个 item——
     /// 扫描器把它们与 "; " 单帧写法一起归一成规范连接串，而不是截成第一个值。
     /// 已知上游限制：同键**多帧**（Picard 等工具的写法）在 lofty 0.25.4 读侧
-    /// 会塌缩成最后一帧，见 docs/43 §10 欠账。
+    /// 会塌缩成最后一帧（lofty 上游已知限制）。
     #[test]
     fn multi_value_artist_and_genre_are_joined() {
         let dir = tempfile::tempdir().unwrap();

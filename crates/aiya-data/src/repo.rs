@@ -158,7 +158,7 @@ pub struct TrackRow {
     pub last_played_at_ms: Option<i64>,
     pub gain_db: Option<f64>,
     /// 文件可用性：online / offline / missing。扫描器与 beets 对账都会改它，
-    /// UI 用它给行打灰标（此前 DTO 里没有 → 列表看不出哪首已经找不到文件）。
+    /// UI 用它给行打灰标——列表直接可见哪首已经找不到文件。
     pub availability: String,
     /// 流派（0003 迁移，beets 同步带来）。列表不显示，筛选器 conds 用。
     pub genre: Option<String>,
@@ -337,8 +337,8 @@ const JOIN_AGG: &str =
      LEFT JOIN artists al_ar ON al_ar.id = al.artist_id";
 
 /// JOIN 与排序（playlist/recent/mostPlayed 不吃用户 sort 字段）。
-/// 例外：recent 吃 `direction`——曲库页「最近播放」tab 二次点击翻转正倒序
-/// （docs/28）：次数并列时"最近还在听"排前面——推荐页 top-15 的第 15 名
+/// 例外：recent 吃 `direction`——曲库页「最近播放」tab 二次点击翻转正倒序：
+/// 次数并列时"最近还在听"排前面——推荐页 top-15 的第 15 名
 /// 争夺战里，半年没听的那首先出去。
 fn join_and_order(q: &TrackWindowQuery) -> (&'static str, &'static str) {
     match &q.source {
@@ -630,7 +630,7 @@ pub fn list_tracks(conn: &Connection, q: &TrackWindowQuery) -> DbResult<TrackPag
 
     let page_limit = limit;
 
-    // COUNT（同 WHERE 但**不含游标谓词**）此前 COUNT 复用了带游标条件的 head，于是 total
+    // COUNT（同 WHERE 但**不含游标谓词**）。COUNT 复用带游标条件的 head 的话，total
     // 是"游标之后的剩余量"，每翻一页递减 —— UI 拿它画滚动条/显示"N 首"会一路缩水。
     let total: i64 = {
         let (count_sql, count_binders) = build_count(q, &cond_clauses);
@@ -708,14 +708,14 @@ pub struct IdCollection {
 /// 按查询条件收集全量 track id（批量选择 / 播放全部）。
 ///
 /// 为什么不复用 `list_tracks` 的 limit：`list_tracks` 是**窗口化列表**入口，
-/// limit 硬钳 500 是对的（虚拟列表不需要更多）；但把它当"取全量"用会静默
-/// 截断（此前 player_play_query 以为 limit=10000 就能拿全，实际只拿到 500）。
+/// limit 硬钳 500 是对的（虚拟列表不需要更多）；把它当"取全量"用会静默
+/// 截断（limit=10000 的调用方实际只拿到 500）。
 ///
 /// 分页推进方式按来源区分——这是修死循环的关键：
 /// * library 来源有游标键 → 游标翻页；
 /// * playlist/recent/mostPlayed 是固定顺序、没有游标 → **必须用 offset 翻页**。
-///   此前命令侧无论什么来源都只写 `q.cursor`，在 offset 模式下 cursor 被
-///   完全忽略，于是每轮返回同一页、循环永不退出（点一下批量操作就冻死 App）。
+///   无论什么来源都只写 `q.cursor` 的话，offset 模式下 cursor 被
+///   完全忽略，每轮返回同一页、循环永不退出（点一下批量操作就冻死 App）。
 pub fn collect_track_ids(
     conn: &Connection,
     q: &TrackWindowQuery,
@@ -1204,8 +1204,8 @@ mod tests {
         assert_eq!(page2.total, 3, "第二页的 total 仍是全量 3，不是剩余 1");
     }
 
-    /// 死循环回归：UI 传 offset 模式的 query 进来，批量收集也必须收敛。
-    /// 此前命令侧只写 `q.cursor`，offset 模式下被忽略 → 每轮同一页 → 永不退出。
+    /// 死循环回归：UI 传 offset 模式的 query 进来，批量收集也必须收敛——
+    /// 只写 `q.cursor` 时 offset 模式被忽略 → 每轮同一页 → 永不退出。
     #[test]
     fn collect_ids_terminates_with_offset_mode_input() {
         let conn = open_in_memory().unwrap();
@@ -1313,7 +1313,7 @@ mod tests {
 
     /// 「存为歌单」的前置判断：每条路径是否在曲库里，答案要**同序等长**。
     ///
-    /// 这条测试守的是两件容易被"顺手优化"掉的事：
+    /// 这条测试守的是两件容易被无意"优化"掉的事：
     /// 1. 没命中的路径返回 `None`，**不造行**（另一个库可能有还没扫描进来的文件）；
     /// 2. 结果顺序 = 输入顺序（界面按行标灰，错位就等于标错了歌）。
     #[test]

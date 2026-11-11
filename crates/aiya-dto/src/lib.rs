@@ -1,12 +1,11 @@
-//! IPC DTO：跨进程边界的**唯一**形状来源（docs/17）。
+//! IPC DTO：跨进程边界的**唯一**形状来源。
 //!
 //! 为什么要有这一层（而不是继续 `json!` 手拼）：
-//! - `json!` 拼出来的字段名/嵌套形状没有任何编译期约束，TS 侧只能手抄
-//!   （`ui/contracts` 1301 行全靠人肉同步，已出过两次事）；
+//! - `json!` 拼出来的字段名/嵌套形状没有任何编译期约束，TS 侧只能手抄；
 //! - 这里的每个结构体都 `derive(TS)`，由 `npm run gen:types` 生成到
 //!   `ui/src/lib/ipc/generated/`，字段一改，TS 侧跟着变，`git diff` 会红。
 //!
-//! 约定（docs/17 §3）：
+//! 约定：
 //! - 字段 Rust 侧 snake_case，wire 上一律 camelCase；
 //! - 时间**一律毫秒**（`*Ms`），id 一律 `String`，缺值用 `Option` → `null`；
 //! - 整数一律 `#[ts(type = "number")]`：ts-rs 默认把 `i64/u64` 映射成 `bigint`，
@@ -26,7 +25,7 @@
 //!
 //! **参数为什么不在这里**：命令参数出错必须映射成 `invalidArg`，而 Tauri 的
 //! 参数反序列化发生在命令体之前——用强类型参数会把"参数不合法"变成 Tauri
-//! 自己的一句话 reject，绕过本模块的错误分类（docs/17 §3.2）。所以
+//! 自己的一句话 reject，绕过本模块的错误分类。所以
 //! query / settings 这类复合参数仍收 `Json` 并在命令体里解析。
 
 use serde::{Deserialize, Serialize};
@@ -54,7 +53,7 @@ pub use refresh::{RefreshSnapshot, RefreshState};
 // 拖放分类结果。形状定义跟着分类器走（`src/drop.rs`，纯函数 +
 // 单测在那里），这里只做出口——命令签名与 ts-rs 都从 `dto::` 拿，与其余 DTO 一致。
 
-/// 拖入 / 打开一批文件的回执（docs/52 §5.3）。
+/// 拖入 / 打开一批文件的回执。
 ///
 /// 为什么不直接返回 `PlayerState`：UI 需要告诉用户"进去了几项、跳过了哪些、
 /// 为什么跳过"。播放状态本来就走 `player:state` 事件，命令再返回一次只是多
@@ -65,7 +64,7 @@ pub use refresh::{RefreshSnapshot, RefreshState};
 pub struct OpenPathsReceipt {
     /// 真正进队列的条目数
     pub opened: usize,
-    /// 被跳过的条目（人话，直接进吐司，不再二次加工）
+    /// 被跳过的条目（用户可读文本，直接进吐司，不再二次加工）
     pub skipped: Vec<String>,
 }
 
@@ -91,8 +90,8 @@ pub struct ApiError {
     pub retryable: bool,
 }
 
-/// 错误分类。刻意比旧码少：旧实现里 `E_INTERNAL` 一个码占了 26/41，
-/// 等于没有分类；这里按"UI 该怎么处理"来分，而不是按"哪段代码出错"来分。
+/// 错误分类。按"UI 该怎么处理"来分，而不是按"哪段代码出错"来分——
+/// 分类粒度粗到"一个码占 26/41"就等于没有分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]

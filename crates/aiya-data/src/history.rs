@@ -2,9 +2,9 @@
 //!
 //! 为什么集中在这里：`history` 行与 `tracks` 上的反范式统计列
 //! （`play_count` / `last_played_at`）是一份数据的两种表示 —— 写和清都必须
-//! 在**同一个事务**里完成。此前 `record_history` 只插 history、根本没人维护
-//! `play_count`（UI 里每次播放都显示 0，mostPlayed 永远空），`history_clear`
-//! 也只删 history，清完历史列表还在显示播放次数。
+//! 在**同一个事务**里完成。拆开写两处必然走样：只插 history 不维护
+//! `play_count`，UI 里每次播放都显示 0、mostPlayed 永远空；只删 history，
+//! 清完历史列表还在显示播放次数。
 
 use rusqlite::{params, Connection, TransactionBehavior};
 

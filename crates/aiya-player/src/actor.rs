@@ -32,22 +32,22 @@ pub struct PlayerActor {
     /// 最近一次需要发出的引擎指令（Actor 不直接驱动线程）
     pending_load: Option<(u64, String, u64, bool)>, // (token, path, startMs, autoplay)
     /// 需要下发 EngineCommand::Stop（队尾停住/删掉当前曲且队列空）。
-    /// 此前只有 pending_load，这两种迁移对引擎完全静默：UI 显示已停、
+    /// 没有它，这两种迁移对引擎完全静默：UI 显示已停、
     /// 声音继续放到本曲结束。
     pending_stop: bool,
-    /// Loading 期间用户按过暂停（此前该命令被静默吞掉）：Loaded 到达且
+    /// Loading 期间用户按过暂停（不暂存该命令会被静默吞掉）：Loaded 到达且
     /// token 匹配时直接落 Paused 而不是 Playing。
     pending_pause: bool,
     /// 本次 Stop 是"直播暂停 = 断开"引起的，**不是曲终**。
     ///
     /// 引擎对 Stop 的回报是 `Eof`（它没法区分"停"和"放完了"），而 `Ended`
-    /// 的默认语义是"推进队列"。不认领就会暂停一下跳到下一首（docs/52 §10）。
+    /// 的默认语义是"推进队列"。不认领的话，直播暂停会跟着跳到下一首。
     disconnecting: bool,
     /// 随机模式的播放历史栈（Prev 的"上一首"来源）。存 queue 下标。
     history: PlayHistory,
     /// Actor 自己维护的单调位置估计（无引擎回报时给 UI）
     last_reported_ms: u64,
-    /// 当前曲目音源类别（docs/22 G3）。instruct_load 时按路径前缀判定：
+    /// 当前曲目音源类别。instruct_load 时按路径前缀判定：
     /// http(s) = Stream（FM 推流），否则 File。
     source: AudioSource,
     /// ReplayGain 归一化开关（设置项 normalizeVolume）。放在 Actor 里而不是
@@ -252,7 +252,7 @@ impl PlayerActor {
     /// 队列原序的完整 `TrackRef`（宿主落库 / 恢复时用）。
     ///
     /// 为什么不是"让宿主拿 ids 回查库"：`file:` / `stream:` 这些临时项**不在
-    /// 库里**，回查只会查空。多态队列的落库必须带着 ref 本身（docs/52 §6.3）。
+    /// 库里**，回查只会查空。多态队列的落库必须带着 ref 本身。
     pub fn queue_refs(&self) -> Vec<TrackRef> {
         self.queue.clone()
     }
@@ -553,7 +553,7 @@ impl PlayerActor {
                 }
                 QueueOp::Remove { indices } => {
                     let was_playing = self.status == PlaybackStatus::Playing;
-                    // indices 是**播放顺序里的位置**（UI 拿到的是 queue_snapshot().ids 的下标）。此前当成 queue 下标用：洗牌时删错歌，且
+                    // indices 是**播放顺序里的位置**（UI 拿到的是 queue_snapshot().ids 的下标）。当成 queue 下标用的话：洗牌时删错歌，且
                     // rebuild_order(None) 会把整队重洗 —— 删一首就打乱全部顺序。
                     let mut positions: Vec<usize> = indices
                         .into_iter()
@@ -639,7 +639,7 @@ impl PlayerActor {
                         Some(duration_ms)
                     };
                     if self.status == PlaybackStatus::Loading {
-                        // Loading 期间用户按过暂停 → 落 Paused（此前被静默吞掉）
+                        // Loading 期间用户按过暂停 → 落 Paused（不接住这个意图就会被静默吞掉）
                         let want_pause = std::mem::take(&mut self.pending_pause);
                         self.status = if want_pause {
                             PlaybackStatus::Paused
@@ -812,7 +812,7 @@ mod tests {
         p.take_pending_load().expect("装载意图");
     }
 
-    /// `HTTP://` 也要标成流（引擎那边大小写不敏感，两边曾经不一致）
+    /// `HTTP://` 也要标成流（引擎那边大小写不敏感，两处判定同规则）
     #[test]
     fn uppercase_scheme_is_still_a_stream() {
         let mut p = PlayerActor::new();
@@ -824,7 +824,7 @@ mod tests {
         assert_eq!(p.state().duration_ms, None, "直播没有总时长");
     }
 
-    /// 直播暂停 = 断开（docs/52 §10）：状态落 Paused、下发 Stop、已收听时长归零
+    /// 直播暂停 = 断开：状态落 Paused、下发 Stop、已收听时长归零
     #[test]
     fn pausing_a_stream_disconnects() {
         let mut p = PlayerActor::new();
@@ -1199,7 +1199,7 @@ mod tests {
     }
 
     /// 空队列下 PlayNext 也要自动起播（与 Append 对齐）：没有当前曲时，
-    /// "下一首播放"插入的就是播放起点。此前 Idle 下插入后静躺不播，
+    /// "下一首播放"插入的就是播放起点。Idle 下插入后若不起播，
     /// 用户点了没反应。
     #[test]
     fn play_next_to_empty_autoplays() {
@@ -1579,7 +1579,7 @@ mod tests {
     }
 
     /// 装载窗口的暂停意图是**翻转**语义：按一次 = 装载完落暂停，按两次 =
-    /// 回到"接着放"。旧实现置 true 不翻转，把"按了又按"卡死在暂停上；
+    /// 回到"接着放"（置 true 不翻转的话，"按了又按"卡死在暂停上）；
     /// 且意图必须能被命令路径读走下发引擎（pending_pause()），否则装载期
     /// 按暂停会"UI 落 Paused 而引擎继续出声"。
     #[test]
@@ -1650,7 +1650,7 @@ mod tests {
     /* hydrate 的洗牌策略 */
 
     /// hydrate 开洗牌与 ToggleShuffle 同策略：当前曲钉到 order 位 0
-    /// （此前 hydrate 用 rebuild_order(None)，当前曲落在随机位置）。
+    /// （不能用 rebuild_order(None)——当前曲会落在随机位置）。
     #[test]
     fn hydrate_shuffle_pins_current_to_front_like_toggle() {
         let mut p = PlayerActor::new();

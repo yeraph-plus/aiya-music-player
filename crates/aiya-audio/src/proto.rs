@@ -1,4 +1,4 @@
-//! sidecar 线协议（ADR-0002）。
+//! sidecar 线协议。
 //!
 //! - 传输：命名管道，UTF-8 JSON 行帧（每条消息一行，`\n` 结尾）
 //! - 只传命令/事件/心跳，不传 PCM
@@ -9,20 +9,20 @@ use serde::{Deserialize, Serialize};
 
 /// 协议版本。不匹配的握手直接失败，由调用方决定重启或退出。
 ///
-/// v7：`Load` 增加 `paused` 字段——装载意图自带暂停态。此前"装载但暂停"
-/// 靠 Load 后紧跟 Pause 实现，引擎在 Load 开流期间就开始出声、Pause 要等
-/// 渲染循环第一次收命令才生效，启动恢复必有几百毫秒残声（用户实测）。
-/// 旧字段 `startMs`/`token` 不变；`#[serde(default)]` 让缺字段按 false 处理。
+/// v7：`Load` 增加 `paused` 字段——装载意图自带暂停态，开流前就知道不该
+/// 出声。旧字段 `startMs`/`token` 不变；`#[serde(default)]` 让缺字段按
+/// false 处理。
 ///
-/// v6：新增 `SetEq(EqParams)` 命令与 `EngineEvent::EqApplied`（docs/24 B5b，
-/// 10 段 biquad）。EQ 是设置而非曲目属性：恢复序列在 SetOutputConfig 之后
+/// v6：新增 `SetEq(EqParams)` 命令与 `EngineEvent::EqApplied`（10 段 biquad）。
+/// EQ 是设置而非曲目属性：恢复序列在 SetOutputConfig 之后
 /// 无条件回放。`EqApplied` 带生效值（clamp 后），UI 以它为准而非自己发的值。
 ///
 /// v5：`EngineEvent::Error` 加 `kind` 分类（`fileMissing`/`io`/`decode`/
-/// `codecUnsupported`/`deviceLost`/`unsupportedFormat`/`unknown`）。此前只有
-/// 一句话，宿主无法区分"文件没了该跳过"和"设备断了该提示"，只能解析文案前缀。
-/// v5.1（无版本号递增的**加值**）：kind 新增 `codecUnsupported`（docs/22 G1，
-/// 容器认识但编码没编进 features）。旧宿主 parse 不认识会落到 `unknown`，
+/// `codecUnsupported`/`deviceLost`/`unsupportedFormat`/`unknown`）——只传
+/// 一句话时，宿主无法区分"文件没了该跳过"和"设备断了该提示"，只能解析
+/// 文案前缀。
+/// v5.1（无版本号递增的**加值**）：kind 新增 `codecUnsupported`
+/// （容器认识但编码没编进 features）。旧宿主 parse 不认识会落到 `unknown`，
 /// 向后兼容，故不 bump 协议版本。
 ///
 /// v4：`SetExclusive(bool)` → `SetOutputConfig(OutputConfig)`（模式/时钟/缓冲/
@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 ///     用户需要知道"我选的独占·事件·10ms，设备实际给了什么"。
 /// v3：新增 `SetExclusive` 命令与 `AudioMode` 事件（独占可选 + 失败可解释）。
 /// v2：`Load` 携带 `start_ms` + `token`；所有事件回显 `token`
-/// （ADR-0003 generation，修"启动恢复从 0 播"与"曲尾切歌连跳两首"）。
+/// （装载代数 generation，宿主按它丢弃过期回报）。
 pub const PROTOCOL_VERSION: u32 = 7;
 
 /// host → sidecar 消息。

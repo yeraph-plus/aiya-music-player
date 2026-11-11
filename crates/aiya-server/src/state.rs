@@ -37,9 +37,9 @@ pub struct ServerState {
     pub events: crate::events::EventBus,
     /// 扫描管线控制（scanning/cancel/最近快照）
     pub scan: crate::scan::ScanCtl,
-    /// 推流频道控制层（docs/68）：单测试频道，N1.1 起换 DB 行
+    /// 推流频道控制层：单测试频道，DB 行为真源
     pub station: crate::station::StationCtl,
-    /// beets 安装登记表（host-core）：子进程收尸槽 + 占位互斥
+    /// beets 安装登记表（host-core）：子进程回收槽 + 占位互斥
     pub beets_install: std::sync::Arc<aiya_host_core::InstallRegistry>,
     /// 最近一次位置回报（记账秒数的估算源）：(track_id, ms)
     pub last_played: Mutex<(String, u64)>,

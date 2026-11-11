@@ -9,10 +9,10 @@
 --   * 0006/0007 → 一次性数据回填/清理，新库无数据，不吸收
 --   * 0008/0009 → track_enrichment 建后即弃的净零对，不吸收
 --   * 0012 → stations / station_playlists / station_schedules / station_history
---     （docs/68 自动 DJ 推流频道；桌面与 server 共库不分叉）
+--     （自动 DJ 推流频道；桌面与 server 共库不分叉）
 --   * 0010 → queue_items 重建形（kind/track_id 可空 + payload + CHECK）
 --   * 0011 → idx_albums_artwork / idx_artists_artwork
--- 设计依据 docs/02 §5.2：
+-- 设计依据（数据层设计档案定盘，细节归档案）：
 --   * tracks 不暴露路径给 UI（locator/文件事实只存在于本库）
 --   * 标签写操作归 beets，tracks 只存播放/展示需要的字段
 --   * 队列规范化（queue_state 单行 + queue_items 位置表），不写 JSON 整行
@@ -190,7 +190,7 @@ CREATE INDEX idx_albums_artwork    ON albums(artwork_id);
 CREATE INDEX idx_artists_artwork   ON artists(artwork_id);
 
 
--- ---------------------------------------------------------------- 推流频道（docs/68 §3）
+-- ---------------------------------------------------------------- 推流频道
 --
 -- 自动 DJ 频道面。id 一律 uuid v5（NS_* 常量，ids.rs）：服务端权威、创建后
 -- 改名不变（LIVE_STATION_FIELDS："服务端权威 id；容器/端口变更不影响"）。
@@ -203,7 +203,7 @@ CREATE TABLE stations (
   cover_url  TEXT,
   -- 段目录名（ch<id 前 8 位>），唯一：/hls/{hls_dir} 是外部收听端看到的地址
   hls_dir    TEXT NOT NULL,
-  -- private（默认，/hls 与 ws 过鉴权）| public（免鉴权，docs/68 §12.4）
+  -- private（默认，/hls 与 ws 过鉴权）| public（免鉴权）
   visibility TEXT NOT NULL DEFAULT 'private',
   -- 0=停播 1=开播（频道级开关；停播保留段目录与配置，再开播热恢复）
   active     INTEGER NOT NULL DEFAULT 0,

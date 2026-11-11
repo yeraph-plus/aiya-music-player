@@ -30,7 +30,7 @@ pub struct LibraryStats {
     /// 曲目文件的字节总和（`tracks.size_bytes` 之和）。
     ///
     /// 与 `db_bytes` 是两回事：那是索引（SQLite 文件）自己的体积，这是
-    /// 磁盘上音乐加起来多大。扫描时顺手拿到的 `meta.len()`，不需要额外
+    /// 磁盘上音乐加起来多大。扫描时顺带拿到的 `meta.len()`，不需要额外
     /// stat 文件——但**离线/缺失的曲目仍计入**（记的是上次入库时的大小），
     /// 所以它是"库里有多少音乐"而不是"现在还能放多少"。
     #[ts(type = "number")]
@@ -118,7 +118,7 @@ pub struct ScanCancel {
 
 /// 选目录成功后的路径。用户取消选择时命令返回 `null` 而不是空字符串。
 ///
-/// docs/29 批 A：`roots` 是选择后的**完整根列表**（多目录并集单库），
+/// `roots` 是选择后的**完整根列表**（多目录并集单库），
 /// UI 拿它直接回填 textarea，省一次 roots_get 往返。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]

@@ -1,9 +1,9 @@
 //! 歌单写操作（repo 层）。
 //!
-//! 契约来自旧仓库 `packages/database/src/playlists.repo.ts` + 其 255 条测试里的
-//! 播放列表规格（`tests/playlists.test.ts`）。重写版此前只实现了 list/detail/create，
-//! 其余 7 条写命令在 `generate_handler!` 里根本不存在 → UI 一调就是 Tauri 层的
-//! promise reject（不是 `ok:false` 信封，UI 的 `result.ok` 分支连错误提示都走不到）。
+//! 契约对齐旧仓库 `packages/database/src/playlists.repo.ts` 的播放列表规格
+//! （其 255 条测试）。写命令的缺失不会在类型层暴露：UI 一调就是 Tauri 层的
+//! promise reject（不是 `ok:false` 信封，UI 的 `result.ok` 分支连错误提示都走不到），
+//! 所以命令面必须与这里逐条对齐。
 //!
 //! 四条不变量，列表查询与 UI 的下标寻址都依赖它们：
 //!
@@ -137,7 +137,7 @@ pub fn create_smart(
 
 /// 更新动态歌单的规则：规则落库 + **替换重算**（清空现有曲目、按新规则重新
 /// 物化——所见即所得；日常增量走 refresh_smart）。返回 false = 歌单不存在；
-/// 手动歌单 = `Custom` 错误（手动/动态互不转换，docs/40 §1.4 拍板）。
+/// 手动歌单 = `Custom` 错误（手动/动态互不转换）。
 pub fn set_rule(
     conn: &mut Connection,
     playlist_id: &str,

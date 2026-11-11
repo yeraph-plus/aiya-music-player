@@ -1,13 +1,13 @@
-//! HLS (m3u8) 流式解码源 — docs/22 G3 / docs/52。
+//! HLS (m3u8) 流式解码源。
 //!
-//! 段格式两条路（docs/52）：
-//! * **ADTS AAC 裸段**（`.aac` / 无扩展名）：直接 `probe(hint=aac)`，最初实现；
+//! 段格式两条路：
+//! * **ADTS AAC 裸段**（`.aac` / 无扩展名）：直接 `probe(hint=aac)`；
 //! * **MPEG-TS 段**（实测 6 个真台 6/6 都是这种）：先经 [`crate::ts::strip`]
 //!   剥包层与 PES 头，输出 ADTS / MPEG audio 裸字节再 probe。判定用**内容嗅探**
 //!   （`0x47` + 188 对齐），不看扩展名——带查询串的段名是真实存在的情况。
 //!
 //! 为什么不做 TS demuxer：HLS 规范要求 TS 里的 AAC 用 ADTS 封装，剥掉包层就是
-//! 现成的 ADTS 流；Symphonia 0.5 没有 TS demuxer，升 0.6 是另一条大路（docs/21）。
+//! 现成的 ADTS 流；Symphonia 0.5 没有 TS demuxer，升 0.6 是另一条大路。
 //!
 //! 调度模型（engine 只认 [`crate::decoder::DecodedStream`]，这里是其中
 //! 一个变体）：
@@ -20,9 +20,9 @@
 //!
 //! 取字节口是 [`Fetcher`]：`http(s)` 走 ureq，`file:` 读盘——同一个
 //! [`HybridFetcher`] 两种都认，所以本地 m3u8 与远程流共用整套调度状态机
-//! （docs/52 §4：端到端验收因此可以脱离网络进 `verify`）。
+//! （端到端验收因此可以脱离网络进 `verify`）。
 //!
-//! 显式拒绝（报 `Unsupported` 说人话）：AES-128/SAMPLE-AES 加密、`EXT-X-MAP`
+//! 显式拒绝（报用户可读的 `Unsupported`）：AES-128/SAMPLE-AES 加密、`EXT-X-MAP`
 //! （fMP4 初始化段）、LATM 封装的 AAC。master playlist（多 rendition）取第一个
 //! 变体——给什么码率就播什么，没有带宽自适应的意义，tracing 记一行。
 //!
@@ -59,7 +59,7 @@ pub(crate) trait Fetcher: Send {
 /// [`OUTAGE_BUDGET`]），调大前先看那里的账。
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// 生产实现：**一个实现两种 scheme**（docs/52 §4）。
+/// 生产实现：**一个实现两种 scheme**。
 ///
 /// `http(s):` → ureq 同步阻塞；`file:` → 读盘。为什么不拆两个 `HlsStream`：
 /// 本地 m3u8 只是 base URL 从 `http://` 换成 `file:`，调度状态机（live 轮询 /
@@ -498,7 +498,7 @@ pub(crate) struct HlsStream {
     failures: u32,
     /// 单测注入：轮询间隔
     poll_interval: Duration,
-    /// TS 包剥离的跨段定位状态（PAT/PMT 可能只在首段出现，docs/52 §3.2）。
+    /// TS 包剥离的跨段定位状态（PAT/PMT 可能只在首段出现）。
     /// 非 TS 段（原生 ADTS）不会碰它。
     ts_state: TsState,
 }
@@ -528,7 +528,7 @@ impl HlsStream {
         Self::with_fetcher(url, || Box::new(HybridFetcher::new()))
     }
 
-    /// 打开**本地** m3u8（docs/52 §4）：把路径转成 `file:` URL 后走同一条链。
+    /// 打开**本地** m3u8：把路径转成 `file:` URL 后走同一条链。
     ///
     /// base 就是 m3u8 所在目录，相对段地址照 `Url::join` 解析——与远程流
     /// 完全同一套逻辑，所以本地 m3u8 能当端到端验收的替身（不出网）。
@@ -668,7 +668,7 @@ impl HlsStream {
     ///
     /// TS 判定用内容嗅探（`0x47` + 188 对齐），不看扩展名：带查询串的段名
     /// （实测 Power POP）用扩展名判会漏，漏了就会把 TS 字节当 ADTS 喂给 probe，
-    /// 报出来是"段解不开"而不是真实原因（docs/52 §1.2）。
+    /// 报出来是"段解不开"而不是真实原因。
     fn open_segment(
         fetcher: &mut dyn Fetcher,
         prefetch: &mut Prefetch,
@@ -990,7 +990,7 @@ mod tests {
 
     /// 手拼最小 ADTS 段：N 帧合法 ADTS 头 + 垃圾负载。
     /// probe/next_packet 都认头；负载解不出 → 坏包跳过 → 段 EOF。
-    /// 这就是"没有 ffmpeg 造不出真 AAC"下的务实替身（docs/22 §5）。
+    /// 这就是"没有 ffmpeg 造不出真 AAC"下的务实替身。
     /// 位域按 ISO 14496-3 ADTS 规范逐字节拼，freq_idx: 4=44100, 3=48000。
     fn adts_segment(frames: usize, freq_idx: u8, channels: u8) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1177,8 +1177,7 @@ mod tests {
         );
     }
 
-    /// TS 段不再被解析期拒绝（docs/52 §1.2 那个 bug 的反向锁）：带查询串的
-    /// 段名曾经既不匹配 `.ts` 后缀、到了 probe 才炸，现在一律收下、由内容决定。
+    /// TS 段不被解析期拒绝（反向锁）：带查询串的段名也一律收下、由内容决定。
     #[test]
     fn ts_segments_are_accepted_including_query_strings() {
         let base = Url::parse(BASE).unwrap();
@@ -1524,7 +1523,7 @@ mod tests {
         assert!(err.to_string().contains("no segments"), "{err}");
     }
 
-    /// 本地 m3u8（docs/52 §4）：真读盘、真走 `file:` URL、相对段地址。
+    /// 本地 m3u8：真读盘、真走 `file:` URL、相对段地址。
     ///
     /// 这条的价值是把端到端验收从网络上摘下来：段一个是 TS、一个是原生
     /// ADTS，覆盖两条段路径 + 跨段状态，全部不依赖 HTTP。

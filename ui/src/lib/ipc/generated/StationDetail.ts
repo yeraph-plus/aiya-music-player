@@ -11,7 +11,7 @@ export type StationDetail = { playlists: Array<StationPlaylist>, schedules: Arra
  */
 hlsUrl: string, 
 /**
- * private | public（docs/68 §12.4）
+ * private | public
  */
 visibility: string, 
 /**

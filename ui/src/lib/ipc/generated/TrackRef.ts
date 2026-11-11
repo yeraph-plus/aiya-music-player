@@ -11,6 +11,6 @@ import type { TrackAudio } from "./TrackAudio";
 export type TrackRef = { id: string, title: string, artist: string | null, album: string | null, 
 /**
  * 艺人/专辑详情页跳转键（正在播放页的歌手/专辑行可点）。
- * `#[serde(default)]`：旧版持久化队列里没有这两列，反序列化补 None。
+ * `#[serde(default)]`：早于这两个字段引入的持久化快照里没有它们，反序列化补 None。
  */
 artistId: string | null, albumId: string | null, durationMs: number | null, artworkId: string | null, gainDb: number | null, audio: TrackAudio | null, };

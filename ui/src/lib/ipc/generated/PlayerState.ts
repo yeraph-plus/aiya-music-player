@@ -17,7 +17,7 @@ export type PlayerState = { queueLength: number, queueVersion: number,
  * 洗牌开启时 order 是 queue 的一个排列，二者指向的数字不同——
  * UI 拿 `index` 对队列原序列表，宿主拿 `cursor` 对 queue_snapshot()。
  *
- * 为什么不用 -1 哨兵（docs/17 §9.2 偏差 1 的偿还）：`null` 在 TS 侧
+ * 为什么不用 -1 哨兵：`null` 在 TS 侧
  * 无法与合法下标 0 混淆，`-1` 可以（漏判 `>= 0` 就是越界写）。缺值
  * 一律 `null` 是本契约的既定规则，index/cursor 是最后两个例外。
  */
@@ -27,13 +27,13 @@ index: number | null,
  */
 cursor: number | null, repeat: RepeatMode, shuffle: boolean, status: PlaybackStatus, 
 /**
- * 当前曲目音源类别。本地曲库 = File；队列里出现 http(s) 路径（FM 推流，
- * docs/20 远程版）= Stream。Actor 在 instruct_load 时由路径前缀判定。
+ * 当前曲目音源类别。本地曲库 = File；队列里出现 http(s) 路径（FM 推流）
+ * = Stream。Actor 在 instruct_load 时由路径前缀判定。
  */
 source: AudioSource, positionMs: number, durationMs: number | null, volume: number, muted: boolean, rate: number, error: AudioError | null, current: TrackRef | null, token: number, 
 /**
  * 快照生成时间，**毫秒**。名字带 `Ms` 是硬要求：同结构里
  * `positionMs`/`durationMs` 都是毫秒，只让它一个叫 `updatedAt`
- * 等于留个坑给下一个人猜单位（docs/17 §3.1）。
+ * 等于留个坑给下一个人猜单位。
  */
 updatedAtMs: number, };

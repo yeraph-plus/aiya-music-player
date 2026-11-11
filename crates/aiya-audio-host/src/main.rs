@@ -1,4 +1,4 @@
-//! AIYA Music 音频 sidecar 进程（ADR-0002）。
+//! AIYA Music 音频 sidecar 进程。
 //!
 //! 职责：持有一个 `aiya_audio::Engine`，通过命名管道以 JSON 行帧与 host 通信。
 //! 不打开 SQLite、不依赖 Tauri —— 崩溃只带走音频，host 负责重启与恢复。
@@ -119,7 +119,7 @@ fn main() {
 /// 建管道 → 等连接 → 会话 →（断开则）重开等重连；Shutdown 正常退出。
 ///
 /// 为什么有 8s 退场窗口：host 崩溃/被任务管理器结束后，这里拿到的只是
-/// 管道断开。此前无条件 `disconnect()` + `connect()` 永久等待 —— 进程
+/// 管道断开。无条件 `disconnect()` + `connect()` 永久等待会让进程
 /// 常驻并占着 WASAPI 设备；PID 复用后还会让新 sidecar 建管道失败
 /// （FILE_FLAG_FIRST_PIPE_INSTANCE），连带新宿主起不来。
 /// host 真要重连会 spawn 全新进程（管道名带 PID），所以短暂等待后必须退出。
@@ -197,11 +197,11 @@ fn run_session(
 
     // 心跳线程：从握手完成这一刻就开始跳
     //
-    // 为什么不等引擎：Welcome 一发出去，host 的看门狗（5s）就开始计时。此前心跳
-    // 写在主循环里，而主循环要等 Engine::spawn 与 reader 线程就绪才进——初始化
-    // 慢的时候进程"握着管道却一条消息都不发"，host 无从区分"慢"与"死"，只能杀。
-    // 实测（受控注入 8s 卡顿）后果是每 5s 被杀一次、generation 一路涨到 9，
-    // 播放器永远起不来。心跳的语义就是"进程还活着"，它不该等任何初始化。
+    // 为什么不等引擎：Welcome 一发出去，host 的看门狗（5s）就开始计时。心跳
+    // 写在主循环里的话，主循环要等 Engine::spawn 与 reader 线程就绪才进——
+    // 初始化慢时进程"握着管道却一条消息都不发"，host 无从区分"慢"与"死"，
+    // 只能杀（每 5s 杀一次、generation 无限上涨，播放器起不来）。
+    // 心跳的语义就是"进程还活着"，它不该等任何初始化。
     let hb_running = Arc::new(AtomicBool::new(true));
     let hb_writer = Arc::clone(&write_half);
     let hb_flag = Arc::clone(&hb_running);

@@ -1,4 +1,4 @@
-//! 推流频道的传输形状（docs/68 §6/§12）。
+//! 推流频道的传输形状。
 //!
 //! 与 `aiya-data::station` 的分工：DTO 是传输面（camelCase、时间毫秒、
 //! track_ids 已解析成数组——UI 不做 JSON.parse）；repo 是持久化面（snake_case、
@@ -20,7 +20,7 @@ pub struct StationSummary {
     pub cover_url: Option<String>,
     /// `/hls/{hls_dir}/live.m3u8`——相对同源；反代场景随部署基址
     pub hls_url: String,
-    /// private | public（docs/68 §12.4）
+    /// private | public
     pub visibility: String,
     /// 频道级开关（停播保留配置与段目录，再开播热恢复）
     pub active: bool,
@@ -93,7 +93,7 @@ impl StationEdit {
     }
 }
 
-/// station_set_playlists 入参（整表提交语义，docs/68 §3）。
+/// station_set_playlists 入参（整表提交语义）。
 #[derive(Debug, Clone, Deserialize, TS)]
 #[ts(export)]
 #[serde(rename_all = "camelCase")]

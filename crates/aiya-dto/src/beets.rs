@@ -4,7 +4,7 @@
 //! 不是 beets 子进程的内部账本。放一起的好处是 `grep dto::` 就能看全
 //! IPC 形状；`beets.rs` 里 `pub use` 回来，调用点不用改。
 //!
-//! docs/33 M2 之后，这份形状里的环境信息**全部由工具自报**（播放器不再探测）；
+//! 这份形状里的环境信息**全部由工具自报**（播放器不再探测）；
 //! `plugin_health` 就是为此加的：`plugins` 是"配置里写了什么"（愿望清单），
 //! `plugin_health` 才是"实际能干哪些活"（三态）。
 
@@ -52,7 +52,7 @@ pub struct BeetsStatus {
     pub data_home: Option<String>,
     /// v2：宿主拿工具自报的 `schemaHash` 与编译期嵌入的镜像哈希比对的结果。
     ///
-    /// 不是工具的线上字段——是宿主算出来的结论（docs/35 P1-4 闭合）。
+    /// 不是工具的线上字段——是宿主算出来的结论。
     /// `false` 时 UI 出警告条并禁用整理按钮：契约不一致时执行变更等于
     /// 让两套对不上口径的代码同时写一个库。
     pub schema_matched: bool,
@@ -96,7 +96,7 @@ pub struct BeetsPluginSummary {
 /// 插件表里的一条（**编译期内嵌**，不需要装过组件就能拿到）。
 ///
 /// 来源是 `beets-tool/src/aiya_beets/data/plugins.json`，与工具侧、打包脚本、
-/// 安装器读的是同一份字节（docs/51 §1）。装没装、缺不缺依赖的三态由
+/// 安装器读的是同一份字节。装没装、缺不缺依赖的三态由
 /// `beets_status` 的 pluginHealth 给出，不在这里。
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -113,7 +113,7 @@ pub struct BeetsPluginItem {
     /// pip 目标（插件包自身 + 依赖），带版本约束
     #[serde(default)]
     pub packages: Vec<String>,
-    /// 外部二进制（ffmpeg / fpcalc …）：勾了这个插件就会顺带下载它（docs/53）
+    /// 外部二进制（ffmpeg / fpcalc …）：勾了这个插件就会顺带下载它
     #[serde(default)]
     pub exe: Vec<String>,
     /// 默认会写音频文件或产出文件（索引家结构上不收）
@@ -121,7 +121,7 @@ pub struct BeetsPluginItem {
     pub writes: bool,
     #[serde(default)]
     pub network: bool,
-    /// 免配置包预置（带 `exe` 的插件，其 exe 也必须随包发，见 docs/54）
+    /// 免配置包预置（带 `exe` 的插件，其 exe 也必须随包发）
     #[serde(default)]
     pub bundle: bool,
     /// 首次生成 config 时启用（由 JSON 的 `profiles.workbench` 注入）
@@ -152,7 +152,7 @@ pub struct CancelRequested {
     pub requested: bool,
 }
 
-/// beets 配置快照（docs/40 十三轮：待整理目录 + 唯一整理输出根）。
+/// beets 配置快照（待整理目录 + 唯一整理输出根）。
 ///
 /// 三个键各管一件事：inbox 是"待整理的歌从哪来"，targetRoot 是"整理好
 /// 的歌落到哪个曲库目录"，importedCount 是防重复导入的排除表大小。

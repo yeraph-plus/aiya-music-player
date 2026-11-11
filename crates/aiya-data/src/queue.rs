@@ -1,10 +1,10 @@
 //! 播放队列持久化（queue_state 单行 + queue_items 位置表）。
 //!
-//! 决策（对齐旧仓库 ADR-018）：
+//! 决策：
 //! - queue_items 全量重写（事务内 DELETE+INSERT），不做增量 diff —— 队列几百行 <5ms，简单可靠
 //! - 随机排列不落库：恢复时按原序 + shuffle 开关重新洗牌（当前曲保持在原位）
 //! - 队列里的曲目若已被删除（FK CASCADE 清了 queue_items 行），恢复时静默跳过
-//! - **队列可以是多态的**（docs/52 §6，迁移 0010）：`track` 走外键指向曲库，
+//! - **队列可以是多态的**（迁移 0010）：`track` 走外键指向曲库，
 //!   `file` / `stream` 是"能播但不进曲库"的临时项，只在 `payload` 里存一份
 //!   最小显示字段，重启后照原样回到队列
 
@@ -12,7 +12,7 @@ use rusqlite::Connection;
 
 use crate::DbError;
 
-/// 队列元素种类（docs/52 §6.2）。
+/// 队列元素种类。
 ///
 /// 存进 `queue_items.kind` 的就是这里的 `as_str()`；未知值按 `Track` 兜底
 /// （旧库升级路径上不可能出现，但读到脏数据时不该整队崩）。
@@ -285,10 +285,10 @@ mod tests {
         assert_eq!(items2, items);
     }
 
-    /// docs/52 §6 的核心：临时行（拖入文件 / 直播流）能进队列、能落库、能读回。
+    /// 多态队列的核心：临时行（拖入文件 / 直播流）能进队列、能落库、能读回。
     ///
-    /// 迁移 0010 之前这条会 FK 失败（`track_id NOT NULL`），而失败是**静默**的
-    /// —— 上层只有一句 warn，重启后队列悄悄少一项。这条用例是那个 bug 的锁。
+    /// `track_id` 外键允许 NULL 才有这条行为；若外键 NOT NULL，落库 FK 失败
+    /// 且是**静默**的——上层只有一句 warn，重启后队列悄悄少一项。这条用例锁住它。
     #[test]
     fn transient_items_roundtrip_without_tracks() {
         let mut conn = open_conn(Path::new(":memory:")).unwrap();
@@ -313,7 +313,7 @@ mod tests {
     }
 
     /// 曲目被删（扫描淘汰）时：只清掉指向它的行，临时行仍在
-    /// —— 这正是"保留外键 + 允许 NULL"换来的行为（docs/52 §6.2）。
+    /// —— 这正是"保留外键 + 允许 NULL"换来的行为。
     #[test]
     fn cascade_removes_track_rows_but_keeps_transient() {
         let mut conn = open_conn(Path::new(":memory:")).unwrap();

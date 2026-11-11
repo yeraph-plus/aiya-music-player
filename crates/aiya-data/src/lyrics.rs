@@ -1,6 +1,6 @@
 //! 歌词读取与 LRC 解析（P4）。
 //!
-//! 范围（docs/05 §7）：读文件 / 编码 / 解析。滚动与点击在 UI（lyrics-clock）。
+//! 范围：读文件 / 编码 / 解析。滚动与点击在 UI（lyrics-clock）。
 //!
 //! 查找策略：与音频文件同目录、同主文件名的 `.lrc`（Windows 文件系统大小写
 //! 不敏感，直接拼即可）。v1 不做全网搜歌词、不读内嵌歌词（demo 也只有 .lrc）。
@@ -18,7 +18,7 @@ use serde::Serialize;
 #[serde(rename_all = "camelCase")]
 pub struct ParsedLyrics {
     /// 契约（contracts/domain.ts Lyrics.found）要求必填：命中歌词恒 true。
-    /// 此前没这个字段，UI 判 `!lyrics?.found` 一律走空态 —— 有歌词也显示"暂无"。
+    /// 没有它，UI 判 `!lyrics?.found` 一律走空态 —— 有歌词也显示"暂无"。
     pub found: bool,
     pub lines: Vec<LyricLine>,
     /// LRC `[offset:]` 标签原值（诊断展示）；已折进各行 timeMs
@@ -386,8 +386,7 @@ mod tests {
 
     #[test]
     fn lrc_path_handles_non_utf8_names() {
-        // 修复点：lrc_path_for 不再经过 to_str()（非 UTF-8 主名会静默丢歌词）。
-        // 旧实现这里返回 None；新实现必须拼出与音频同名的 .lrc。
+        // 非 UTF-8 主名也要拼出与音频同名的 .lrc：经过 to_str() 会静默丢歌词（返回 None）。
         #[cfg(windows)]
         {
             use std::os::windows::ffi::OsStringExt as _;

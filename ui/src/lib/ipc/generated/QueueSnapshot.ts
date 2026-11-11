@@ -12,6 +12,6 @@ export type QueueSnapshot = { ids: Array<string>, index: number, cursor: number,
  * 为什么不把整个队列的 `TrackRef` 都给出去：一万首队列的标题/封面键是
  * 几百 KB，而 UI 本来就要靠 `library_tracks` 批量取库内元数据（那里还
  * 有列表字段）。临时项只有几条，**且查库必然查不到**——不给它开个口，
- * 队列面板就只能给它们画一行空白（docs/52 §7.2）。
+ * 队列面板就只能给它们画一行空白。
  */
 transient: Array<TrackRef>, version: number, tookMs: number, };
