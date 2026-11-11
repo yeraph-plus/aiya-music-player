@@ -1,5 +1,5 @@
 /** settings 域：设置页（SettingsPanel）的分组、设置项标题/提示、选项文案、
- *  诊断块与关于页。zh 值逐字保留迁移前的中文文案；en 按 docs/64a 术语表与
+ *  诊断块与关于页。zh 值与界面现行中文逐字一致；en 按术语表与
  *  风格规则新写（sentence case、ASCII 标点、占位符个数顺序不变）。 */
 
 export const settingsZh = {

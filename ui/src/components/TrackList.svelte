@@ -85,7 +85,7 @@ import CheckCell from './ui/CheckCell.svelte';
     filterCount?: number;
     /** 打开筛选器模态框（与 filterCount 一起用） */
     onfilteropen: () => void;
-    /** 歌手/专辑名点击跳转（docs/27：列表内直达详情页，不再绕右键菜单） */
+    /** 歌手/专辑名点击跳转（列表内直达详情页，不经右键菜单） */
     onopenartist: (id: string) => void;
     onopenalbum: (id: string) => void;
     /**

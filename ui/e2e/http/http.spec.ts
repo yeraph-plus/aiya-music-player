@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * http 形态 e2e（docs/66 §11）：真 aiya-server + 浏览器引擎的完整链路。
+ * http 形态 e2e：真 aiya-server + 浏览器引擎的完整链路。
  *
  * 与 mock 套件的分工：mock 锁 UI 装配与桌面形态，这里锁 Web 形态——
  * 登录闸首帧、首启种子根、浏览器解码灰标、`<audio>` 真播放、设置页

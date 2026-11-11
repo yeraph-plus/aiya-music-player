@@ -28,7 +28,7 @@
   const playerState = $derived(player.state);
 
   /**
-   * 运行时播放错误的分档（报错三档通道，2026-11 拍板）：
+   * 运行时播放错误的分档（报错三档通道）：
    * - **阻断级**（deviceLost / unknown）：设备或引擎出了状况，不处理就没法继续
    *   听 → 弹窗，带「跳到下一首」动作；
    * - **不阻断**（文件缺失、解码、格式不支持等单曲问题）：跳过即可 → 播放条吐司。
@@ -111,7 +111,7 @@
     try {
       await player.playTracks(player.queueIds, index);
     } catch (err) {
-      // 起播失败不阻断运行：走播放条吐司（报错三档，2026-11 拍板）
+      // 起播失败不阻断运行：走播放条吐司（报错三档）
       notify.showToast(errorMessage(err));
     }
   }
@@ -172,9 +172,9 @@
 
   <!--
     队列 / EQ 抽屉：窗口右缘滑出的悬浮 SideDrawer 宿主
-    （上下让出顶栏/播放条栏高再留呼吸边）。原先播放条上的 bits-ui
-    Popover 气泡——floating-ui 测量+碰撞翻转让开合位置有可见抖动；
-    抽屉几何确定（贴右缘、定宽、定边距），没有测量参与。
+    （上下让出顶栏/播放条栏高再留呼吸边）。抽屉几何确定
+    （贴右缘、定宽、定边距），没有测量参与——floating-ui 式测量+碰撞翻转
+    的开合位置有可见抖动，不用于此壳。
     互斥仍由 ui store 的 setQueue/setEqDrawer 负责，这里只做壳。
   -->
   <SideDrawer open={ui.queueOpen} label={t('shell.drawer.queue')} onclose={() => ui.closeQueue()}>

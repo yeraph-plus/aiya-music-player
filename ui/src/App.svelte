@@ -2,8 +2,7 @@
   /**
    * 应用根：**装配 + 全局副作用**，没有业务逻辑。
    *
-   * 批次 3 之前这里 1070 行（列表查询、歌单 CRUD、批量操作、快捷键、
-   * 五个对话框全在里面）。现在：
+   * 编排按归属分置：
    * - 版面 → `components/AppShell.svelte`（零 prop，自己读 store）
    * - 主区 → `views/LibraryView.svelte`
    * - 浮层 → `components/OverlayHost.svelte`
@@ -55,7 +54,7 @@
 
   /**
    * 系统媒体中心：只订阅 PlayerState，与音频出口无关（出声在 Rust 侧）。
-   * SMTC 常开无开关（2026-11-04 拍板）：标题/封面同步与面板控制键全量注册，
+   * SMTC 常开无开关：标题/封面同步与面板控制键全量注册，
    * 不再有"按键接管与否"的运行期变化，创建一次活到卸载。
    */
   function buildMediaSession(): MediaSessionBridge {
@@ -107,7 +106,7 @@
   });
 
   onMount(() => {
-    // 登录闸打开时跳过整条启动链（审查 P2 降噪）：过期会话不再在登录卡背后
+    // 登录闸打开时跳过整条启动链：过期会话不再在登录卡背后
     // 打 1Hz 的 401 回报与 SSE 心跳。登录成功 = 整页重载，mount 自然重走
     if (gate) return;
     mediaSession = buildMediaSession();
@@ -142,9 +141,8 @@
 <Tooltip.Provider delayDuration={400} skipDelayDuration={300}>
   <AppShell>
     <!--
-      一名一路由。拆页（B4-1）之前这里是 `page === 'home'` 外面再套一层
-      `libraryDetail`，六个列表视图全靠一个 boolean 区分；现在列表页
-      共用同一套列表查询，路由值直接决定渲染谁。
+      一名一路由：路由值直接决定渲染谁，列表页共用同一套列表查询
+      （多字段拼路由、boolean 区分视图的表示法已退役，见 RETIRED_PAGES）。
       专辑/艺人详情页有独立视图（含头部聚合数据），先于
       LibraryView 判断。
     -->

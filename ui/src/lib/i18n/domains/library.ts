@@ -1,6 +1,6 @@
 /** library 域：曲库簇（LibraryView / LibraryTools / TrackListPanel / TrackTable /
  *  BrowseView / AlbumView / ArtistView / content/Header）的文案。
- *  zh 值逐字保留迁移前的中文（e2e 断言中文文案）；en 按 docs/64a 术语表新写。
+ *  zh 值与界面现行中文逐字一致（e2e 断言中文文案）；en 按术语表新写。
  *  en 表 `Record<keyof typeof zh, string>` 保证键位奇偶。
  *  注：Header 的 subtitle/meta 分隔符是全站零件唯一的渲染文本，键挂在本域
  *  （library.metaSep）——AlbumView / ArtistView 的 meta 段拼接同用它。 */

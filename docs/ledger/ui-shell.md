@@ -6,6 +6,8 @@
 ## 条目（新→旧）
 
 <!-- 每条一行：- YYYY-MM-DD · 代码位置 · 事实/取舍 · 来龙去脉（可选） -->
+- 2026-11-04 · stores/notify.svelte.ts、components/AppShell.svelte、stores/overlay.svelte.ts 及各 store/view 失败路径 · 运行时报错三档通道：后端/数据错误→界面错误条、不阻断运行的播放报错→播放条吐司、须用户介入的（设备丢失/未知故障）→overlay 弹窗 · 判据是"是否需要用户介入才能继续"；吐司档曲名不进文案（播放条正显示着它）。
+- 2026-11-04 · stores/beets-session.svelte.ts · beets:import 事件订阅必须懒触发（首次发命令时）· 模块在静态 import 链上、求值早于 main.ts 装 mock transport：构造期订阅在浏览器预览下落到 Tauri 通道被吞、此后再无订阅者（表现为会话停在"匹配中"）。
 
 - 2026-11-05 · lib/i18n/、lib/i18n.svelte.ts、settings.ts、pages.css · 英语支持落地：i18n 词典模块（9 个域表 ~700 键，zh/en 成对 + `Record<keyof zh>` 键位奇偶类型约束）、`settings.language` 空值首启语义（宿主 GetUserDefaultUILanguage 探测写库，前端只跟随）、`<html data-lang>` 驱动装饰字取消 CSS（英文界面里装饰字与标题同语言属重复信息）、format.ts/首页问候/设置选项标签（label 改存 Msg 键，值/文案分离）双语化；Rust 宿主/crates/beets-tool 用户面报错硬迁移英文（中文界面下原样显示，P2-16 同批口径） · 分片由 9 个子代理执行（并发 2 实测上限），终扫确认域表外字符串零残留；E2E 以 addInitScript 预置 zh 不受首启探测影响
 - 2026-11-04 · stores/facets.svelte.ts · loadAlbums/loadArtists 各持请求代次（同一轮会并发发两个查询，不能共享）· 聚合查询的过期响应曾可回写旧结果，同仓其余异步路径早有成套代次模式，此处是漏网。

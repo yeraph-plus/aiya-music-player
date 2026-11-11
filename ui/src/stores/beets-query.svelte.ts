@@ -58,7 +58,7 @@ export function opsFor(kind: string): string[] {
   return ['contains', 'eq', 'prefix', 'regex'];
 }
 
-/** 算子 → i18n 键（渲染点经 opLabel 取人话，下拉里显示这个，不是英文缩写） */
+/** 算子 → i18n 键（渲染点经 opLabel 取显示名，下拉里显示这个，不是英文缩写） */
 export const OP_LABELS: Record<string, Msg> = {
   contains: 'beets.query.opContains',
   eq: 'beets.query.opEq',
@@ -68,7 +68,7 @@ export const OP_LABELS: Record<string, Msg> = {
   lte: 'beets.query.opLte',
 };
 
-/** 算子 → 人话；未登记的算子原样回显（与 beets 侧新增算子解耦） */
+/** 算子 → 显示名；未登记的算子原样回显（与 beets 侧新增算子解耦） */
 export function opLabel(op: string): string {
   const key = OP_LABELS[op];
   return key ? t(key) : op;

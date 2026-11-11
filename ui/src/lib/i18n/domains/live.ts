@@ -1,7 +1,7 @@
 /** live 域：直播页（LiveView）的页面文案——卡组、添加流弹窗、开播吐司。
  *  直播三态徽章（直播/连接中/已断开）由 lib/live.ts 的 `livePhase` 渲染，
  *  复用 shell 域的 shell.live.*（播放条与直播页同一口径），不在本域重复。
- *  zh 值逐字保留迁移前的中文（e2e 断言中文文案）；en 按 docs/64a 术语表新写。
+ *  zh 值与界面现行中文逐字一致（e2e 断言中文文案）；en 按术语表新写。
  *  en 表 `Record<keyof typeof zh, string>` 保证键位奇偶。 */
 
 export const liveZh = {

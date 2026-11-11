@@ -16,12 +16,11 @@
   import { ui } from '../stores/ui.svelte';
 
   /**
-   * 专辑 / 艺人宫格浏览页（B4-3b， 路由表 albums/artists）。
+   * 专辑 / 艺人宫格浏览页（路由 albums/artists）。
    *
-   * 升为侧栏一级项（曲库页 tab 撤掉后宫格需要一级入口）
-   * 宫格页上的 tab 条随之撤掉——侧栏就是这层导航，页内再放一组
-   * "专辑/艺人互切"是同一个功能的第二次出现。卡片进详情页
-   * （`album`/`artist` 带参数路由， 拆出的独立视图）。
+   * 专辑/艺人是侧栏一级项；宫格页不设 tab 条——侧栏就是这层导航，
+   * 页内再放一组"专辑/艺人互切"是同一个功能的第二次出现。卡片进详情页
+   * （`album`/`artist` 带参数路由的独立视图）。
    *
    * 两个模式共用一个组件：形状完全一样（宫格卡片），差别只有数据源、
    * 文案与卡片副标题——分开写两个视图得到的是两份一模一样的拉取/空态/
@@ -94,7 +93,7 @@
 
   let scrollEl: HTMLElement | null = $state(null);
 
-  /** 专辑卡片属性。艺人卡片不用封面（docs/28 修订：user 图标，见模板内分支） */
+  /** 专辑卡片属性。艺人卡片不用封面（user 图标，见模板内分支） */
   function albumCardProps(item: AlbumFacet): { title: string; subtitle: string; cover: string | null } {
     return {
       title: item.title,

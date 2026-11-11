@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * 路由与 UiState 迁移回归（B4-1 起常驻，原为临时探针）。
+ * 路由与 UiState 迁移回归（常驻套件）。
  *
  * 两块最容易**静默**坏的东西：
  * 1. 旧 UiState 文件的迁移 —— 写错了不报错，只表现成"重启后回到首页、
@@ -66,7 +66,7 @@ test('旧 UiState：home + libraryDetail + recent → 单页已退役，落到�
   expect(await activeSidebar(page)).toEqual(['曲库']);
 });
 
-// 旧文件 page 直接是退役值的形状（B4-1 拆页后写过一段时间）也要兜底
+// 旧文件 page 直接是退役值的形状也要兜底
 test('旧 UiState：page=mostPlayed → 落到曲库（docs/28）', async ({ page }) => {
   await seedState(page, { page: 'mostPlayed', sort: 'title', direction: 'asc', scrollTop: 0 });
   await page.goto('/');
@@ -99,27 +99,25 @@ test('一级路由逐个可达 + 侧栏高亮恰好一个', async ({ page }) => 
     via: 'initial' | 'nav' | 'playlist' | 'player';
     text: string;
     title: string;
-    /** 侧栏高亮数；默认 1。正在播放页无侧栏席位（docs/25 §6），应为 0 */
+    /** 侧栏高亮数；默认 1。正在播放页无侧栏席位，应为 0 */
     sidebarActive?: number;
   }> = [
-    { via: 'initial', text: '', title: '' }, // 仪表盘无页标题（2026-10-28）
+    { via: 'initial', text: '', title: '' }, // 仪表盘无页标题
     { via: 'nav', text: '曲库', title: '全部曲目' },
-    // 专辑/艺人升侧栏一级项（曲库 tab 撤掉）
+    // 专辑/艺人是侧栏一级项
     { via: 'nav', text: '专辑', title: '专辑' },
     { via: 'nav', text: '艺人', title: '艺人' },
-    // beets 独立成页
+    // beets 是独立页
     { via: 'nav', text: 'Beets', title: 'Beets' },
-    // FM 电台占位页换成直播页（路由 radio → live）。标题也从
-    // 「FM 电台」改成「直播」——侧栏文字与页内 h1 必须一致，否则这条断言
+    // 直播页（路由 live）：侧栏文字与页内 h1 必须一致，否则这条断言
     // 会变成"文字对上了但点的是另一页"。
     { via: 'nav', text: '直播', title: '直播' },
     { via: 'playlist', text: '', title: '' }, // 标题动态取歌单名
-    // （下面「底部工具组只有两项」那条用例守住"它不能复活"）
-    { via: 'nav', text: '设置', title: '设置' }, // 2026-10-28 三次修订：单页平铺，标题固定
+    // 底部工具组的缺席由「侧栏底部工具组只剩两项」那条用例专守
+    { via: 'nav', text: '设置', title: '设置' }, // 设置页是单页平铺，标题固定
     // 正在播放页放最后**：那一页侧栏整体退出，留在它上面时
     // 后面任何一次 `.sidebar .nav-item` 点击都会"element is not visible"。
-    // 这条顺序不是随意的——它曾经排在中间，于是这个用例稳定超时 30s。
-    // 正在播放页从播放条歌曲区域进（侧栏席位已撤）
+    // 正在播放页从播放条歌曲区域进（侧栏无席位）
     { via: 'player', text: '', title: '未在播放', sidebarActive: 0 },
   ];
 
@@ -168,8 +166,8 @@ async function openLibrarySettings(page: Page): Promise<void> {
 
 test('2026-10-30：侧栏底部工具组只剩「Beets / 设置」两项', async ({ page }) => {
   await page.goto('/');
-  // 「扫描入库」那条路走完了： 升成一级页 → 拆走 beets →
-  // 只剩一条目录卡片 → 并入设置页「曲库」组。席位留着就是死链接。
+  // 侧栏不再有「扫描入库」入口：其能力已并入设置页「曲库」组——
+  // 席位留着就是死链接。
   await expect(page.locator('.sidebar .nav-item', { hasText: '扫描入库' })).toHaveCount(0);
   const footer = page.locator('.sidebar .sidebar-footer .nav-item');
   await expect(footer).toHaveCount(2);
@@ -181,7 +179,8 @@ test('2026-10-30：首页「位置缺失」告警 → 设置页曲库组（滚�
   page,
 }) => {
   // `?missing=2` 让 mock 的 library_stats 报出缺失（默认
-  // 0，那条告警不出现）。这条路径以前指向「扫描入库」页；那页并入设置页之后，导航变成"切路由 + 一次性跳转请求"，只切路由的话人会落在「外观」组——正是这次要守的东西。
+  // 0，那条告警不出现）。告警的导航是"切路由 + 一次性跳转请求"——
+  // 只切路由的话人会落在「外观」组，这条用例守的是完整跳转。
   await page.goto('/?missing=2');
   const warn = page.locator('.stat-warn');
   await expect(warn).toContainText('2 个位置缺失');
@@ -248,7 +247,7 @@ test('docs/29 批 A 八轮：立即索引跑完 → 执行状态留下上次记�
   await page.getByRole('button', { name: '立即索引' }).click();
   await expect(card).toContainText('上次索引：', { timeout: 15_000 });
   await expect(card).toContainText('新增');
-  // 自动刷新行已删（八轮）：静默管线不再占版面
+  // 无自动刷新行：静默管线不占版面
   await expect(card).not.toContainText('自动刷新');
 });
 
@@ -256,8 +255,8 @@ test('docs/48：曲库目录行不再带 beets 的「整理输出」单选', asy
   await openLibrarySettings(page);
   await page.locator('#settings-library .root-list .root-row').first().waitFor();
 
-  // **本应用**的设置面，不该出现另一个库的配置项。搬走之后若有人"顺手加回来"，
-  // 症状是曲库又开始改一个它不拥有的文件。
+  // **本应用**的设置面，不出现另一个库的配置项——
+  // 曲库不改一个它不拥有的文件。
   await expect(page.locator('.root-list .root-target')).toHaveCount(0);
   await expect(page.locator('input[name="beets-target-root"]')).toHaveCount(0);
 
@@ -346,19 +345,17 @@ test('docs/48：Beets 是侧栏独立的一页（可达 + 高亮恰好一个）'
 });
 
 test('docs/48：未装 beets 时 Beets 页只给两条安装路线，不出查询区', async ({ page }) => {
-  // `?beets=absent` 让 mock 的 beets_status 报 found:false。
-  // 这条路径以前只有肉眼验过（mock 里 found 恒 true）。
+  // `?beets=absent` 让 mock 的 beets_status 报 found:false（mock 有未装形态）。
   await page.goto('/?beets=absent');
   await page.locator('.sidebar .nav-item', { hasText: 'Beets' }).click();
 
   const main = page.locator('.main');
   // 未安装状态在页头 meta 说明（一行「未安装」，详细解释归安装页）
   await expect(main).toContainText('未安装');
-  // 两张平级卡、各占一行：预配置环境常驻；本机安装只差"有没有 Python"
+  // 两张平级卡、各占一行（预配置环境 + 下载安装）；本机安装路线
+  // （Python 探测链）不在此页呈现
   await expect(main.getByRole('button', { name: /下载并安装/ })).toBeVisible();
   await expect(main.locator('section.beets-panel').filter({ hasText: '预配置环境' })).toHaveCount(1);
-  // 检测到 Python 才渲染本机安装路线），只留一行说明 + 重新检测
-  // Python 探测整链退役：页面里不该再出现任何"本机安装"痕迹
   await expect(main).not.toContainText('本机安装');
   await expect(main).not.toContainText('重新检测');
 
@@ -537,7 +534,7 @@ test('docs/28：专辑宫格（侧栏一级项）→ 卡片 → 专辑详情 →
   const albumTitle = await card.locator('.k-card-title').textContent();
   await card.click();
 
-  // 详情页：标题 = 专辑名，meta 带曲目数（B4-3a 聚合的字段）
+  // 详情页：标题 = 专辑名，meta 带曲目数（聚合查询的字段）
   await expect(page.locator('.main h1')).toHaveText(albumTitle!.trim());
   await expect(page.locator('.content-header, .main').first()).toContainText(/首/);
   // 详情页上侧栏仍高亮「专辑」

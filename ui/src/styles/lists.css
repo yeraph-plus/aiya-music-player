@@ -53,8 +53,7 @@
   top: 0;
   z-index: var(--z-sticky);
   height: 30px;
-  /* 原来的 surface-head
-     深色横条太突兀。改与页面同源的半透明磨砂——滚过时只隐约压住行内容，不再是一根实色条。半透明底滚过亮封面时有效亮度抬升，表头字用 text-2（而非弱档 text-3）保对比度——底色不能回退（用户拍板），字色补齐（P1-2）。 */
+  /* 实色 surface-head 的深色横条太突兀：改与页面同源的半透明磨砂——滚过时只隐约压住行内容，不再是一根实色条。半透明底滚过亮封面时有效亮度抬升，表头字用 text-2（而非弱档 text-3）保对比度——底色不能回退，字色补齐。 */
   background: color-mix(in srgb, var(--surface-1) 62%, transparent);
   backdrop-filter: blur(var(--blur-head));
   color: var(--text-2);
@@ -116,7 +115,7 @@
 
 /* 封面悬浮播放键
  *
- * 单击=选中（B4-1）之后，行内保留一个直接起播的入口：**叠在封面上**，
+ * 单击=选中，行内保留一个直接起播的入口：**叠在封面上**，
  * 行 hover 时出现（半透明压暗底 + 白色三角），不再是 # 列里换序号。
  * 正在播放的行不放（那里有跳动条，封面键照常可用）。
  */
@@ -237,7 +236,7 @@
   font-size: var(--fs-sm);
 }
 
-/* 浏览器解不了的容器（W6 真机矩阵项）：整行降透明示意"点了多半白点"。
+/* 浏览器解不了的容器：整行降透明示意"点了多半白点"。
    灰标是提示不是禁令——双击仍可尝试，浏览器解码失败走播放条报错兜底。
    桌面宿主 browserCanPlay 恒真，该类不会出现 */
 .row.unsupported .cell {
@@ -321,8 +320,8 @@
 }
 
 
-/* reduced-motion（发布前 UI 审查 P1-1） */
-/* 列表级循环动画此前没跟 kit 的降级惯例（ui/Skeleton.svelte 已有同款）：
+/* reduced-motion */
+/* 列表级循环动画与 kit 的降级惯例一致（ui/Skeleton.svelte 已有同款）：
    声条动画属性是 height（逐帧布局）且播放全程常驻，shimmer 骨架常驻列表首屏。 */
 @media (prefers-reduced-motion: reduce) {
   .bars.animated i {

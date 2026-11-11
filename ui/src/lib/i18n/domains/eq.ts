@@ -1,6 +1,6 @@
 /** eq 域：均衡器面板（EqPanel）与 stores/eq.svelte 的文案（预设名、失败吐司）。
  *  频段短标签（31/63/…/16k）与 `dB` 单位是语言中立记号，不进表。
- *  zh 值逐字保留迁移前的中文（e2e 断言中文文案）；en 按 docs/64a 术语表新写
+ *  zh 值与界面现行中文逐字一致（e2e 断言中文文案）；en 按术语表新写
  *  （均衡器=EQ，UI 标签 sentence case；错误句小写开头）。
  *  en 表 `Record<keyof typeof zh, string>` 保证键位奇偶。 */
 

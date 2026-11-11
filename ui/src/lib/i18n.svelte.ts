@@ -1,11 +1,11 @@
 /**
- * i18n 基建（docs/64 §3.2）：平面键值表 + 响应式 locale。
+ * i18n 基建：平面键值表 + 响应式 locale。
  *
  * 语言值来自应用设置 `language`（首启由宿主按系统 UI 语言写库，之后恒按
  * 设置值）——App.svelte 的 effect 调 setLocale 跟随，并把 `<html data-lang>`
  * 一并设置（装饰字取消等纯 CSS 分支靠它）。
  *
- * 域表在 `i18n/domains/*.ts`：每个迁移分片一个域段（zh/en 成对，en 用
+ * 域表在 `i18n/domains/*.ts`：按域分段（zh/en 成对，en 用
  * `Record<keyof typeof zh, string>` 保证键位奇偶），在此登记合并——
  * 键类型从合并后的 zh 推导，任何一域缺键都会编译报错。
  */

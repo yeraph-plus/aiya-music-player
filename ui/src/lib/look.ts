@@ -6,8 +6,8 @@
  * `<html data-theme>` 必须在**第一帧之前**就设对，否则浅色主题会先画一帧
  * 深色再跳成浅色（深→浅的闪白尤其明显）。
  *
- * 做法是写一份 localStorage 镜像：`App` 的主题 `$effect` 每次应用外观时顺手
- * 写回，`main.ts` 挂载前先读。镜像与库里不一致时最多闪一帧，紧接着
+ * 做法是写一份 localStorage 镜像：`App` 的主题 `$effect` 每次应用外观时
+ * 一并写回，`main.ts` 挂载前先读。镜像与库里不一致时最多闪一帧，紧接着
  * `bootstrap()` 返回真值就会纠正——比"每次都闪"好。
  *
  * `theme` 存的是偏好（`'dark' | 'light' | 'system'`），`<html data-theme>` 上写
@@ -27,7 +27,7 @@ export interface Look {
   theme: ThemeMode;
   /** 主题颜色：切 `html[data-ambient]`，CSS 渐变与强调色成套换 */
   ambient: AmbientScheme;
-  /** 界面缩放档位（docs/56）：随主题一起走首帧镜像；readLook 已收口，恒为合法档位 */
+  /** 界面缩放档位：随主题一起走首帧镜像；readLook 已收口，恒为合法档位 */
   uiScale: UiScale;
 }
 

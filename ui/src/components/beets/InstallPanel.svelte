@@ -56,7 +56,7 @@
   };
   const stageLabel = (s: string): string => (STAGE_KEY[s] ? t(STAGE_KEY[s]) : s);
 
-  /** 入口来源（docs/33 §6.1）：排障第一个问题是"为什么用的是这个" */
+  /** 入口来源：排障第一个问题是"为什么用的是这个" */
   function entryText(source: string | null | undefined): string {
     switch (source) {
       case 'env':

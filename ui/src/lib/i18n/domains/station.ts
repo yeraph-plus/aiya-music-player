@@ -1,7 +1,7 @@
-/** station 域：推流频道管理器（LiveView「我的频道」tab，docs/68 §12.2/12.3）
+/** station 域：推流频道管理器（LiveView「我的频道」tab）
  *  的文案——频道列表卡、编辑表单、歌单编排、周×24h 节目表网格、站单下发。
- *  zh 新写（对齐 docs/68 术语：频道=station、节目表=schedule、歌单=playlist、
- *  插播=push）；en 按 docs/64a 术语表新写。
+ *  zh 与 en 同期新写（术语对齐：频道=station、节目表=schedule、歌单=playlist、
+ *  插播=push）。
  *  en 表 `Record<keyof typeof zh, string>` 保证键位奇偶。 */
 
 export const stationZh = {

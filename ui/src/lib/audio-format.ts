@@ -99,8 +99,8 @@ export function formatSampleRate(hz: number): string {
  * 拿它当音质展示会得出"FLAC 不如 320k MP3"的荒谬结论。
  *
  * **`bitrate` 的单位是 kbps，不是 bps**（Lofty 的 `audio_bitrate()` 文档写明
- * `(kbps)`，beets 的 `bitrate` 字段文档也写 "in kilobits per second"）。
- * 这里曾经写过 `/ 1000`，于是 320 kbps 的 MP3 显示成 "0 kbps"、
+ * `(kbps)`，beets 的 `bitrate` 字段文档也写 "in kilobits per second"）——
+ * 直接取整显示，不能再除 1000。
  */
 export function formatAudioSpec(audio: TrackAudio | null | undefined): string | null {
   if (!audio) return null;

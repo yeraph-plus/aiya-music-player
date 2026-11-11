@@ -46,7 +46,7 @@ import TextTabs from '../components/ui/TextTabs.svelte';
   /** 两侧各最多露出的层叠深度；更深的卡整体隐去但仍占位（轮到时从原位回来） */
   const STACK_DEPTH = 3;
 
-  /** 双 tab（docs/68 §12.3）：收听（现状卡组）/ 我的频道（推流管理器）。
+  /** 双 tab：收听（现状卡组）/ 我的频道（推流管理器）。
    *  管理器只在 web 宿主渲染（caps.streaming——桌面壳没有 station 命令）。 */
   let tab = $state<'listen' | 'manage'>('listen');
   const caps = backendCaps();
@@ -257,7 +257,7 @@ import TextTabs from '../components/ui/TextTabs.svelte';
       if (index >= 0) browseIndex = index;
       notify.showToast(t('live.toastConnecting', { name: name ?? url }));
     } catch (error) {
-      // 开流失败不阻断运行：走播放条吐司（报错三档，2026-11 拍板）。
+      // 开流失败不阻断运行：走播放条吐司（报错三档）。
       // 地址还留在卡组与地址框里，吐司消失后重试成本就是点一下。
       notify.showToast(errorMessage(error));
     } finally {

@@ -21,8 +21,8 @@
   color: var(--text-3);
 }
 
-/* 英文模式取消装饰字：英文界面里它不是装饰，是和标题同语言的重复信息
-   （docs/64 §3.2）。data-lang 由 App 的 effect 按设置语言写在 <html> 上 */
+/* 英文模式取消装饰字：英文界面里它不是装饰，是和标题同语言的重复信息。
+   data-lang 由 App 的 effect 按设置语言写在 <html> 上 */
 [data-lang='en'] .page-kicker,
 [data-lang='en'] .ch-kicker {
   display: none;
@@ -36,9 +36,8 @@
   margin: 26px 0 10px;
 }
 
-/* 区块标题只有一行：大字标题 + 小字英文装饰 +（可选）计数。
-   此前是三行式（英文 / 标题 / 一句产品陈述），三个区块重复下来等于六行说明文字，
-   页面读起来像目录；陈述句本身没有信息量。基线对齐让小字贴着大字坐，
+/* 区块标题只有一行：大字标题 + 小字英文装饰 +（可选）计数——
+   一行式保持仪表盘密度，陈述行没有信息增量。基线对齐让小字贴着大字坐，
    不另起一行。 */
 .section-heading .section-title {
   display: flex;
@@ -56,10 +55,10 @@
   white-space: nowrap;
 }
 
-/* 标题行里的计数徽章：原先是标题行右端一行灰字"共 N 个"，贴右后与告警位争
-   同一处，读起来像导航；并入左侧后做成胶囊，与侧栏歌单计数同一处理
-   （--surface-hover 半透明底、无描边——细描边在 21px 大字旁边会抢视线）。
-   基线对齐让胶囊文字与装饰词坐在同一条基线上，胶囊底落到大字的字脚处 */
+/* 标题行里的计数徽章：胶囊，归属标题行（不做成游离的导航状），
+   与侧栏歌单计数同一处理（--surface-hover 半透明底、无描边——细描边在
+   21px 大字旁边会抢视线）。基线对齐让胶囊文字与装饰词坐在同一条基线上，
+   胶囊底落到大字的字脚处 */
 .section-heading .section-meta {
   display: inline-flex;
   align-items: center;
@@ -325,7 +324,7 @@
 /*
  * 两栏：左信息（封面 + 徽章/标题/专辑/艺人）右歌词。整页**无卡片**——
  * 没有边框、没有底色，内容直接浮在背景上；背景四层由 AppShell 根部的
- * AmbientBackdrop 全应用提供（T4c app 化，本页进沉浸档遮罩；
+ * AmbientBackdrop 全应用提供（本页进沉浸档遮罩；
  * 预模糊封面 + 频谱环境光 + 主题遮罩）
  * 真正的 backdrop-filter 玻璃只给 .np-meta 一个展示性小块。
  */
@@ -356,7 +355,7 @@
   z-index: var(--z-content);
 }
 
-/* 左列布局（用户拍板终版）：**封面独占流内、精确上下居中**（240px 不变）；信息块绝对定位——顶边 = 页面中线 + 半个封面高度 + 18px
+/* 左列布局：**封面独占流内、精确上下居中**（240px 不变）；信息块绝对定位——顶边 = 页面中线 + 半个封面高度 + 18px
    呼吸，即正好从封面下缘开始往下排。不用"整组居中"是因为组里带着信息块，封面中心会被信息块高度顶得偏离页面中线。 */
 .np-info {
   position: relative;
@@ -384,7 +383,7 @@
   color: var(--text-3);
 }
 
-/* 信息块**无底色无玻璃**（T4d 用户拍板）：背景固定渐变自身已保证可读性，不再垫毛玻璃卡片。绝对定位锚在封面下方（见 .np-info 注释）。 */
+/* 信息块**无底色无玻璃**：背景固定渐变自身已保证可读性，不垫毛玻璃卡片。绝对定位锚在封面下方（见 .np-info 注释）。 */
 .np-meta {
   position: absolute;
   top: calc(50% + 120px + 18px); /* 中线 + 半封面(240/2) + 18px 呼吸 */
@@ -409,7 +408,7 @@
   font-size: var(--fs-hero);
   font-weight: 650;
   letter-spacing: -0.01em;
-  /* 标题最多两行，超出行省略（T4d） */
+  /* 标题最多两行，超出行省略 */
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -446,8 +445,8 @@
   color: var(--accent-text);
 }
 
-/* 右列：歌词容器真透明（T4a 意图在此落地——player.css 给 .lyrics-panel 的
- * surface-2 底色在这里掀掉：沉浸页歌词直接浮在背景四层上，不再套卡片） */
+/* 右列：歌词容器真透明（沉浸页歌词直接浮在背景四层上，不套卡片——
+ * player.css 给 .lyrics-panel 的 surface-2 底色在这里掀掉） */
 .np-lyrics {
   min-width: 0;
   min-height: 0;
@@ -544,8 +543,8 @@
   mask-image: linear-gradient(to bottom, transparent 0, #000 10%, #000 90%, transparent 100%);
 }
 
-/* 歌词排版（用户拍板）：**全部左右居中**，当前句字号翻倍（15 →
-   30px）。居中之后原来的左侧对齐排版会散架：非激活行短、激活行长的横向差异变成"参差的右边"，只有居中才能让长短行共用同一条中轴。激活行去掉底色药丸（原来是一整条 accent-weak）：30px 的字本身就是最强的视觉锚点，再垫一层色块会把它变成"一条横幅"。 */
+/* 歌词排版：**全部左右居中**，当前句字号翻倍（15 →
+   30px）。居中让长短行共用同一条中轴——非激活行短、激活行长，左对齐会排出"参差的右边"。激活行不用底色药丸：30px 的字本身就是最强的视觉锚点，再垫一层色块会把它变成"一条横幅"。 */
 .np-lyrics .lyric-line {
   padding: 10px 14px;
   text-align: center;
@@ -580,7 +579,7 @@
   color: var(--text-1);
 }
 
-/* 滚动条只在 hover 时出现（用户拍板）：歌词区是阅读区，常驻的滚动条会在居中排版旁边多出一条竖线。透明 thumb 仍然占位，所以 hover 不会引起内容横向跳动。 */
+/* 滚动条只在 hover 时出现：歌词区是阅读区，常驻的滚动条会在居中排版旁边多出一条竖线。透明 thumb 仍然占位，所以 hover 不会引起内容横向跳动。 */
 .np-lyrics .lyrics-body {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
@@ -612,9 +611,8 @@
   font-size: var(--fs-base);
 }
 
-/* FM 电台占位页的样式已随页面退役：
-   直播页有自己的 scoped 样式（`views/LiveView.svelte`），全局这里不留下
-   无主的 `.radio-page` 规则——那些选择器一条都匹配不到了。 */
+/* 直播页样式归 `views/LiveView.svelte` 的 scoped 段：全局不保留
+   无主的 `.radio-page` 规则（这里没有任何会匹配它的选择器）。 */
 
 /* 设置单页 */
 

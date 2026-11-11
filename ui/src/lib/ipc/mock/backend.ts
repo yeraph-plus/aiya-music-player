@@ -120,7 +120,7 @@ function mulberry32(seed: number): () => number {
 
 /**
  * 假音频规格：按 id 序号取模，让预览页能同时看到**无损 / Hi-Res / 有损 /
- * 未知**四种徽章形态（批次 3 修好的 `lossless` 与 kbps 单位，正好靠它肉眼验）。
+ * 未知**四种徽章形态（`lossless` 与 kbps 单位正靠它肉眼验）。
  */
 function audioFor(id: string): TrackAudio {
   const n = Number.parseInt(id.slice(2), 10) || 0;
@@ -720,8 +720,8 @@ export class MockBackend {
    * 导入预览的事件流演练（`beets:import`）。
    *
    * 为什么必须**发出专辑**而不是只发 done(0)：整理页的整块 UI（专辑卡、候选
-   * 下拉、逐字段 diff、应用按钮）只在收到 album 事件后才会渲染。以前这条回
-   * `albums: 0`，预览里那一页永远空白，改版式时只能靠想象——等于没有预览。
+   * 下拉、逐字段 diff、应用按钮）只在收到 album 事件后才会渲染——done(0)
+   * 的空预览等于没有预览。
    *
    * 形状与 `beets-tool/src/aiya_beets/cmds/importer.py` 的 candidate_payload
    * 逐字对齐（album / mapping / evidence），字段少一个，真机就会和预览不一样。
@@ -1231,7 +1231,7 @@ export class MockBackend {
   }
 
   /**
-   * 预览环境的取消支持（八轮）：真后端走 scan_cancel 标志位，mock 用一个
+   * 预览环境的取消支持：真后端走 scan_cancel 标志位，mock 用一个
    * 布尔等价物。每步之间轮询一次，置位后发 `cancelled` 终态事件并提前返回
    * ——与真后端"已完成批次保留、取消路径不跑对账"的语义对齐。
    */
@@ -1248,8 +1248,8 @@ export class MockBackend {
     const started = Date.now();
     // 阶段顺序与真后端逐字对齐：walking → parsing（解析与
     // 入库重叠）→ importing（解析全完、排队入库）→ done。
-    // 旧版这里有一段 `artwork`：封面落盘并进解析 worker 之后它不再单独出现，
-    // mock 留着会让"只在 mock 里才有"的状态白白多一个。
+    // 无 `artwork` 段：封面随解析 worker 落盘，不单独成相——
+    // mock 不保留"只在 mock 里才有"的状态。
     //
     // `parsed > scanned` 是常态而不是 bug：解析比入库快，两者差值就是排队量，
     // 也正是 UI 要显示「解析 X · 已入库 Y」的理由。
@@ -1706,9 +1706,9 @@ export class MockBackend {
   /**
    * 播放中的位置推进：暂停/空闲时定时器已清，不会走到这。
    *
-   * 到曲尾按 repeat/shuffle 语义推进，对齐 actor（发布前审查 P1-8）：此前
-   * 是"当前曲目循环"，整专辑连播、随机切歌、队列播完停止这三条核心路径
-   * 在 e2e（全跑 mock）里永远走不到。自动连播先落 playQueue（paused + 归零）
+   * 到曲尾按 repeat/shuffle 语义推进，对齐 actor——e2e 全跑 mock，这里若与
+   * actor 语义漂移，整专辑连播、随机切歌、队列播完停止三条核心路径就无人
+   * 覆盖。自动连播先落 playQueue（paused + 归零）
    * 再翻回 playing——同步块内连发两版状态，与真机"Eof → Load"的两拍一致。
    */
   private tickPosition(): void {
@@ -1800,8 +1800,8 @@ export class MockBackend {
 
   playTracks(trackIds: string[], startIndex = 0): PlayerState {
     this.playQueue([...trackIds], startIndex);
-    // 对齐 actor：QueueOp::ReplaceAll → instruct_load(true, 0)，点播即出声。
-    // 此前 mock 停在 paused，与真机行为漂移（CDP 真窗口实测发现）。
+    // 对齐 actor：QueueOp::ReplaceAll → instruct_load(true, 0)，点播即出声——
+    // e2e 全跑 mock，这里必须与真机行为一致。
     return this.setPlayingIf(true);
   }
 
@@ -2101,7 +2101,7 @@ export class MockBackend {
 
   setUiState(state: UiState): void {
     // 整体覆盖，不合并 —— 与真后端（setting_set 整键覆盖）同语义。合并的话
-    // 拆页前留下的旧字段（libraryDetail/view）会永远洗不掉（B4-1 e2e 实测）。
+    // 旧 UiState 文件里的退役字段（libraryDetail/view）会永远洗不掉（e2e 实测）。
     this.uiState = state;
     saveJson('aiya.uiState', state);
   }

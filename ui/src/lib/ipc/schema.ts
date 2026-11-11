@@ -13,22 +13,22 @@
 import '../zod-setup';
 import { z } from 'zod';
 
-/** 设置项。老配置文件缺字段是常态（`output` 是 2026-10 才加的），所以全 optional + passthrough。 */
+/** 设置项。设置项可随后续版本新增，老配置文件缺字段是常态，所以全 optional + passthrough。 */
 export const settingsSchema = z
   .object({
     theme: z.enum(['dark', 'light', 'system']).optional(),
     ambient: z.enum(['aurora', 'ember', 'meadow', 'dusk', 'mono']).optional(),
-    /** 界面缩放档位（docs/56）：只验数值，档位白名单收口在 mergeSettings */
+    /** 界面缩放档位：只验数值，档位白名单收口在 mergeSettings */
     uiScale: z.number().optional(),
-    /** 禁用系统缩放（docs/56）：Rust 侧 apply_scale_policy 消费 */
+    /** 禁用系统缩放：Rust 侧 apply_scale_policy 消费 */
     disableSystemScale: z.boolean().optional(),
     normalizeVolume: z.boolean().optional(),
     spectrum: z.boolean().optional(),
-    /** 全局 3D 效果总闸（docs/46 §6.2）；缺省时按默认开兜底 */
+    /** 全局 3D 效果总闸；缺省时按默认开兜底 */
     glEffects: z.boolean().optional(),
     bgSpectrum: z.boolean().optional(),
     npSpectrum: z.boolean().optional(),
-    /** 山形光晕档位（docs/46 §3.2） */
+    /** 山形光晕档位 */
     ridgeGlow: z.enum(['soft', 'balanced', 'neon']).optional(),
     /**
      * 频谱形态。`off` / `wave` 在这里保留：它们是**旧配置里的存量值**，读进来
@@ -45,7 +45,7 @@ export const settingsSchema = z
     /** 自动刷新间隔（秒，0 = 关掉定时；下限由宿主夹到 10） */
     refreshSeconds: z.number().int().min(0).max(3600).optional(),
     shortcuts: z.record(z.string(), z.string()).optional(),
-    /** 输出配置（2026-10 起取代 `exclusiveMode: bool`） */
+    /** 输出配置（继任 v1 的布尔 `exclusiveMode`，见下方遗留字段） */
     output: z
       .object({
         mode: z.enum(['shared', 'exclusive', 'exclusiveRequired', 'null']).optional(),
@@ -55,7 +55,7 @@ export const settingsSchema = z
       })
       .passthrough()
       .optional(),
-    /** 直播页「最近打开」（docs/52 §7.3）：上限 20，按 URL 去重 */
+    /** 直播页「最近打开」：上限 20，按 URL 去重 */
     liveRecent: z
       .array(z.object({ url: z.string(), title: z.string().optional() }).passthrough())
       .optional(),
@@ -75,8 +75,8 @@ export const uiStateSchema = z
     artistId: z.string().nullable().optional(),
     albumId: z.string().nullable().optional(),
     /**
-     * 一级路由（B4-1 拆页 8 值；B4-3 加专辑/艺人/搜索； 撤
-     * 那一页并入设置页的「曲库」组）。旧文件的 `home` 仍合法；落到已退役的
+     * 一级路由（专辑/艺人/搜索为一级项；「扫描入库」页并入
+     * 设置页的「曲库」组）。旧文件的 `home` 仍合法；落到已退役的
      * `recent`/`mostPlayed`/`tools` 时由 ui.restore() 换算（这里不收编，
      * 让 devValidate 在开发期把"还在写退役值"的代码暴露出来）。
      */

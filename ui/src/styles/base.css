@@ -3,18 +3,18 @@
 
 /* 元素默认
  * 两段合在这里：
- *      却装着 `*{box-sizing}` 与 body/button/input 的 reset —— 换皮时按注释
- *      找变量的人一定会漏掉这几条。
- *   ② Tailwind preflight 曾经代劳、同日移除后必须自补的几条（见 app.css）。
+ *   ① 文件头说了本文件不该出现 --var 定义，却装着 `*{box-sizing}` 与
+ *      body/button/input 的 reset —— 换皮时按注释找变量的人一定会漏掉这几条。
+ *   ② 没有任何框架 reset 兜底、必须自补的几条（见 app.css）。
  *
  * ② 里每一条都有出处，不是抄一份 CSS reset：
- *   ul/ol    `.error-list` 只写了 padding-left，靠 preflight 去掉的 disc 会回来
- *   svg      preflight 的 display:block 消掉行内基线缝隙（非 flex 上下文才看得出）
- *   h1..h6   ImportPanel 的 `.panel-head h2` **没有任何自有样式**，全靠 preflight
+ *   ul/ol    `.error-list` 只写了 padding-left，不补这条 disc 列表符会回来
+ *   svg      display:block 消掉行内基线缝隙（非 flex 上下文才看得出）
+ *   h1..h6   ImportPanel 的 `.panel-head h2` **没有任何自有样式**，全靠这里
  *            归零；不补就变成浏览器默认 1.5em 加粗 + 上下 margin，面板头撑变形
  *   a        继承颜色 + 去下划线
  *   table    border-collapse：`.diag-table`/`.diff-table` 自己也写了，这条给新表兜底
- * 没搬的（preflight 的 `*{border:0 solid}`、fieldset/hr/dialog、placeholder 颜色）：
+ * 没搬的（`*{border:0 solid}`、fieldset/hr/dialog、placeholder 颜色）：
  * 逐处查过没有依赖；真需要时在那条规则里把 border 写全，别依赖全局。
  */
 
@@ -22,8 +22,8 @@
   box-sizing: border-box;
 }
 
-/* body 的 user-select:none 不许扩散到"用户可能要复制"的内容。
- * B6 巡检发现的缺口——此前一个例外都没有，歌词/路径/错误详情全都选不中。
+/* body 的 user-select:none 不许扩散到"用户可能要复制"的内容：
+ * 歌词/路径/错误详情全是阅读与复制面，一律放开。
  * `.selectable` 挂在容器上整块放开；歌词逐行放开足够（点行是 seek，拖选是复制，
  * 两种手势在行内不冲突）。 */
 .selectable,
@@ -100,8 +100,8 @@ select:focus-visible {
   outline-offset: 1px;
 }
 
-/* 全局键盘焦点环（发布前 UI 审查 P0-2）：Button/IconButton/Chip/Card/.link 族等高频交互件此前裸奔 UA 默认焦点环，与 Switch/Slider/Select 的自画 accent
-   环视觉分裂。`:where()` 特异性为 0——各组件自带的焦点样式可以照常覆盖；已经自画环的（select 上方这条、Switch、Slider、PlayerBar .now）不受影响。 */
+/* 全局键盘焦点环：Button/IconButton/Chip/Card/.link 族等高频交互件与 Switch/Slider/Select 的自画 accent
+   环统一为同一套 accent 焦点环。`:where()` 特异性为 0——各组件自带的焦点样式可以照常覆盖；已经自画环的（select 上方这条、Switch、Slider、PlayerBar .now）不受影响。 */
 :where(button, [role='button'], a, [role='tab']):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;

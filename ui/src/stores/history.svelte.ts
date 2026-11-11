@@ -8,8 +8,8 @@ import { ui } from './ui.svelte';
  * 播放历史编排。
  *
  * 只有一个写操作（清空）。读操作不走这里：最近播放/常听作为**查询来源**
- * （`lib/ipc/client.ts` 的 TrackSource）由推荐页直接拉， 起两个
- * 单页退役后这里也不再把"清空"和某个列表视图的刷新绑在一起。
+ * （`lib/ipc/client.ts` 的 TrackSource）由推荐页直接拉；"清空"不与任何
+ * 列表视图的刷新绑定。
  *
  * 单独建文件而不是塞进 `library`：`clear` 要刷新统计与诊断，
  * 而 `library` 是被 `list` 依赖的底层 store（塞进去就成环）。

@@ -28,7 +28,7 @@ class LibraryStore {
    * 为什么放在 library 而不是 playlists store：曲目变动后这份数据会过期，
    * 而 `list.removeTracks` 与 `scan.afterScan` 都要刷它 —— 它们**不能**
    * import playlists（playlists 反过来 import 它们做 reload/playAll，会成环，
-   * 全仓此前是 0 环）。library 只依赖 ipc，是这张图里唯一夹在中间的位置。
+   * 全仓的 store 依赖图保持 0 环）。library 只依赖 ipc，是这张图里唯一夹在中间的位置。
    * playlists store 在此之上做"改完刷新 + 提示 + 重载"的编排。
    */
   playlists = $state<PlaylistSummary[]>([]);
@@ -223,9 +223,8 @@ class LibraryStore {
   /**
    * 清空播放历史。失败抛出（调用方要给用户看到"没清掉"）。
    *
-   * 放在这里而不是单独建 `history` store：目前历史只有一个写操作，
-   * 真正的历史视图（播放次数榜）在批次 3 才落地，届时再按
-   * 拆出 `history.svelte.ts` 一并接 `history.stats` —— 现在拆是空壳。
+   * 写操作收在最底层 store（只依赖 ipc）；清空后的统计/诊断刷新由
+   * `history.svelte.ts` 编排层负责。
    */
   async clearHistory(): Promise<void> {
     await ipc.history.clear();
@@ -237,7 +236,7 @@ export interface ScanProgressView {
   phase: string;
   /** 已入库（含 unchanged / failed 记账）的文件数 —— 进度条按它走 */
   scanned: number;
-  /** 解析已完成数（docs/29 批 B）。`parsed - scanned` = 排队等入库的积压 */
+  /** 解析已完成数。`parsed - scanned` = 排队等入库的积压 */
   parsed: number;
   total: number | null;
   imported: number;

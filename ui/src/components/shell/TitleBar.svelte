@@ -95,8 +95,8 @@
 
   <div class="tb-drag"></div>
 
-  <!-- 窗口三键是壳的能力（W6 裁剪）：浏览器里没有窗口语义，整组不渲染——
-  此前是 disabled 摆着，占位又暗示可点。拖拽区属性在 web 下是惰性属性，无需分支 -->
+  <!-- 窗口三键是壳的能力：浏览器里没有窗口语义，整组不渲染——
+  disabled 占位同样暗示可点。拖拽区属性在 web 下是惰性属性，无需分支 -->
   {#if isNative}
     <div class="window-controls">
       <Tooltip label={t('shell.titlebar.minimize')}>

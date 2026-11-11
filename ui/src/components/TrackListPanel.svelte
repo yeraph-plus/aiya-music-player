@@ -132,7 +132,7 @@
         notify.showToast(t('shell.overlay.addedToQueue', { n: ids.length }));
         selection.clear();
       } catch (error) {
-        // 入队失败不阻断运行：走播放条吐司（报错三档，2026-11 拍板）
+        // 入队失败不阻断运行：走播放条吐司（报错三档）
         notify.showToast(errorMessage(error));
       }
     })();

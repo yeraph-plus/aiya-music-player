@@ -50,7 +50,7 @@ function pump(now: number): void {
  * 订阅逐帧回调，返回退订函数。
  *
  * 注意 tick 里**不要**再调 `requestAnimationFrame`——调度器已经保证每帧一次，
- * 再排就是 那个 2^n 事故的复现路径。
+ * tick 内再排一层，重排按帧数 2^n 指数放大。
  */
 export function subscribeRender(tick: RenderTick): () => void {
   ticks.add(tick);

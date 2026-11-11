@@ -208,8 +208,8 @@ import TextTabs from './ui/TextTabs.svelte';
    * 处理，写错不报错而是静默降级，因此此处只列后端识别的字符串，不提供别名。
    *
    * 后端的 `'null'`（静音）排查档**刻意不列**：静音只有播放条一个入口，设置页
-   * 再给一份是双份实现（2026-11-05 拍板）。若存量配置停留在该档，hint 走
-   * `settings.output.hint.fallback` 兜底，用户随手选一档即写回合法值。
+   * 不重复提供。若存量配置停留在该档，hint 走
+   * `settings.output.hint.fallback` 兜底，随手选一档即写回合法值。
    */
   const OUTPUT_MODES: Array<{ value: string; label: string; hint: string }> = $derived([
     { value: 'shared', label: t('settings.output.mode.shared'), hint: t('settings.output.mode.shared.hint') },

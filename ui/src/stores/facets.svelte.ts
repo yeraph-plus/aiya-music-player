@@ -4,7 +4,7 @@ import { errorMessage } from '../lib/errors';
 import { notify } from './notify.svelte';
 
 /**
- * 专辑 / 艺人聚合数据（B4-3b）。
+ * 专辑 / 艺人聚合数据（宫格浏览的按需视图）。
  *
  * 为什么独立 store 而不是塞进 `library`：`library` 持有的是"扫描 + 统计 +
  * 歌单摘要"这类**整库事实**，宫格数据是**按需拉取的浏览视图**——页面打开

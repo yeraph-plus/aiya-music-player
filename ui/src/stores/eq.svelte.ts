@@ -47,7 +47,7 @@ class EqStore {
   loaded = $state(false);
   enabled = $state(false);
   bands = $state<number[]>([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-  /** 低音旋钮（dB，±12）：引擎侧 90 Hz 低架，独立于图示段（docs/39） */
+  /** 低音旋钮（dB，±12）：引擎侧 90 Hz 低架，独立于图示段 */
   bass = $state(0);
   /** 高音旋钮（dB，±12）：引擎侧 7.5 kHz 高架，独立于图示段 */
   treble = $state(0);

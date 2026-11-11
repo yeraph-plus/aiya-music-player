@@ -1,7 +1,7 @@
 /** beets 域：Beets 簇（BeetsView 壳 + 安装/分析/整理三个子页）的文案。
  *  组件/宿主下发的动态消息（install.message、sess.lastError、errorMessage 的
  *  结果等）不在本域；列出的都是前端自有的静态文案。
- *  zh 值逐字保留迁移前的中文（e2e 断言中文文案）；en 按 docs/64a 术语表新写
+ *  zh 值与界面现行中文逐字一致（e2e 断言中文文案）；en 按术语表新写
  *  （整理=Organize、预配置环境=preconfigured bundle、索引=index）。
  *  en 表 `Record<keyof typeof zh, string>` 保证键位奇偶。 */
 
@@ -122,7 +122,7 @@ export const beetsZh = {
   'beets.query.hits': '命中 {n} 首',
   'beets.query.truncated': '（只显示前 {n} 首，缩小条件或提高上限）',
 
-  /* stores/beets-query.svelte.ts：算子人话（OP_LABELS）、条件校验句与存为歌单吐司 */
+  /* stores/beets-query.svelte.ts：算子显示名（OP_LABELS）、条件校验句与存为歌单吐司 */
   'beets.query.opContains': '包含',
   'beets.query.opEq': '等于',
   'beets.query.opPrefix': '开头是',

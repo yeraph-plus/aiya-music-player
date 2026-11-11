@@ -18,7 +18,7 @@
     enabled: boolean;
     /** 背景频谱形态（山形 / 波纹，见 `BgSpectrumStyle`） */
     shape: BgSpectrumStyle;
-    /** 背景频谱光效档位（docs/46 §3.2；山形与波纹**共用**同一档语义） */
+    /** 背景频谱光效档位（山形与波纹**共用**同一档语义） */
     glow: RidgeGlow;
     /**
      * 是否处于暂停态。暂停时频谱静止并收平，而非凝固在暂停瞬间的起伏上。

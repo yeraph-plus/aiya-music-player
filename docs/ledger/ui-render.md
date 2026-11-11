@@ -6,6 +6,7 @@
 ## 条目（新→旧）
 
 <!-- 每条一行：- YYYY-MM-DD · 代码位置 · 事实/取舍 · 来龙去脉（可选） -->
+- 2026-11 · components/AppShell.svelte · 队列/EQ 抽屉宿主用几何确定的 SideDrawer（贴右缘、定宽、定边距），不用 floating-ui 测量气泡 · 测量+碰撞翻转的开合位置有可见抖动。
 - 2026-11-04 · components/LyricsPanel.svelte · 歌词时钟并入 subscribeRender 调度器（暂停即退订、页面隐藏整体停摆）· 它曾是调度器之外唯一常驻 rAF 循环。
 
 

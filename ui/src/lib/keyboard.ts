@@ -18,7 +18,7 @@ const VOLUME_STEP = 0.05;
 /**
  * 全局键盘处理。
  *
- * 从 `App.svelte` 搬出来（批次 3）的理由：这段逻辑**一个视图都不碰**——
+ * 独立成模块的理由：这段逻辑**一个视图都不碰**——
  * 它只读 store（ui / player / list / selection / overlay）和快捷键绑定。
  * 留在 App 里就得把 5 个 store 的成员在 App 顶部各起一个 `$derived` 别名。
  *
@@ -29,8 +29,8 @@ const VOLUME_STEP = 0.05;
  */
 /**
  * 焦点落在这些控件上时，单键快捷键必须让位：Space/Enter 是激活键，
- * 方向键是控件自己的导航。此前只排除 INPUT/TEXTAREA，Tab 到按钮上按
- * 空格会"按钮不响应 + 播放状态乱切"，聚焦列表行按空格会先起播再暂停。
+ * 方向键是控件自己的导航。INPUT/TEXTAREA 之外，按钮/滑杆/选项/菜单项/tab
+ * 等可交互控件同样让位——聚焦其上按空格应激活控件本身，而不是切播放状态。
  */
 const INTERACTIVE_SELECTOR =
   'button, select, a, [role="slider"], [role="radio"], [role="option"], [role="menuitem"], [role="tab"]';
@@ -105,7 +105,7 @@ export function runShortcut(action: ShortcutAction): void {
       player.setShuffle(!(state?.shuffle ?? false));
       return;
     case 'cycleRepeat':
-      // 动作 id 是持久化键不改（老配置不失效）；实现已升级为模式单键循环
+      // 动作 id 是持久化键不改（老配置不失效）；实现是模式单键循环
       player.cyclePlayMode();
       return;
     case 'selectAll':
@@ -161,10 +161,10 @@ export function onKeydown(event: KeyboardEvent): void {
     total: list.total,
     selectedIndex: selection.selectedIndex,
     hasSelection: selection.size > 0,
-    // 队列与 EQ 抽屉都算"面板"（此前只算了队列：EQ 开着时 Esc 的 closePanel
-    // 意图落到 closeQueue 上是 no-op，全靠 SideDrawer 自己的监听兜底）
+    // 队列与 EQ 抽屉都算"面板"（closePanel 意图按 hasPanel 落到具体抽屉，
+    // 两者都要能被 Esc 关闭）
     hasPanel: ui.queueOpen || ui.eqOpen,
-    // 有模态时吞掉全局快捷键：否则在「确认删除」弹窗上敲空格会顺手播放
+    // 有模态时吞掉全局快捷键：否则在「确认删除」弹窗上敲空格会误触发播放
     modalOpen: overlay.hasModal,
     bindings: resolveShortcutBindings(ui.settings.shortcuts),
   });
@@ -175,7 +175,7 @@ export function onKeydown(event: KeyboardEvent): void {
       event.preventDefault();
       selection.selectedIndex = intent.index;
       // DOM 焦点跟着走（roving focus）：只挪高亮 class 的话，Space 播的是
-      // 焦点所在旧行、Enter 播的是高亮新行（发布前 UI 审查 P0-1）
+      // 焦点所在旧行、Enter 播的是高亮新行
       selection.requestRowFocus();
       return;
     case 'play':

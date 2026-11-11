@@ -15,9 +15,9 @@ import { startDpiDiagnostics } from './lib/dpi-diagnostics';
  *
  * `?failCmd=library_list` 可注入一条命令失败，用来手验错误条渲染。
  * `?beets=absent` 让 `beets_status` 报"未安装"，用来演练 Beets 未安装的收拢形态
- * 这条路径以前只有肉眼验过。
+ * （e2e 用它守这条路径）。
  * `?missing=2` 让 `library_stats` 报出位置缺失，用来演练首页那条告警 →
- * 唯一还能证明"跳过去确实落在了曲库组"的方式）。
+ * 设置页曲库组的跳转（e2e 用它证明"跳过去确实落在了曲库组"）。
  */
 if (!('__TAURI_INTERNALS__' in window)) {
   const params = new URLSearchParams(window.location.search);

@@ -38,8 +38,8 @@ const THEME_VALUES: ReadonlySet<string> = new Set(THEME_MODES.map((m) => m.value
  *
  * `spectrum` / `spectrumEngine` / `accentFromArtwork` 来自频谱与封面取色的旧方案；
  * `density` 因行高只保留一套；`glass` 无消费方（壳层不做玻璃）；
- * `mediaKeys` 退役：SMTC 常开无开关（2026-11-04 拍板），"系统媒体键"开关连同
- * 其后端消费方一并删除。写回路径是整个对象快照，残留一个死键即永久写回。
+ * `mediaKeys`：SMTC 常开无开关，"系统媒体键"开关连同
+ * 其后端消费方一并退役。写回路径是整个对象快照，残留一个死键即永久写回。
  */
 const RETIRED_KEYS = [
   'spectrum',

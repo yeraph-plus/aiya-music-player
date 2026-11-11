@@ -2,13 +2,10 @@ import { expect, test, type Page } from '@playwright/test';
 
 /**
  *
- * 选择器原则：认语义与稳定类名，不认版式类名。
- * 上一版 4 条全红，就是钉在了重构前的版式上：
- * - `.main .list .row` → 首页改表格后那段是 `.tt-row`（`.list` 只在曲库/歌单页）
- * - `'设置与诊断'` → 现在就叫「设置」
- * - `.tabs button` → 设置已改成一页常驻区块 + PageToolbar 锚点，没有 tab 切换
+ * 选择器原则：认语义与稳定类名，不认版式类名——版式类名会随重排变，
+ * 钉在上面用例会整批失真。
  *
- * 这一版使用：
+ * 本套件使用：
  * - 壳体：`.titlebar`（唯一全局条）、`.sidebar .nav-item`（一级导航）
  * - 页内：`.main h1`（Header 标题，故意不带类名 —— 标题类名会随批次变）、`.content-toolbar .text-tab`（Toolbar）
  * - 列表：`.list .row`（虚拟列表）、`.tt-row`（首页紧凑表）
@@ -37,8 +34,7 @@ function firstRow(page: Page) {
   return page.locator('.main .list .row:not(.skeleton):not(.failed)').first();
 }
 
-/** 侧栏「曲库」→ 曲库列表（2026-10-28：推荐页仪表盘化，「浏览全部曲目」
- *  按钮撤销，侧栏成为列表页唯一入口） */
+/** 侧栏「曲库」→ 曲库列表（侧栏是列表页唯一入口） */
 async function openLibrary(page: Page): Promise<void> {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '曲库' }).click();
@@ -51,21 +47,20 @@ test('启动装配：顶栏四件 + 仪表盘三级 + 播放条空态', async ({
   // 宽 TitleBar：搜索框在位、返回键此时无历史所以 disabled
   await expect(page.locator('.titlebar .tb-search input')).toBeVisible();
   await expect(page.getByRole('button', { name: '返回上一页' })).toBeDisabled();
-  // 首页无页标题（侧栏已是一级导航）；统计是纯文字两块（播放数 + 时长），
-  // 原先是可点的统计卡（.stat-card），后改 2×2 小卡（.stat-tile），
-  // 现在只剩文字——两次都因"首页像模板"撤销，守这里
+  // 首页无页标题（侧栏是一级导航）；统计是纯文字两块（播放数 + 时长），
+  // 不是可点卡片——.stat-card / .stat-tile 渲染数恒为 0
   await expect(page.locator('.main h1')).toHaveCount(0);
   await expect(page.locator('.main .playlist-row .playlist-card').first()).toBeVisible();
   await expect(page.locator('.main .stat-block')).toHaveCount(2);
   await expect(page.locator('.main .stat-tile')).toHaveCount(0);
   await expect(page.locator('.main .stat-card')).toHaveCount(0);
-  // 区块标题只有一行（大字标题 + 小字英文装饰 + 歌单计数徽章），描述行已撤；
+  // 区块标题只有一行（大字标题 + 小字英文装饰 + 歌单计数徽章），无描述行；
   // 三个短列表各有一层半透明底
   await expect(page.locator('.main .section-desc')).toHaveCount(0);
   await expect(page.locator('.main .home-panel')).toHaveCount(3);
   await expect(page.locator('.main .section-heading .section-meta')).toBeVisible();
-  // 首页不放破坏性入口：清空播放历史只在曲库页（动作行）与设置页。
-  // 它曾挂在"常听"标题行右端（.section-link），与"仪表盘是浏览的地方"相悖
+  // 首页不放破坏性入口：清空播放历史只在曲库页（动作行）与设置页，
+  // 仪表盘标题行不挂动作链接——.section-link 渲染数恒为 0
   await expect(page.locator('.main .section-link')).toHaveCount(0);
   // 三行仪表盘：常听|最近播放双表 + 最近添加整宽表
   await expect(page.locator('.main .home-duo .preview-list')).toHaveCount(2);
@@ -73,8 +68,8 @@ test('启动装配：顶栏四件 + 仪表盘三级 + 播放条空态', async ({
   await expect(page.locator('.main .list')).toHaveCount(0);
   await expect(page.locator('footer')).toContainText('未在播放');
   // 歌单摘要的加载链路：boot → playlists.refresh() → library.playlists → 侧栏。
-  // 断言在这里是为了「挪完还接得上」——数量不钉死（mock 种子为滚动演示
-  // 扩过编），只要有歌单渲染进侧栏就算链路通
+  // 断言锁的是链路连通——数量不钉死（mock 种子按滚动演示配置），
+  // 只要有歌单渲染进侧栏就算链路通
   await expect(page.locator('.sidebar .playlist-item')).not.toHaveCount(0);
   // 背景四层是全应用的——推荐页也有背景渐变层；
   // 沉浸档：可读性遮罩 veil 整层删除（不再有 .ambient-veil），断言其缺席。
@@ -99,7 +94,7 @@ test('歌单：侧栏点开 → 标题与列表来自该歌单', async ({ page }
 
 test('导航链：曲库 → 侧栏切专辑宫格（docs/28 一级项）→ 详情 → 逐级返回', async ({ page }) => {
   await openLibrary(page);
-  // 曲库页第一层 tab 已撤（连同分隔线），专辑/艺人从侧栏进
+  // 曲库页无第一层 tab（连同分隔线），专辑/艺人从侧栏进
   await expect(page.locator('.main .content-toolbar .text-tab')).toHaveCount(0);
 
   await page.locator('.sidebar .nav-item', { hasText: '专辑' }).click();
@@ -125,7 +120,7 @@ test('导航链：曲库 → 侧栏切专辑宫格（docs/28 一级项）→ 详
 
 test('播放链路：双击行播放 → 播放条与队列激活行', async ({ page }) => {
   await openLibrary(page);
-  // B4-1 交互语义：单击=选中，双击=播放。双击**标题单元格**——行几何中心
+  // 交互语义：单击=选中，双击=播放。双击**标题单元格**——行几何中心
   await firstRow(page).locator('.cell.title').dblclick();
   // 播放条出歌名与时长（mock 的 playTracks → 状态广播 → store → 渲染）
   await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
@@ -135,7 +130,7 @@ test('播放链路：双击行播放 → 播放条与队列激活行', async ({ 
   await page.locator('footer').getByRole('button', { name: /播放队列/ }).click();
   const active = page.locator('.queue-panel .queue-row.active');
   await expect(active).toHaveCount(1);
-  // ▶ 已换成与列表一致的声条（ playing 时跳动，静态也有三根条）
+  // 行序号渲染为声条（playing 时跳动，静态也有三根条），不认 ▶ 字符
   await expect(active.locator('.q-index .bars')).toHaveCount(1);
 });
 
@@ -187,7 +182,7 @@ test('设置页：单页平铺 + tab 跳转定位 + 主题切换生效', async (
   await expect(tabs.first()).toHaveText('曲库');
   await expect(tabs.first()).toHaveAttribute('aria-current', 'true');
   await expect(page.locator('.group-title')).toHaveCount(6);
-  // 顺序是拍板项：曲库（唯一有实际内容的组）排在全部偏好开关之前
+  // 组顺序是既定决策：曲库（唯一有实际内容的组）排在全部偏好开关之前
   await expect(page.locator('.group-title').first()).toHaveText('曲库');
 
   // 点「快捷键」→ 平滑滚动跳转，内容本就全渲染（无条件切换）
@@ -222,7 +217,7 @@ test('正在播放页：起播后两栏沉浸布局 + 背景四层接住真实�
   await firstRow(page).locator('.cell.title').dblclick();
   await expect(page.locator('footer')).not.toContainText('未在播放', { timeout: 5_000 });
 
-  // 正在播放页唯一入口 = 播放条左侧歌曲区域（侧栏席位已撤）
+  // 正在播放页唯一入口 = 播放条左侧歌曲区域（侧栏无席位）
   await page.locator('footer .now').click();
 
   // 信息列跟着播放态走（标题换成真歌名），歌词容器在右
@@ -230,11 +225,11 @@ test('正在播放页：起播后两栏沉浸布局 + 背景四层接住真实�
   await expect(page.locator('.np-info .audio-spec')).toBeVisible();
   await expect(page.locator('.lyrics-panel')).toBeVisible();
 
-  // 背景层常在；沉浸档（正在播放页）遮罩撤销（T4d）
+  // 背景层常在；沉浸档（正在播放页）无遮罩层
   // 频谱环境光不被压暗
   await expect(page.locator('.ambient-art')).toBeVisible();
   await expect(page.locator('.ambient-veil')).toHaveCount(0);
-  // canvas 只在 **WebGL 不可用的 2D 兜底**路径上才存在，正常机器上恒为空—— 断言"为 0"是真的，只是它什么都没验。正在播放页的频谱现在是页内
+  // canvas 只在 **WebGL 不可用的 2D 兜底**路径上才存在，正常机器上恒为空—— 断言"为 0"是真的，只是它什么都没验。正在播放页的频谱是页内
   // `<canvas class="np-spectrum">`，由「正在播放页频谱」开关派生。
   await expect(page.locator('.np-spectrum')).toHaveCount(0); // mock 默认关
 
@@ -242,7 +237,7 @@ test('正在播放页：起播后两栏沉浸布局 + 背景四层接住真实�
   // Esc 就是那一页的退路（keyboard.ts 里显式给的语义）。
   await page.keyboard.press('Escape');
   await page.locator('.sidebar .nav-item', { hasText: '设置' }).click();
-  // 开关名也是 改的：原来一个「频谱可视化」，现在拆成背景/正在播放页两个
+  // 开关名：「正在播放页频谱」——频谱设置分为背景与正在播放页两个开关
   await page.getByRole('switch', { name: '正在播放页频谱' }).click();
   await page.locator('footer .now').click();
   await expect(page.locator('.np-spectrum')).toHaveCount(1);

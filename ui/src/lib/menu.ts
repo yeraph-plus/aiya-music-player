@@ -60,7 +60,7 @@ export function trackMenuItems(
     { label: t('lib.menu.addToPlaylist'), action: actions.addToPlaylist, disabled: !track },
   );
   if (!multi) {
-    // B4-3b 起直达艺人/专辑详情页（不再是"筛选 chip"），文案随之改为浏览语义
+    // 直达艺人/专辑详情页（浏览语义，非筛选动作）
     items.push(
       { label: t('lib.menu.viewArtist'), action: actions.filterByArtist, disabled: !track?.artistId || self === 'artist' },
       { label: t('lib.menu.viewAlbum'), action: actions.filterByAlbum, disabled: !track?.albumId || self === 'album' },

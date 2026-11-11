@@ -93,7 +93,7 @@ class UiStore {
   /** `page === 'playlist'` 时的参数。其余路由下无意义（保留旧值，返回时才清） */
   playlistId = $state<string | null>(null);
   queueOpen = $state(false);
-  /** EQ 抽屉（播放条 Popover）会话态开合，与队列抽屉互斥（docs/25 §1） */
+  /** EQ 抽屉（播放条 Popover）会话态开合，与队列抽屉互斥 */
   eqOpen = $state(false);
   /**
    * 列表批量操作模式：开 = 显示勾选列，关 = 隐藏。
@@ -305,7 +305,7 @@ class UiStore {
   /* 一级页面与队列抽屉 */
 
   openPage(page: AppPage): void {
-    // 与旧实现同语义：openPage('playlist') 保留现有 playlistId（playlist
+    // openPage('playlist') 保留现有 playlistId（playlist
     // 的进入走 openPlaylist/enterList，这里只兜住直呼的情况）
     this.setRoute(page, page === 'playlist' ? this.playlistId : null);
     this.queueOpen = false;
@@ -414,7 +414,7 @@ class UiStore {
     this.queueOpen = false;
   }
 
-  /** EQ 抽屉开合的唯一入口（docs/25 §1）；开时关队列，规则对等 */
+  /** EQ 抽屉开合的唯一入口；开时关队列，规则对等 */
   setEqDrawer(open: boolean): void {
     this.eqOpen = open;
     if (open) this.queueOpen = false;

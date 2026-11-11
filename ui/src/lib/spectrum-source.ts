@@ -27,7 +27,7 @@ export interface SpectrumSource {
  * 订阅是**按需 + 引用计数**的：引擎 tap（`spectrum_set`）是**全局**开关，
  * 而消费方可能有多个（AppShell 的背景环境层、正在播放页的可视化），共享
  * 同一个实例。`start()/stop()` 按引用计数叠放——第一个 start 打开 tap，
- * 最后一个 stop 才关闭；否则页面层卸载会把背景层的 tap 一起带走（T4h）。
+ * 最后一个 stop 才关闭；否则页面层卸载会把背景层的 tap 一起带走。
  *
  * 引擎未就绪时永远收不到帧：`live` 为 false、分带恒 0，面板呈现静态空态 ——
  * 这是预期的降级，不是 bug。

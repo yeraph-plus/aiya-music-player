@@ -5,11 +5,10 @@ import { artworkObjectUrl } from './artwork-blob.js';
 /**
  * Media Session：系统媒体中心 / 锁屏 / 蓝牙耳机的显示与控制。
  *
- * **SMTC 常开无开关**（2026-11-04 拍板）：本层是标准 Web 通道，全量注册
+ * **SMTC 常开无开关**：本层是标准 Web 通道，全量注册
  * 元数据与控制键；Windows 侧真正的系统集成由后端 `smtc.rs`（souvlaki）承担
  * ——面板显示与失焦媒体键都走它，本层是否触达系统面板随 WebView2 而定，
- * 不作为任何承诺的依据。历史上这里写过"失焦时走主进程的 globalShortcut"，
- * 主进程从未注册过 globalShortcut，那是失真注释。
+ * 不作为任何承诺的依据；主进程 globalShortcut 不承担媒体键。
  *
  * 封面必须是 blob:/data: 之类的"标准" scheme —— `media://` 会被 Blink 拒绝，
  * 所以这里走 artwork-blob 转一次。标题等信息先同步落到系统 UI，
@@ -78,7 +77,7 @@ export function createMediaSession(handlers: MediaSessionHandlers): MediaSession
     try {
       session.setActionHandler(action, handler);
     } catch {
-      /* 部分动作在旧版 Chromium 不支持 */
+      /* 部分动作在部分 Chromium 版本不受支持 */
     }
   }
 

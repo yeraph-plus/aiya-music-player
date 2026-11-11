@@ -49,7 +49,7 @@ class PlaylistsStore {
     await library.loadPlaylists();
     const view = ui.view;
     // setView 而不是 enterList：这里只是"当前歌单没了"的兜底，
-    // 不该顺手清掉用户的搜索词与筛选（拆页前直接写 ui.view 恰好绕过了清理）
+    // 不该顺带清掉用户的搜索词与筛选——清空属于显式导航入口的动作
     if (view.kind === 'playlist' && !this.byId(view.id)) ui.setView(LIBRARY_VIEW);
   }
 

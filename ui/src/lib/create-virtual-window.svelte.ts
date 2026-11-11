@@ -3,9 +3,9 @@ import { computeRange, type VirtualRange } from './virtual';
 /**
  * 固定行高虚拟列表的滚动水管：scroller 绑定、视口测量、可见区间推导。
  *
- * `TrackList`（曲库/歌单，B4-1 前后都是主力列表）与 `QueuePanel`（播放队列）
- * 原来各抄了一遍 ResizeObserver effect / scrollTop 状态 / pad 计算 —— 逐字
- * 相同的 30 行在两处漂移，改一处漏一处只是时间问题。区间数学本身在
+ * `TrackList`（曲库/歌单的主力列表）与 `QueuePanel`（播放队列）共用这套
+ * 滚动水管：这份测量/推导逻辑若在两处各写一遍，逐字相同的 30 行会漂移，
+ * 改一处漏一处只是时间问题。区间数学本身在
  * `lib/virtual.ts`（纯函数、可单测），这里只负责把 DOM 测量接上去。
  *
  * **用法**（`.svelte.ts` 里的 runes 在组件初始化时调用才合法）：

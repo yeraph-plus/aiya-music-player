@@ -1,15 +1,15 @@
 /* Beets 页的共享词汇。
  *
  * `.panel-head` / `.dim` 这套形状被三处同时需要。留在各自的 `<style>` 里
- * 等于把同一段 CSS 抄三遍（以前 ImportPanel + BeetsSection 就是这么腐化的：
- * 两处 panel 的内边距差 2px，肉眼看不出来但会让人觉得"哪里不对"）。
+ * 等于把同一段 CSS 抄三遍——两处 panel 的内边距哪怕只差 1-2px，肉眼看不出来
+ * 但会让人觉得"哪里不对"。
  *
  * 所以这里放**跨子页复用**的东西，命名统一 `beets-` 前缀避免与页面级类撞名。
  * 只属于某个子页的（专辑卡、结果表列宽）仍留在那个组件的 scoped style 里——
  * 全局样式表不该知道"专辑卡长什么样"。
  */
 
-/* 页面容器：一列卡片，间距统一。原先在 BeetsView 的 scoped style 里 */
+/* 页面容器：一列卡片，间距统一（跨子页复用，故进本表） */
 .beets-page {
   display: flex;
   flex-direction: column;

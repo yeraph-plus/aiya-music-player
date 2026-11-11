@@ -15,7 +15,7 @@ const BOOT_TIMEOUT_MS = 8000;
 /**
  * 启动引导。
  *
- * 从 `App.svelte` 的 `onMount` 搬出来（批次 3）：这段是**一次性编排**
+ * 从 `App.svelte` 独立出来：这段是**一次性编排**
  * （订阅 → 并发拉取 → 首屏 → 对齐播放器快照），一个组件生命周期方法里
  * 塞 60 行 async 会盖住 App 真正该做的事（装配）。
  *
@@ -76,7 +76,7 @@ export function boot(options: { onState: (state: PlayerState) => void }): () => 
     // 频谱面板若被恢复，`AppShell` 的 effect 会自己拿源（sidePanel 已就位）
 
     // 歌单摘要必须在 `ui.bootstrap()` 之后拉：恢复出来的 view 可能指着一个
-    // 已经不存在的歌单，`playlists.refresh()` 会顺手把视图退回曲库。
+    // 已经不存在的歌单，`playlists.refresh()` 会把失效视图退回曲库。
     await playlists.refresh();
 
     await library.loadStats();

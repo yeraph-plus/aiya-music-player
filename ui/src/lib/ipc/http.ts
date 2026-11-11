@@ -45,7 +45,7 @@ type StateListener = (s: PlayerState) => void;
 class WebPlayerEngine {
   private audio: HTMLAudioElement;
   private listeners = new Set<StateListener>();
-  // 频谱旁路：WebAudio AnalyserNode 客户端复刻 48 对数分带（W4 预留件）。
+  // 频谱旁路：WebAudio AnalyserNode 客户端复刻 48 对数分带。
   // MediaElementSource 对同一元素只能建一次；Safari 有静音前科，探测失败
   // 即降级为无频谱（Remote 源保持空态，与桌面 tap 关闭同观感）。
   private ctx: AudioContext | null = null;
@@ -87,9 +87,9 @@ class WebPlayerEngine {
       void this.report({ kind: 'ended', token });
     });
     this.audio.addEventListener('error', () => {
-      // 真失败三件事一起做（审查 P1：此前只 emit error 字段——不带 status，
-      // AppShell 报错通道不认；且 100ms 内被快照冲掉；且从不回报 failed，
-      // 服务端 Actor 停在 playing、队列不推进，"点解不了的文件"成了假播放）
+      // 真失败三件事一起做：写 status=error（AppShell 报错通道只认 error 态）、
+      // 立即 emit（单发 error 字段会被 100ms 内的快照冲掉）、回报 failed
+      // （服务端 Actor 才能离开 playing、队列继续推进）。
       if (!this.base) return;
       const detail = { code: 'io' as const, message: 'browser audio element error' };
       this.base = { ...this.base, status: 'error', error: detail };
@@ -373,7 +373,7 @@ export function installHttpTransport(): void {
         // 输出模式是桌面专属：空订阅
         return () => {};
       }
-      // SSE 多路复用：全部事件通道共享一条 EventSource（审查 P2）——浏览器
+      // SSE 多路复用：全部事件通道共享一条 EventSource——浏览器
       // HTTP/1.1 每主机 6 连接上限，<audio> 的 Range 长连接还要占一条，
       // 每通道各开会在 beets 页 + 设置页同开时挤占并发槽
       let set = sseChannels.get(event);

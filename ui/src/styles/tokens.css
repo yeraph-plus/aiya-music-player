@@ -23,7 +23,7 @@
   --surface-hover: rgba(255, 255, 255, 0.055);
   --surface-active: rgba(124, 156, 255, 0.14);
   --surface-cover: rgba(255, 255, 255, 0.06);
-  /* 禁用件的统一压暗档（发布前 UI 审查 P3：此前 0.35/0.4/0.45/0.5/0.55 五种） */
+  /* 禁用件的统一压暗档（全站单一取值） */
   --disabled-opacity: 0.45;
   /* 封面上的悬浮衬底（行内播放键底、hover 加深）。黑不随主题——衬底压的是
      封面图像本身，浅色主题下黑衬底同样成立 */
@@ -37,11 +37,11 @@
   --line: rgba(255, 255, 255, 0.08);
   --line-strong: rgba(255, 255, 255, 0.16);
   --text-1: rgba(255, 255, 255, 0.92); /* 主文字 */
-  /* 次要：副标题、说明。0.58：此前 0.5 按**纯 surface-1** 校准，T4c 之后真实背景是 ambient 光晕（左上蓝晕峰值处有效亮度更高），吸顶表头/侧栏的
-     text-2 跌到 3:1 上下（发布前 UI 审查 P1-2）。0.58 对光晕峰值 ≥4.5:1。 */
+  /* 次要：副标题、说明。0.58：真实背景是 ambient 光晕（左上蓝晕峰值处有效亮度更高），
+     校准基准是光晕峰值——吸顶表头/侧栏的 text-2 对光晕峰值 ≥4.5:1。 */
   --text-2: rgba(255, 255, 255, 0.58);
-  /* 最弱：kicker、计数。0.55：同上按光晕峰值重校（0.47 在光晕上 ≈2.5:1）。
-   * 仍低于 text-2，层级不倒挂。校准基准从"surface-1"改为"--ambient-bg 峰值"。 */
+  /* 最弱：kicker、计数。0.55：同按光晕峰值校准（0.47 在光晕上 ≈2.5:1）。
+   * 仍低于 text-2，层级不倒挂。 */
   --text-3: rgba(255, 255, 255, 0.55);
 
   /* 主色与状态 */
@@ -67,7 +67,7 @@
   --close-hover: #e81123;
   --close-fg: #fff;
 
-  /* 背景方案（T4d）：aurora 是默认，渐变画在 AmbientBackdrop 第 1 层；
+  /* 背景方案：aurora 是默认，渐变画在 AmbientBackdrop 第 1 层；
    * 其余方案见文件尾部的 [data-ambient] 区段 */
   --ambient-bg:
     radial-gradient(1100px 720px at 12% -12%, rgba(43, 84, 176, 0.55), transparent 60%),
@@ -90,11 +90,11 @@
   --radius-sm: 0.375rem;
   --radius-md: 0.5rem;
   --radius-lg: 0.625rem;
-  --radius-xl: 0.875rem; /* 模态/抽屉面板（此前 14/16 两种裸值） */
+  --radius-xl: 0.875rem; /* 模态/抽屉面板 */
   --radius-pill: 999px;
 
-  /* 阴影阶梯（发布前 UI 审查 P2-3）：11 种一次性几何收敛为 5 档 + 2 个方向
-   * 变体。颜色取 var(--shadow)，随主题懒解析，只需定义这一份。 */
+  /* 阴影阶梯：5 档 + 2 个方向变体，业务样式统一取这里。
+   * 颜色取 var(--shadow)，随主题懒解析，只需定义这一份。 */
   --shadow-1: 0 1px 3px var(--shadow); /* 控件：Switch/Slider/SegmentedControl */
   --shadow-2: 0 8px 20px var(--shadow); /* Tooltip */
   --shadow-3: 0 12px 30px var(--shadow); /* 卡片/封面/Toast */
@@ -103,13 +103,13 @@
   --shadow-4-left: -18px 0 44px var(--shadow); /* 右侧抽屉（SideDrawer） */
   --shadow-up: 0 -6px 18px color-mix(in srgb, var(--shadow) 50%, transparent); /* 播放条上缘 */
 
-  /* 玻璃模糊阶梯（此前 6 种裸值）：遮罩 4 / 吸顶头 8（10 并入）/ 浮层 18 / 模态 28 */
+  /* 玻璃模糊阶梯：遮罩 4 / 吸顶头 8 / 浮层 18 / 模态 28 */
   --blur-scrim: 4px;
   --blur-head: 8px;
   --blur-pop: 18px;
   --blur-modal: 28px;
 
-  /* 层叠（发布前 UI 审查 P1-3）之前 14 个裸值靠各文件注释维系、Toast=Menu=Select 同值谁在上看 DOM 顺序。阶梯契约：背景 0 < 内容 1 < 吸顶 3 < 拖拽插线 5 < 播放条 20 < 直播舞台浮层 40 < 模态 50/51 < 浮层
+  /* 层叠阶梯契约：背景 0 < 内容 1 < 吸顶 3 < 拖拽插线 5 < 播放条 20 < 直播舞台浮层 40 < 模态 50/51 < 浮层
      55 < 抽屉 56 < 菜单 61 < 下拉 62 < toast 65 < tooltip 70。z-index 必须取自本梯（check-ui-layers.mjs 守）。 */
   --z-under: -1;
   --z-bg: 0;
@@ -138,11 +138,7 @@
     -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   /* 等宽不是"数字字体"：诊断表路径、时间轴刻度都用它 */
   --font-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
-  /* 字阶（发布前 UI 审查 P1-1 重定档）：此前声明 6 档、实际 ~18 档 160 处裸值。
-   * 收敛为 10 档。base 12.5→12：全仓 12px×39 是现实主力，原 12.5 的 21 处
-   * （全是 kit 组件）随档下移 0.5px；lg 15→14（原 var 用户 0）；xl 22→17
-   * （唯一 var 用户 StatBlock 是死件），22 归 2xl；19/21 归 xl/2xl。
-   * 2026-10-31改 rem，注释保留原 px 值供对照。 */
+  /* 字阶：10 档，业务样式统一取这里。以 rem 计；行尾注释保留 px 值供对照。 */
   --fs-2xs: 0.625rem; /* 10px */
   --fs-xs: 0.65625rem; /* 10.5px */
   --fs-sm: 0.71875rem; /* 11.5px */
@@ -207,7 +203,7 @@ html[data-theme='light'] {
     linear-gradient(168deg, #eef1f9 0%, #e8edf7 55%, #f2f4fa 100%);
 }
 
-/* 背景方案（T4d）固定 CSS 渐变 + 配套强调色，成套切换（`html[data-ambient]`）。写法约束：暗色块（单属性选择器）必须排在浅色主题块之后——两者同为
+/* 背景方案固定 CSS 渐变 + 配套强调色，成套切换（`html[data-ambient]`）。写法约束：暗色块（单属性选择器）必须排在浅色主题块之后——两者同为
    (0,1,1)，后者靠顺序赢；浅色变体用双属性选择器 (0,2,1) 压回。aurora 不覆盖强调色（用主题默认蓝），只换渐变。 */
 
 html[data-ambient='ember'] {

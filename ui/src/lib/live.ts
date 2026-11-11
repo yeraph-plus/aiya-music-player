@@ -4,7 +4,7 @@
  * 为什么单独抽一层：同一条状态在**两个地方**渲染（底部播放条的徽章、直播页
  * 的大画面），"暂停"在直播语义下不是暂停而是**断开**。两处各写一遍
  * `status === 'playing' ? '直播' : '已断开'` 的话，改文案必漏一处——
- * 这个仓在 `is_http_url` 上已经吃过一次同样的亏。
+ * 口径抽成单层共享。
  */
 import { t } from './i18n.svelte';
 import { STREAM_ID_PREFIX } from './format';
@@ -21,11 +21,11 @@ export interface LivePhase {
 /**
  * 直播三态。
  *
- * `paused` 在这条链路上等于**已断开**：用户拍板"暂停即终止连接、播放即重连"
- * （见 `actor.rs` 的 Stream 分支），文案必须跟着说实话。
+ * `paused` 在这条链路上等于**已断开**：暂停即终止连接、播放即重连
+ * （见 `actor.rs` 的 Stream 分支），文案必须跟着如实。
  */
 export function livePhase(status: PlaybackStatus | null | undefined): LivePhase {
-  // 三态文案与播放条同一口径：shell 域的 shell.live.*（zh 值与迁移前逐字一致）
+  // 三态文案与播放条同一口径：shell 域的 shell.live.*
   if (status === 'playing') return { text: t('shell.live.on'), tone: 'on' };
   if (status === 'loading') return { text: t('shell.live.wait'), tone: 'wait' };
   return { text: t('shell.live.off'), tone: 'off' };
@@ -74,7 +74,7 @@ function newLiveId(): string {
  * 每次加载结果一致（legacy id 由 URL 派生），所以**不需要写回**也能稳定。
  * url 都没有的条目是彻底的坏数据，丢弃。source 只补缺不覆盖——service 档
  * （服务端站单）在写盘回程被这里抹掉的话，mergeServiceStations 的分流判据
- * 就失效了（审查 P1-3）。
+ * 就失效了。
  */
 export function normalizeLiveRecent(raw: unknown): LiveRecentEntry[] {
   if (!Array.isArray(raw)) return [];
@@ -133,7 +133,7 @@ export function rememberLive(
 }
 
 /**
- * 站单下发（docs/68 §12.1/§12.3）：把服务端频道列表合并进「最近打开」。
+ * 站单下发：把服务端频道列表合并进「最近打开」。
  *
  * 合并方向与 rememberLive **相反**——rememberLive 是"现在带的信息优先"
  * （开播现场带 url+name），站单是"**用户已填字段赢、服务端只补空白**"
@@ -164,7 +164,7 @@ export function mergeServiceStations(
         url: st.hlsUrl, // url 可随部署变，服务端权威
         source: 'service',
       };
-      // 字段合并按 source 分流（审查 P1-1）："用户字段赢"无法区分用户值
+      // 字段合并按 source 分流："用户字段赢"无法区分用户值
       // 与上轮服务端值（首见即冻结）——service 卡的四字段直接以服务端为
       // 准（用户的元数据编辑入口在 StationPanel），manual 卡按 id/url 命中
       // 的才走"只补空白"。

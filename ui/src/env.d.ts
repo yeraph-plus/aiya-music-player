@@ -1,8 +1,8 @@
 import type { AmbientScheme, ThemeMode } from './lib/settings';
 
 /**
- * 全局环境声明。**没有 `window.api`**：批次 2 之后 UI 只走 `lib/ipc/client.ts`
- * 的 typed invoke，旧的 `AiyaApi` 巨型预加载对象随 `compat/` 一起删除。
+ * 全局环境声明。**没有 `window.api`**：UI 只走 `lib/ipc/client.ts`
+ * 的 typed invoke，没有预加载的巨型 API 对象。
  */
 declare global {
   interface Window {

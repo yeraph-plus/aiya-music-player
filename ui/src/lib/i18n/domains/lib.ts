@@ -1,7 +1,7 @@
 /** lib 域：lib/ 纯函数与 stores/ 业务侧渲染到 UI 的文案，按来源文件分组：
  *  menu（右键菜单）/ smart（动态歌单校验）/ liveMessage（直播状态与流来源）/
  *  audioFormat（音频规格悬停提示）/ drop（拖放蒙版与吐司）。
- *  zh 值逐字保留迁移前的中文（e2e 断言中文文案）；en 按 docs/64a 术语表新写。
+ *  zh 值与界面现行中文逐字一致（e2e 断言中文文案）；en 按术语表新写。
  *  en 表 `Record<keyof typeof zh, string>` 保证键位奇偶。 */
 
 export const libZh = {

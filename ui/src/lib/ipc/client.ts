@@ -348,7 +348,7 @@ export const ipc = {
   },
 
   /**
-   * 推流频道（docs/68 §6）：**server 专属面**——调用方必须以
+   * 推流频道：**server 专属面**——调用方必须以
    * `backendCaps().streaming` 为门（桌面壳没有这些命令，invoke 会 404）。
    * 参数是动态 Value 侧解析（与 live/history 同款），这里用结构类型。
    */
@@ -395,7 +395,7 @@ export const ipc = {
     apply: (decisions: ApplyDecision[], resume?: boolean) =>
       call<JobStarted>('beets_apply', { decisions, resume: resume ?? false }),
     cancel: () => call<CancelRequested>('beets_cancel'),
-    /** beets 配置快照：待整理目录 / 整理输出根 / 已导入记录数（docs/40 十三轮） */
+    /** beets 配置快照：待整理目录 / 整理输出根 / 已导入记录数 */
     config: () => call<BeetsConfig>('beets_config_get'),
     /** 设置待整理目录（null = 清除）。与曲库目录重叠会被后端以 invalid_arg 拒绝 */
     setInbox: (path: string | null) => call<BeetsConfig>('beets_set_inbox', { path }),
@@ -435,7 +435,7 @@ export const ipc = {
     uninstall: () => call<JobStarted>('beets_uninstall'),
 
     /*
-     * 批 D：曲库维护四件套
+     * 曲库维护四件套
      * 四条都是**异步**的：立刻返回「已启动」，进度/结果走 `beets:maintenance`。
      */
     /**

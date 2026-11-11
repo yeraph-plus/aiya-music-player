@@ -24,7 +24,7 @@ const SEARCH_DEBOUNCE_MS = 120;
 /**
  * 曲目列表 store：查询构造 + 窗口分页 + 重载 + 「播放当前列表」。
  *
- * 为什么从 App.svelte 搬出来（批次 3）：
+ * 为什么独立成 store：
  * 1. `LibraryView`（渲染）、`lib/keyboard.ts`（selectAll 要 total）、
  *    `playlists` store（加入歌单后要 reload）**三方都要**这套状态。
  *    留在 App 就得把 8 个东西逐层传给组件，或者绕回去问 App —— 而 App
@@ -142,7 +142,7 @@ class ListStore {
     try {
       await player.playQuery(this.query(), index);
     } catch (err) {
-      // 起播失败不阻断运行：走播放条吐司（报错三档，2026-11 拍板）
+      // 起播失败不阻断运行：走播放条吐司（报错三档）
       notify.showToast(errorMessage(err));
     }
   }
@@ -164,8 +164,8 @@ class ListStore {
    * （经 `nav.search()`），但只有停顿 120 ms 才发查询 —— 否则 5 首/字的连打会排队等 IPC。
    */
   setSearch(value: string): void {
-    // 搜索始终针对全库。不在搜索页时先跳过去（B4-3c：独立搜索结果页，
-    // 不再寄居曲库列表）；已经在搜索页就只更新查询，不再重置视图。
+    // 搜索始终针对全库。不在搜索页时先跳过去（搜索是独立的
+    // 结果页，不寄居曲库列表）；已经在搜索页就只更新查询，不再重置视图。
     if (value.trim() && ui.page !== 'search') ui.enterSearch();
     ui.search = value;
     clearTimeout(this.searchTimer);
@@ -282,9 +282,9 @@ class ListStore {
   /**
    * 切到曲库列表页。
    *
-   * `sort` 用于"最近添加 → 查看全部"这类**带排序语义的入口**：以前它只能
-   * 打开「全部曲目」，排序用的是上一次留下的字段，用户看到的并不是最近
-   * 添加的顺序。同一个页面再点一次仍然重新拉（手滑点错了想刷新）。
+   * `sort` 用于"最近添加 → 查看全部"这类**带排序语义的入口**：入口声明
+   * 自己的排序，打开即按该字段排，不依赖上一次留下的字段——否则用户看到
+   * 的并不是最近添加的顺序。同一个页面再点一次仍然重新拉（手滑点错了想刷新）。
    */
   openLibrary(
     sort?: { field: TrackSort; direction: 'asc' | 'desc' },
@@ -347,7 +347,7 @@ class ListStore {
   }
 
   /**
-   * 进专辑/艺人详情页（B4-3b）。参数复用筛选字段的原因见 `ui.enterFacet`；
+   * 进专辑/艺人详情页。参数复用筛选字段的原因见 `ui.enterFacet`；
    * 查询照常走 `library_list`（source=library + albumId/artistId 过滤），
    * 所以重载/滚动恢复/批量动作与其它列表页**同一条路径**，零特判。
    */

@@ -1,7 +1,7 @@
 import { rangeSelection, SELECTION_CAP } from './selection';
 
 /**
- * 行选择的**公共语义**层（B4-1 定稿，B4-2 抽出）。
+ * 行选择的**公共语义**层。
  *
  * 两个实现共用这里的分流与上限规则：
  * - **下标版**（主列表/歌单）：`stores/selection.svelte.ts` + `lib/selection.ts`
@@ -30,7 +30,7 @@ export type RowIntent =
   | 'range';
 
 /**
- * 点行的意图分流（B4-1 交互语义）。
+ * 点行的意图分流。
  *
  * 注意 Shift 在**没有锚点**时的处理由存储侧决定：下标版回退到键盘焦点行
  * （`selection.anchor < 0 ? selectedIndex : anchor`），ID 版回退成 toggle

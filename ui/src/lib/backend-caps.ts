@@ -1,10 +1,10 @@
 /**
- * 后端能力面（docs/66 §10）：桌面宿主（Tauri 壳 + Rust 引擎）与 Web 宿主
+ * 后端能力面：桌面宿主（Tauri 壳 + Rust 引擎）与 Web 宿主
  * （aiya-server + 浏览器 `<audio>`）共用同一套 UI，但一部分功能只存在于
- * 桌面侧——EQ 与输出设备是独立进程音频引擎的 DSP（ADR-0002），托盘、
+ * 桌面侧——EQ 与输出设备是独立进程音频引擎的 DSP，托盘、
  * 防休眠、webview 缩放补偿是窗口壳的能力。Web 下这些入口不渲染，避免
- * 给出"调了没反应"的死开关；设置字段本身照常落库（DB 不做客户端分支，
- * docs/66 §8.2），桌面侧语义不受影响。
+ * 给出"调了没反应"的死开关；设置字段本身照常落库（DB 不做客户端分支），
+ * 桌面侧语义不受影响。
  *
  * 判据与 boot 三态同源：`__AIYA_WEB__` 仅由 http 传输装载时写入
  * （ipc/http.ts），且装载先于 mount（main.ts）。在组件初始化期调用即可靠，
@@ -24,7 +24,7 @@ export interface BackendCaps {
   shell: boolean;
   /** 系统目录/文件选择器（pick_folder 系命令）：窗口壳能力，浏览器没有 */
   pickFolder: boolean;
-  /** 推流频道（docs/68）：server 专属面——频道管理、节目表、站单下发。
+  /** 推流频道：server 专属面——频道管理、节目表、站单下发。
    *  桌面壳不编译 station 域，web 宿主恒有（镜像内置 liquidsoap）。 */
   streaming: boolean;
 }

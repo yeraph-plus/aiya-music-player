@@ -13,9 +13,8 @@
   import { ui } from '../stores/ui.svelte';
 
   /**
-   * 专辑详情页：此前寄居 LibraryView，靠 `ui.page` 分支
-   * 拼头部——现在页面各归各，路由参数（`ui.albumId`）直接可寻址，
-   * 列表接线共用 TrackListPanel。
+   * 专辑详情页：可寻址的独立路由页（`ui.albumId` 直达），
+   * 头部自拼、列表接线共用 TrackListPanel。
    *
    * 曲目列表与曲库页同一条查询路径（source=library + albumId 筛选），
    * 详情页可能被启动恢复直接命中（facets 缓存还是空），所以这里负责

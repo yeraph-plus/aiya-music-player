@@ -132,7 +132,7 @@ export interface AppSettings {
   theme: ThemeMode;
   /** 主题颜色：固定渐变背景 + 配套强调色，成套切换（切换即换视觉身份） */
   ambient: AmbientScheme;
-  /** 界面缩放档位（百分比，见 `UI_SCALES`）；`html` 内联 font-size 随它走（docs/56） */
+  /** 界面缩放档位（百分比，见 `UI_SCALES`）；`html` 内联 font-size 随它走 */
   uiScale: UiScale;
   /**
    * 禁用系统缩放：开启后 Rust 侧把 webview zoom 补偿为 1/scale，内容
@@ -162,7 +162,7 @@ export interface AppSettings {
    * 合成器缓存，玻璃降为一次性开销。
    */
   bgSpectrum: boolean;
-  /** 正在播放页频谱。与 `bgSpectrum` 各自独立（docs/46 §5：两个页面分开控制） */
+  /** 正在播放页频谱。与 `bgSpectrum` 各自独立（两个页面分开控制） */
   npSpectrum: boolean;
   /** 频谱形态：正在播放页可视化的形态（背景形态见 `bgSpectrumStyle`） */
   spectrumStyle: SpectrumStyle;
@@ -194,7 +194,7 @@ export interface AppSettings {
    */
   historyDays: number;
   /**
-   * 界面语言。空 = 首启未定（宿主按系统 UI 语言探测后写库，docs/64 §3.1），
+   * 界面语言。空 = 首启未定（宿主按系统 UI 语言探测后写库），
    * 此后恒为 'zh' / 'en'——前端不做探测，只跟随。
    */
   language: string;
@@ -235,12 +235,11 @@ export interface LiveRecentEntry {
    * 上传，本地文件路径也未支持），为服务端站单与将来"选图存路径"预留
    */
   cover?: string;
-  /**
-   * 入库途径。manual = 手工添加；推流服务上线后其站单走 'service'，
-   * 同步方向与覆盖优先级都以它判别。老数据缺省按 manual 归一。
-   */
-  /** manual = 手工添加；service = 服务端站单下发（推流频道，docs/68）。
-   *  同步方向与覆盖优先级以它判别：service 卡的字段由服务端管，用户补填优先。 */
+    /**
+     * 入库途径。manual = 手工添加；service = 服务端站单下发（推流频道）。
+     * 同步方向与覆盖优先级以它判别：service 卡的字段由服务端管，用户补填
+     * 优先；老数据缺省按 manual 归一。
+     */
   source: 'manual' | 'service';
   /** 入库时间（毫秒）。重开/补元数据不改变它——它是"何时进库"不是"何时最后听" */
   addedAtMs: number;

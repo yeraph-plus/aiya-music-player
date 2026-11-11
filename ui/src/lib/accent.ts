@@ -9,7 +9,7 @@
  *
  * **失效信号**：`<html>` 上的 `data-theme` / `data-ambient` 属性。
  * 用 MutationObserver 而不是定时重读：换主题后必须**立刻**失效，否则光谱
- * 会保持旧色到下一次偶然重取（曾经就是"切了主题但频谱不变色"）。
+ * 会保持旧色到下一次偶然重取，画面与主题脱节。
  *
  * 前提：`--accent` / `--text-2` / `--text-3` 全部定义在 `html` 选择器上
  * （tokens.css 的 :root、html[data-theme=...]、html[data-ambient=...]）。

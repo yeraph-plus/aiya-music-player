@@ -8,7 +8,7 @@
   interface Props {
     /** 频谱数据源（与背景层共享同一实例，start/stop 引用计数叠放） */
     source: SpectrumSource | null;
-    /** 可视化形态（设置「频谱风格」，docs/26 §3）：切换即时生效，不重建数据订阅 */
+    /** 可视化形态（设置「频谱风格」）：切换即时生效，不重建数据订阅 */
     style: SpectrumStyle;
     /**
      * 是否暂停。暂停时本页频谱静止并收平，与背景层语义一致。

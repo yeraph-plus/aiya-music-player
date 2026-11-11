@@ -24,8 +24,8 @@ import Progress from '../components/ui/Progress.svelte';
 
   /**
    * 曲库主区：只负责**曲库 / 歌单 / 搜索**三个列表页。
-   * 专辑/艺人详情页拆去了 AlbumView/ArtistView（参数路由直达），
-   * 最近播放/常听单页退役（常听收进推荐页 top-15）。
+   * 专辑/艺人详情页在 AlbumView/ArtistView（参数路由直达）；
+   * 常听的入口在推荐页 top-15。
    * 列表接线在 TrackListPanel——这里只剩头部、筛选 chip 与搜索聚合段。
    */
 
@@ -76,7 +76,7 @@ import Progress from '../components/ui/Progress.svelte';
     };
   });
 
-  /* 搜索结果页（B4-3c） */
+  /* 搜索结果页 */
 
   const isSearchPage = $derived(ui.page === 'search');
 
@@ -133,8 +133,8 @@ import Progress from '../components/ui/Progress.svelte';
 
   /**
    * 时间筛选 chip：筛选器模态框应用后在这里给一个可清除的入口。
-   * 只在曲库页显示——艺人/专辑"筛选"已升级为详情页路由（B4-3b），
-   * 详情页拆出后曲库页只剩时间筛选这一种可清除状态。
+   * 只在曲库页显示——艺人/专辑的入口是详情页路由（非筛选动作），
+   * 曲库页只剩时间筛选这一种可清除状态。
    */
   const filterChips = $derived(
     ui.page === 'library' && list.timeFilterOn

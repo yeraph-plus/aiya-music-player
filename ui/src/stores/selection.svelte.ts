@@ -14,7 +14,7 @@ class SelectionStore {
   /** 当前焦点行（键盘上下移动） */
   selectedIndex = $state(-1);
   /**
-   * 「把 DOM 焦点交给焦点行」的请求计数（发布前 UI 审查 P0-1）。
+   * 「把 DOM 焦点交给焦点行」的请求计数。
    *
    * 只有键盘 move 意图（keyboard.ts）会调 `requestRowFocus()` 置位：方向键
    * 移动的不只是高亮 class，DOM 焦点必须跟过去——否则 Space 播的是焦点
@@ -45,7 +45,7 @@ class SelectionStore {
   }
 
   /**
-   * 点行 / Ctrl / Shift 点行统一入口（B4-1 交互语义）。
+   * 点行 / Ctrl / Shift 点行统一入口。
    *
    * 裸点=只选这一行（清掉别的）、Ctrl=切换、Shift=连选；**裸点不再播放** ——
    * 播放归双击 / hover 播放键 / Enter。与 `handleCheck` 分开是因为语义不同：

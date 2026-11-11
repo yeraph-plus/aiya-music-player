@@ -261,7 +261,7 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
       return mock.beetsPluginTable();
     case 'beets_uninstall':
       return mock.beetsUninstall();
-    // 批 D：曲库维护四件套（事件流演练，见 MockBackend.beetsMaintenance）
+    // 曲库维护四件套（事件流演练，见 MockBackend.beetsMaintenance）
     case 'beets_adopt':
       return mock.beetsMaintenance('adopt', false);
     case 'beets_update':
