@@ -603,11 +603,15 @@ mod tests {
 
     #[test]
     fn path_key_matches_scanner_case_folding() {
-        let a = path_key(r"D:\Music\A.FLAC");
-        let b = path_key("D:/music/a.flac");
-        assert_eq!(a.to_lowercase(), b.to_lowercase(), "大小写不敏感");
+        let a = path_key("/Music/A.FLAC");
+        let b = path_key("/music/a.flac");
+        assert_eq!(a, b, "大小写不敏感");
         if cfg!(windows) {
-            assert_eq!(a, b, "Windows 上正/反斜杠必须同一个键");
+            assert_eq!(
+                path_key(r"D:\Music\A.FLAC"),
+                path_key("D:/music/a.flac"),
+                "Windows 上正/反斜杠必须同一个键"
+            );
         }
     }
 

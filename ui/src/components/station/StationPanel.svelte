@@ -7,8 +7,8 @@
    * 壳没有这些命令）。
    */
   import { t } from '../../lib/i18n.svelte';
-  import { ipc } from '../../lib/ipc/client';
-  import type { StationDetail, StationSchedule, StationSummary } from '../../lib/ipc/generated';
+  import { stationManager } from '../../stores/station-manager.svelte';
+  import type { StationSchedule, StationSummary } from '../../lib/ipc/generated';
   import Button from '../ui/Button.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import { notify } from '../../stores/notify.svelte';
@@ -19,9 +19,9 @@
   /** 站单已变（开播/停播/元数据保存）——父层拉 station_list 合并收听列表 */
   let { onchanged = () => {} }: { onchanged?: () => void } = $props();
 
-  let stations = $state<StationSummary[]>([]);
+  const stations = $derived(stationManager.stations);
   let selectedId = $state<string | null>(null);
-  let detail = $state<StationDetail | null>(null);
+  const detail = $derived(stationManager.detail);
   let mode = $state<'list' | 'detail' | 'edit'>('list');
   let busy = $state(false);
   let copied = $state(false);
@@ -60,12 +60,8 @@
   });
 
   async function load(): Promise<void> {
-    stations = await ipc.station.list();
-    if (selectedId) {
-      const still = stations.find((s) => s.id === selectedId);
-      if (still) detail = await ipc.station.get(selectedId);
-      else selectedId = null;
-    }
+    const still = await stationManager.load(selectedId);
+    if (selectedId && !still) selectedId = null;
   }
 
   /* ---- 列表操作 ---- */
@@ -105,9 +101,8 @@
         coverUrl: form.coverUrl.trim() || null,
         visibility: form.visibility,
       };
-      const saved = editingId
-        ? await ipc.station.update(editingId, input)
-        : await ipc.station.create(input);
+      const saved = await stationManager.save(editingId, input);
+      if (!saved) return;
       selectedId = saved.id;
       mode = 'detail';
       notify.showToast(t('station.toastSaved'));
@@ -122,7 +117,7 @@
     if (busy) return;
     busy = true;
     try {
-      await ipc.station.activate(s.id, !s.active);
+      if (!(await stationManager.setActive(s.id, !s.active))) return;
       notify.showToast(t(s.active ? 'station.toastOff' : 'station.toastOn', { name: s.name }));
       await load();
       onchanged();
@@ -132,14 +127,14 @@
   }
 
   async function doSkip(s: StationSummary): Promise<void> {
-    await ipc.station.skip(s.id);
+    if (!(await stationManager.skip(s.id))) return;
     notify.showToast(t('station.toastSkip'));
     await load();
   }
 
   async function doDelete(s: StationSummary): Promise<void> {
     if (!confirm(t('station.delConfirm', { name: s.name }))) return;
-    await ipc.station.remove(s.id);
+    if (!(await stationManager.remove(s.id))) return;
     notify.showToast(t('station.toastDeleted'));
     if (selectedId === s.id) {
       selectedId = null;
@@ -181,7 +176,8 @@
   async function searchTracks(): Promise<void> {
     const q = plSearch.trim();
     if (!q) return;
-    const page = await ipc.library.list({ search: q, offset: plSearchPage * 30, limit: 30 });
+    const page = await stationManager.searchTracks(q, plSearchPage * 30, 30);
+    if (!page) return;
     for (const tr of page.items) {
       plHitNames.set(tr.id, `${tr.title}${tr.artist ? ` — ${tr.artist}` : ''}`);
     }
@@ -213,8 +209,7 @@
       };
       if (plEditIndex === null) list.push(payload);
       else list[plEditIndex] = payload;
-      const { playlists } = await ipc.station.setPlaylists(detail.id, list);
-      detail = { ...detail!, playlists };
+      if (!(await stationManager.setPlaylists(detail.id, list))) return;
       plDlg = false;
       notify.showToast(t('station.toastRestart'));
       onchanged();
@@ -228,8 +223,7 @@
     busy = true;
     try {
       const list = detail.playlists.filter((_, x) => x !== i);
-      const { playlists } = await ipc.station.setPlaylists(detail.id, list);
-      detail = { ...detail!, playlists };
+      if (!(await stationManager.setPlaylists(detail.id, list))) return;
       onchanged();
     } finally {
       busy = false;
@@ -317,8 +311,7 @@
       };
       if (schEditIndex === null) list.push(payload);
       else list[schEditIndex] = payload;
-      const { schedules } = await ipc.station.setSchedules(detail.id, list);
-      detail = { ...detail!, schedules };
+      if (!(await stationManager.setSchedules(detail.id, list))) return;
       schDlg = false;
       notify.showToast(t('station.toastRestart'));
     } finally {
@@ -338,8 +331,7 @@
         priority: sc.priority,
       }));
       list.splice(schEditIndex, 1);
-      const { schedules } = await ipc.station.setSchedules(detail.id, list);
-      detail = { ...detail!, schedules };
+      if (!(await stationManager.setSchedules(detail.id, list))) return;
       schDlg = false;
       notify.showToast(t('station.toastRestart'));
     } finally {
@@ -690,7 +682,7 @@
   .st-cell.filled { border: none; opacity: 0.85; }
   .st-cell.filled:hover { opacity: 1; }
   /* 对话框 */
-  .st-dlg { position: fixed; inset: 0; background: rgb(0 0 0 / 45%); display: grid; place-items: center; z-index: 60; }
+  .st-dlg { position: fixed; inset: 0; background: rgb(0 0 0 / 45%); display: grid; place-items: center; z-index: var(--z-modal); }
   .st-dlg-body { background: var(--surface, #1a1a24); color: inherit; border-radius: 14px; padding: 20px; width: min(480px, 92vw); max-height: 84vh; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
   .st-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .st-days { display: flex; gap: 6px; flex-wrap: wrap; }

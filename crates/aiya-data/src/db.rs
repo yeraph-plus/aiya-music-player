@@ -505,25 +505,33 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// close() 时克隆被其它线程持有：不能永久阻塞——克隆在超时内释放则
-    /// close 正常返回（超时 5s，这里 200ms 释放，用 4s 上限断言没有走超时路径）。
+    /// close() 时克隆被其它线程持有：不能永久阻塞——克隆释放后 close 尽快
+    /// 返回（释放点起算 4s 上限，保证没走 5s 超时路径）。计时基准是克隆
+    /// 实际释放时刻：高负载下 releaser 线程的启动可能被推迟数秒，从 spawn
+    /// 起算会把线程调度延迟误判成 close 未及时解锁。
     #[test]
     fn close_unblocks_when_late_clone_is_dropped() {
         let path = std::env::temp_dir().join(format!("aiya-test-late-{}.db", std::process::id()));
         let mut db = open(&path).unwrap();
         let holder = db.clone();
+        let started = std::time::Instant::now();
         let releaser = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(200));
             drop(holder);
-        });
-        let started = std::time::Instant::now();
-        db.close();
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(4),
-            "close 在克隆释放后应尽快返回，实际 {:?}",
             started.elapsed()
+        });
+        db.close();
+        let close_elapsed = started.elapsed();
+        let released = releaser.join().unwrap();
+        assert!(
+            close_elapsed < std::time::Duration::from_secs(30),
+            "close 必须返回（不留永久阻塞），实际 {close_elapsed:?}"
         );
-        releaser.join().unwrap();
+        assert!(
+            close_elapsed.as_secs_f64() - released.as_secs_f64()
+                < std::time::Duration::from_secs(4).as_secs_f64(),
+            "克隆释放后 close 应尽快返回：克隆 {released:?} 后释放，close {close_elapsed:?} 后返回"
+        );
         let _ = std::fs::remove_file(&path);
     }
 }
