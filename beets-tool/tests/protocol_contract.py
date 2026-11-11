@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""协议契约测试（docs/33 §9 M3）：工具吐出的**每一行**都必须符合 v2 schema。
+"""协议契约测试：工具吐出的**每一行**都必须符合 v2 schema。
 
 三件事，缺一不可：
 
@@ -312,8 +312,8 @@ for raw in lines2:
         terminals.setdefault(obj["session"], []).append(obj["type"])
 
 assert "cancelAck" in types2, types2
-# 12 个请求 × 每个必须**恰好一个**终态。以前冒烟里的写法是"整批只许一个"，
-# 那在多个请求排队时是错的：取消一到，每个排队中的请求各自收尾成 cancelled。
+# 12 个请求 × 每个必须**恰好一个**终态。"整批只许一个终态"的口径是不对的：
+# 取消一到，每个排队中的请求各自收尾成 cancelled——所以按请求逐个断言。
 missing = [i for i in range(12) if f"app_{20 + i:02d}" not in terminals]
 assert not missing, f"这些请求没有终态事件（会话会卡住）：{missing}"
 multi = {k: v for k, v in terminals.items() if len(v) != 1}

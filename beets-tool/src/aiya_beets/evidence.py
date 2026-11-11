@@ -1,9 +1,9 @@
 """候选证据分层（v2）：给每个候选一个"为什么推荐它"的机器可判层。
 
-分层规则借鉴 beets-web-manager 的 ADR 0002/0007（docs/41 §3.5），自强到弱：
+分层规则借鉴 beets-web-manager，自强到弱：
 `recordingId > metadataSlot > releaseGroup > similarity`。
 
-三条从对方踩坑里学来的纪律：
+三条纪律（同类实现验证过的教训）：
 
 1. 标题归一化**版本保持**——不剥 ``(Live)`` / remaster / ``feat.`` 括注。
    剥了的话 "Song (Live 2019)" 与错歌 "Song" 归一同形，错歌也能拿满分；

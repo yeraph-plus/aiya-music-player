@@ -117,7 +117,7 @@ def _tracked_plugins(enabled: list[str]) -> list[str]:
     """要上报的插件 = config 里启用的 ∪ `settings.json` 里勾过的。
 
     为什么必须并上后者：**缺外部工具的插件会被 `cfg` 从 `plugins:` 里剔掉**
-    （写了 beets 就整个起不来，docs/53 §1.1）。只看 config 的话，它会在状态里
+    （写了 beets 就整个起不来）。只看 config 的话，它会在状态里
     凭空消失——用户刚勾的 replaygain 不见了，而真正的原因（缺 ffmpeg）一个字
     都看不到。并上之后它照旧出现在 `pluginHealth` 里，带 `enabled: false` 与
     `missing: ["ffmpeg"]`，那才是能指导用户下一步的信息。

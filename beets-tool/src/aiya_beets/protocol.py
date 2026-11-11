@@ -1,6 +1,6 @@
 """协议常量与信封构造。
 
-**这是本仓库的契约真源**（docs/33 §4）：命令名、事件名、错误码都在这里定义，
+**这是本仓库的契约真源**：命令名、事件名、错误码都在这里定义，
 播放器镜像一份 schema（`protocol/aiya-beets-v2.json`）做双侧校验。
 
 协议形态：NDJSON over stdio，一行一条。
@@ -10,7 +10,7 @@
 
 **冻结规则**：加可选字段不算破坏、加新命令/新事件不算破坏、改名算。
 改名必须同时改 `protocol/v2.schema.json` 并把 `PROTOCOL_VERSION` +1，
-否则契约测试会红（两侧各一条，见 docs/33 §9 M3）。
+否则契约测试会红（两侧各一条）。
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ MIN_CLIENT = PROTOCOL_VERSION
 # 改了 schema 忘了改这里？`tests/protocol_contract.py` 会红（它手上真有文件）。
 SCHEMA_SHA256 = "a55c22f5fc59d65bd36edffb67791fb7c21c0443a65f1d73e8404f4f471bffbd"
 
-# 错误码（v1 冻结 10 个，v2 加 E_LIBRARY_BUSY）
+# 错误码（v2 冻结 11 个）
 #
 # 宿主按 code 分类给 UX，**不按 beets_message 文本匹配**——文本会随人改动。
 # 这张表是双向的：schema 里的枚举与本模块必须一字不差，
@@ -71,9 +71,9 @@ class ProtocolError(Exception):
     """带错误码的业务异常：命令内部直接抛，由 server 统一转成信封。
 
     为什么需要它：`move_items` 的三种拒绝理由（无库根 / 根不一致 / 根不存在）
-    是**业务判定**，不是 bug。以前它们抛 `ValueError`，被顶层兜底成
-    `E_INTERNAL`——宿主只能显示"工具内部异常"，而这些恰恰是宿主该给
-    用户明确指引的场景（去配置扫描目录 / 别在未知位置搬文件）。
+    是**业务判定**，不是 bug。抛裸异常会被顶层兜底成 `E_INTERNAL`——宿主只能
+    显示"工具内部异常"，而这些恰恰是宿主该给用户明确指引的场景（去配置扫描
+    目录 / 别在未知位置搬文件）。
     """
 
     def __init__(self, code: str, stage: str, message: str, **extra):
@@ -102,7 +102,7 @@ def check_client(req: dict) -> None:
     不带 = 信任（两侧同仓同 tag 发版时总是一致的；显式携带是给"用户装了
     新版播放器、旧组件还留着"这种真实场景用的）。
 
-    **不做自动降级协商**（docs/33 §4.4）：不匹配就直接失败，并在 message 里
+    **不做自动降级协商**：不匹配就直接失败，并在 message 里
     说清该往哪边升。协商会产生"一半功能能用"的模糊状态，比失败更难排查。
     """
     raw = req.get("clientProtocol")

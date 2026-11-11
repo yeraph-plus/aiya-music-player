@@ -1,6 +1,6 @@
-"""让 `beets-xtractor` 在 beets 2.14 上真能跑（docs/54 §3）。
+"""让 `beets-xtractor` 在 beets 2.14 上真能跑。
 
-## 为什么要打补丁（docs/50 §3 实测）
+## 为什么要打补丁
 
 `beets-xtractor 0.4.2` 的 `command.py::_get_input_path_for_item` 取的是
 `item.get("path")` —— beets 2.14 起那是**相对曲库根**的字节串：
@@ -12,7 +12,7 @@
 日志打一行就跳过（外层 `_run_analysis` 把 `FileNotFoundError` 吞掉，退出码 0）。
 症状是「插件装好了、跑完了、bpm 一列全空」——最难查的那一类。
 
-那个包 2024 年之后没再发版（0.4.2 是最后一版），所以修法只能是宿主侧
+那个包上游已停止发版（0.4.2 是最后一版），所以修法只能是宿主侧
 monkeypatch：**不改第三方文件**，装多少份、装到哪都不打架。
 
 ## 为什么不自己写一个插件
@@ -26,9 +26,9 @@ monkeypatch：**不改第三方文件**，装多少份、装到哪都不打架�
 
 提取器必须是**带 Gaia2 的构建**：没有它，配了 svm_models 会
 `Identifier 'GaiaTransform' not found in registry` 然后**退出 1、一个 json 都
-不产出**（docs/50 §2.5 的踩坑记录）。catalog 两个平台都满足这一前提：win 走
-brendanerofeev 的 gaia-win64 社区构建（docs/54），linux 走 MTG essentia-builds
-的 manylinux 构建（docs/67），12 件 SVM 模型按提取器同级的 models/ 解析成
+不产出**。catalog 两个平台都满足这一前提：win 走
+brendanerofeev 的 gaia-win64 社区构建，linux 走 MTG essentia-builds
+的 manylinux 构建，12 件 SVM 模型按提取器同级的 models/ 解析成
 绝对路径。高档位下 danceability / mood 等 SVM 特征由此产出。
 """
 
@@ -50,10 +50,9 @@ class XtractorError(Exception):
 def _input_path(self, item) -> str:
     """用 `library.directory` 拼回绝对路径，而不是直接用 `item.path`。
 
-    ## 实测订正（docs/50 §3 记错了一半）
+    ## 实测（beets 2.14.1，索引家 `directory` 指向曲库根）
 
-    docs/50 当时写的是"`item.path` 是绝对、`item.get('path')` 是相对"。本轮实测
-    （beets 2.14.1，索引家 `directory` 指向曲库根）：**`item.path` 也是相对**——
+    **`item.path` 也是相对**——
 
         item.path        → b'中音测试 440Hz.wav'
         lib.directory    → 'D:\\MUSIC_Player\\test-music'

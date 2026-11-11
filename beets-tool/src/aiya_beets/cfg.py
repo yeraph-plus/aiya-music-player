@@ -1,14 +1,14 @@
 """配置生成：`config.yaml` 长什么样、放在哪，全归这里。
 
-## 为什么这属于工具侧（docs/33 §2.1）
+## 为什么这属于工具侧
 
 YAML 键名（`library` / `directory` / `plugins`）、单引号转义规则、哪个键可以省——
 这些都是 beets 的知识。播放器不该知道，否则 beets 改配置格式就得跟着改播放器。
-现在播放器只提供两个**事实**，通过环境变量传进来：
+播放器只提供**事实**，通过环境变量传进来：
 
     AIYA_BEETS_HOME       数据根（播放器给 `{app_data}/beets` 或 `{app_data}/beets-index`）
     AIYA_BEETS_SCAN_ROOT  用户的第一个扫描根（可选；没给就不写 directory）
-    AIYA_BEETS_PROFILE    `workbench`（默认，用户库）| `index`（索引库，docs/45 §4.1）
+    AIYA_BEETS_PROFILE    `workbench`（默认，用户库）| `index`（索引库）
 
 ## 两个刻意的"不"
 
@@ -18,44 +18,37 @@ YAML 键名（`library` / `directory` / `plugins`）、单引号转义规则、�
    ——猜错等于把用户的文件 move 到他没预期的地方（`config['directory']` 恒有内置
    默认 `~/Music`，所以"不写"和"写默认"是两件事）。
 
-## 为什么 `directory` 是例外（2026-10-30 真机事故）
+## 为什么 `directory` 是例外
 
 它**不是用户偏好，是应用事实**：曲库根（`AIYA_BEETS_SCAN_ROOT`）与整理落点
-（`AIYA_BEETS_DEST`）由播放器决定，用户没有编辑入口。
+（`AIYA_BEETS_DEST`）由播放器决定，用户没有编辑入口。省略这一行时 beets 的
+`move/copy` 落到内置默认 `~/Music`，与界面下发的落点脱节——所以 `directory`
+单独走 [`_sync_directory`]：只改这一行（没有就插在 `library` 之后），其余行
+逐字节保留。契约面见 config_contract.py 的「workbench directory 外科式同步」。
 
-原实现把它也归进"写一次就不再碰"，于是：用户第一次进设置页时还没有曲库目录
-→ 生成 config 时省略 `directory` → **此后永远不补**。结果 `beets move/copy`
-用内置默认 `~/Music`，整理出来的文件全落到 `C:/Users/<me>/Music/Non-Album/…`，
-而界面上明明写着落点是 `D:/Music/整理`。实测撞到：两首歌被 copy 到
-`~/Music/Non-Album/`，落点目录是空的。
-
-所以 `directory` 单独走 [`_sync_directory`]：只改这一行（没有就插在 `library`
-之后），其余行逐字节保留。这也是 docs/49 §7.1「落点外科式修改」那条测试。
-
-## 索引家为什么反过来（docs/45 §6.1）
+## 索引家为什么反过来
 
 `index` 家的 config.yaml 是**生成的工件，不是用户配置**：它承载"永不写文件"这条
 安全前提（`import.write/copy/move: no` + `xtractor.write: no` + 插件白名单），
 而这几条全靠 beets 的默认值恰好不对——xtractor 的 `write` 默认就是 `yes`。
 所以这一侧：
 
-* `directory` 指向**曲库根**（docs/49）——索引家是"用户曲库的只读镜像"，分析对象
+* `directory` 指向**曲库根**——索引家是"用户曲库的只读镜像"，分析对象
   就是曲库本身，不再另造一个占位目录。没给曲库根时退回 `{home}/scratch` 占位，
   因为"空目录"是它唯一需要满足的条件；
 * 每次启动都按模板重渲染（内容相同则不动盘），**渲染后自检**——断言关键键存在
   且为期望值，不依赖"默认值恰好对"；
-* 用户在 UI 里没有编辑入口（拍板 D），要改就改模板。
+* 用户在 UI 里没有编辑入口，要改就改模板。
 
-### 一条被推翻的旧结论（docs/49 §1.2）
+### `directory` 指向曲库根为什么安全
 
-这里原先写着"`directory` 指向扫描根会让库里存相对路径、`path::` 定位失效"，因此
-恒用占位目录。beets 2.14.1 实测：**磁盘上确实存相对**（`Album/x.flac`），但
-`Item.path` 这个 API 读出来是绝对（beets 用 `config.directory` 拼回去了），
-`PathQuery` 相对/绝对两种口径都能命中。所以只要走 Python API（本工具全部走 API），
-指向曲库根是安全的。兜底仍然留着：查询出口把绝对路径再 `join` 一次（幂等）。
+beets 2.14.1 实测：磁盘上确实存相对（`Album/x.flac`），但 `Item.path` 这个
+API 读出来是绝对（beets 用 `config.directory` 拼回去了），`PathQuery`
+相对/绝对两种口径都能命中。本工具全部走 Python API，指向曲库根是安全的。
+兜底仍然留着：查询出口把绝对路径再 `join` 一次（幂等）。
 
-代价是"口径变了"：老索引库的记录是绝对路径、新记录是相对。用户拍板**干净重建**，
-所以 `ensure_config` 用 `layout.json` 记下当前口径，变了就成对删库与增量状态。
+索引记录的路径口径由 `layout.json` 记下：口径变了就成对删库与增量状态
+（干净重建），`ensure_config` 负责认出"变了"。
 
 自检的意义不在"模板写对了没有"（那是同义反复），而在于**任意一份落盘的文本**
 都必须过闸：老版本写的、手改的、被别的工具动过的，过不去就重写。测试里的负向
@@ -96,7 +89,7 @@ INDEX_IMPORT_KEYS: tuple[tuple[str, str], ...] = (
     ("duplicate_action", "keep"),  # 默认 ask 会吞掉同标签同长的第二个文件
 )
 
-# 社区 x64 构建**（brendanerofeev/essentia gaia-win64-2，源起 regorxxx 的
+# 社区 x64 构建（brendanerofeev/essentia gaia-win64-2，源起 regorxxx 的
 # Actions 构建），highlevel 打开——danceability / mood 等 SVM 特征由此产出；
 # svm_models 指向与提取器同级的 models/ 目录（12 件 .history，随包/随装分发，
 # 渲染时解析成绝对路径——模型不是可执行文件，走 binaries 表的 models/ 子路径）。
@@ -194,7 +187,7 @@ def apply_env() -> None:
     config.yaml 写在自定义目录，而库文件仍落在 `%APPDATA%\\beets` —— 两处分裂，
     用户看到的是"配置生效了但库不对"）。
 
-    v2 起 `BEETSDIR` 不再"显式给的优先、其余不管"（docs/45 §6.3）：双家隔离靠
+    `BEETSDIR` 不走"显式给的优先、其余不管"：双家隔离靠
     `AIYA_BEETS_HOME` 切家，而锁文件、ops 登记簿、断点都按 `data_home()` 定位。
     外部环境里残留的 `BEETSDIR` 会让 **beets 写 A 家、锁建在 B 家**，隔离静默
     失效——所以两者都在且不等时直接抛 `ConfigConflict`，fail-fast 不猜。
@@ -216,9 +209,8 @@ def apply_env() -> None:
 def scan_root() -> str | None:
     """**曲库根**（播放器传的事实）：索引家拿它当分析对象，与落点无关。
 
-    索引家曾经与整理家共用这个变量，结果"改落点"会把索引范围一起改掉
-    （落点常常只是曲库里一个子目录）。docs/49 §3.2 把两者拆开：这个键永远
-    只表示曲库根，落点走 `dest_root()`。
+    这个键永远只表示曲库根；落点是另一个变量（`dest_root()`）。两者不分家的话，
+    "改落点"会把索引范围一起改掉（落点常常只是曲库里一个子目录）。
     """
     val = (os.environ.get("AIYA_BEETS_SCAN_ROOT") or "").strip()
     return os.path.expanduser(val) if val else None
@@ -227,7 +219,7 @@ def scan_root() -> str | None:
 def dest_root() -> str | None:
     """**整理落点**：copy/move 的目标根（整理家写进 `directory`）。
 
-    没给就回退曲库根——那是"整理输出"这个功能出现之前的行为，老配置零迁移。
+    没给就回退曲库根——未配置落点的部署仍可用，老配置零迁移。
     """
     val = (os.environ.get("AIYA_BEETS_DEST") or "").strip()
     return os.path.expanduser(val) if val else None
@@ -253,9 +245,9 @@ def scratch_dir(home: Path) -> Path:
 def index_dir(home: Path, root: str | None) -> Path:
     """索引家的 `directory`：曲库根（只读分析对象），没给根时退回占位目录。
 
-    为什么不再恒用占位目录（docs/49 §1.2 的实测）：索引家是"曲库的只读镜像"，
-    指到曲库根之后 beets 的 `path` 语义与用户的真实目录一致，查询结果拿去
-    `tracks.path_lower` 关联才对得上，不用先翻译一次。
+    为什么不恒用占位目录：索引家是"曲库的只读镜像"，指到曲库根之后 beets 的
+    `path` 语义与用户的真实目录一致，查询结果拿去 `tracks.path_lower` 关联
+    才对得上，不用先翻译一次。
     """
     return Path(root).expanduser() if root else scratch_dir(home)
 
@@ -271,8 +263,8 @@ def render_config(
     `workbench`：刻意只有三行——library、可选 directory、plugins。beets 的其余
     配置保持它自己的默认（用户的家，用户做主）。
 
-    `index`：除了上面三行，还钉死 `import` 段的写盘开关与每个插件的强制参数
-    （docs/45 §6.1）。`root` 在这一侧是**曲库根**（只读分析对象，docs/49）；
+    `index`：除了上面三行，还钉死 `import` 段的写盘开关与每个插件的强制参数。
+    `root` 在这一侧是**曲库根**（只读分析对象）；
     没给时退回占位目录。
     """
     if profile not in PROFILES:
@@ -302,7 +294,7 @@ def _render_workbench(home: Path, root: str | None, plugins: list[str] | None) -
 
 
 def _drop_unusable(names: list[str], where: str) -> list[str]:
-    """剔掉"外部依赖还缺"的插件，并在 stderr 说明剔了谁（docs/53 §1.1）。
+    """剔掉"外部依赖还缺"的插件，并在 stderr 说明剔了谁。
 
     为什么必须剔：`plugins: replaygain` 而 PATH 上没有 ffmpeg 时，beets 的**任何**
     子命令都起不来（插件在启动时初始化，`UserError` 直接抛）。写了却缺 exe，
@@ -359,7 +351,7 @@ def _sync_directory(text: str, root: str) -> str:
 
     但 `directory` 是例外——它是应用事实（曲库根 / 整理落点），而且必须跟着变，
     否则第一次没配目录时省掉的那一行永远补不回来，`move/copy` 就落到 beets
-    内置默认的 `~/Music`（真机事故，见模块头）。
+    内置默认的 `~/Music`（`directory` 单独同步的原因，见模块头）。
     """
     want = f"directory: {yaml_path(root)}"
     if _DIRECTORY_LINE.search(text):
@@ -535,7 +527,7 @@ def verify_config(
 
     `root` 是**期望的曲库根**（索引家的 `directory`）。传 None 表示"这一侧应该
     是占位目录"——即宿主没给曲库根的那种形态。闸必须能分辨两者，否则"目录被
-    改回 scratch"这种退化会静默通过（docs/49 §7.4 的负向验证正是这一条）。
+    改回 scratch"这种退化会静默通过（负向验证正是这一条）。
     """
     if profile != PROFILE_INDEX:
         return
@@ -669,7 +661,7 @@ def index_layout(home: Path, root: str | None) -> dict[str, str]:
 
     为什么要记：`directory` 换了，库里 `items.path` 的相对基准就换了——旧行是
     绝对、新行是相对，混存的后果不是报错，是"清旧步骤认不出自己写过什么"。
-    用户已拍板口径变化就干净重建（docs/49 §3.3），这里负责认出"变了"。
+    口径变化走干净重建，这里负责认出"变了"。
     """
     return {"directory": _norm(index_dir(home, root))}
 
@@ -705,7 +697,7 @@ def ensure_config(home: Path | None = None, prof: str | None = None) -> Path:
 
     * `workbench`：不存在才写（用户的家，写一次就不再碰）；
     * `index`：每次按模板重渲染（内容相同则不落盘），落盘后过自检。用户没有
-      编辑入口（拍板 D），这一侧"手改"只可能是外部污染，重写才是正确反应。
+      编辑入口，这一侧"手改"只可能是外部污染，重写才是正确反应。
       口径（`directory`）变化时**先成对删库**再写——旧记录的路径语义已经对不上。
 
     写入失败抛 OSError（调用方决定是警告还是致命）。

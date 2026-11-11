@@ -6,6 +6,10 @@
 ## 条目（新→旧）
 
 <!-- 每条一行：- YYYY-MM-DD · 代码位置 · 事实/取舍 · 来龙去脉（可选） -->
+- 2026-11-12 · beets-tool/src/aiya_beets/cli.py · 读配置的命令必须在 import beets 之前备好 config.yaml · beets 导入时即把配置读进内存、之后写盘对本次进程无效；备配置曾藏在 serve() 里，status 这类先起 beets 的命令对新家报的是 beets 默认家库路径，双家隔离一上来就错位。
+- 2026-11-12 · beets-tool/src/aiya_beets/runtime.py · stdout 独占给协议帧，sys.stdout 重指 stderr · beets 库迁移时会往 stdout 打 `Created database backup at: …` 裸行；靠客户端容错跳裸行存活的话，任何第三方 print 都能插进事件流并迫使宿主养解析兜底，故协议走原始句柄、print/warnings/traceback 全落 stderr（裸行容错仍保留，防进程外污染）。
+- 2026-11-12 · beets-tool/src/aiya_beets/{protocol.py,cmds/maintain.py} · 业务拒绝必须带自己的错误码回，不走裸异常 · 裸 ValueError 会被顶层兜成 E_INTERNAL，宿主只能显示"内部异常"，而无库根/根不一致/根不存在恰是用户可自助处置的场景。
+- 2026-11-12 · beets-tool/src/aiya_beets/cmds/query.py · fields 的 flexible 键读取失败不吞、整条报错 · 吞成空列表后"插件装了但字段列表为空"与"读不到"不可分辨，宁可报错也不拿空列表冒充答案。
 
 - 2026-11-09 · crates/aiya-host-core/src/{lib.rs,beets.rs}、src-tauri/src/lib.rs、beets-tool/tools/build_bundle.py、beets-tool/src/aiya_beets/xtractor.py、Dockerfile · beets 桥双平台（win 桌面 / linux 容器）静态审查修复批：canon_path 加 cfg!(windows) 分支（unix 分隔符不动 + 去尾 / + 小写，与 aiya-data path_key 同口径；子路径前缀判断按平台分隔符——此前 Windows 形态无条件下发，unix 上靠"双方同变"碰巧自洽，`/music/` 这类带尾斜杠输入归出来的形态不对）+ src-tauri 四份重复实现（canon_path/paths_overlap/path_conflicts_with_roots/path_within_roots）收编进 host-core（canon_path_tests 双平台各 8 条，unix 半边随 2026-11-11 的 CI linux-test job 首次上线）；beets.rs manifest 缺失兜底补 linux 入口 bin/python3；build_bundle zip 打包显式 unix 权限位 + create_system=3 钉扎（zip crate 的 unix_mode() 只在 create_system=3 才读 external_attr——Windows 宿主构建 linux 包丢 +x 的路堵死；Docker 内构建本是 POSIX，此举是"任何宿主构建都对"的加固）；xtractor.py 文档串订正（win-i686 无 Gaia 的 docs/50 时代描述 → 双平台 Gaia 现状，highlevel compute 1 + 12 件 SVM）；Dockerfile 运行层补 ffmpeg + libchromaprint-tools（catalog 载体 windows-only、bins 在 linux 不下载，web 端 replaygain/convert/embedart/alternatives/chroma 五插件此前 missing 且无自助补齐路径，现系统 PATH 经 exe_path→shutil.which 兜住）
 

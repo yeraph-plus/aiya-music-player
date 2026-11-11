@@ -1,14 +1,14 @@
 """A 轨道的卸载：`install` 的反向操作，**只删它装进去的东西**。
 
-## 边界（2026-10-30 拍板）
+## 边界
 
 安装脚本装了四类东西到 `--target`：venv 解释器、beets 本体、pip 依赖、
 用户勾选的插件。这四类都在同一个目录里，所以"反向操作"就是删这个目录。
 
 **数据不归它管**：`beets/`（整理家的 library.db / config / ops.jsonl）与
 `beets-index/`（分析库 / enrich.db）虽然也在应用数据目录内，但它们是用户
-资产、不是安装产物，且应用自己有清理入口。卸载组件顺手删掉 1850 首的分析
-结果，是那种"用户没让你做"的破坏。
+资产、不是安装产物，且应用自己有清理入口——删了它们等于销毁用户没让删的
+分析结果。
 
 ## 为什么删目录而不是 `pip uninstall`
 
@@ -22,7 +22,7 @@ venv 是私有的：删目录既彻底又不依赖 pip 的状态。逐包 uninst
     uninstall --target {data_root}/beets-tool --all    # 整层：venv + bundle + bin
 
 `--all` 是宿主用的形态：卸载要撤回"安装往这一层放的**全部**东西"，而
-bin/ 里的外置工具（docs/53）和 bundle/ 里的套件包都不在 venv 内。
+bin/ 里的外置工具和 bundle/ 里的套件包都不在 venv 内。
 不给 `--all` 就只认 venv——手工命令行误传 `{data_root}` 时不会连带删掉数据。
 
 ## 安全闸
@@ -57,8 +57,8 @@ from pathlib import Path
 def _venv_python(target: Path) -> Path:
     """venv 里的解释器路径（Windows 是 Scripts，其他平台是 bin）。
 
-    单轨化后 install.py 不再建 venv，这里只为识别**旧版 A 轨安装器**留下的
-    环境（有的 venv 缺 pyvenv.cfg，靠解释器落点兜一层）。
+    install.py 的现行形态不建 venv；此函数只用于识别既存 venv 的解释器落点
+    （有的 venv 缺 pyvenv.cfg，靠解释器落点兜一层）。
     """
     if os.name == "nt":
         return target / "Scripts" / "python.exe"

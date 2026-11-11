@@ -1,15 +1,11 @@
 """外部二进制：下载、校验、落到 `bin/`、以及把 `bin/` 塞进 PATH。
 
-## 为什么要有这个模块（docs/53 §1.1 实测）
+## 为什么要有这个模块
 
-默认插件清单里曾有 `replaygain`，它**写死**找 `ffmpeg`（`beetsplug/replaygain.py:289`，
-没有配置键）。而 PATH 上没有 ffmpeg 时，beets 不是"少了归一化"，是**任何子命令都起不来**：
-
-    beets.exceptions.UserError: replaygain initialization failed:
-    could not find ffmpeg at ffmpeg
-
-同一批命令把 ffmpeg 放进 PATH 就正常，`rg_track_gain` 落到 -2.6 / -2.4 / -3.1
-（3 个 wav 实测）。所以"外部二进制"从"提示用户自备"升级成"装的时候就带上"。
+beets 自带的 `replaygain` 插件**写死**找 `ffmpeg`（`beetsplug/replaygain.py:289`，
+没有配置键），而 PATH 上没有 ffmpeg 时，beets 不是"少了归一化"，是**任何子
+命令都起不来**（插件在启动时初始化，`UserError` 直接抛）。所以外部二进制必须
+在装的时候就带上，不能只"提示用户自备"。
 
 ## 三个二进制各怎么拿（都是实测过 200 的地址）
 
@@ -17,7 +13,7 @@
     streaming_extractor_music    data.metabrainz.org 直链 zip（AcousticBrainz 停服的留存）
     fpcalc                       GitHub acoustid/chromaprint v1.6.2 zip
 
-## 两个落点，一套查找（docs/54）
+## 两个落点，一套查找
 
     {data_root}/beets-tool/bin/              下载落点（用户点安装时下的）
     {data_root}/beets-tool/bundle/bin/       免配置包自带（构建时塞进去的）
@@ -104,7 +100,7 @@ def bin_dir(home: Path | None = None) -> Path | None:
 
 
 def bundle_bin_dir() -> Path | None:
-    """免配置包自带的 `bin/`：`{data_root}/beets-tool/bundle/bin`（docs/54）。
+    """免配置包自带的 `bin/`：`{data_root}/beets-tool/bundle/bin`。
 
     路径是怎么来的：宿主把套件包展开到 `{data_root}/beets-tool/bundle`
     （`beets.rs::install_via_bundle`），包里若有 `bin/` 就落在下面。它与我们
@@ -201,8 +197,8 @@ def check(names: list[str] | None = None) -> list[dict]:
         }
         if path is not None:
             # 用 _probe_ok 而不是裸 probe：DLL/模型这类非可执行条目没法"跑一次"，
-            # 在即算就绪（与 install/ensure 同一语义）。此前这里裸 probe，把
-            # 包内所有模型报成 usable=false → missing，套件包自检永远过不去。
+            # 在即算就绪（与 install/ensure 同一语义）；裸 probe 会把包内所有
+            # 模型报成 usable=false → missing，套件包自检永远过不去。
             ok, version = _probe_ok(path, spec)
             row["version"] = version
             row["usable"] = ok
@@ -406,7 +402,7 @@ def _probe_ok(path: Path, spec: BinarySpec) -> tuple[bool, str | None]:
     """落盘体检：.exe 跑一次 probe 参数；DLL / 模型等非可执行文件没法"跑一次"
     ——完整性由下载侧的 sha256 钉扎保证，文件在即算就绪。
 
-    linux 轨（docs/67 转正清单）：`.exe` 后缀是 Windows 口径。linux 下提取器
+    linux 轨：`.exe` 后缀是 Windows 口径。linux 下提取器
     是无后缀可执行文件，照样跑 probe；`.history` 是数据（模型），维持
     "文件在即就绪"；`.so` 也跑不了（共享库），同模型口径。"""
     import sys
@@ -421,9 +417,9 @@ def _probe_ok(path: Path, spec: BinarySpec) -> tuple[bool, str | None]:
 def ensure_loader_path() -> None:
     """linux：把免配置包 `bin/` 前插进 LD_LIBRARY_PATH（本进程改，子进程继承）。
 
-    提取器动态链接 Qt5（docs/67 ldd 实测）：win 靠"DLL 在 exe 旁边"的搜索
+    提取器动态链接 Qt5（ldd 实测）：win 靠"DLL 在 exe 旁边"的搜索
     规则天然成立，linux 必须显式路径。容器里 Qt5 由系统包提供时这一步是
-    no-op（bin/ 里没有 so，等 A 轨道"随包附 so"的载体化后自动生效）。
+    no-op（bin/ 里没有 so；"随包附 so"的载体形态落地后自动生效）。
     """
     import sys
 
@@ -471,7 +467,7 @@ def ensure(names: list[str], on_progress=None, carriers: dict[str, Path] | None 
 
 
 def stage(names: list[str], dest: Path, on_progress=None, carriers: dict[str, Path] | None = None) -> list[dict]:
-    """把一批二进制解到指定目录（免配置包构建用，见 docs/54）。
+    """把一批二进制解到指定目录（免配置包构建用）。
 
     与 `ensure` 的区别只有两点：落点由调用方给（包里的 `bin/`），以及**不跳过**
     ——打包要的是"每次都用当前 pin 的载体重新验一遍"，跳过会让一个上一次构建

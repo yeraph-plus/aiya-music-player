@@ -1,10 +1,10 @@
-"""插件市场（白名单版，docs/40 §3 拍板收敛）：目录 + 安装。
+"""插件市场（白名单制）：目录 + 安装。
 
-## 拍板范围（2026-10-28 用户确认）
+## 范围（既定口径）
 
 不做全量市场。**只收录调研过的有用插件**（MARKET_CATALOG 白名单），
 项目内只集成"把插件装进当前运行环境"的 pip 命令——启停仍走 config.yaml
-（cfg.render_config，播放器不知道 YAML 语法，docs/33 P1）。
+（cfg.render_config，播放器不知道 YAML 语法）。
 
 ## 环境兼容（uv / venv / 系统 Python）
 
@@ -126,8 +126,8 @@ def install_plugin(req_id: int, name: str, emit, cancel_gen, gen: int) -> None:
             protocol.E_INTERNAL, "pluginInstall", f"failed to start the installer: {e}"
         ) from e
 
-    # v2 积弊修复：取消必须能杀掉 pip。旧实现阻塞在 `for line in proc.stdout` 上，cancel 检查排在 proc.wait() 之后——卡死的 pip
-    # 让"取消"永远无效。现在输出走泵线程 + 队列，主循环 0.5s 轮询一次取消代数，到点 kill+wait。
+    # 取消必须能杀掉 pip：输出走泵线程 + 队列，主循环 0.5s 轮询一次取消代数，到点 kill+wait——
+    # cancel 检查若排在 proc.wait() 之后，卡死的 pip 会让"取消"永远无效。
     assert proc.stdout is not None
     lines: "queue.Queue[str | None]" = queue.Queue()
 

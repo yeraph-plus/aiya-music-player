@@ -1,7 +1,7 @@
 """beets 库访问的公共部分：字段口径、库打开、文件扫描分组、配置库根。
 
 这里的每个函数都在**复刻 beets CLI 的判定逻辑**，注释里标了对应位置——
-升 beets 版本时必须照着比对（见 docs/31 的固定调用命令清单）。
+升 beets 版本时必须用固定的 beets 调用命令清单逐条比对。
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ def open_library(directory: str | None = None):
     （beets/ui/__init__.py:857），sidecar 照做，否则 move/copy 会写进用户的
     真实 Music 文件夹。
 
-    `directory` = 显式指定的目标根（批 D 的 move_items 用宿主传的扫描根）；
+    `directory` = 显式指定的目标根（move_items 用宿主传的扫描根）；
     None 时沿用 config 的 directory（`~/Music` 兜底）。
     """
     from beets import config as beets_config
@@ -41,9 +41,9 @@ def item_abs_path(lib, item) -> str:
     """item 的**绝对**路径。幂等：已经是绝对就原样返回（只做 normpath 归一）。
 
     beets 把 `items.path` 存成**相对 `library.directory`**（文件在该目录内时），
-    API 通常已经拼回绝对——但那是实现细节，不是契约（docs/49 §1.2 的实测就
-    踩在这个细节上）。所有出口（查询 / 导入预览）都过这一道，理由不是"现在会坏"，
-    而是"哪天它变了，症状是全部曲目集体变未入库，且零报错"。
+    API 通常已经拼回绝对——但那是实现细节，不是契约。所有出口（查询 / 导入预览）
+    都过这一道，理由不是"现在会坏"，而是"哪天它变了，症状是全部曲目集体变
+    未入库，且零报错"。
     """
     raw = item.path
     if isinstance(raw, bytes):

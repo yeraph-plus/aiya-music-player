@@ -1,24 +1,24 @@
-"""索引增强三段式：清旧 → 补登 → 分析（docs/45 §4.2/§4.3）。
+"""索引增强三段式：清旧 → 补登 → 分析。
 
 ## 为什么是"用户手动装 beets 之后才可能跑"的一段
 
-beets 与 Essentia 都不进发布包（2026-10-30 拍板）：装不装是用户的选择，
+beets 与 Essentia 都不进发布包（既定边界）：装不装是用户的选择，
 所以这条链路**必须能整体不存在**——没装 beets 时 `serve` 早就回了
 `E_NOT_INSTALLED`，宿主把它当"索引能力不可用"，其余功能零影响。
 
 ## 三段为什么是这个顺序
 
-docs/45 §4.3 的原始顺序是 补登 → 清旧 → 分析，那会把文件从库里删掉再指望
+顺序不能反：先补登后清旧，等于把文件从库里删掉再指望
 它自己回来。正确的因果是：
 
 1. **清旧**（仅 `force`）：把清单里的项从库里摘掉。字段随之消失，插件下次
    才会重新产出。
 2. **补登**：把清单重新导进来。被摘掉的回到库里，本来就不在库的第一次进来。
    已在库且没被摘的，`-I` 让它们**重新走一遍 import 流程**（否则增量会直接
-   跳过，插件根本不跑——实测 docs/45 §3.4）。
+   跳过，插件根本不跑）。
 3. **分析**：跑源命令，逐个 (文件, 源) 回吐。
 
-## 与宿主的分工（边界铁律，docs/44 §9.1）
+## 与宿主的分工（边界铁律）
 
 本模块**只产出数据**，绝不往应用 DB 写行、也绝不写音频文件。`enrichItem`
 的消费者是宿主进程，它持自己的扫描互斥去落库。理由三条：边界门禁、宿主
@@ -98,8 +98,8 @@ SOURCES: tuple[SourceSpec, ...] = (
 #
 # **7 个 mood_* 概率必须一起给**：宿主拿它们做 argmax 得到单列 `mood_label`
 # 只给 `mood_mirex` 的话，宿主那半边（提升列、按情绪筛选）
-# 在假源上永远是空的——不是"没数据"，是"假源没喂到该喂的地方"，批 4 的
-# 情绪筛选就没法在没有 Essentia 的机器上验。
+# 在假源上永远是空的——不是"没数据"，是"假源没喂到该喂的地方"，情绪筛选就
+# 没法在没有 Essentia 的机器上验。
 _MOOD_CLASSES = (
     "mood_happy", "mood_sad", "mood_relaxed", "mood_aggressive",
     "mood_party", "mood_acoustic", "mood_electronic",
@@ -218,7 +218,7 @@ def _probe_fields(path: str) -> dict:
 
 
 def index_import(req_id: int, root: str | None, gen: int) -> None:
-    """**只读入库**：把曲库根整批登记进索引家，不做任何分析（docs/49 §3.8）。
+    """**只读入库**：把曲库根整批登记进索引家，不做任何分析。
 
     为什么单独一条命令，而不是"让 `enrich` 的 want 为空"：`enrich` 里
     `want` 缺省的含义是"用这个家**已接线的源**"，与"我只要入库"是两件事。
@@ -388,7 +388,7 @@ def _index_by_path(lib) -> dict[str, object]:
     """一次全表扫描建 path → item 索引。
 
     为什么不用 `lib.items(query)` 逐路径查：`path:` 匹配是**子串**语义，
-    会连带命中同名前缀的其它文件（实测 docs/45 §3.6）。要精确只能靠
+    会连带命中同名前缀的其它文件。要精确只能靠
     `path::` 正则 + 转义，拼错一处就是静默 0 命中。索引一次更稳。
     """
     out: dict[str, object] = {}
@@ -403,7 +403,7 @@ def _detach(lib, paths: list[str]) -> None:
     用 `item.remove()` 而不是 `lib.remove(item)`：后者是 beets 1.x 的 API，
     2.x 已经删了（方法挂在模型上）。写错的结果不是报错而是**静默无效**
     ——`AttributeError` 被下面的 except 吞掉，`force` 看起来跑了、其实没摘，
-    过期文件永远不会被重算。批 2 就是被这条咬过一次。
+    过期文件永远不会被重算。
     """
     by_path = _index_by_path(lib)
     for p in paths:
@@ -418,7 +418,7 @@ def _detach(lib, paths: list[str]) -> None:
 
 def _apply_probe(item) -> tuple[str, dict]:
     """自测源：写 flexible 字段并回读。回读是刻意的——`status` 只认字段真出现，
-    不认"我以为我写了"（真实源的教训见 docs/45 §3.7）。"""
+    不认"我以为我写了"。"""
     for k, v in _probe_fields(item.path.decode("utf-8", "replace")).items():
         item[k] = v
     item.store()
@@ -431,7 +431,7 @@ def _apply_probe(item) -> tuple[str, dict]:
 
 
 def _extract_fields(path: str, exe: str, profile: str, out_json: str) -> dict:
-    """跑一次提取器并把 JSON 映射成 enrich 字段（批 5 的核心映射）。
+    """跑一次提取器并把 JSON 映射成 enrich 字段。
 
     映射口径（Essentia/AB 标准输出形制，CI 冒烟日志为首个实证点）：
     - bpm ← rhythm.bpm；average_loudness ← lowlevel.average_loudness
@@ -610,7 +610,7 @@ def enrich(req_id: int, paths: list[str], want, force: bool, gen: int) -> None:
         "type": "enrichDone", "session": session,
         "total": sum(counts.values()),
         # 刻意叫 succeeded 而不是 ok：契约里"有 ok 就是应答信封"，
-        # 事件带一个名为 ok 的键会被客户端当信封解析（批 2 踩过）
+        # 事件带一个名为 ok 的键会被客户端当信封解析
         "succeeded": counts["ok"], "empty": counts["empty"],
         "failed": counts["failed"], "skipped": counts["skipped"],
         "sources": ran,

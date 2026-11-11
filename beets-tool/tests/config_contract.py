@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""双家隔离契约（docs/45 §4.1 / §6）：DB1 索引家与 DB2 用户库各过各的。
+"""双家隔离契约：DB1 索引家与 DB2 用户库各过各的。
 
 这一批没有任何"功能"，全部是**安全前提**，所以测试也照着门禁写：
 
@@ -105,7 +105,7 @@ def run_status(home: str, profile: str | None = None, **extra):
 
 
 def must_gate(text: str, home: str, why: str, root: str | None = None) -> None:
-    """断言这份文本过不了闸。`root` = 期望的曲库根（docs/49）。"""
+    """断言这份文本过不了闸。`root` = 期望的曲库根。"""
     try:
         cfg.verify_config(text, cfg.PROFILE_INDEX, Path(home), root)
     except cfg.ConfigGateError:
@@ -228,7 +228,7 @@ try:
 
     # 5b. 口径变化 → 成对删库与增量状态
     # 索引家的 directory 从占位目录改成曲库根时，旧记录（绝对路径）与新记录
-    # （相对）的语义基准不同。用户拍板"干净重建"，所以这里盯两件事：
+    # （相对）的语义基准不同。口径变化走干净重建，所以这里盯两件事：
     # 变了必须删干净（含 state.pickle，只删库会让 -R 记忆仍在 → 全跳过）；没变
     # 必须一个字节都不动（否则每次启动都重建，索引永远跑不完）。
     (idx_home / "library.db").write_bytes(b"fake-db")
@@ -325,9 +325,9 @@ try:
 
     # 9. workbench 的 directory 外科式同步
     #
-    # 守的是一个真机事故：第一次生成 config 时还没有曲库目录，`directory` 行
-    # 被省略；此后永远不补 → beets 的 move/copy 用内置默认 ~/Music，
-    # 整理出来的文件落到 C:\Users\<me>\Music\Non-Album\，而界面写着 D:\Music\整理。
+    # 守的是 cfg 模块头的「directory 是例外」约束：`directory` 行一旦被省略，
+    # beets 的 move/copy 就落到内置默认 ~/Music，与界面下发的落点脱节——
+    # 这一行必须跟着应用事实走，且永远补得回来。
     #
     # 同时守住"用户的家不能被覆盖"：其余行必须**逐字节**保留。
     USER_WB = (

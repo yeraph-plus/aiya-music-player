@@ -1,20 +1,20 @@
 """幂等操作登记簿（v2）：``{dataHome}/ops.jsonl`` 追加式日志。
 
-两个职责（docs/41 §3.2/§6.3）：
+两个职责：
 
 1. **重放**：同 ``requestId`` + 同请求内容重入 → 回放上次的事件流（不含
    progress），不重执行；同键不同内容 → ``E_INVALID_ARG``。
    **只重放 done**：failed / cancelled 不重放——用户修完冲突的重跑必须
-   真执行，不能拿到上次的失败（A3.5 语义）。
-2. **审计**：所有库变更操作的时间线（who/when/what/outcome），未来
-   P1-5 任务注册表的数据层前身。
+   真执行，不能拿到上次的失败。
+2. **审计**：所有库变更操作的时间线（who/when/what/outcome），也是
+   未来任务注册表的数据层前身。
 
 为什么单实例下重放几乎不触发：宿主的会话槽已挡重复提交（第二个
 ``spawn_session`` 直接 ``Busy``）。重放防的是协议层残余——双开播放器、
 未来宿主加自动重试。**审计才是每天都在发生的事**：每次 apply/adopt/
 update/move/dump 都留一行，出问题有账可查。
 
-并发模型：一命令一进程（docs/33 §5），begin/finish 都在主循环线程；
+并发模型：一命令一进程，begin/finish 都在主循环线程；
 jsonl 追加 + 读时取最新（同 requestId 的 running 残留被后续覆盖）。
 dataHome 不可写 → 全部 fail-open（丢幂等不丢功能），写 stderr 留痕。
 """

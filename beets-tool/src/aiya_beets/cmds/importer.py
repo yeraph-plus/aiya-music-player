@@ -67,7 +67,7 @@ def candidate_payload(cid: str, match) -> dict:
         "fromScratch": bool(getattr(match, "from_scratch", False)),
         "extraItems": len(getattr(match, "extra_items", []) or []),
         "extraTracks": len(getattr(match, "extra_tracks", []) or []),
-        # v2：证据分层 + 人话依据（UI 显示"为什么推荐这个"；机器判定看 tier）
+        # v2：证据分层 + 人类可读依据（UI 显示"为什么推荐这个"；机器判定看 tier）
         "evidence": tier,
         "reasons": reasons,
         "album": album_meta(match.info),
@@ -84,7 +84,7 @@ def preview_import(req_id, paths: list[str], options: dict, gen: int) -> None:
     不写任何文件/库（B1 铁律）；匹配是网络操作（MusicBrainz），
     单组失败不中断整批（错误进事件，UI 可见）。
 
-    options.excludePaths：已导入排除表（docs/40 十三轮）。待整理目录固定后，
+    options.excludePaths：已导入排除表。待整理目录固定后，
     copy 应用会把原件留在 inbox——不排除的话下次整理会把同一批文件再导一遍
     （beets 库重复条目 → dump 同步 → 曲库出现离线重复行）。宿主记录成功
     应用的源路径并在这里过滤。大小写不敏感（Windows 路径）。

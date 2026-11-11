@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""索引增强 / 查询的冒烟（docs/45 §4.2）：真 beets + 真进程，走一遍全链路。
+"""索引增强 / 查询的冒烟：真 beets + 真进程，走一遍全链路。
 
 验的不是"函数返回对不对"，而是四件只有跑真进程才暴露的事：
 
 1. **协议形状**：`enrichItem` / `enrichDone` / `query` / `fields` 的每一行都过
    schema。手写 JSON 的单测发现不了 DTO 漂移——只有对着对面发的 schema 验才算。
-2. **文件不动**：整场跑完音频文件字节不变。"索引家永不写文件"是拍板前提，
+2. **文件不动**：整场跑完音频文件字节不变。"索引家永不写文件"是既定前提，
    靠代码自觉守不住，得有断言。
 3. **子进程不偷 stdin**：`enrich` 内部起 `beet import` 子进程，如果没把它的
    stdin 掐掉，它会跟主循环抢管道里的请求行——症状是"后面的请求凭空消失"。
@@ -65,7 +65,7 @@ def check(name, obj, label):
 
 
 # 隔离环境刻意走**真的 index 家**（AIYA_BEETS_PROFILE=index）而不是手写一份 config.yaml：索引家的模板里钉着 `write/copy/move: no` 和 `duplicate_action:
-# keep`，后者正是"同标签同长的第二个文件能不能进库"的开关——手写配置很容易漏，而漏了之后症状是"只导进去 1/6 个文件"，看起来像路径 bug。用真模板等于顺带验了 "批 1 的模板足够支撑批 2 的流程"。
+# keep`，后者正是"同标签同长的第二个文件能不能进库"的开关——手写配置很容易漏，而漏了之后症状是"只导进去 1/6 个文件"，看起来像路径 bug。用真模板等于顺带验了"模板足以支撑整套流程"。
 SRC_WAV = _resolve_test_music(3)
 WORK = tempfile.mkdtemp(prefix="aiya-enrich-")
 HOME = os.path.join(WORK, "home")
@@ -147,7 +147,7 @@ def classify(raw):
 
 PATHS = make_files()
 BEFORE = fingerprint(PATHS)
-# 批 5 起 xtractor 是真源：`fields` 里恒报 ready（"器能不能跑"三态不探 bins），真正的就绪判定在 enrich 请求时才做。这里探一次，供
+# xtractor 是真源：`fields` 里恒报 ready（"器能不能跑"三态不探 bins），真正的就绪判定在 enrich 请求时才做。这里探一次，供
 # [5] 分支断言用—— 开发机 bins 齐 → 走成功路；干净机 → 走"未就绪"拒绝路。两条路都合法。
 XTR_OK, XTR_WHY = xtractor_ready()
 print(f"[0] 环境就绪：{len(PATHS)} 个文件，库 {LIBDIR}，xtractor 就绪={XTR_OK}")
@@ -167,7 +167,7 @@ assert "title" in names and "bpm" in names, f"内置字段缺失，只有 {sorte
 assert all(f["source"] in ("builtin", "flexible") for f in fields_data["fields"])
 src_states = {s["name"]: s["state"] for s in fields_data["sources"]}
 assert src_states["probe"] == "ready", src_states
-# 批 5：xtractor 已接线，三态恒为 ready（缺 bins 不体现在这里，体现在
+# xtractor 已接线，三态恒为 ready（缺 bins 不体现在这里，体现在
 # enrich 请求的"未就绪"拒绝上——见 [5]）。
 assert src_states["xtractor"] == "ready", src_states
 assert src_states["lastgenre"] == "unwired", src_states
@@ -257,7 +257,7 @@ assert all("title" in it["fields"] and "bpm" in it["fields"] for it in resps[3][
 assert resps[4]["total"] == len(PATHS), f"数值 range 应全命中：{resps[4]['total']}"
 assert resps[5]["total"] == 0, (
     "原生语法对未注册类型的 flexible 字段本应 0 命中；若这里变了，"
-    "说明 beets 的类型注册行为改了，docs/45 §3.3 的结论要重写"
+    "说明 beets 的类型注册行为改了，验收口径要与归档结论同步重写"
 )
 assert codes.get(6) == P.E_INVALID_ARG, codes
 assert codes.get(7) == P.E_INVALID_ARG, codes
@@ -352,7 +352,7 @@ assert all(v is None for v in marks_after.values()), (
 )
 print(f"[4] force 幂等 OK：{done2['succeeded']} 条 ok / {done2['skipped']} 条 skipped")
 
-# 场景 5：未知源 / 空路径 / xtractor 就绪门 want=["xtractor"] 在批 5 后是**合法源名**：就绪（bins 齐）→ 真跑一遍提取并返回 ok；未就绪 →
+# 场景 5：未知源 / 空路径 / xtractor 就绪门 want=["xtractor"] 是**合法源名**：就绪（bins 齐）→ 真跑一遍提取并返回 ok；未就绪 →
 # E_CONFIG 且带原因（环境问题用户可修，不是参数拼错）。两种结果都合规，按机器实况分支—— 但无论哪条路，"静默当成功"和"静默当失败"都不许出现。
 L5 = [
     json.dumps({"id": 10, "cmd": "enrich", "paths": PATHS[:1], "want": ["no_such_source"]}),

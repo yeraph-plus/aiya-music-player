@@ -135,7 +135,7 @@ def handle(req: dict, gen: int) -> dict | None:
                             bool(req.get("pretend")), gen)
         return None
 
-    # 插件市场（拍板白名单版；协议纯加法）
+    # 插件市场（白名单版；协议纯加法）
     if cmd == "plugin_catalog":
         return protocol.ok_response(req_id, {"catalog": market.catalog_payload()})
     if cmd == "plugin_install":
@@ -212,8 +212,8 @@ def serve() -> int:
         _not_installed("beets import raised SystemExit")
         return 0
 
-    # cancel 必须在工作循环运行时也能被接收：后台线程持续读 stdin。cancel 在 reader 线程**立即递增取消代数**——此前 cancel 行与其他请求一样进队列，而主循环正同步执行
-    # preview/apply（网络匹配+写文件），req_q.get() 根本轮不到它，取消永远看不到。队列元素是 (行, 入队时的取消代数)：排队期间被取消过的请求在派发时就能识别出来（旧实现的 CANCEL.clear() 会把这个取消抹掉）。
+    # cancel 必须在工作循环运行时也能被接收：后台线程持续读 stdin。cancel 在 reader 线程**立即递增取消代数**——若 cancel 行与其他请求一样进队列，而主循环正同步执行
+    # preview/apply（网络匹配+写文件），req_q.get() 根本轮不到它，取消永远看不到。队列元素是 (行, 入队时的取消代数)：排队期间被取消过的请求在派发时就能识别出来（派发前 clear 布尔标志的写法会把这个取消抹掉）。
     req_q: queue.Queue = queue.Queue()
 
     def _read_stdin() -> None:

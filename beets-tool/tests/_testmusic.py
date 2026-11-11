@@ -1,13 +1,8 @@
 # -*- coding: utf-8 -*-
 """三个 smoke 共用的测试音源解析：有真音源就用，没有就现场合成。
 
-为什么要有这个文件（2026-10-27 首次 CI 红的直接原因）：
-    三个测试原本都写死 `D:\\MUSIC_Player\\test-music`，那是开发机的绝对路径。
-    源码公开之后，CI runner 上既没有 D 盘也没有那三个 wav，`os.listdir` 直接
-    抛 FileNotFoundError，整个 beets job 在第一步就失败。本地永远复现不出来，
-    因为本地恰好有那个目录。
-
-解析顺序（先命中先返回，只取前 `count` 个）：
+音源路径不允许写死开发机的绝对路径：CI runner 上没有那个目录，`os.listdir`
+直接抛 FileNotFoundError。解析顺序（先命中先返回，只取前 `count` 个）：
     1. `$AIYA_TEST_MUSIC`
     2. `<repo>/test-music`
     3. `<repo>/../test-music`      ← 本仓开发机的布局（仓库与音源是兄弟目录）
@@ -26,7 +21,7 @@ import wave
 
 # 把 stdout/stderr 固定成 UTF-8：这三个脚本的 print 全是中文，而 Windows 上
 # **管道** stdout 默认按 locale 编码（英文系统就是 cp1252），第一个中文就
-# 复现方法：`PYTHONIOENCODING=cp1252 python beets-tool/tests/smoke_apply.py`）。
+# `UnicodeEncodeError`（复现方法：`PYTHONIOENCODING=cp1252 python beets-tool/tests/smoke_apply.py`）。
 # CI 里另设了 PYTHONUTF8 / PYTHONIOENCODING；这里兜一层，让本机任何 shell 都能跑。
 for _stream in (sys.stdout, sys.stderr):
     try:

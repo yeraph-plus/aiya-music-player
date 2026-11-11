@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""插件表契约（docs/51 §1）：`data/plugins.json` 是唯一事实源，五个消费方读同一份。
+"""插件表契约：`data/plugins.json` 是唯一事实源，五个消费方读同一份。
 
 这一批没有功能，全是**结构前提**。表写错不会报错，只会让某处静默少一个插件、
 或者把写盘插件放进索引家——所以门禁必须比使用方更严：
@@ -11,7 +11,7 @@
   [5] bundle 与外部二进制的关系：包里带着的插件，它的 exe 必须也随包发
   [6] 负向十三连：把表改坏（含 binaries 载体与引用），校验必须逐个变红
   [7] 双语奇偶：plugins-zh_Hans.json（存在时）除 binaries[].why/vendor 外
-      任何字段都必须与基名逐字段一致（docs/64 §3.3）
+      任何字段都必须与基名逐字段一致
 
 只读表，不写盘，不碰 beets 运行时。
 """
@@ -182,8 +182,8 @@ def validate(doc: dict) -> list[str]:
         else:
             # license 字段是**许可全文文件的 id**（third-party/<license>.txt 随包
             # 附全文，见 build_bundle.write_third_party）——含路径分隔符的整句
-            # 说明文字会把查找变成穿越路径（2026-11-05 实测：svm 条目塞了带 URL
-            # 的整句，构建在"缺许可全文"上静默退场）。出处细节归 vendor 字段。
+            # 说明文字会把查找变成穿越路径（实测：带 URL 的整句会让构建在
+            # "缺许可全文"上静默退场）。出处细节归 vendor 字段。
             if "/" in lic or "\\" in lic or lic in (".", ".."):
                 errs.append(f"{name}: license 必须是不含路径分隔符的短 id，实际 {lic!r}"
                             f"（出处说明写进 vendor，全文放 beets-tool/third-party/{lic}.txt）")
@@ -266,7 +266,7 @@ def validate(doc: dict) -> list[str]:
 
 
 def check_parity(base: dict, zh: dict) -> list[str]:
-    """双语奇偶校验（docs/64 §3.3）：zh 变体只许在展示字段（why/vendor）上不同。
+    """双语奇偶校验：zh 变体只许在展示字段（why/vendor）上不同。
 
     `plugins-zh_Hans.json` 是 UI 的中文变体（Rust 宿主 include_str! 两份、按
     应用设置语言二选一，变体缺失回退英文基名；py 侧永远只读基名）。两份表
@@ -452,8 +452,8 @@ def main() -> int:
         "sha256 写短了": lambda d: d["binaries"][0].update({"sha256": "abc123"}),
         "载体成员留空": lambda d: d["binaries"][0]["carrier"].update({"member": ""}),
         # platforms 是平台差的数据真源（bins 下不下、包带不带都看它），写坏
-        # 会让 linux 轨静默去拉 win 载体（2026-11-11 审查：这条分支此前
-        # 引用了未定义的 item_errors，坏值进来会 NameError 而不是变红）
+        # 会让 linux 轨静默去拉 win 载体（这条分支本身也必须有负向覆盖：
+        # 校验逻辑坏掉时坏值会静默通过而不是变红）
         "platforms 写了未知平台": lambda d: next(
             b for b in d["binaries"] if b["name"] == "ffmpeg"
         ).update({"platforms": ["windows", "macos"]}),

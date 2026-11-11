@@ -1,6 +1,6 @@
 """插件能力：一份 JSON 表 + 三态自检 + 市场目录。
 
-## 为什么需要三态（docs/31 P0-1）
+## 为什么需要三态
 
 `config['plugins']` 是**愿望清单**：写着 `lyrics` 不等于 lyrics 能用。
 实测（beets 2.14.1）：`plugins.load_plugins()` 对插件导入异常**只写日志、
@@ -16,14 +16,13 @@
 sys.modules 会留下半成品，重试行为不可预测；而且导入有注册钩子副作用。
 用 `importlib.util.find_spec` 只看"包在不在"，零副作用。
 
-## 为什么表在 JSON 里（docs/51 §1）
+## 为什么表在 JSON 里
 
-这张表原本有三份硬编码：`MARKET_CATALOG`（市场目录 12 条）、
-`DEFAULT_PLUGINS`（首发 6 条）、`INDEX_PLUGINS`（索引家白名单 3 条），
-外加 `env.REQUIRED_EXTRAS` 一处人工说明。同一件事写四遍，必然漂——
+插件、二进制、市场目录的清单如果散在代码里（市场目录、默认清单、索引家
+白名单、依赖说明各一份），同一件事写四遍必然漂——
 而且 `install.py` 与 `build_bundle.py` 各自不知道对方装了哪些包。
 
-现在唯一事实源是 `data/plugins.json`，五个消费方读同一份字节：
+唯一事实源是 `data/plugins.json`，五个消费方读同一份字节：
 
     plugins.py         → 三个派生视图（本模块）
     install.py         → --plugins a,b 拼 pip 命令
@@ -32,8 +31,8 @@ sys.modules 会留下半成品，重试行为不可预测；而且导入有注�
     cfg.py             → 索引家白名单的强制参数与结构拒绝
 
 读取用 `importlib.resources` 而不是 `Path(__file__)`：`.pyz` 是 zip，
-`Path(__file__).parent/'data'` 在 zip 里 `is_file()` 恒 False
-（这就是 A 轨道以前"缺少依赖清单"的真因，docs/51 §0）。
+`Path(__file__).parent/'data'` 在 zip 里 `is_file()` 恒 False——包形态下
+那条路读不到数据文件。
 """
 
 from __future__ import annotations
@@ -59,7 +58,7 @@ class PluginSpec:
 
 @dataclass(frozen=True)
 class MarketSpec:
-    """市场目录项（docs/40 §3 拍板：白名单，不做全量）。
+    """市场目录项（白名单制，不做全量）。
 
     `packages` 为空 = 不需要额外 pip 包（要么随 beets 内置，要么依赖已在
     `requirements.lock` 里，比如 fetchart 要的 requests）。UI 的「安装」按钮
@@ -80,7 +79,7 @@ class MarketSpec:
 
 @dataclass(frozen=True)
 class BinarySpec:
-    """一个外部二进制：从哪拿、多大、什么哈希、落到 bin/ 的什么名字（docs/53）。
+    """一个外部二进制：从哪拿、多大、什么哈希、落到 bin/ 的什么名字。
 
     ## 为什么"载体"和"落盘物"是两个东西
 
@@ -96,7 +95,7 @@ class BinarySpec:
     所以 `kind` 只有 `zip` 一种，不另设 `pypi-wheel`：多一个分支只多一处
     要维护的走法，换来的是同一件事的两种写法。
 
-    ## `bundle` 是什么意思（docs/54）
+    ## `bundle` 是什么意思
 
     `bundle=True` = **这个 exe 由我们随免配置包一起发**：构建时下载、校验、抽成员，
     塞进包里的 `bin/`，解压后用户机不用再下一次。它不改变"运行时怎么找"——
@@ -129,9 +128,9 @@ class BinarySpec:
 class IndexPluginSpec:
     """索引家（DB1）允许的插件：**名字 + 强制参数 + 写盘标志**三元组。
 
-    ## 为什么不能只有名字（docs/45 §6.2）
+    ## 为什么不能只有名字
 
-    白名单只写名字，挡不住"插件默认值自己写盘"这件事。实测（docs/45 §3.7）：
+    白名单只写名字，挡不住"插件默认值自己写盘"这件事。实测：
     `xtractor` 的 `write` 默认就是 `yes`，命中即 `item.try_write()` 把 bpm
     写回音频文件——一句话就破掉"索引家永不改文件"的前提，而且没有任何报错。
 
@@ -171,7 +170,7 @@ def catalog_text() -> str:
     return files("aiya_beets").joinpath("data/plugins.json").read_text(encoding="utf-8")
 
 
-# 运行平台（工具跑在哪，exe 依赖就按哪份清单算）。docs/67 转正：binaries 带
+# 运行平台（工具跑在哪，exe 依赖就按哪份清单算）。binaries 带
 # platforms 维度——不在运行平台的依赖（如 linux 的 Qt5）由宿主系统提供，
 # 不进 exe 清单、不进免配置包、bins 也不去下载它。
 RUNNING_OS = "windows" if os.name == "nt" else "linux"
@@ -183,7 +182,7 @@ _CATALOG_BINARIES_BY_NAME: dict[str, dict[str, Any]] = {
 
 
 def _exe_deps_of(item: dict[str, Any]) -> tuple[str, ...]:
-    """插件的 exe 依赖，按运行平台过滤（binaries.platforms，docs/67 转正）。
+    """插件的 exe 依赖，按运行平台过滤（binaries.platforms）。
 
     直读原始 catalog（本函数运行在模块装载期，binary()/BINARIES 还没成型）。
     表里没声明的名字保持原样（exe_path 对未知名字有裸查找分支）。"""
@@ -321,7 +320,7 @@ def binaries_for(names: list[str]) -> list[str]:
 def exe_path(dep: str) -> str | None:
     """这个外部依赖现在能不能找到：`bin/`（含包内 `bundle/bin/`）优先，其次 PATH。
 
-    为什么要先看本地目录：那些 exe 是我们自己下发的（docs/53），它不需要 PATH
+    为什么要先看本地目录：那些 exe 是我们自己下发的，它不需要 PATH
     注入就已经存在；而 `shutil.which` 只在 `cli.main` 注入之后才看得见它。
     两边都认，配置渲染与三态报告才能在建进程之前就得出正确结论。
 
@@ -362,7 +361,7 @@ def missing_binaries(deps: list[str]) -> list[str]:
 def usable_plugins(names: list[str]) -> list[str]:
     """把"外部依赖还缺"的插件从清单里剔掉，保留原顺序。
 
-    ## 为什么必须剔（docs/53 §1.1 实测）
+    ## 为什么必须剔
 
     `plugins: replaygain` 而 PATH 上没有 ffmpeg 时，beets **任何子命令**都
     起不来：插件在启动时初始化，`FatalReplayGainError` 被包成 `UserError`
@@ -507,7 +506,7 @@ def summary(report: list[dict]) -> dict:
     键名用 camelCase：线上所有其它字段都是 camelCase，这里单独用 snake
     会让宿主 DTO（`rename_all = "camelCase"`）解析失败——而失败路径是
     `from_value(...).ok()`，静默变成 None，UI 只是"什么都没显示"。
-    M3 冻结协议时统一，`tests/protocol_contract.py` 现在守着它。
+    字段命名是协议面口径的一部分，`tests/protocol_contract.py` 守着它。
     """
     counts = {"ready": 0, "missingDeps": 0, "unavailable": 0}
     for item in report:

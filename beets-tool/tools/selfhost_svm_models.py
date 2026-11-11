@@ -4,16 +4,13 @@
 ## 为什么存在
 
 beets-xtractor 的高层特征（danceability / mood_* 等 12 件 SVM 模型）来自
-essentia.upf.edu 的 beta5 归档——本机实测 ~17KB/s 且频繁断流，直接把慢源
-转嫁给每一次插件安装。所以模型重打包后自托管在本仓库的固定 release
-`svm-models-<VERSION>` 上，`plugins.json` 的 12 个 `svm-*` 条目从那里下载
-（快、稳、可钉 sha256）。
+essentia.upf.edu 的 beta5 归档——直链实测 ~17KB/s 且频繁断流。模型重打包后
+自托管在本仓库的固定 release `svm-models-<VERSION>` 上，`plugins.json` 的
+12 个 `svm-*` 条目从那里下载（快、稳、可钉 sha256）。
 
-## 与 GitHub Action 的关系
+## 何时跑
 
-原载体是 `.github/workflows/svm-models-selfhost.yml`（自托管 runner），
-2026-11-05 移入本维护链：模型不换版本就不需要跑，挂在 Actions 列表里是
-零维护噪音。方法与 Action 逐步一致；只在**换模型版本**时由维护者本机跑：
+模型不换版本就不需要跑；只在**换模型版本**时由维护者本机跑：
 
     python tools/selfhost_svm_models.py --publish
 
@@ -61,7 +58,7 @@ def sha256(path: Path) -> str:
 
 
 def download(url: str, dest: Path) -> None:
-    # 与 Action 的 curl --retry 3 同口径：慢源断流重试三次。
+    # 慢源断流重试三次（与 curl --retry 3 同口径）。
     for attempt in (1, 2, 3):
         try:
             with urllib.request.urlopen(url, timeout=120) as r, dest.open("wb") as f:
@@ -97,7 +94,7 @@ def collect_models(archive: Path, out: Path) -> list[Path]:
 def pack(out_dir: Path, dest: Path) -> None:
     with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
         for f in sorted(out_dir.iterdir()):
-            # zip 内路径 = ./<名>.history，与 Action 产物逐字节同构（entry 名对齐）
+            # zip 内路径 = ./<名>.history（entry 名对齐，重打包产物可逐字节比对）
             zf.write(f, f"{f.name}")
 
 

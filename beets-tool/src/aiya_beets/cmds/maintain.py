@@ -163,7 +163,7 @@ def update_library(req_id, pretend: bool, gen: int) -> None:
     第 2 条尤其重要：不做 mtime 预筛的话，万首库每次 update 都要把每个文件
     重新读一遍标签，和"什么都没变"的用户预期完全相反。
 
-    判定 1 的删除有两道护栏（发布前审查 P1-5）：beets CLI 的删除有交互确认，
+    判定 1 的删除有两道护栏：beets CLI 的删除有交互确认，
     协议这边是单向非交互、确认不了。可移动盘/网络盘没挂载时 exists 对全部
     条目返回假，点一次"刷新标签"就把整库行清零（文件还在，rg_track_gain、
     匹配过的标签、与播放器读模型的关联全丢）——库根不可访问、或缺失占比
@@ -329,7 +329,7 @@ def move_items(req_id, directory: str, pretend: bool, gen: int) -> None:
 
     session = f"move_{req_id:02d}"
     configured = configured_directory()
-    # 三种拒绝都是**业务判定**，必须带自己的码回（以前抛 ValueError 被顶层兜底成
+    # 三种拒绝都是**业务判定**，必须带自己的码回（裸 ValueError 会被顶层兜底成
     # E_INTERNAL，宿主只能显示"工具内部异常"——而这三条恰恰是用户能自己解决的事：去配扫描目录、别在未知位置搬文件）。
     if not configured:
         raise ProtocolError(

@@ -19,12 +19,12 @@ _CANCEL_STEP = 200
 
 
 def dump_items(req_id, gen: int) -> None:
-    """流式导出 beets 库 items（宿主读模型对齐用，docs/08 §5 读模型同步）。
+    """流式导出 beets 库 items（宿主读模型对齐用）。
 
     每行一个 item 事件（几万条也不膨胀内存）；最后 dumpDone 带总数。
 
-    v2 补了取消检查——此前是唯一没有 cancel 的流式命令，几万条的库上
-    "取消"按钮形同虚设。取消后宿主必须丢弃整份 dump：半份会被误当全量
+    流式命令逐段检查取消代数——几万条的库上没有取消检查的话，"取消"按钮
+    形同虚设。取消后宿主必须丢弃整份 dump：半份会被误当全量
     对账（宿主已按"没见到 dumpDone 就全弃"兜这个底）。
     """
     session = f"sync_{req_id:02d}"

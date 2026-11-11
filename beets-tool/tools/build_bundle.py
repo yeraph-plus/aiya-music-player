@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""构建 B 轨道发布物：便携套件包（`--platform windows|linux`，docs/67）。
+"""构建 B 轨道发布物：便携套件包（`--platform windows|linux`）。
 
 ## 它解决什么
 
@@ -11,10 +11,10 @@ python-build-standalone，提取器来自 CI artifact（`--extractor`），模�
 
 "免配置"的含义是解压即全功能：`plugins.json` 里标了 `bundle: true` 的插件
 （当前 lyrics / fetchart / mbsync / xtractor），它们的 pip 包已经躺在
-`site-packages` 里。以前打出来的包是「beets + 依赖，零插件」，用户装完还得联网
-pip 一次——那不是免配置，只是免装 Python。
+`site-packages` 里。只装 beets 不装插件依赖的包不是免配置——用户装完还得
+联网 pip 一次，那只是免装 Python。
 
-`binaries[].bundle: true` 的外部工具（当前只有 Essentia 提取器，docs/54）也会被
+`binaries[].bundle: true` 的外部工具（当前只有 Essentia 提取器）也会被
 下载、校验、抽出来塞进包里的 `bin/`：xtractor 没有那个 20MB 的 exe 就是**假开**
 （渲染配置时会把它从 `plugins:` 里剔掉）。所以"预置 xtractor"这件事，真正的
 工作在这一段。
@@ -30,7 +30,7 @@ pip 一次——那不是免配置，只是免装 Python。
 Python 官方的 embeddable 发行版用 `python3xx._pth` 列出搜索路径（全部相对
 解释器所在目录），`sys.prefix` 由 exe 位置推出 ⇒ 整个目录复制到任意路径都能跑。
 这与 venv 相反：venv 的 `pyvenv.cfg` 里 `home` 是**绝对路径硬指针**，换个位置
-就废（docs/29 批 C 实测，docs/33 §6.2）。
+就废——所以可重定位的运行时不能走 venv。
 
 ## 为什么 `_pth` 决定包放哪
 
@@ -39,12 +39,12 @@ Python 官方的 embeddable 发行版用 `python3xx._pth` 列出搜索路径（�
 落在 `_pth` 列出的目录里 —— 当前是 `Lib\\site-packages`。
 这也是本脚本不做"临时拼 sys.path"的原因：拼了在 embeddable 上根本不生效。
 
-## 为什么用 uv 装依赖，而不是 pip（docs/51 §3.2）
+## 为什么用 uv 装依赖，而不是 pip
 
 同一件事 uv 快一个量级，且**解析目标解释器是认真的**：`--python <embed>/python.exe`
 时它会去问那个解释器要 sysconfig，所以出来的是 cp314 的 wheel（实测
-`numpy-2.5.4` tag = `cp314-cp314-win_amd64`），而不是打包机上的 3.13。
-这正是"打出来的包到用户机 import 失败"这类事故的根因。
+`numpy-2.5.4` tag = `cp314-cp314-win_amd64`），而不是打包机上的 3.13——
+按打包机版本解析出来的包，到用户机 import 失败。
 
 不引入中间 venv：venv 的作用是"能运行"，而 embeddable 本身就能跑。
 中间建 venv 再拷 site-packages 只会多一次拷贝，并把 `pyvenv.cfg` 里那条
@@ -92,9 +92,8 @@ def _force_utf8_stdio() -> None:
     """把这个脚本自己的 stdout/stderr 切成 UTF-8。
 
     Windows 上**管道**里的 stdout 按 locale 编码（英文 runner 是 cp1252），
-    中文 print 直接 `UnicodeEncodeError` —— release 工作流实测崩在
-    `下载自带解释器 … →` 那句。`PYTHONUTF8` 环境变量只在解释器启动前有效，
-    脚本里设太晚（build_installer 以前那个 `os.environ.setdefault` 就是空操作）。
+    中文 print 直接 `UnicodeEncodeError`。`PYTHONUTF8` 环境变量只在解释器
+    启动前有效，脚本里设太晚，所以要在本进程里 reconfigure。
     """
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -106,8 +105,7 @@ def _force_utf8_stdio() -> None:
 def protocol_version() -> int:
     """协议版本从源码读，不手抄。
 
-    手抄过一次（3）——冻结成 v1 时忘了改这里，manifest 与 status 说的不是一个
-    数字。凡是"同一事实存两份"的地方都会漂，能算就别写。
+    manifest 与 status 必须说同一个数字：同一事实存两份就会漂，能算就别写。
     """
     from aiya_beets.protocol import PROTOCOL_VERSION
 
@@ -115,11 +113,7 @@ def protocol_version() -> int:
 
 
 def package_version() -> str:
-    """包版本同样从源码读。
-
-    以前这里是硬编码的 `VERSION = "0.1.0"`，而 `aiya_beets.__version__` 早就
-    是 0.2.0 —— 打出来的包在 manifest 里自称 0.1.0（docs/51 §0 实测）。
-    """
+    """包版本同样从源码读：manifest 与包内 `__version__` 必须是同一个数字。"""
     from aiya_beets import __version__
 
     return __version__
@@ -132,7 +126,7 @@ def _ignore(_dir: str, names: list[str]) -> set[str]:
 # 自带解释器的版本：固定而不是"取最新"。发布物的可复现性优先于拿到 patch 更新。
 # 解释器随免配置包分发给用户。哈希与 python.org 官方发布页逐字节核对过。
 EMBED_VERSION = "3.14.10"
-# 下载物的 sha256 钉扎（发布前审查 P2-7）：urlretrieve 无任何完整性校验，
+# 下载物的 sha256 钉扎：urlretrieve 无任何完整性校验，
 # python.org 换版/被劫持会让发布物漂移。官方页 https://www.python.org/downloads/release/python-31410/
 EMBED_SHA256 = "90905e64a840557d8c1bc4f5b74db3d7ee85e3ffb217611cac1c7813acea4159"
 EMBED_URL = (
@@ -141,7 +135,7 @@ EMBED_URL = (
 )
 RUNTIME_DEFAULT = TOOL / ".runtime" / f"python-{EMBED_VERSION}-embed-amd64"
 
-# Linux 轨（docs/67 §4 转正清单）：解释器换 python-build-standalone（标准 prefix
+# Linux 轨：解释器用 python-build-standalone（标准 prefix
 # 布局，bin/python3 + lib/python3.x，没有 Windows embeddable 的 _pth 机制）。
 # 版本与 win 包的 embeddable 同为 3.14.10；tag 与 sha 钉扎，%2B 是 URL 里
 # `+` 的编码。缓存优先用 .runtime-linux/ 下已下载的 tar.gz（离线重建）。
@@ -188,13 +182,11 @@ def ensure_runtime(
 ) -> None:
     """准备自带解释器目录（缺什么补什么，已存在就复用）。
 
-    这一步以前由播放器仓的 `tools/pack-beets-runtime.mjs` 干，M2 把它删了
-    （运行时不再随播放器发布）。但**B 轨道要能重建**，所以这份责任搬到这里：
-    下载官方 embeddable → 写 `_pth` → 装依赖。
+    B 轨道要能重建：下载官方 embeddable → 写 `_pth` → 装依赖。
 
     `_pth` 必须自己写：官方 embeddable 默认只列 `pythonXY.zip` 和 `.`，
     不含 `Lib/site-packages`，而 `_pth` 存在时 Python **忽略 PYTHONPATH**
-    ——包放哪都 import 不到（这个坑 M2 踩过一次，写进 README 了）。
+    ——包放哪都 import 不到。
     """
     if platform_name == "linux":
         # PBS install_only：解压根就是 prefix（bin/python3 + lib/python3.x）。
@@ -332,7 +324,7 @@ def install_deps(runtime: Path, extra: list[str], uv: str | None, platform_name:
     # `beetsplug/`，于是 `beets-xtractor` 的 `beetsplug/xtractor/` 永远进不去——
     # 构建日志一片绿（那些警告平时就在），只有最后一步的 import 自检会红，
     # 而且红得像是"包坏了"而不是"没装进去"。uv 的 `--target` 语义好一些，
-    # 但两条路走同一个实现更省心：空目录装 + 合并，天然幂等，也不会留旧版本。
+    # 但两条路走同一个实现更省心：空目录装 + 合并，天然幂等，也不会把过期包残留在 site-packages。
     staging = Path(tempfile.mkdtemp(prefix="aiya-deps-", dir=str(runtime.parent)))
     env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     try:
@@ -374,7 +366,7 @@ def bundle_binary_plan() -> list[str]:
     wanted = list(plugins.BUNDLE_BINARIES)
     need: list[str] = []
     for name in plugins.BUNDLE_PLUGINS:
-        # 平台过滤后的 exe 依赖（binaries.platforms，docs/67）：linux 上
+        # 平台过滤后的 exe 依赖（binaries.platforms）：linux 上
         # Qt5 由系统提供，不在 need/wanted 里
         for dep in plugins.binaries_for([name]):
             if dep not in need:
@@ -401,10 +393,10 @@ def stage_binaries(
     发出去（32 位 exe 靠 WoW64，构建机缺它就是一个"发出去才发现"的坑）。
 
     linux 轨的差异：提取器来自本地文件（CI artifact，`--extractor` 指定）——
-    它没有发布通道载体（docs/67：产物只进 artifact）；构建时改名成与 catalog
+    它没有发布通道载体（构建产物只进 artifact）；构建时改名成与 catalog
     exe 清单一致的 `streaming_extractor_music`（无 .exe 后缀），工具侧
     `exe_path` 按名字找，平台无关。Qt5 两个 so 不进包：容器路线由运行时层
-    apt 提供（docs/67 §4 的"随包附 so"留给 A 轨道载体化时再做）。
+    apt 提供。
     """
     if platform_name == "linux":
         want = [n for n in names if n != "streaming_extractor_music"]
@@ -500,7 +492,7 @@ def _license_file_id(spdx: str) -> str | None:
 
 
 def write_third_party(work: Path, staged: list[dict], bundle_name: str = "beets-portable-win-x64.zip") -> None:
-    """写清随包发布的第三方二进制来源与许可（docs/54）。
+    """写清随包发布的第三方二进制来源与许可。
 
     ## 为什么这条不是可选项
 
@@ -709,8 +701,7 @@ def main() -> int:
         print(f"包内 pip 自检失败：{pip.stderr[:400]}", file=sys.stderr)
         return 1
     # beets 本体必须真能 import：`aiya_beets version` 只打印常量、pip 自检
-    # 只碰 pip，两者都证不了 beets 在包里是好的——"带 beets 的包"曾在 beets
-    # 坏掉时通过全部自检（2026-11-11 测试面审查）。依赖装齐 ≠ 能导入。
+    # 只碰 pip，两者都证不了 beets 在包里是好的。依赖装齐 ≠ 能导入。
     beets = subprocess.run(
         [str(py_exe(work, platform_name)),
          "-c", "import beets; print(beets.__version__)"],

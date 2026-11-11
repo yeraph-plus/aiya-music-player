@@ -156,8 +156,8 @@ def main(argv: list[str] | None = None) -> int:
             argv += ["--carrier", item]
         return bins.main(argv)
 
-    # 读配置的命令必须在 import beets **之前**把 config.yaml 备好：beets 一导入就把配置读进内存，之后写的文件对它不生效。以前这一步藏在 serve() 里，于是 `status`
-    # 对新家（还没 config）报的是 beets 默认家的库路径——双家隔离一上来就报错位。现在统一在这里做，所有读命令看到的是同一份事实。
+    # 读配置的命令必须在 import beets **之前**把 config.yaml 备好：beets 一导入就把配置读进内存，之后写的文件对它不生效。
+    # 统一在这里做，所有读命令（包括 status）看到的是同一份事实——漏备的命令对新家（还没 config）报的是 beets 默认家的库路径，双家隔离一上来就错位。
     try:
         cfg.ensure_config(None, prof)
     except OSError as e:

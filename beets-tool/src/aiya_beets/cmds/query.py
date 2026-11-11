@@ -1,8 +1,8 @@
-"""索引查询与字段清单：`query` / `fields` 两条信封命令（docs/44 §5.1）。
+"""索引查询与字段清单：`query` / `fields` 两条信封命令。
 
 ## 两条命令为什么都不带 target
 
-"查哪个库"由**进程**的 `AIYA_BEETS_PROFILE` 决定（批 1 的双家隔离）。
+"查哪个库"由**进程**的 `AIYA_BEETS_PROFILE` 决定（双家隔离约束）。
 协议里再放一个 target 字段就是第二个真源：宿主传 `index`、进程跑在
 `workbench` 上时会静默查出另一个库的全部内容——这种错不会抛异常，
 只会让用户看见"索引里有几万首我没导过的歌"。
@@ -15,7 +15,7 @@ beets 的 `a..b` 范围比较只对在 `item_types` 里**注册过类型**的字
 第三方插件有没有记得 register 上，等于让"有没有数据"变成运气。
 
 `raw` 是保留的逃逸口，走 beets 自己的解析器——那边的语义就是 beets 的语义，
-包括上面这条限制。两者分工写在这里，免得以后有人"顺手统一"。
+包括上面这条限制。两者分工写在这里，防止以后被误统一。
 """
 
 from __future__ import annotations
@@ -243,8 +243,7 @@ def fields() -> dict:
         })
 
     lib = open_library()
-    # flexible 键只读 SQL：走 beets 的 API 要把全库 item 反序列化一遍，而这个命令只要"有哪些键"。只读连接，不会与写者抢锁。URI 用正斜杠：Windows 下 `file:D:\x\y.db` 的反斜杠会被当转义。失败**不吞**。曾经这里是 `except
-    # sqlite3.Error: flexible = []`，症状是 "插件明明装了、xtractor 也写出了 bpm，字段列表里却没有"——用户能看到的只有一个空列表，分不清是"没数据"还是"读不到"。宁可整条命令报错，也不要用空列表冒充一个答案。
+    # flexible 键只读 SQL：走 beets 的 API 要把全库 item 反序列化一遍，而这个命令只要"有哪些键"。只读连接，不会与写者抢锁。URI 用正斜杠：Windows 下 `file:D:\x\y.db` 的反斜杠会被当转义。失败**不吞**：吞成空列表的话，症状是 "插件明明装了、xtractor 也写出了 bpm，字段列表里却没有"——用户能看到的只有一个空列表，分不清是"没数据"还是"读不到"。宁可整条命令报错，也不要用空列表冒充一个答案。
     try:
         uri = f"file:{Path(str(lib.path)).as_posix()}?mode=ro"
         conn = sqlite3.connect(uri, uri=True, timeout=5)

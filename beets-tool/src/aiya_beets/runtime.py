@@ -10,8 +10,8 @@ import json
 import sys
 import threading
 
-# 取消代数（generation），不是布尔标志。为什么不能用一个 Event：宿主发 cancel 时可能"请求行已进管道、主循环还没派发" —— 旧实现每次派发前
-# CANCEL.clear()，于是刚置的取消被下一条请求抹掉，取消静默失效（表现为点了取消还在写标签）。改成自增代数后：请求入队时记下当时的代数；派发时比较"当前代数是否变过"，变过就说明自己在排队期间被取消过 → 直接跳过；工作循环里同样比较代数，变过就收尾发 cancelled。
+# 取消代数（generation），不是可复位的布尔 Event：宿主发 cancel 时可能"请求行已进管道、主循环还没派发"——
+# 若每次派发前 clear，刚置的取消会被下一条请求抹掉，取消静默失效（表现为点了取消还在写标签）。自增代数：请求入队时记下当时的代数；派发时比较"当前代数是否变过"，变过就说明自己在排队期间被取消过 → 直接跳过；工作循环里同样比较代数，变过就收尾发 cancelled。
 _CANCEL_GEN = 0
 _CANCEL_LOCK = threading.Lock()
 
@@ -38,7 +38,7 @@ def force_utf8_stdio() -> None:
 
     为什么必须显式设置：Windows 上 Python 对管道用**本地编码**（简中 = cp936），
     `json.dumps(..., ensure_ascii=False)` 出来的中文会以 GBK 字节写出，宿主按
-    UTF-8 读 → 非法字节 → 旧 reader 直接 break，整个会话无声死掉（用户看到的是
+    UTF-8 读 → 非法字节 → reader 直接 break，整个会话无声死掉（用户看到的是
     "导入没反应"）。ensure_ascii=True 能绕过，但会把路径/标题全变 \\uXXXX，
     日志与断点调试都失去可读性，所以选择在协议层钉编码。
 
@@ -98,12 +98,12 @@ _PROTO = None
 def open_protocol_stream() -> None:
     """把 stdout 独占给协议，第三方库的 print 赶去 stderr。
 
-    为什么必须这么做（v1 冻结时实测）：beets 2.14 在库迁移时会往 **stdout**
+    为什么必须这么做（beets 2.14 实测行为）：beets 在库迁移时会往 **stdout**
     打一行 `Created database backup at: ...`。协议第一条硬规则是"stdout 只
-    允许 JSON 行"——以前靠客户端容错跳过裸行活着，但那意味着任何第三方
-    print 都能在事件流中间插一条噪声，客户端还要为此养一个解析兜底。
+    允许 JSON 行"——靠客户端容错跳过裸行的话，任何第三方 print 都能在事件
+    流中间插一条噪声，客户端还要为此养一个解析兜底。
 
-    现在反过来：协议帧走 `_PROTO`（原始 stdout），`sys.stdout` 指向 stderr，
+    所以协议帧走 `_PROTO`（原始 stdout），`sys.stdout` 指向 stderr，
     于是 `print(...)`、`warnings`、traceback 全落到 stderr，stdout 干净。
     客户端的裸行容错**保留**——它防的是进程外的污染（父进程重定向、控制台
     代码页），不是我们自己的 bug。

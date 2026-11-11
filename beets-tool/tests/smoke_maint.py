@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""批 D 曲库维护四件套冒烟：adopt / update / duplicates / move。
+"""曲库维护四件套冒烟：adopt / update / duplicates / move。
 
 隔离运行：独立临时 BEETSDIR + 独立库目录，不碰 dev 库和真实 Music 目录。
 
