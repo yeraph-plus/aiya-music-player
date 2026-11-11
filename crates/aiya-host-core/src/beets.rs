@@ -2355,40 +2355,54 @@ mod tests {
     /// 子目录落点必须**真的生效**，不能静默回退成曲库根。
     ///
     /// 这条是回归测试：`beets_set_target` 已经放宽到接受子目录，而
-    /// `roots_for_tools` 里曾经还写着严格相等，于是"设置里存着 D:\Music\整理"
-    /// 会被判非法、实际用 D:\Music —— 文件倒进曲库根，用户看不出是哪一步错了。
+    /// `roots_for_tools` 里曾经还写着严格相等，于是「选了子目录当落点」被
+    /// 静默判为非法、回退成曲库根——文件倒进曲库根，用户看不出是哪一步错了。
+    /// 夹具按平台拆：落点判据走分隔符边界，盘符形态在 unix 上不是绝对路径。
     #[test]
     fn pick_dest_accepts_subdirectory() {
-        let roots = vec!["D:\\Music".to_string()];
-        assert_eq!(
-            pick_dest(Some("D:\\Music\\整理".to_string()), &roots),
-            Some("D:\\Music\\整理".to_string())
-        );
+        let (root, sub) = if cfg!(windows) {
+            ("D:\\Music".to_string(), "D:\\Music\\整理".to_string())
+        } else {
+            ("/music".to_string(), "/music/整理".to_string())
+        };
+        let roots = vec![root.clone()];
+        assert_eq!(pick_dest(Some(sub.clone()), &roots), Some(sub));
         // 等于根也合法
-        assert_eq!(
-            pick_dest(Some("D:\\Music".to_string()), &roots),
-            Some("D:\\Music".to_string())
-        );
+        assert_eq!(pick_dest(Some(root.clone()), &roots), Some(root));
     }
 
     /// 曲库外的落点不算数 → 回退第一个根。
-    /// 假兄弟（`D:\Music2`）不能因为字符串前缀像就被当成子目录。
+    /// 假兄弟（`Music2`）不能因为字符串前缀像就被当成子目录。
     #[test]
     fn pick_dest_falls_back_when_outside() {
-        let roots = vec!["D:\\Music".to_string()];
+        let (root, outside, sibling) = if cfg!(windows) {
+            (
+                "D:\\Music".to_string(),
+                "E:\\Other".to_string(),
+                "D:\\Music2".to_string(),
+            )
+        } else {
+            (
+                "/music".to_string(),
+                "/srv/other".to_string(),
+                "/music2".to_string(),
+            )
+        };
+        let roots = vec![root.clone()];
         assert_eq!(
-            pick_dest(Some("E:\\Other".to_string()), &roots),
-            Some("D:\\Music".to_string())
+            pick_dest(Some(outside.clone()), &roots),
+            Some(root.clone()),
+            "曲库外回退第一个根"
         );
         assert_eq!(
-            pick_dest(Some("D:\\Music2".to_string()), &roots),
-            Some("D:\\Music".to_string()),
-            "D:\\Music2 是 D:\\Music 的假兄弟，不是子目录"
+            pick_dest(Some(sibling.clone()), &roots),
+            Some(root.clone()),
+            "假兄弟不是子目录"
         );
         // 未设置 → 回退第一个根
-        assert_eq!(pick_dest(None, &roots), Some("D:\\Music".to_string()));
+        assert_eq!(pick_dest(None, &roots), Some(root.clone()));
         // 没有根 → None（没有可落的地方）
-        assert_eq!(pick_dest(Some("D:\\Music".to_string()), &[]), None);
+        assert_eq!(pick_dest(Some(root), &[]), None);
     }
 
     #[test]

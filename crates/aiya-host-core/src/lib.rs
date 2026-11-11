@@ -198,6 +198,17 @@ fn canon_sep() -> &'static str {
     }
 }
 
+/// 子路径前缀判断的边界：canon 形态加尾分隔符；形态本身以分隔符结尾（裸根
+/// `/`、盘符根 `D:\`）则原样——裸根就是一切绝对路径的祖先边界，补分隔符
+/// 反而判丢（`/` + `/` = `//`，没有任何路径以它开头）。
+fn canon_boundary(p: &str) -> String {
+    if p.ends_with(canon_sep()) {
+        p.to_string()
+    } else {
+        format!("{p}{}", canon_sep())
+    }
+}
+
 /// 路径是否落在根集合内（相等或其子路径）。
 ///
 /// 整理落点用的就是这条：落点在曲库之外 → 整理完的文件扫描器看不见，用户会
@@ -209,7 +220,7 @@ pub fn path_within_roots(path: &str, roots: &[String]) -> bool {
     }
     roots.iter().any(|r| {
         let rc = canon_path(r);
-        !rc.is_empty() && (c == rc || c.starts_with(&format!("{rc}{}", canon_sep())))
+        !rc.is_empty() && (c == rc || c.starts_with(&canon_boundary(&rc)))
     })
 }
 
@@ -228,9 +239,7 @@ pub fn path_overlaps_roots(path: &str, roots: &[String]) -> bool {
         if rc.is_empty() {
             return false;
         }
-        c == rc
-            || c.starts_with(&format!("{rc}{}", canon_sep()))
-            || rc.starts_with(&format!("{c}{}", canon_sep()))
+        c == rc || c.starts_with(&canon_boundary(&rc)) || rc.starts_with(&canon_boundary(&c))
     })
 }
 
