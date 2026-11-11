@@ -233,16 +233,21 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 
 ### 4.4 自动检查
 
-`tools/check-style.mjs` 接入 `verify`（`check:style:strict`），扫描 Rust
+`tools/check-style.mjs` 接入 `verify` 与 CI（`check:style:strict`），扫描 Rust
 （crates/、src-tauri/）、前端（ui/src/、ui/e2e/，排除生成物）与构建脚本
-（tools/*.mjs）。命中分桶：**阻断** = 非 L2 注释（`//`、HTML 注释等）里的
-日期戳与 docs 引用（`docs/NN`、`notes/`、`ADR-`；裸 `§` 为 GPL 条款/源码定位
-等合法引用，不拦）；**L2 延后** = `///`、`//!` 与块注释内部的同类命中；
-**语域 report** = 高精度禁词（人话、拍板、顺手、翻车、搞定、抽风、收尸），
-维持 report-only。宽泛词（像、别、坑、必须）误报率高，不进自动门禁，由批次
-人工处理。白名单在 `tools/check-style-allowlist.json`（整文件或单行豁免）。
-beets-tool 的 Python 侧不在其范围，由 `tools/comment-gov/scan.py` 覆盖
-（同目录另含批次治理与验收工具 apply / verify / test_scan）。
+（tools/*.mjs）。日期戳（含月戳与 `YYYY 年`）与 docs 引用（`docs/NN`、
+`notes/`、`ADR-`；裸 `§` 为 GPL 条款/源码定位等合法引用，不拦）在**任何注释
+形态**（`//`、`///`、`//!`、块注释、JSDoc、HTML 注释）都是阻断，无延后桶。
+存量经 `tools/check-style-allowlist.json` 豁免并按**棘轮**只减不增：分区
+治理每清一处删对应豁免条目，烧完回归裸阻断，不新增豁免。语域 report =
+高精度禁词（人话、拍板、顺手、翻车、搞定、抽风、收尸）与历史叙事信号词
+（旧实现、此前、曾经、以前、旧版、事故），report-only 观察误报，不阻断。
+宽泛词（像、别、坑、必须）误报率高，不进自动门禁，由批次人工处理。
+
+beets-tool 的 Python 侧由 `tools/comment-gov/scan.py --check` 覆盖（npm
+`check:style:py`）：`#` 注释与 docstring 同为注释面，日期/引用与 Rust/前端
+同桶同白名单，已接入 `verify` 与 CI。同目录另含批次治理与验收工具
+apply / verify / test_scan（`verify.py` 剥注释零差异终验，干净检出恒过）。
 
 ### 4.5 历史查询路由（注释不设路标）
 

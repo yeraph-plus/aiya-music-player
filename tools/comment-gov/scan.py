@@ -703,6 +703,130 @@ def scan_scope(name, dirs):
     }
 
 
+# ---------------------------------------------------------------- 常驻门禁
+# --check / --emit-allowlist：beets-tool Python 侧的注释文风门禁（docs/71 洞④）。
+# 口径与 tools/check-style.mjs 对齐：日期戳与 docs 引用在任何注释形态都是
+# 阻断，存量走 tools/check-style-allowlist.json 棘轮豁免（只减不增）；叙事
+# 信号词 report-only。docstring 在机械批里是运行时值（apply 永不触碰），
+# 在这里是注释面——它是收割主标的，门禁必须看见。
+
+CHECK_DATE = re.compile(
+    r'20\d{2}-\d{2}(-\d{2})?|20\d{2}年|\d{4}年'
+    r'|20\d{2}/\d{1,2}/\d{1,2}|20\d{2}\.\d{1,2}\.\d{1,2}|@date\b|Date:',
+    re.IGNORECASE,
+)
+CHECK_DOCREF = re.compile(r'docs/\d|notes/|ADR-\d|AGENTS\.md')
+CHECK_NARRATIVE = re.compile(r'旧实现|此前|曾经|以前|旧版|事故')
+ALLOWLIST_PATH = ROOT / 'tools' / 'check-style-allowlist.json'
+
+
+def py_surface_segments(lines):
+    """逐行返回注释面片段 [(text, col)]。
+
+    注释面 = # 注释与行尾其后的全部内容、三引号字符串的内部文本。失败封闭：
+    单引号串内部（含转义）按代码跳过；三引号转义定界符等罕见形态拿不准就
+    按注释面处理——误报走白名单豁免，漏报等于门禁失效。
+    """
+    out = []
+    triple = None  # 当前定界符：'"""' / "'''"
+    for line in lines:
+        segs = []
+        i = 0
+        n = len(line)
+        if triple is not None:
+            end = line.find(triple)
+            if end == -1:
+                segs.append((line, 0))
+                out.append(segs)
+                continue
+            segs.append((line[:end], 0))
+            i = end + len(triple)
+            triple = None
+        while i < n:
+            c = line[i]
+            if c == '#':
+                segs.append((line[i + 1:], i + 1))
+                break
+            if c in '\'"':
+                q3 = line[i:i + 3]
+                if q3 in ('"""', "'''"):
+                    close = line.find(q3, i + 3)
+                    if close == -1:
+                        segs.append((line[i + 3:], i + 3))
+                        triple = q3
+                        break
+                    segs.append((line[i + 3:close], i + 3))
+                    i = close + 3
+                    continue
+                j = i + 1
+                while j < n:
+                    if line[j] == '\\':
+                        j += 2
+                        continue
+                    if line[j] == c:
+                        break
+                    j += 1
+                i = j + 1 if j < n else n
+                continue
+            i += 1
+        out.append(segs)
+    return out
+
+
+def py_check_scan():
+    """beets-tool 全量扫描 → (blocking, hits, narrative, files_n)。
+
+    blocking/hits 的元素：{rel, line, kind, tag, text}；blocking 是未豁免
+    子集。豁免条目："相对路径"（整文件）或 "相对路径:行号"。
+    """
+    allowlist = []
+    if ALLOWLIST_PATH.exists():
+        allowlist = json.loads(ALLOWLIST_PATH.read_text(encoding='utf-8'))
+    hits, narrative, files_n = [], 0, 0
+    for p in iter_files(PY_DIRS):
+        loaded = load_text(p)
+        if loaded is None:
+            continue
+        lines = loaded[0]
+        files_n += 1
+        r = rel(p)
+        for idx, segs in enumerate(py_surface_segments(lines)):
+            for text, _col in segs:
+                if CHECK_NARRATIVE.search(text):
+                    narrative += 1
+                for rx, kind in ((CHECK_DATE, 'date'), (CHECK_DOCREF, 'docref')):
+                    m = rx.search(text)
+                    if m:
+                        hits.append({'rel': r, 'line': idx + 1, 'kind': kind,
+                                     'tag': m.group(0), 'text': text.strip()[:90]})
+    blocking = [h for h in hits
+                if h['rel'] not in allowlist
+                and f"{h['rel']}:{h['line']}" not in allowlist]
+    return blocking, hits, narrative, files_n
+
+
+def pycheck_main():
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    blocking, hits, narrative, files_n = py_check_scan()
+    if '--emit-allowlist' in sys.argv:
+        allowlist = json.loads(ALLOWLIST_PATH.read_text(encoding='utf-8')) \
+            if ALLOWLIST_PATH.exists() else []
+        merged = sorted(set(allowlist) | {f"{h['rel']}:{h['line']}" for h in hits})
+        ALLOWLIST_PATH.write_text(
+            json.dumps(merged, ensure_ascii=False, indent=1) + '\n', encoding='utf-8')
+        print(f"comment-gov: 白名单合并 {len(merged) - len(set(allowlist))} 条，"
+              f"共 {len(merged)} 条（棘轮基线，与 check-style 共用同一文件）")
+        return
+    for h in blocking:
+        print(f"{h['rel']}:{h['line']}  [{h['kind']}/{h['tag']}]  {h['text']}")
+    exempted = len(hits) - len(blocking)
+    verdict = '通过' if not blocking else f'未通过（{len(blocking)} 处未豁免）'
+    print(f"\ncomment-gov check: python 日期/引用 {len(hits)}（豁免 {exempted}）"
+          f"，叙事词 {narrative}（report-only），扫描 {files_n} 个文件 —— {verdict}")
+    if blocking:
+        sys.exit(1)
+
+
 def main():
     import sys as _sys
     _sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -757,4 +881,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if '--check' in sys.argv or '--emit-allowlist' in sys.argv:
+        pycheck_main()
+    else:
+        main()

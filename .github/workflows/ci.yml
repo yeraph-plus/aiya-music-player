@@ -87,6 +87,21 @@ jobs:
       - name: 契约生成物一致
         run: npm run gen:types:check
 
+      # 注释文风门禁（docs/71 洞①）：strict 在本地 verify 有、CI 没有，等于
+      # 门禁不存在——历史叙事与 docs 引用的新增只能靠本地自觉。日期/引用在
+      # 任何注释形态都是阻断（存量走 allowlist 棘轮，只减不增）；beets-tool
+      # 的 Python 侧（含 docstring）走 comment-gov --check，同一白名单。
+      # verify.py 是批次工具：干净检出恒过；工作区带未提交注释改动时按
+      # 剥注释零差异判。
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: 注释文风门禁
+        run: |
+          npm run check:style:strict
+          npm run check:style:py
+          python -I tools/comment-gov/verify.py
+
       - name: e2e（mock 后端 + 系统 Edge）
         run: npm --prefix ui run test:e2e
 
