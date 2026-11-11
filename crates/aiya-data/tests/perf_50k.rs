@@ -1,6 +1,6 @@
 //! 5 万首性能验收（对照旧 Electron 基线：冷启动 366–403ms、深分页 2.3ms）。
 //!
-//! 运行：cargo test -p aiya-data --release --test perf_50k -- --ignored --nocapture
+//! 运行：npm run bench:50k
 //!
 //! 口径说明：旧基线"冷启动"含 Electron 主进程建库 + 首屏查询 + renderer 首帧，
 //! 本测只覆盖 Rust 侧可对比的部分（建库灌数 + 冷连接首屏 + 深分页 + 搜索），
@@ -97,7 +97,7 @@ fn q_page(conn: &Connection, offset: usize) -> std::time::Duration {
 }
 
 #[test]
-#[ignore = "性能验收：cargo test -p aiya-data --release --test perf_50k -- --ignored --nocapture"]
+#[ignore = "性能验收：npm run bench:50k"]
 fn perf_50k_baseline() {
     let conn = open_in_memory().unwrap();
 

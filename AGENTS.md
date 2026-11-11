@@ -103,6 +103,8 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 | `npm run gen:types` / `gen:types:check` | 从 Rust 生成 TS 类型 / 只校验不写盘 |
 | `npm run smoke:engine` / `smoke:offset` / `smoke:switch` / `smoke:rate` / `smoke:mode` | 真机 WASAPI 出声冒烟（需要声卡） |
 | `npm run smoke:supervisor` | sidecar 握手/心跳/看门狗冒烟（不需要声卡） |
+| `npm run probe:clock` | 时钟诊断：独占下 `GetCurrentPadding` 与 `IAudioClock::GetPosition` 哪个可信、事件/轮询两种时钟的写入策略是否喂饱设备 |
+| `npm run smoke:output` | 宿主↔sidecar 接缝冒烟：起真子进程 `aiya-audio-host`，v4 协议送 `SetOutputConfig`、读回 `audioMode` 事件（wire 形状与接缝行为，区别于直接驱动引擎的 `smoke:mode`） |
 | `npm run smoke:beets` / `smoke:maint` | beets apply 五场景 / 维护四件套（隔离 `BEETSDIR`，不动真实库） |
 | `npm run smoke:proto` / `smoke:config` / `smoke:catalog` / `smoke:bins` / `smoke:uninstall` / `smoke:lock` / `smoke:enrich` | beets 契约与能力冒烟（隔离 `BEETSDIR`） |
 | `npm run bench:50k` | 5 万首查询性能基准（release，`--ignored`） |
@@ -112,7 +114,8 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 | `npm run check:ui-layers` | UI 分层门禁 |
 | `npm run proto:check` / `proto:sync` | 协议门禁：镜像与工具侧真源字节一致 / 同步镜像 |
 | `npm run notices` | 刷新 `licenses/CARGO-DEPS.md`（依赖变更后跑） |
-| `npm run probe:ui` | CDP 探针（对真实窗口做 UI 断言） |
+| `npm run probe:ui` | UI 运行时探针：CDP 在真窗口读 DOM、抓 console.error 与未捕获异常（默认探结构，`--actions` 探交互；有未捕获异常或 console.error → 退出码 1）。目标先起其一：Tauri 真窗口 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 npm run dev`，或浏览器预览 `msedge --headless=new --remote-debugging-port=9222 http://localhost:1420/`（dev:ui 起的 1420 端口） |
+| `npm run probe:exclusive` | 独占格式探测：枚举默认输出设备**实际接受**的独占 (采样率, 位深) 组合——`open_exclusive` 的设计依据，也是"独占没生效"的排障工具 |
 
 ### 2.3 验证门禁
 

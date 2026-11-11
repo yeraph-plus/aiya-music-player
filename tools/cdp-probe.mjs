@@ -6,16 +6,8 @@
  * 端口（CDP），在真窗口里读 DOM、抓 console.error 与未捕获异常 ——
  * 既不依赖截图权限，也不需要给应用加测试钩子。
  *
- * 用法：
- *   1) Tauri 真窗口：
- *      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 npm run dev
- *   2) 浏览器预览（`npm run dev:ui` 起的 1420 端口）：
- *      msedge --headless=new --remote-debugging-port=9222 http://localhost:1420/
- *   然后：
- *      npm run probe:ui                 # 结构 + 错误
- *      npm run probe:ui -- --actions    # 面板开关等交互序列
- *
  * 判定：有未捕获异常、或除 favicon 之外的 console.error → 退出码 1。
+ * 启动目标与命令序列见仓库根命令表（§2.2 的 probe:ui 行）。
  *
  * 实现要点：
  * - **选目标**：浏览器会带 `edge://`、扩展后台页等杂项目标，盲取 [0] 会连到
