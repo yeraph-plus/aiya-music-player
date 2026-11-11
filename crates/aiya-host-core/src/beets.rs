@@ -1215,7 +1215,8 @@ fn install_bundle_to(
 
     // manifest 缺失/读不动时的兜底（正常包走不到这里：入口是构建时写死的）。
     // 三个名字覆盖两平台的布局：win 在根（python.exe）或打包产物入口，
-    // linux 在 bin/（PBS 解释器，docs/67）。兜底只保证"能起"，入口契约在 manifest。
+    // linux 在 bin/（PBS 解释器，布局与容器构建产物一致）。兜底只保证
+    // "能起"，入口契约在 manifest。
     for (name, with_module_arg) in [
         ("aiya-beets.exe", false),
         ("python.exe", true),
