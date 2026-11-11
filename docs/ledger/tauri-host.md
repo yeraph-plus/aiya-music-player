@@ -6,6 +6,7 @@
 ## 条目（新→旧）
 
 <!-- 每条一行：- YYYY-MM-DD · 代码位置 · 事实/取舍 · 来龙去脉（可选） -->
+- 2026-11-12 · crates/aiya-host-core/src/beets.rs（busy_status / busy_status_stays_found）· 会话槽被占 ≠ 未安装：probe 对 Busy 回 found:true + E_BEETS_BUSY 的忙态壳，不复用 absent 壳 · probe 曾把 Busy 统一翻成 E_BEETS_UNREACHABLE（found=false），整理会话期间整理库页自行跳"未安装"安装页，组件看起来凭空消失——真相只是用户刚点的预览/整理还在跑
 - 2026-11-12 · src-tauri/tests/ipc_contract.rs SERVER_ONLY · station_* 豁免必须两侧对称（web SERVER_ONLY 与桌面壳同表同步维护）· 2026-11-11 收尾发现 2451486 起 main 此测试一直红——"豁免清空"只清了 web 侧、桌面侧对称豁免漏配，补齐后绿；规则已回写注释，事件链归档
 - 2026-11-12 · src-tauri/src/lib.rs app_diagnostics · 诊断快照只装有消费方的字段（压平原则）· v1 曾塞 20 个字段大半无页面读（统计与 LibraryStats 重复、流计数恒 0、audioMode 真实出口是 audio:mode 事件），每次拉取白跑 COUNT；media_keys 随 SMTC 常开退役，本批清理其注释残留
 - 2026-11-12 · crates/aiya-host-core/src/{lib.rs,beets.rs} · 裸根祖先判定修复 + unix 夹具拆分（批 0.7，linux-test 分层暴露的最后一层）：path_overlaps_roots / path_within_roots 的子路径边界 `p+sep` 对裸根失效——unix 根 `/` 补成分隔符得 `//`，没有路径以它开头，把 `/` 当整理源/inbox 时「预览递归扫全库」的重叠闸整个旁路（Windows 未炸纯因盘符前缀 `d:\` 恰好等于 rc+sep 的巧合）→ canon_boundary（canon 形态自带尾分隔符则原样），重叠闸与落点闸（根设为 `/` 时一切绝对路径都在根内）双修；pick_dest 两测试夹具按平台拆（unix 落点判据走 `/` 边界，盘符路径在 unix 非绝对路径，within 恒 false 静默回退根）· host-core 的 ledger 归属：十主题划分早于 server 拆分（docs/66），host-core 编排归本域｜验证：cargo fmt/clippy/test -p aiya-host-core 绿（Windows 侧 40/0）；unix 行为经 CI linux job 实证

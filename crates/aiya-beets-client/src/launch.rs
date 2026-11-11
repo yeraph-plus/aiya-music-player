@@ -69,7 +69,7 @@ impl Launcher {
     ///
     /// stderr 为什么不留：它和 stdout 是两条流，宿主只解析 stdout。留个管道
     /// 却没人读，写满缓冲区就会把子进程阻塞死——这是最经典的假死来源。
-    /// 要留诊断只能重定向到文件，M1 保持原有行为（丢弃）。
+    /// 要留诊断只能重定向到文件；当前行为是丢弃。
     pub fn command(&self) -> Command {
         let mut cmd = Command::new(&self.program);
         cmd.args(&self.args)

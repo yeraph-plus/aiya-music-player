@@ -5,16 +5,16 @@
 //! `runtime_version` / `library_root`）——宿主只知道"有个工具、它报了个版本、
 //! 它的数据根在这"，不需要知道工具是怎么实现自己的。
 //!
-//! M3 起用随仓镜像的 JSON Schema 逐字段校验这里（`tests/proto_mirror.rs`），
+//! `tests/proto_mirror.rs` 用随仓镜像的 JSON Schema 逐字段校验这里，
 //! 所以**改字段名必须同时改协议**，否则契约测试会红。
 
 use serde::{Deserialize, Serialize};
 
 /// 本 crate 支持的协议版本。
 ///
-/// libraryLock/E_LIBRARY_BUSY/resumedSkipped），拍板升版 + 新字段在 v2 内
-/// 定为 required。v1 宿主连 v2 工具会被 `E_PROTOCOL_MISMATCH` 拒绝并在
-/// message 里说明升级方向——不做降级协商。
+/// v2 新增 `libraryLock` / `E_LIBRARY_BUSY` / `resumedSkipped` 并定为 required。
+/// v1 宿主连 v2 工具会被 `E_PROTOCOL_MISMATCH` 拒绝并在 message 里说明升级
+/// 方向——不做降级协商。
 ///
 /// 用途：① 请求里带 `clientProtocol`（工具据此拒掉版本不符的一方）；
 /// ② `tests/proto_mirror.rs` 拿它与镜像 meta 里的版本比对。
@@ -30,10 +30,9 @@ pub(crate) struct Envelope {
 }
 
 /// 错误细节。**线上字段是 snake 的 `beets_message`**（schema EnvelopeError
-/// required 一字不差）——此前误挂 `rename_all = "camelCase"`，导致 ok:false
-/// 信封永远解析失败（被上层当成"协议解析失败"而不是工具自己的诊断）。
-/// 正常 status 走 ok:true 所以从未暴露，v2 拒旧组件的路径一跑就现形。
-/// extras（`trace`/`holder`/`clientProtocol`…）按 schema 允许未知字段，忽略。
+/// required 一字不差）：字段名挂错的话 `ok:false` 信封全部解析失败，上层会把
+/// 工具自己的诊断当成"协议解析失败"。extras（`trace`/`holder`/`clientProtocol`…）
+/// 按 schema 允许未知字段，忽略。
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct EnvelopeError {
     pub code: String,
@@ -56,8 +55,8 @@ pub struct StatusReport {
     pub protocol_version: Option<u32>,
     /// 契约指纹：工具自报的 schema sha256。
     ///
-    /// v2 起宿主拿它与编译期嵌入的镜像哈希比对（`schemaMatched`，docs/35
-    /// P1-4 闭合）——"组件与播放器分别升级"不再只靠版本号兜底。
+    /// 宿主拿它与编译期嵌入的镜像哈希比对（`schemaMatched`）——"组件与播放器
+    /// 分别升级"不只靠版本号兜底。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema_hash: Option<String>,
     /// 工具自身版本（线上字段原名 `beetsVersion`，见模块注释）。
@@ -135,9 +134,9 @@ pub struct StatusReport {
 impl StatusReport {
     /// 协议版本是否在宿主能理解的范围内。
     ///
-    /// M3 起由调用方（`src-tauri/src/beets.rs`）在探测后立即拦截：
-    /// 版本不符时 `found: false` + `E_PROTOCOL_MISMATCH`，并在文案里说清
-    /// 该升哪一边。这里只回答"是不是同一版"。
+    /// 由调用方在探测后立即拦截：版本不符时 `found: false` +
+    /// `E_PROTOCOL_MISMATCH`，并在文案里说清该升哪一边。这里只回答
+    /// "是不是同一版"。
     pub fn speaks(&self, expected: u32) -> bool {
         self.protocol_version == Some(expected)
     }

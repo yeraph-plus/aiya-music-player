@@ -1,17 +1,17 @@
 //! 进程生命周期与 NDJSON 行协议。
 //!
 //! 这一层是 client 的心脏，也是它与"环境知识"完全无关的部分：起进程、写一行
-//! 请求、逐行读事件、超时收尸、会话互斥、取消。它不知道对面是谁，也不知道
+//! 请求、逐行读事件、超时回收、会话互斥、取消。它不知道对面是谁，也不知道
 //! 请求里装的是什么业务——只认「一行一个 JSON」这一条铁律。
 //!
-//! 三条实测得来的硬约束（别改回去）：
+//! 三条实测确立的硬约束：
 //!
 //! 1. **按字节读再显式 `from_utf8`**。`BufRead::lines()` 遇到非法字节直接
 //!    返回 Err 并结束迭代，调用方只看到"没有输出了"——真正的编码问题被埋掉。
 //!    这里逐行判编码，非法行记日志后跳过，会话继续。
-//! 2. **超时必须收尸**。只 return 不 kill，卡死的子进程会一直占着管道；
+//! 2. **超时必须回收进程**。只 return 不 kill，卡死的子进程会一直占着管道；
 //!    调用方等到的是"没响应"，留下的是僵尸。
-//! 3. **spawn 之前占会话位**。此前是 spawn 之后才 acquire，并发的第二个请求
+//! 3. **spawn 之前占会话位**。先 spawn 后占位的话，并发的第二个请求
 //!    会照样起进程、请求行照样进对方队列照常执行（写标签、动数据），却没有
 //!    reader 转发事件——既脏又泄漏。
 
@@ -210,8 +210,8 @@ pub fn spawn_session(
         message: e.to_string(),
     })?;
 
-    // 写失败必须收尸：只 return 的话子进程挂着管道变成孤儿（超时收尸是
-    // 读侧的规矩，写侧同样适用）。
+    // 写失败必须回收进程：只 return 的话子进程挂着管道变成孤儿（读侧的
+    // 规矩，写侧同样适用）。
     let mut stdin = match child.stdin.take() {
         Some(s) => s,
         None => {
@@ -235,7 +235,7 @@ const MAX_LINE_BYTES: usize = 10 * 1024 * 1024;
 /// 逐行读一个管道，把 UTF-8 合法行送进 channel；非法行记日志后跳过。
 ///
 /// 单独抽出来的原因：一次性查询、会话转发、批量收集三处读法完全一样，
-/// 而编码处理是最容易各自漂移的那种细节（此前就漏过一次）。
+/// 而编码处理是最容易各自漂移的那种细节。
 pub fn spawn_line_reader<R: Read + Send + 'static>(
     reader: R,
     tx: std::sync::mpsc::Sender<String>,
@@ -306,17 +306,16 @@ pub struct PumpOutcome {
 ///
 /// ## 为什么需要它（而不是每个调用点自己写一遍）
 ///
-/// 安装器与 bins 下载器都要"起进程 → 逐行把进度帧转给 UI → 等终态 → 收尸"。
-/// 这段骨架曾在 `beets.rs` 里被抄了两份，两份都用 `BufRead::lines()` ——
-/// 那个 API **没有单行上限**，上游吐一行超长报错链就会把整行读进
-/// 内存。这里复用 [`spawn_line_reader`]，`MAX_LINE_BYTES` 的上限与非法 UTF-8
-/// 容错一并生效。
+/// 安装器与 bins 下载器都要"起进程 → 逐行把进度帧转给 UI → 等终态 → 回收"。
+/// 这段骨架是两处共用的唯一读循环：`BufRead::lines()` **没有单行上限**，
+/// 上游吐一行超长报错链就会把整行读进内存。这里复用 [`spawn_line_reader`]，
+/// `MAX_LINE_BYTES` 的上限与非法 UTF-8 容错一并生效。
 ///
 /// ## 为什么不管 wait/kill
 ///
-/// 句柄的所有权在调用方（安装路径要把它登记进退出收尸槽，应用退出时由
-/// `RunEvent::Exit` 收尸）。这里只持有 stdout 读端。看起来 `timed_out` 之后
-/// 调用方必须自己 kill —— 这个契约写在返回值里，而不是偷偷替它做。
+/// 句柄的所有权在调用方（安装路径要把它登记进退出回收槽，应用退出时由
+/// `RunEvent::Exit` 回收）。这里只持有 stdout 读端；`timed_out` 之后由调用方
+/// 自己 kill——这个契约写在返回值里，函数不代做。
 ///
 /// ## 两级超时
 ///
@@ -425,7 +424,7 @@ fn request_once(
         recv_first_json(&rx, timeout)
     })();
 
-    // 无论成败都收尸：超时/提前退出/正常拿到应答，都不留僵尸
+    // 无论成败都回收进程：超时/提前退出/正常拿到应答，都不留僵尸
     let _ = child.kill();
     let _ = child.wait();
     result
@@ -567,16 +566,16 @@ pub fn request_data(
     result
 }
 
-/// 会话式召回的终态事件名。见到任意一个就收尾——**不能靠进程退出判断**
-/// （正常收尾和崩溃退出长得一样，混为一谈会漏掉"半份结果"）。
-/// 会话终态事件名。读到其中之一就收尾（关进程、放槽位、调 `on_exit`）。
+/// 会话终态事件名。读到其中之一就收尾（关进程、放槽位、调 `on_exit`）——
+/// **不能靠进程退出判断**（正常收尾和崩溃退出长得一样，混为一谈会漏掉
+/// "半份结果"）。
 ///
 /// `pub` 是为了让 `tests/proto_mirror.rs` 拿它与镜像 schema 里的 `type`
 /// 常量集合比对——改名而忘了改这里，症状是"会话永远不结束"，很难现场定位。
 ///
-/// 此前只有导入链的终态在这张表里，维护四件套 + dump + 索引入库成功后客户端
-/// 等不到终态，会话空转到 600 s 看门狗误杀——期间会话槽占死、on_exit 对账
-/// （整理后修正库路径的唯一时机）被推迟（发布前审查 P0-1）。
+/// 终态集合必须覆盖**每一条会话式命令**：缺一条的话，那条链路成功后客户端
+/// 等不到终态，会话空转到 600 s 被看门狗误杀——期间会话槽占死、on_exit 对账
+/// （整理后修正库路径的唯一时机）被推迟。
 pub const TERMINAL_EVENTS: &[&str] = &[
     "done",
     "applyDone",
@@ -597,7 +596,7 @@ pub const TERMINAL_EVENTS: &[&str] = &[
 /// `gen` 是本会话的世代号（[`acquire`] 的返回值）：收尾时 `release(gen)` 只在
 /// 槽内世代仍是自己时生效——旧 reader 的迟到清理不会偷走后继会话的槽位。
 ///
-/// `on_exit` 一定在"会话真正结束之后"调用（收尸完、槽位已释放），用于让
+/// `on_exit` 一定在"会话真正结束之后"调用（进程回收完、槽位已释放），用于让
 /// 调用方在数据落盘后做后续动作（比如对账）。它跑在自己的线程里，不阻塞读循环。
 pub fn spawn_reader(
     mut child: Child,
@@ -619,7 +618,7 @@ pub fn spawn_reader(
         return Err(e);
     }
 
-    // Arc<Mutex<Child>>：会话线程持有一份（kill/wait），失败路径也持有一份收尸
+    // Arc<Mutex<Child>>：会话线程持有一份（kill/wait），失败路径也持有一份用于回收
     let child = Arc::new(Mutex::new(child));
     let child_for_fail = Arc::clone(&child);
 
@@ -717,7 +716,7 @@ pub fn spawn_reader(
                     }
                 }
             }
-            // 关 stdin → 对面读到 EOF 后退出；wait 收尸防僵尸。
+            // 关 stdin → 对面读到 EOF 后退出；wait 回收防僵尸。
             // 世代号兜底：本会话已被 cancel（槽已空）时这里是 no-op。
             drop(release(gen));
             if let Ok(mut c) = child.lock() {
@@ -805,7 +804,7 @@ mod tests {
         release_unacquired();
     }
 
-    /// 收尸测试子进程，防僵尸。
+    /// 回收测试子进程，防僵尸。
     fn reap(children: &mut [Child]) {
         for c in children.iter_mut() {
             let _ = c.kill();
@@ -833,7 +832,7 @@ mod tests {
 
     /// P0 回归：取消长会话后新会话已入槽，旧 reader 的迟到 release（旧世代）
     /// 不得偷走新会话的 stdin、不得清掉 busy 位、新会话必须仍可取消。
-    /// （旧实现 release() 无条件清位 + take 槽位，正是这里模拟的时序会翻车。）
+    /// （`release` 若无条件清位 + take 槽位，正是这里模拟的时序会出问题。）
     #[test]
     fn stale_release_cannot_steal_new_generation() {
         let _g = test_lock();
@@ -1017,9 +1016,8 @@ mod tests {
 
     /// `pump_frames` 的三件正事：非 JSON 行不许丢、`done`/`error` 要认出来。
     ///
-    /// 这条替换的是 `beets.rs` 里两份手写读循环。那份用 `BufRead::lines()`，
-    /// 丢掉了单行上限；这里的裸行还必须转成 progress —— 静默丢弃会让安装
-    /// "卡住"变成无从判断（进度信息全在那几行里）。
+    /// 读循环必须带单行上限（`BufRead::lines()` 没有）；裸行还必须转成
+    /// progress —— 静默丢弃会让安装"卡住"变成无从判断（进度信息全在那几行里）。
     #[test]
     fn pump_frames_reads_frames_and_flags_terminal_state() {
         let body = b"{\"type\":\"progress\",\"message\":\"a\"}\n\
@@ -1044,7 +1042,7 @@ mod tests {
         assert_eq!(seen[3]["type"], "done");
     }
 
-    /// 空闲超时只置标志，**不动进程**：句柄所有权在调用方（要登记进退出收尸槽）。
+    /// 空闲超时只置标志，**不动进程**：句柄所有权在调用方（要登记进退出回收槽）。
     #[test]
     fn pump_frames_times_out_without_killing_anything() {
         struct Silent;

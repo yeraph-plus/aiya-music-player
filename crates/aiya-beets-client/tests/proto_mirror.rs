@@ -1,9 +1,9 @@
-//! 镜像契约测试（docs/33 §9 M3）：本 crate 的 serde 形状 vs 播放器仓根镜像的 schema。
+//! 镜像契约测试：本 crate 的 serde 形状 vs 播放器仓根镜像的 schema。
 //!
 //! 三条断言，各守一类漂移：
 //!
 //! 1. **版本**：镜像 meta 的 `protocolVersion` 必须等于 `PROTOCOL_VERSION`。
-//!    改了协议但没改客户端常量 → 红（客户端会继续用旧版本号握手）。
+//!    改了协议但没改客户端常量 → 红（客户端拿着过期的常量握手）。
 //! 2. **字段**：`StatusData.required` 必须**逐字**等于序列化后的 `StatusReport`
 //!    键集合。少一个 = 客户端读不到；多一个 = 客户端在建模对面不存在的东西。
 //! 3. **终态事件名**：`TERMINAL_EVENTS` 必须都是 schema 里存在的 `type`。
@@ -154,7 +154,7 @@ fn terminal_events_exist_in_schema() {
             .unwrap_or_else(|| panic!("每个 Event 变体都要有 type const：{v}"));
         types.insert(name.to_string());
     }
-    // 终态错误信封在 Response）
+    // 终态错误信封（sessionFailed）不在 Event 里，形状在 Response
     assert_eq!(variants.len(), 21, "Event 变体数变了：{}", variants.len());
 
     for t in TERMINAL_EVENTS {

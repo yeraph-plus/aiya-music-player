@@ -32,7 +32,7 @@ pub trait BeetsHost: Send + Sync + 'static {
     ) -> Option<std::collections::HashMap<String, String>>;
     /// 应用设置 KV 的字符串项（language 等）。
     fn setting_str(&self, key: &str) -> Option<String>;
-    /// 安装/卸载登记表：子进程收尸槽 + 占位互斥。
+    /// 安装/卸载登记表：子进程回收槽 + 占位互斥。
     fn install_registry(&self) -> &InstallRegistry;
     /// 安装互斥占位：false→true 成功返回 true；已有任务在跑返回 false。
     fn try_set_installing(&self) -> bool;
@@ -66,7 +66,7 @@ pub fn event_sink(
     std::sync::Arc::new(BeetsEventSink(host))
 }
 
-/// 安装登记表：`child` 槽给退出收尸（桌面 RunEvent::Exit / server 进程退出），
+/// 安装登记表：`child` 槽给退出回收（桌面 RunEvent::Exit / server 进程退出），
 /// `installing` 占位防两条安装线程并发互拆。
 pub struct InstallRegistry {
     pub child: Mutex<Option<std::process::Child>>,
@@ -165,9 +165,9 @@ pub fn read_paused_roots(conn: &Connection) -> Vec<String> {
 /// 也是纯小写（写入与读取同口径），这里必须跟它一致，否则 beets 回报路径与
 /// 库内记录对不上。代价：大小写敏感文件系统上仅大小写不同的两个真实路径
 /// 会被视为同一位置——与 path_key 同一取舍，比"大小写漂移导致全部对不上"
-/// 便宜得多。此前 Windows 分支被无条件下发到 Linux（2026-11-09 审查）：
-/// 等值/子路径判断碰巧自洽（双方同变），但 `/music/` 会归一成 `\music\`
-/// 形态的前缀判断，纯属 Windows 形态漏到了另一侧。
+/// 便宜得多。Windows 形态（`\` 分隔符）不下发到 unix 分支：等值/子路径判断
+/// 靠"双方同变"碰巧自洽，`/music/` 这类带尾斜杠的输入会归出 `\music\` 形态，
+/// 前缀判断整个失真。
 pub fn canon_path(p: &str) -> String {
     if cfg!(windows) {
         p.trim()

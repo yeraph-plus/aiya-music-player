@@ -1,13 +1,13 @@
 //! beets 侧工具（`aiya-beets`）的宿主侧：**发现入口 + 结果落地**。
 //!
-//! 这个文件里**不再有 beets 的环境知识**（docs/33 M2）：
+//! 这个文件里没有 beets 的环境知识：
 //! 没有 include_str!、没有解释器探测、没有 config.yaml 拼装、没有插件清单。
 //! 播放器只做两件事：
 //!   ① 找到工具的入口（四个来源，见 `discover`），带上数据目录起进程；
 //!   ② 把工具报回来的结果落地（协议形状 → UI DTO、dump → 自有库对账）。
 //!
 //! 工具怎么装、装到哪、配置怎么写、开哪些插件，全归 `beets-tool/` 那边。
-//! 唯一共享的东西是数据目录约定 `{app_data}/beets`（docs/33 §3.1）。
+//! 唯一共享的东西是数据目录约定 `{app_data}/beets`。
 //!
 //! **未安装时核心播放功能必须全通**——beets 是增强能力，不是依赖。
 use crate::{BeetsHost, InstallGuard};
@@ -18,17 +18,17 @@ use std::time::{Duration, Instant};
 
 use aiya_beets_client::{BeetsTool, EventSink, Launcher, StatusReport, StdioTool, ToolError};
 
-/// 设置页 beets 状态区数据源。形状定义搬去 `dto::beets`（契约归 dto），
-/// 这里 `pub use` 回来，本文件其余调用点不用改。
+/// 设置页 beets 状态区数据源。形状定义在 `dto::beets`（契约归 dto），
+/// 这里 `pub use` 暴露，本文件其余调用点不用改。
 pub use aiya_dto::beets::BeetsStatus;
 
 /* 发现 */
 
 /// 工具入口：程序 + 参数。
 ///
-/// 为什么是「程序 + 参数」而不是单个可执行路径：便携包里跑是
-/// `<bundle>/python.exe -m aiya_beets`，A 轨道装好的包是 `aiya-beets.exe`。
-/// 统一成这个形状后，两种形态共用同一套代码。
+/// 为什么是「程序 + 参数」而不是单个可执行路径：入口有两种形态——便携包
+/// 解释器（`<bundle>/python.exe -m aiya_beets`，带参数）与独立可执行
+/// （`aiya-beets.exe`，无参数）。统一成这个形状后，两种形态共用同一套代码。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolEntry {
     pub program: String,
@@ -58,14 +58,14 @@ impl EntrySource {
 
 /// 数据目录约定：`{app_data}/beets`。
 ///
-/// 这是播放器与工具**唯一共享的约定**（docs/33 §3.1）：播放器决定"数据放哪"
+/// 这是播放器与工具**唯一共享的约定**：播放器决定"数据放哪"
 /// （应用数据目录归宿主管），工具决定"里面怎么摆"。不传的话，工具会去
 /// `%APPDATA%\beets`，与用户自己的 beets 抢同一个库。
 pub fn data_home(host: &dyn BeetsHost) -> PathBuf {
     host.data_root().join("beets")
 }
 
-/// beets 的"双家"（docs/45 §4）：工作台家与索引家。
+/// beets 的"双家"：工作台家与索引家。
 ///
 /// 为什么必须要两个家（不是"一个家两种模式"）：
 /// - **工作台家**（`{app_data}/beets`）是用户自己的 beets 库，允许写标签、
@@ -123,17 +123,17 @@ pub fn enrich_db(host: &dyn BeetsHost) -> PathBuf {
 
 /// beets 模块自己的配置，落在 `{data_home}/settings.json`。
 ///
-/// ## 为什么搬出应用的 settings 表
+/// ## 为什么不放在应用的 settings 表
 ///
 /// 这些键（`beets.toolPath` / `beets.targetRoot` / `beets.inboxImported` …）
-/// 曾经存在应用的 `settings` 表里。它们不是应用设置：应用从不读它们来做任何
-/// 决定，只有 beets 模块自己读。放在应用表里有两个真实代价：
+/// 不是应用设置：应用从不读它们来做任何决定，只有 beets 模块自己读。放进
+/// 应用表里有两个真实代价：
 ///
 /// 1. **数据模型耦合**：应用的 settings 里出现"因为装了 beets 才有"的键，
 ///    备份、迁移、"导出我的设置"都会被它们污染。
-/// 2. **写路径耦合**：`clear_target_if_invalid` 让**应用**在曲库根变化时去改
-///    beets 的配置——方向反了。现在改成读时校验：target 不在扫描根里就当没设，
-///    用户把目录加回来时它自己恢复，比"被悄悄清掉"更好。
+/// 2. **写路径耦合**：让**应用**在曲库根变化时去改 beets 的配置，方向反了；
+///    读时校验（target 不在扫描根里就当没设，目录加回来时自己恢复）没有
+///    这个问题，也比"被悄悄清掉"更好。
 ///
 /// ## 为什么是 json 不是又一张表
 ///
@@ -259,8 +259,8 @@ pub fn config_view(host: &dyn BeetsHost, roots: &[String]) -> aiya_dto::beets::B
 /// 纯函数版（可测）：配置 + 曲库目录 → 视图。
 ///
 /// 落点合法性走 [`pick_dest`]，与 `beets_set_target` 的校验、`tool_env` 的
-/// 下发**同一套判据**。这三处曾经各写一遍，放宽子目录时漏掉其中一处就会
-/// 还留着严格相等，UI 显示曲库根而 `tool_env` 已经下发子目录）。
+/// 下发**同一套判据**：三处各写各的时，放宽子目录会漏掉其中一处——UI 显示
+/// 曲库根而 `tool_env` 已下发子目录。
 fn config_view_of(s: &Settings, roots: &[String]) -> aiya_dto::beets::BeetsConfig {
     let target = trimmed(s.target_root.clone());
     let effective = pick_dest(target.clone(), roots);
@@ -289,14 +289,14 @@ pub fn adopt_legacy_settings(host: &dyn BeetsHost, legacy: Settings) -> bool {
 /// 一次取两个事实：**曲库根**（索引家的分析对象）与**整理落点**（整理家的
 /// `directory`，copy/move 的目标）。
 ///
-/// 为什么必须分开（docs/49 §3.2）：落点常常只是曲库里一个子目录（`曲库/整理`）。
+/// 为什么必须分开：落点常常只是曲库里一个子目录（`曲库/整理`）。
 /// 两者合成一个变量时，用户改落点会把索引范围一起缩成那一小块——症状是
 /// "索引跑完了，可查询里只有几条"，而配置看起来完全合规。
 ///
 /// 优先级：
 /// * 曲库根 = **第一个扫描根**，永远不取勾选的落点；
-/// * 落点 = 勾选值（若它仍是某个扫描根）否则退回第一个扫描根——与"勾选框出现
-///   之前"的行为一致（docs/40 十三轮），老配置零迁移。
+/// * 落点 = 勾选值（若它仍是某个扫描根）否则退回第一个扫描根；老配置（没有
+///   勾选值）零迁移。
 fn roots_for_tools(host: &dyn BeetsHost) -> (Option<String>, Option<String>) {
     // 勾选值来自**本模块自己的配置**，扫描根来自**应用**（用户事实）。两者分开取：配置和应用库各有各的写者，混在一次读里会让"谁的目录算数" 这个问题有两个答案。
     let target = trimmed(load_settings(host).target_root);
@@ -307,13 +307,12 @@ fn roots_for_tools(host: &dyn BeetsHost) -> (Option<String>, Option<String>) {
 
 /// 落点取哪个：勾选值合法就用它，否则回退第一个扫描根。
 ///
-/// 合法性判据与 `beets_set_target` **必须同一条**：落点可以是曲库目录本身，
-/// 也可以是它的子目录（docs/49 §3.4）。
+/// 合法性判据与 `beets_set_target` **必须同一条**（复用同一个函数）：落点可以
+/// 是曲库目录本身，也可以是它的子目录。
 ///
-/// 曾经这里是 `canon_path(r) == canon_path(t)`（严格相等），而校验已经放宽到
-/// 子目录 —— 后果是「选了子目录当落点」被静默判为非法、回退成曲库根：设置里
-/// 明明写着 `D:\Music\整理`，实际整理却把文件倒进 `D:\Music`。两条判据分离
-/// 就会这样，所以复用同一个函数，并由 `pick_dest_*` 的单测钉住。
+/// 判据分离的后果：「选了子目录当落点」被静默判为非法、回退成曲库根——设置里
+/// 明明写着 `D:\Music\整理`，实际整理却把文件倒进 `D:\Music`。由 `pick_dest_*`
+/// 的单测钉住。
 fn pick_dest(target: Option<String>, roots: &[String]) -> Option<String> {
     target
         .filter(|t| crate::path_within_roots(t, roots))
@@ -374,13 +373,13 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// 按优先级找工具入口（docs/33 §6.1）。
+/// 按优先级找工具入口。
 ///
-/// 顺序理由：显式指定永远第一 → 安装器写下的路径最可靠 → PATH 说明用户
-/// 拍板：不维护第二套环境）——开发机上要跑 beets 功能，与用户一样走安装流。
+/// 顺序理由：显式指定永远第一 → 安装器写下的路径最可靠 → PATH 兜底。播放器
+/// **不维护第二套环境**：开发机上要跑 beets 功能，与用户一样走安装流。
 ///
-/// **刻意没有"猜 venv 布局"这一条**：A 轨道的入口是安装器**写进设置**的，
-/// 不是探测出来的。播放器不知道 venv 长什么样（P1 禁止），它只记住"入口在哪"。
+/// **刻意没有"猜解释器布局"这一条**：设置里的入口是安装器**写下的**，不是
+/// 探测出来的。播放器不关心解释器怎么布局，只记住"入口在哪"。
 pub fn discover(host: &dyn BeetsHost) -> Option<(ToolEntry, EntrySource)> {
     if let Ok(program) = std::env::var("AIYA_BEETS_BIN") {
         if !program.trim().is_empty() {
@@ -418,7 +417,7 @@ pub fn discover(host: &dyn BeetsHost) -> Option<(ToolEntry, EntrySource)> {
 /// 起进程时的环境。只给**事实**，不给 beets 知识。
 ///
 /// * `AIYA_BEETS_HOME`：数据根（播放器给）
-/// * `BEETSDIR`：**必须显式下发且与上面一致**（docs/45 §6.3）
+/// * `BEETSDIR`：**必须显式下发且与上面一致**
 /// * `AIYA_BEETS_SCAN_ROOT`：**曲库根**（索引家的分析对象，永不取落点）
 /// * `AIYA_BEETS_DEST`：**整理落点**（整理家写进 `directory`，copy/move 的目标）
 /// * `PYTHONIOENCODING` / `PYTHONUTF8`：管道编码钉 UTF-8。工具内部也 reconfigure
@@ -428,11 +427,10 @@ pub fn discover(host: &dyn BeetsHost) -> Option<(ToolEntry, EntrySource)> {
 /// ## 为什么要显式下发 `BEETSDIR`
 ///
 /// 工具侧的家（`config.yaml` / 锁 / ops 登记簿 / 断点）全按 `AIYA_BEETS_HOME`
-/// 定位，而 beets 自己只认 `BEETSDIR`。以前靠工具"翻译"这一个方向，且遇到
-/// **外部已存在的** `BEETSDIR` 就直接让步——dev shell 里 export 过一个，
-/// 于是出现"beets 写 A 家、锁建在 B 家"：双家隔离静默失效，症状是"索引跑完了
-/// 却查不到"。现在两侧都钉死：宿主显式覆盖（`env()` 优先于继承值），
-/// 工具侧再在两者不等时 fail-fast。
+/// 定位，而 beets 自己只认 `BEETSDIR`。外部环境里残留的 `BEETSDIR` 会让
+/// **beets 写 A 家、锁建在 B 家**：双家隔离静默失效，症状是"索引跑完了
+/// 却查不到"。所以两侧都钉死：宿主显式覆盖（优先于继承值），
+/// 工具侧在两者不等时 fail-fast。
 fn tool_env(host: &dyn BeetsHost, profile: Profile) -> Vec<(String, String)> {
     let (root, dest) = roots_for_tools(host);
     env_pairs(&profile.home(host), root, dest, profile)
@@ -481,7 +479,7 @@ fn launcher_for(host: &dyn BeetsHost, entry: &ToolEntry, profile: Profile) -> La
 /// client 里再也写不出 `host.emit(...)`，宿主形态也就不会渗回协议层。
 /// 协议版本闸门：`None` = 兼容；`Some(文案)` = 拒用，并在文案里说清升哪一边。
 ///
-/// 为什么不做自动协商（docs/33 §4.4）：协商会产生"一半功能能用一半不能"的
+/// 为什么不做自动协商：协商会产生"一半功能能用一半不能"的
 /// 模糊状态，比直接失败更难排查。两侧各自独立升级，唯一安全的做法是**要么
 /// 完全匹配、要么明确拒绝**。
 ///
@@ -544,9 +542,8 @@ fn status_from(entry: &ToolEntry, source: EntrySource, report: StatusReport) -> 
 
 /// 编译期嵌入的镜像契约指纹（`protocol/aiya-beets-v2.meta.json` 的 sha256）。
 ///
-/// v2 接线 schemaHash 运行时比对（docs/35 P1-4 闭合）：工具自报的
-/// `schemaHash` 与它一比就知道"装的是不是同一版契约"——版本号相同但
-/// schema 字节不同（装错版本、手改过文件）从此骗不过宿主。meta 是提交
+/// 工具自报的 `schemaHash` 与它一比就知道"装的是不是同一版契约"——版本号
+/// 相同但 schema 字节不同（装错版本、手改过文件）骗不过宿主。meta 是提交
 /// 进仓的合法 JSON，include_str 把"文件不存在"变成编译错误。
 fn expected_schema_sha256() -> &'static str {
     static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -570,7 +567,7 @@ fn schema_matches(report: &StatusReport) -> bool {
 }
 
 /// 探测失败时的空壳（带诊断）。`entry` 有值时保留入口信息——用户需要知道
-/// "我们试着用了哪个程序"，否则报错只有一句"不可用"。
+/// "试着用了哪个程序"，否则报错只有一句"不可用"。
 fn absent(
     code: &str,
     message: Option<String>,
@@ -636,8 +633,8 @@ fn query_sidecar(
 /// 会话槽被占时的状态：组件**在**，只是这一刻读不到细节。
 ///
 /// 不能复用 [`absent`]：那条会把 `found` 置 false，UI 于是显示「未安装 beets」
-/// 并把用户踹到安装页——而真相是"你刚点的预览/整理还在跑"（整理一个批次
-/// 要发很多次查询），期间页面自己跳去了安装页，看起来像组件凭空没了。
+/// 并跳去安装页——而真相是预览/整理还在跑（整理一个批次
+/// 要发很多次查询），期间页面自己跳去安装页，看起来像组件凭空没了。
 ///
 /// `schema_matched` 保持 false（没拿到报告就谈不上契约匹配），UI 因此会禁用
 /// 写操作——这正合适：槽被占时本来也发不出写命令。
@@ -703,12 +700,12 @@ pub fn probe(host: &dyn BeetsHost) -> BeetsStatus {
 /// 也让下载路径能在本地用 `python -m http.server` 真实走一遍
 /// （`AIYA_BEETS_RELEASE_BASE=http://127.0.0.1:8000`）。
 ///
-/// `beets-latest` 更名——beets 包手动发布、每次更新都要整套实测，不该自称
-/// latest；版本 release 与通道一律 prerelease，仓库 "Latest" 永远只落在播放器上）。
+/// 通道 tag 是 `beets-portable` 而不是 `beets-latest`：beets 包每次更新都要整套
+/// 实测，不自称 latest；版本 release 与通道一律 prerelease，仓库 "Latest" 永远
+/// 只落在播放器上。
 ///
-/// 为什么不再用 `releases/latest/download`：那是"最近创建的 release"，而 beets
-/// 与播放器是两个独立发布节奏。beets 单独发一版，latest 就指过去；之后发播放器
-/// release（不带 beets 资产），这里又 404。两边互相踩。
+/// 为什么不用 `releases/latest/download`：它指"最近创建的 release"，而 beets
+/// 与播放器是两个独立发布节奏，latest 会在两边之间来回指、时不时 404。
 ///
 /// `release-beets.yml` 每次发布都会把同样两个资产 `--clobber` 到
 /// `beets-portable` 这个 prerelease 上，所以这里的 URL 永久稳定，与播放器发布
@@ -719,7 +716,7 @@ pub fn probe(host: &dyn BeetsHost) -> BeetsStatus {
 const RELEASE_BASE: &str =
     "https://github.com/yeraph-plus/aiya-music-player/releases/download/beets-portable";
 const BUNDLE_ASSET_WIN: &str = "beets-portable-win-x64.zip";
-/// Linux 轨产物（docs/67 §4）：服务器容器走 `AIYA_BEETS_BUNDLE` 本地文件，
+/// Linux 轨产物：服务器容器走 `AIYA_BEETS_BUNDLE` 本地文件，
 /// 这个名字只在"无本地覆盖、按平台下载"时被用到。
 const BUNDLE_ASSET_LINUX: &str = "beets-portable-linux-x64.zip";
 
@@ -735,7 +732,7 @@ fn bundle_asset() -> &'static str {
 ///
 /// schema、mock 里都没有入口，也就是**写了没人能设**——三层优先级实际只有两层
 /// 生效，剩下一层是死分支。真要支持镜像源，顺序是先给入口再留分支，反过来等于
-/// 没做。眼下环境变量这一层够用：CI 与本地演练都用它指过去。
+/// 没做。环境变量这一层够用：CI 与本地演练都用它指过去。
 ///
 /// 尾斜杠统一去掉：`{base}/{asset}` 拼出来不能出现 `//`（有些静态服务器会 404）。
 fn release_base() -> String {
@@ -842,15 +839,15 @@ fn verify_asset(path: &std::path::Path, kind: AssetKind) -> Result<usize, String
     }
 }
 
-/// 下载物的 sha256 校验（发布前审查 P1-6）。
+/// 下载物的 sha256 校验。
 ///
 /// `.pyz` 下载完要交给本机 Python 执行，是全链路里权限最高的工件，不能只验
 /// "是个 zip"。发布通道随包附 `SHA256SUMS`（release-beets.yml 生成、随两个
 /// 资产一起上传），下载后逐行比对。它防的是**传输与落盘完整性**（截断、代理
 /// 篡改、404 页、拿错资产），不防 GitHub 仓库本身被入侵——那要把哈希钉进
 /// 宿主二进制，但 beets 与播放器是两个发布节奏（固定下载通道 beets-portable），
-/// 钉死等于每次 beets 发版都要重发播放器。取舍写在这里，别当它是完备的
-/// 供应链防线；真要镜像源，先给入口再留分支（release_base 的注释同理）。
+/// 钉死等于每次 beets 发版都要重发播放器。所以这不是完备的
+/// 供应链防线；真要镜像源，先给入口再留分支（见 `release_base`）。
 fn verify_checksum(path: &std::path::Path, asset: &str, base: &str) -> Result<(), String> {
     use sha2::{Digest, Sha256};
     use std::io::Read as _;
@@ -975,8 +972,8 @@ const BIN_OVERALL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 /// `install --plugins <新清单> --previous <旧清单>`，帧逐行透传。
 ///
 /// 这是"换插件"的执行体：pip 装/卸、bins 补外部工具、配置同步全在脚本侧
-/// （install.py），宿主只负责拉起进程、转事件、看门狗收尸。两级超时与
-/// 安装器时代同款（pip 冷装几分钟；行间空闲 60s = 卡死）。
+/// （install.py），宿主只负责拉起进程、转事件、看门狗回收。两级超时同一套
+/// （pip 冷装几分钟；行间空闲 60s = 卡死）。
 fn run_env_manager(
     host: &dyn BeetsHost,
     entry: &ToolEntry,
@@ -1010,7 +1007,7 @@ fn run_env_manager(
         }
     };
     // 句柄唯一所有者是共享槽（AppState.beets_install_child）：本函数此后
-    // 经槽 wait/kill，应用退出（RunEvent::Exit）也经槽收尸。
+    // 经槽 wait/kill，应用退出（RunEvent::Exit）也经槽回收。
     let registry = host.install_registry();
     {
         let mut slot = registry
@@ -1041,7 +1038,7 @@ fn run_env_manager(
                 let code = c.wait().map_err(|e| {
                     format!("failed to wait for the environment manager to exit: {e}")
                 })?;
-                slot.take(); // 已收尸，退出路径不必再管
+                slot.take(); // 已回收，退出路径不必再管
                 Ok(code)
             }
             None => Err("install was interrupted by host exit".to_string()),
@@ -1062,7 +1059,7 @@ fn run_env_manager(
     Ok(())
 }
 
-/// B 轨道：展开套件包到 `{app_data}/beets-tool/bundle`。
+/// 展开套件包到 `{app_data}/beets-tool/bundle`。
 fn install_via_bundle(
     host: &dyn BeetsHost,
     zip_path: &std::path::Path,
@@ -1071,7 +1068,7 @@ fn install_via_bundle(
     install_bundle_to(&install_root(host).join("bundle"), zip_path, emit)
 }
 
-/// 下载外置工具：`<入口> bins --from-plugins a,b`（docs/53）。
+/// 下载外置工具：`<入口> bins --from-plugins a,b`。
 ///
 /// 为什么放在宿主侧、由安装流程顺带跑：这些东西是"插件能不能用"的前置，
 /// 而缺 ffmpeg 会让 beets 的**任何**子命令都起不来（实测
@@ -1081,7 +1078,7 @@ fn install_via_bundle(
 /// 为什么传**插件名**而不是 exe 名：哪个插件要哪个工具是工具侧的 `plugins.json`
 /// 说的（`binaries_for`）。宿主自己算就是第二份派生——两边算法一旦分家，
 /// 症状是"装了插件却没下工具"，而这条正是让 beets 全线起不来的那种故障。
-/// 内嵌表里已经不再有 `binaries` 段，宿主没有能力算，也就不可能算错。
+/// 内嵌表里没有 `binaries` 段，宿主没有能力算，也就不可能算错。
 fn run_bins(
     host: &dyn BeetsHost,
     entry: &ToolEntry,
@@ -1110,7 +1107,7 @@ fn run_bins(
         .take()
         .ok_or_else(|| "external tool download output was not captured".to_string())?;
 
-    // 句柄进共享槽：应用退出时统一收尸，别留下一个还在下 87MB 的孤儿进程
+    // 句柄进共享槽：应用退出时统一回收，不留一个还在下 87MB 的孤儿进程
     let registry = host.install_registry();
     {
         let mut slot = registry
@@ -1131,7 +1128,7 @@ fn run_bins(
         emit,
     );
 
-    // 从槽里取回来 wait：进程可能已经被退出流程收尸了，那就没有句柄可等
+    // 从槽里取回来 wait：进程可能已经被退出流程回收了，那就没有句柄可等
     let code = {
         let mut slot = registry
             .child
@@ -1258,11 +1255,9 @@ fn safe_relative(name: &str) -> Option<std::path::PathBuf> {
     (!out.as_os_str().is_empty()).then_some(out)
 }
 
-/// 解压上限：win 包实际约 30MB；linux 轨（docs/67）是完整 Python 运行时，
+/// 解压上限：win 包实际约 30MB；linux 轨是完整 Python 运行时，
 /// 未压缩 700MB+（libpython 一项 137MB），留一倍余量。不是防自己人，是防
 /// "被替换过的包"把磁盘写满——那种故障现场极难归因到一次安装。
-/// （首启实测踩过：512MB 旧闸把 linux 包解到一半按防篡改中止，错误帧只进
-/// 事件总线，表面上就是"装了没动静"。）
 const BUNDLE_MAX_BYTES: u64 = 1536 * 1024 * 1024;
 
 /// 展开套件包，**不用 `ZipArchive::extract`**。
@@ -1287,8 +1282,8 @@ fn extract_safely<R: std::io::Read + std::io::Seek>(
         let mut entry = zip
             .by_index(i)
             .map_err(|e| format!("failed to read a bundle entry: {e}"))?;
-        // zip 9 起 `name()` 返回 Result：条目名可能是非法编码（CP437 之外的未标注原始字节），旧版默默替换成 lossy
-        // 字符串——那会让路径校验对着"替换后的名字"做判断，与真实落盘名不符。宁可在这里失败。
+        // zip 9 起 `name()` 返回 Result：条目名可能是非法编码（CP437 之外的
+        // 未标注原始字节）。拿替换后的名字做路径校验会与真实落盘名不符，宁可在这里失败。
         let name = entry
             .name()
             .map_err(|e| format!("failed to read a bundle entry name: {e}"))?
@@ -1328,8 +1323,8 @@ fn extract_safely<R: std::io::Read + std::io::Seek>(
             .map_err(|e| format!("failed to write {}: {e}", dest.display()))?;
         std::io::copy(&mut entry, &mut out)
             .map_err(|e| format!("failed to unpack {}: {e}", dest.display()))?;
-        // unix 位随包还原（linux 轨：bin/python3 不可执行 = 组件装完即坏，
-        // spawn 全线 EACCES——首启实测踩过；win 条目没有 unix_mode，跳过）
+        // unix 位随包还原（linux 轨：bin/python3 没有执行位时 spawn 全线
+        // EACCES，组件装完即坏；win 条目没有 unix_mode，跳过）
         #[cfg(unix)]
         if let Some(mode) = entry.unix_mode() {
             use std::os::unix::fs::PermissionsExt as _;
@@ -1349,8 +1344,6 @@ fn remember_entry(host: &dyn BeetsHost, entry: &ToolEntry) -> Result<(), String>
     })
 }
 
-/// 安装互斥的 panic 兜底（同 refresh 的 FlagGuard 教训）：
-/// 任一退出路径（含 unwind）都必须复位，否则之后所有安装报 busy。
 /// 安装（异步）：立刻返回，进度走 `beets:install`，结束时补一条 finished。
 ///
 /// `plugins` 是用户在 UI 里勾的**启用清单**：安装器据此装额外依赖，
@@ -1361,7 +1354,7 @@ fn remember_entry(host: &dyn BeetsHost, entry: &ToolEntry) -> Result<(), String>
 /// finished 带**重新探测后的 status**：UI 不用再单独发一次查询，
 /// 也不会出现"装完了但状态块还是旧值"这种中间态。
 ///
-/// 并发互斥（发布前审查 P1-1）：同一时刻只允许一条安装线程。安装线程往
+/// 并发互斥：同一时刻只允许一条安装线程。安装线程往
 /// `beets_install_child` 这个单槽里塞句柄，两条线程并发时第二个会顶掉第一个
 /// ——收尾 kill/wait 错对象、误报"被退出中断"，pip 被中途杀还可能留半个
 /// venv。占位失败直接返回错误，UI 以 error 事件呈现。
@@ -1388,12 +1381,11 @@ pub fn start_install(
                 let path =
                     fetch_asset("AIYA_BEETS_BUNDLE", bundle_asset(), AssetKind::Bundle, &emit)?;
                 let entry = install_via_bundle(&*host, &path, &emit)?;
-                // 外置工具：两个轨道都跑，但缺的东西不一样 —— B 轨道
-                // 自带 Essentia 提取器，`exe_path` 会在包内 `bundle/bin`
-                // 里找到它；A 轨道没有，得现下。清单由**工具侧按插件名**自己算，
-                // 已经就位的会跳过，所以"包里带了"不会变成"再下一次 20MB"。
-                // 为什么非做不可：缺 ffmpeg 时 replaygain 会让 beets 整个 CLI
-                // 起不来（实测 `UserError: replaygain initialization failed`）。
+                // 外置工具：便携包自带 Essentia 提取器（`exe_path` 在包内
+                // `bundle/bin` 里找到它），其余按插件清单现下。清单由**工具侧
+                // 按插件名**自己算，已经就位的会跳过，所以"包里带了"不会变成
+                // "再下一次 20MB"。为什么非做不可：缺 ffmpeg 时 replaygain 会让
+                // beets 整个 CLI 起不来（实测 `UserError: replaygain initialization failed`）。
                 if !plugins.is_empty() {
                     run_bins(&*host, &entry, &plugins, &emit).map_err(|e| {
                         format!("component installed, but the external tools failed to download: {e} (click install again to fetch them)")
@@ -1432,7 +1424,7 @@ pub fn start_install(
 
 /// 换插件（操作桥）：把新清单写进 settings，再 spawn 包内解释器跑
 /// `install --plugins <新> --previous <旧>`——pip 装/卸的差量、外部工具补齐、
-/// 配置同步全在脚本侧，宿主只拉起进程、转事件、收尸。
+/// 配置同步全在脚本侧，宿主只拉起进程、转事件、看门狗回收。
 ///
 /// 与安装共用同一把互斥（beets_installing）与同一个事件通道（beets:install）：
 /// pip 改 site-packages 与解压套件包都不能并发，UI 也共用同一块进度区。
@@ -1568,10 +1560,10 @@ fn uninstall_plan(host: &dyn BeetsHost, root: &std::path::Path) -> Result<Uninst
         .stderr(std::process::Stdio::null())
         .envs(tool_env(host, Profile::Workbench));
     crate::proc::no_window(&mut cmd);
-    // 此前这里是全文件唯一无超时的子进程调用（`cmd.output()` 无限等退出）：
-    // dry-run 卡住时整个卸载线程永久挂在"有 progress 帧、永远等不到终态"。
-    // 改 spawn + 轮询 try_wait + 超时 kill，所有等待有界（其余子进程交互走
-    // StdioTool / pump_frames 的两级看门狗，不适用单次 output() 这种一问一答）。
+    // 不用 `cmd.output()`：它无限等退出，dry-run 卡住时整个卸载线程永久挂在
+    // "有 progress 帧、永远等不到终态"。spawn + 轮询 try_wait + 超时 kill，
+    // 所有等待有界（其余子进程交互走 StdioTool / pump_frames 的两级看门狗，
+    // 那是行流式场景，单次一问一答不适用）。
     let Ok(mut child) = cmd.spawn() else {
         return Ok(UninstallPlan::Unavailable);
     };
@@ -1656,7 +1648,7 @@ fn extract_message(v: &serde_json::Value) -> Option<String> {
 /// 插件，全在 `beets-tool/` 里，删它就等于全部撤回。
 /// `beets/`（整理家 library.db + ops.jsonl）与 `beets-index/`（分析库）虽然
 /// 也在同一个数据根下，但它们是用户资产、不是安装产物，**这里一个字节都不动**
-/// ——那些由应用自己的清理入口管。顺手删掉 1850 首的分析结果，是用户没让你做的事。
+/// ——那些由应用自己的清理入口管；分析结果（1850 首量级）不在卸载范围。
 pub fn start_uninstall(host: std::sync::Arc<dyn BeetsHost>) -> Result<(), String> {
     {
         // 与安装/换插件共用同一把互斥（beets_installing）：卸载删的正是安装
@@ -1760,7 +1752,7 @@ fn uninstall_now(host: &dyn BeetsHost, emit: &dyn Fn(serde_json::Value)) -> Resu
     Ok(())
 }
 
-/* B1/B2：导入会话（事件流转发） */
+/* 导入会话（事件流转发） */
 
 /// 取工具入口并造一个可直接起进程的 tool。
 ///
@@ -1775,7 +1767,7 @@ fn tool_or_err(host: &dyn BeetsHost) -> Result<StdioTool, String> {
     )))
 }
 
-/* B3：会话槽 + 取消 */
+/* 会话槽 + 取消 */
 
 /// 取消当前会话：写 cancel 行 → 关 stdin（对面收尾后 EOF 退出）。
 ///
@@ -1858,7 +1850,7 @@ pub fn start_preview(
 
 /// v2 幂等键：每次调用生成新值（`{cmd}-{unix 毫秒}-{进程内序号}`）。
 ///
-/// 单实例下宿主不重试，重放是协议层安全网 + 双实例防护（docs/41 §3.2）；
+/// 单实例下宿主不重试，重放是协议层安全网 + 双实例防护；
 /// 工具侧的 ops.jsonl 同时是操作审计日志。进程内自增序号保证同一毫秒内
 /// 的两次调用也不撞键。
 fn new_request_id(cmd: &str) -> String {
@@ -1873,7 +1865,7 @@ fn new_request_id(cmd: &str) -> String {
     format!("{cmd}-{ms}-{seq:04}")
 }
 
-/// B2：应用导入决策。decisions 形状由契约定义（ApplyDecision），
+/// 应用导入决策。decisions 形状由契约定义（ApplyDecision），
 /// 宿主不解释语义，只透传；完成后自动把工具侧结果对齐自有库（自闭环）。
 ///
 /// `resume`（v2）：中断后续跑——重发同一批 decisions，sidecar 按内容指纹
@@ -1928,7 +1920,7 @@ pub fn start_apply(
     )
 }
 
-/// 批 D 曲库维护任务的统一入口（adopt / update / duplicates / move）。
+/// 曲库维护任务的统一入口（adopt / update / duplicates / move）。
 ///
 /// 四条命令的公共部分完全一样：占会话位 → 起一次性子进程 → 事件流走
 /// `beets:maintenance` → 进程退出后按需跑一次读模型对账。差别只有 req 载荷
@@ -1937,7 +1929,7 @@ pub fn start_apply(
 ///
 /// `refresh` 为什么只有 adopt/move 给：这两条会改库的**内容与路径**——
 /// adopt 把文件登记进库（对账后 `tracks.beets_item_id` 才有值，而后续 move
-/// 的路径跟随正是靠这个双键，docs/29 §12）；move 把文件搬走，路径漂移必须
+/// 的路径跟随正是靠这个双键）；move 把文件搬走，路径漂移必须
 /// 立刻跟随，不能等用户下次扫描。update 只改标签（路径不变）、duplicates
 /// 纯只读，都不需要自动对账。
 fn start_maintenance(
@@ -2050,14 +2042,14 @@ pub fn start_enrich(
 
 /// 分析会话固定跑索引家。
 ///
-/// 抽成函数只为让测试能盯住它：直接写 `Profile::Index` 也能跑，但"哪天有人
-/// 顺手改成 `Workbench`（看起来更简单）"时，没有任何东西会红——而那个改动的
-/// 后果是 `item.remove()` + 按用户 config 重导，也就是**用户的歌被改**。
+/// 抽成函数只为让测试能盯住它：直接写 `Profile::Index` 也能跑，但改成
+/// `Workbench`（看起来更简单）不会有任何东西变红——而那个改动的后果是
+/// `item.remove()` + 按用户 config 重导，也就是**用户的歌被改**。
 pub fn enrich_profile() -> Profile {
     Profile::Index
 }
 
-/// 查询页固定跑**索引家**（docs/49 §3.7）。
+/// 查询页固定跑**索引家**。
 ///
 /// 与 `enrich_profile` 同理抽成函数：这条"改回工作台家"的改动不会有任何东西
 /// 变红，而症状是"整理库页永远查不到东西"——因为工作台家是用户自己的 beets 库，
@@ -2074,14 +2066,14 @@ pub fn query_profile() -> Profile {
 /// 混一条通道会让查询页的进度条在两种粒度之间跳。
 pub const INDEX_CHANNEL: &str = "beets:index";
 
-/// 只读入库：把 **`root`**（缺省＝曲库根）登记进索引家，不做分析（docs/49 §3.8）。
+/// 只读入库：把 **`root`**（缺省＝曲库根）登记进索引家，不做分析。
 ///
 /// 与 `start_enrich` 的分工很硬：
 /// * 这条 → "索引库里有行"，查询页的前提；
 /// * 那条 → "每个文件有分析结论"，`xtractor` 未接线时**整批**被拒。
 ///
-/// 曾经以为入库是分析的副产品，实测发现分析器没接好时连库都不建（`enrich`
-/// 直接 E_INVALID_ARG），于是筛选页永远 0 命中。所以两条路必须分开。
+/// 入库不是分析的副产品：分析器没接线时 `enrich` 直接拒绝（`E_INVALID_ARG`），
+/// 连库都不建——筛选页会永远 0 命中。所以两条路必须分开。
 ///
 /// ## 为什么 `root` 可传子目录（整理后补索引就走这条）
 ///
@@ -2095,7 +2087,7 @@ pub const INDEX_CHANNEL: &str = "beets:index";
 ///
 /// 82 s 里几乎全是**进程启动开销**（每批 `python -m beets import` 固定 ~0.85 s，
 /// 与批内文件数关系很小：实测 1 个已入库文件 0.88 s、20 个 1.25 s），不是解析。
-/// 所以"整理完顺手整根重扫"是不能接受的 82 秒，而落点通常只有一两批。
+/// 所以"整理完整根重扫"是不能接受的 82 秒，而落点通常只有一两批。
 ///
 /// 传子目录**不会被 `-R` 误跳过**：beets 的增量记忆（`statefile: state.pickle`
 /// 的 `taghistory`）记的是「一个导入任务的那批 paths 元组」，新文件组成新元组；
@@ -2132,17 +2124,15 @@ pub const NOT_INSTALLED: &str =
 /// 30 s 是给"库刚被整理过、SQLite 在补索引"留的余量。
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 读 beets 库（**索引家**，docs/49 §3.7 改了归属）。
+/// 读 beets 库（**索引家**）。
 ///
-/// 为什么现在查索引家：索引家的 `directory` 已经指向**曲库根**（docs/49 §3.1），
-/// 它就是"用户曲库的只读镜像"——库里的每一条 path 都必然在曲库里，分析字段
-/// （bpm / 情绪 / 流派）也只在这里有。反过来说，工作台家是用户自己的 beets 库，
-/// 应用从不往里面导，为空是常态（查到 0 条不是 bug，是"没配"）。
+/// 索引家的 `directory` 指向**曲库根**，它就是"用户曲库的只读镜像"——库里的
+/// 每一条 path 都必然在曲库里，分析字段（bpm / 情绪 / 流派）也只在这里有。
+/// 反过来说，工作台家是用户自己的 beets 库，应用从不往里面导，为空是常态
+/// （查到 0 条不是 bug，是"没配"）。
 ///
-/// 旧立论是"索引家是应用独占的只读副本、路径大概率不在曲库"，那是 `directory`
-/// 还是占位 `scratch` 时的情况，已经不成立。**兜底**：工具侧查询出口把 path
-/// 拼成绝对（`normpath(join(directory, path))`），宿主这边照旧只按 path 关联，
-/// 不假设路径形态。
+/// **兜底**：工具侧查询出口把 path 拼成绝对（`normpath(join(directory, path))`），
+/// 宿主这边照旧只按 path 关联，不假设路径形态。
 ///
 /// `rules` 与 `raw` 互斥（工具侧会拒）：不猜优先级，两个都给等于让调用方
 /// 把"我到底想要什么"外包给一个 if。
@@ -2192,14 +2182,14 @@ pub fn field_catalog(host: &dyn BeetsHost) -> Result<aiya_dto::beets::BeetsField
 
 /* 插件市场 */
 
-/// 插件表的**编译期内嵌**副本（唯一事实源是工具侧那个 JSON，docs/51 §1）。
+/// 插件表的**编译期内嵌**副本（唯一事实源是工具侧那个 JSON）。
 ///
 /// 为什么内嵌而不是"装完组件再问 sidecar"：安装页要在**什么都没装**的时候
 /// 就把"有哪些插件、各自要装什么"展示出来让用户勾选。这条路径上没有 serve
 /// 进程，只能靠编译期带一份。它和工具侧、打包脚本、安装器读的是同一个文件，
 /// 所以不存在"UI 说 A、安装器装 B"的漂移；`build.rs` 里有 rerun-if-changed。
 ///
-/// 双语分支（docs/64 §3.3）：英文基名 + `plugins-zh_Hans.json` 中文变体。
+/// 双语分支：英文基名 + `plugins-zh_Hans.json` 中文变体。
 /// 两份只有 `binaries[].why` / `vendor` 这两个展示字段允许不同，结构字段
 /// （name/target/carrier/size/sha256/bundle/probe/license）逐字节一致——
 /// 由 `catalog_contract.py` 的奇偶校验与 `plugin_table_variants` 单测共同守住。
@@ -2327,7 +2317,7 @@ mod tests {
         assert!(env.iter().all(|(k, _)| k != "AIYA_BEETS_SCAN_ROOT"));
     }
 
-    /// 曲库根与落点是**两个事实**，必须各走各的键（docs/49 §3.2）。
+    /// 曲库根与落点是**两个事实**，必须各走各的键。
     ///
     /// 合成一个变量时，用户把落点改成 `曲库/整理` 会把索引范围一起缩成那一块
     /// ——索引跑完却查不出东西，而配置看上去完全合规。这条测试盯的就是那个键。
@@ -2354,9 +2344,9 @@ mod tests {
 
     /// 子目录落点必须**真的生效**，不能静默回退成曲库根。
     ///
-    /// 这条是回归测试：`beets_set_target` 已经放宽到接受子目录，而
-    /// `roots_for_tools` 里曾经还写着严格相等，于是「选了子目录当落点」被
-    /// 静默判为非法、回退成曲库根——文件倒进曲库根，用户看不出是哪一步错了。
+    /// 落点下发判据（`roots_for_tools`）与校验判据（`beets_set_target`）分离时，
+    /// 一处放宽子目录另一处仍是严格相等：「选了子目录当落点」被静默判为非法、
+    /// 回退成曲库根——文件倒进曲库根，用户看不出是哪一步错了。
     /// 夹具按平台拆：落点判据走分隔符边界，盘符形态在 unix 上不是绝对路径。
     #[test]
     fn pick_dest_accepts_subdirectory() {
@@ -2418,12 +2408,11 @@ mod tests {
         assert_eq!(get("AIYA_BEETS_SCAN_ROOT"), "/music");
     }
 
-    /// **P0 的回归防线**：profile 必须由宿主显式下发。
+    /// profile 必须由宿主显式下发。
     ///
-    /// 这条测试存在的理由是它曾经不存在：`enrich` 走的是工作台家（用户真库），
-    /// 而 `-R` 重导前的 `item.remove()` 会把用户的条目删掉再按用户的 config
-    /// 重导——"点一下分析"= 改用户的歌。缺的不是代码，是**没有一条测试看着
-    /// 那句环境变量有没有被写上**。
+    /// `enrich` 若走工作台家（用户真库），`-R` 重导前的 `item.remove()` 会把
+    /// 用户的条目删掉再按用户的 config 重导——"点一下分析"= 改用户的歌。
+    /// 这条测试盯着那句环境变量有没有被写上。
     #[test]
     fn env_always_states_profile() {
         for (profile, want) in [(Profile::Workbench, "workbench"), (Profile::Index, "index")] {
@@ -2436,7 +2425,7 @@ mod tests {
         }
     }
 
-    /// 分析必须跑在索引家（P0 的第二条防线；第一条看 `env_always_states_profile`）。
+    /// 分析必须跑在索引家（配套测试：`env_always_states_profile`）。
     #[test]
     fn enrich_runs_in_index_home() {
         assert_eq!(
@@ -2446,7 +2435,7 @@ mod tests {
         );
     }
 
-    /// 查询/字段清单必须与分析同家（docs/49 §3.7）。
+    /// 查询/字段清单必须与分析同家。
     ///
     /// 分开看只是"少几行"，连起来看才是账单：字段清单来自索引库、查询打到工作台
     /// 库时，UI 会列出 bpm 这个字段而工作台库里根本没有它，用户看到的是
@@ -2459,7 +2448,7 @@ mod tests {
     /// 两个 crate 各自有一份"路径 → path_lower 键"的实现：`aiya-beets-store`
     /// 用它写结论库的行键，`aiya-data::repo` 用它回曲库换 `track_id`。
     ///
-    /// 它们**不能互相依赖**（那正是这次解耦要断的东西），所以只能靠断言锁在
+    /// 它们**不能互相依赖**（依赖正是边界要断的东西），所以只能靠断言锁在
     /// 一起：一旦一边改了归一规则，症状不是报错，而是"增强结果一条都对不上
     /// 曲目"——那种 bug 只有对着真库才会显形。这条测试把两边拉到同一批样本上。
     #[test]
@@ -2512,10 +2501,9 @@ mod tests {
             1,
             "索引家默认启用的插件数变了，确认是否有意"
         );
-        // 免配置包预置的插件：带外部命令的，那个命令必须**也随包发**。
-        // 以前这里的断言是"预置插件不许带 exe"（那会儿三个二进制都不进包）；
-        // Essentia 随包发之后规则变成"要带就带全"——否则装完的包里 xtractor
-        // 会被渲染侧剔掉（缺工具），用户看到的是"预置了但用不了"。
+        // 免配置包预置的插件：带外部命令的，那个命令必须**也随包发**（要带
+        // 就带全）——否则装完的包里 xtractor 会被渲染侧剔掉（缺工具），用户
+        // 看到的是"预置了但用不了"。
         let bundle_bins = bundle_binary_names();
         for r in rows.iter().filter(|r| r.bundle) {
             for dep in &r.exe {
@@ -2536,7 +2524,7 @@ mod tests {
     /// 内嵌表里 `binaries[].bundle` 的名字（与 `plugin_table` 读同一份 JSON）。
     ///
     /// 走 `Value` 而不是给 `PluginTableFile` 加字段：这一段**只有单测要**。
-    /// 运行时不再需要它——哪个插件要哪个工具由工具侧按插件名自己算
+    /// 运行时不需要它——哪个插件要哪个工具由工具侧按插件名自己算
     /// （`bins --from-plugins`），宿主算就是第二份派生。加字段就得挂
     /// `#[allow(dead_code)]`，那正是"运行时不用但为测试留着"的味道。
     fn bundle_binary_names() -> Vec<String> {
@@ -2553,7 +2541,7 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// 双语奇偶（docs/64 §3.3）：zh 变体与英文基名的**结构字段**必须逐字段
+    /// 双语奇偶：zh 变体与英文基名的**结构字段**必须逐字段
     /// 一致，只有 `binaries[].why` / `vendor` 允许不同。Python 侧
     /// `catalog_contract.py` 守仓库文件，这里守 Rust 内嵌的两份——两边都红
     /// 才能同时防住"改了仓库忘了重编"与"只改了一份"。
@@ -2623,7 +2611,7 @@ mod tests {
         assert_eq!(back.tool_path, cfg.tool_path);
         assert_eq!(back.inbox_imported, cfg.inbox_imported);
         assert_eq!(back.plugins, cfg.plugins);
-        // 旧版 settings.json 没有 plugins 键：必须能读（否则升级后所有设置
+        // 缺 plugins 键的 settings.json 必须能读（否则升级后所有设置
         // 一起回落默认值，用户看到的是"我的配置没了"）
         let old = r#"{"toolPath":"C:/x/aiya-beets.exe","inboxImported":[]}"#;
         std::fs::write(&path, old).unwrap();
@@ -2670,8 +2658,8 @@ mod tests {
 
     /// 子目录落点必须**显示成生效值**，否则界面说"落到曲库根"、实际写到子目录。
     ///
-    /// 也改了，但 `config_view_of` 还留着严格相等 —— UI 显示 `D:\CkMsr\Music`，
-    /// 而工具拿到的 `AIYA_BEETS_DEST` 是 `D:\CkMsr\Music\_整理测试`。
+    /// 显示判据与下发判据（`tool_env` 的 `AIYA_BEETS_DEST`）不是同一条时，
+    /// 界面显示的就是回退后的曲库根，而工具拿到的落点是子目录。
     #[test]
     fn config_view_shows_subdirectory_target() {
         let roots = vec!["D:/Music".to_string()];
@@ -2772,7 +2760,7 @@ mod tests {
         assert!(err.contains("empty file"), "{err}");
     }
 
-    /// B 轨道的展开 + 入口校验：入口由 manifest 说了算（播放器不猜布局）。
+    /// 套件包的展开 + 入口校验：入口由 manifest 说了算（播放器不猜布局）。
     #[test]
     fn bundle_unpack_follows_manifest_entry() {
         let zip_bytes = make_zip(&[
@@ -2859,7 +2847,7 @@ mod tests {
         assert!(st.schema_matched);
         assert_eq!(st.library_lock.as_deref(), Some("free"));
         assert!(st.library_lock_holder.is_none());
-        // 三态是 的修法：不能只报"配置里开着"，要报"能不能干活"
+        // 能力三态：不能只报"配置里开着"，要报"能不能干活"
         let health = st.plugin_health.expect("pluginHealth 必须解析");
         assert_eq!(health[0].state, "missing_deps");
         assert_eq!(health[0].missing, vec!["bs4".to_string()]);
@@ -2868,10 +2856,9 @@ mod tests {
 
     /// 未装工具时给的是**可解释的状态**，不是崩溃、也不是空对象。
     ///
-    /// docs/33 §3.1 的硬原则要求"未装 beets 时核心功能全通"；依赖隔离那条
-    /// 已由 `tools/check-boundary.mjs` 守住（核心 crate 连依赖都不许有）。
-    /// 这里补的是另一半：beets 自己的命令面在未装时必须回一个带错误码的
-    /// 状态，让 UI 能说清"没装"而不是"出错了"。
+    /// "未装 beets 时核心功能全通"有两半：依赖隔离由 `tools/check-boundary.mjs`
+    /// 守住（核心 crate 连依赖都不许有）；beets 自己的命令面在未装时必须回一个
+    /// 带错误码的状态，让 UI 能说清"没装"而不是"出错了"。
     #[test]
     fn absent_status_carries_code_and_entry() {
         let entry = ToolEntry {
@@ -2887,7 +2874,7 @@ mod tests {
         assert!(!st.found);
         assert_eq!(st.error_code.as_deref(), Some("E_TOOL_NOT_FOUND"));
         assert_eq!(st.error_message.as_deref(), Some("找不到"));
-        // 用户排障要知道"我们试着用了哪个程序、从哪找的"
+        // 用户排障要知道"试着用了哪个程序、从哪找的"
         assert_eq!(st.interpreter.as_deref(), Some("C:/x/aiya-beets.exe"));
         assert_eq!(st.script_path.as_deref(), Some("serve"));
         assert_eq!(st.entry_source.as_deref(), Some("path"));
@@ -2899,9 +2886,9 @@ mod tests {
 
     /// 忙碌（会话槽被占）**不是**不可用：`found` 必须留 true。
     ///
-    /// 撞上会话槽返回 Busy，`probe` 把它统一翻成 `E_BEETS_UNREACHABLE`，
-    /// 于是 `found=false` → 整理库页自行跳到"未安装"的安装页。用户看到的
-    /// 是"组件凭空消失"，实际只是他自己刚点的预览还在跑。
+    /// 把 Busy 当不可达（`found=false`）的话，整理库页会自行跳到"未安装"的
+    /// 安装页——用户刚点的预览还在跑，看起来像组件凭空消失。`busy_status`
+    /// 用 `E_BEETS_BUSY` 堵住这条误判。
     #[test]
     fn busy_status_stays_found() {
         let entry = ToolEntry {
@@ -2918,9 +2905,8 @@ mod tests {
 
     /// 协议版本不符 → **工具存在但不可用**，且必须说清升哪一边。
     ///
-    /// 这条守的是 docs/33 §4.4 的"不做自动协商"：两侧独立发布之后，
-    /// 版本不匹配是**常态**，不能表现为"功能时好时坏"，只能表现为
-    /// 一句能照做的话。
+    /// "不做自动协商"：两侧独立发布，版本不匹配是**常态**，不能表现为
+    /// "功能时好时坏"，只能表现为一句能照做的话。
     #[test]
     fn protocol_mismatch_marks_tool_unusable() {
         let entry = ToolEntry {
@@ -3002,9 +2988,9 @@ mod tests {
         }
     }
 
-    /// B 轨道套件包（自带 embeddable 解释器 + 包在 Lib/site-packages）能命中工具。
+    /// 套件包（自带 embeddable 解释器 + 包在 Lib/site-packages）能命中工具。
     ///
-    /// 这条守的是 B 轨道的核心前提：套件包**不需要系统装 Python**，
+    /// 这条守的是分发的核心前提：套件包**不需要系统装 Python**，
     /// 解压到任意路径都能跑。产物由 `beets-tool/tools/build_bundle.py` 生成，
     /// 没生成就跳过（clean checkout / CI 上默认不跑这条）。
     ///
@@ -3054,10 +3040,9 @@ mod tests {
         assert!(status.python_version.is_some(), "自带解释器应自报版本");
     }
 
-    /// 端到端：真 sidecar dump_items（dev venv + dev 隔离库，B2 冒烟留下的 3 条）
+    /// 端到端：真 sidecar dump_items（dev venv + dev 隔离库，冒烟脚本留下的 3 条）
     /// → Rust 逐行解析（协议形状锚点）。
-    /// 对账已随 docs/43 §8-E 整体移除；dump_items 保留为协议命令
-    /// （诊断/未来显式流程用），宿主没有常规调用方。
+    /// dump_items 保留为协议命令（诊断/未来显式流程用），宿主没有常规调用方。
     #[cfg(debug_assertions)]
     #[test]
     fn dump_parse_end_to_end() {

@@ -13,7 +13,7 @@ pub enum ToolError {
     #[error("failed to start external tool {program}: {message}")]
     Spawn { program: String, message: String },
 
-    /// 工具在超时内没有任何应答。调用方负责收尸，这里只报事实。
+    /// 工具在超时内没有任何应答。调用方负责回收进程，这里只报事实。
     #[error("external tool did not respond within {timeout:?}")]
     Timeout { timeout: Duration },
 

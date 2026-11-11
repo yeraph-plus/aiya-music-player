@@ -1,8 +1,7 @@
 //! 工具门面：宿主只用这一个 trait 说话。
 //!
-//! 现在的实现是「每次操作起一个短进程」（`StdioTool`）。将来若要换成常驻
-//! worker 或本地 socket，只需另写一个 impl，`src-tauri` 的调用点一个字不用改
-//! ——这正是 M1 把接口先抽出来的目的。
+//! 当前实现是「每次操作起一个短进程」（`StdioTool`）。将来若要换成常驻
+//! worker 或本地 socket，只需另写一个 impl，调用点一个字不用改。
 
 use std::sync::Arc;
 use std::time::Duration;
