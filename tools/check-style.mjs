@@ -34,7 +34,7 @@ const SKIP_DIRS = new Set([
   'node_modules', 'dist', 'target', 'test-results',
   'generated', 'binaries', 'gen', 'bindings',
 ]);
-const EXTS = new Set(['.rs', '.ts', '.svelte', '.mjs']);
+const EXTS = new Set(['.rs', '.ts', '.svelte', '.mjs', '.css', '.sql']);
 
 // 高精度禁词：口语词与拟人叙事（语域共同禁令）。
 const BANNED = /(人话|拍板|顺手|翻车|搞定|抽风|收尸)/g;
@@ -87,6 +87,7 @@ function makeCommentState(ext) {
       return true;
     }
     if (t.startsWith('//')) return true;   // 覆盖 rs 的 /// 与 //!、ts 的 //
+    if (ext === '.sql' && t.startsWith('--')) return true;
     if (ext === '.svelte' || ext === '.ts' || ext === '.mjs') {
       if (t.startsWith('*')) return true;  // 块注释续行兜底
     }

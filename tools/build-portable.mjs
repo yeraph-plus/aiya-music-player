@@ -102,7 +102,7 @@ for (const [src, rel] of licenseFiles) put(src, rel);
 writeFileSync(join(stage, "portable.txt"), `${product} ${version} 便携版\n`, "utf8");
 writeFileSync(join(stage, "README.txt"), readme.replace(/\n/g, "\r\n"), "utf8");
 
-// 调试用：只展开目录，不打 zip（以前这个判断放在最后，参数名与实际行为不符）
+// 调试用：只展开目录，不打 zip（参数名与实际行为一致，判断放在展开之前）
 if (process.argv.includes("--no-zip")) {
   console.log(`[portable] OK（未打包） ${relative(root, stage)}`);
   process.exit(0);

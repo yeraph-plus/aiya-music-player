@@ -237,8 +237,8 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 ### 4.4 自动检查
 
 `tools/check-style.mjs` 接入 `verify` 与 CI（`check:style:strict`），扫描 Rust
-（crates/、src-tauri/）、前端（ui/src/、ui/e2e/，排除生成物）与构建脚本
-（tools/*.mjs）。日期戳（含月戳与 `YYYY 年`）与 docs 引用（`docs/NN`、
+（crates/、src-tauri/）、前端（ui/src/、ui/e2e/，排除生成物）、构建脚本
+（tools/*.mjs）与样式/迁移注释（.css、.sql——注释形态块注释与 `--`）。日期戳（含月戳与 `YYYY 年`）与 docs 引用（`docs/NN`、
 `notes/`、`ADR-`；裸 `§` 为 GPL 条款/源码定位等合法引用，不拦）在**任何注释
 形态**（`//`、`///`、`//!`、块注释、JSDoc、HTML 注释）都是阻断，无延后桶。
 存量经 `tools/check-style-allowlist.json` 豁免并按**棘轮**只减不增：分区
