@@ -3,7 +3,7 @@ import type { DroppedKind } from "./DroppedKind";
 
 export type DroppedItem = { path: string, kind: DroppedKind, 
 /**
- * 人话补充：不支持时说格式名，文件夹说"文件夹"
+ * 可读补充：不支持时说格式名，文件夹说"文件夹"
  */
 note: string, 
 /**
