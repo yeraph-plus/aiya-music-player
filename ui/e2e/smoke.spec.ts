@@ -78,9 +78,12 @@ test('启动装配：顶栏四件 + 仪表盘三级 + 播放条空态', async ({
   await expect(page.locator('.sidebar .playlist-item')).not.toHaveCount(0);
   // 背景四层是全应用的——推荐页也有背景渐变层；
   // 沉浸档：可读性遮罩 veil 整层删除（不再有 .ambient-veil），断言其缺席。
+  // 动态层恰好一条渲染路径：GL 档（tier≥2）是 .ambient-flow，软件光栅
+  // （CI headless Edge 实测落档 1）走 2D 兜底 .ambient-spectrum——钉哪条
+  // 都等于把宿主 GPU 能力写死进断言，钉"二选一"才是层结构本身的契约。
   await expect(page.locator('.ambient-art')).toHaveCount(1);
   await expect(page.locator('.ambient-veil')).toHaveCount(0);
-  await expect(page.locator('.ambient-spectrum')).toHaveCount(0);
+  await expect(page.locator('.ambient-flow, .ambient-spectrum')).toHaveCount(1);
 });
 
 test('歌单：侧栏点开 → 标题与列表来自该歌单', async ({ page }) => {

@@ -7,6 +7,8 @@
 
 <!-- 每条一行：- YYYY-MM-DD · 代码位置 · 事实/取舍 · 来龙去脉（可选） -->
 
+- 2026-11-12 · ui/e2e/smoke.spec.ts · e2e 启动装配用例环境假设修正（批 0.6 收尾）：`.ambient-spectrum` toHaveCount(0) 把「宿主 WebGL 落档 ≥2」写死进断言——CI headless Edge 软件光栅实测落档 1（detectCapability tier 1 → 2D 兜底画布合法挂载，11-05 后 runner Edge 自动更新起红），本地有 GPU 恒绿所以只在线上炸；修法是钉层结构本来的契约「动态层恰好一条渲染路径」（`.ambient-flow, .ambient-spectrum` 二选一 toHaveCount(1)），GPU 能力不进断言 ｜ 验证：本地 e2e 44/44 绿；CI 实证随 run 48
+
 - 2026-11-12 · AGENTS §2.2、tools/cdp-probe.mjs、crates/aiya-data/tests/perf_50k.rs · 流程位收口（批 H 前半，docs/71 §4）：cdp-probe 的启动 runbook 从脚本头注释挪 §2.2 命令表（执行流程/命令序列归 §2.2 不进 ledger——脚本头只留"是什么/为什么/判定/实现要点"，指向表位置用裸 § 不带文件名）；probe:exclusive / probe:clock / smoke:output 三条既有脚本补进 §2.2（probe:matrix 刻意不进——output_matrix 已降级为对照工具，现行判"声音在走"的口径是 clock_probe 与 smoke:mode）；perf_50k.rs 头注释与 #[ignore] 说明里的裸 cargo 命令删重（注册位是 bench:50k，注释只留 npm 命令名）
 
 - 2026-11-12 · tools/check-style.mjs、tools/comment-gov/scan.py、tools/check-style-allowlist.json、package.json、.github/workflows/ci.yml、AGENTS §4.4 · 门禁四洞加固 + L2 棘轮（批 B，docs/71 §3）：①CI verify job 补注释文风门禁步（setup-python 3.12 + check:style:strict + check:style:py + comment-gov verify）——strict 此前只挂本地 verify，CI 不跑是治理失效根因；②DATE 正则放宽（月戳 20\d{2}-\d{2}、\d{4}年、斜杠/点分形态同查）——旧则要求两位日，月戳全部漏检；③叙事词（旧实现/此前/曾经/以前/旧版/事故）进 report 桶观察（先跑两周看误报再议升级）；④scan.py 加 --check/--emit-allowlist（# 注释与 docstring 同为注释面，独立轻量状态机失败封闭：单引号串内 # 不算注释、三引号内部全算），npm check:style:py 接进 verify 链；L2 延后桶取消（拍板 1 落地）：日期/引用在任何注释形态都是阻断，存量机械生成豁免 355 条（JS/Rust 255 行 + Python 100 行——253 处旧 L2 命中 + 正则放宽后新可见命中，按行去重）进 check-style-allowlist.json，分区治理只删不增、烧完回归裸阻断，不新增豁免 ｜ 负向验证：JS/Python 双侧注入违规 → 退出码 1，还原 → 绿；test_scan.py 全过；白名单生成语义为合并式（check-style 与 comment-gov 共用同一文件互不覆盖）
