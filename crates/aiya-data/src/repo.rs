@@ -1247,42 +1247,67 @@ mod tests {
         assert!(got.truncated, "被 max 截断必须显式告知调用方");
     }
 
-    /// 归一：分隔符两种写法要落到同一个键；重复归一等价（幂等）。
+    /// 归一：大小写折叠全平台；分隔符折叠是 Windows 语义（unix 上反斜杠是
+    /// 合法文件名字符，不可折叠，见 [`path_key`] 的平台分支）。重复归一等价（幂等）。
     #[test]
     fn path_key_folds_separators_and_case() {
-        let a = path_key(r"D:\Music\A\01 - Song.flac");
-        let b = path_key("d:/music/a/01 - song.flac");
-        assert_eq!(a, b, "分隔符与大小写不同的同一路径必须是同一个键");
-        assert_eq!(path_key(&a), a, "对已归一的键再归一次不能变");
-        assert!(a.is_ascii() && !a.contains('/'), "键里不该留正斜杠");
+        if cfg!(windows) {
+            let a = path_key(r"D:\Music\A\01 - Song.flac");
+            assert_eq!(
+                a,
+                path_key("d:/music/a/01 - song.flac"),
+                "分隔符与大小写不同的同一路径必须是同一个键"
+            );
+            assert!(a.is_ascii() && !a.contains('/'), "键里不该留正斜杠");
+        } else {
+            assert_eq!(
+                path_key("/Music/A/01 - Song.flac"),
+                path_key("/music/a/01 - song.flac"),
+                "大小写不同的同一路径必须是同一个键"
+            );
+        }
+        let k = if cfg!(windows) {
+            path_key(r"D:\Music\A\01.flac")
+        } else {
+            path_key("/Music/A/01.flac")
+        };
+        assert_eq!(path_key(&k), k, "对已归一的键再归一次不能变");
     }
 
-    /// 反查：调用方递**原始路径**（正斜杠、大小写随意）也要能换到 id。
+    /// 反查：调用方递**原始路径**（分隔符/大小写与库内写法不同）也要能换到 id。
     ///
     /// fixture 里的路径是 `/m/1.flac` 这种 POSIX 写法，只适合查列表逻辑；
-    /// 命中测试要另插一行**Windows 原生路径**——真实曲库是扫描器走 PathBuf
-    /// 写进去的，形状就该是 `D:\Music\...`。
+    /// 命中测试要另插一行**平台原生路径**——真实曲库是扫描器走 PathBuf
+    /// 写进去的，形状随宿主平台走（Windows `D:\Music\...`、unix `/music/...`）。
     #[test]
     fn track_ids_by_paths_matches_after_normalizing() {
         let conn = open_in_memory().unwrap();
         insert_fixtures(&conn);
-        let stored = path_key(r"D:\Music\A\01.flac");
+        let (native, variant, miss) = if cfg!(windows) {
+            (
+                r"D:\Music\A\01.flac",
+                "d:/music/a/01.flac",
+                r"D:\Music\A\02.flac",
+            )
+        } else {
+            ("/Music/A/01.flac", "/music/a/01.FLAC", "/Music/A/02.flac")
+        };
+        let stored = path_key(native);
         conn.execute(
             "INSERT INTO tracks (id,title,title_norm,added_at,path,path_lower,size_bytes,mtime)
              VALUES ('tw','x','x',1,?1,?2,1,1)",
-            rusqlite::params![r"D:\Music\A\01.flac", stored],
+            rusqlite::params![native, stored],
         )
         .unwrap();
 
-        let raw = vec!["d:/music/a/01.flac".to_string()];
-        let got = track_ids_by_paths(&conn, &raw).unwrap();
+        let got = track_ids_by_paths(&conn, &[variant.to_string()]).unwrap();
         assert_eq!(
             got.get(&stored).map(String::as_str),
             Some("tw"),
             "分隔符与大小写不同的同一路径必须换到 id"
         );
 
-        let miss = track_ids_by_paths(&conn, &[r"D:\Music\A\02.flac".to_string()]).unwrap();
+        let miss = track_ids_by_paths(&conn, &[miss.to_string()]).unwrap();
         assert!(miss.is_empty(), "查不到就返回空表，不是报错也不是造行");
     }
 
@@ -1295,23 +1320,33 @@ mod tests {
     fn resolve_paths_aligned_keeps_order_and_marks_misses() {
         let conn = open_in_memory().unwrap();
         insert_fixtures(&conn);
+        let (p1, p2, variant2, miss) = if cfg!(windows) {
+            (
+                r"D:\Music\A\01.flac",
+                r"D:\Music\A\02.flac",
+                "d:/music/a/02.flac", // 分隔符与大小写都不同，仍要命中
+                r"D:\Music\Z\99.flac",
+            )
+        } else {
+            (
+                "/Music/A/01.flac",
+                "/Music/A/02.flac",
+                "/music/a/02.FLAC", // 大小写不同，仍要命中
+                "/Music/Z/99.flac",
+            )
+        };
         conn.execute(
             "INSERT INTO tracks (id,title,title_norm,added_at,path,path_lower,size_bytes,mtime)
              VALUES ('ta','a','a',1,?1,?2,1,1), ('tb','b','b',1,?3,?4,1,1)",
-            rusqlite::params![
-                r"D:\Music\A\01.flac",
-                path_key(r"D:\Music\A\01.flac"),
-                r"D:\Music\A\02.flac",
-                path_key(r"D:\Music\A\02.flac"),
-            ],
+            rusqlite::params![p1, path_key(p1), p2, path_key(p2),],
         )
         .unwrap();
 
         let paths = vec![
-            r"D:\Music\Z\99.flac".to_string(), // 未入库
-            r"D:\Music\A\01.flac".to_string(),
-            r"d:/music/a/02.flac".to_string(), // 大小写与分隔符都不同，仍要命中
-            r"D:\Music\A\01.flac".to_string(), // 重复路径：逐条给答案，不去重
+            miss.to_string(), // 未入库
+            p1.to_string(),
+            variant2.to_string(),
+            p1.to_string(), // 重复路径：逐条给答案，不去重
         ];
         let got = resolve_paths_aligned(&conn, &paths).unwrap();
         assert_eq!(

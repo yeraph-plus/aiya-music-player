@@ -293,9 +293,25 @@ mod tests {
 
     #[test]
     fn url_and_percent_decoding() {
-        let es = parse("file:///C:/My%20Music/a.flac\nC:/My%20Music/b.flac\n");
-        assert_eq!(es[0].target, p("C:/My Music/a.flac"));
-        assert_eq!(es[1].target, p("C:/My Music/b.flac"));
+        // 绝对 URL 解 scheme + 裸路径百分号解码。盘符形态是 Windows 语义
+        // （file:///C:/ 的前导斜杠按平台剥），unix 用根路径形态守同一条
+        // 解码契约。
+        let (with_scheme, bare, decoded_first) = if cfg!(windows) {
+            (
+                "file:///C:/My%20Music/a.flac",
+                "C:/My%20Music/b.flac",
+                "C:/My Music/a.flac",
+            )
+        } else {
+            (
+                "file:///my%20music/a.flac",
+                "/my%20music/b.flac",
+                "/my music/a.flac",
+            )
+        };
+        let es = parse(&format!("{with_scheme}\n{bare}\n"));
+        assert_eq!(es[0].target, p(decoded_first));
+        assert_eq!(es[1].target, p(&bare.replace("%20", " ")));
     }
 
     /// 相对路径必须规范化：`..` 不消掉的话，导入侧按 path_lower 精确对账
@@ -315,6 +331,7 @@ mod tests {
     }
 
     /// 规范化不越界：到根之后 `..` 保留原样，不许静默上移成别处。
+    /// 根的形态随平台走：Windows 是盘符根（`D:/`），unix 是文件系统根（`/`）。
     #[test]
     fn normalization_does_not_climb_past_root() {
         // 相对 base 上不去的 .. 保留（消掉就等于凭空吞了真实层级）
@@ -322,10 +339,15 @@ mod tests {
             parse_playlist("../../x.flac\n", Path::new("m")).unwrap()[0].target,
             Path::new("..").join("x.flac")
         );
-        let t = parse_playlist("D:/../x.flac\n", Path::new("m")).unwrap()[0]
+        let entry = if cfg!(windows) {
+            "D:/../x.flac\n"
+        } else {
+            "/../x.flac\n"
+        };
+        let t = parse_playlist(entry, Path::new("m")).unwrap()[0]
             .target
             .clone();
-        assert!(t.is_absolute(), "盘符根不可被 .. 吃掉：{t:?}");
+        assert!(t.is_absolute(), "根不可被 .. 吃掉：{t:?}");
         assert!(
             t.to_string_lossy().contains(".."),
             "根之后的 .. 应保留而不是静默上移：{t:?}"
@@ -399,30 +421,42 @@ mod tests {
 
     #[test]
     fn render_relative_under_base_dir() {
+        // 库内相对化/库外保绝对。盘符路径只在 Windows 上是绝对路径——unix
+        // 分支用根路径形态守同一契约，否则相对化判定在 unix 上整个空转。
+        let (base, inner, outside) = if cfg!(windows) {
+            (Path::new("D:/m"), "D:/m/songs/a.flac", "D:/other/b.flac")
+        } else {
+            (Path::new("/m"), "/m/songs/a.flac", "/other/b.flac")
+        };
         let s = render_playlist(
             &[
-                item("D:/m/songs/a.flac", None, "内", 1000),
-                item("D:/other/b.flac", None, "外", 1000),
+                item(inner, None, "内", 1000),
+                item(outside, None, "外", 1000),
             ],
-            Path::new("D:/m"),
+            base,
             true,
         );
         assert!(s.contains("songs/a.flac\n"), "库内相对化：{s}");
-        assert!(s.contains("D:/other/b.flac\n"), "库外保持绝对：{s}");
+        assert!(s.contains(&format!("{outside}\n")), "库外保持绝对：{s}");
     }
 
     #[test]
     fn render_parse_roundtrip() {
+        let (base, p_a, p_b) = if cfg!(windows) {
+            (Path::new("D:/m"), "D:/m/a.flac", "D:/m/sub/b.mp3")
+        } else {
+            (Path::new("/m"), "/m/a.flac", "/m/sub/b.mp3")
+        };
         let items = vec![
-            item("D:/m/a.flac", Some("歌手甲"), "歌一", 200_000),
-            item("D:/m/sub/b.mp3", None, "歌二", 95_500),
+            item(p_a, Some("歌手甲"), "歌一", 200_000),
+            item(p_b, None, "歌二", 95_500),
         ];
-        let text = render_playlist(&items, Path::new("D:/m"), true);
-        let es = parse_playlist(&text, Path::new("D:/m")).unwrap();
+        let text = render_playlist(&items, base, true);
+        let es = parse_playlist(&text, base).unwrap();
         assert_eq!(es.len(), 2);
         assert_eq!(es[0].duration_sec, Some(200));
         assert_eq!(es[0].artist.as_deref(), Some("歌手甲"));
         assert_eq!(es[0].title.as_deref(), Some("歌一"));
-        assert_eq!(es[1].target, p("D:/m/sub/b.mp3"), "相对路径回读要落回原位");
+        assert_eq!(es[1].target, p(p_b), "相对路径回读要落回原位");
     }
 }

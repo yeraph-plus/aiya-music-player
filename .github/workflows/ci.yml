@@ -141,7 +141,9 @@ jobs:
         run: cargo fmt --check
 
       - name: test（aiya-server 依赖图全量，含 cfg(unix) 用例）
-        run: cargo test -p aiya-server -p aiya-host-core -p aiya-data -p aiya-player -p aiya-dto -p aiya-beets-client -p aiya-beets-store
+        # --no-fail-fast：unix 用例是首上线（68f4167），潜伏红会分层暴露——
+        # fail-fast 一轮只揭一层，全量报告一轮看全。
+        run: cargo test --no-fail-fast -p aiya-server -p aiya-host-core -p aiya-data -p aiya-player -p aiya-dto -p aiya-beets-client -p aiya-beets-store
 
   beets:
     name: beets 契约与维护 smoke
