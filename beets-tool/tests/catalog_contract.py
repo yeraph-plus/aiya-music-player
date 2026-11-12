@@ -10,8 +10,7 @@
   [4] packages_for：未知名字必须抛错（静默跳过 = 勾了 A 装了 B）
   [5] bundle 与外部二进制的关系：包里带着的插件，它的 exe 必须也随包发
   [6] 负向十三连：把表改坏（含 binaries 载体与引用），校验必须逐个变红
-  [7] 双语奇偶：plugins-zh_Hans.json（存在时）除 binaries[].why/vendor 外
-      任何字段都必须与基名逐字段一致
+  [7] zh 文本归档：binaries[].whyZh/vendorZh 16 条全覆盖（双语内容随表归档）
 
 只读表，不写盘，不碰 beets 运行时。
 """
@@ -40,7 +39,7 @@ OPTIONAL_KEYS = {"indexForced"}
 BINARY_KEYS = {
     "name", "target", "bundle", "why", "carrier", "size", "sha256", "license", "vendor",
 }
-BINARY_OPTIONAL = {"probe", "probeAllowFail", "platforms"}
+BINARY_OPTIONAL = {"probe", "probeAllowFail", "platforms", "whyZh", "vendorZh"}
 BINARY_BOOLS = ("bundle",)
 CARRIER_KEYS = {"kind", "url", "size", "sha256", "member"}
 
@@ -265,52 +264,6 @@ def validate(doc: dict) -> list[str]:
     return errs
 
 
-def check_parity(base: dict, zh: dict) -> list[str]:
-    """双语奇偶校验：zh 变体只许在展示字段（why/vendor）上不同。
-
-    `plugins-zh_Hans.json` 是 UI 的中文变体（Rust 宿主 include_str! 两份、按
-    应用设置语言二选一，变体缺失回退英文基名；py 侧永远只读基名）。两份表
-    人工维护，没有这道闸必然漂：改了基名的下载地址忘了改变体，症状是"中文
-    界面装出旧文件"。所以**结构字段逐字段一致**是硬约束——载体的 url/sha256/
-    size/member、落点 target、体积与校验和、license 文件 id，任何一边单改
-    都必须在这里变红。only why/vendor may differ, and both sides non-empty.
-    """
-    errs: list[str] = []
-    # plugins[] 只有 title/note 这类单语展示字段（双语化另走 i18n），整段必须一致
-    for key in ("schema", "beets", "profiles", "plugins"):
-        if base.get(key) != zh.get(key):
-            errs.append(f"{key} 段两份不一致（该段没有双语字段，必须逐字节一致）")
-
-    bins_b = base.get("binaries") or []
-    bins_z = zh.get("binaries") or []
-    if len(bins_b) != len(bins_z):
-        return errs + [f"binaries 条数不一致：{len(bins_b)} / {len(bins_z)}"]
-
-    for i, (b, z) in enumerate(zip(bins_b, bins_z)):
-        tag = b.get("name") or f"binaries[{i}]"
-        if b.get("name") != z.get("name"):
-            errs.append(
-                f"binaries[{i}] 名字/顺序不一致：{b.get('name')!r} / {z.get('name')!r}"
-            )
-            continue
-        # 除 why/vendor 外的**每一个键**都必须一致（含 probe/probeAllowFail），
-        # 比逐字段点名更严：新增结构键时自动纳入把守范围
-        for key in sorted(set(b) | set(z)):
-            if key in ("why", "vendor"):
-                continue
-            if b.get(key) != z.get(key):
-                errs.append(f"{tag}: {key} 两份不一致")
-        bc, zc = b.get("carrier") or {}, z.get("carrier") or {}
-        for key in sorted(set(bc) | set(zc)):
-            if bc.get(key) != zc.get(key):
-                errs.append(f"{tag}: carrier.{key} 两份不一致")
-        for key in ("why", "vendor"):
-            for side, item in (("基名", b), ("zh", z)):
-                v = item.get(key)
-                if not isinstance(v, str) or not v:
-                    errs.append(f"{tag}: {side} 的 {key} 必须是非空字符串")
-    return errs
-
 
 def main() -> int:
     # [1] 真实表必须合规
@@ -483,21 +436,16 @@ def main() -> int:
         assert got, f"负向用例『{label}』没变红——这条门禁是装饰"
         print(f"    · {label} → 红：{got[0]}")
 
-    # [7] 双语奇偶校验：zh_Hans 变体（存在时）与基名只在 why/vendor 上分叉
-    zh_path = Path(TOOL, "src", "aiya_beets", "data", "plugins-zh_Hans.json")
-    if zh_path.is_file():
-        zh_doc = json.loads(zh_path.read_text(encoding="utf-8"))
-        errs = check_parity(DOC, zh_doc)
-        assert not errs, (
-            "plugins-zh_Hans.json 与 plugins.json 不一致：\n  " + "\n  ".join(errs)
-        )
-        print(
-            f"[7] zh_Hans 奇偶校验 OK：{len(DOC['binaries'])} 个 binaries 的 "
-            "name/target/carrier.url/carrier.sha256/carrier.size/carrier.member/"
-            "size/sha256/bundle/probe/license 逐字段一致；why/vendor 双边非空"
-        )
-    else:
-        print("[7] plugins-zh_Hans.json 不存在，跳过奇偶校验（变体缺失回退基名）")
+
+    # [7] zh 文本归档覆盖：zh_Hans 结构变体并入基表后，binaries 的双语
+    # 内容以 whyZh/vendorZh 字段随表归档——16 条全覆盖，缺失 = 归档不完整
+    zh_missing = [
+        b["name"]
+        for b in DOC.get("binaries", [])
+        if not b.get("whyZh") or not b.get("vendorZh")
+    ]
+    assert not zh_missing, f"binaries 的 zh 归档文本缺失：{zh_missing}"
+    print(f"[7] zh 文本归档 OK：{len(DOC['binaries'])} 条 binaries 的 whyZh/vendorZh 全覆盖")
 
     print("ALL PASS")
     return 0

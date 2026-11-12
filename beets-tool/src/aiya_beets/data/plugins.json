@@ -10,7 +10,10 @@
       "fromfilename",
       "duplicates",
       "scrub",
-      "smartplaylist"
+      "smartplaylist",
+      "musicbrainz",
+      "fetchart",
+      "mbsync"
     ],
     "index": [
       "xtractor"
@@ -37,7 +40,9 @@
       "vendor": "Qt5 Core (The Qt Company), redistributed as-is from the community build",
       "platforms": [
         "windows"
-      ]
+      ],
+      "whyZh": "Gaia 构建非静态链接：Qt5Core 必须与提取器同目录，缺它 spawn 起不来",
+      "vendorZh": "Qt5 Core（The Qt Company），随社区构建原样分发"
     },
     {
       "name": "streaming_extractor_music",
@@ -60,7 +65,9 @@
       "platforms": [
         "windows",
         "linux"
-      ]
+      ],
+      "whyZh": "xtractor 调它算 bpm / danceability / mood（python 绑定在 Windows 上没有发行版）；Gaia/SVM 需要社区构建——AB 官方 win-i686 没编 Gaia2，配模型必炸",
+      "vendorZh": "Essentia music extractor，带 Gaia/SVM（社区构建 brendanerofeev/essentia gaia-win64-2，源起 regorxxx 的 Actions 构建，commit 14dce99b）"
     },
     {
       "name": "ffmpeg",
@@ -84,7 +91,9 @@
       "vendor": "ffmpeg 7.1 essentials (gyan.dev), distributed via PyPI imageio-ffmpeg 0.7.0",
       "platforms": [
         "windows"
-      ]
+      ],
+      "whyZh": "replaygain 归一化、转码副本、封面写进文件都调它；缺了 replaygain 会让 beets 整个 CLI 起不来",
+      "vendorZh": "ffmpeg 7.1 essentials (gyan.dev)，经 PyPI imageio-ffmpeg 0.7.0 分发"
     },
     {
       "name": "fpcalc",
@@ -108,7 +117,9 @@
       "vendor": "chromaprint-fpcalc 1.6.2 (acoustid)",
       "platforms": [
         "windows"
-      ]
+      ],
+      "whyZh": "chroma 插件拿它算 acoustid 指纹（PyPI 上没有可用发行版）",
+      "vendorZh": "chromaprint-fpcalc 1.6.2 (acoustid)"
     },
     {
       "name": "svm-danceability",
@@ -131,7 +142,9 @@
       "platforms": [
         "windows",
         "linux"
-      ]
+      ],
+      "whyZh": "highlevel.danceability 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "vendorZh": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
       "name": "svm-gender",
@@ -154,7 +167,9 @@
       "platforms": [
         "windows",
         "linux"
-      ]
+      ],
+      "whyZh": "highlevel.gender 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "vendorZh": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
       "name": "svm-genre_rosamerica",
@@ -177,7 +192,9 @@
       "platforms": [
         "windows",
         "linux"
-      ]
+      ],
+      "whyZh": "highlevel.genre_rosamerica 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "vendorZh": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
       "name": "svm-mood_acoustic",
@@ -200,7 +217,9 @@
       "platforms": [
         "windows",
         "linux"
-      ]
+      ],
+      "whyZh": "highlevel.mood_acoustic 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "vendorZh": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
       "name": "svm-mood_aggressive",
@@ -223,7 +242,9 @@
       "platforms": [
         "windows",
         "linux"
-      ]
+      ],
+      "whyZh": "highlevel.mood_aggressive 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "vendorZh": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
       "name": "svm-mood_electronic",
@@ -246,7 +267,9 @@
       "platforms": [
         "windows",
         "linux"
-      ]
+      ],
+      "whyZh": "highlevel.mood_electronic 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "vendorZh": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
       "name": "svm-mood_happy",
@@ -269,7 +292,9 @@
       "platforms": [
         "windows",
         "linux"
-      ]
+      ],
+      "whyZh": "highlevel.mood_happy 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "vendorZh": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
       "name": "svm-mood_sad",
@@ -292,7 +317,9 @@
       "platforms": [
         "windows",
         "linux"
-      ]
+      ],
+      "whyZh": "highlevel.mood_sad 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "vendorZh": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
       "name": "svm-mood_party",
@@ -315,7 +342,9 @@
       "platforms": [
         "windows",
         "linux"
-      ]
+      ],
+      "whyZh": "highlevel.mood_party 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "vendorZh": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
       "name": "svm-mood_relaxed",
@@ -338,7 +367,9 @@
       "platforms": [
         "windows",
         "linux"
-      ]
+      ],
+      "whyZh": "highlevel.mood_relaxed 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "vendorZh": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
       "name": "svm-voice_instrumental",
@@ -361,7 +392,9 @@
       "platforms": [
         "windows",
         "linux"
-      ]
+      ],
+      "whyZh": "highlevel.voice_instrumental 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "vendorZh": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     },
     {
       "name": "svm-moods_mirex",
@@ -384,10 +417,26 @@
       "platforms": [
         "windows",
         "linux"
-      ]
+      ],
+      "whyZh": "highlevel.moods_mirex 的 Gaia SVM 模型（.history）——danceability/mood 等高层特征由此产出",
+      "vendorZh": "MTG（essentia-extractor-svm_models-v2.1_beta5 归档重打包，本仓库 release svm-models-v2.1_beta5 自托管）"
     }
   ],
   "plugins": [
+    {
+      "name": "musicbrainz",
+      "title": "MusicBrainz 匹配",
+      "note": "beets 内置元数据源：导入刮削与查询匹配的候选来源，autotag 的燃料（不启用则整理预览恒 0 候选）",
+      "builtin": true,
+      "packages": [],
+      "imports": [
+        "musicbrainz"
+      ],
+      "exe": [],
+      "writes": false,
+      "network": true,
+      "bundle": true
+    },
     {
       "name": "replaygain",
       "title": "音量拉齐",

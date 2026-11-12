@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { ListFilter, Search, Tag } from '@lucide/svelte';
+  import { ListFilter, Play, Search, Tag } from '@lucide/svelte';
   import Button from '../ui/Button.svelte';
   import CheckCell from '../ui/CheckCell.svelte';
   import Dialog from '../ui/Dialog.svelte';
@@ -37,6 +37,13 @@
   let indexNote = $state<string | null>(null);
   let indexError = $state<string | null>(null);
   let stopIndex: (() => void) | null = null;
+  /** xtractor 分析（enrich）的运行态与待算清单。开始只由用户点击触发——
+   *  分析是小时级的长任务，任何"落后就自动跑"的逻辑都会变成隐式占用
+   *  会话槽数小时（期间查询被 E_BUSY 挡住）。 */
+  let enrichRun = $state(false);
+  let enrichNote = $state<string | null>(null);
+  let enrichError = $state<string | null>(null);
+  let worklist = $state<{ missing: number; stale: number } | null>(null);
   /**
    * 本轮分析会话是否由本面板发起。
    *
@@ -58,9 +65,40 @@
       indexItems = null;
     }
     try {
-      tracksTotal = (await ipc.enrichment.worklist('xtractor', false)).totalTracks;
+      const w = await ipc.enrichment.worklist('xtractor', false);
+      tracksTotal = w.totalTracks;
+      worklist = { missing: w.missing, stale: w.stale };
     } catch {
       tracksTotal = null;
+      worklist = null;
+    }
+  }
+
+  /** 开始 xtractor 分析（用户显式点击；本面板不自动触发）。
+   *  启动后轮询待算清单：missing + stale 归零 = 完成，刷新计数收尾。 */
+  async function startEnrich(): Promise<void> {
+    if (enrichRun) return;
+    enrichRun = true;
+    enrichError = null;
+    enrichNote = t('beets.enrich.running');
+    try {
+      await ipc.enrichment.start('xtractor', false);
+      for (;;) {
+        await new Promise(r => setTimeout(r, 10000));
+        const w = await ipc.enrichment.worklist('xtractor', false);
+        worklist = { missing: w.missing, stale: w.stale };
+        const left = w.missing + w.stale;
+        enrichNote = t('beets.enrich.runningLeft', { n: left });
+        if (left === 0) {
+          enrichNote = t('beets.enrich.done');
+          break;
+        }
+      }
+      await loadIndexCount();
+    } catch (e) {
+      enrichError = errorMessage(e);
+    } finally {
+      enrichRun = false;
     }
   }
 
@@ -158,8 +196,20 @@
         {#snippet icon()}<ListFilter size={14} />{/snippet}
         {indexItems === 0 ? t('beets.index.build') : t('beets.index.rebuild')}
       </Button>
+      <Button
+        size="sm"
+        loading={enrichRun}
+        disabled={enrichRun || (worklist !== null && worklist.missing + worklist.stale === 0)}
+        title={t('beets.enrich.startTip')}
+        onclick={() => void startEnrich()}
+      >
+        {#snippet icon()}<Play size={14} />{/snippet}
+        {t('beets.enrich.start')}
+      </Button>
       {#if indexNote}<span class="beets-dim">{indexNote}</span>{/if}
       {#if indexError}<span class="beets-danger">{indexError}</span>{/if}
+      {#if enrichNote}<span class="beets-dim">{enrichNote}</span>{/if}
+      {#if enrichError}<span class="beets-danger">{enrichError}</span>{/if}
     </div>
     {#if indexItems === 0 && !indexRun}
       <p class="beets-dim">

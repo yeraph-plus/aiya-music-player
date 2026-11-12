@@ -2194,31 +2194,19 @@ pub fn field_catalog(host: &dyn BeetsHost) -> Result<aiya_dto::beets::BeetsField
 /// 进程，只能靠编译期带一份。它和工具侧、打包脚本、安装器读的是同一个文件，
 /// 所以不存在"UI 说 A、安装器装 B"的漂移；`build.rs` 里有 rerun-if-changed。
 ///
-/// 双语分支：英文基名 + `plugins-zh_Hans.json` 中文变体。
-/// 两份只有 `binaries[].why` / `vendor` 这两个展示字段允许不同，结构字段
-/// （name/target/carrier/size/sha256/bundle/probe/license）逐字节一致——
-/// 由 `catalog_contract.py` 的奇偶校验与 `plugin_table_variants` 单测共同守住。
-/// 人类可读的展示字段随语言走，结构字段只有一份事实。
+/// 插件登记表的**编译期内嵌**副本（唯一事实源 = 工具侧同一个 JSON）。
+///
+/// 双语文本随条目走：`titleZh` / `noteZh`（插件）与 `binaries[].whyZh` /
+/// `vendorZh` 是可选变体字段，与基字段同文件——没有第二份结构清单，也没有
+/// 奇偶校验的负担。条目上另有两类关系字段：`packages` / `imports` / `exe`
+/// 是依赖面（勾选即装），`profiles.workbench` / `profiles.index` 是预置启用面
+/// （fresh install 的 config 渲染从这里取，见工具侧 plugins.py 同一份 profiles）。
 const PLUGIN_TABLE_JSON: &str =
     include_str!("../../../beets-tool/src/aiya_beets/data/plugins.json");
-const PLUGIN_TABLE_JSON_ZH_HANS: &str =
-    include_str!("../../../beets-tool/src/aiya_beets/data/plugins-zh_Hans.json");
-
-/// 应用设置里的语言键（值 "zh" / "en"）。
-const LANGUAGE_KEY: &str = "language";
-
-/// 语言 → 插件表文本。值非 "zh"（空 / 未设 / 拼错）一律用英文基名——
-/// "变体缺失回退基名"的回退就落在这个 match 的默认分支。
-fn plugin_table_text(lang: &str) -> &'static str {
-    match lang {
-        "zh" => PLUGIN_TABLE_JSON_ZH_HANS,
-        _ => PLUGIN_TABLE_JSON,
-    }
-}
 
 /// 读应用设置的语言键（AppState 的 settings 内存镜像；镜像里没有 = 未设 = 英文）。
 fn settings_language(host: &dyn BeetsHost) -> String {
-    host.setting_str(LANGUAGE_KEY).unwrap_or_default()
+    host.setting_str("language").unwrap_or_default()
 }
 
 #[derive(serde::Deserialize)]
@@ -2229,6 +2217,7 @@ struct PluginTableFile {
     #[serde(default)]
     plugins: Vec<aiya_dto::beets::BeetsPluginItem>,
 }
+
 
 #[derive(serde::Deserialize, Default)]
 struct PluginProfiles {
@@ -2248,7 +2237,7 @@ pub fn plugin_table(host: &dyn BeetsHost) -> Result<Vec<aiya_dto::beets::BeetsPl
 
 /// 纯函数版（可测）：语言 → 解析对应内嵌表。
 pub fn plugin_table_in(lang: &str) -> Result<Vec<aiya_dto::beets::BeetsPluginItem>, String> {
-    let mut doc: PluginTableFile = serde_json::from_str(plugin_table_text(lang)).map_err(|e| {
+    let mut doc: PluginTableFile = serde_json::from_str(PLUGIN_TABLE_JSON).map_err(|e| {
         format!("failed to parse the embedded plugin table (broken build artifact?): {e}")
     })?;
     if doc.schema != 2 {
@@ -2546,57 +2535,29 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// 双语奇偶：zh 变体与英文基名的**结构字段**必须逐字段
-    /// 一致，只有 `binaries[].why` / `vendor` 允许不同。Python 侧
-    /// `catalog_contract.py` 守仓库文件，这里守 Rust 内嵌的两份——两边都红
-    /// 才能同时防住"改了仓库忘了重编"与"只改了一份"。
+    /// 单登记表口径：语言挑文本 + 预置启用面注入 + musicbrainz 燃料条目。
+    /// zh_Hans 结构变体已并入基表（titleZh/noteZh/whyZh/vendorZh 可选字段），
+    /// 仓库文件的守约职责收敛到 catalog_contract.py 的结构与覆盖检查。
     #[test]
-    fn plugin_table_variants_match_structurally() {
-        // 变体缺失回退基名：任何语言值（含空 / 未设 / 乱写）都必须能解析
+    fn plugin_table_languages_and_profiles() {
+        // 任何语言值（含空 / 未设 / 乱写）都必须能解析——回退基字段的口径
         for lang in ["", "en", "zh", "fr"] {
             let rows = plugin_table_in(lang).expect("任何语言都应落到可解析的表");
             assert!(rows.len() >= 10, "语言 {lang:?} 解析出的条目过少");
         }
-        let en: serde_json::Value =
-            serde_json::from_str(plugin_table_text("en")).expect("基名应可解析");
-        let zh: serde_json::Value =
-            serde_json::from_str(plugin_table_text("zh")).expect("zh 变体应可解析");
-        assert_eq!(en["schema"], zh["schema"], "schema 两份必须一致");
-        assert_eq!(en["beets"], zh["beets"], "beets 段两份必须一致");
-        assert_eq!(en["profiles"], zh["profiles"], "profiles 两份必须一致");
-        assert_eq!(
-            en["plugins"], zh["plugins"],
-            "plugins 段没有双语字段，必须逐字节一致"
-        );
-        let (en_b, zh_b) = (
-            en["binaries"].as_array().expect("binaries 数组"),
-            zh["binaries"].as_array().expect("binaries 数组"),
-        );
-        assert_eq!(en_b.len(), zh_b.len(), "binaries 条数必须一致");
-        for (e, z) in en_b.iter().zip(zh_b.iter()) {
-            let name = e["name"].as_str().unwrap_or("?");
-            for key in [
-                "name", "target", "size", "sha256", "bundle", "license", "probe",
-            ] {
-                assert_eq!(e[key], z[key], "{name}: binaries[].{key} 两份必须一致");
-            }
-            for key in ["kind", "url", "size", "sha256", "member"] {
-                assert_eq!(
-                    e["carrier"][key], z["carrier"][key],
-                    "{name}: carrier.{key} 两份必须一致"
-                );
-            }
-            for key in ["why", "vendor"] {
-                assert!(
-                    !e[key].as_str().unwrap_or_default().is_empty(),
-                    "{name}: 基名 {key} 非空"
-                );
-                assert!(
-                    !z[key].as_str().unwrap_or_default().is_empty(),
-                    "{name}: zh 变体 {key} 非空"
-                );
-            }
-        }
+        let en = plugin_table_in("en").expect("en 可解析");
+        let zh = plugin_table_in("zh").expect("zh 可解析");
+        assert_eq!(en.len(), zh.len(), "同一份登记表，条数恒等");
+        // 登记表单份：两语言读同一文件，文本本就单语（插件段中文、
+        // binaries 的 why/vendor 双语随 whyZh/vendorZh 字段归档）
+        let en_lyrics = en.iter().find(|x| x.name == "lyrics").expect("lyrics 条目");
+        assert_eq!(en_lyrics.title, "歌词抓取");
+        // 预置启用面注入
+        let mb = en.iter().find(|x| x.name == "musicbrainz").expect("musicbrainz 条目");
+        assert!(mb.default, "musicbrainz 必须在 workbench 预置启用面");
+        assert!(!mb.index_default, "musicbrainz 不在索引家");
+        let xt = en.iter().find(|x| x.name == "xtractor").expect("xtractor 条目");
+        assert!(xt.index_default, "xtractor 必须在 index 预置启用面");
     }
 
     #[test]
