@@ -3,10 +3,10 @@
 // 引用单向化：历史与取舍查 ledger（docs 下的流水账目录），代码内不设路标。
 // 宽泛词（像、别、坑、必须）误报率高，不进自动门禁，由治理批次人工处理。
 //
-// 桶位：日期/引用在任何注释形态（含 ///、//!、块注释、JSDoc）都是阻断，
-// 无延后桶；存量经白名单豁免并按棘轮只减不增（分区治理清一处删一条，
-// 烧完回归裸阻断，不新增豁免）。禁词与历史叙事信号词走语域 report 观察
-// （词表见 NARRATIVE 正则），不阻断。
+// 桶位：日期/引用/历史叙事信号词在任何注释形态（含 ///、//!、块注释、
+// JSDoc）都是阻断，无延后桶；存量经白名单豁免并按棘轮只减不增（分区治理
+// 清一处删一条，烧完回归裸阻断，不新增豁免）。高精度禁词走语域 report
+// （词表见 BANNED 正则），不阻断。
 //
 // 范围：Rust（crates/、src-tauri/）、前端（ui/src/、ui/e2e/，排除 generated/）、
 // 构建脚本（tools/*.mjs）。beets-tool 的 Python 侧由 comment-gov 的 --check
@@ -123,7 +123,7 @@ for (const file of files) {
         // report-only。
         const kind = re === BANNED ? 'banned' : re === NARRATIVE ? 'narrative'
           : re === DATE ? 'date' : 'docref';
-        const bucket = kind === 'banned' || kind === 'narrative' ? 'report' : 'blocking';
+        const bucket = kind === 'banned' ? 'report' : 'blocking';
         findings.push({ rel, tag: m[1], kind, bucket, text: line.trim().slice(0, 90) });
       }
     }

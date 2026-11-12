@@ -117,7 +117,7 @@ v1（docs/59 的 G0–G7 批次与三层模型）有两个与目标冲突的赌�
 - **门禁四洞全闭**（docs/71 §3）：CI verify job 跑 strict + check:style:py
   + comment-gov verify；DATE 正则放宽（月戳与 "YYYY 年" 可见）；语域叙事词
   （旧实现/此前/曾经/以前/旧版/事故）进 report 桶——收割后**全仓命中 0**
-  （含 tools 自区 4 处），观察期提前收口；scan.py --check 接进 verify 链
+  （含 tools 自区 4 处），观察期零误报收口后升阻断（拍板）；scan.py --check 接进 verify 链
   （beets-tool 的 # 注释与 docstring 同为注释面，共用 allowlist）。
 - **扫描面扩 .css/.sql**：此前两形态不扫属盲区；批 G/F 实测 styles/*.css 与
   migrations/*.sql 清零后纳入门禁。

@@ -705,9 +705,9 @@ def scan_scope(name, dirs):
 
 # ---------------------------------------------------------------- 常驻门禁
 # --check / --emit-allowlist：beets-tool Python 侧的注释文风门禁（docs/71 洞④）。
-# 口径与 tools/check-style.mjs 对齐：日期戳与 docs 引用在任何注释形态都是
-# 阻断，存量走 tools/check-style-allowlist.json 棘轮豁免（只减不增）；叙事
-# 信号词 report-only。docstring 在机械批里是运行时值（apply 永不触碰），
+# 口径与 tools/check-style.mjs 对齐：日期戳、docs 引用与历史叙事信号词在
+# 任何注释形态都是阻断，存量走 tools/check-style-allowlist.json 棘轮豁免
+# （只减不增）。docstring 在机械批里是运行时值（apply 永不触碰），
 # 在这里是注释面——它是收割主标的，门禁必须看见。
 
 CHECK_DATE = re.compile(
@@ -792,13 +792,14 @@ def py_check_scan():
         r = rel(p)
         for idx, segs in enumerate(py_surface_segments(lines)):
             for text, _col in segs:
-                if CHECK_NARRATIVE.search(text):
-                    narrative += 1
-                for rx, kind in ((CHECK_DATE, 'date'), (CHECK_DOCREF, 'docref')):
+                for rx, kind in ((CHECK_DATE, 'date'), (CHECK_DOCREF, 'docref'),
+                                 (CHECK_NARRATIVE, 'narrative')):
                     m = rx.search(text)
                     if m:
                         hits.append({'rel': r, 'line': idx + 1, 'kind': kind,
                                      'tag': m.group(0), 'text': text.strip()[:90]})
+                        if kind == 'narrative':
+                            narrative += 1
     blocking = [h for h in hits
                 if h['rel'] not in allowlist
                 and f"{h['rel']}:{h['line']}" not in allowlist]
@@ -821,8 +822,8 @@ def pycheck_main():
         print(f"{h['rel']}:{h['line']}  [{h['kind']}/{h['tag']}]  {h['text']}")
     exempted = len(hits) - len(blocking)
     verdict = '通过' if not blocking else f'未通过（{len(blocking)} 处未豁免）'
-    print(f"\ncomment-gov check: python 日期/引用 {len(hits)}（豁免 {exempted}）"
-          f"，叙事词 {narrative}（report-only），扫描 {files_n} 个文件 —— {verdict}")
+    print(f"\ncomment-gov check: python 日期/引用/叙事词 {len(hits)}（豁免 {exempted}）"
+          f"，扫描 {files_n} 个文件 —— {verdict}")
     if blocking:
         sys.exit(1)
 
