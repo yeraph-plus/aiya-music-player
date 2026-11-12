@@ -1346,8 +1346,13 @@ fn remember_entry(host: &dyn BeetsHost, entry: &ToolEntry) -> Result<(), String>
 /// 安装（异步）：立刻返回，进度走 `beets:install`，结束时补一条 finished。
 ///
 /// `plugins` 是用户在 UI 里勾的**启用清单**：安装据此按勾选清单补外置二进制
-/// （bins）；pip 依赖不在此步，走"换插件"。勾选清单写进 `settings.plugins`
-/// （重装后恢复启用），工具侧渲染 `config.yaml` 时照它启用。
+/// （bins）；pip 依赖不在此步——预置插件全套已随包装好，非预置的带 pip
+/// 依赖才需要"换插件"。勾选清单写进 `settings.plugins`（重装后恢复启用面），
+/// 工具侧渲染 `config.yaml` 时照它启用。
+///
+/// beets 没有更新路径（只有安装与卸载）：bundle 整体替换即全新状态，重装
+/// 后装的插件不保留——恢复面 = 重装 + 按勾选换插件。不做"更新后自动重放
+/// install"之类的恢复语义。
 ///
 /// finished 带**重新探测后的 status**：UI 不用再单独发一次查询，
 /// 也不会出现"装完了但状态块还是旧值"这种中间态。

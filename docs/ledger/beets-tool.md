@@ -6,6 +6,7 @@
 ## 条目（新→旧）
 
 <!-- 每条一行：- YYYY-MM-DD · 代码位置 · 事实/取舍 · 来龙去脉（可选） -->
+- 2026-11-13 · crates/aiya-host-core/src/beets.rs start_install、ui/src/components/beets/InstallPanel.svelte · beets 无更新路径（拍板）：流程只有安装与卸载——bundle 整体替换即全新状态，后装插件不保留；线上包预置插件全套随包装好，非预置的带 pip 依赖走「换插件」补装，重装后勾选面从 settings.plugins 经 ensure_config 恢复；不做「更新后自动重放 install」之类的恢复语义——保留它会扩大维护面｜措辞对齐：UI 动作名「更新」→「重新安装」（文案本就是重新下载安装语义），start_install/组件注释同步补设计事实
 - 2026-11-12 · beets-tool/src/aiya_beets/cli.py · 读配置的命令必须在 import beets 之前备好 config.yaml · beets 导入时即把配置读进内存、之后写盘对本次进程无效；备配置曾藏在 serve() 里，status 这类先起 beets 的命令对新家报的是 beets 默认家库路径，双家隔离一上来就错位。
 - 2026-11-12 · beets-tool/src/aiya_beets/runtime.py · stdout 独占给协议帧，sys.stdout 重指 stderr · beets 库迁移时会往 stdout 打 `Created database backup at: …` 裸行；靠客户端容错跳裸行存活的话，任何第三方 print 都能插进事件流并迫使宿主养解析兜底，故协议走原始句柄、print/warnings/traceback 全落 stderr（裸行容错仍保留，防进程外污染）。
 - 2026-11-12 · beets-tool/src/aiya_beets/{protocol.py,cmds/maintain.py} · 业务拒绝必须带自己的错误码回，不走裸异常 · 裸 ValueError 会被顶层兜成 E_INTERNAL，宿主只能显示"内部异常"，而无库根/根不一致/根不存在恰是用户可自助处置的场景。
