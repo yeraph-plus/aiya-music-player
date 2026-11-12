@@ -113,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     # 其余参数原样交给 `beet xtractor`：那条命令自己有六个开关，抄一份必然漂
     p_xt = sub.add_parser(
         "xtractor",
-        help="compute bpm/danceability (index profile; runs beet xtractor in-process, see docs/54)",
+        help="compute bpm/danceability (index profile; runs beet xtractor in-process)",
     )
 
     ns = ap.parse_args(args)

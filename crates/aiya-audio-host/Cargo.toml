@@ -2,7 +2,7 @@
 name = "aiya-audio-host"
 version.workspace = true
 edition.workspace = true
-description = "AIYA Music 音频 sidecar 进程（ADR-0002）：命名管道 JSON 协议，崩溃隔离。"
+description = "AIYA Music 音频 sidecar 进程：命名管道 JSON 协议，崩溃隔离。"
 
 [dependencies]
 aiya-audio = { path = "../aiya-audio" }

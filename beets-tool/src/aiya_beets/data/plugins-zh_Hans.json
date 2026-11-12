@@ -43,7 +43,7 @@
       "name": "streaming_extractor_music",
       "target": "streaming_extractor_music.exe",
       "bundle": true,
-      "why": "xtractor 调它算 bpm / danceability / mood（python 绑定在 Windows 上没有发行版）；Gaia/SVM 需要社区构建——AB 官方 win-i686 没编 Gaia2，配模型必炸（docs/50 §2.5）",
+      "why": "xtractor 调它算 bpm / danceability / mood（python 绑定在 Windows 上没有发行版）；Gaia/SVM 需要社区构建——AB 官方 win-i686 没编 Gaia2，配模型必炸",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/brendanerofeev/essentia/releases/download/gaia-win64-2/essentia-gaia-win64.zip",

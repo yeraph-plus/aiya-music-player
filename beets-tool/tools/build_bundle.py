@@ -450,7 +450,7 @@ def stage_binaries(
                 "sha256": sha,
                 "version": None,
                 "license": "AGPL-3.0-or-later",
-                "vendor": "MTG essentia-builds CI（manylinux_2_28，docs/67）",
+                "vendor": "MTG essentia-builds CI（manylinux_2_28）",
                 "source": "workflow artifact essentia-extractor-linux-x86_64-test",
             })
             print(f"  提取器（本地）→ bin/streaming_extractor_music.exe（sha256 {sha[:12]}…）")
@@ -582,7 +582,7 @@ def frozen_versions(site: Path) -> dict[str, str]:
 def main() -> int:
     ap = argparse.ArgumentParser(description="打包 aiya-beets 免配置套件包")
     ap.add_argument("--platform", choices=("windows", "linux"), default="windows",
-                    help="目标平台：windows（embeddable）或 linux（PBS，docs/67）")
+                    help="目标平台：windows（embeddable）或 linux（PBS）")
     ap.add_argument("--runtime", default=None,
                     help="自带解释器目录（缺就自动下载并装依赖；默认随平台）")
     ap.add_argument("--out", default=None, help="产物 zip 路径（默认随平台）")
@@ -607,7 +607,7 @@ def main() -> int:
 
     if platform_name == "linux" and args.extractor is None:
         raise SystemExit("linux 轨必须给 --extractor（CI artifact 里的提取器二进制，"
-                         "docs/67：该产物没有发布通道载体）")
+                         "该产物没有发布通道载体）")
 
     ensure_runtime(
         runtime,

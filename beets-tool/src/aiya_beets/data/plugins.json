@@ -43,7 +43,7 @@
       "name": "streaming_extractor_music",
       "target": "streaming_extractor_music.exe",
       "bundle": true,
-      "why": "called by the xtractor plugin to compute bpm / danceability / mood (the Python bindings have no Windows distribution); Gaia/SVM need the community build - the official AB win-i686 build omits Gaia2 and crashes with models (docs/50 §2.5); linux 构建无参调用是 Usage + 非 0 退出（MTG waf examples 构建），probeAllowFail 打开——win 构建无参返回 0，不受影响",
+      "why": "called by the xtractor plugin to compute bpm / danceability / mood (the Python bindings have no Windows distribution); Gaia/SVM need the community build - the official AB win-i686 build omits Gaia2 and crashes with models; linux 构建无参调用是 Usage + 非 0 退出（MTG waf examples 构建），probeAllowFail 打开——win 构建无参返回 0，不受影响",
       "carrier": {
         "kind": "zip",
         "url": "https://github.com/brendanerofeev/essentia/releases/download/gaia-win64-2/essentia-gaia-win64.zip",
@@ -743,5 +743,5 @@
       "bundle": false
     }
   ],
-  "schemaNote": "schema 2 + platforms（docs/67 转正）：binaries[].platforms 声明该载体存在的平台，缺省全平台；不在运行平台的 exe 依赖视为系统提供（如 linux 的 Qt5）"
+  "schemaNote": "schema 2 + platforms：binaries[].platforms 声明该载体存在的平台，缺省全平台；不在运行平台的 exe 依赖视为系统提供（如 linux 的 Qt5）"
 }
