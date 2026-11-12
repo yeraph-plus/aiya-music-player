@@ -6,6 +6,7 @@
 ## 条目（新→旧）
 
 <!-- 每条一行：- YYYY-MM-DD · 代码位置 · 事实/取舍 · 来龙去脉（可选） -->
+- 2026-11-12 · tag v0.2.1、release run 5 · v0.2.1 正式发布 · 330c7bd 所打 tag 因 ui-layers 红从未发布（releases 列表查证），按拍板移 tag 至治理收口位 e361777 重跑：release 全绿，安装包 + 便携版双资产落盘（6.8MB / 9.8MB）；批 0.5–0.7 线上红修复与批 A–H 注释治理收口在同一点位
 - 2026-11-12 · AGENTS §4.4、docs/60 §7、tools/{check-style,check-boundary,check-ui-layers,build-portable}.mjs · 批 H 后半：docs/60 收口对账（数字改实测值——L2 存量 253 非 210；棘轮 355→1 烧穿，唯一豁免 JSON Schema "2020-12" 技术标识；叙事词 report 观察期提前收口、全仓命中 0）；check-style 扫描面扩 .css/.sql（-- 与块注释形态，扩面前实测两形态已清零）；tools 自区叙事 4 处清零；验收缺口补记——注释治理批必须带 gen:types:check（ts-rs 把 /// 导出进生成物，run 50 实证漏跑即红）
 
 - 2026-11-12 · ui/e2e/smoke.spec.ts · e2e 启动装配用例环境假设修正（批 0.6 收尾）：`.ambient-spectrum` toHaveCount(0) 把「宿主 WebGL 落档 ≥2」写死进断言——CI headless Edge 软件光栅实测落档 1（detectCapability tier 1 → 2D 兜底画布合法挂载，11-05 后 runner Edge 自动更新起红），本地有 GPU 恒绿所以只在线上炸；修法是钉层结构本来的契约「动态层恰好一条渲染路径」（`.ambient-flow, .ambient-spectrum` 二选一 toHaveCount(1)），GPU 能力不进断言 ｜ 验证：本地 e2e 44/44 绿；CI 实证随 run 48
