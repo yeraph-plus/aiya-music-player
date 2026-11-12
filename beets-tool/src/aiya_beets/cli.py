@@ -168,6 +168,17 @@ def main(argv: list[str] | None = None) -> int:
 
     # serve 必须**先于**任何"能不能用"的检查：它的准备动作都在上面做完了。
     if ns.cmd == "serve":
+        # 会话里跑的整理预览会触达 beets.autotag.distance → numpy 的 C 扩展
+        # 导入链：在工作线程的请求处理中途导入会在 Windows 上永久挂起（加载
+        # .pyd 与会话线程模型冲突，实测独立进程 0.3s / 会话内 >80s 无产出）。
+        # 在主线程的 serve 启动期预导入，之后请求线程命中的一律是缓存。
+        # numpy 不在所有 bundle 变体里必装（无分析器的包），缺了就跳过——
+        # 那类包的整理预览本来就走不到 autotag 的距离计算。
+        try:
+            import numpy  # noqa: F401 — 预导入（见上）
+        except ImportError:
+            pass
+
         from .server import serve
 
         return serve()
