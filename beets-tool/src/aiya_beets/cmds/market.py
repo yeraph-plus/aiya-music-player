@@ -6,17 +6,19 @@
 项目内只集成"把插件装进当前运行环境"的 pip 命令——启停仍走 config.yaml
 （cfg.render_config，播放器不知道 YAML 语法）。
 
-## 环境兼容（uv / venv / 系统 Python）
+## 环境兼容（单一环境：跑 serve 的那个）
 
-安装目标恒为 **serve 进程自己的解释器**（`sys.executable`）：
-A 轨道 venv、uv 管理的环境、系统 Python——不管 beets 当初怎么装的，
-"能跑 serve 的环境"就是"插件该去的环境"，不做任何二次猜测。
+安装目标恒为 **serve 进程自己的解释器**（`sys.executable`）：beets 只有
+便携包一条安装路线，"能跑 serve 的环境"就是包内解释器，插件装进包内
+site-packages，不做任何二次猜测。
 
 pip 可用性按序探测（uv 建的 venv 默认**不带 pip**，这是实测行为）：
-  1. `sys.executable -m pip --version` 成功 → 用它；
+  1. `sys.executable -m pip --version` 成功 → 用它（便携包自带 pip：
+     构建时装进包内 site-packages 并经发布自检，`_pth` 已把它列入搜索路径）；
   2. 失败但 PATH 上有 `uv` → `uv pip install --python <sys.executable>`；
-  3. 都没有 → 明确报错（B 轨道离线套件包属这一类：_pth 固定 site-packages
-     且无 pip，装 PyPI 插件需要走 A 轨道重装）。
+  3. 都没有 → 明确报错：当前解释器没有 pip、机器上也没有 uv。便携包用户
+     点一次「重新下载并安装」即可恢复包内 pip；自带解释器之外的环境需先
+     装好 pip 或 uv。
 
 输出走行帧事件（progress / done），与 maintain.py 同一套终端事件约定
 （`done` 是 TERMINAL_EVENTS 之一，宿主 run_session 直接可用）。
@@ -61,7 +63,7 @@ def _pip_prefix(python: str) -> tuple[list[str], str] | None:
 
 
 def resolve_installer() -> tuple[list[str], str] | tuple[None, str]:
-    """按序探测安装器：venv pip → uv pip。"""
+    """按序探测安装器：环境内 pip → uv pip。"""
     # 覆盖名沿用本仓的既有约定（tests/ 一律用 AIYA_BEETS_PYTHON 指解释器）。
     # 裸 `PYTHON` 语义太泛——谁都可能拿它装别的意思，也从不属于本工具的契约。
     python = os.environ.get("AIYA_BEETS_PYTHON", sys.executable)
@@ -74,7 +76,7 @@ def resolve_installer() -> tuple[list[str], str] | tuple[None, str]:
         return [uv, "pip", "install", "--python", python], "uv pip"
     return None, (
         "no pip in the current Python environment and no uv on PATH, cannot install plugins online. "
-        "For the offline bundle track use the installer track instead, or preinstall wheels when packaging."
+        "reinstall the portable bundle to restore its bundled pip, or preinstall wheels when packaging."
     )
 
 

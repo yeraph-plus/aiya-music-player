@@ -11,7 +11,8 @@ import type { BeetsPluginSummary } from "./BeetsPluginSummary";
  */
 export type BeetsStatus = { found: boolean, 
 /**
- * 工具的启动程序（A 轨道是 `aiya-beets.exe`，B 轨道是便携包里的解释器）。
+ * 便携包入口（manifest 的 entry/args；settings.json toolPath 记录，
+ * 宿主 discover 据此起进程）。
  */
 interpreter: string | null, 
 /**

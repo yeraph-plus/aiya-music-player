@@ -841,9 +841,8 @@ fn verify_asset(path: &std::path::Path, kind: AssetKind) -> Result<usize, String
 
 /// 下载物的 sha256 校验。
 ///
-/// `.pyz` 下载完要交给本机 Python 执行，是全链路里权限最高的工件，不能只验
-/// "是个 zip"。发布通道随包附 `SHA256SUMS`（release-beets.yml 生成、随两个
-/// 资产一起上传），下载后逐行比对。它防的是**传输与落盘完整性**（截断、代理
+/// 资产是 zip 套件包：宿主校验后整包解压，包内解释器自足，是全链路里权限最高
+/// 的工件，不能只验"是个 zip"。发布通道随包附 `SHA256SUMS`（release-beets.yml 生成上传），下载后逐行比对。它防的是**传输与落盘完整性**（截断、代理
 /// 篡改、404 页、拿错资产），不防 GitHub 仓库本身被入侵——那要把哈希钉进
 /// 宿主二进制，但 beets 与播放器是两个发布节奏（固定下载通道 beets-portable），
 /// 钉死等于每次 beets 发版都要重发播放器。所以这不是完备的
@@ -860,9 +859,9 @@ fn verify_checksum(path: &std::path::Path, asset: &str, base: &str) -> Result<()
         .map_err(|e| {
             format!(
                 "failed to download SHA256SUMS ({sums_url}): {e}\n\
-                 installing without a checksum manifest is not allowed; download both \
-                 release assets manually and point AIYA_BEETS_INSTALLER / AIYA_BEETS_BUNDLE \
-                 at the local files"
+                 installing without a checksum manifest is not allowed; download the \
+                 release asset manually and point AIYA_BEETS_BUNDLE \
+                 at the local file"
             )
         })?;
     resp.into_reader()
@@ -1346,10 +1345,9 @@ fn remember_entry(host: &dyn BeetsHost, entry: &ToolEntry) -> Result<(), String>
 
 /// 安装（异步）：立刻返回，进度走 `beets:install`，结束时补一条 finished。
 ///
-/// `plugins` 是用户在 UI 里勾的**启用清单**：安装器据此装额外依赖，
-/// 装成功后写进 `settings.plugins`，工具侧渲染 `config.yaml` 时照它启用。
-/// 免配置包（Bundle）轨道自带预置插件，勾选对它没有意义——传了也忽略，
-/// 但会发一条 warning 说清"这次勾选没生效"，而不是静默吞掉。
+/// `plugins` 是用户在 UI 里勾的**启用清单**：安装据此按勾选清单补外置二进制
+/// （bins）；pip 依赖不在此步，走"换插件"。勾选清单写进 `settings.plugins`
+/// （重装后恢复启用），工具侧渲染 `config.yaml` 时照它启用。
 ///
 /// finished 带**重新探测后的 status**：UI 不用再单独发一次查询，
 /// 也不会出现"装完了但状态块还是旧值"这种中间态。
@@ -1528,7 +1526,7 @@ const UNINSTALL_PLAN_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// ## 为什么只借 `--dry-run`，不把删除交出去
 ///
-/// `aiya-beets uninstall` 的执行体就在被删目录里（venv 的 python.exe），而
+/// `aiya-beets uninstall` 的执行体就在被删目录里（便携包的 python.exe），而
 /// Windows 上运行中的 exe 删不掉（实测 `DeleteFileW` 返回 0、错误码 5
 /// access denied；同目录的普通文件返回 1 可删）。让工具侧真删，结果是一半
 /// 删掉、一半留着，比不删更难收拾。所以分工是：**工具侧过闸 + 算账，
@@ -1639,13 +1637,15 @@ fn extract_message(v: &serde_json::Value) -> Option<String> {
         .map(str::to_string)
 }
 
-/// 卸载：删 `{data_root}/beets-tool`（venv / bundle / 下载缓存），清设置里的入口。
+/// 卸载：删 `{data_root}/beets-tool` 整层（bundle 自足解释器 + bin 外置工具 +
+/// 下载缓存），清设置里的入口。
 ///
 /// 与安装/换插件共用同一把互斥（`beets_installing`）：两边动的是同一棵目录树，
 /// 并发必然互相拆台。占位在起线程**之前**做，线程内的释放走 [`InstallGuard`]。
 ///
-/// 卸载是**安装的反向操作**：安装往里放了 venv 解释器、beets 本体、pip 依赖、
-/// 插件，全在 `beets-tool/` 里，删它就等于全部撤回。
+/// 卸载是**安装的反向操作**：安装产物是 bundle 自足解释器（beets 本体、pip
+/// 依赖、插件都在包内 site-packages，没有 venv），全在 `beets-tool/` 里，
+/// 删它就等于全部撤回。
 /// `beets/`（整理家 library.db + ops.jsonl）与 `beets-index/`（分析库）虽然
 /// 也在同一个数据根下，但它们是用户资产、不是安装产物，**这里一个字节都不动**
 /// ——那些由应用自己的清理入口管；分析结果（1850 首量级）不在卸载范围。
@@ -2676,7 +2676,7 @@ mod tests {
         );
     }
 
-    /* 安装轨道 */
+    /* 安装 */
 
     /// 造一个最小 zip（内存里拼，不落盘）。
     fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
@@ -2841,7 +2841,7 @@ mod tests {
         assert_eq!(st.library_exists, Some(true));
         assert_eq!(st.plugins, Some(vec!["musicbrainz".to_string()]));
         assert_eq!(st.entry_source.as_deref(), Some("settings"));
-        // 装后状态卡按轨道出能力面：入口形状推导的结果要能过 IPC
+        // 装后状态卡按探测结果出能力面：入口形状推导的结果要能过 IPC
         assert_eq!(st.data_home.as_deref(), Some("d"));
         // v2：schema 比对结论 + 库锁三态原样透传
         assert!(st.schema_matched);

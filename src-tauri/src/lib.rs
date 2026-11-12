@@ -1073,8 +1073,8 @@ fn app_open_url(url: String) -> Result<(), dto::ApiError> {
 /* library 命令 */
 
 /// beets 环境状态（设置页诊断区）。低频查询，每次现查（探测 + 一次 status 往返）。
-/// 非 async 命令在主线程执行——probe 逐候选解释器尝试最多 ~30s，
-/// 会冻住主线程。spawn_blocking 卸载。
+/// 非 async 命令在主线程执行——probe 一次 discover + 一次 status 往返，
+/// ~10s 上限，会冻住主线程。spawn_blocking 卸载。
 ///
 /// 返回 `Result` 只是形态统一：`probe` 自己从不失败（失败信息进
 /// `error_code` / `error_message` 字段），这里唯一的错误源是工作线程崩了。
@@ -1087,7 +1087,7 @@ async fn beets_status(app: AppHandle) -> Result<dto::beets::BeetsStatus, dto::Ap
 
 /// 启动一次只读预览（B1）：事件流走 `beets:import`。
 /// 未装 beets → `beetsMissing`（UI 显示安装指引）。
-/// 探测（pick_interpreter）最多 ~30s 阻塞，spawn_blocking 卸载。
+/// 探测 = 一次 discover + 一次 status 往返（~10s 上限），spawn_blocking 卸载。
 #[tauri::command]
 async fn beets_preview(
     app: AppHandle,

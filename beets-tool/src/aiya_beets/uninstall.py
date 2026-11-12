@@ -1,9 +1,10 @@
-"""A 轨道的卸载：`install` 的反向操作，**只删它装进去的东西**。
+"""卸载：宿主对 bundle 目录整层删除前的过闸与算账脚本（`install` 的反向操作）。
 
 ## 边界
 
-安装脚本装了四类东西到 `--target`：venv 解释器、beets 本体、pip 依赖、
-用户勾选的插件。这四类都在同一个目录里，所以"反向操作"就是删这个目录。
+现行安装形态是便携包：安装产物是 bundle 自足解释器带起来的整层——beets
+本体、pip 依赖、用户勾选的插件全在包内 site-packages，没有 venv。所以
+宿主走的 `--all` 认 bundle 形态，"反向操作"就是算这层的账、放行整层删除。
 
 **数据不归它管**：`beets/`（整理家的 library.db / config / ops.jsonl）与
 `beets-index/`（分析库 / enrich.db）虽然也在应用数据目录内，但它们是用户
@@ -18,12 +19,13 @@ venv 是私有的：删目录既彻底又不依赖 pip 的状态。逐包 uninst
 
 ## 两种目标（`--all`）
 
-    uninstall --target {data_root}/beets-tool/venv     # A 轨道：只删 venv
-    uninstall --target {data_root}/beets-tool --all    # 整层：venv + bundle + bin
+    uninstall --target {data_root}/beets-tool/venv     # 旧装残留：只删 venv
+    uninstall --target {data_root}/beets-tool --all    # 整层：bundle + bin（宿主用）
 
-`--all` 是宿主用的形态：卸载要撤回"安装往这一层放的**全部**东西"，而
-bin/ 里的外置工具和 bundle/ 里的套件包都不在 venv 内。
-不给 `--all` 就只认 venv——手工命令行误传 `{data_root}` 时不会连带删掉数据。
+`--all` 是宿主用的形态：卸载要撤回"安装往这一层放的**全部**东西"——
+bundle 自足解释器和 bin/ 里的外置工具都不在 venv 内。
+不给 `--all` 就只认 venv：venv 形态识别只服务旧装残留与手工 CLI，
+手工命令行误传 `{data_root}` 时不会连带删掉数据。
 
 ## 安全闸
 

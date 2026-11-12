@@ -1186,12 +1186,6 @@ export class MockBackend {
     ];
   }
 
-  /**
-   * 本机 Python 探测：浏览器里没有这个概念，如实报"找不到"。
-   *
-   * 不做成假成功：安装页要根据这个结果决定按钮可不可点，
-   * mock 说找得到而真机找不到，是最难查的那种"预览里好好的"。
-   */
   /** 卸载组件：事件流形状与真后端一致（progress → done → finished）。 */
   async beetsUninstall(): Promise<{ started: boolean }> {
     const emit = (e: Record<string, unknown>) => this.emitter.emit('beets:install', e);

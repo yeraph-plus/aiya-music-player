@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""构建 B 轨道发布物：便携套件包（`--platform windows|linux`）。
+"""构建便携套件包发布物（`--platform windows|linux`）。
 
 ## 它解决什么
 
@@ -25,7 +25,7 @@ python-build-standalone，提取器来自 CI artifact（`--extractor`），模�
 自己 `urlretrieve` 一次，就会出现"包里那个能跑、用户机下下来那个不一定"两条
 没人对比过的路。这里只负责把它落到包内目录。
 
-## 为什么可重定位（这是 B 轨道成立的前提）
+## 为什么可重定位（这是便携套件包成立的前提）
 
 Python 官方的 embeddable 发行版用 `python3xx._pth` 列出搜索路径（全部相对
 解释器所在目录），`sys.prefix` 由 exe 位置推出 ⇒ 整个目录复制到任意路径都能跑。
@@ -182,7 +182,7 @@ def ensure_runtime(
 ) -> None:
     """准备自带解释器目录（缺什么补什么，已存在就复用）。
 
-    B 轨道要能重建：下载官方 embeddable → 写 `_pth` → 装依赖。
+    便携套件包要能重建：下载官方 embeddable → 写 `_pth` → 装依赖。
 
     `_pth` 必须自己写：官方 embeddable 默认只列 `pythonXY.zip` 和 `.`，
     不含 `Lib/site-packages`，而 `_pth` 存在时 Python **忽略 PYTHONPATH**

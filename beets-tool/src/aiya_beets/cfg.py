@@ -373,9 +373,10 @@ _PLUGINS_LINE = re.compile(r"^plugins:[^\n]*$", re.MULTILINE)
 def _sync_plugins(text: str, names: list[str]) -> str:
     """把 `plugins:` 行改成 `names`，**其余行逐字节保留**。
 
-    为什么这是应用事实而不是用户偏好：用户在安装页勾了哪些插件、安装器就把
-    哪些依赖装进了 venv。config 里不启用，等于装了个摆设。所以它要跟着
-    `settings.json` 走，与 `directory` 同一类处理（外科式替换一行）。
+    为什么这是应用事实而不是用户偏好：用户在安装页勾了哪些插件、install.py
+    （包内环境管理器）就把哪些依赖装进包内 site-packages。config 里不启用，
+    等于装了个摆设。所以它要跟着 `settings.json` 走，与 `directory` 同一类
+    处理（外科式替换一行）。
 
     空清单写成 `plugins: []` 而不是留空：空值是 YAML 的 None，
     beets 的 `as_str_seq` 对它怎么处理不值得赌。

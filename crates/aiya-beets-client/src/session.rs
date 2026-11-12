@@ -478,8 +478,8 @@ pub fn query_status(launcher: &Launcher, timeout: Duration) -> Result<StatusRepo
 /// 发一次 `plugin_catalog`，返回市场目录数组（每个元素是 market_report 的一行）。
 ///
 /// 与 `query_status` 同款一次性短进程查询：目录是静态白名单 + 三态检测，
-/// 低频读，不值得为它养常驻会话。元素保持 `Value` 不定形——字段归 DTO 解释
-/// （`BeetsMarketItem`），client crate 不掺 UI 语义。
+/// 低频读，不值得为它养常驻会话。元素保持 `Value` 不定形——字段由 DTO 层
+/// 再解释，client crate 不掺 UI 语义。
 /// 同样走会话互斥（理由见 `query_status`）。
 pub fn query_plugin_catalog(
     launcher: &Launcher,

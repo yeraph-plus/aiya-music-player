@@ -7,7 +7,7 @@
     status        一行 JSON（脚本/宿主可解析）
     capabilities  一行 JSON（插件三态）
     doctor        人肉体检（可读文本，出问题不用翻应用日志）
-    install       A 轨道安装器（建 venv 装 beets）
+    install       包内环境管理器（差量 pip 装插件 + 自检 + 外置工具 + 配置同步）
     version       版本号
 """
 
