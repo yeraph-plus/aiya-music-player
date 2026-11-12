@@ -475,60 +475,11 @@ pub fn query_status(launcher: &Launcher, timeout: Duration) -> Result<StatusRepo
     result
 }
 
-/// 发一次 `plugin_catalog`，返回市场目录数组（每个元素是 market_report 的一行）。
-///
-/// 与 `query_status` 同款一次性短进程查询：目录是静态白名单 + 三态检测，
-/// 低频读，不值得为它养常驻会话。元素保持 `Value` 不定形——字段由 DTO 层
-/// 再解释，client crate 不掺 UI 语义。
-/// 同样走会话互斥（理由见 `query_status`）。
-pub fn query_plugin_catalog(
-    launcher: &Launcher,
-    timeout: Duration,
-) -> Result<Vec<Value>, ToolError> {
-    if !reserve() {
-        return Err(ToolError::Busy);
-    }
-    let raw = request_once(
-        launcher,
-        &serde_json::json!({
-            "id": 1,
-            "cmd": "plugin_catalog",
-            "clientProtocol": crate::proto::PROTOCOL_VERSION,
-        }),
-        timeout,
-    );
-    let result = raw.and_then(|raw| {
-        let env: Envelope = serde_json::from_value(raw)
-            .map_err(|e| ToolError::Protocol(format!("unexpected response envelope shape: {e}")))?;
-        if !env.ok {
-            let err = env.error.unwrap_or_else(|| crate::proto::EnvelopeError {
-                code: "E_UNKNOWN".into(),
-                stage: "unknown".into(),
-                beets_message: "no error detail".into(),
-            });
-            return Err(ToolError::Rejected {
-                code: err.code,
-                stage: err.stage,
-                message: err.beets_message,
-            });
-        }
-        let data = env.data.unwrap_or(serde_json::Value::Null);
-        let catalog = data
-            .get("catalog")
-            .cloned()
-            .unwrap_or(serde_json::Value::Array(Vec::new()));
-        serde_json::from_value(catalog)
-            .map_err(|e| ToolError::Protocol(format!("unexpected catalog field shape: {e}")))
-    });
-    release_unacquired();
-    result
-}
-
 /// 一次性请求：发一条命令、读一条应答、返回 `data`（不解析形状）。
 ///
-/// 与 `query_plugin_catalog` 的区别只在于"谁解析"：那边把 `catalog` 解析成
-/// 类型化的行，这里把整块 `data` 原样交给调用方——查询结果与字段清单的形状
-/// 归宿主侧的 DTO 管，client 只负责协议正确性（`.ok` 信封、错误码、超时）。
+/// 与类型化查询的区别只在于"谁解析"：这里把整块 `data` 原样交给调用方——
+/// 查询结果与字段清单的形状归宿主侧的 DTO 管，client 只负责协议正确性
+/// （`.ok` 信封、错误码、超时）。
 ///
 /// 走 `reserve()`：查询会开对方的库，与"正在整理库"的会话抢同一个文件锁，
 /// 不能并行（对面有锁，这里也不该制造争用）。
@@ -582,7 +533,6 @@ pub const TERMINAL_EVENTS: &[&str] = &[
     "enrichDone",
     "cancelled",
     "sessionFailed",
-    "pluginDone",
     "adoptDone",
     "updateDone",
     "duplicatesDone",
@@ -920,7 +870,6 @@ mod tests {
                 "enrichDone",
                 "cancelled",
                 "sessionFailed",
-                "pluginDone",
                 "adoptDone",
                 "updateDone",
                 "duplicatesDone",

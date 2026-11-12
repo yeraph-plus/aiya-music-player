@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// 用途：① 请求里带 `clientProtocol`（工具据此拒掉版本不符的一方）；
 /// ② `tests/proto_mirror.rs` 拿它与镜像 meta 里的版本比对。
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// 一次性应答的外层信封。所有命令共用这个形状。
 #[derive(Debug, Clone, Deserialize)]
@@ -91,13 +91,6 @@ pub struct StatusReport {
     pub plugins: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_dir: Option<String>,
-    /// 工具的运行时是否在支持窗口内（工具自报）。
-    #[serde(
-        default,
-        rename = "pythonSupported",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub runtime_supported: Option<bool>,
     /// 工具自报的**能力健康**（形状由工具定义，client 只透传不解释）。
     ///
     /// 为什么用 `Value` 而不是类型化：能力清单是工具的内部结构，client
@@ -153,7 +146,7 @@ mod tests {
         // 值一律用中性占位：本测试验的是**字段名**能不能对上，
         // 不涉及任何具体工具的内容（crate 也不该认识那些名字）。
         let wire = serde_json::json!({
-            "protocolVersion": 2,
+            "protocolVersion": 3,
             "schemaHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "beetsVersion": "1.2.3",
             "pythonVersion": "3.14.7",
@@ -162,7 +155,6 @@ mod tests {
             "libraryDirectory": "C:/Music",
             "plugins": ["alpha", "beta"],
             "configDir": "C:/data",
-            "pythonSupported": true,
             "pluginHealth": [{"name": "alpha", "state": "ready", "enabled": true, "missing": [], "note": ""}],
             "pluginSummary": {"ready": 1, "missingDeps": 0, "unavailable": 0},
             "dataHome": "C:/data",
@@ -182,7 +174,6 @@ mod tests {
         assert!(r.speaks(PROTOCOL_VERSION));
         assert!(!r.speaks(PROTOCOL_VERSION + 1));
         // 能力段是透传的：client 不解释形状，只保证能原样取到
-        assert_eq!(r.runtime_supported, Some(true));
         assert_eq!(r.data_home.as_deref(), Some("C:/data"));
         assert_eq!(
             r.capability_health

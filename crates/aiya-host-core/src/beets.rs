@@ -1477,7 +1477,7 @@ pub fn start_plugins_set(
 
 /// 统计目录的文件数与字节数（先算账再删——删完就没法报了）。
 ///
-/// 只在**工具侧不可用**时用：正常路径上账目由 `uninstall --all --dry-run`
+/// 只在**工具侧不可用**时用：正常路径上账目由 `uninstall --dry-run`
 /// 给出（见 [`uninstall_plan`]），那份还顺带过了四道闸。
 fn measure_dir(root: &std::path::Path) -> (u64, u64) {
     let mut files = 0u64;
@@ -1522,12 +1522,12 @@ enum UninstallPlan {
     Refused(String),
 }
 
-/// `uninstall --all --dry-run` 的超时。dry-run 只做目录遍历与账目计算，
+/// `uninstall --dry-run` 的超时。dry-run 只做目录遍历与账目计算，
 /// 本地大目录也在秒级；30 s 还没完 = 子进程卡死（杀软锁文件 / 进程僵死），
 /// 与 [`QUERY_TIMEOUT`] 同一量级的保守取值。
 const UNINSTALL_PLAN_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 让工具侧出卸载计划：`uninstall --all --dry-run --target <root>`。
+/// 让工具侧出卸载计划：`uninstall --dry-run --target <root>`。
 ///
 /// ## 为什么只借 `--dry-run`，不把删除交出去
 ///
@@ -1555,7 +1555,7 @@ fn uninstall_plan(host: &dyn BeetsHost, root: &std::path::Path) -> Result<Uninst
     };
     let mut cmd = std::process::Command::new(&entry.program);
     cmd.args(&entry.args)
-        .args(["uninstall", "--all", "--dry-run"])
+        .args(["uninstall", "--dry-run"])
         .arg("--target")
         .arg(root)
         .stdin(std::process::Stdio::null())

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 # 协议版本。**不兼容变更才 +1**：加可选字段不算、加新命令不算、改名算。
 #
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 # 本服务端能接受的最低客户端版本。MIN_CLIENT = 2：旧播放器（v1 宿主）会被
 # E_PROTOCOL_MISMATCH 拒绝，message 里写明"请升级播放器"——不做降级协商
@@ -30,7 +30,7 @@ MIN_CLIENT = PROTOCOL_VERSION
 # 影响它能不能自报身份**。播放器把镜像里的 sha256 与本值一比，立刻知道
 # 对面是同一版契约还是旧组件——不需要读文件、不需要额外命令。
 # 改了 schema 忘了改这里？`tests/protocol_contract.py` 会红（它手上真有文件）。
-SCHEMA_SHA256 = "a55c22f5fc59d65bd36edffb67791fb7c21c0443a65f1d73e8404f4f471bffbd"
+SCHEMA_SHA256 = "5ff6cf46c8b07f8b8d3c9e2064cb875fa445a4380544751951c7f7e35fdf09e7"
 
 # 错误码（v2 冻结 11 个）
 #

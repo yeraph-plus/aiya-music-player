@@ -68,7 +68,6 @@ fn full_report() -> StatusReport {
         library_root: Some("C:/Music".into()),
         plugins: Some(vec!["a".into()]),
         config_dir: Some("C:/x".into()),
-        runtime_supported: Some(true),
         capability_health: Some(serde_json::json!([])),
         capability_summary: Some(serde_json::json!({})),
         data_home: Some("C:/x".into()),
@@ -155,7 +154,7 @@ fn terminal_events_exist_in_schema() {
         types.insert(name.to_string());
     }
     // 终态错误信封（sessionFailed）不在 Event 里，形状在 Response
-    assert_eq!(variants.len(), 21, "Event 变体数变了：{}", variants.len());
+    assert_eq!(variants.len(), 19, "Event 变体数变了：{}", variants.len());
 
     for t in TERMINAL_EVENTS {
         // sessionFailed 的形状在 Response 里（它有 ok 字段），不在 Event 里
@@ -183,7 +182,7 @@ fn every_request_variant_has_cmd_and_is_closed() {
         .expect("Request 必须是 oneOf");
     assert_eq!(
         variants.len(),
-        17,
+        15,
         "命令数变了（加命令要改 schema 与这里的期望）"
     );
     for v in variants {

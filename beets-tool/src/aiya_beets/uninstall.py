@@ -3,8 +3,9 @@
 ## 边界
 
 现行安装形态是便携包：安装产物是 bundle 自足解释器带起来的整层——beets
-本体、pip 依赖、用户勾选的插件全在包内 site-packages，没有 venv。所以
-宿主走的 `--all` 认 bundle 形态，"反向操作"就是算这层的账、放行整层删除。
+本体、pip 依赖、用户勾选的插件全在包内 site-packages，没有 venv。卸载
+对象就是这一整层（beets 无更新路径，只有安装与卸载），账目与放行都按
+bundle 形态算。
 
 **数据不归它管**：`beets/`（整理家的 library.db / config / ops.jsonl）与
 `beets-index/`（分析库 / enrich.db）虽然也在应用数据目录内，但它们是用户
@@ -17,22 +18,19 @@ venv 是私有的：删目录既彻底又不依赖 pip 的状态。逐包 uninst
 `__pycache__`、空的 `bin/`、以及 pip 自己不认识的残留（比如 ——target 装进去的
 `aiya_beets` 源码目录）。
 
-## 两种目标（`--all`）
+## 目标（唯一形态）
 
-    uninstall --target {data_root}/beets-tool/venv     # 旧装残留：只删 venv
-    uninstall --target {data_root}/beets-tool --all    # 整层：bundle + bin（宿主用）
+    uninstall --target {data_root}/beets-tool    # 整层：bundle + bin（宿主用）
 
-`--all` 是宿主用的形态：卸载要撤回"安装往这一层放的**全部**东西"——
-bundle 自足解释器和 bin/ 里的外置工具都不在 venv 内。
-不给 `--all` 就只认 venv：venv 形态识别只服务旧装残留与手工 CLI，
-手工命令行误传 `{data_root}` 时不会连带删掉数据。
+卸载要撤回"安装往这一层放的**全部**东西"——bundle 自足解释器和 bin/ 里的
+外置工具都不在任何子目录内。没有别的目标形态：两轨时代的 venv 安装已退役。
 
 ## 安全闸
 
 这个脚本会 `rmtree`，参数来自外部（宿主/命令行）。所以：
 1. 必须是**已存在**的目录，且 resolves 后仍是它自己（不被 junction 骗）；
-2. 必须看起来是安装产物（venv 有 `pyvenv.cfg`；`--all` 认 `beets-tool` 目录名
-   或 `venv/` `bundle/` `bin/` 任一存在），否则拒绝——防止把 `D:\\Music` 传进来；
+2. 必须看起来是安装产物（`beets-tool` 目录名，或 `venv/` `bundle/` `bin/`
+   任一存在——后者兼容旧装残留的目录形状），否则拒绝——防止把 `D:\\Music` 传进来；
 3. 拒绝盘根 / 用户主目录 / Windows 与 Program Files；
 4. **拒绝删除自己所在的目录树**：Windows 上运行中的 exe 删不掉（实测
    `DeleteFileW` 返回 0、错误码 5 access denied，同目录的普通文件返回 1 可删）。
@@ -55,17 +53,6 @@ import os
 import shutil
 import sys
 from pathlib import Path
-
-def _venv_python(target: Path) -> Path:
-    """venv 里的解释器路径（Windows 是 Scripts，其他平台是 bin）。
-
-    install.py 的现行形态不建 venv；此函数只用于识别既存 venv 的解释器落点
-    （有的 venv 缺 pyvenv.cfg，靠解释器落点兜一层）。
-    """
-    if os.name == "nt":
-        return target / "Scripts" / "python.exe"
-    return target / "bin" / "python"
-
 
 def emit(obj: dict) -> None:
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
@@ -117,24 +104,17 @@ def _measure(target: Path) -> tuple[int, int]:
     return files, size
 
 
-def _looks_like_install(target: Path, everything: bool) -> str | None:
+def _looks_like_install(target: Path) -> str | None:
     """返回拒绝理由；None = 看起来是安装产物。
 
-    `--all` 放宽到"目录名是 beets-tool，或含 venv/bundle/bin 任一"：整层卸载的
-    目标本来就是 `beets-tool` 本身，它没有 `pyvenv.cfg`（那是 venv 才有的）。
-    放宽的两条都是**安装器自己造出来的形状**，不是任何目录都可能满足的。
+    目标必须是"目录名是 beets-tool，或含 venv/bundle/bin 任一"：卸载对象
+    就是安装器自己造出来的整层，不是任何目录都可能满足的形状。
     """
-    if everything:
-        if target.name == "beets-tool":
-            return None
-        if any((target / name).is_dir() for name in ("venv", "bundle", "bin")):
-            return None
-        return f"does not look like a beets-tool install directory (not beets-tool and has no venv/bundle/bin): {target}"
-    # 只认 venv 形态：`pyvenv.cfg` 是 venv 的定义文件。没有它就不是安装器
-    # 造出来的东西，删掉等于替用户决定他的目录该不该留。
-    if (target / "pyvenv.cfg").is_file() or _venv_python(target).is_file():
+    if target.name == "beets-tool":
         return None
-    return f"does not look like an environment created by the installer (no pyvenv.cfg): {target}"
+    if any((target / name).is_dir() for name in ("venv", "bundle", "bin")):
+        return None
+    return f"does not look like a beets-tool install directory (not beets-tool and has no venv/bundle/bin): {target}"
 
 
 def _contains_self(target: Path) -> bool:
@@ -156,12 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="aiya-beets uninstall",
         description="remove installed artifacts (dependencies / beets / plugins / external tools); data directories are untouched",
     )
-    ap.add_argument("--target", required=True, help="the --target used by install, or the whole beets-tool layer (with --all)")
-    ap.add_argument(
-        "--all",
-        action="store_true",
-        help="target is the whole beets-tool layer (venv / bundle / bin), not just the venv",
-    )
+    ap.add_argument("--target", required=True, help="the whole beets-tool install layer (bundle + bin)")
     ap.add_argument("--dry-run", action="store_true", help="report what would be removed without deleting")
     args = ap.parse_args(argv)
 
@@ -183,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         emit({"type": "error", "stage": "prepare", "message": f"uninstall refused: {why} ({target})"})
         return 2
 
-    why = _looks_like_install(target, args.all)
+    why = _looks_like_install(target)
     if why:
         emit({"type": "error", "stage": "prepare", "message": f"uninstall refused: {why}"})
         return 2
@@ -194,9 +169,8 @@ def main(argv: list[str] | None = None) -> int:
         "message": f"will remove {target} ({files} files, {size / 2**20:.1f} MB)",
     })
     if args.dry_run:
-        # 计划里带上 all：宿主据此知道这次核算覆盖的是整层还是单个 venv
         emit({"type": "done", "stage": "done", "removed": False, "target": str(target),
-              "files": files, "bytes": size, "dryRun": True, "all": args.all})
+              "files": files, "bytes": size, "dryRun": True})
         return 0
 
     if _contains_self(target):

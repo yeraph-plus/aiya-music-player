@@ -75,7 +75,6 @@ def status_payload() -> dict:
         "schemaHash": SCHEMA_SHA256,
         "beetsVersion": getattr(beets, "__version__", None),
         "pythonVersion": runtime_version(),
-        "pythonSupported": runtime_supported(),
         "libraryPath": str(lib_path),
         "libraryExists": _exists(lib_path),
         # 库根目录：**只认 config.yaml 原文**（None = 没显式配过）。不用 config['directory'] 是因为它恒返回内置默认

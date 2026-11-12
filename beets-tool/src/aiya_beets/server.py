@@ -15,7 +15,7 @@ import threading
 import traceback
 
 from . import env, lockfile, ops, protocol
-from .cmds import dump, enrich, importer, maintain, market, query
+from .cmds import dump, enrich, importer, maintain, query
 from .runtime import (
     bump_cancel,
     cancel_gen,
@@ -133,18 +133,6 @@ def handle(req: dict, gen: int) -> dict | None:
     if cmd == "move_items":
         maintain.move_items(req_id, str(req.get("directory") or ""),
                             bool(req.get("pretend")), gen)
-        return None
-
-    # 插件市场（白名单版；协议纯加法）
-    if cmd == "plugin_catalog":
-        return protocol.ok_response(req_id, {"catalog": market.catalog_payload()})
-    if cmd == "plugin_install":
-        name = str(req.get("name") or "")
-        if not name:
-            return protocol.error_response(
-                req_id, protocol.E_INVALID_ARG, "pluginInstall", "name is empty"
-            )
-        market.install_plugin(req_id, name, emit, cancel_gen, gen)
         return None
 
     return protocol.error_response(
