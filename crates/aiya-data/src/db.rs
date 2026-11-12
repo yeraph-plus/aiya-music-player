@@ -30,7 +30,15 @@ pub enum DbError {
 // migrations/0001_init.sql 头注的吸收清单。今后加表加列：改 0001 本体
 // （开发库用"改基线 + 手动 PRAGMA user_version 回拨/删库重扫"消化），
 // 正式发布后再恢复"0001 冻结 + 增量递增"的纪律。
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
+//
+// 0013 是 v0.2.1 发布后第一个真增量（0001 已随发布冻结）：path_key 切换为
+// 区分大小写，存量 path_lower 按 path 列重推导；对账结果由折叠层保持等价
+// （repo.rs 的 path_key_folded）。SQL 按平台二选一（unix 不做任何变换）。
+#[cfg(windows)]
+const M0013_PATH_KEY: &str = include_str!("../migrations/0013_path_key_case_sensitive_windows.sql");
+#[cfg(unix)]
+const M0013_PATH_KEY: &str = include_str!("../migrations/0013_path_key_case_sensitive_unix.sql");
+const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql"), M0013_PATH_KEY];
 
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
 

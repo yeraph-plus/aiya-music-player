@@ -60,19 +60,38 @@ pub fn online_paths(conn: &Connection) -> DbResult<Vec<String>> {
 
 /// 路径 → `tracks.path_lower` 这一列的键。
 ///
-/// Windows 上先把 `/` 统一成 `\` 再全小写。两条都不能省：
-/// - 不统一分隔符：`D:/m/a.flac` 与 `D:\m\a.flac` 是同一个文件，字符串不等。
-/// - 不小写：Windows 文件系统大小写不敏感，曲库写入时已经按小写归一。
+/// 区分大小写（列名是 0001 基线的历史遗留，存的是归一化键而非小写串）。
+/// 唯一的归一步骤在 Windows：`/` 统一成 `\`——正反斜杠是同一个文件，字符串
+/// 却不等。unix 上反斜杠是合法文件名字符，不做任何变换；`A.flac` 与
+/// `a.flac` 在大小写敏感的文件系统上是两个文件，键必须可区分。
 ///
 /// **与外部工具自己的归一化必须同口径**：`aiya-beets-store` 有一份
 /// `path_key`，它写结论库的行键，这边拿行键回曲库换 `track_id`。两份实现
 /// 漂移的症状不是报错，而是"增强结果一条都对不上曲目"——所以 `beets.rs`
 /// 里有一条测试拿同一批样本比对两边（不靠代码依赖，靠断言锁）。
+///
+/// 大小写不同的输入要命中同一行，走 [`path_key_folded`] 的对账折叠层，
+/// 不在本函数里折叠——web 分支的对账口径在这里之外另行决策。
 pub fn path_key(raw: &str) -> String {
     if cfg!(windows) {
-        raw.replace('/', "\\").to_lowercase()
+        raw.replace('/', "\\")
     } else {
-        raw.to_lowercase()
+        raw.to_string()
+    }
+}
+
+/// 对账匹配键：`path_key` 之上的折叠层，匹配时的两侧都经它折叠。
+///
+/// Windows 文件系统大小写不敏感：外部工具回传的路径大小写与曲库落库时
+/// 可能不同，折叠后才能对上。unix 文件系统大小写敏感，折叠会把两个真实
+/// 存在的文件混成一个键——原样匹配。全仓唯一的折叠出口；web 分支的对账
+/// 口径要单独定，改这里或其调用方分叉，不动 [`path_key`]。
+fn path_key_folded(key: &str) -> String {
+    let k = path_key(key);
+    if cfg!(windows) {
+        k.to_lowercase()
+    } else {
+        k
     }
 }
 
@@ -80,29 +99,28 @@ pub fn path_key(raw: &str) -> String {
 ///
 /// 给"外部工具拿着自己那套键回来要 id"用（结论库只存 path_lower）。也接受
 /// 未归一的原始路径：入口处会走一遍 [`path_key`]，重复归一幂等。这样调用方
-/// 不必知道"要不要先小写"——那把知识只该有一处。
+/// 不必知道"要不要先归一"——那把知识只该有一处。
 ///
-/// 分批 900：SQLite 的变量上限在 3.32 之后是 32766，但没必要求极限——500 条
-/// 一页的查询本来就分不出几批。
+/// 匹配走 [`path_key_folded`]：存储键与查询键两侧都折叠后比对（全表载入
+/// 内存建映射）。不能用 `WHERE path_lower IN (...)` 直查——折叠发生在
+/// Rust 侧（SQLite 的 lower() 只处理 ASCII，与 Rust 的 Unicode 折叠不同
+/// 口径），且存储键与查询键的大小写可能都不一致。
 pub fn track_ids_by_paths(
     conn: &Connection,
     keys: &[String],
 ) -> DbResult<std::collections::HashMap<String, String>> {
+    let mut folded: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut stmt = conn.prepare("SELECT path_lower, id FROM tracks")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    for row in rows {
+        let (key, id) = row?;
+        folded.insert(path_key_folded(&key), id);
+    }
     let mut out = std::collections::HashMap::new();
-    let normalized: Vec<String> = keys.iter().map(|k| path_key(k)).collect();
-    for chunk in normalized.chunks(900) {
-        if chunk.is_empty() {
-            continue;
-        }
-        let holes = vec!["?"; chunk.len()].join(",");
-        let sql = format!("SELECT path_lower, id FROM tracks WHERE path_lower IN ({holes})");
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?;
-        for row in rows {
-            let (key, id) = row?;
-            out.insert(key, id);
+    for k in keys {
+        let nk = path_key(k);
+        if let Some(id) = folded.get(&path_key_folded(&nk)) {
+            out.insert(nk, id.clone());
         }
     }
     Ok(out)
@@ -1247,23 +1265,35 @@ mod tests {
         assert!(got.truncated, "被 max 截断必须显式告知调用方");
     }
 
-    /// 归一：大小写折叠全平台；分隔符折叠是 Windows 语义（unix 上反斜杠是
-    /// 合法文件名字符，不可折叠，见 [`path_key`] 的平台分支）。重复归一等价（幂等）。
+    /// 归一：分隔符折叠是 Windows 语义（unix 上反斜杠是合法文件名字符，
+    /// 不可折叠，见 [`path_key`] 的平台分支）；键区分大小写——unix 的
+    /// 大小写敏感文件系统上 `A.flac` 与 `a.flac` 是两个文件。重复归一等价
+    /// （幂等）。大小写不同的输入命中同一行走 [`path_key_folded`]。
     #[test]
-    fn path_key_folds_separators_and_case() {
+    fn path_key_normalizes_separators_case_sensitive() {
         if cfg!(windows) {
             let a = path_key(r"D:\Music\A\01 - Song.flac");
             assert_eq!(
                 a,
-                path_key("d:/music/a/01 - song.flac"),
-                "分隔符与大小写不同的同一路径必须是同一个键"
+                path_key("D:/Music/A/01 - Song.flac"),
+                "正反斜杠不同的同一路径必须是同一个键"
+            );
+            assert_ne!(
+                path_key(r"D:\Music\A\01 - Song.flac"),
+                path_key(r"D:\Music\a\01 - song.flac"),
+                "键区分大小写"
             );
             assert!(a.is_ascii() && !a.contains('/'), "键里不该留正斜杠");
         } else {
             assert_eq!(
                 path_key("/Music/A/01 - Song.flac"),
-                path_key("/music/a/01 - song.flac"),
-                "大小写不同的同一路径必须是同一个键"
+                "/Music/A/01 - Song.flac",
+                "unix 上键就是原路径，逐字符保留"
+            );
+            assert_ne!(
+                path_key("/Music/A/01.FLAC"),
+                path_key("/Music/A/01.flac"),
+                "键区分大小写：两个真实存在的文件必须可区分"
             );
         }
         let k = if cfg!(windows) {
@@ -1274,7 +1304,9 @@ mod tests {
         assert_eq!(path_key(&k), k, "对已归一的键再归一次不能变");
     }
 
-    /// 反查：调用方递**原始路径**（分隔符/大小写与库内写法不同）也要能换到 id。
+    /// 反查：调用方递**原始路径**也要能换到 id。Windows 上大小写/分隔符
+    /// 不同的写法经对账折叠层命中；unix 上大小写敏感，只有逐字符相同的
+    /// 路径命中（`A.flac` 与 `a.flac` 是两个文件，混了就是删错歌）。
     ///
     /// fixture 里的路径是 `/m/1.flac` 这种 POSIX 写法，只适合查列表逻辑；
     /// 命中测试要另插一行**平台原生路径**——真实曲库是扫描器走 PathBuf
@@ -1286,11 +1318,11 @@ mod tests {
         let (native, variant, miss) = if cfg!(windows) {
             (
                 r"D:\Music\A\01.flac",
-                "d:/music/a/01.flac",
+                "D:/Music/A/01.flac", // 仅分隔符不同：path_key 直接归一到同键
                 r"D:\Music\A\02.flac",
             )
         } else {
-            ("/Music/A/01.flac", "/music/a/01.FLAC", "/Music/A/02.flac")
+            ("/Music/A/01.flac", "/Music/A/01.flac", "/Music/A/02.flac")
         };
         let stored = path_key(native);
         conn.execute(
@@ -1301,14 +1333,70 @@ mod tests {
         .unwrap();
 
         let got = track_ids_by_paths(&conn, &[variant.to_string()]).unwrap();
+        let norm_key = path_key(variant);
         assert_eq!(
-            got.get(&stored).map(String::as_str),
+            got.get(&norm_key).map(String::as_str),
             Some("tw"),
-            "分隔符与大小写不同的同一路径必须换到 id"
+            "写法不同的同一路径必须换到 id（返回映射以归一化输入键为键）"
         );
+
+        // 大小写变体走折叠层：Windows 命中同一行；unix 是另一个文件，未命中。
+        let case_variant = if cfg!(windows) {
+            "d:/MUSIC/a/01.FLAC"
+        } else {
+            "/music/a/01.flac"
+        };
+        let got_case = track_ids_by_paths(&conn, &[case_variant.to_string()]).unwrap();
+        let case_key = path_key(case_variant);
+        if cfg!(windows) {
+            assert_eq!(
+                got_case.get(&case_key).map(String::as_str),
+                Some("tw"),
+                "大小写变体经折叠层命中同一行"
+            );
+        } else {
+            assert!(
+                !got_case.contains_key(&case_key),
+                "unix 上大小写不同的路径是另一个文件"
+            );
+        }
 
         let miss = track_ids_by_paths(&conn, &[miss.to_string()]).unwrap();
         assert!(miss.is_empty(), "查不到就返回空表，不是报错也不是造行");
+
+        if cfg!(unix) {
+            let case_miss = track_ids_by_paths(&conn, &["/music/a/01.flac".to_string()]).unwrap();
+            assert!(
+                case_miss.is_empty(),
+                "unix 上大小写不同的路径是另一个文件，绝不命中"
+            );
+        }
+    }
+
+    /// unix 上仅大小写不同的两个文件共存且各自反查命中——键区分大小写的
+    /// 存在理由（Windows 文件系统摆不出这个形态，unix 部署真实存在）。
+    #[test]
+    #[cfg(unix)]
+    fn track_ids_by_paths_distinguishes_case_variant_files() {
+        let conn = open_in_memory().unwrap();
+        conn.execute(
+            "INSERT INTO tracks (id,title,title_norm,added_at,path,path_lower,size_bytes,mtime)
+             VALUES ('tc','x','x',1,?1,?2,1,1), ('td','y','y',1,?3,?4,1,1)",
+            rusqlite::params![
+                "/music/A.flac",
+                path_key("/music/A.flac"),
+                "/music/a.flac",
+                path_key("/music/a.flac"),
+            ],
+        )
+        .unwrap();
+        let got = track_ids_by_paths(
+            &conn,
+            &["/music/A.flac".to_string(), "/music/a.flac".to_string()],
+        )
+        .unwrap();
+        assert_eq!(got.get("/music/A.flac").map(String::as_str), Some("tc"));
+        assert_eq!(got.get("/music/a.flac").map(String::as_str), Some("td"));
     }
 
     /// 「存为歌单」的前置判断：每条路径是否在曲库里，答案要**同序等长**。
@@ -1324,14 +1412,14 @@ mod tests {
             (
                 r"D:\Music\A\01.flac",
                 r"D:\Music\A\02.flac",
-                "d:/music/a/02.flac", // 分隔符与大小写都不同，仍要命中
+                "d:/MUSIC/a/02.FLAC", // 分隔符与大小写都不同：折叠层接住
                 r"D:\Music\Z\99.flac",
             )
         } else {
             (
                 "/Music/A/01.flac",
                 "/Music/A/02.flac",
-                "/music/a/02.FLAC", // 大小写不同，仍要命中
+                "/Music/A/02.flac", // unix 对账按精确路径
                 "/Music/Z/99.flac",
             )
         };
@@ -1359,6 +1447,16 @@ mod tests {
             ],
             "同序等长；未命中是 None 而不是造一条"
         );
+
+        if cfg!(unix) {
+            let case_miss =
+                resolve_paths_aligned(&conn, &["/music/a/02.flac".to_string()]).unwrap();
+            assert_eq!(
+                case_miss,
+                vec![None],
+                "unix 上大小写不同的路径是另一个文件，未命中"
+            );
+        }
 
         assert!(
             resolve_paths_aligned(&conn, &[]).unwrap().is_empty(),

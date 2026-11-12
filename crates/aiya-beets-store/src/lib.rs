@@ -87,17 +87,19 @@ CREATE INDEX IF NOT EXISTS idx_enrich_mood  ON track_enrichment(mood_label);
 CREATE INDEX IF NOT EXISTS idx_enrich_dance ON track_enrichment(danceability);
 ";
 
-/// 路径归一：与扫描器同口径（Windows 大小写不敏感，正/反斜杠等价）。
+/// 路径归一：与扫描器同口径（Windows 正/反斜杠等价；键区分大小写——unix
+/// 大小写敏感文件系统上 `A.flac` 与 `a.flac` 是两个文件）。
 ///
-/// 两侧算法必须一致，否则同一个文件在曲库里叫 `D:\Music\a.flac`、在结论表里
-/// 叫 `d:/music/a.flac`，工作清单会永远认为它"没算过"。
+/// 两侧算法必须一致，否则同一个文件在曲库里叫 `D:\Music\A.flac`、在结论表里
+/// 叫 `d:\music\a.flac`，工作清单会永远认为它"没算过"。大小写不同的写法
+/// 是否对上，由曲库侧的对账折叠层（repo.rs `path_key_folded`）决定，键本身
+/// 不折叠。
 pub fn path_key(path: &str) -> String {
-    let normalized = if cfg!(windows) {
+    if cfg!(windows) {
         path.replace('/', "\\")
     } else {
         path.to_string()
-    };
-    normalized.to_lowercase()
+    }
 }
 
 /// 7 类概率里取最大。严格大于才替换——并列时保留先出现的那个，
@@ -601,15 +603,24 @@ mod tests {
     }
 
     #[test]
-    fn path_key_matches_scanner_case_folding() {
-        let a = path_key("/Music/A.FLAC");
-        let b = path_key("/music/a.flac");
-        assert_eq!(a, b, "大小写不敏感");
+    fn path_key_normalizes_separators_case_sensitive() {
         if cfg!(windows) {
+            let a = path_key(r"D:\Music\A.FLAC");
             assert_eq!(
-                path_key(r"D:\Music\A.FLAC"),
-                path_key("D:/music/a.flac"),
+                a,
+                path_key("D:/Music/A.FLAC"),
                 "Windows 上正/反斜杠必须同一个键"
+            );
+            assert_ne!(
+                a,
+                path_key(r"D:\Music\a.flac"),
+                "键区分大小写：两个真实存在的文件必须可区分"
+            );
+        } else {
+            assert_eq!(
+                path_key("/Music/A.FLAC"),
+                "/Music/A.FLAC",
+                "unix 上键就是原路径，逐字符保留"
             );
         }
     }

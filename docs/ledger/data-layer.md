@@ -6,6 +6,7 @@
 ## 条目（新→旧）
 
 <!-- 每条一行：- YYYY-MM-DD · 代码位置 · 事实/取舍 · 来龙去脉（可选） -->
+- 2026-11-13 · crates/aiya-data/src/{repo.rs,scanner.rs,db.rs} + migrations/0013_path_key_case_sensitive_{windows,unix}.sql + crates/aiya-beets-store/src/lib.rs · path_key 切换为区分大小写、对账折叠解耦（拍板）· 键 = 分隔符归一（Windows /→\）+ 大小写保留——unix 大小写敏感文件系统上 A.flac 与 a.flac 是两个文件，旧的无条件小写会把它们折成同一个键、反查必串；大小写不敏感匹配解耦为 repo.rs 的 path_key_folded（全仓唯一折叠出口：Windows 折叠 / unix 原样，web 分支对账口径的决策点，后续单独处理）。存量兼容：migration 0013（平台双文件，v0.2.1 后第一个真增量——0001 已随发布冻结）把 tracks.path_lower 按 path 列重推导，等价性 = 旧键恒等于新键经折叠层，存储形状变、对账结果不变；scanner 的预筛/seen/upsert 全部切到 path_key 口径（upsert 在 Windows 侧加 lower() SQL 对账档接大小写漂移，unix 严格精确）；beets-store 同步（enrich.db 旧小写键行由 stale GC 自愈，一次性重算结论）；列名 path_lower 保留（0001 基线历史遗留，存的是归一化键非小写串）｜验证：cargo fmt/clippy/test 两 crate 绿；新增 unix 大小写共存测试（track_ids_by_paths_distinguishes_case_variant_files），unix 分支行为经 CI linux job 实证
 - 2026-11-12 · crates/aiya-beets-store/src/lib.rs + crates/aiya-data/src/db.rs（migration 0008/0009）· track_enrichment 表只住结论库（{beets-index}/enrich.db），应用库不许有 beets 表（0009 断言守）· 0008 曾把该表建在应用库：写它要拿 scanning 互斥、挡住用户扫描，索引与曲库争一把锁。
 - 2026-11-12 · crates/aiya-data/src/artwork.rs（STAGE_SEQ）· 封面暂存 tmp 名带序号（进程内唯一 + pid 区分），不用 hash+pid · 旧名 `.{hash8}.{pid}.tmp` 在串行扫描下成立，并行解析后同专辑多首共用封面导致 rename 拿到被截断的半图；测试 concurrent_stage_same_bytes_does_not_corrupt_target 锁定。
 

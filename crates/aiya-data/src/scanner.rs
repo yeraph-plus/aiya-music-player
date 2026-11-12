@@ -385,16 +385,30 @@ fn upsert(
     artwork: Option<&StagedArtwork>,
     reloc: Option<&mut RelocateIndex>,
 ) -> DbResult<UpsertOutcome> {
-    // 对账键 = path_lower（Windows 大小写不敏感语义；该列是 0001 基线里的
-    // `path_lower TEXT NOT NULL UNIQUE`，早期编号 0003 的迁移已在压平基线时并入）
-    let path_lower = t.path.to_lowercase();
-    let mut existing: Option<(String, i64, i64, String)> = conn
-        .query_row(
+    // 对账键 = path_lower（该列是 0001 基线里的 `path_lower TEXT NOT NULL
+    // UNIQUE`，早期编号 0003 的迁移已在压平基线时并入）。键 = path_key：
+    // 分隔符归一、区分大小写（0013 迁移把存量从小写基线重推导到本口径）。
+    let path_lower = crate::repo::path_key(&t.path);
+    // 大小写漂移对账：Windows 文件系统大小写不敏感，同一物理文件可能以不同
+    // 大小写抵达 upsert（盘符/目录大小写漂移、外部清单转写），folded 层在
+    // SQL 侧用 lower() 实现（ASCII 折叠；CJK 路径无大小写，两档都不受影响）。
+    // unix 大小写敏感，A.flac 与 a.flac 是两个文件，严格精确。
+    let mut existing: Option<(String, i64, i64, String)> = if cfg!(windows) {
+        conn.query_row(
+            "SELECT id, mtime, size_bytes, availability FROM tracks
+             WHERE path_lower = ?1 OR lower(path_lower) = lower(?1)",
+            [&path_lower],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .ok()
+    } else {
+        conn.query_row(
             "SELECT id, mtime, size_bytes, availability FROM tracks WHERE path_lower = ?1",
             [&path_lower],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
-        .ok();
+        .ok()
+    };
 
     // 改名/移动对账（P1：文件改名 = 旧行被标 missing + 新路径重复插入，播放统计和歌单引用全留在死行上）。path 未命中、且"本轮没 walk 到"的行里恰好一条 (size, mtime) 完全相等 —— 那就是同一份文件被改名/移动了 （rename 不改 mtime 与 size）。做 relocate：行身份（主键
     // id）不变，只更新路径字段；随后的 INSERT ON CONFLICT(path_lower) 命中迁好的行，照常刷标签并把 availability 翻回 online。参考 beets_sync::relocate_track 的同一先例。0 条或多条候选维持现状（新插入 / 标 missing），不猜。
@@ -696,7 +710,7 @@ fn process_file(
         }
     };
     let mtime = mtime_of(&meta);
-    let path_lower = path.to_string_lossy().to_lowercase();
+    let path_lower = crate::repo::path_key(&path.to_string_lossy());
 
     // 预筛：mtime+size 都没变、且行是在线状态 → 连标签都不读。
     //
@@ -968,10 +982,10 @@ pub fn scan_roots_ext(
     }
 
     let total = files.len();
-    // 本轮实际 walk 到的路径（小写），供 missing 对账用
+    // 本轮实际 walk 到的路径（对账键口径，与存储列同源），供 missing 对账用
     let seen: std::collections::HashSet<String> = files
         .iter()
-        .map(|p| p.to_string_lossy().to_lowercase())
+        .map(|p| crate::repo::path_key(&p.to_string_lossy()))
         .collect();
 
     // 库内已有行的轻量索引：预筛 unchanged 用。只取四列、一次性读全表 —— 5 万行约 8–10MB，换来解析阶段对每个文件都不必再查库（解析线程没有连接，也根本不该有）。
@@ -1629,22 +1643,32 @@ mod tests {
         let mut conn = open_in_memory().unwrap();
         let r1 = scan_directory(&mut conn, dir.path(), None, |_| {}).unwrap();
         assert_eq!(r1.imported, 1);
-        // 模拟第二次扫描时路径大小写变化（Windows 上盘符/目录大小写可能漂移）
-        // —— 直接手工 upsert 一个大写变体路径，验证命中同一行。
+        // Windows：同一物理文件可能以不同大小写报进 upsert（盘符/目录大小写
+        // 漂移）——对账折叠层必须接住，否则一个文件两行。unix：大小写不同
+        // = 不同文件，各自成行（path_key 区分大小写的存在理由）。
         let mut parsed = parse_file(&dir.path().join("a.mp3")).unwrap();
         parsed.path = parsed.path.to_uppercase();
         let tx = conn.transaction().unwrap();
         let inserted = upsert(&tx, &parsed, 999, None, None).unwrap();
         tx.commit().unwrap();
-        assert_eq!(
-            inserted,
-            UpsertOutcome::Unchanged,
-            "大小写变体必须命中已有行（且 mtime/size 未变 → 早退），而不是新插入"
-        );
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(count, 1);
+        if cfg!(windows) {
+            assert_eq!(
+                inserted,
+                UpsertOutcome::Unchanged,
+                "大小写变体必须命中已有行（且 mtime/size 未变 → 早退），而不是新插入"
+            );
+            assert_eq!(count, 1, "同一物理文件只许一行");
+        } else {
+            assert_eq!(
+                inserted,
+                UpsertOutcome::Inserted,
+                "unix 上大小写不同是新文件"
+            );
+            assert_eq!(count, 2, "两个文件两行");
+        }
     }
 
     /// ParsedTrack 手工构造（批失败重放 / relocate 单测用；不走 lofty 解析）。
@@ -1824,12 +1848,20 @@ mod tests {
     #[test]
     fn batch_failure_replays_and_counts_only_real_failures() {
         let mut conn = open_in_memory().unwrap();
-        // 外科手术式失败源：只对特定路径的 INSERT RAISE(ABORT)
-        conn.execute_batch(
+        // 外科手术式失败源：只对特定路径的 INSERT RAISE(ABORT)。毒丸路径取
+        // 平台归一后的形态（upsert 的键 = path_key，Windows 上正斜杠会被
+        // 归一成反斜杠，触发器按归一后的键匹配）。
+        let bad = if cfg!(windows) {
+            r"\m\bad.mp3"
+        } else {
+            "/m/bad.mp3"
+        };
+        conn.execute_batch(&format!(
             "CREATE TRIGGER boom BEFORE INSERT ON tracks
-             WHEN NEW.path_lower = '/m/bad.mp3'
+             WHEN NEW.path_lower = '{}'
              BEGIN SELECT RAISE(ABORT, 'boom'); END;",
-        )
+            bad
+        ))
         .unwrap();
 
         let mut batch: Vec<Item> = Vec::new();
@@ -1866,10 +1898,18 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 2);
+        // 入库键 = path_key（Windows 归一成反斜杠形态），按同口径核对
+        let ok_keys: Vec<String> = ["/m/ok1.mp3", "/m/ok2.mp3"]
+            .iter()
+            .map(|p| crate::repo::path_key(p))
+            .collect();
         let missing: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM tracks WHERE path_lower IN ('/m/ok1.mp3','/m/ok2.mp3')",
-                [],
+                &format!(
+                    "SELECT COUNT(*) FROM tracks WHERE path_lower IN ({})",
+                    vec!["?"; ok_keys.len()].join(",")
+                ),
+                rusqlite::params_from_iter(ok_keys.iter()),
                 |r| r.get(0),
             )
             .unwrap();
