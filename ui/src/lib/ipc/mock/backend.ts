@@ -2173,7 +2173,7 @@ export class MockBackend {
 
   diagnostics(): Diagnostics {
     return {
-      version: '0.2.1',
+      version: '0.3.0',
       dataDir: '（浏览器预览：localStorage）',
       recentErrors: [],
     };
