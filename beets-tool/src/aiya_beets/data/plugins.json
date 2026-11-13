@@ -731,38 +731,6 @@
       "bundle": false
     },
     {
-      "name": "discogs",
-      "title": "Discogs 源",
-      "note": "Discogs 元数据源（电子乐强项）；需先配 user_token 或在 beets CLI 授权一次——未配 token 时插件初始化会向 stdout 打印授权 URL 并阻塞等 stdin 输入，serve 下会污染协议流并吞掉宿主命令帧",
-      "builtin": true,
-      "packages": [
-        "discogs-client>=2.3,<3"
-      ],
-      "imports": [
-        "discogs_client"
-      ],
-      "exe": [],
-      "writes": false,
-      "network": true,
-      "bundle": false
-    },
-    {
-      "name": "beatport",
-      "title": "Beatport 源",
-      "note": "Beatport 元数据源（舞曲/电子）；初始化即发 OAuth 请求（无凭证/无网时插件加载即失败被吞）；2026-11 实测本机网络 oauth-api.beatport.com 解析失败，且 beets 官方已宣布 3.0 移除——不建议启用",
-      "builtin": true,
-      "packages": [
-        "requests-oauthlib>=1.3,<3"
-      ],
-      "imports": [
-        "requests_oauthlib"
-      ],
-      "exe": [],
-      "writes": false,
-      "network": true,
-      "bundle": false
-    },
-    {
       "name": "deezer",
       "title": "Deezer 源",
       "note": "Deezer 元数据源（免凭证公开 API）；2026-11 实测本机网络直接出候选，与 MusicBrainz 并用可补匹配覆盖",
@@ -785,22 +753,6 @@
       "imports": [
         "requests",
         "confuse"
-      ],
-      "exe": [],
-      "writes": false,
-      "network": true,
-      "bundle": false
-    },
-    {
-      "name": "tidal",
-      "title": "TIDAL 源",
-      "note": "TIDAL 元数据源；须登录 TIDAL 账号（OAuth 设备授权），未登录时仅该源请求报 401、不影响其他源与会话",
-      "builtin": true,
-      "packages": [
-        "requests-oauthlib>=1.3,<3"
-      ],
-      "imports": [
-        "requests_oauthlib"
       ],
       "exe": [],
       "writes": false,
