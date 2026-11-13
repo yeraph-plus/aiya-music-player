@@ -6,6 +6,7 @@
 ## 条目（新→旧）
 
 <!-- 每条一行：- YYYY-MM-DD · 代码位置 · 事实/取舍 · 来龙去脉（可选） -->
+- 2026-11-14 · tag v0.3.0 + tag beets-portable、release/beets-portable 两 run · **v0.3.0 正式发布**（首次一次过、无需移 tag）· 9a79621 版本收口位直接双绿：播放器 release run 全绿（安装包 7MB + 便携版 9MB 双资产落盘），beets-portable 通道同步刷新（55MB zip + SHA256SUMS——登记表 deezer/spotify 变更后未重建的尾巴一并补上，通道与 main 同点位）｜版本 0.2.1→0.3.0 抬 minor 的依据：协议 v2→v3（旧 bundle 哈希不符即拒、重下恢复）+ migration 0013（path_key 区分大小写）+ 刮削源功能面（musicbrainz REQUIRED 恒启 / deezer/spotify 入表 / 账号型源不进表）+ 分析取消按钮——按 0.1.0→0.2.0 波次先例抬 minor；beets-tool 0.2.0 独立版本线不动｜本版内容面 = beets 收尾批全链（docs/73：P0 挂死修复 / 刮削 0 候选根因闭合 / 真机实测验证矩阵 + docs/73 §6-7 审查批 P1/P2 全清）
 - 2026-11-13 · tools/check-style.mjs、tools/comment-gov/scan.py、AGENTS §4.4 · 历史叙事信号词（旧实现/此前/曾经/以前/旧版/事故）升阻断 · report 桶观察期零误报收口（全仓 0 命中）后拍板升格，JS/Rust/css/sql 与 Python 两侧同桶；高精度禁词（人话/拍板/顺手等）维持 report
 - 2026-11-12 · tag v0.2.1、release run 5 · v0.2.1 正式发布 · 330c7bd 所打 tag 因 ui-layers 红从未发布（releases 列表查证），按拍板移 tag 至治理收口位 e361777 重跑：release 全绿，安装包 + 便携版双资产落盘（6.8MB / 9.8MB）；批 0.5–0.7 线上红修复与批 A–H 注释治理收口在同一点位
 - 2026-11-12 · AGENTS §4.4、docs/60 §7、tools/{check-style,check-boundary,check-ui-layers,build-portable}.mjs · 批 H 后半：docs/60 收口对账（数字改实测值——L2 存量 253 非 210；棘轮 355→1 烧穿，唯一豁免 JSON Schema "2020-12" 技术标识；叙事词 report 观察期提前收口、全仓命中 0）；check-style 扫描面扩 .css/.sql（-- 与块注释形态，扩面前实测两形态已清零）；tools 自区叙事 4 处清零；验收缺口补记——注释治理批必须带 gen:types:check（ts-rs 把 /// 导出进生成物，run 50 实证漏跑即红）
