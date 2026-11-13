@@ -2218,7 +2218,6 @@ struct PluginTableFile {
     plugins: Vec<aiya_dto::beets::BeetsPluginItem>,
 }
 
-
 #[derive(serde::Deserialize, Default)]
 struct PluginProfiles {
     #[serde(default)]
@@ -2236,7 +2235,7 @@ pub fn plugin_table(host: &dyn BeetsHost) -> Result<Vec<aiya_dto::beets::BeetsPl
 }
 
 /// 纯函数版（可测）：语言 → 解析对应内嵌表。
-pub fn plugin_table_in(lang: &str) -> Result<Vec<aiya_dto::beets::BeetsPluginItem>, String> {
+pub fn plugin_table_in(_lang: &str) -> Result<Vec<aiya_dto::beets::BeetsPluginItem>, String> {
     let mut doc: PluginTableFile = serde_json::from_str(PLUGIN_TABLE_JSON).map_err(|e| {
         format!("failed to parse the embedded plugin table (broken build artifact?): {e}")
     })?;
@@ -2553,10 +2552,16 @@ mod tests {
         let en_lyrics = en.iter().find(|x| x.name == "lyrics").expect("lyrics 条目");
         assert_eq!(en_lyrics.title, "歌词抓取");
         // 预置启用面注入
-        let mb = en.iter().find(|x| x.name == "musicbrainz").expect("musicbrainz 条目");
+        let mb = en
+            .iter()
+            .find(|x| x.name == "musicbrainz")
+            .expect("musicbrainz 条目");
         assert!(mb.default, "musicbrainz 必须在 workbench 预置启用面");
         assert!(!mb.index_default, "musicbrainz 不在索引家");
-        let xt = en.iter().find(|x| x.name == "xtractor").expect("xtractor 条目");
+        let xt = en
+            .iter()
+            .find(|x| x.name == "xtractor")
+            .expect("xtractor 条目");
         assert!(xt.index_default, "xtractor 必须在 index 预置启用面");
     }
 
