@@ -179,6 +179,13 @@ def main(argv: list[str] | None = None) -> int:
         except ImportError:
             pass
 
+        # beets 2.14 的插件加载是显式动作（load_plugins 只在 beets 自己的 ui
+        # 入口被调用）；serve 不经过 ui，不补这一声，元数据源（musicbrainz
+        # 匹配）就不会加载——整理预览恒 0 候选。
+        from beets import plugins as beets_plugins
+
+        beets_plugins.load_plugins()
+
         from .server import serve
 
         return serve()

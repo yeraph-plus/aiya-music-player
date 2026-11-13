@@ -435,7 +435,8 @@
       "exe": [],
       "writes": false,
       "network": true,
-      "bundle": true
+      "bundle": true,
+      "required": true
     },
     {
       "name": "replaygain",

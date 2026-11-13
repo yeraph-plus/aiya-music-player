@@ -249,6 +249,13 @@ INDEX_PLUGINS: tuple[IndexPluginSpec, ...] = tuple(
 INDEX_DEFAULT_PLUGINS: tuple[str, ...] = tuple(catalog()["profiles"]["index"])
 WORKBENCH_DEFAULT_PLUGINS: tuple[str, ...] = tuple(catalog()["profiles"]["workbench"])
 
+# beets 内置但**应用功能依赖**的插件（required: true）：不随用户的勾选集
+# 走，config 渲染时恒并入启用行。musicbrainz 是整理刮削的燃料——serve 不
+# 经过 beets.ui，插件加载由工具显式触发，它不在启用行里刮削恒 0 候选。
+REQUIRED_PLUGINS: tuple[str, ...] = tuple(
+    item["name"] for item in entries() if item.get("required")
+)
+
 # 免配置包预置的插件（`bundle: true`）。集合本身是产品决策，改 JSON 不改代码。
 BUNDLE_PLUGINS: tuple[str, ...] = tuple(item["name"] for item in entries() if item.get("bundle"))
 

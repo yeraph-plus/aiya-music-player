@@ -85,17 +85,21 @@
   gen:types ✓、svelte-check 0/0、e2e 44/44、workspace 26 套件绿。
 - 发布：v0.2.1 播放器 release + beets-portable 通道双资产在架。
 
-## 6 · 剩余项（逐条有出处）
+## 6 · 剩余项（2026-11-13 追加拍板后更新）
 
-1. **刮削专项（G2）**：beets 2.14 metadata_plugins 与 aiya-beets 集成调试
-   ——预览会话中 metadata sources 为空的机制定位（插件加载时序 / @cache /
-   serve 环境），候选 >0 后补验「整理拷贝」端到端（autotag 0 候选时 UI 只能
-   skip，拷贝动作无法走通）。
-2. **代理方案 A 实现**：tool_env 下发 HTTPS_PROXY/HTTP_PROXY/NO_PROXY
-   （settings 新键 + 设置 UI 输入框 + host-core 三行）——待拍板后另批；
+1. ~~刮削专项（G2）~~ **已闭合（2026-11-13 追加）**：根因 = beets 2.14 把
+   插件加载改为显式 `load_plugins()`（只挂在 beets 自己的 ui 入口），serve
+   模式不经过 ui → 加载从未发生 → 元数据源恒空。修复 = serve 分支显式调
+   `beets.plugins.load_plugins()`；直连工具进程验证：MusicBrainz 源加载 →
+   5 候选 → apply_import 全通（写标签 + 拷贝落点 + 入库，3s，failed 0）。
+   观察项：混合目录组（四首不同专辑挤一个 inbox）匹配度低（recommendation
+   none，候选路径出现 Non-Album 分段）——真实场景整专辑目录导入不受影响。
+2. **代理方案 A**：**延后一批**（拍板：只有 beets 需要代理，应用级全局代理
+   可能没必要；但 GitHub 访问不稳可能连便携包都拉不下来——方案先想清楚）。
    评估全文见 docs/72 §3。
-3. **分析续算**：enrich 已分析 20/1381（幂等可续）——用户点「开始分析」
-   随时续跑；全库 ~4 小时（真曲 ~10s/首）。跑完后复验标签查询与存歌单的
-   全量形态。
+3. ~~分析续算~~ **全库跑不跑由用户自理**：xtractor 已实证正常出值
+   （20/1381 幂等可续），不再作为遗留项跟踪。
 4. **未覆盖面**：整理 move（真删）模式、http-server 的 beets 面、
    更新行为（本就无更新路径，按设计不测）。
+5. **存量兼容**：REQUIRED_PLUGINS 并集在 ensure_config 的同步里生效——
+   旧装 config 缺 musicbrainz 的，下一次会话启动/换插件自动补齐。
