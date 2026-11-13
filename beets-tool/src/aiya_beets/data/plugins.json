@@ -430,7 +430,7 @@
       "builtin": true,
       "packages": [],
       "imports": [
-        "musicbrainz"
+        "requests"
       ],
       "exe": [],
       "writes": false,
