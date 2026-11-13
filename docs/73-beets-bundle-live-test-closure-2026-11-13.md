@@ -103,3 +103,31 @@
    更新行为（本就无更新路径，按设计不测）。
 5. **存量兼容**：REQUIRED_PLUGINS 并集在 ensure_config 的同步里生效——
    旧装 config 缺 musicbrainz 的，下一次会话启动/换插件自动补齐。
+6. **刮削源追加实测（2026-11-14）**：beetsplug 里其余元数据源逐一过探针
+   （load_plugins + candidates，Robert Miles / Dreamland，无 -I 对齐 serve
+   真实条件）——
+   - **deezer / spotify：可用，已入登记表**。零凭证零新依赖（requests/confuse
+     已随包），实测出真候选（3/5 候选、15s 级）；bundle 登记表副本已同步，
+     install 链十件目标集实跑通过（幂等 pip + 自检 + 零卸载差量）。
+   - **tidal：插件加载干净，依赖只有 requests-oauthlib（wheel）**；候选阶段
+     401——须 TIDAL 账号 OAuth 设备授权。失败模式是每请求报错，不挂会话。
+     已入表（note 注明须账号）。beets 的 tidal 是纯 requests_oauthlib 实现，
+     不依赖 tidalapi 包，无 sdist 构建问题。
+   - **discogs：危险，先配 token 才准启用**。无 tokenfile/user_token 时插件
+     `__init__` 的 OAuth 握手向 stdout 打印授权 URL（污染 NDJSON 协议流）+
+     `beets.ui.input_()` 阻塞读 stdin（吞宿主下一条命令帧）——实测复现。
+     note 已改为显式警告；条目保留（`bundle\python.exe -m beets` CLI 交互
+     授权一次落 tokenfile 后可用，或配 user_token）。
+   - **beatport：本机不可用**。`__init__` 即发 OAuth 请求，实测
+     oauth-api.beatport.com DNS 解析失败（网络层），加载失败被 load_plugins
+     吞（traceback 进 stderr，进程不死）；beets 官方宣布 3.0 移除。note 标记
+     不建议启用。
+   - **待拍板：凭证型源的启用闸**。discogs/beatport 的 note 只是提示，UI 仍
+     可点启用 → 下一次 serve 启动即污染协议流。要不要在 serve 分支 load_plugins
+     之前按"凭证证据"（tokenfile 存在 / user_token 非空）剔除无凭证的凭证型源
+     （登记表加字段，load 失败在三态报告里显示），随刮削专项一起定。
+   - 附带发现：bundle 解释器 user-site 开着——pip 会把用户级 Python314
+     site-packages 里的包当"已满足"跳过装进 bundle（six 就这样没进包），
+     免配置包的封闭性有缺口；且探针用 `-I` 会与 serve 条件不一致（误判缺依赖）。
+     pip 走用户全局配置的清华镜像，镜像抖动时 install 链随镜像一起失败
+     （本次实测镜像 000 / 官方 PyPI 200——用户级 pip.ini 是既有事实，工具不代改）。
