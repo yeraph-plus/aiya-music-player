@@ -34,7 +34,7 @@ ENTRY_KEYS = {
     "name", "title", "note", "builtin", "packages", "imports",
     "exe", "writes", "network", "bundle",
 }
-OPTIONAL_KEYS = {"indexForced"}
+OPTIONAL_KEYS = {"indexForced", "required"}
 
 BINARY_KEYS = {
     "name", "target", "bundle", "why", "carrier", "size", "sha256", "license", "vendor",
