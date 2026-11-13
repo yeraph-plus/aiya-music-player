@@ -3,8 +3,6 @@ fn main() {
     // 不说一声的话，改了 JSON 只重编 beets.rs 才会生效 —— 而 JSON 是数据文件，
     // 改了它 cargo 不会认为源文件变了，于是二进制里还是旧表、UI 显示旧插件。
     println!("cargo:rerun-if-changed=../beets-tool/src/aiya_beets/data/plugins.json");
-    // 中文变体同样内嵌（`PLUGIN_TABLE_JSON_ZH_HANS`），一起盯住。
-    println!("cargo:rerun-if-changed=../beets-tool/src/aiya_beets/data/plugins-zh_Hans.json");
 
     // 先自己看一眼 sidecar 在不在，再交给 tauri_build。为什么值得多这几行：`bundle.resources` 里那句 resource path
     // `binaries\aiya-audio-host-x86_64-pc-windows-msvc.exe` doesn't exist 是 tauri-build 打的，它不说"怎么造出来"。干净检出（CI、新克隆、换了机器）下面把解法直接写在报错里。

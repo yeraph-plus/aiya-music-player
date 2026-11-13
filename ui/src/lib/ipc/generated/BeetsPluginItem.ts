@@ -35,4 +35,9 @@ default: boolean,
 /**
  * 索引家默认启用（由 `profiles.index` 注入）
  */
-indexDefault: boolean, };
+indexDefault: boolean, 
+/**
+ * 应用功能依赖的插件（REQUIRED_PLUGINS 并集的燃料闸）：不随用户的勾选集
+ * 走，UI 据此把勾选框置灰——勾选态与 config 实际启用态必须一致
+ */
+required: boolean, };

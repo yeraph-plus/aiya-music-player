@@ -484,6 +484,7 @@ fn small_result_dtos_keep_their_exact_keys() {
         bundle: true,
         default: true,
         index_default: false,
+        required: true,
     })
     .unwrap();
     assert_eq!(
@@ -499,7 +500,8 @@ fn small_result_dtos_keep_their_exact_keys() {
             "network",
             "bundle",
             "default",
-            "indexDefault"
+            "indexDefault",
+            "required"
         ])
     );
 

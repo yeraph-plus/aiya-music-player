@@ -1142,6 +1142,7 @@ export class MockBackend {
         bundle: false,
         default: true,
         indexDefault: false,
+        required: false,
       },
       {
         name: 'lyrics',
@@ -1155,6 +1156,7 @@ export class MockBackend {
         bundle: true,
         default: true,
         indexDefault: false,
+        required: false,
       },
       {
         name: 'chroma',
@@ -1168,6 +1170,7 @@ export class MockBackend {
         bundle: false,
         default: false,
         indexDefault: false,
+        required: false,
       },
       {
         name: 'xtractor',
@@ -1182,6 +1185,7 @@ export class MockBackend {
         bundle: true,
         default: false,
         indexDefault: true,
+        required: false,
       },
     ];
   }

@@ -2187,18 +2187,17 @@ pub fn field_catalog(host: &dyn BeetsHost) -> Result<aiya_dto::beets::BeetsField
 
 /* 插件市场 */
 
-/// 插件表的**编译期内嵌**副本（唯一事实源是工具侧那个 JSON）。
+/// 插件登记表的**编译期内嵌**副本（唯一事实源是工具侧那个 JSON）。
 ///
 /// 为什么内嵌而不是"装完组件再问 sidecar"：安装页要在**什么都没装**的时候
 /// 就把"有哪些插件、各自要装什么"展示出来让用户勾选。这条路径上没有 serve
 /// 进程，只能靠编译期带一份。它和工具侧、打包脚本、安装器读的是同一个文件，
 /// 所以不存在"UI 说 A、安装器装 B"的漂移；`build.rs` 里有 rerun-if-changed。
 ///
-/// 插件登记表的**编译期内嵌**副本（唯一事实源 = 工具侧同一个 JSON）。
-///
-/// 双语文本随条目走：`titleZh` / `noteZh`（插件）与 `binaries[].whyZh` /
-/// `vendorZh` 是可选变体字段，与基字段同文件——没有第二份结构清单，也没有
-/// 奇偶校验的负担。条目上另有两类关系字段：`packages` / `imports` / `exe`
+/// 语言口径：单表单文本（插件段 title/note 本就是中文），无结构变体文件
+/// （zh_Hans 变体已并入基表）。binaries 的 why/vendor 双语以
+/// `whyZh` / `vendorZh` **归档字段**随表存放（暂无运行期消费方，消费留给
+/// 后续语言分叉）。条目上另有两类关系字段：`packages` / `imports` / `exe`
 /// 是依赖面（勾选即装），`profiles.workbench` / `profiles.index` 是预置启用面
 /// （fresh install 的 config 渲染从这里取，见工具侧 plugins.py 同一份 profiles）。
 const PLUGIN_TABLE_JSON: &str =
@@ -2534,9 +2533,9 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// 单登记表口径：语言挑文本 + 预置启用面注入 + musicbrainz 燃料条目。
-    /// zh_Hans 结构变体已并入基表（titleZh/noteZh/whyZh/vendorZh 可选字段），
-    /// 仓库文件的守约职责收敛到 catalog_contract.py 的结构与覆盖检查。
+    /// 单登记表口径：单表单文本 + 预置启用面注入 + musicbrainz 燃料条目。
+    /// zh_Hans 结构变体已并入基表并删除（whyZh/vendorZh 是归档字段，无运行期
+    /// 消费方），仓库文件的守约职责收敛到 catalog_contract.py 的结构与覆盖检查。
     #[test]
     fn plugin_table_languages_and_profiles() {
         // 任何语言值（含空 / 未设 / 乱写）都必须能解析——回退基字段的口径
@@ -2557,6 +2556,10 @@ mod tests {
             .find(|x| x.name == "musicbrainz")
             .expect("musicbrainz 条目");
         assert!(mb.default, "musicbrainz 必须在 workbench 预置启用面");
+        assert!(
+            mb.required,
+            "musicbrainz 是 REQUIRED_PLUGINS 的燃料，必须带 required 标记（UI 据此置灰勾选框）"
+        );
         assert!(!mb.index_default, "musicbrainz 不在索引家");
         let xt = en
             .iter()

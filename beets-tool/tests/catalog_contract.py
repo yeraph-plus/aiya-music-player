@@ -11,6 +11,9 @@
   [5] bundle 与外部二进制的关系：包里带着的插件，它的 exe 必须也随包发
   [6] 负向十三连：把表改坏（含 binaries 载体与引用），校验必须逐个变红
   [7] zh 文本归档：binaries[].whyZh/vendorZh 16 条全覆盖（双语内容随表归档）
+  [8] 燃料闸与预置承诺：REQUIRED_PLUGINS 恰为 musicbrainz（serve 的显式
+      load_plugins 链悬在它身上，删标记 = 0 候选静默回归）；profiles.workbench
+      8 件按预置承诺钉死名单（fresh install 启用面不许静默缩水）
 
 只读表，不写盘，不碰 beets 运行时。
 """
@@ -446,6 +449,25 @@ def main() -> int:
     ]
     assert not zh_missing, f"binaries 的 zh 归档文本缺失：{zh_missing}"
     print(f"[7] zh 文本归档 OK：{len(DOC['binaries'])} 条 binaries 的 whyZh/vendorZh 全覆盖")
+
+    # [8] 燃料闸与预置承诺
+    # serve 的显式 load_plugins 链悬在 required 标记上：谁把 musicbrainz 的
+    # required 删了（或整条目删了），REQUIRED_PLUGINS 变空元组、元数据源停载、
+    # 整理预览 0 候选静默回归，且 OPTIONAL_KEYS 校验不会红，必须在这里钉死。
+    assert plugins.REQUIRED_PLUGINS == ("musicbrainz",), (
+        f"REQUIRED_PLUGINS 必须恰为 musicbrainz，实际 {plugins.REQUIRED_PLUGINS}"
+        "（删标记 = 整理预览 0 候选静默回归）"
+    )
+    # 预置承诺（单轨化档案 §1）的内置可用四件 + 分析器全家桶 + 维护件：
+    # 8 件名单钉死——fresh install 的启用面不许静默缩水或漂移。
+    assert list(plugins.WORKBENCH_DEFAULT_PLUGINS) == [
+        "lyrics", "fromfilename", "duplicates", "scrub",
+        "smartplaylist", "musicbrainz", "fetchart", "mbsync",
+    ], f"workbench 预置清单漂移：{plugins.WORKBENCH_DEFAULT_PLUGINS}"
+    print(
+        f"[8] 燃料闸与预置承诺 OK：required={plugins.REQUIRED_PLUGINS}，"
+        f"workbench {len(plugins.WORKBENCH_DEFAULT_PLUGINS)} 件钉死"
+    )
 
     print("ALL PASS")
     return 0

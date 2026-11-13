@@ -131,6 +131,10 @@ pub struct BeetsPluginItem {
     /// 索引家默认启用（由 `profiles.index` 注入）
     #[serde(default)]
     pub index_default: bool,
+    /// 应用功能依赖的插件（REQUIRED_PLUGINS 并集的燃料闸）：不随用户的勾选集
+    /// 走，UI 据此把勾选框置灰——勾选态与 config 实际启用态必须一致
+    #[serde(default)]
+    pub required: bool,
 }
 
 /// "任务已启动"（preview / apply / sync 三个命令共用）。

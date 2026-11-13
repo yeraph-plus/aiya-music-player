@@ -44,6 +44,7 @@
   let enrichNote = $state<string | null>(null);
   let enrichError = $state<string | null>(null);
   let worklist = $state<{ missing: number; stale: number } | null>(null);
+  let stopEnrich: (() => void) | null = null;
   /**
    * 本轮分析会话是否由本面板发起。
    *
@@ -56,6 +57,11 @@
    * （挂载时建立一次，不在每次点击时临时创建）。
    */
   let localRun = false;
+  /** 组件存活旗标：onDestroy 置假，enrich 轮询循环见到即退出（离开页面
+   *  只停 UI，宿主侧会话不受影响）。 */
+  let alive = true;
+  /** enrich 终态已收尾（归零 / 事件 / 异常三者竞态的仲裁位）。 */
+  let enrichSettled = true;
 
   /** 分析库现在几条：`total` 是应用 limit 之前的真实命中数，拿它当条目数。 */
   async function loadIndexCount() {
@@ -75,30 +81,76 @@
   }
 
   /** 开始 xtractor 分析（用户显式点击；本面板不自动触发）。
-   *  启动后轮询待算清单：missing + stale 归零 = 完成，刷新计数收尾。 */
+   *  启动后轮询待算清单：missing + stale 归零 = 完成，刷新计数收尾。
+   *
+   *  轮询有三条退出路，缺一不可：
+   *  - 归零（正常完成）；
+   *  - `beets:enrich` 终态事件（error / sessionFailed / sessionEnd）——会话
+   *    失败或被取消时 worklist 永不归零，没有这条就是 10s 一次的空转循环；
+   *  - 组件卸载（alive 旗标）：离开页面只停 UI 轮询，宿主侧会话照常跑完
+   *    （回来时 worklist 会重新拉取，点开始遇 E_BUSY 说明还在跑）。 */
   async function startEnrich(): Promise<void> {
     if (enrichRun) return;
     enrichRun = true;
+    enrichSettled = false;
     enrichError = null;
     enrichNote = t('beets.enrich.running');
     try {
       await ipc.enrichment.start('xtractor', false);
       for (;;) {
         await new Promise(r => setTimeout(r, 10000));
+        if (!alive || enrichSettled) return;
         const w = await ipc.enrichment.worklist('xtractor', false);
         worklist = { missing: w.missing, stale: w.stale };
         const left = w.missing + w.stale;
         enrichNote = t('beets.enrich.runningLeft', { n: left });
         if (left === 0) {
+          enrichSettled = true;
           enrichNote = t('beets.enrich.done');
           break;
         }
       }
       await loadIndexCount();
     } catch (e) {
+      enrichSettled = true;
       enrichError = errorMessage(e);
     } finally {
       enrichRun = false;
+    }
+  }
+
+  /** enrich 会话的终态收尾：run 与轮询都停在这里，note/error 按终态种类落。
+   *  settled 守着与「归零收尾」的竞态：谁先到谁落账，后到的直接忽略。 */
+  function endEnrich(message: string | null): void {
+    if (!enrichRun || enrichSettled) return;
+    enrichSettled = true;
+    enrichRun = false;
+    if (message) {
+      enrichError = message;
+    } else {
+      // 会话干净结束但清单没归零 = 用户取消了（崩溃走 sessionFailed，
+      // 不带 message 的干净结束只有取消一条路）
+      enrichNote = t('beets.enrich.cancelled');
+    }
+    void loadIndexCount();
+  }
+
+  function onEnrichEvent(raw: unknown) {
+    const e = raw as { type?: string; message?: string };
+    if (e.type === 'sessionFailed' || e.type === 'error') {
+      endEnrich(e.message ?? t('beets.enrich.errorInterrupted'));
+    } else if (e.type === 'sessionEnd') {
+      endEnrich(null);
+    }
+  }
+
+  /** 取消分析：宿主 cancel_session（幂等回执）。UI 状态由终态事件收尾，
+   *  这里只发请求——回执 false（没有在跑的会话）不算错。 */
+  async function cancelEnrich(): Promise<void> {
+    try {
+      await ipc.beets.cancel();
+    } catch {
+      // 会话恰好自然结束时取消会落空；终态事件/轮询异常各自有收尾路
     }
   }
 
@@ -151,12 +203,17 @@
 
   onMount(() => {
     stopIndex = events.beetsIndex(onIndexEvent);
+    stopEnrich = events.beetsEnrich(onEnrichEvent);
     void (async () => {
       await Promise.all([q.loadCatalog(), loadIndexCount()]);
     })();
   });
 
-  onDestroy(() => stopIndex?.());
+  onDestroy(() => {
+    alive = false;
+    stopIndex?.();
+    stopEnrich?.();
+  });
 
   /** 值单元格：字段可能不存在（未回带），也可能不是字符串 */
   function cell(row: { hit: { fields: Record<string, unknown> } }, name: string): string {
@@ -206,6 +263,11 @@
         {#snippet icon()}<Play size={14} />{/snippet}
         {t('beets.enrich.start')}
       </Button>
+      {#if enrichRun}
+        <Button size="sm" variant="ghost" title={t('beets.enrich.cancel')} onclick={() => void cancelEnrich()}>
+          {t('beets.enrich.cancel')}
+        </Button>
+      {/if}
       {#if indexNote}<span class="beets-dim">{indexNote}</span>{/if}
       {#if indexError}<span class="beets-danger">{indexError}</span>{/if}
       {#if enrichNote}<span class="beets-dim">{enrichNote}</span>{/if}

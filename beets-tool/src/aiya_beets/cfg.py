@@ -757,7 +757,10 @@ def ensure_config(home: Path | None = None, prof: str | None = None) -> Path:
             # 勾了但外部工具还没下载的，这一版先不启用（否则 beets 起不来）。
             # settings.json 不改：等 bins 补齐后下一次启动自动恢复。
             # required 插件（元数据源）在同步时恒并入——存量 config 没有
-            # musicbrainz 的，一次会话启动就补齐。
+            # musicbrainz 的，一次会话启动就补齐。前提是 settings.plugins 有
+            # 勾选记录（chosen 非空才走这条支路）：settings 缺键/空数组的存量
+            # 环境不会在这里补齐（fresh install 与安装页勾选必写非空清单，
+            # 暴露面只剩手工搭建/手删 settings.json 的环境）。
             want = _sync_plugins(want, _drop_unusable(list(chosen) + [n for n in REQUIRED_PLUGINS if n not in chosen], "workbench"))
         if want != text:
             path.write_text(want, encoding="utf-8", newline="\n")

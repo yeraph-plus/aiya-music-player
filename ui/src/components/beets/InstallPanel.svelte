@@ -39,7 +39,12 @@
     void ui.loadBeetsPlugins();
   });
 
+  /** 勾选（`null` = 还没动过，用表里的默认清单）。
+   *  required 条目不参与勾选：config 渲染时工具侧的 REQUIRED_PLUGINS 并集
+   *  会把它们恒并回启用行，UI 置灰而不是"勾了又被改回"——勾选态必须与
+   *  config 实际启用态一致。 */
   function toggle(name: string): void {
+    if (table.find((p) => p.name === name)?.required) return;
     const next = new Set(chosen);
     if (next.has(name)) next.delete(name);
     else next.add(name);
@@ -103,11 +108,20 @@
       {#each table as p (p.name)}
         <li>
           <label>
-            <input type="checkbox" checked={chosen.includes(p.name)} onchange={() => toggle(p.name)} />
+            <input
+              type="checkbox"
+              checked={chosen.includes(p.name)}
+              disabled={p.required}
+              title={p.required ? t('beets.install.requiredTip') : undefined}
+              onchange={() => toggle(p.name)}
+            />
             <span class="pick-name">{p.name}</span>
             <span class="pick-title">{p.title}</span>
             {#if p.packages.length > 0}
               <span class="pick-tag">{p.packages.join(' ')}</span>
+            {/if}
+            {#if p.required}
+              <span class="pick-tag">{t('beets.install.requiredTip')}</span>
             {/if}
           </label>
           <span class="pick-note">{p.note}</span>

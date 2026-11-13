@@ -10,7 +10,8 @@
 
 真 bundle 在真应用里走完 安装 → 换插件 → 分析 → 查询 → 存歌单 → 整理预览
 全链（CDP 驱动真窗口 + 直连工具进程隔离复现），**修掉一个 P0 挂死与一个
-发布闸脚本 bug**，登记表收口为单源，另发现三个结构性缺口转出（§6）。
+发布闸脚本 bug**，登记表收口为单源，另发现四个结构性缺口
+（§2.3：两修、一转出、一缓解）。
 
 ## 1 · 线上打包（三次迭代）
 
@@ -46,14 +47,14 @@
 - **标签查询 → 存为歌单**：原始语法 `bpm:120..170` → 命中 16 首 →
   全选 → 「Beets 查询」歌单落 library.sqlite（16 items）。
 
-### 2.3 结构性缺口四项（两修两转出）
+### 2.3 结构性缺口四项（两修、一转出、一缓解）
 
 | 缺口 | 处置 |
 |---|---|
-| G1 启用面与 docs/58 预置承诺不符（5 件默认，xtractor/fetchart/mbsync 不在） | **已修**：profiles.workbench 扩至 8 件（§3）；settings.plugins 空基准（G4）与 G1 同源，预置面就位后随勾选落账 |
-| G2 刮削 autotag 恒 0 候选 | **转出**（beets 2.14 metadata_plugins 集成专项，§6-1）——启用 musicbrainz 后预览会话中 metadata sources 仍为空，上游新架构与集成的接缝问题，非管线缺件 |
+| G1 启用面与 docs/58 预置承诺不符（5 件默认，xtractor/fetchart/mbsync 不在） | **已修**：profiles.workbench 扩至 8 件（§3）；settings.plugins 空基准（ledger 实测批条目④）与 G1 同源，预置面就位后随勾选落账 |
+| G2 刮削 autotag 恒 0 候选 | **转出后闭合**（§6-1，0761d44）——启用 musicbrainz 后预览会话中 metadata sources 仍为空，上游新架构与集成的接缝问题，非管线缺件 |
 | G3 「开始分析」无 UI 入口（enrichment.start 零调用） | **已修**：IndexPanel 分析按钮（用户显式点击；无自动触发是拍板语义） |
-| G4 enrich 运行中阻塞查询（E_BUSY 数小时）且无进度无取消反馈 | **部分缓解**：按钮带 10s 轮询进度 + beets_cancel 可取消；查询占用的结构性解法（读写分离/独立会话）随 G2 专项 |
+| G4 enrich 运行中阻塞查询（E_BUSY 数小时）且无进度无取消反馈 | **部分缓解**：按钮带 10s 轮询进度；UI 取消按钮 + 终态事件退出轮询已补（审查批，§6-7）；查询占用的结构性解法（读写分离/独立会话）仍未做——原计划随 G2 专项，专项收官（§6-1）时未包含，单独记挂 |
 
 ## 3 · 登记表收口（插件清单单源化）
 
@@ -102,7 +103,12 @@
 4. **未覆盖面**：整理 move（真删）模式、http-server 的 beets 面、
    更新行为（本就无更新路径，按设计不测）。
 5. **存量兼容**：REQUIRED_PLUGINS 并集在 ensure_config 的同步里生效——
-   旧装 config 缺 musicbrainz 的，下一次会话启动/换插件自动补齐。
+   旧装 config 缺 musicbrainz 的，下一次会话启动/换插件自动补齐
+   （**前提：settings.plugins 有勾选记录**——同步支路只在 chosen 非空时走，
+   settings 缺键/空数组的存量环境不在补齐面内；fresh install 与安装页勾选
+   必写非空清单，暴露面只剩手工搭建/手删 settings.json 的环境）。
+   required 插件**不可通过勾选关闭**：并集恒并回启用行，UI 勾选框已置灰并
+   注明"整理刮削必需"——勾选态与 config 实际启用态保持一致。
 6. **刮削源追加实测（2026-11-14）**：beetsplug 里其余元数据源逐一过探针
    （load_plugins + candidates，Robert Miles / Dreamland，无 -I 对齐 serve
    真实条件）——
@@ -122,3 +128,21 @@
      免配置包的封闭性有缺口；且探针用 `-I` 会与 serve 条件不一致（误判缺依赖）。
      pip 走用户全局配置的清华镜像，镜像抖动时 install 链随镜像一起失败
      （本次实测镜像 000 / 官方 PyPI 200——用户级 pip.ini 是既有事实，工具不代改）。
+7. **收尾批审查（2026-11-14）**：子代理只读审查 22bfd10^..03e2207 十提交
+   （P0 0 / P1 1 / P2 9，总体结论"可以收"）——
+   - **P1（已修）**：「开始分析」轮询无失败退出、无取消入口（会话失败时
+     worklist 永不归零 → 10s 空转循环，`beets:enrich` 终态事件无人消费，
+     docs 声称的可取消实际不可达）。修复 = IndexPanel 订阅 `beets:enrich`
+     终态（error/sessionFailed/sessionEnd）退出轮询 + UI 取消按钮
+     （`ipc.beets.cancel` → 宿主 cancel_session，幂等）+ alive 旗标防离开
+     页面后的幽灵循环（离开只停 UI 轮询，宿主侧会话照常跑完）。
+   - **P2（全清）**：build.rs 已删 zh_Hans 表的 rerun-if-changed 死行；
+     beets.rs 两段叠放注释合并 + `titleZh`/`noteZh` 失真表述纠正（从未存在，
+     whyZh/vendorZh 改口"归档字段、暂无运行期消费方"）；DTO `BeetsPluginItem`
+     补 `required`（UI 勾选框置灰 + 注明必需，toggle 结构兜底）；
+     catalog_contract 新增 [8]（REQUIRED_PLUGINS 恰为 musicbrainz +
+     workbench 8 件钉名单——fuel 闸与 docs/58 预置承诺从"没人守"到"必红"）；
+     config_contract [10] 断言从行前缀子串升级为整行精确 + 并集不重复变体 +
+     反方向断言同步；cfg.py 同步支路注释与本文 §6-5 补"settings.plugins 有
+     勾选记录"前提；本文档 §0/§2.3 计数与编号撞车修正、ledger"维护五件"
+     笔误改四件、docs/72 状态行回填拍板结果。

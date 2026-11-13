@@ -373,7 +373,8 @@ try:
         assert rest2 == USER_WB, "换落点不该动别的行"
         print("[9] workbench directory 外科式同步 OK")
 
-        # [10] settings.json 的插件清单驱动 config 的 plugins 行
+        # [10] settings.json 的插件清单驱动 config 的 plugins 行（+ REQUIRED_PLUGINS
+        # 并集：musicbrainz 是刮削燃料，恒并入启用行、不随勾选集走——见 plugins.py）
         #
         # 装了不启用等于白装：安装页勾 lyrics、安装器装了 bs4，而 config 里
         # 没有 lyrics，插件永远不会加载。所以这一行必须跟着 settings 走。
@@ -385,7 +386,9 @@ try:
         )
         cfg.ensure_config(wb_home, "workbench")
         after10 = wb_cfg.read_text(encoding="utf-8")
-        assert "plugins: lyrics fetchart" in after10, after10
+        plugins_line = next(ln for ln in after10.splitlines() if ln.startswith("plugins:"))
+        # 整行精确断言（不是前缀子串）：并集漏掉或多并、顺序错乱都要在这里红
+        assert plugins_line.strip() == "plugins: lyrics fetchart musicbrainz", plugins_line
         assert "myplugin" not in after10, "用户手改的旧清单必须被应用事实替换，不能两行并存"
         rest_after = "".join(
             ln for ln in after10.splitlines(keepends=True) if not ln.startswith("plugins:")
@@ -395,10 +398,24 @@ try:
         )
         assert rest_after == rest_before, "同步 plugins 不该动别的行"
 
+        # 并集不重复：chosen 已含 musicbrainz 时渲染行里仍只有一个
+        (wb_home / "settings.json").write_text(
+            json.dumps({"plugins": ["lyrics", "fetchart", "musicbrainz"]}),
+            encoding="utf-8",
+            newline="\n",
+        )
+        cfg.ensure_config(wb_home, "workbench")
+        plugins_line = next(
+            ln
+            for ln in wb_cfg.read_text(encoding="utf-8").splitlines()
+            if ln.startswith("plugins:")
+        )
+        assert plugins_line.strip() == "plugins: lyrics fetchart musicbrainz", plugins_line
+
         # 反方向一：没有这个键 = 用户没选过 → 不许回滚他手改的那行
         (wb_home / "settings.json").write_text("{}", encoding="utf-8", newline="\n")
         cfg.ensure_config(wb_home, "workbench")
-        assert "plugins: lyrics fetchart" in wb_cfg.read_text(encoding="utf-8"), (
+        assert "plugins: lyrics fetchart musicbrainz" in wb_cfg.read_text(encoding="utf-8"), (
             "settings 里少了 plugins 键时不该动 config"
         )
 
@@ -407,7 +424,7 @@ try:
             json.dumps({"plugins": []}), encoding="utf-8", newline="\n"
         )
         cfg.ensure_config(wb_home, "workbench")
-        assert "plugins: lyrics fetchart" in wb_cfg.read_text(encoding="utf-8"), (
+        assert "plugins: lyrics fetchart musicbrainz" in wb_cfg.read_text(encoding="utf-8"), (
             "空数组 = 没选过，不该清空"
         )
 
