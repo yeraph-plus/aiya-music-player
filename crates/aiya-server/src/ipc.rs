@@ -91,6 +91,7 @@ pub const ROUTED: &[&str] = &[
     "player_clear",
     // 浏览器引擎回报通道（http.ts 引擎内部调用，不在 client.ts 的 ipc.* 面）
     "player_report",
+    "live_open",
     // ---- W3：编排域收口（beets / 扫描管线 / 事件泵） ----
     "beets_status",
     "beets_preview",
@@ -102,8 +103,8 @@ pub const ROUTED: &[&str] = &[
     "station_create",
     "station_update",
     "station_delete",
-    "station_set_playlists",
-    "station_set_schedules",
+    "station_set_program",
+    "station_apply",
     "station_activate",
     "station_skip",
     "station_push",
@@ -162,50 +163,15 @@ fn station_summary(
     }
 }
 
-fn station_playlist_dto(
-    r: &aiya_data::station::StationPlaylistRow,
-) -> aiya_dto::station::StationPlaylist {
-    let track_ids: Vec<String> = r
-        .track_ids_json
-        .as_deref()
-        .and_then(|s| serde_json::from_str(s).ok())
-        .unwrap_or_default();
-    aiya_dto::station::StationPlaylist {
-        id: r.id.clone(),
-        name: r.name.clone(),
-        kind: r.kind.clone(),
-        track_ids,
-        rule_json: r.rule_json.clone(),
-    }
-}
-
-fn station_schedule_dto(
-    r: &aiya_data::station::StationScheduleRow,
-) -> aiya_dto::station::StationSchedule {
-    aiya_dto::station::StationSchedule {
-        id: r.id.clone(),
-        playlist_id: r.playlist_id.clone(),
-        start_hm: r.start_hm.clone(),
-        end_hm: r.end_hm.clone(),
-        days_mask: r.days_mask,
-        priority: r.priority,
-    }
-}
-
 fn station_detail(
     st: &crate::state::ServerState,
     row: &aiya_data::station::StationRow,
 ) -> aiya_data::DbResult<aiya_dto::station::StationDetail> {
     let id = row.id.clone();
-    let (pls, schs) = db_lock(st).send(move |conn| {
-        let pls = aiya_data::station::list_playlists(conn, &id)?;
-        let schs = aiya_data::station::list_schedules(conn, &id)?;
-        Ok((pls, schs))
-    })?;
+    let program = db_lock(st).send(move |conn| Ok(crate::program::prepare(conn, &id)?.program))?;
     Ok(aiya_dto::station::StationDetail {
         summary: station_summary(st, row),
-        playlists: pls.iter().map(station_playlist_dto).collect(),
-        schedules: schs.iter().map(station_schedule_dto).collect(),
+        program,
     })
 }
 
@@ -290,11 +256,17 @@ async fn dispatch(
         "app_info" => ok(json!({
             "dataDir": st.db_path.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
         })),
-        "app_get_ui_state" => ok(db_lock(st)
-            .send(|conn| Ok(setting_get(conn, "ui_state").unwrap_or_else(|| json!({}))))
-            .map_err(ApiError::from)?),
+        "app_get_ui_state" => {
+            let raw = db_lock(st)
+                .send(|conn| Ok(setting_get(conn, "ui_state").unwrap_or_else(|| json!({}))))
+                .map_err(ApiError::from)?;
+            ok(raw)
+        }
         "app_set_ui_state" => {
-            let v = a.clone();
+            let v = a
+                .get("state")
+                .cloned()
+                .ok_or_else(|| invalid_arg("state required"))?;
             db_lock(st)
                 .send(move |conn| {
                     setting_set(conn, "ui_state", &v).map_err(aiya_data::DbError::Sql)
@@ -544,8 +516,8 @@ async fn dispatch(
                 .send(move |conn| {
                     let mut total = 0i64;
                     for p in &paths {
-                        let prefix = crate::state::root_prefix_lower(p);
-                        if prefix == "\\" {
+                        let prefix = crate::state::root_prefix(p);
+                        if prefix.is_empty() {
                             continue;
                         }
                         total += crate::state::count_tracks_under_prefix(conn, &prefix)?;
@@ -564,8 +536,8 @@ async fn dispatch(
                     let mut removed = 0i64;
                     let mut deleted = Vec::new();
                     for p in &paths {
-                        let prefix = crate::state::root_prefix_lower(p);
-                        if prefix == "\\" {
+                        let prefix = crate::state::root_prefix(p);
+                        if prefix.is_empty() {
                             continue;
                         }
                         {
@@ -1090,39 +1062,76 @@ async fn dispatch(
             to_value(crate::state::drive(st))
         }
 
+        "live_open" => {
+            let url = s_arg(a, "url").unwrap_or_default().trim().to_string();
+            let parsed = url::Url::parse(&url).ok();
+            if !local_hls_url(&url)
+                && !parsed.as_ref().is_some_and(|u| {
+                    matches!(u.scheme(), "http" | "https") && u.host_str().is_some()
+                })
+            {
+                return Err(ApiError::invalid_arg(
+                    "expected an http(s) URL or a station HLS path",
+                ));
+            }
+            let title = s_arg(a, "title")
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| {
+                    parsed
+                        .as_ref()
+                        .and_then(|u| u.host_str())
+                        .unwrap_or("Live")
+                        .to_string()
+                });
+            player_lock(st).reduce(aiya_player::PlayerCommand::Queue(
+                aiya_player::QueueOp::ReplaceAll {
+                    tracks: vec![aiya_player::TrackRef::transient_stream(&url, title)],
+                    start: 0,
+                },
+            ));
+            to_value(crate::state::drive(st))
+        }
         "player_report" => {
             let kind = s_arg(a, "kind").unwrap_or_default();
             let token = num_arg::<u64>(a, "token").unwrap_or(0);
-            // 记账数据源：最近一次位置回报（曲终秒数的估算源）。令牌不符的
-            // 迟到帧一并跳过——旧标签页的位置不能当新曲的记账源
-            if kind == "position" && token == player_lock(st).state().token {
-                let pos = num_arg::<u64>(a, "positionMs").unwrap_or(0);
-                let track = player_lock(st)
-                    .state()
-                    .current
-                    .map(|c| c.id)
-                    .unwrap_or_default();
-                *st.last_played
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = (track, pos);
-            }
+            let mut history = None;
             {
                 let mut actor = player_lock(st);
+                let current = actor.state();
+                // 身份校验、归约与记账数据提取使用同一把锁，过期回报没有副作用。
+                if token != current.token {
+                    return to_value(current);
+                }
                 match kind.as_str() {
                     "loaded" => actor.reduce(aiya_player::PlayerCommand::Loaded {
                         token,
                         duration_ms: num_arg::<u64>(a, "durationMs").unwrap_or(0),
                     }),
                     "position" => {
-                        // 迟到帧丢弃（Loaded/Ended 同口径）：web 多客户端下旧标签页
-                        // 的位置不能写进新曲状态，否则记账把 A 曲秒数记到 B 曲头上
-                        if token == actor.state().token {
-                            actor.reduce(aiya_player::PlayerCommand::Position {
-                                position_ms: num_arg::<u64>(a, "positionMs").unwrap_or(0),
-                            });
+                        let pos = num_arg::<u64>(a, "positionMs").unwrap_or(0);
+                        if let Some(track) = current.current {
+                            *st.last_played
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                (token, track.id, pos);
                         }
+                        actor.reduce(aiya_player::PlayerCommand::Position { position_ms: pos });
                     }
-                    "ended" => actor.reduce(aiya_player::PlayerCommand::Ended { token }),
+                    "ended" => {
+                        let mut last = st
+                            .last_played
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if let Some(track) = current.current {
+                            if last.0 == token && last.1 == track.id {
+                                let pos = current.duration_ms.map_or(last.2, |d| last.2.min(d));
+                                history = Some((track.id, pos));
+                            }
+                        }
+                        *last = (0, String::new(), 0);
+                        actor.reduce(aiya_player::PlayerCommand::Ended { token });
+                    }
                     "failed" => {
                         let code = s_arg(a, "code").unwrap_or_else(|| "io".into());
                         actor.reduce(aiya_player::PlayerCommand::Failed {
@@ -1141,18 +1150,10 @@ async fn dispatch(
                 }
             }
             // 播放记账：曲终按最近位置落一条历史（桌面泵同口径）
-            if kind == "ended" {
-                let (track, pos) = st
-                    .last_played
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone();
+            if let Some((track, pos)) = history {
                 let now = crate::state::now_secs();
                 let _ = db_lock(st)
                     .send(move |conn| aiya_data::history::record(conn, &track, now, pos / 1000));
-                *st.last_played
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = (String::new(), 0);
             }
             // 队列状态行 5s 节流落库（桌面泵同口径）
             if kind == "position" {
@@ -1236,11 +1237,11 @@ async fn dispatch(
                 out
             };
             let cleaned = normalize(vec_s_arg(a, "roots").unwrap_or_default());
-            let watched: std::collections::HashSet<String> =
-                cleaned.iter().map(|r| r.to_lowercase()).collect();
+            let watched: std::collections::HashSet<std::path::PathBuf> =
+                cleaned.iter().map(|r| crate::scan::root_key(r)).collect();
             let paused_cleaned: Vec<String> = normalize(vec_s_arg(a, "paused").unwrap_or_default())
                 .into_iter()
-                .filter(|p| !watched.contains(&p.to_lowercase()))
+                .filter(|p| !watched.contains(&crate::scan::root_key(p)))
                 .collect();
             let cleaned2 = cleaned.clone();
             let paused2 = paused_cleaned.clone();
@@ -1342,11 +1343,18 @@ async fn dispatch(
             to_value(station_summary(st, &row))
         }
         "station_delete" => {
+            let _operation = st.station.operation().await;
             let id = s_arg(a, "stationId").ok_or_else(|| invalid_arg("stationId required"))?;
             let row = station_row_of(st, &id)?;
-            let _ = st.station.stop(&row.id); // 未在跑时静默
+            st.station
+                .stop_and_wait(&row.id)
+                .await
+                .map_err(ApiError::internal)?;
             db_lock(st)
-                .send(move |conn| aiya_data::station::delete_station(conn, &row.id))
+                .send(move |conn| {
+                    crate::program::clear(conn, &row.id)?;
+                    aiya_data::station::delete_station(conn, &row.id)
+                })
                 .map_err(ApiError::from)?;
             // 段目录与顶层 conf/{dir}（审查 P2-1：conf 残留会被 keeper 复活）
             // 都随频道走；失败不拦（boot GC 兜底段目录，conf 由 GC 的孤儿检测
@@ -1358,50 +1366,44 @@ async fn dispatch(
             }
             ok(json!({}))
         }
-        "station_set_playlists" => {
+        "station_set_program" => {
+            let _operation = st.station.operation().await;
             let id = s_arg(a, "stationId").ok_or_else(|| invalid_arg("stationId required"))?;
-            let edits: Vec<aiya_dto::station::StationPlaylistEdit> =
-                serde_json::from_value(a.get("playlists").cloned().unwrap_or(json!([])))
-                    .map_err(invalid_arg)?;
-            let inputs: Vec<aiya_data::station::PlaylistInput> = edits
-                .into_iter()
-                .map(|e| aiya_data::station::PlaylistInput {
-                    name: e.name,
-                    kind: e.kind,
-                    track_ids: e.track_ids.unwrap_or_default(),
-                    rule_json: e.rule_json,
-                })
-                .collect();
-            let rows = db_lock(st)
-                .send(move |conn| aiya_data::station::replace_playlists(conn, &id, &inputs))
-                .map_err(ApiError::from)?;
-            let out: Vec<aiya_dto::station::StationPlaylist> =
-                rows.iter().map(station_playlist_dto).collect();
-            ok(json!({ "playlists": out }))
+            let row = station_row_of(st, &id)?;
+            let edit: aiya_dto::station::StationProgramEdit =
+                serde_json::from_value(a.clone()).map_err(invalid_arg)?;
+            db_lock(st)
+                .send(move |conn| crate::program::save(conn, &id, edit))
+                .map_err(|e| ApiError::invalid_arg(e.to_string()))?;
+            to_value(station_detail(st, &row).map_err(ApiError::from)?.program)
         }
-        "station_set_schedules" => {
+        "station_apply" => {
+            let _operation = st.station.operation().await;
             let id = s_arg(a, "stationId").ok_or_else(|| invalid_arg("stationId required"))?;
-            let edits: Vec<aiya_dto::station::StationScheduleEdit> =
-                serde_json::from_value(a.get("schedules").cloned().unwrap_or(json!([])))
-                    .map_err(invalid_arg)?;
-            let inputs: Vec<aiya_data::station::ScheduleInput> = edits
-                .into_iter()
-                .map(|e| aiya_data::station::ScheduleInput {
-                    playlist_id: e.playlist_id,
-                    start_hm: e.start_hm,
-                    end_hm: e.end_hm,
-                    days_mask: e.days_mask,
-                    priority: e.priority,
-                })
-                .collect();
-            let rows = db_lock(st)
-                .send(move |conn| aiya_data::station::replace_schedules(conn, &id, &inputs))
+            let row = station_row_of(st, &id)?;
+            let sid = id.clone();
+            let program = db_lock(st)
+                .send(move |conn| crate::program::prepare(conn, &sid))
                 .map_err(ApiError::from)?;
-            let out: Vec<aiya_dto::station::StationSchedule> =
-                rows.iter().map(station_schedule_dto).collect();
-            ok(json!({ "schedules": out }))
+            if !program.program.issues.is_empty() {
+                return Err(ApiError::invalid_arg(crate::program::issues_text(
+                    &program.program,
+                )));
+            }
+            if row.active {
+                st.station
+                    .stop_and_wait(&id)
+                    .await
+                    .map_err(ApiError::internal)?;
+                st.station
+                    .start(st, &row)
+                    .await
+                    .map_err(ApiError::internal)?;
+            }
+            to_value(station_detail(st, &row).map_err(ApiError::from)?.program)
         }
         "station_activate" => {
+            let _operation = st.station.operation().await;
             let id = s_arg(a, "stationId").ok_or_else(|| invalid_arg("stationId required"))?;
             let active = a.get("active").and_then(Value::as_bool).unwrap_or(false);
             let row = station_row_of(st, &id)?;
@@ -1416,7 +1418,10 @@ async fn dispatch(
                     .await
                     .map_err(ApiError::internal)?;
             } else {
-                let _ = st.station.stop(&id);
+                st.station
+                    .stop_and_wait(&id)
+                    .await
+                    .map_err(ApiError::internal)?;
                 db_lock(st)
                     .send(move |conn| aiya_data::station::set_active(conn, &row.id, false))
                     .map_err(ApiError::from)?;
@@ -1646,6 +1651,20 @@ async fn dispatch(
 
 /* ---- 小工具 ---- */
 
+fn local_hls_url(raw: &str) -> bool {
+    let Some(rest) = raw.strip_prefix("/hls/") else {
+        return false;
+    };
+    let Some((dir, file)) = rest.split_once('/') else {
+        return false;
+    };
+    !dir.is_empty()
+        && dir
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && file == "live.m3u8"
+}
+
 fn ok(v: Value) -> Result<Value, ApiError> {
     Ok(v)
 }
@@ -1714,4 +1733,130 @@ fn enrichment_query_sync(
             })
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ui_state_roundtrips_client_payload_without_persisting_the_wrapper() {
+        let st = crate::state::test_state(std::path::Path::new(":memory:"));
+        let state = json!({"page":"broadcast","sort":"title","scrollTop":32});
+        dispatch(&st, "app_set_ui_state", &json!({"state":state}), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            dispatch(&st, "app_get_ui_state", &json!({}), None)
+                .await
+                .unwrap(),
+            state
+        );
+        assert_eq!(
+            db_lock(&st)
+                .send(|conn| Ok(setting_get(conn, "ui_state").unwrap()))
+                .unwrap(),
+            state
+        );
+        assert!(dispatch(&st, "app_set_ui_state", &json!({}), None)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn live_open_routes_local_and_external_streams_and_rejects_paths() {
+        let st = crate::state::test_state(std::path::Path::new(":memory:"));
+        for url in ["/hls/test/live.m3u8", "https://example.com/live.m3u8"] {
+            let value = dispatch(&st, "live_open", &json!({"url":url, "title":"Radio"}), None)
+                .await
+                .unwrap();
+            assert_eq!(value["source"], "stream");
+            assert_eq!(value["current"]["id"], format!("stream:{url}"));
+            assert_eq!(value["current"]["title"], "Radio");
+            assert!(value["current"].get("path").is_none());
+        }
+        for url in [
+            "/hls/../live.m3u8",
+            "/hls/a/../../data",
+            "/music/a.mp3",
+            "file:///etc/passwd",
+            "//example.com/a",
+        ] {
+            assert!(dispatch(&st, "live_open", &json!({"url":url}), None)
+                .await
+                .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_reports_cannot_fail_current_track_or_consume_its_history() {
+        let st = crate::state::test_state(std::path::Path::new(":memory:"));
+        db_lock(&st).send(|c| {
+            c.execute_batch("INSERT INTO tracks (id,title,title_norm,path,path_lower,added_at) VALUES ('a','a','a','a.mp3','a.mp3',0), ('b','b','b','b.mp3','b.mp3',0)")?;
+            Ok(())
+        }).unwrap();
+        let tracks = track_refs_by_ids_db(&db_lock(&st), &["a".into(), "b".into()]);
+        player_lock(&st).reduce(aiya_player::PlayerCommand::Queue(
+            aiya_player::QueueOp::ReplaceAll { tracks, start: 0 },
+        ));
+        let old = crate::state::drive(&st).token;
+        player_lock(&st).reduce(aiya_player::PlayerCommand::Next);
+        let current = crate::state::drive(&st);
+        dispatch(
+            &st,
+            "player_report",
+            &json!({"kind":"loaded","token":current.token,"durationMs":10000}),
+            None,
+        )
+        .await
+        .unwrap();
+        dispatch(
+            &st,
+            "player_report",
+            &json!({"kind":"position","token":current.token,"positionMs":8000}),
+            None,
+        )
+        .await
+        .unwrap();
+        let before = st.last_played.lock().unwrap().clone();
+        for kind in ["failed", "ended", "position", "loaded"] {
+            let value = dispatch(
+                &st,
+                "player_report",
+                &json!({"kind":kind,"token":old,"positionMs":999999}),
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(value["status"], "playing");
+            assert_eq!(value["token"], current.token);
+            assert_eq!(*st.last_played.lock().unwrap(), before);
+        }
+        assert_eq!(
+            db_lock(&st)
+                .send(|c| Ok(
+                    c.query_row("SELECT COUNT(*) FROM history", [], |r| r.get::<_, i64>(0))?
+                ))
+                .unwrap(),
+            0
+        );
+        dispatch(
+            &st,
+            "player_report",
+            &json!({"kind":"ended","token":current.token}),
+            None,
+        )
+        .await
+        .unwrap();
+        let history = db_lock(&st)
+            .send(|c| {
+                Ok(
+                    c.query_row("SELECT track_id, seconds_played FROM history", [], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                    })?,
+                )
+            })
+            .unwrap();
+        assert_eq!(history, ("b".into(), 8));
+    }
 }

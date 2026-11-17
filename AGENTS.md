@@ -95,11 +95,11 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 | `npm run check` | `svelte-check`（0 error / 0 warning 才算过） |
 | `npm run test` | Rust 全量测试（1 条 `--ignored` 为 `bench:50k` 性能基准） |
 | `npm run test:data` / `test:audio` / `test:player` / `test:app` | 单 crate 测试 |
-| `npm run test:all` | 先编 sidecar → Rust 全量 + UI 类型检查 + 依赖/边界/分层/协议门禁 + UI 构建 |
+| `npm run test:all` | 先编 sidecar → Rust 全量 + UI 类型检查 + HTTP transport 回归 + 依赖/边界/分层/协议门禁 + UI 构建 |
 | `npm run test:e2e` | Playwright（mock 后端 + 系统 Edge） |
 | `npm run test:e2e:http` | Playwright × 真 aiya-server（8799，cargo 增量构建 + 临时曲库，登录闸/播放/隐身清单） |
 | `npm run test:e2e:firefox` | 同 test:e2e 跑 Playwright bundled Firefox（真机矩阵；需先 `npx playwright install firefox`） |
-| `npm run verify` | `test:all` + `test:e2e` + `check:fmt` + `check:clippy`（-D warnings）+ `gen:types:check` + `check:style:strict` + beets 九项冒烟（apply/maint/proto/config/catalog/bins/uninstall/lock/enrich） |
+| `npm run verify` | `test:all` + `test:e2e` + `test:e2e:http` + `check:fmt` + `check:clippy`（-D warnings）+ `gen:types:check` + `check:style:strict` + beets 九项冒烟（apply/maint/proto/config/catalog/bins/uninstall/lock/enrich） |
 | `npm run gen:types` / `gen:types:check` | 从 Rust 生成 TS 类型 / 只校验不写盘 |
 | `npm run smoke:engine` / `smoke:offset` / `smoke:switch` / `smoke:rate` / `smoke:mode` | 真机 WASAPI 出声冒烟（需要声卡） |
 | `npm run smoke:supervisor` | sidecar 握手/心跳/看门狗冒烟（不需要声卡） |
@@ -131,6 +131,11 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 
 > 每条是现行约束事实，标注来源编号。**修改本节即修改约束**，须在批次文档中
 > 记录来由（流程见 §5.3）。
+
+宿主范围（docs/74）：C1、C3、C5、C6 的原生音频与 WebView 限制适用于
+Tauri 桌面宿主。HTTP 宿主由浏览器 `<audio>` / hls.js 解码，服务端只传媒体
+字节；曲库路径仍不下发。HTTP 播放命令与引擎回报在同一串行通道中按提交
+顺序执行和应用快照；流暂停释放媒体连接，重新播放产生新的装载 token。
 
 - **C1 后端拥有音频输出**：解码、DSP、设备枚举、播放时钟全部由 Rust 音频进程
   负责；WebView 不创建 `<audio>` / `AudioContext` / `MediaElementSource`，不接触
@@ -186,6 +191,14 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
   否则 `%APPDATA%\dev.aiya.music`。全仓只有 `paths.rs` 回答"数据放哪"。
 - **C12 发布基址覆盖**（docs/33）：仅经 `AIYA_BEETS_RELEASE_BASE` 环境变量覆盖，
   高于内置常量；不设 `beets.releaseBase` 配置键。
+
+HTTP 推流节目（docs/75）：频道队列直接引用当前服务库内的系统歌单或内置全曲库来源（__library__），配置作为
+一份带版本的文档原子保存在 settings；不复制曲目集合、不承接旧频道歌单接口。
+歌单删除沿用系统原有流程，缺失来源在配置与应用时报告。配置保存与运行时应用
+分开，节目与常规队列的实际推进由 Liquidsoap 负责，与个人收听队列独立。
+每个队列项的全部时段共用一个优先级；周时段结束允许 24:00，以表示整日。
+节目可用性通过带判别字段的 StationProgramIssue 返回，由 UI 翻译原因、星期和内置
+来源名；未设置 TZ 时返回 null，由 UI 展示服务器本地时区，技术诊断保留原始文本。
 
 ### 3.1 范围边界（现在不做什么）
 

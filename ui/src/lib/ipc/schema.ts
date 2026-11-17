@@ -94,6 +94,7 @@ export const uiStateSchema = z
         'settings',
         'beets',
         'live',
+        'broadcast',
         /**
          * `radio`（旧「FM 电台」页）**只读保留**：磁盘上的 UiState 可能还落着
          * 这个值。写进枚举是为了让整份状态过校验（校验失败会丢掉整份），

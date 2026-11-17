@@ -6,7 +6,7 @@
 //! 人肉读代码保证——节流基准恒假（进度条全程冻结）就是这一类错误。
 //!
 //! 抽出来后 `PumpCore::ingest` 只有三个输入：一批事件、Actor、当前时刻；
-//! 输出是"该做的旁路动作"清单 + 是否动了引擎。时钟与引擎下发出口都可注入，
+//! 输出是旁路动作清单与全量保存标记。时钟与引擎下发出口都可注入，
 //! 于是可以在普通 `#[test]` 里断言完整的事件 → 动作序列。
 
 use aiya_audio::{EngineCommand, EngineEvent};
@@ -25,7 +25,7 @@ use aiya_player::{PlayerActor, PlayerCommand};
 /// 不该喂数据。
 ///
 /// `send` 是引擎出口（生产环境写进引擎通道，测试里塞进 Vec）。
-/// 返回是否真的下了命令（调用方据此决定要不要全量落库）。
+/// 返回是否需要全量落库：下发装载/停止，或队列结构发生变化。
 pub fn apply_engine_intents<F>(send: &mut F, actor: &mut PlayerActor) -> bool
 where
     F: FnMut(EngineCommand),
@@ -52,7 +52,7 @@ where
         send(EngineCommand::Stop);
         acted = true;
     }
-    acted
+    actor.take_queue_changed() || acted
 }
 
 /// 泵处理一批事件后需要宿主做的事（按产生顺序返回）。
@@ -97,8 +97,8 @@ impl PumpCore {
 
     /// 处理一批引擎事件：归约进 Actor → 下发引擎意图 → 返回旁路动作。
     ///
-    /// 返回 `(effects, acted)`：`acted` = 本批是否实际下发了引擎意图
-    /// （pending_load / pending_stop）。广播状态（EmitState）不代表队列变了
+    /// 返回 `(effects, acted)`：`acted` 表示引擎意图或队列结构需要全量落库。
+    /// 广播状态（EmitState）不代表队列变了
     /// ——播放中每 500ms 一次的 Position 节流也置位，调用方落库必须用
     /// `acted` 门控，否则播放全程在反复全量重写 queue_items。
     ///
@@ -280,6 +280,7 @@ mod tests {
             start: 0,
         }));
         let _ = actor.take_pending_load();
+        let _ = actor.take_queue_changed();
         actor
     }
 
@@ -287,6 +288,59 @@ mod tests {
         let mut out = Vec::new();
         apply_engine_intents(&mut |c| out.push(c), actor);
         out
+    }
+
+    #[test]
+    fn queue_edits_persist_without_engine_commands() {
+        let mut actor = playing_two();
+        let mut conn = aiya_data::db::open_in_memory().unwrap();
+        for id in ["a", "b", "c", "x"] {
+            conn.execute(
+                "INSERT INTO tracks (id, title, title_norm, added_at, path, path_lower)
+                 VALUES (?1, ?1, ?1, 0, ?2, ?2)",
+                rusqlite::params![id, format!("D:/music/{id}.flac")],
+            )
+            .unwrap();
+        }
+        for (op, expected) in [
+            (
+                QueueOp::Append {
+                    tracks: vec![track("c")],
+                },
+                vec!["a", "b", "c"],
+            ),
+            (
+                QueueOp::PlayNext {
+                    tracks: vec![track("x")],
+                },
+                vec!["a", "x", "b", "c"],
+            ),
+            (QueueOp::Move { from: 3, to: 0 }, vec!["c", "a", "x", "b"]),
+            (QueueOp::Remove { indices: vec![2] }, vec!["c", "a", "b"]),
+        ] {
+            actor.reduce(PlayerCommand::Queue(op));
+            let mut sent = Vec::new();
+            assert!(apply_engine_intents(&mut |c| sent.push(c), &mut actor));
+            assert!(sent.is_empty(), "编辑非当前项不应打断播放");
+            let p = crate::queue_persist_from_actor(&actor, true);
+            let items: Vec<_> = actor
+                .queue_refs()
+                .iter()
+                .map(crate::queue_item_from_ref)
+                .collect();
+            aiya_data::save_queue_full(&mut conn, &p, &items).unwrap();
+            let (saved, rows) = aiya_data::load_queue(&conn).unwrap().unwrap();
+            let ids: Vec<_> = rows
+                .iter()
+                .map(|r| r.track_id.as_deref().unwrap())
+                .collect();
+            assert_eq!(ids, expected);
+            assert_eq!(ids[saved.current_index as usize], "a");
+            assert!(!apply_engine_intents(
+                &mut |_| panic!("重复下发"),
+                &mut actor
+            ));
+        }
     }
 
     /// 协议 v7：暂停态随 Load 下发，不再有独立的 Pause 命令——
@@ -478,6 +532,7 @@ mod tests {
         }));
         let token = actor.state().token;
         let _ = actor.take_pending_load();
+        let _ = actor.take_queue_changed();
         let mut core = PumpCore::new();
         let mut sent = Vec::new();
 

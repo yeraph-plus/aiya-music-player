@@ -46,6 +46,7 @@ AIYA Music 本体以 **GPL-3.0-or-later** 发布（全文见仓库根 `LICENSE`�
 | Tailwind CSS | 4.x | MIT |
 | zod | 4.x | MIT |
 | @tauri-apps/api | 2.9.x | Apache-2.0 OR MIT |
+| hls.js（Web 宿主动态加载） | 1.7.x | Apache-2.0 |
 
 ## 二、不随包分发、运行时按需调用的外部程序
 

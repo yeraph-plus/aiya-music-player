@@ -100,7 +100,7 @@ const SEGMENT_READ_CAP: u64 = 64 * 1024 * 1024;
 /// 代理目标校验：scheme 白名单 + 拒绝环回/私网/link-local 目标。/stream 是
 /// 服务端发起的抓取器，不做这层就是内网探测与云元数据端点（169.254.169.254）
 /// 的读取跳板（审查 P1 SSRF）。DNS 解析在调用方的阻塞线程里做。
-fn validate_target(base: &Url) -> Result<(), String> {
+fn validate_target(base: &Url) -> Result<Vec<std::net::SocketAddr>, String> {
     if base.scheme() != "http" && base.scheme() != "https" {
         return Err(format!("scheme not allowed: {}", base.scheme()));
     }
@@ -143,7 +143,127 @@ fn validate_target(base: &Url) -> Result<(), String> {
             return Err(format!("target resolves to non-public address ({ip})"));
         }
     }
-    Ok(())
+    Ok(addrs)
+}
+
+fn fetch_public(target: Url) -> Result<(Url, ureq::Response), String> {
+    fetch_redirects(target, validate_target)
+}
+
+fn fetch_redirects(
+    mut target: Url,
+    resolve: impl Fn(&Url) -> Result<Vec<std::net::SocketAddr>, String>,
+) -> Result<(Url, ureq::Response), String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    for hop in 0..=5 {
+        let addrs = resolve(&target)?;
+        // 请求使用已校验的地址集合，避免校验与连接之间再次解析 DNS。
+        let agent = ureq::AgentBuilder::new()
+            .redirects(0)
+            .resolver(move |_: &str| Ok(addrs.clone()))
+            .timeout(
+                deadline
+                    .checked_duration_since(std::time::Instant::now())
+                    .ok_or("upstream timeout")?,
+            )
+            .build();
+        let response = agent
+            .get(target.as_str())
+            .call()
+            .map_err(|e| e.to_string())?;
+        if !matches!(response.status(), 301 | 302 | 303 | 307 | 308) {
+            return Ok((target, response));
+        }
+        if hop == 5 {
+            return Err("too many upstream redirects".into());
+        }
+        let location = response
+            .header("Location")
+            .ok_or("redirect without Location")?;
+        target = target.join(location).map_err(|e| e.to_string())?;
+    }
+    unreachable!()
+}
+
+fn rewrite_playlist(text: &str, base: &Url, mut rewrite: impl FnMut(Url) -> String) -> String {
+    let mut out = String::with_capacity(text.len() + 256);
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            let mut rest = line;
+            while let Some(i) = rest.find("URI=\"") {
+                out.push_str(&rest[..i + 5]);
+                rest = &rest[i + 5..];
+                let Some(end) = rest.find('"') else {
+                    break;
+                };
+                match base.join(&rest[..end]) {
+                    Ok(url) => out.push_str(&rewrite(url)),
+                    Err(_) => out.push_str(&rest[..end]),
+                }
+                out.push('"');
+                rest = &rest[end + 1..];
+            }
+            out.push_str(rest);
+        } else if !line.is_empty() {
+            match base.join(line) {
+                Ok(url) => out.push_str(&rewrite(url)),
+                Err(_) => out.push_str(line),
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// 私有站单把凭据带入子清单和段请求，原生 HLS 与 MSE 使用同一份清单。
+pub async fn hls_file(
+    State(st): State<std::sync::Arc<ServerState>>,
+    Path((dir, file)): Path<(String, String)>,
+    Query(q): Query<HashMap<String, String>>,
+    req: Request,
+) -> Response {
+    let safe = |s: &str| {
+        !s.is_empty()
+            && s != "."
+            && s != ".."
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    };
+    if !safe(&dir) || !safe(&file) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(root) = st.station.hls_root() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let path = root.join(&dir).join(&file);
+    if !file.ends_with(".m3u8") {
+        return serve_file(path, req).await;
+    }
+    let text = match tokio::fs::read_to_string(path).await {
+        Ok(t) => t,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let base =
+        Url::parse(&format!("http://localhost/hls/{dir}/{file}")).expect("validated HLS path");
+    let body = rewrite_playlist(&text, &base, |mut url| {
+        if let Some(token) = q.get("token") {
+            url.query_pairs_mut().append_pair("token", token);
+        }
+        format!(
+            "{}{}",
+            url.path(),
+            url.query().map(|s| format!("?{s}")).unwrap_or_default()
+        )
+    });
+    (
+        [
+            (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 /// `/stream?u=<url>`：HLS 字节代理。清单逐行换源到本代理（token 透传），
@@ -155,57 +275,35 @@ pub async fn stream_proxy(Query(q): Query<HashMap<String, String>>) -> Response 
     let Ok(base) = Url::parse(target) else {
         return (StatusCode::BAD_REQUEST, "bad url").into_response();
     };
-    // 清单判定按路径而不是原始串：上游带 `?token=` 查询串时
-    // `ends_with(".m3u8")` 会把清单当段走二进制分支（审查 P2）
-    let path_lower = base.path().to_ascii_lowercase();
-    let is_playlist = path_lower.ends_with(".m3u8") || path_lower.ends_with(".m3u");
-
-    let fetch = {
-        let target = target.clone();
-        let base = base.clone();
-        tokio::task::spawn_blocking(move || {
-            validate_target(&base)?;
-            ureq::get(&target)
-                .timeout(Duration::from_secs(15))
-                .call()
-                .map_err(|e| e.to_string())
-        })
-        .await
-    };
-    let resp = match fetch {
+    let fetch = { tokio::task::spawn_blocking(move || fetch_public(base)).await };
+    let (base, resp) = match fetch {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => return (StatusCode::BAD_GATEWAY, format!("upstream: {e}")).into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
     };
+
+    let path_lower = base.path().to_ascii_lowercase();
+    let content_type = resp
+        .header("Content-Type")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let is_playlist = path_lower.ends_with(".m3u8")
+        || path_lower.ends_with(".m3u")
+        || content_type.contains("mpegurl");
 
     if is_playlist {
         let text = match resp.into_string() {
             Ok(t) => t,
             Err(e) => return (StatusCode::BAD_GATEWAY, format!("read: {e}")).into_response(),
         };
-        let mut out = String::with_capacity(text.len() + 256);
-        for line in text.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                out.push_str(line);
-            } else {
-                match base.join(trimmed) {
-                    Ok(resolved) => {
-                        // token 透传：hls.js 的段请求 URL 由清单给定，查询参数是
-                        // <audio>/hls.js 都能携带的凭据形态（W4 鉴权设计留待定案）
-                        let mut ser = url::form_urlencoded::Serializer::new(String::new());
-                        ser.append_pair("u", resolved.as_str());
-                        if let Some(tok) = q.get("token") {
-                            ser.append_pair("token", tok);
-                        }
-                        out.push_str("/stream?");
-                        out.push_str(&ser.finish());
-                    }
-                    Err(_) => out.push_str(trimmed),
-                }
+        let out = rewrite_playlist(&text, &base, |resolved| {
+            let mut ser = url::form_urlencoded::Serializer::new(String::new());
+            ser.append_pair("u", resolved.as_str());
+            if let Some(tok) = q.get("token") {
+                ser.append_pair("token", tok);
             }
-            out.push('\n');
-        }
+            format!("/stream?{}", ser.finish())
+        });
         (
             [
                 (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
@@ -215,7 +313,7 @@ pub async fn stream_proxy(Query(q): Query<HashMap<String, String>>) -> Response 
         )
             .into_response()
     } else {
-        let mime = segment_mime(target);
+        let mime = segment_mime(base.as_str());
         let mut bytes = Vec::new();
         let mut reader = resp.into_reader().take(SEGMENT_READ_CAP);
         if reader.read_to_end(&mut bytes).is_err() {
@@ -244,5 +342,60 @@ fn segment_mime(url: &str) -> &'static str {
         "audio/mp4"
     } else {
         "application/octet-stream"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    #[test]
+    fn public_targets_reject_private_and_unsupported_addresses() {
+        for url in [
+            "http://127.0.0.1/a",
+            "http://10.0.0.1/a",
+            "http://169.254.169.254/",
+            "http://[::ffff:127.0.0.1]/",
+            "file:///etc/passwd",
+        ] {
+            assert!(validate_target(&Url::parse(url).unwrap()).is_err(), "{url}");
+        }
+        assert!(validate_target(&Url::parse("https://8.8.8.8/a").unwrap()).is_ok());
+    }
+
+    #[test]
+    fn redirect_to_private_target_is_checked_before_connecting() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut buf = [0; 4096];
+            assert!(s.read(&mut buf).unwrap() > 0);
+            s.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let result = fetch_redirects(Url::parse("http://public.test/live").unwrap(), |url| {
+            if url.host_str() == Some("public.test") {
+                Ok(vec![addr])
+            } else {
+                validate_target(url)
+            }
+        });
+        server.join().unwrap();
+        assert!(result.unwrap_err().contains("non-public"));
+    }
+
+    #[test]
+    fn playlists_rewrite_segments_keys_maps_and_variant_playlists() {
+        let base = Url::parse("https://example.com/redirected/live.m3u8").unwrap();
+        let text = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\"\n#EXT-X-MAP:URI=\"init.mp4\"\nvariant.m3u8\nseg.ts\n";
+        let rewritten = rewrite_playlist(text, &base, |url| format!("proxy:{}", url));
+        for name in ["key.bin", "init.mp4", "variant.m3u8", "seg.ts"] {
+            assert!(
+                rewritten.contains(&format!("proxy:https://example.com/redirected/{name}")),
+                "{rewritten}"
+            );
+        }
     }
 }

@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { mkdir, copyFile, writeFile } from 'node:fs/promises';
+import { dirname, basename, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * http 形态 e2e：真 aiya-server + 浏览器引擎的完整链路。
@@ -128,39 +131,243 @@ test('会话刷新直进 + 双语抽查（English）', async ({ page }) => {
   await expect(page.getByText('Library folders')).toBeVisible();
 });
 
-test('推流频道：建频道进列表 + 站单卡片进收听 tab + 频道删除', async ({ page }) => {
+test('推流工作台：全曲库、整卡队列与多时段一次保存', async ({page}) => {
+  test.setTimeout(60000);
   await login(page);
-  // 曲库导航到直播页：双 tab（caps.streaming web 形态才渲染「我的频道」）
-  await page.locator('aside button', { hasText: /直播|Live/ }).click();
-  await expect(page.locator('.text-tab', { hasText: /我的频道|My stations/ })).toBeVisible();
-  await page.locator('.text-tab', { hasText: /我的频道|My stations/ }).click();
-  await expect(page.getByText(/还没有频道|No stations yet/)).toBeVisible();
+  const token=await page.evaluate(()=>localStorage.getItem('aiya.authToken'));
+  const call=async(cmd:string,data:Record<string,unknown>={})=>{
+    const r=await page.request.post(`/ipc/${cmd}`,{data,headers:{authorization:`Bearer ${token}`}});
+    expect(r.ok(),await r.text()).toBeTruthy();return r.json();
+  };
+  const tracks=await call('library_list',{query:{limit:10}});
+  const morning=await call('playlist_create',{name:'Morning fixture',trackIds:[tracks.items[0].id]});
+  const night=await call('playlist_create',{name:'Night fixture',trackIds:[tracks.items[1].id]});
+  let stationId:string|undefined;
+  try {
+    await page.locator('aside button',{hasText:/推流|Broadcasting/}).click();
+    await expect(page.locator('.broadcast .ch-kicker')).toHaveText('BROADCAST');
+    await expect(page.locator('.broadcast h1')).toHaveText(/推流|Broadcasting/);
+    await expect(page.locator('.broadcast input[type="search"]')).toHaveCount(0);
+    await expect.poll(async()=>(await call('app_get_ui_state')).page).toBe('broadcast');
+    await page.reload();
+    await page.getByRole('button',{name:/新建频道|New station/}).click();
+    const dialog=page.getByRole('dialog');
+    await expect(dialog.locator('.k-field')).toHaveCount(4);
+    await expect(dialog.locator('select')).toHaveCount(0);
+    await expect(dialog.getByRole('combobox')).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);expect(await call('station_list')).toEqual([]);
+    await page.getByRole('button',{name:/新建频道|New station/}).click();
+    await page.getByPlaceholder(/如「深夜 FM」|Midnight FM/).fill('E2E Radio');
+    await page.getByLabel(/副标题|Subtitle/).fill('All fields');
+    await page.getByLabel(/描述|Description/).fill('Weekly radio');
+    await dialog.getByRole('combobox').click();
+    await page.getByRole('option',{name:/公开|Public/}).click();
+    await dialog.getByRole('button',{name:/^保存$|^Save$/}).click();
+    await expect(page.locator('.station-workbench')).toBeVisible();
+    stationId=(await call('station_list'))[0].id;
+    const detail=await call('station_get',{stationId});
+    expect(detail).toMatchObject({subtitle:'All fields',description:'Weekly radio',visibility:'public'});
+    await expect(page.locator('.broadcast h1')).toHaveText(/推流|Broadcasting/);
+    await expect(page.locator('.broadcast .ch-kicker')).toHaveText('BROADCAST');
+    await page.getByRole('button',{name:/添加 全曲库|Add All tracks/,exact:true}).click();
+    await page.getByRole('button',{name:/添加 Morning fixture|Add Morning fixture/,exact:true}).click();
+    await page.getByRole('button',{name:/Morning fixture 已添加|Morning fixture already added/}).click();
+    await expect(page.locator('.queue-list>li')).toHaveCount(2);
+    await page.getByRole('button',{name:/添加 Night fixture|Add Night fixture/,exact:true}).click();
+    await expect(page.locator('.queue-list>li')).toHaveCount(3);
+    await expect(page.locator('.playlist-grid .k-cover')).toHaveCount(3);
+    const queue=page.locator('.queue-list>li').nth(2);
+    await expect(queue.locator('select')).toHaveCount(0);
+    await queue.getByRole('combobox').click();
+    await page.getByRole('option',{name:/随机顺序|Shuffle/}).click();
+    await queue.getByRole('switch',{name:/^指定时段$|^Scheduled$/}).click();
+    await expect(queue.locator('.week-grid')).toBeVisible();
+    await expect(queue.locator('input[type="number"]')).toHaveCount(1);
+    await queue.getByLabel(/优先级|Priority/,{exact:true}).fill('4');
+    const drag=async(d1:number,h1:number,d2:number,h2:number)=>{
+      const first=queue.locator(`.week-cell[data-day="${d1}"][data-hour="${h1}"]`);
+      const last=queue.locator(`.week-cell[data-day="${d2}"][data-hour="${h2}"]`);
+      await first.scrollIntoViewIfNeeded();
+      const a=(await first.boundingBox())!,b=(await last.boundingBox())!;
+      await page.mouse.move(a.x+a.width/2,a.y+a.height/2);await page.mouse.down();
+      await page.mouse.move(a.x+a.width-1,a.y+a.height/2);
+      expect(await page.evaluate(({x,y})=>getComputedStyle(document.elementFromPoint(x,y)!).cursor,{x:a.x+a.width-1,y:a.y+a.height/2})).toBe('crosshair');
+      await page.mouse.move(b.x+b.width/2,b.y+b.height/2,{steps:8});await page.mouse.up();
+    };
+    await drag(0,8,1,9);
+    await expect(queue.locator('.slot-row')).toHaveCount(1);
+    const slot=queue.locator('.slot-row').first();
+    await slot.getByLabel(/开始|Start/,{exact:true}).fill('08:30');
+    await slot.getByLabel(/结束|End/,{exact:true}).fill('10:15');
+    await expect(queue.locator('.time-band[data-slot="0"]')).toHaveCount(2);
+    await drag(6,22,6,23);
+    await expect(queue.locator('.slot-row')).toHaveCount(2);
+    await expect(queue.locator('.slot-row').nth(1).getByLabel(/结束|End/,{exact:true})).toHaveValue('24:00');
+    await drag(0,0,6,23);
+    await expect(queue.locator('.slot-row')).toHaveCount(3);
+    await expect(queue.getByRole('button',{name:/确认时段|Confirm slot|全部安排|All schedules/})).toHaveCount(0);
+    expect((await call('station_get',{stationId})).program.items).toEqual([]);
+    await page.locator('aside button',{hasText:/直播|Live/}).click();
+    await expect(dialog).toContainText(/未保存|Unsaved/);
+    await page.getByRole('button',{name:/继续编辑|Keep editing/}).click();
+    await page.getByRole('button',{name:/保存配置|Save configuration/}).click();
+    await expect(page.getByRole('button',{name:/保存配置|Save configuration/})).toHaveCount(0);
+    const program=(await call('station_get',{stationId})).program;
+    expect(program.items.map((i:{playlistId:string})=>i.playlistId)).toEqual(['__library__',morning.id,night.id]);
+    expect(program.items[2]).toMatchObject({playMode:'shuffle',priority:4,slots:[{startHm:'08:30',endHm:'10:15',daysMask:3},{startHm:'22:00',endHm:'24:00',daysMask:64},{startHm:'00:00',endHm:'24:00',daysMask:127}]});
+    await call('playlist_rename',{id:night.id,name:'Night renamed'});
+    await expect(queue.locator('.k-card-title')).toContainText('Night renamed',{timeout:10000});
+    for(const width of [960,1280,1440]) {
+      await page.setViewportSize({width,height:900});
+      expect(await page.locator('.broadcast').evaluate(el=>el.scrollWidth<=el.clientWidth+1)).toBe(true);
+    }
+    await page.getByRole('button',{name:/编辑频道信息|Edit station details/}).click();
+    await expect(dialog.getByLabel(/副标题|Subtitle/)).toHaveValue('All fields');
+    await dialog.getByLabel(/副标题|Subtitle/).fill('Updated');
+    await dialog.getByRole('button',{name:/^保存$|^Save$/}).click();
+    expect((await call('station_get',{stationId})).subtitle).toBe('Updated');
+    await page.getByRole('button',{name:/返回列表|Back to list/}).click();
+    await expect(page.locator('.station-workbench')).toHaveCount(0);
+    const row=page.locator('.station-list article');
+    await expect(row.locator('button')).toHaveText(['','','','']);
+    await expect(row.getByRole('button',{name:/开播|Go on air/})).toHaveAttribute('title',/开播|Go on air/);
+    await expect(row.locator('.on-air')).toHaveAttribute('aria-label',/已停播|Stopped/);
+    await expect(row.locator('.k-card-title')).toContainText(/E2E Radio（公开）|E2E Radio \(Public\)/);
+    await expect(row.getByRole('link')).toHaveAttribute('href',/\/hls\/.*live.m3u8$/);
+    await expect(row.locator('button[aria-expanded],.k-menu')).toHaveCount(0);
+    await row.getByRole('button',{name:/^配置$|^Configure$/}).click();
+    await expect(queue.locator('.slot-row').first().getByLabel(/开始|Start/,{exact:true})).toHaveValue('08:30');
+    await page.locator('.workbench-toolbar').getByRole('button',{name:/^删除$|^Delete$/}).click();
+    await expect(dialog).toContainText('E2E Radio');
+    await dialog.getByRole('button',{name:/取消|Cancel/}).click();
+    await page.locator('aside button',{hasText:/直播|Live/}).click();
+    await expect(page.getByText('E2E Radio').first()).toBeVisible();
+    await call('station_delete',{stationId});stationId=undefined;
+  } finally {
+    if(stationId)await call('station_delete',{stationId});
+    await call('playlist_delete',{id:morning.id});await call('playlist_delete',{id:night.id});
+  }
+});
 
-  // 新建频道（public）：保存后进详情（歌单/节目表编排入口），返回列表见卡
-  await page.getByRole('button', { name: /新建频道|New station/ }).click();
-  await page.getByPlaceholder(/如「深夜 FM」|Midnight FM/).fill('E2E Radio');
-  await page.locator('select').first().selectOption('public');
-  await page.getByRole('button', { name: /保存|Save/ }).click();
-  await expect(page.getByRole('heading', { name: 'E2E Radio' })).toBeVisible();
-  await page.locator('.st-back').click();
-  await expect(page.locator('.st-card-name', { hasText: 'E2E Radio' })).toBeVisible();
+for (const locale of ['zh', 'en'] as const) test(`推流双语 ${locale}：校验、来源异常与英文窄屏`, async ({ page }) => {
+  test.setTimeout(60000);
+  await login(page);
+  const token = await page.evaluate(() => localStorage.getItem('aiya.authToken'));
+  const call = async (cmd: string, data: Record<string, unknown> = {}) => {
+    const r = await page.request.post(`/ipc/${cmd}`, { data, headers: { authorization: `Bearer ${token}` } });
+    expect(r.ok(), await r.text()).toBeTruthy(); return r.json();
+  };
+  const zh = locale === 'zh';
+  await page.locator('aside button', { hasText: /设置|Settings/ }).click();
+  await page.getByRole('radio', { name: zh ? '中文' : 'English', exact: true }).click();
+  const tracks = await call('library_list', { query: { limit: 10 } });
+  const single = await call('playlist_create', { name: 'I18N single', trackIds: [tracks.items[0].id] });
+  const empty = await call('playlist_create', { name: 'I18N empty', trackIds: [] });
+  const station = await call('station_create', { name: 'I18N Radio', visibility: 'private' });
+  let emptyDeleted = false;
+  try {
+    await page.locator('aside').getByRole('button', { name: zh ? '推流' : 'Broadcasting', exact: true }).click();
+    await expect(page.locator('.broadcast h1')).toHaveText(zh ? '推流' : 'Broadcasting');
+    const row = page.locator(`article[data-station="${station.id}"]`);
+    await expect(row.locator('.k-card-title')).toHaveText(zh ? 'I18N Radio（私密）' : 'I18N Radio (Private)');
+    await expect(row.getByRole('button', { name: zh ? '复制收听地址' : 'Copy stream URL', exact: true })).toHaveAttribute('title', zh ? '复制收听地址' : 'Copy stream URL');
+    await row.getByRole('button', { name: zh ? '开播' : 'Go on air', exact: true }).click();
+    const emptyQueue = zh ? '开播前请先添加系统歌单或全曲库。' : 'Add a playlist or all tracks before broadcasting.';
+    await expect(page.getByText(emptyQueue, { exact: true })).toBeVisible();
+    await row.getByRole('button', { name: zh ? '配置' : 'Configure', exact: true }).click();
+    await expect(page.locator('.program-issues')).toHaveText(emptyQueue);
+    await page.getByRole('button', { name: zh ? '编辑频道信息' : 'Edit station details', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByLabel(zh ? '频道名称（必填）' : 'Station name (required)', { exact: true })).toHaveValue('I18N Radio');
+    await expect(dialog.getByRole('combobox')).toContainText(zh ? '私密（服务鉴权）' : 'Private (server authentication)');
+    await page.keyboard.press('Escape');
+    const source = page.locator('.playlist-grid .k-card').filter({ hasText: 'I18N single' });
+    await expect(source.locator('.k-card-sub')).toHaveText(zh ? '手动 · 1 首' : 'Manual · 1 track');
+    await expect(page.locator('.playlist-grid .k-card').filter({ hasText: 'I18N empty' }).locator('.k-card-sub')).toHaveText(zh ? '手动 · 0 首' : 'Manual · 0 tracks');
+    let revision = (await call('station_get', { stationId: station.id })).program.revision;
+    const setItems = async (items: unknown[]) => {
+      const program = await call('station_set_program', { stationId: station.id, revision, items });
+      revision = program.revision; return program;
+    };
+    const regular = (playlistId: string) => ({ playlistId, playMode: 'ordered', priority: 0, scheduled: false, slots: [] });
+    await setItems([regular(empty.id)]);
+    await expect(page.locator('.program-issues')).toHaveText(zh ? '歌单没有可播放曲目：I18N empty' : 'No playable tracks in playlist: I18N empty', { timeout: 10000 });
+    await call('playlist_delete', { id: empty.id }); emptyDeleted = true;
+    await expect(page.locator('.program-issues')).toHaveText(zh ? `歌单已不存在：${empty.id}` : `Playlist no longer exists: ${empty.id}`, { timeout: 10000 });
+    const program = await setItems([{ ...regular(single.id), scheduled: true, slots: [{ startHm: '08:00', endHm: '10:00', daysMask: 1 }] }]);
+    expect(program.timezone).toBeNull();
+    expect(program.issues).toEqual([{ kind: 'uncoveredTime', weekday: 0, time: '00:00' }]);
+    await expect(page.locator('.program-issues')).toHaveText(zh ? '周一 00:00 未安排节目，请添加常规轮播歌单或补全时段。' : 'No program at Mon 00:00. Add a regular playlist or complete the schedule.', { timeout: 10000 });
+    await expect(page.locator('.week-head')).toContainText(zh ? '服务器本地时区' : 'Server local time zone');
+    await expect(page.locator('.week-grid').getByRole('button', { name: zh ? '周一 08:00–09:00' : 'Mon 08:00–09:00', exact: true })).toHaveCount(1);
+    await page.locator('.slot-row').getByLabel(zh ? '结束' : 'End', { exact: true }).fill('25:00');
+    await expect(page.locator('.queue-list .program-error')).toHaveText(zh ? '请选择星期，并填写有效且不相同的起止时间（HH:MM）' : 'Choose weekdays and valid, different start/end times (HH:MM).');
+    await expect(page.getByRole('button', { name: zh ? '保存配置' : 'Save configuration', exact: true })).toBeDisabled();
+    await page.locator('.slot-row').getByLabel(zh ? '结束' : 'End', { exact: true }).fill('10:15');
+    await page.setViewportSize({ width: 960, height: 1000 });
+    for (const selector of ['.broadcast', '.workbench-toolbar', '.workbench-save', '.slot-line']) {
+      expect(await page.locator(selector).evaluate(el => el.scrollWidth <= el.clientWidth + 1), selector).toBe(true);
+    }
+    await page.locator('.broadcast').evaluate(el => el.scrollTop = 0);
+    await page.screenshot({ path: resolve(dirname(fileURLToPath(import.meta.url)), `../../../.aiya-tmp/i18n-${locale}-960.png`), fullPage: true });
+    await page.locator('.slot-row').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: resolve(dirname(fileURLToPath(import.meta.url)), `../../../.aiya-tmp/i18n-${locale}-schedule-960.png`), fullPage: true });
+    await page.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click();
+  } finally {
+    await call('station_delete', { stationId: station.id });
+    await call('playlist_delete', { id: single.id });
+    if (!emptyDeleted) await call('playlist_delete', { id: empty.id });
+  }
+});
 
-  // 站单下发：切回收听 tab，service 卡片自动出现（hlsUrl 合并进 liveRecent）
-  await page.locator('.text-tab', { hasText: /收听|Listen/ }).click();
-  await expect(page.getByText('E2E Radio').first()).toBeVisible();
-
-  // 元数据编辑：改 visibility 保存 → 列表卡 meta 变「公开」
-  await page.locator('.text-tab', { hasText: /我的频道|My stations/ }).click();
-  await page.locator('.st-card-name', { hasText: 'E2E Radio' }).click();
-  await page.getByRole('button', { name: /编辑|Edit/ }).click();
-  await page.locator('select').first().selectOption('private');
-  await page.getByRole('button', { name: /保存|Save/ }).click();
-  await expect(page.getByRole('heading', { name: 'E2E Radio' })).toBeVisible();
-  await page.locator('.st-back').click();
-  await expect(page.locator('.st-card', { hasText: 'E2E Radio' })).toContainText(/私人|Private/);
-
-  // 清理：删除频道（confirm 对话框接受）
-  page.on('dialog', (d) => void d.accept());
-  await page.locator('.st-card', { hasText: 'E2E Radio' }).locator('button[aria-label*="删除"], button[aria-label*="Delete"]').click();
-  await expect(page.locator('.st-card-name', { hasText: 'E2E Radio' })).toHaveCount(0);
+test('私有频道卡片：HLS 装载、分段鉴权和断开重连', async ({ page }) => {
+  await login(page);
+  const token = await page.evaluate(() => localStorage.getItem('aiya.authToken'));
+  const call = async (cmd: string, data: Record<string, unknown> = {}) => {
+    const r = await page.request.post(`/ipc/${cmd}`, { data, headers: { authorization: `Bearer ${token}` } });
+    expect(r.ok(), await r.text()).toBeTruthy();
+    return r.json();
+  };
+  const summary = await call('station_create', { name: 'Private HLS', visibility: 'private' });
+  try {
+    const info = await call('app_info');
+    const root = dirname(info.dataDir);
+    expect(basename(root)).toMatch(/^aiya-http-e2e-/);
+    const dir = summary.hlsUrl.split('/')[2];
+    expect(dir).toMatch(/^[\w-]+$/);
+    const hlsDir = join(root, 'hls', dir);
+    await mkdir(hlsDir, { recursive: true });
+    await copyFile(resolve(dirname(fileURLToPath(import.meta.url)), '../../../crates/aiya-audio/tests/fixtures/tone-mp3.mp3'), join(hlsDir, 'segment.mp3'));
+    await writeFile(join(hlsDir, 'live.m3u8'), '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n' + '#EXTINF:0.627,\nsegment.mp3\n'.repeat(60) + '#EXT-X-ENDLIST\n');
+    expect((await page.request.get(summary.hlsUrl)).status()).toBe(401);
+    await page.locator('aside button', { hasText: /直播|Live/ }).click();
+    await expect(page.locator('.live-card .card-face[aria-label$="Private HLS"]')).toHaveCount(1);
+    await expect(page.locator('.live-info h2:not([inert])')).toBeVisible();
+    const cardCount = await page.locator('.live-card:not(.add-card)').count();
+    for (let i = 0; i < cardCount && await page.locator('.live-info h2:not([inert])').textContent() !== 'Private HLS'; i++) {
+      await page.getByRole('button', { name: /下一条流|Next stream/ }).click();
+      await expect(page.locator('.stage')).not.toHaveClass(/locked/);
+    }
+    const card = page.getByRole('button', { name: /播放 Private HLS|Play Private HLS/ });
+    const segmentResponse = page.waitForResponse((r) => r.url().includes('/segment.mp3') && r.ok(), { timeout: 8000 });
+    await card.click();
+    await expect(page.locator('.live-info h2:not([inert])')).toHaveText('Private HLS');
+    const segment = await segmentResponse;
+    expect(new URL(segment.url()).searchParams.get('token')).toBe(token);
+    await expect.poll(() => page.locator('audio').evaluate((a: HTMLAudioElement) => !a.paused && a.currentTime > 0)).toBe(true);
+    const before = await page.locator('audio').evaluate((a: HTMLAudioElement) => ({src:a.src,time:a.currentTime}));
+    await page.locator('aside button', {hasText:/推流|Broadcasting/}).click();
+    await expect(page.locator('.station')).toBeVisible();
+    await expect.poll(() => page.locator('audio').evaluate((a: HTMLAudioElement) => !a.paused && a.currentTime)).toBeGreaterThan(before.time);
+    await expect(page.locator('audio')).toHaveAttribute('src', before.src);
+    await page.locator('aside button', {hasText:/直播|Live/}).click();
+    await page.locator('footer').getByRole('button', { name: /断开直播|Disconnect stream/ }).click();
+    await expect.poll(() => page.locator('audio').getAttribute('src')).toBeNull();
+    await page.locator('footer').getByRole('button', { name: /连接直播|Connect stream/ }).click();
+    await expect.poll(() => page.locator('audio').evaluate((a: HTMLAudioElement) => !a.paused && a.currentTime > 0)).toBe(true);
+  } finally {
+    await call('player_clear');
+    await call('station_delete', { stationId: summary.id });
+  }
 });

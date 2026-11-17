@@ -24,6 +24,8 @@
   import BeetsView from './views/BeetsView.svelte';
   import LibraryView from './views/LibraryView.svelte';
   import LiveView from './views/LiveView.svelte';
+  import BroadcastView from './views/BroadcastView.svelte';
+  import { backendCaps } from './lib/backend-caps';
   import HomeView from './views/HomeView.svelte';
   import NowPlayingView from './views/NowPlayingView.svelte';
   import SettingsView from './views/SettingsView.svelte';
@@ -40,6 +42,7 @@
   import { isListPage, ui } from './stores/ui.svelte';
 
   let mediaSession: MediaSessionBridge | null = null;
+  const caps = backendCaps();
 
   // 登录门：http transport 收到 401 时派发 `aiya:gate`（auth.rs 的登录门）。
   // 首帧值来自进闸预检（main.ts 在 mount 前跑 /auth/state，写入
@@ -160,6 +163,12 @@
       <NowPlayingView />
     {:else if ui.page === 'live'}
       <LiveView />
+    {:else if ui.page === 'broadcast'}
+      {#if caps.streaming}
+        <BroadcastView />
+      {:else}
+        <LiveView />
+      {/if}
     {:else if ui.page === 'beets'}
       <BeetsView />
     {:else}

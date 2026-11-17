@@ -3201,9 +3201,7 @@ fn prune_queue_for_deleted(state: &AppState, app: &AppHandle, deleted: &[String]
     actor.reduce(aiya_player::PlayerCommand::Queue(
         aiya_player::QueueOp::Remove { indices },
     ));
-    // 引擎意图照常出口（删到当前曲 → 换曲/停止）。落库**不按 acted 门控**
-    // （drive_and_emit_inner 的规则在这里不适用）：队列本身变了就必须写，
-    // 否则 CASCADE 后的库内行与内存队列不一致，重启恢复丢布局。
+    // 下发换曲/停止并保存完整队列，使 CASCADE 后的库内行与内存队列一致。
     let _ = apply_engine_intents(state, &mut actor);
     let snap = queue_full_persist_snapshot(state, &actor);
     let snapshot = actor.state();
@@ -3230,8 +3228,8 @@ fn drive_and_emit(state: &State<'_, AppState>, app: &AppHandle) -> aiya_player::
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let acted = apply_engine_intents(state, &mut actor);
-    // 门控 acted：只有真的下发了引擎意图（切歌/停止）才全量落库。锁内只取数据，写库在锁外（save_queue_full 全量重写走单
-    // worker，player 锁内等它会把命令/泵/SMTC 全拖住）。
+    // 队列结构变更与切歌/停止均触发全量保存；位置广播不触发。
+    // 锁内取快照、锁外写库，避免数据库等待阻塞播放命令。
     let persist = acted.then(|| queue_full_persist_snapshot(state, &actor));
     let snapshot = actor.state();
     drop(actor);
@@ -3609,7 +3607,7 @@ fn drive_and_emit_inner(state: &AppState, app: &AppHandle) -> aiya_player::Playe
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let acted = apply_engine_intents(state, &mut actor);
-    // 门控 acted + 锁外落库：与 drive_and_emit 逐行一致（见那里的说明）
+    // 队列结构变更与切歌/停止均触发全量保存，快照在锁外写库。
     let persist = acted.then(|| queue_full_persist_snapshot(state, &actor));
     let snapshot = actor.state();
     drop(actor);
@@ -4825,8 +4823,7 @@ pub fn run() {
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         let mut sent: Vec<aiya_audio::EngineCommand> = Vec::new();
-                        // 门控用 acted（本批是否真下发了引擎意图）：Position 节流也置 EmitState，但队列结构没变 —— 用 EmitState
-                        // 门控的话，播放中每 500ms 全量 DELETE+重写一次 queue_items。
+                        // 引擎意图或队列变更触发保存，Position 节流只广播状态。
                         let (effects, acted) =
                             core.ingest(events, &mut actor, now_ms_u64(), &mut |cmd| {
                                 sent.push(cmd)

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { AudioLines, ChevronLeft, ChevronRight, Plus, Radio, X } from '@lucide/svelte';
   import { fly } from 'svelte/transition';
+  import { onMount } from 'svelte';
   import Button from '../components/ui/Button.svelte';
   import Dialog from '../components/ui/Dialog.svelte';
   import Field from '../components/ui/Field.svelte';
@@ -11,15 +12,13 @@
   import { t } from '../lib/i18n.svelte';
   import { ipc } from '../lib/ipc';
   import { backendCaps } from '../lib/backend-caps';
-import {
-  LIVE_SWAP_MS,
-  livePhase,
-  mergeServiceStations,
-  rememberLive,
-  streamUrlOf,
-} from '../lib/live';
-import StationPanel from '../components/station/StationPanel.svelte';
-import TextTabs from '../components/ui/TextTabs.svelte';
+  import {
+    LIVE_SWAP_MS,
+    livePhase,
+    mergeServiceStations,
+    rememberLive,
+    streamUrlOf,
+  } from '../lib/live';
   import { reducedMotion } from '../lib/motion.svelte';
   import type { LiveRecentEntry } from '../lib/settings';
   import { notify } from '../stores/notify.svelte';
@@ -46,13 +45,10 @@ import TextTabs from '../components/ui/TextTabs.svelte';
   /** 两侧各最多露出的层叠深度；更深的卡整体隐去但仍占位（轮到时从原位回来） */
   const STACK_DEPTH = 3;
 
-  /** 双 tab：收听（现状卡组）/ 我的频道（推流管理器）。
-   *  管理器只在 web 宿主渲染（caps.streaming——桌面壳没有 station 命令）。 */
-  let tab = $state<'listen' | 'manage'>('listen');
   const caps = backendCaps();
 
-  /** 站单下发：服务端频道列表合并进收听列表（source='service'，用户字段赢）。
-   *  挂载时拉一次；管理器每次变更（开播/停播/元数据保存）后由 onchanged 再拉。 */
+  /** 站单下发：刷新服务卡，保留手动流的用户字段。
+   *  每次进入收听页重新拉取，反映频道管理中的增删改。 */
   async function pullStations(): Promise<void> {
     if (!caps.streaming) return;
     try {
@@ -65,11 +61,6 @@ import TextTabs from '../components/ui/TextTabs.svelte';
       // 站单是增强面：拉不到不影响收听列表本身
     }
   }
-
-  const liveTabs = $derived([
-    { id: 'listen', label: t('station.tabListen') },
-    { id: 'manage', label: t('station.tabManage') },
-  ]);
 
   let browseIndex = $state(0);
   /** 换流过渡进行中：锁住箭头与方向键，卡片不叠影 */
@@ -192,8 +183,6 @@ import TextTabs from '../components/ui/TextTabs.svelte';
 
   function onKeydown(event: KeyboardEvent): void {
     if (adding || event.altKey || event.ctrlKey || event.metaKey) return;
-    // 我的频道 tab 下卡组是隐藏视图：方向键不再驱动 browseIndex
-    if (tab !== 'listen') return;
     if (event.key === 'ArrowLeft') swap('left');
     else if (event.key === 'ArrowRight') swap('right');
   }
@@ -289,7 +278,7 @@ import TextTabs from '../components/ui/TextTabs.svelte';
   }
 
   // 站单首拉：web 形态挂载即拉一次（服务端频道卡片自动进收听列表）
-  $effect(() => {
+  onMount(() => {
     void pullStations();
   });
 
@@ -321,23 +310,6 @@ import TextTabs from '../components/ui/TextTabs.svelte';
     {/snippet}
   </Header>
 
-  {#if caps.streaming}
-    <div class="live-tabs">
-      <TextTabs
-        items={liveTabs}
-        value={tab}
-        label={t('station.tabAria')}
-        onchange={(id) => {
-          tab = id as 'listen' | 'manage';
-          if (tab === 'manage') void pullStations();
-        }}
-      />
-    </div>
-  {/if}
-
-  {#if tab === 'manage'}
-    <StationPanel onchanged={() => void pullStations()} />
-  {:else}
   <section class="deck">
     <div
       class="stage"
@@ -456,7 +428,6 @@ import TextTabs from '../components/ui/TextTabs.svelte';
       {/if}
     </div>
   </section>
-  {/if}
 </div>
 
 {#if adding}
@@ -512,7 +483,6 @@ import TextTabs from '../components/ui/TextTabs.svelte';
 {/if}
 
 <style>
-  .live-tabs { display: flex; justify-content: center; margin-bottom: 8px; }
   .live {
     --live-card-w: 250px;
     --live-card-h: 400px;

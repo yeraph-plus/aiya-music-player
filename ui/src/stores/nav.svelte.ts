@@ -66,6 +66,7 @@ export type NavTarget =
 const MAX_DEPTH = 50;
 
 class NavStore {
+  beforeLeave: ((next: () => void) => boolean) | null = null;
   /**
    * 返回栈。**只读给 UI**（`canGoBack`），写入只在 `push` / `back` 里。
    * 用 `$state` 是为了让顶栏返回键的 disabled 跟着变。
@@ -83,6 +84,7 @@ class NavStore {
    * "刷新这一页"（用户手滑点错了想要新数据），而不是往栈里塞一个自己。
    */
   go(target: NavTarget): void {
+    if (this.beforeLeave && !this.beforeLeave(() => this.go(target))) return;
     if (!this.isCurrent(target)) this.push();
     this.apply(target);
   }
@@ -91,6 +93,7 @@ class NavStore {
    * 返回上一页。栈空时无操作（按钮该是 disabled 的）
    */
   back(): void {
+    if (this.beforeLeave && !this.beforeLeave(() => this.back())) return;
     const snapshot = this.history.pop();
     if (!snapshot) return;
     this.restore(snapshot);
@@ -136,6 +139,7 @@ class NavStore {
    * "清空再输入"时会再压一次，栈里出现两个一样的快照。
    */
   search(value: string): void {
+    if (this.beforeLeave && !this.beforeLeave(() => this.search(value))) return;
     if (value.trim() && ui.page !== 'search') this.push();
     list.setSearch(value);
   }

@@ -5,7 +5,7 @@
 #   conf/{ch}/ON            开关位（server 开播 touch / 停播 rm）
 #   conf/{ch}/.pid/.md5     本管家的运行记账（.pid 同时是 server 侧 running 判据）
 #   conf/{ch}/.crash        连续崩溃计数（达到上限停手置 .failed，防秒崩风暴）
-# 挂载进官方 savonet 镜像以 command 覆盖运行——不构建自家 liq 镜像。
+# 挂载进官方 savonet 镜像，覆盖入口后由 shell 执行。
 # 依赖：md5sum/cut/dirname/cat/rm/sleep（镜像自带 coreutils）；无 inotify，轮询足够。
 
 CONF=${LIQ_CONF_DIR:-/hls/conf}
@@ -31,12 +31,19 @@ while :; do
     cur=$(md5sum "$m" 2>/dev/null | cut -d' ' -f1)
     [ -n "$cur" ] || continue
     pid=$(cat "$pidfile" 2>/dev/null)
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then alive=1; else alive=0; fi
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      alive=1
+    else
+      alive=0
+      rm -f "$pidfile"
+    fi
     last=$(cat "$md5file" 2>/dev/null)
 
     if [ "$want_on" = 1 ]; then
       # 在跑且配置未变 → 不动；否则（未起/崩溃/配置更新）重启
       if [ "$alive" = 1 ] && [ "$cur" = "$last" ]; then
+        # 只有上一轮启动且存活到本轮的进程才清零。
+        rm -f "$crashfile" "$d/.failed"
         NEWPIDS="$NEWPIDS $pid"
         continue
       fi
@@ -65,19 +72,11 @@ while :; do
       echo $((crashes + 1)) > "$crashfile"
     elif [ "$alive" = 1 ]; then
       kill "$pid" 2>/dev/null
-      rm -f "$pidfile" "$md5file" "$crashfile"
+      rm -f "$pidfile" "$md5file" "$crashfile" "$d/.failed"
     else
-      rm -f "$pidfile" "$md5file" "$crashfile"
+      rm -f "$pidfile" "$md5file" "$crashfile" "$d/.failed"
     fi
   done
   PIDS="$NEWPIDS"
-  # 正常存活过一轮的频道清零崩溃计数
-  for d in "$CONF"/*/; do
-    [ -d "$d" ] || continue
-    pid=$(cat "$d/.pid" 2>/dev/null)
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      rm -f "$d/.crash"
-    fi
-  done
   sleep "$POLL"
 done

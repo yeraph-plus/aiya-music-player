@@ -5,6 +5,16 @@
 
 ## 条目（新→旧）
 
+- 2026-11-18 · station i18n / i18n.svelte.ts · 推流补齐普通异常与本地时区翻译、英文标点及曲目单复数、星期无障碍名称；参数按单次回调替换，保留用户名称中的占位符和美元字符 · 双语复核与验证见 docs/75。
+
+- 2026-11-18 · WeekTimePicker / Field · 时段改为星期与起止同一行，无可见字段标题；kit 没有时间组件，统一为带 inputmode/pattern/过滤回写的受限文本输入，支持 HH:MM 与结束 24:00 · 方案与验收见 docs/75 第六阶段。
+
+- 2026-11-18 · Card / Button / ProgramEditor / WeekTimePicker · 带正文卡片增加统一留白，开关顺排，时段改分隔线列表；星期选择使用整块可点击的小号按钮及 aria-pressed · 用户实地反馈修订，见 docs/75 第五阶段。
+
+- 2026-11-18 · Card / WeekTimePicker · Card 增加正文槽容纳完整队列配置；周格按钮全尺寸命中、内部留白，时段使用半透明范围层，捕获网格指针并在拖动期间保持全局十字光标 · 现行交互与验证见 docs/75 第四阶段。
+
+- 2026-11-17 · ui/Card.svelte、ui/Field.svelte、station/StationFields.svelte · Card 支持独立动作及元信息槽并避免按钮嵌套；Field 支持 time/url 和范围参数，频道表单、模式与时段配置复用 kit · 对齐既有专辑卡片及频道工作台，详见 docs/75 第三阶段。
+
 <!-- 每条一行：- YYYY-MM-DD · 代码位置 · 事实/取舍 · 来龙去脉（可选） -->
 - 2026-11 · components/AppShell.svelte · 队列/EQ 抽屉宿主用几何确定的 SideDrawer（贴右缘、定宽、定边距），不用 floating-ui 测量气泡 · 测量+碰撞翻转的开合位置有可见抖动。
 - 2026-11-04 · components/LyricsPanel.svelte · 歌词时钟并入 subscribeRender 调度器（暂停即退订、页面隐藏整体停摆）· 它曾是调度器之外唯一常驻 rAF 循环。

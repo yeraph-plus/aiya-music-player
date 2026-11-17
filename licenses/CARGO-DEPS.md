@@ -1,9 +1,9 @@
 # Rust 依赖清单（自动生成，勿手改）
 
-生成时间：2026-11-04　条目数：568
+生成时间：2026-11-17　条目数：588
 生成命令：`node tools/gen-notices.mjs`
 
-本仓库自有的 7 个 crate（aiya-audio-host@0.1.0、aiya-audio@0.1.0、aiya-beets-client@0.1.0、aiya-beets-store@0.1.0、aiya-data@0.1.0、aiya-player@0.1.0、aiya@0.1.0）以 GPL-3.0-or-later 发布，
+本仓库自有的 10 个 crate（aiya-audio-host@0.3.0、aiya-audio@0.3.0、aiya-beets-client@0.3.0、aiya-beets-store@0.3.0、aiya-data@0.3.0、aiya-dto@0.3.0、aiya-host-core@0.3.0、aiya-player@0.3.0、aiya-server@0.3.0、aiya@0.3.0）以 GPL-3.0-or-later 发布，
 不在此表内。下表为 crates.io 上的第三方依赖，均已静态链接进 `aiya-music.exe`
 或 `aiya-audio-host.exe`。
 
@@ -11,10 +11,10 @@
 
 | 许可 | 条目数 |
 |---|---|
-| MIT OR Apache-2.0 | 253 |
-| MIT | 133 |
+| MIT OR Apache-2.0 | 261 |
+| MIT | 140 |
 | Apache-2.0 OR MIT | 50 |
-| MIT/Apache-2.0 | 19 |
+| MIT/Apache-2.0 | 20 |
 | MPL-2.0 | 18 |
 | Unicode-3.0 | 18 |
 | Zlib OR Apache-2.0 OR MIT | 17 |
@@ -33,6 +33,7 @@
 | Unlicense/MIT | 2 |
 | Apache-2.0 | 2 |
 | CDLA-Permissive-2.0 | 2 |
+| BSD-2-Clause OR Apache-2.0 OR MIT | 2 |
 | 0BSD OR MIT OR Apache-2.0 | 1 |
 | BSD-3-Clause AND MIT | 1 |
 | BSD-3-Clause/MIT | 1 |
@@ -40,8 +41,10 @@
 | CC0-1.0 OR MIT-0 OR Apache-2.0 | 1 |
 | (Apache-2.0 OR MIT) AND BSD-3-Clause | 1 |
 | Apache-2.0 / MIT | 1 |
+| MIT AND BSD-3-Clause | 1 |
 | Apache-2.0 AND ISC | 1 |
 | Apache-2.0 OR ISC OR MIT | 1 |
+| Apache-2.0 OR BSL-1.0 | 1 |
 | Apache-2.0 WITH LLVM-exception | 1 |
 | (MIT OR Apache-2.0) AND Unicode-3.0 | 1 |
 
@@ -58,9 +61,9 @@
 | arrayvec | 0.7.8 | MIT OR Apache-2.0 | github.com/bluss/arrayvec |
 | async-broadcast | 0.7.2 | MIT OR Apache-2.0 | github.com/smol-rs/async-broadcast |
 | async-channel | 2.5.0 | Apache-2.0 OR MIT | github.com/smol-rs/async-channel |
-| async-executor | 1.14.0 | Apache-2.0 OR MIT | github.com/smol-rs/async-executor |
+| async-executor | 1.14.1 | Apache-2.0 OR MIT | github.com/smol-rs/async-executor |
 | async-io | 2.6.0 | Apache-2.0 OR MIT | github.com/smol-rs/async-io |
-| async-lock | 3.4.2 | Apache-2.0 OR MIT | github.com/smol-rs/async-lock |
+| async-lock | 3.5.0 | Apache-2.0 OR MIT | github.com/smol-rs/async-lock |
 | async-process | 2.5.0 | Apache-2.0 OR MIT | github.com/smol-rs/async-process |
 | async-recursion | 1.2.0 | MIT OR Apache-2.0 | github.com/dcchut/async-recursion |
 | async-signal | 0.2.14 | Apache-2.0 OR MIT | github.com/smol-rs/async-signal |
@@ -70,6 +73,8 @@
 | atk-sys | 0.18.2 | MIT | github.com/gtk-rs/gtk3-rs |
 | atomic-waker | 1.1.2 | Apache-2.0 OR MIT | github.com/smol-rs/atomic-waker |
 | autocfg | 1.5.1 | Apache-2.0 OR MIT | github.com/cuviper/autocfg |
+| axum | 0.8.9 | MIT | github.com/tokio-rs/axum |
+| axum-core | 0.5.6 | MIT | github.com/tokio-rs/axum |
 | base64 | 0.21.7 | MIT OR Apache-2.0 | github.com/marshallpierce/rust-base64 |
 | base64 | 0.22.1 | MIT OR Apache-2.0 | github.com/marshallpierce/rust-base64 |
 | base64 | 0.23.1 | MIT OR Apache-2.0 | github.com/marshallpierce/rust-base64 |
@@ -95,7 +100,7 @@
 | cargo_metadata | 0.19.2 | MIT | github.com/oli-obk/cargo_metadata |
 | cargo_toml | 1.0.1 | Apache-2.0 OR MIT | gitlab.com/lib.rs/cargo_toml |
 | cargo-platform | 0.1.9 | MIT OR Apache-2.0 | github.com/rust-lang/cargo |
-| cc | 1.10.0 | MIT OR Apache-2.0 | github.com/rust-lang/cc-rs |
+| cc | 1.11.0 | MIT OR Apache-2.0 | github.com/rust-lang/cc-rs |
 | cesu8 | 1.1.0 | Apache-2.0/MIT | github.com/emk/cesu8-rs |
 | cfb | 0.14.0 | MIT | github.com/mdsteele/rust-cfb |
 | cfg_aliases | 0.2.2 | MIT | github.com/katharostech/cfg_aliases |
@@ -117,7 +122,7 @@
 | core-graphics-types | 0.1.3 | MIT OR Apache-2.0 | github.com/servo/core-foundation-rs |
 | core-graphics-types | 0.2.0 | MIT OR Apache-2.0 | github.com/servo/core-foundation-rs |
 | cpufeatures | 0.2.17 | MIT OR Apache-2.0 | github.com/RustCrypto/utils |
-| crc32fast | 1.5.3 | MIT OR Apache-2.0 | github.com/srijs/rust-crc32fast |
+| crc32fast | 1.5.4 | MIT OR Apache-2.0 | github.com/srijs/rust-crc32fast |
 | crossbeam-channel | 0.5.17 | MIT OR Apache-2.0 | github.com/crossbeam-rs/crossbeam |
 | crossbeam-deque | 0.8.8 | MIT OR Apache-2.0 | github.com/crossbeam-rs/crossbeam |
 | crossbeam-epoch | 0.9.21 | MIT OR Apache-2.0 | github.com/crossbeam-rs/crossbeam |
@@ -212,7 +217,6 @@
 | gtk-sys | 0.18.2 | MIT | github.com/gtk-rs/gtk3-rs |
 | gtk3-macros | 0.18.2 | MIT | github.com/gtk-rs/gtk3-rs |
 | hashbrown | 0.12.3 | MIT OR Apache-2.0 | github.com/rust-lang/hashbrown |
-| hashbrown | 0.16.1 | MIT OR Apache-2.0 | github.com/rust-lang/hashbrown |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 | github.com/rust-lang/hashbrown |
 | hashlink | 0.12.2 | MIT OR Apache-2.0 | github.com/djc/hashlink |
 | heck | 0.4.1 | MIT OR Apache-2.0 | github.com/withoutboats/heck |
@@ -223,7 +227,9 @@
 | http | 1.5.0 | MIT OR Apache-2.0 | github.com/hyperium/http |
 | http-body | 1.1.0 | MIT | github.com/hyperium/http-body |
 | http-body-util | 0.1.5 | MIT | github.com/hyperium/http-body |
+| http-range-header | 0.4.2 | MIT | github.com/MarcusGrass/parse-range-headers |
 | httparse | 1.10.1 | MIT OR Apache-2.0 | github.com/seanmonstar/httparse |
+| httpdate | 1.0.3 | MIT OR Apache-2.0 | github.com/pyfisch/httpdate |
 | hyper | 1.12.0 | MIT | github.com/hyperium/hyper |
 | hyper-util | 0.1.21 | MIT | github.com/hyperium/hyper-util |
 | iana-time-zone | 0.1.65 | MIT OR Apache-2.0 | github.com/strawlab/iana-time-zone |
@@ -248,9 +254,9 @@
 | itoa | 1.0.18 | MIT OR Apache-2.0 | github.com/dtolnay/itoa |
 | javascriptcore-rs | 1.1.2 | MIT | github.com/tauri-apps/javascriptcore-rs |
 | javascriptcore-rs-sys | 1.1.1 | MIT | github.com/tauri-apps/javascriptcore-rs |
-| jiff | 0.2.38 | Unlicense OR MIT | github.com/BurntSushi/jiff |
-| jiff-core | 0.1.1 | Unlicense OR MIT | github.com/BurntSushi/jiff |
-| jiff-static | 0.2.38 | Unlicense OR MIT | github.com/BurntSushi/jiff |
+| jiff | 0.2.39 | Unlicense OR MIT | github.com/BurntSushi/jiff |
+| jiff-core | 0.1.2 | Unlicense OR MIT | github.com/BurntSushi/jiff |
+| jiff-static | 0.2.39 | Unlicense OR MIT | github.com/BurntSushi/jiff |
 | jiff-tzdb | 0.1.9 | Unlicense OR MIT | github.com/BurntSushi/jiff |
 | jiff-tzdb-platform | 0.1.3 | Unlicense OR MIT | github.com/BurntSushi/jiff |
 | jni | 0.21.1 | MIT/Apache-2.0 | github.com/jni-rs/jni-rs |
@@ -268,7 +274,7 @@
 | libdbus-sys | 0.2.7 | Apache-2.0/MIT | github.com/diwic/dbus-rs |
 | libloading | 0.7.4 | ISC | github.com/nagisa/rust_libloading/ |
 | libredox | 0.1.25 | MIT | gitlab.redox-os.org/redox-os/libredox.git |
-| libsqlite3-sys | 0.38.2 | MIT | github.com/rusqlite/rusqlite |
+| libsqlite3-sys | 0.39.1 | MIT | github.com/rusqlite/rusqlite |
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | github.com/sunfishcode/linux-raw-sys |
 | litemap | 0.8.3 | Unicode-3.0 | github.com/unicode-org/icu4x |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 | github.com/Amanieu/parking_lot |
@@ -278,9 +284,11 @@
 | malloc_buf | 0.0.6 | MIT | github.com/SSheldon/malloc_buf |
 | markup5ever | 0.39.0 | MIT OR Apache-2.0 | github.com/servo/html5ever |
 | matchers | 0.2.0 | MIT | github.com/hawkw/matchers |
+| matchit | 0.8.4 | MIT AND BSD-3-Clause | github.com/ibraheemdev/matchit |
 | memchr | 2.8.3 | Unlicense OR MIT | github.com/BurntSushi/memchr |
 | memoffset | 0.9.1 | MIT | github.com/Gilnaa/memoffset |
-| mime | 0.3.17 | MIT OR Apache-2.0 | github.com/hyperium/mime |
+| mime | 0.3.18 | MIT OR Apache-2.0 | github.com/hyperium/mime |
+| mime_guess | 2.0.5 | MIT | github.com/abonander/mime_guess |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 | github.com/Frommi/miniz_oxide/tree/master/miniz_oxide |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 | github.com/Frommi/miniz_oxide/tree/master/miniz_oxide |
 | mio | 1.2.4 | MIT | github.com/tokio-rs/mio |
@@ -345,6 +353,7 @@
 | portable-atomic-util | 0.2.8 | Apache-2.0 OR MIT | github.com/taiki-e/portable-atomic-util |
 | potential_utf | 0.1.6 | Unicode-3.0 | github.com/unicode-org/icu4x |
 | powerfmt | 0.2.1 | MIT OR Apache-2.0 | github.com/jhpratt/powerfmt |
+| ppv-lite86 | 0.2.21 | MIT OR Apache-2.0 | github.com/cryptocorrosion/cryptocorrosion |
 | precomputed-hash | 0.1.1 | MIT | github.com/emilio/precomputed-hash |
 | primal-check | 0.3.4 | MIT OR Apache-2.0 | github.com/huonw/primal |
 | proc-macro-crate | 1.3.1 | MIT OR Apache-2.0 | github.com/bkchr/proc-macro-crate |
@@ -359,6 +368,9 @@
 | quote | 1.0.47 | MIT OR Apache-2.0 | github.com/dtolnay/quote |
 | r-efi | 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | github.com/r-efi/r-efi |
 | r-efi | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | github.com/r-efi/r-efi |
+| rand | 0.9.5 | MIT OR Apache-2.0 | github.com/rust-random/rand |
+| rand_chacha | 0.9.0 | MIT OR Apache-2.0 | github.com/rust-random/rand |
+| rand_core | 0.9.5 | MIT OR Apache-2.0 | github.com/rust-random/rand |
 | raw-window-handle | 0.6.2 | MIT OR Apache-2.0 OR Zlib | github.com/rust-windowing/raw-window-handle |
 | rayon | 1.12.0 | MIT OR Apache-2.0 | github.com/rayon-rs/rayon |
 | rayon-core | 1.13.0 | MIT OR Apache-2.0 | github.com/rayon-rs/rayon |
@@ -372,8 +384,8 @@
 | reqwest | 0.13.5 | MIT OR Apache-2.0 | github.com/seanmonstar/reqwest |
 | rfd | 0.17.2 | MIT | github.com/PolyMeilex/rfd |
 | ring | 0.17.14 | Apache-2.0 AND ISC | github.com/briansmith/ring |
-| rsqlite-vfs | 0.1.1 | MIT |  |
-| rusqlite | 0.40.2 | MIT | github.com/rusqlite/rusqlite |
+| rsqlite-vfs | 0.2.0 | MIT | github.com/Spxg/sqlite-wasm-rs |
+| rusqlite | 0.41.1 | MIT | github.com/rusqlite/rusqlite |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 | github.com/djc/rustc-version-rs |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT | github.com/rust-lang/rustc-hash |
 | rustfft | 6.4.1 | MIT OR Apache-2.0 | github.com/ejmahler/RustFFT |
@@ -382,6 +394,7 @@
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 | github.com/rustls/pki-types |
 | rustls-webpki | 0.103.16 | ISC | github.com/rustls/webpki |
 | rustversion | 1.0.23 | MIT OR Apache-2.0 | github.com/dtolnay/rustversion |
+| ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 | github.com/dtolnay/ryu |
 | same-file | 1.0.6 | Unlicense/MIT | github.com/BurntSushi/same-file |
 | schemars | 0.8.22 | MIT | github.com/GREsau/schemars |
 | schemars | 0.9.0 | MIT | github.com/GREsau/schemars |
@@ -395,15 +408,18 @@
 | serde_derive | 1.0.229 | MIT OR Apache-2.0 | github.com/serde-rs/serde |
 | serde_derive_internals | 0.29.1 | MIT OR Apache-2.0 | github.com/serde-rs/serde |
 | serde_json | 1.0.154 | MIT OR Apache-2.0 | github.com/serde-rs/json |
+| serde_path_to_error | 0.1.20 | MIT OR Apache-2.0 | github.com/dtolnay/path-to-error |
 | serde_repr | 0.1.21 | MIT OR Apache-2.0 | github.com/dtolnay/serde-repr |
 | serde_spanned | 0.6.9 | MIT OR Apache-2.0 | github.com/toml-rs/toml |
 | serde_spanned | 1.1.2 | MIT OR Apache-2.0 | github.com/toml-rs/toml |
+| serde_urlencoded | 0.7.1 | MIT/Apache-2.0 | github.com/nox/serde_urlencoded |
 | serde_with | 3.24.0 | MIT OR Apache-2.0 | github.com/jonasbb/serde_with/ |
 | serde_with_macros | 3.24.0 | MIT OR Apache-2.0 | github.com/jonasbb/serde_with/ |
 | serde-untagged | 0.1.9 | MIT OR Apache-2.0 | github.com/dtolnay/serde-untagged |
 | serialize-to-javascript | 0.1.2 | MIT OR Apache-2.0 | github.com/chippers/serialize-to-javascript |
 | serialize-to-javascript-impl | 0.1.2 | MIT OR Apache-2.0 | github.com/chippers/serialize-to-javascript |
 | servo_arc | 0.4.3 | MIT OR Apache-2.0 | github.com/servo/stylo |
+| sha1 | 0.10.7 | MIT OR Apache-2.0 | github.com/RustCrypto/hashes |
 | sha1_smol | 1.0.1 | BSD-3-Clause | github.com/mitsuhiko/sha1-smol |
 | sha2 | 0.10.9 | MIT OR Apache-2.0 | github.com/RustCrypto/hashes |
 | sharded-slab | 0.1.7 | MIT | github.com/hawkw/sharded-slab |
@@ -419,7 +435,7 @@
 | soup3 | 0.5.0 | MIT | gitlab.gnome.org/World/Rust/soup3-rs |
 | soup3-sys | 0.5.0 | MIT | gitlab.gnome.org/World/Rust/soup3-rs |
 | souvlaki | 0.8.3 | MIT | github.com/Sinono3/souvlaki |
-| sqlite-wasm-rs | 0.5.5 | MIT | github.com/Spxg/sqlite-wasm-rs |
+| sqlite-wasm-rs | 0.6.2 | MIT | github.com/Spxg/sqlite-wasm-rs |
 | stable_deref_trait | 1.2.1 | MIT OR Apache-2.0 | github.com/storyyeller/stable_deref_trait |
 | static_vcruntime | 3.0.0 | MIT OR Apache-2.0 OR Zlib | github.com/ChrisDenton/static_vcruntime |
 | strength_reduce | 0.2.4 | MIT OR Apache-2.0 | github.com/ejmahler/strength_reduce |
@@ -476,16 +492,19 @@
 | tinystr | 0.8.5 | Unicode-3.0 | github.com/unicode-org/icu4x |
 | tinyvec | 1.13.3 | Zlib OR Apache-2.0 OR MIT | github.com/Lokathor/tinyvec |
 | tokio | 1.54.1 | MIT | github.com/tokio-rs/tokio |
+| tokio-macros | 2.7.2 | MIT | github.com/tokio-rs/tokio |
+| tokio-stream | 0.1.19 | MIT | github.com/tokio-rs/tokio |
+| tokio-tungstenite | 0.29.0 | MIT | github.com/snapview/tokio-tungstenite |
 | tokio-util | 0.7.20 | MIT | github.com/tokio-rs/tokio |
 | toml | 0.8.2 | MIT OR Apache-2.0 | github.com/toml-rs/toml |
-| toml | 1.1.8+spec-1.1.0 | MIT OR Apache-2.0 | github.com/toml-rs/toml |
+| toml | 1.2.0+spec-1.1.0 | MIT OR Apache-2.0 | github.com/toml-rs/toml |
 | toml_datetime | 0.6.3 | MIT OR Apache-2.0 | github.com/toml-rs/toml |
 | toml_datetime | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 | github.com/toml-rs/toml |
 | toml_edit | 0.19.15 | MIT OR Apache-2.0 | github.com/toml-rs/toml |
 | toml_edit | 0.20.2 | MIT OR Apache-2.0 | github.com/toml-rs/toml |
-| toml_edit | 0.25.17+spec-1.1.0 | MIT OR Apache-2.0 | github.com/toml-rs/toml |
+| toml_edit | 0.25.18+spec-1.1.0 | MIT OR Apache-2.0 | github.com/toml-rs/toml |
 | toml_parser | 1.1.5+spec-1.1.0 | MIT OR Apache-2.0 | github.com/toml-rs/toml |
-| toml_writer | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 | github.com/toml-rs/toml |
+| toml_writer | 1.2.0+spec-1.1.0 | MIT OR Apache-2.0 | github.com/toml-rs/toml |
 | tower | 0.5.3 | MIT | github.com/tower-rs/tower |
 | tower-http | 0.6.11 | MIT | github.com/tower-rs/tower-http |
 | tower-layer | 0.3.3 | MIT | github.com/tower-rs/tower |
@@ -500,10 +519,12 @@
 | try-lock | 0.2.5 | MIT | github.com/seanmonstar/try-lock |
 | ts-rs | 12.0.1 | MIT | github.com/Aleph-Alpha/ts-rs |
 | ts-rs-macros | 12.0.1 | MIT | github.com/Aleph-Alpha/ts-rs |
+| tungstenite | 0.29.0 | MIT OR Apache-2.0 | github.com/snapview/tungstenite-rs |
 | typed-path | 0.13.0 | MIT OR Apache-2.0 | github.com/chipsenkbeil/typed-path |
 | typeid | 1.0.3 | MIT OR Apache-2.0 | github.com/dtolnay/typeid |
 | typenum | 1.20.1 | MIT OR Apache-2.0 | github.com/paholg/typenum |
 | uds_windows | 1.2.1 | MIT | github.com/haraldh/rust_uds_windows |
+| unicase | 2.10.0 | MIT OR Apache-2.0 | github.com/seanmonstar/unicase |
 | unicode-ident | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 | github.com/dtolnay/unicode-ident |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 | github.com/unicode-rs/unicode-segmentation |
 | untrusted | 0.9.0 | ISC | github.com/briansmith/untrusted |
@@ -590,7 +611,7 @@
 | windows-threading | 0.2.1 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | windows-version | 0.1.7 | MIT OR Apache-2.0 | github.com/microsoft/windows-rs |
 | winnow | 0.5.40 | MIT | github.com/winnow-rs/winnow |
-| winnow | 1.0.4 | MIT | github.com/winnow-rs/winnow |
+| winnow | 1.0.5 | MIT | github.com/winnow-rs/winnow |
 | winreg | 0.56.0 | MIT | github.com/gentoo90/winreg-rs |
 | wit-bindgen | 0.57.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | github.com/bytecodealliance/wit-bindgen |
 | writeable | 0.6.4 | Unicode-3.0 | github.com/unicode-org/icu4x |
@@ -603,13 +624,15 @@
 | zbus_macros | 5.19.0 | MIT | github.com/z-galaxy/zbus/ |
 | zbus_names | 4.3.5 | MIT | github.com/z-galaxy/zbus/ |
 | zcheapstr | 1.2.0 | MIT | github.com/z-galaxy/zcheapstr/ |
+| zerocopy | 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT | github.com/google/zerocopy |
+| zerocopy-derive | 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT | github.com/google/zerocopy |
 | zerofrom | 0.1.8 | Unicode-3.0 | github.com/unicode-org/icu4x |
 | zerofrom-derive | 0.1.8 | Unicode-3.0 | github.com/unicode-org/icu4x |
 | zeroize | 1.9.1 | Apache-2.0 OR MIT | github.com/RustCrypto/utils |
 | zerotrie | 0.2.5 | Unicode-3.0 | github.com/unicode-org/icu4x |
 | zerovec | 0.11.9 | Unicode-3.0 | github.com/unicode-org/icu4x |
 | zerovec-derive | 0.11.7 | Unicode-3.0 | github.com/unicode-org/icu4x |
-| zip | 9.1.3 | MIT | github.com/zip-rs/zip2 |
+| zip | 9.4.0 | MIT | github.com/zip-rs/zip2 |
 | zlib-rs | 0.6.8 | Zlib | github.com/trifectatechfoundation/zlib-rs |
 | zmij | 1.0.23 | MIT | github.com/dtolnay/zmij |
 | zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib | github.com/etemesi254/zune-image |

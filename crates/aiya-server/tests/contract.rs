@@ -84,7 +84,6 @@ const DESKTOP_ONLY: &[&str] = &[
     "app_open_url",
     "classify_paths",
     "player_open_paths",
-    "live_open",
     "live_pick_playlist",
     // 歌单导入/导出走系统文件选择器（导出写盘 / 导入读文件）；web 形态需要
     // 上传/下载 API 承接，随 W4+ 批次评估

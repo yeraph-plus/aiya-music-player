@@ -672,3 +672,16 @@ test('docs/27 五轮：筛选器全部留空 = 不过滤（无角标，列表不
   await expect(page.getByRole('button', { name: '筛选器', exact: true })).toBeVisible();
   await expect(firstRow).toBeVisible();
 });
+
+
+test('桌面宿主恢复推流路由时回到纯收听页', async ({page}) => {
+  const stationCalls: string[] = [];
+  page.on('request', (r) => { if (r.url().includes('/ipc/station_')) stationCalls.push(r.url()); });
+  await seedState(page, {page:'broadcast',sort:'title',direction:'asc'});
+  await page.goto('/');
+  await expect(page.locator('.main h1')).toHaveText('直播');
+  expect(await activeSidebar(page)).toEqual(['直播']);
+  await expect(page.locator('.sidebar-footer .nav-item')).toHaveText(['Beets','设置']);
+  await expect(page.locator('.live-tabs, .station')).toHaveCount(0);
+  expect(stationCalls).toEqual([]);
+});

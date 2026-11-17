@@ -8,9 +8,11 @@
     Mic2,
     Plus,
     Radio,
+    RadioTower,
     Settings,
   } from '@lucide/svelte';
   import { artworkUrl } from '../../lib/artwork';
+  import { backendCaps } from '../../lib/backend-caps';
   import { t } from '../../lib/i18n.svelte';
   import { nav } from '../../stores/nav.svelte';
   import { overlay } from '../../stores/overlay.svelte';
@@ -26,7 +28,7 @@
    * 都是路由入口，必须共用同一个 `nav.go` 与同一份历史栈。以 prop 传递回调时，
    * AppShell 需为每个入口编写转发函数，新增入口容易遗漏，表现为点击无响应。
    *
-   * 一级导航分两组。上组：推荐、曲库、专辑、艺人、直播；底部：Beets、设置。
+   * 一级导航分两组。上组：推荐、曲库、专辑、艺人、直播；底部：Beets、推流、设置。
    *
    * - 「正在播放」不在侧栏：唯一入口为播放条左侧的曲目区域，该区域本身即展示
    *   当前播放内容，比经由侧栏更直接。
@@ -76,12 +78,20 @@
       go: () => nav.go({ kind: 'page', page: 'beets' }),
     },
     {
+      key: 'broadcast',
+      labelKey: 'shell.nav.broadcast',
+      icon: RadioTower,
+      go: () => nav.go({ kind: 'page', page: 'broadcast' }),
+    },
+    {
       key: 'settings',
       labelKey: 'shell.nav.settings',
       icon: Settings,
       go: () => nav.go({ kind: 'page', page: 'settings' }),
     },
   ] as const;
+  const caps = backendCaps();
+  const footerPages = FOOTER_PAGES.filter((item) => item.key !== 'broadcast' || caps.streaming);
 
   /**
    * 判定"当前在哪"。
@@ -229,10 +239,10 @@
     </div>
   </div>
 
-  <!-- 底部工具组：容纳应用管理两项（Beets / 设置），与上方内容导航分区。
+  <!-- 底部工具组：应用管理入口，与上方内容导航分区。
        统计不移入侧栏，而是分布在首页卡片与设置页「曲库」组。 -->
   <div class="sidebar-footer">
-    {#each FOOTER_PAGES as item (item.key)}
+    {#each footerPages as item (item.key)}
       <button
         class="nav-item"
         class:active={isActive(item.key)}

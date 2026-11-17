@@ -51,9 +51,7 @@ export function currentLocale(): Locale {
 /** 取文案；`{name}` 形态占位符用 params 替换。未知键回退 zh 表原键名。 */
 export function t(key: Msg, params?: Record<string, string | number>): string {
   const table = locale === 'en' ? en : zh;
-  let s = table[key] ?? key;
-  if (params) {
-    for (const [k, v] of Object.entries(params)) s = s.replaceAll(`{${k}}`, String(v));
-  }
-  return s;
+  const s = table[key] ?? key;
+  return params ? s.replace(/\{(\w+)\}/g, (token, name: string) =>
+    Object.hasOwn(params, name) ? String(params[name]) : token) : s;
 }

@@ -17,6 +17,7 @@
  */
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import type { PlayerState } from './generated/PlayerState';
+import Hls from 'hls.js';
 import { setTransport, transport, type Transport } from './transport';
 
 let authToken = '';
@@ -59,6 +60,8 @@ class WebPlayerEngine {
   private pendingSeekMs: number | null = null;
   private lastPositionReport = 0;
   private ticker: ReturnType<typeof setInterval> | null = null;
+  private hls: Hls | null = null;
+  private positionReportPending = false;
 
   /** 播放中与否（与心跳同口径）：频谱推帧的闸——暂停冻结在最后一帧。 */
   get paused(): boolean {
@@ -165,7 +168,31 @@ class WebPlayerEngine {
       // 换曲装载；恢复装载（暂停态）落到记忆位置
       this.pendingSeekMs = s.status === 'paused' ? s.positionMs : (seekMs ?? null);
       if (seekMs != null) this.pendingSeekMs = seekMs;
-      this.audio.src = withToken(`/audio/${encodeURIComponent(s.current.id)}`);
+      this.hls?.destroy();
+      this.hls = null;
+      if (s.source === 'stream') {
+        const url = s.current.id.slice('stream:'.length);
+        const src = url.startsWith('/hls/')
+          ? withToken(url)
+          : withToken(`/stream?u=${encodeURIComponent(url)}`);
+        if (Hls.isSupported()) {
+          const hls = new Hls();
+          this.hls = hls;
+          hls.on(Hls.Events.ERROR, (_event, data) => {
+            if (data.fatal && this.hls === hls) {
+              void this.report({ kind: 'failed', token: s.token, code: 'io', message: data.details });
+            }
+          });
+          hls.loadSource(src);
+          hls.attachMedia(this.audio);
+        } else if (this.audio.canPlayType('application/vnd.apple.mpegurl')) {
+          this.audio.src = src;
+        } else {
+          void this.report({ kind: 'failed', token: s.token, code: 'codecUnsupported', message: 'HLS playback is unavailable' });
+        }
+      } else {
+        this.audio.src = withToken(`/audio/${encodeURIComponent(s.current.id)}`);
+      }
     } else if (seekMs != null) {
       this.pendingSeekMs = seekMs;
       this.audio.currentTime = seekMs / 1000;
@@ -180,8 +207,14 @@ class WebPlayerEngine {
       void this.audio.play().catch(() => {
         /* autoplay 拦截：等下一次用户手势的命令再起 */
       });
-    } else if (s.status === 'paused' || s.status === 'idle') {
+    } else if (s.status === 'paused' || s.status === 'idle' || s.status === 'error') {
       this.audio.pause();
+      if (s.source === 'stream' || !s.current) {
+        this.hls?.destroy();
+        this.hls = null;
+        this.audio.removeAttribute('src');
+        this.audio.load();
+      }
     }
     this.ensureTicker();
     this.emit(this.snapshot());
@@ -194,18 +227,15 @@ class WebPlayerEngine {
 
   /** 引擎回报：走命令面归约，响应快照自动回灌。 */
   private async report(payload: Record<string, unknown>): Promise<void> {
+    const position = payload.kind === 'position';
+    if (position && this.positionReportPending) return;
+    if (position) this.positionReportPending = true;
     try {
-      const s = await transport().invoke<PlayerState>('player_report', payload);
-      // token 未变（同曲 loaded/position 回报）也要刷新基座：时长/位置落库口径
-      if (s && typeof s === 'object' && 'token' in s) {
-        const tokenChanged = (s as PlayerState).token !== this.lastToken;
-        this.lastToken = (s as PlayerState).token;
-        this.base = s as PlayerState;
-        if (tokenChanged) this.apply(s as PlayerState);
-        else this.emit(this.snapshot());
-      }
+      await transport().invoke<PlayerState>('player_report', payload);
     } catch {
       /* 回报失败静默：下一次事件继续 */
+    } finally {
+      if (position) this.positionReportPending = false;
     }
   }
 
@@ -308,37 +338,47 @@ export function installHttpTransport(): void {
   // SSE 共享连接（多路复用，见 listen 内注释）
   let sseSourceRef: EventSource | null = null;
   const sseChannels = new Map<string, Set<(data: unknown) => void>>();
+  const sseHandlers = new Map<string, EventListener>();
   const sseSource = (): EventSource => {
     if (sseSourceRef === null) sseSourceRef = new EventSource(withToken('/events'));
     return sseSourceRef;
   };
 
+  let playerTail: Promise<unknown> = Promise.resolve();
+  const request = async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
+    const resp = await fetch(withToken(`/ipc/${encodeURIComponent(cmd)}`), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(authToken ? { authorization: `Bearer ${authToken}` } : {}),
+      },
+      body: JSON.stringify(args ?? {}),
+      signal: cmd.startsWith('player_') || cmd === 'live_open' ? AbortSignal.timeout(15_000) : undefined,
+    });
+    const body: unknown = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      if (resp.status === 401) {
+        // 会话过期/被撤销：App 切到登录闸（重登后整页重载）
+        window.dispatchEvent(new CustomEvent('aiya:gate'));
+      }
+      throw body ?? { code: 'internal', message: `HTTP ${resp.status}`, detail: null, retryable: false };
+    }
+    // player_* 响应 = PlayerState 快照：喂引擎（seek 的参数侧真值从 args 取）
+    if ((cmd.startsWith('player_') || cmd === 'live_open') && body && typeof body === 'object' && 'token' in (body as object)) {
+      engine.apply(
+        body as PlayerState,
+        cmd === 'player_seek' ? (args?.positionMs as number | undefined) : undefined,
+      );
+    }
+    return body as T;
+  };
   const http: Transport = {
-    invoke: async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
-      const resp = await fetch(withToken(`/ipc/${encodeURIComponent(cmd)}`), {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(authToken ? { authorization: `Bearer ${authToken}` } : {}),
-        },
-        body: JSON.stringify(args ?? {}),
-      });
-      const body: unknown = await resp.json().catch(() => null);
-      if (!resp.ok) {
-        if (resp.status === 401) {
-          // 会话过期/被撤销：App 切到登录闸（重登后整页重载）
-          window.dispatchEvent(new CustomEvent('aiya:gate'));
-        }
-        throw body ?? { code: 'internal', message: `HTTP ${resp.status}`, detail: null, retryable: false };
-      }
-      // player_* 响应 = PlayerState 快照：喂引擎（seek 的参数侧真值从 args 取）
-      if (cmd.startsWith('player_') && body && typeof body === 'object' && 'token' in (body as object)) {
-        engine.apply(
-          body as PlayerState,
-          cmd === 'player_seek' ? (args?.positionMs as number | undefined) : undefined,
-        );
-      }
-      return body as T;
+    invoke: <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
+      if (!cmd.startsWith('player_') && cmd !== 'live_open') return request<T>(cmd, args);
+      // 命令、引擎回报及其快照按提交顺序完成；失败不阻断后续控制。
+      const result = playerTail.then(() => request<T>(cmd, args));
+      playerTail = result.catch(() => {});
+      return result;
     },
     listen: async <T,>(event: string, cb: (payload: T) => void): Promise<UnlistenFn> => {
       if (event === 'player:state') {
@@ -380,7 +420,7 @@ export function installHttpTransport(): void {
       if (!set) {
         set = new Set();
         sseChannels.set(event, set);
-        sseSource().addEventListener(event, (e) => {
+        const handler: EventListener = (e) => {
           const data = (e as MessageEvent).data as string;
           let payload: unknown;
           try {
@@ -389,15 +429,20 @@ export function installHttpTransport(): void {
             payload = data;
           }
           for (const fn of sseChannels.get(event) ?? []) fn(payload);
-        });
+        };
+        sseHandlers.set(event, handler);
+        sseSource().addEventListener(event, handler);
       }
       set.add(cb as (data: unknown) => void);
       // EventSource 自带重连；服务端连接建立即推首帧快照
       return () => {
         const cur = sseChannels.get(event);
-        if (!cur) return;
+        if (!cur || cur !== set) return;
         cur.delete(cb as (data: unknown) => void);
         if (cur.size === 0) {
+          const handler = sseHandlers.get(event);
+          if (handler) sseSourceRef?.removeEventListener(event, handler);
+          sseHandlers.delete(event);
           sseChannels.delete(event);
           if (sseChannels.size === 0 && sseSourceRef !== null) {
             sseSourceRef.close();

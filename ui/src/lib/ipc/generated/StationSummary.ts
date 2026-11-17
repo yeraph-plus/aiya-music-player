@@ -18,7 +18,7 @@ visibility: string,
  */
 active: boolean, 
 /**
- * 引擎进程在跑（单容器 = spawn 存活；双容器 = keeper .run 位在）
+ * 引擎进程在跑（单容器 = spawn 存活；双容器 = keeper ON 与 .pid 位在）
  */
 running: boolean, 
 /**

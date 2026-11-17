@@ -20,6 +20,8 @@
     /** sm=28px（表格行内、chip 旁），md=--control-h（默认 32px） */
     size?: 'sm' | 'md';
     disabled?: boolean;
+    /** 切换按钮的选中状态。 */
+    pressed?: boolean;
     /** 转圈并禁止点按；正文保留（避免按钮宽度在加载时跳动） */
     loading?: boolean;
     title?: string;
@@ -37,6 +39,7 @@
     variant = 'secondary',
     size = 'md',
     disabled = false,
+    pressed,
     loading = false,
     title,
     ariaLabel,
@@ -61,6 +64,7 @@
   aria-busy={loading}
   {title}
   aria-label={ariaLabel}
+  aria-pressed={pressed}
   {onclick}
 >
   {#if loading}

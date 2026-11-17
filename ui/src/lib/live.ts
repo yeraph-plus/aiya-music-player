@@ -133,14 +133,8 @@ export function rememberLive(
 }
 
 /**
- * 站单下发：把服务端频道列表合并进「最近打开」。
- *
- * 合并方向与 rememberLive **相反**——rememberLive 是"现在带的信息优先"
- * （开播现场带 url+name），站单是"**用户已填字段赢、服务端只补空白**"
- * （LIVE_STATION_FIELDS 契约：服务端权威 id、url 随部署更新、用户填过的
- * title/subtitle/描述不被覆盖）。id 用服务端权威 id（station.id），所以
- * 同一频道换端口/换部署不会长出第二张卡。被删除的频道不再下发——已下发
- * 的旧卡片保留（用户可以手动 forget），不做反向清除。
+ * 用当前站单刷新收听列表。服务卡使用服务端元数据，手动流保留用户字段。
+ * 服务卡按频道身份移除已删除项；手动流即使与频道地址相同也保留其来源。
  */
 export function mergeServiceStations(
   list: readonly LiveRecentEntry[],
@@ -153,7 +147,8 @@ export function mergeServiceStations(
     hlsUrl: string;
   }[],
 ): LiveRecentEntry[] {
-  const out = [...list];
+  const ids = new Set(summaries.map((st) => st.id));
+  const out = list.filter((entry) => entry.source !== 'service' || ids.has(entry.id));
   for (const st of summaries) {
     let idx = out.findIndex((item) => item.id === st.id);
     if (idx < 0) idx = out.findIndex((item) => item.url === st.hlsUrl);
@@ -162,7 +157,7 @@ export function mergeServiceStations(
       const merged: LiveRecentEntry = {
         ...prev,
         url: st.hlsUrl, // url 可随部署变，服务端权威
-        source: 'service',
+        source: prev.source,
       };
       // 字段合并按 source 分流："用户字段赢"无法区分用户值
       // 与上轮服务端值（首见即冻结）——service 卡的四字段直接以服务端为

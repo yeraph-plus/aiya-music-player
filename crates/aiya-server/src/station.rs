@@ -33,6 +33,23 @@ use crate::state::ServerState;
 
 /* ---- 渲染（纯函数，单测锁定关键指令行） ---- */
 
+pub fn hm_minutes(raw: &str) -> Option<u32> {
+    if raw.len() != 5
+        || !raw.bytes().enumerate().all(|(i, b)| {
+            if i == 2 {
+                b == b':'
+            } else {
+                b.is_ascii_digit()
+            }
+        })
+    {
+        return None;
+    }
+    let (h, m) = raw.split_once(':')?;
+    let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+    (h < 24 && m < 60).then_some(h * 60 + m)
+}
+
 pub struct LiqConfig {
     /// 频道段目录（**liq 视角**绝对路径——Sidecar 下是 /hls/{dir}）
     pub liq_dir: String,
@@ -45,29 +62,6 @@ pub struct LiqConfig {
     pub base_expr: String,
     /// 节目表 switch 块（"sch = switch(...)"；空 = 无节目表，走 base 直连）
     pub schedule_block: String,
-}
-
-/// m3u 行：annotate 协议注入 title；空标题退裸路径（占位 unknown 由模板兜）
-fn annotate_lines(entries: &[(String, String)]) -> String {
-    entries
-        .iter()
-        .map(|(path, title)| {
-            // 双引号换写、反斜杠剔除（会转义闭合引号）、控制字符抹平——
-            // annotate 行按单行解析（审查 P2-3）
-            let safe: String = title
-                .replace('\\', "")
-                .replace('"', "'")
-                .chars()
-                .filter(|c| !c.is_control())
-                .collect();
-            if safe.is_empty() {
-                path.clone()
-            } else {
-                format!("annotate:title=\"{safe}\":{path}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// 渲染单频道 .liq（2.4.6 实测形态：stdlib crossfade(duration=)、方法式
@@ -95,6 +89,7 @@ base = {base_expr}
 req = request.queue(id="request")
 {schedule_block}
 src = fallback(track_sensitive=false, [req, crossfade(duration=2., {mid}), blank(duration=2.)])
+server.register(namespace="station", "skip", fun (_) -> begin source.skip(src); "Done." end)
 
 # 回灌：每轨开始覆盖写 now.jsonl（宿主 1s 轮询进 SSE）。不用 stdout print——
 # 管道块缓冲攒行不刷；file.write 每轨落盘一次，"当前轨"语义免掉轮转 GC。
@@ -138,6 +133,7 @@ struct Inner {
     liq_host: OnceLock<String>,
     /// telnet 端口分配记录（12701 起线性探测）
     ports: Mutex<Vec<u16>>,
+    operations: tokio::sync::Mutex<()>,
 }
 
 struct ChannelRun {
@@ -150,11 +146,111 @@ struct ChannelRun {
     last_track: Arc<Mutex<Option<String>>>,
     /// InProcess 守护任务的停播信号；Sidecar = None（摘 ON 位即可）
     stop_tx: Mutex<Option<tokio::sync::mpsc::Sender<()>>>,
+    guard_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// 回灌轮询任务句柄：stop/覆盖前 abort（审查 P1-2，防任务永生泄漏）
     poll_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
+struct PortReservation<'a> {
+    ctl: &'a StationCtl,
+    port: u16,
+    committed: bool,
+}
+impl Drop for PortReservation<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.ctl.free_port(self.port);
+        }
+    }
+}
+
 impl StationCtl {
+    pub async fn operation(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.inner.operations.lock().await
+    }
+
+    pub async fn wait_ready(&self, id: &str) -> Result<(), String> {
+        for _ in 0..100 {
+            if self.runtime_of(id).0 {
+                if let Ok(port) = self.port_of(id) {
+                    if telnet_cmd(&self.liq_host_of(), port, "version")
+                        .await
+                        .is_ok()
+                    {
+                        return Ok(());
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        Err("Liquidsoap did not become ready; inspect the station log".into())
+    }
+
+    pub async fn stop_and_wait(&self, id: &str) -> Result<(), String> {
+        let port = self.port_of(id).ok();
+        let pid_path = self
+            .inner
+            .channels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(id)
+            .and_then(|c| {
+                self.inner
+                    .hls_root
+                    .get()
+                    .map(|root| root.join("conf").join(&c.dir).join(".pid"))
+            });
+        let present = port.is_some();
+        if !present {
+            return Ok(());
+        }
+        let guard_handle = self
+            .inner
+            .channels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(id)
+            .and_then(|c| {
+                c.guard_handle
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+            });
+        self.stop(id)?;
+        if let Some(mut handle) = guard_handle {
+            if tokio::time::timeout(Duration::from_secs(10), &mut handle)
+                .await
+                .is_err()
+            {
+                handle.abort();
+                let _ = handle.await;
+                return Err("Timed out waiting for the Liquidsoap supervisor to stop".into());
+            }
+        }
+        if self.inner.mode.get() == Some(&ControlMode::InProcess) {
+            return Ok(());
+        }
+        for _ in 0..100 {
+            let pid_gone = pid_path.as_ref().is_none_or(|p| !p.exists());
+            let telnet_gone = match port {
+                Some(p) => matches!(
+                    tokio::time::timeout(
+                        Duration::from_millis(200),
+                        tokio::net::TcpStream::connect((self.liq_host_of().as_str(), p))
+                    )
+                    .await,
+                    Ok(Err(_))
+                ),
+                None => true,
+            };
+            if telnet_gone && pid_gone {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        Err("Timed out waiting for Liquidsoap to stop".into())
+    }
+
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -163,6 +259,7 @@ impl StationCtl {
                 mode: OnceLock::new(),
                 liq_host: OnceLock::new(),
                 ports: Mutex::new(Vec::new()),
+                operations: tokio::sync::Mutex::new(()),
             }),
         }
     }
@@ -263,7 +360,7 @@ impl StationCtl {
     /// 手动切歌。
     pub async fn skip(&self, station_id: &str) -> Result<Value, String> {
         let port = self.port_of(station_id)?;
-        let out = telnet_cmd(&self.liq_host_of(), port, "request.skip").await?;
+        let out = telnet_cmd(&self.liq_host_of(), port, "station.skip").await?;
         Ok(json!({ "raw": out.trim().to_string() }))
     }
 
@@ -315,16 +412,43 @@ impl StationCtl {
         st: &StdArc<ServerState>,
         row: &aiya_data::station::StationRow,
     ) -> Result<(), String> {
+        let result = self.start_prepared(st, row).await;
+        if let Err(error) = result {
+            let error = match self.stop_and_wait(&row.id).await {
+                Ok(()) => error,
+                Err(stop_error) => format!("{error}; {stop_error}"),
+            };
+            let sid = row.id.clone();
+            let message = error.clone();
+            let _ = crate::state::db_lock(st)
+                .send(move |conn| crate::program::failed(conn, &sid, &message));
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn start_prepared(
+        &self,
+        st: &StdArc<ServerState>,
+        row: &aiya_data::station::StationRow,
+    ) -> Result<(), String> {
         // 幂等闸（审查 P1-1）：已在跑的频道重复 start（UI 双击/命令重放）
         // 直接返回——否则泄漏端口与回灌任务，还会短暂双编码器同写段目录
-        if self
+        let registered = self
             .inner
             .channels
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains_key(&row.id)
-        {
-            return Ok(());
+            .contains_key(&row.id);
+        if registered {
+            return self.wait_ready(&row.id).await;
+        }
+        let sid = row.id.clone();
+        let prepared = crate::state::db_lock(st)
+            .send(move |conn| crate::program::prepare(conn, &sid))
+            .map_err(|e| e.to_string())?;
+        if !prepared.program.issues.is_empty() {
+            return Err(crate::program::issues_text(&prepared.program));
         }
         let mode = *self.inner.mode.get().ok_or("station not booted")?;
         let hls_root = self
@@ -337,6 +461,11 @@ impl StationCtl {
         std::fs::create_dir_all(&hls_dir).map_err(|e| format!("create hls dir: {e}"))?;
 
         let port = self.alloc_port();
+        let mut reservation = PortReservation {
+            ctl: self,
+            port,
+            committed: false,
+        };
         let telnet_bind: &'static str = if mode == ControlMode::Sidecar {
             "0.0.0.0"
         } else {
@@ -349,160 +478,9 @@ impl StationCtl {
             hls_dir.to_string_lossy().replace('\\', "/")
         };
 
-        // ---- 频道编排（审查 P1-5：节目表真正接进播放管线）----
-        // 读歌单与节目表，生成每歌单 m3u 与 switch 块；无歌单退回全库随机 100
-        let row_id = row.id.clone();
-        let (playlists, schedules) = crate::state::db_lock(st)
-            .send(move |conn| {
-                let pls = aiya_data::station::list_playlists(conn, &row_id)?;
-                let schs = aiya_data::station::list_schedules(conn, &row_id)?;
-                Ok((pls, schs))
-            })
-            .map_err(|e| e.to_string())?;
-
-        let mut program_sources = String::new();
-        let mut pl_vars: HashMap<String, String> = HashMap::new();
-        for (idx, pl) in playlists.iter().enumerate() {
-            // send 闭包要 'static：先把 pl 的两处读出拷贝（kind/track_ids）
-            let kind = pl.kind.clone();
-            let pl_track_ids: Vec<String> = pl
-                .track_ids_json
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or_default();
-            let sid = row.id.clone();
-            let entries: Vec<(String, String)> = crate::state::db_lock(st)
-                .send(move |conn| {
-                    match kind.as_str() {
-                        // manual：按 track_ids 顺序（查全放 map，按列表序取）
-                        "manual" => {
-                            let mut by_id = HashMap::new();
-                            if !pl_track_ids.is_empty() {
-                                let placeholders = (1..=pl_track_ids.len())
-                                    .map(|x| format!("?{x}"))
-                                    .collect::<Vec<_>>()
-                                    .join(", ");
-                                let sql = format!(
-                                    "SELECT id, path, COALESCE(title, '') FROM tracks
-                                     WHERE availability = 'online' AND id IN ({placeholders})"
-                                );
-                                let mut stmt = conn.prepare(&sql)?;
-                                let rows = stmt.query_map(
-                                    rusqlite::params_from_iter(pl_track_ids.iter()),
-                                    |r| {
-                                        Ok((
-                                            r.get::<_, String>(0)?,
-                                            r.get::<_, String>(1)?,
-                                            r.get::<_, String>(2)?,
-                                        ))
-                                    },
-                                )?;
-                                for r in rows {
-                                    let (id, path, title) = r?;
-                                    by_id.insert(id, (path, title));
-                                }
-                            }
-                            let ordered: Vec<(String, String)> = pl_track_ids
-                                .iter()
-                                .filter_map(|id| by_id.get(id).cloned())
-                                .collect();
-                            Ok(ordered)
-                        }
-                        // random_all：随机 100，排除 24h 内播过的（防重复窗口）
-                        _ => random_entries(conn, &sid).map_err(aiya_data::DbError::Sql),
-                    }
-                })
-                .map_err(|e| e.to_string())?;
-            if entries.is_empty() {
-                self.free_port(port);
-                return Err(format!(
-                    "歌单 {} 无可播曲目——频道 {} 未启动",
-                    pl.name, row.name
-                ));
-            }
-            let m3u_name = format!("pl{idx}.m3u");
-            let m3u_path = hls_dir.join(&m3u_name);
-            std::fs::write(&m3u_path, annotate_lines(&entries))
-                .map_err(|e| format!("write m3u: {e}"))?;
-            let var = format!("pl{idx}");
-            program_sources += &format!(
-                "pl{idx} = playlist(id=\"pl{idx}\", mode=\"randomize\", \"{liq_prefix}/{m3u_name}\")\n",
-                liq_prefix = liq_prefix
-            );
-            pl_vars.insert(pl.id.clone(), var);
-        }
-
-        // 默认源（未排时段）：第一个 random_all 歌单 → 否则第一个歌单 →
-        // 否则全库随机 100（无歌单的现状形态）
-        let base_expr = playlists
-            .iter()
-            .find(|p| p.kind == "random_all")
-            .or_else(|| playlists.first())
-            .and_then(|p| pl_vars.get(&p.id).cloned());
-        let (base_expr, program_sources) = match base_expr {
-            Some(v) => (v, program_sources),
-            None => {
-                let sid = row.id.clone();
-                let entries: Vec<(String, String)> = crate::state::db_lock(st)
-                    .send(move |conn| random_entries(conn, &sid).map_err(aiya_data::DbError::Sql))
-                    .map_err(|e| e.to_string())?;
-                if entries.is_empty() {
-                    self.free_port(port);
-                    return Err(format!("曲库无在线曲目——频道 {} 未启动", row.name));
-                }
-                let m3u_path = hls_dir.join("default.m3u");
-                std::fs::write(&m3u_path, annotate_lines(&entries))
-                    .map_err(|e| format!("write m3u: {e}"))?;
-                let base_m3u = format!("{liq_prefix}/default.m3u");
-                (
-                    "base".to_string(),
-                    format!("base = playlist(id=\"base\", mode=\"randomize\", \"{base_m3u}\")\n"),
-                )
-            }
-        };
-
-        // switch 展开：每 (时段 × 星期) 一行，priority 序（DB 已 DESC）；
-        // 跨零点（start>=end）拆"当日尾段 + 次日头段"两行；weekday 数字 =
-        // bit0(周一)=1w … bit6(周日)=7w
-        let mut rows: Vec<String> = Vec::new();
-        for s in &schedules {
-            let Some(var) = pl_vars.get(&s.playlist_id) else {
-                continue;
-            };
-            let sh: u32 = s
-                .start_hm
-                .split(':')
-                .next()
-                .and_then(|x| x.parse().ok())
-                .unwrap_or(0);
-            let eh: u32 = s
-                .end_hm
-                .split(':')
-                .next()
-                .and_then(|x| x.parse().ok())
-                .unwrap_or(0);
-            for day in 0..7usize {
-                if (s.days_mask & (1 << day)) == 0 {
-                    continue;
-                }
-                let d = day + 1;
-                if sh < eh {
-                    rows.push(format!("  ({{{}h-{}h and {}w}}, {}),", sh, eh, d, var));
-                } else {
-                    rows.push(format!("  ({{{}h-24h and {}w}}, {}),", sh, d, var));
-                    let nd = day % 7 + 1;
-                    rows.push(format!("  ({{0h-{}h and {}w}}, {}),", eh, nd, var));
-                }
-            }
-        }
-        let schedule_block = if rows.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "sch = switch(track_sensitive=false, [\n{}\n])",
-                rows.join("\n")
-            )
-        };
+        let cursor = std::fs::read_to_string(hls_dir.join("regular.cursor")).ok();
+        let (program_sources, base_expr, schedule_block) =
+            crate::program::render(&prepared, &liq_prefix, cursor.as_deref());
 
         let text = render_liq(&LiqConfig {
             liq_dir: liq_prefix.clone(),
@@ -521,6 +499,7 @@ impl StationCtl {
             running: Arc::new(AtomicBool::new(false)),
             last_track: Arc::new(Mutex::new(None)),
             stop_tx: Mutex::new(None),
+            guard_handle: Mutex::new(None),
             poll_handle: Mutex::new(None),
         };
 
@@ -552,7 +531,10 @@ impl StationCtl {
                 *run.stop_tx
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(stop_tx);
-                self.spawn_guard(liq_path, Arc::clone(&run.running), stop_rx);
+                let handle = self.spawn_guard(liq_path, Arc::clone(&run.running), stop_rx);
+                *run.guard_handle
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handle);
             }
             ControlMode::Sidecar => {
                 // 配置卷：顶层 conf/{ch}/station.liq + ON 位（keeper 契约：
@@ -622,6 +604,13 @@ impl StationCtl {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(row.id.clone(), run);
+        reservation.committed = true;
+        self.wait_ready(&row.id).await?;
+        let sid = row.id.clone();
+        let fingerprint = prepared.fingerprint;
+        crate::state::db_lock(st)
+            .send(move |conn| crate::program::applied(conn, &sid, &fingerprint))
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -655,7 +644,7 @@ impl StationCtl {
         match mode {
             ControlMode::InProcess => {
                 if let Some(tx) = stop_tx {
-                    std::mem::drop(tx.send(()));
+                    let _ = tx.try_send(());
                 }
             }
             ControlMode::Sidecar => {
@@ -696,7 +685,7 @@ impl StationCtl {
         liq_path: PathBuf,
         running: Arc<AtomicBool>,
         mut stop_rx: tokio::sync::mpsc::Receiver<()>,
-    ) {
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut backoff: u64 = 1;
             let mut crash_streak: u32 = 0;
@@ -747,10 +736,13 @@ impl StationCtl {
                     crash_streak,
                     "station process exited, restarting"
                 );
-                tokio::time::sleep(Duration::from_secs(backoff)).await;
+                tokio::select! {
+                    _ = stop_rx.recv() => return,
+                    _ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
+                }
                 backoff = (backoff * 2).min(30);
             }
-        });
+        })
     }
 
     /// `GET /hls/{dir}/ws`（§12.1）：升级后先发 hello（站单静态字段 + 当前
@@ -803,11 +795,9 @@ impl StationCtl {
                         Ok((channel, data)) if channel == "stations" => {
                             // SSE 载荷原样包进 track 帧（serde 重组——不再字符串
                             // 拼接嵌套，审查 P2-5 的双层 nowPlaying）
-                            let mut v: Value = match serde_json::from_str(&data) {
-                                Ok(v) => v,
-                                Err(_) => continue,
+                            let Some(v) = station_track_event(&data, &row.id) else {
+                                continue;
                             };
-                            v["type"] = json!("track");
                             if sender
                                 .send(Message::Text(v.to_string().into()))
                                 .await
@@ -832,6 +822,15 @@ impl StationCtl {
     }
 }
 
+fn station_track_event(data: &str, station_id: &str) -> Option<Value> {
+    let mut event: Value = serde_json::from_str(data).ok()?;
+    if event.get("stationId").and_then(Value::as_str) != Some(station_id) {
+        return None;
+    }
+    event["type"] = json!("track");
+    Some(event)
+}
+
 /// telnet 短连：发一条命令 + quit，读响应到静默窗口（800ms 无新字节）。
 async fn telnet_cmd(host: &str, port: u16, cmd: &str) -> Result<String, String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -853,29 +852,6 @@ async fn telnet_cmd(host: &str, port: u16, cmd: &str) -> Result<String, String> 
         }
     }
     Ok(String::from_utf8_lossy(&buf).into_owned())
-}
-
-/// 防重复窗口的随机选歌：24h 内播过的歌不进池（station_history）
-fn random_entries(
-    conn: &rusqlite::Connection,
-    sid: &str,
-) -> rusqlite::Result<Vec<(String, String)>> {
-    // 防重复窗口：24h 内播过的歌不进随机池（station_history）
-    let mut stmt = conn.prepare(
-        "SELECT path, COALESCE(title, '') FROM tracks WHERE availability = 'online'
-           AND id NOT IN (SELECT track_id FROM station_history
-                          WHERE station_id = ?1 AND played_at >= ?2)
-         ORDER BY RANDOM() LIMIT 100",
-    )?;
-    let rows = stmt.query_map(
-        rusqlite::params![sid, crate::state::now_secs() - 24 * 3600],
-        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-    )?;
-    let mut v = Vec::new();
-    for r in rows {
-        v.push(r?);
-    }
-    Ok(v)
 }
 
 /* ---- boot ---- */
@@ -944,6 +920,79 @@ pub async fn boot(st: &StdArc<ServerState>, data_root: &Path) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn stopping_waits_for_the_in_process_supervisor_to_finish() {
+        let ctl = StationCtl::new();
+        ctl.inner.mode.set(ControlMode::InProcess).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let done = Arc::new(AtomicBool::new(false));
+        let finished = done.clone();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let handle = tokio::spawn(async move {
+            rx.recv().await;
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            finished.store(true, Ordering::SeqCst);
+        });
+        ctl.inner.channels.lock().unwrap().insert(
+            "s".into(),
+            ChannelRun {
+                dir: "test".into(),
+                port,
+                hls_dir: PathBuf::new(),
+                visibility: "private".into(),
+                running: Arc::new(AtomicBool::new(false)),
+                last_track: Arc::new(Mutex::new(None)),
+                stop_tx: Mutex::new(Some(tx)),
+                guard_handle: Mutex::new(Some(handle)),
+                poll_handle: Mutex::new(None),
+            },
+        );
+        ctl.stop_and_wait("s").await.unwrap();
+        assert!(done.load(Ordering::SeqCst));
+        assert!(ctl.inner.channels.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_start_keeps_the_error_and_does_not_mark_the_program_applied() {
+        let st = crate::state::test_state(Path::new(":memory:"));
+        let row = crate::state::db_lock(&st)
+            .send(|conn| {
+                aiya_data::station::create_station(
+                    conn,
+                    &aiya_data::station::StationCreate {
+                        name: "empty".into(),
+                        subtitle: None,
+                        description: None,
+                        cover_url: None,
+                        visibility: "private".into(),
+                    },
+                )
+            })
+            .unwrap();
+        assert!(st.station.start(&st, &row).await.is_err());
+        let program = crate::state::db_lock(&st)
+            .send(move |conn| Ok(crate::program::prepare(conn, &row.id)?.program))
+            .unwrap();
+        assert!(program.needs_apply);
+        assert!(program.error.unwrap().contains("Add a system playlist"));
+        assert!(st.station.inner.channels.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn websocket_events_are_scoped_to_the_connected_station() {
+        let event = json!({"stationId":"private", "nowPlaying":"Private title"}).to_string();
+        assert!(station_track_event(&event, "public").is_none());
+        assert_eq!(
+            station_track_event(&event, "private").unwrap()["type"],
+            "track"
+        );
+        for data in ["{}", "null", "not json"] {
+            assert!(station_track_event(data, "public").is_none());
+        }
+    }
 
     fn cfg() -> LiqConfig {
         LiqConfig {

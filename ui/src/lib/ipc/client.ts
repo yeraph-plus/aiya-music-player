@@ -57,8 +57,8 @@ import type {
   ScanResult,
   SpectrumToggle,
   StationDetail,
-  StationPlaylist,
-  StationSchedule,
+  StationProgram,
+  StationProgramEdit,
   StationSummary,
   TrackDetail,
   TrackPage,
@@ -362,15 +362,9 @@ export const ipc = {
       input: { name: string; subtitle: string | null; description: string | null; coverUrl: string | null; visibility: string },
     ) => call<StationSummary>('station_update', { stationId, ...input }),
     remove: (stationId: string) => call<void>('station_delete', { stationId }),
-    /** 歌单与节目表都是整表提交（UI 发完整列表，server 事务全删全插） */
-    setPlaylists: (
-      stationId: string,
-      playlists: { name: string; kind: string; trackIds: string[] | null; ruleJson: string | null }[],
-    ) => call<{ playlists: StationPlaylist[] }>('station_set_playlists', { stationId, playlists }),
-    setSchedules: (
-      stationId: string,
-      schedules: { playlistId: string; startHm: string; endHm: string; daysMask: number; priority: number }[],
-    ) => call<{ schedules: StationSchedule[] }>('station_set_schedules', { stationId, schedules }),
+    setProgram: (stationId: string, edit: StationProgramEdit) =>
+      call<StationProgram>('station_set_program', {stationId, ...edit}),
+    apply: (stationId: string) => call<StationProgram>('station_apply', {stationId}),
     /** 开播/停播：先落库再起管/摘管——重启后 boot 按 active=1 批量拉起 */
     activate: (stationId: string, active: boolean) =>
       call<StationSummary>('station_activate', { stationId, active }),

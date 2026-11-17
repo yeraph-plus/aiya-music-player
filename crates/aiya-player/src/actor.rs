@@ -28,6 +28,7 @@ pub struct PlayerActor {
     rate: f64,
     error: Option<AudioError>,
     queue_version: u64,
+    queue_changed: bool,
     token: u64,
     /// 最近一次需要发出的引擎指令（Actor 不直接驱动线程）
     pending_load: Option<(u64, String, u64, bool)>, // (token, path, startMs, autoplay)
@@ -78,6 +79,7 @@ impl PlayerActor {
             rate: 1.0,
             error: None,
             queue_version: 0,
+            queue_changed: false,
             token: 0,
             pending_load: None,
             pending_stop: false,
@@ -162,6 +164,11 @@ impl PlayerActor {
     /// 取走"需要停引擎"的标记（队尾停住 / 队列清空）。
     pub fn take_pending_stop(&mut self) -> bool {
         std::mem::take(&mut self.pending_stop)
+    }
+
+    /// 取走队列结构变更标记，供宿主触发全量持久化。
+    pub fn take_queue_changed(&mut self) -> bool {
+        std::mem::take(&mut self.queue_changed)
     }
 
     pub fn volume(&self) -> (f64, bool) {
@@ -265,6 +272,20 @@ impl PlayerActor {
 
     fn bump_queue_version(&mut self) {
         self.queue_version += 1;
+        self.queue_changed = true;
+    }
+
+    fn wants_playback(&self) -> bool {
+        self.status == PlaybackStatus::Playing
+            || (self.status == PlaybackStatus::Loading && !self.pending_pause)
+    }
+
+    /// 非随机模式下，显式编辑后的播放顺序也是持久化原序。
+    fn commit_order(&mut self) {
+        if !self.shuffle {
+            self.queue = self.order.iter().map(|&i| self.queue[i].clone()).collect();
+            self.order = (0..self.queue.len()).collect();
+        }
     }
 
     fn next_token(&mut self) -> u64 {
@@ -333,11 +354,8 @@ impl PlayerActor {
         if let Some(track) = track {
             let token = self.next_token();
             self.pending_load = Some((token, track.path.clone(), start_ms, autoplay));
-            // 音源类别在产生处判定：http(s) 路径 = 网络流。
-            // 用 `is_stream_path`（大小写不敏感）而不是手写前缀比较：引擎那边
-            // 就是 `eq_ignore_ascii_case`，两处不一致时 `HTTP://` 会一边当流
-            // 打开、另一边标成 File（进度条可拖，一拖报错）。
-            self.source = if crate::state::is_stream_path(&track.path) {
+            // 流项身份优先；http(s) 路径兼容未带流前缀的队列项。
+            self.source = if track.is_stream() || crate::state::is_stream_path(&track.path) {
                 AudioSource::Stream
             } else {
                 AudioSource::File
@@ -415,8 +433,8 @@ impl PlayerActor {
             },
 
             PlayerCommand::Next => {
-                // 暂停中点"下一首"应保持暂停（主流播放器行为）；只有正在播才起播
-                let autoplay = self.status == PlaybackStatus::Playing;
+                // 切歌继承播放意图，包括装载期间的暂停选择。
+                let autoplay = self.wants_playback();
                 if self.advance() {
                     self.instruct_load(autoplay, 0);
                 } else {
@@ -429,7 +447,7 @@ impl PlayerActor {
             }
 
             PlayerCommand::Prev => {
-                let autoplay = self.status == PlaybackStatus::Playing;
+                let autoplay = self.wants_playback();
                 // 播放超过 3 秒 → 回到本曲开头（通用播放器惯例）
                 if self.position_ms > 3_000 && self.current_track().is_some() {
                     self.instruct_load(autoplay, 0);
@@ -514,6 +532,9 @@ impl PlayerActor {
                     self.instruct_load(true, 0);
                 }
                 QueueOp::Append { tracks } => {
+                    if tracks.is_empty() {
+                        return;
+                    }
                     let first_new = self.queue.len();
                     self.queue.extend(tracks);
                     // 洗牌开启时不再整队重洗（删一首不打乱全部，加一首也不该）：
@@ -521,9 +542,7 @@ impl PlayerActor {
                     if self.shuffle {
                         self.append_shuffled(first_new);
                     } else {
-                        // order 重新构建（保持当前播放位置）
-                        let current_queue_index = self.order.get(self.cursor).copied();
-                        self.rebuild_order(current_queue_index);
+                        self.order.extend(first_new..self.queue.len());
                     }
                     self.bump_queue_version();
                     // 空队列追加后自动开始播放
@@ -533,6 +552,9 @@ impl PlayerActor {
                     }
                 }
                 QueueOp::PlayNext { tracks } => {
+                    if tracks.is_empty() {
+                        return;
+                    }
                     let insert_at = self.cursor + 1;
                     let first_new = self.order.len().min(insert_at);
                     for (k, t) in tracks.into_iter().enumerate() {
@@ -540,6 +562,7 @@ impl PlayerActor {
                         self.queue.push(t);
                         self.order.insert(first_new + k, queue_idx);
                     }
+                    self.commit_order();
                     self.bump_queue_version();
                     // 与 Append 同一条空队列自动起播分支（写法照抄，语义对齐）：
                     // PlayNext 的"下一首"只是插入位置依赖当前曲，没有当前曲时
@@ -547,12 +570,12 @@ impl PlayerActor {
                     // "下一首播放"却毫无反应，曲目静躺在队列里，和空队列 Append
                     // 的行为也不一致。
                     if self.status == PlaybackStatus::Idle && !self.order.is_empty() {
-                        self.cursor = self.order.iter().position(|&i| i == first_new).unwrap_or(0);
+                        self.cursor = first_new;
                         self.instruct_load(true, 0);
                     }
                 }
                 QueueOp::Remove { indices } => {
-                    let was_playing = self.status == PlaybackStatus::Playing;
+                    let was_playing = self.wants_playback();
                     // indices 是**播放顺序里的位置**（UI 拿到的是 queue_snapshot().ids 的下标）。当成 queue 下标用的话：洗牌时删错歌，且
                     // rebuild_order(None) 会把整队重洗 —— 删一首就打乱全部顺序。
                     let mut positions: Vec<usize> = indices
@@ -576,6 +599,7 @@ impl PlayerActor {
                         positions.iter().map(|&p| self.order[p]).collect();
                     queue_idx.sort_unstable();
                     queue_idx.dedup();
+                    self.history.remove_indices(&queue_idx);
                     for &qi in queue_idx.iter().rev() {
                         if qi < self.queue.len() {
                             self.queue.remove(qi);
@@ -625,6 +649,7 @@ impl PlayerActor {
                             self.cursor = pos;
                         }
                     }
+                    self.commit_order();
                     self.bump_queue_version();
                 }
             },
@@ -1129,6 +1154,162 @@ mod tests {
         assert_eq!(snap2.ids[0], "t0", "关闭 shuffle 恢复原序");
         // 当前曲目还是 t3
         assert_eq!(p.state().current.unwrap().id, "t3");
+    }
+
+    #[test]
+    fn append_preserves_edits_and_hydrated_order() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![track("a"), track("b"), track("c")],
+            start: 1,
+        }));
+        p.reduce(PlayerCommand::Queue(QueueOp::Move { from: 2, to: 1 }));
+        p.reduce(PlayerCommand::Queue(QueueOp::PlayNext {
+            tracks: vec![track("x")],
+        }));
+        p.reduce(PlayerCommand::Queue(QueueOp::Append {
+            tracks: vec![track("d")],
+        }));
+        let expected = vec!["a", "c", "b", "x", "d"];
+        assert_eq!(p.queue_snapshot().ids, expected);
+        assert_eq!(p.state().current.unwrap().id, "b");
+
+        let saved = p.state();
+        let mut restored = PlayerActor::new();
+        restored.hydrate(
+            p.queue_refs(),
+            saved.repeat,
+            saved.shuffle,
+            saved.volume,
+            saved.muted,
+            saved.rate,
+            saved.position_ms,
+            saved.current.as_ref().map(|t| t.id.as_str()),
+        );
+        assert_eq!(restored.queue_snapshot().ids, expected);
+        assert_eq!(restored.state().current.unwrap().id, "b");
+    }
+
+    #[test]
+    fn switching_during_loading_preserves_playback_intent() {
+        for pauses in 0..=2 {
+            for command in [
+                PlayerCommand::Next,
+                PlayerCommand::Prev,
+                PlayerCommand::Queue(QueueOp::Remove { indices: vec![1] }),
+            ] {
+                let mut p = PlayerActor::new();
+                p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+                    tracks: vec![track("a"), track("b"), track("c")],
+                    start: 0,
+                }));
+                let first_token = p.state().token;
+                p.take_pending_load();
+                p.reduce(PlayerCommand::Next);
+                p.take_pending_load();
+                for _ in 0..pauses {
+                    p.reduce(PlayerCommand::TogglePause);
+                }
+                p.reduce(command.clone());
+                let (token, _, _, autoplay) = p.take_pending_load().unwrap();
+                assert_eq!(autoplay, pauses != 1, "{command:?}, pauses={pauses}");
+                p.reduce(PlayerCommand::Loaded {
+                    token: first_token,
+                    duration_ms: 1,
+                });
+                p.reduce(PlayerCommand::Loaded {
+                    token,
+                    duration_ms: 10_000,
+                });
+                assert_eq!(
+                    p.state().status,
+                    if autoplay {
+                        PlaybackStatus::Playing
+                    } else {
+                        PlaybackStatus::Paused
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn switching_while_paused_keeps_pause() {
+        let mut p = PlayerActor::new();
+        p.hydrate(
+            vec![track("a"), track("b"), track("c")],
+            RepeatMode::Off,
+            false,
+            0.5,
+            false,
+            1.0,
+            0,
+            Some("a"),
+        );
+        p.take_pending_load();
+        for command in [
+            PlayerCommand::Next,
+            PlayerCommand::Prev,
+            PlayerCommand::Queue(QueueOp::Remove { indices: vec![0] }),
+        ] {
+            p.reduce(command);
+            let (token, _, _, autoplay) = p.take_pending_load().unwrap();
+            assert!(!autoplay);
+            p.reduce(PlayerCommand::Loaded {
+                token,
+                duration_ms: 10_000,
+            });
+            assert_eq!(p.state().status, PlaybackStatus::Paused);
+        }
+    }
+
+    #[test]
+    fn shuffle_history_survives_queue_deletions() {
+        for (steps, removed, expected) in [
+            (2, vec![0], "b"),
+            (2, vec![1], "a"),
+            (3, vec![0], "c"),
+            (3, vec![0, 1], "c"),
+            (3, vec![1], "c"),
+        ] {
+            let mut p = PlayerActor::new();
+            p.reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+                tracks: vec![track("a"), track("b"), track("c"), track("d")],
+                start: 0,
+            }));
+            p.reduce(PlayerCommand::ToggleShuffle);
+            for (to, id) in ["a", "b", "c", "d"].iter().enumerate() {
+                let from = p.queue_snapshot().ids.iter().position(|s| s == id).unwrap();
+                p.reduce(PlayerCommand::Queue(QueueOp::Move { from, to }));
+            }
+            for _ in 0..steps {
+                p.reduce(PlayerCommand::Next);
+            }
+            p.reduce(PlayerCommand::Queue(QueueOp::Remove {
+                indices: removed.clone(),
+            }));
+            p.reduce(PlayerCommand::Prev);
+            assert_eq!(
+                p.state().current.unwrap().id,
+                expected,
+                "removed={removed:?}"
+            );
+            if steps == 3 && removed == vec![0] {
+                p.reduce(PlayerCommand::Prev);
+                assert_eq!(p.state().current.unwrap().id, "b");
+            }
+        }
+    }
+
+    #[test]
+    fn empty_insertions_do_not_change_shuffled_queue() {
+        let mut p = PlayerActor::new();
+        p.reduce(PlayerCommand::ToggleShuffle);
+        p.take_queue_changed();
+        p.reduce(PlayerCommand::Queue(QueueOp::Append { tracks: vec![] }));
+        p.reduce(PlayerCommand::Queue(QueueOp::PlayNext { tracks: vec![] }));
+        assert!(p.queue_snapshot().ids.is_empty());
+        assert!(!p.take_queue_changed());
     }
 
     #[test]

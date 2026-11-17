@@ -5,7 +5,12 @@
 
 ## 条目（新→旧）
 
+- 2026-11-18 · aiya-server/station.rs · 切歌跳过当前输出源；引擎就绪后登记已应用指纹，启动失败统一清理，InProcess 停止等待守护任务退出且可中断退避 · docs/74、75 整批静态审查与真实 Liquidsoap 对照。
+
+- 2026-11-18 · aiya-dto/station.rs、aiya-server/program.rs · 推流来源增加内置全曲库 __library__，不创建数据库歌单；优先级归队列项，终点支持 24:00，同一来源多个时段合并为单一选源条件 · docs/75 第四阶段更新来源与时间契约，无旧配置兼容。
+
 <!-- 每条一行：- YYYY-MM-DD · 代码位置 · 事实/取舍 · 来龙去脉（可选） -->
+- 2026-11-17 · pump.rs / lib.rs、crates/aiya-server/src/state.rs · 全量队列保存由结构变更或装载/停止触发，位置回报仍只保存状态；server 在同一播放器锁内获取状态与条目快照 · 追加、插队、删除非当前曲目和重排不产生引擎指令，原门控遗漏了这些编辑。
 - 2026-11-12 · crates/aiya-host-core/src/beets.rs（busy_status / busy_status_stays_found）· 会话槽被占 ≠ 未安装：probe 对 Busy 回 found:true + E_BEETS_BUSY 的忙态壳，不复用 absent 壳 · probe 曾把 Busy 统一翻成 E_BEETS_UNREACHABLE（found=false），整理会话期间整理库页自行跳"未安装"安装页，组件看起来凭空消失——真相只是用户刚点的预览/整理还在跑
 - 2026-11-12 · src-tauri/tests/ipc_contract.rs SERVER_ONLY · station_* 豁免必须两侧对称（web SERVER_ONLY 与桌面壳同表同步维护）· 2026-11-11 收尾发现 2451486 起 main 此测试一直红——"豁免清空"只清了 web 侧、桌面侧对称豁免漏配，补齐后绿；规则已回写注释，事件链归档
 - 2026-11-12 · src-tauri/src/lib.rs app_diagnostics · 诊断快照只装有消费方的字段（压平原则）· v1 曾塞 20 个字段大半无页面读（统计与 LibraryStats 重复、流计数恒 0、audioMode 真实出口是 audio:mode 事件），每次拉取白跑 COUNT；media_keys 随 SMTC 常开退役，本批清理其注释残留

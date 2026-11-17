@@ -5,9 +5,7 @@
   /**
    * 卡片：首页歌单与曲库入口的方块，尺寸与悬停反馈由此统一。
    *
-   * 恒渲染为 `<button>`：卡片在本应用中只作为可点击入口存在，不承载交互子元素
-   * （HTML 不允许 button 嵌套 button）。需要按钮的卡片应使用 `StatBlock` 加外层
-   * 容器组合。
+   * 入口卡片渲染为 button；带独立操作的卡片渲染为 div，避免嵌套交互元素。
    *
    * `cover` 三态与 `Header` 一致：缺省为无封面位（纯图标）、`null` 为占位符、
    * 字符串为图片 URL。
@@ -22,12 +20,15 @@
     icon?: Snippet;
     onclick?: () => void;
     titleAttr?: string;
+    actions?: Snippet;
+    metadata?: Snippet;
+    children?: Snippet;
   }
 
-  let { title, subtitle, cover, icon, onclick, titleAttr }: Props = $props();
+  let { title, subtitle, cover, icon, onclick, titleAttr, actions, metadata, children }: Props = $props();
 </script>
 
-<button type="button" class="k-card" title={titleAttr ?? title} {onclick}>
+{#snippet content()}
   {#if cover !== undefined}
     <Cover src={cover} size="md" />
   {:else if icon}
@@ -35,9 +36,26 @@
   {/if}
   <span class="k-card-text">
     <span class="k-card-title">{title}</span>
-    {#if subtitle}<span class="k-card-sub">{subtitle}</span>{/if}
+    {#if metadata}<span class="k-card-sub">{@render metadata()}</span>
+    {:else if subtitle}<span class="k-card-sub">{subtitle}</span>{/if}
   </span>
-</button>
+{/snippet}
+
+{#if children}
+  <div class="k-card with-body">
+    <div class="k-card-head">{@render content()}{#if actions}<div class="k-card-actions">{@render actions()}</div>{/if}</div>
+    <div class="k-card-body">{@render children()}</div>
+  </div>
+{:else if actions}
+  <div class="k-card with-actions">
+    {@render content()}
+    <div class="k-card-actions">{@render actions()}</div>
+  </div>
+{:else}
+  <button type="button" class="k-card" title={titleAttr ?? title} {onclick}>
+    {@render content()}
+  </button>
+{/if}
 
 <style>
   .k-card {
@@ -58,12 +76,12 @@
       transform var(--dur-fast) var(--ease);
   }
 
-  .k-card:hover {
+  button.k-card:hover {
     background: var(--surface-hover);
     border-color: var(--line-strong);
   }
 
-  .k-card:active {
+  button.k-card:active {
     transform: scale(0.995);
   }
 
@@ -77,6 +95,9 @@
     background: var(--surface-cover);
     color: var(--accent-text);
   }
+
+  .k-card-actions {display:flex;align-items:center;gap:var(--space-2);flex:none;}
+  .with-body {display:block;padding:var(--space-5);}.k-card-head {display:flex;align-items:center;gap:var(--space-3);}.k-card-body {border-top:1px solid var(--line);margin-top:var(--space-3);padding-top:var(--space-4);}
 
   .k-card-text {
     display: flex;

@@ -8,7 +8,7 @@
 --   * 0005 → idx_artists_name_norm / idx_albums_title_norm
 --   * 0006/0007 → 一次性数据回填/清理，新库无数据，不吸收
 --   * 0008/0009 → track_enrichment 建后即弃的净零对，不吸收
---   * 0012 → stations / station_playlists / station_schedules / station_history
+--   * 0012 → stations
 --     （自动 DJ 推流频道；桌面与 server 共库不分叉）
 --   * 0010 → queue_items 重建形（kind/track_id 可空 + payload + CHECK）
 --   * 0011 → idx_albums_artwork / idx_artists_artwork
@@ -211,41 +211,3 @@ CREATE TABLE stations (
   updated_at INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX idx_stations_hls_dir ON stations(hls_dir);
-
--- 频道歌单：manual（UI 挑歌集合）| random_all（全库随机 + history 防重复）；
--- rule_json 预留规则引擎（genre/权重），MVP 不消费
-CREATE TABLE station_playlists (
-  id             TEXT PRIMARY KEY,
-  station_id     TEXT NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
-  name           TEXT NOT NULL,
-  kind           TEXT NOT NULL DEFAULT 'manual',
-  track_ids_json TEXT,
-  rule_json      TEXT,
-  created_at     INTEGER NOT NULL,
-  updated_at     INTEGER NOT NULL
-);
-CREATE INDEX idx_station_playlists_station ON station_playlists(station_id);
-
--- 节目表：时段 → 歌单绑定。end_hm <= start_hm 表跨零点（渲染时 or 拼接展开）；
--- days_mask bit0=周一 … bit6=周日；重叠时段 priority 高者赢（渲染 switch 展开）
-CREATE TABLE station_schedules (
-  id          TEXT PRIMARY KEY,
-  station_id  TEXT NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
-  playlist_id TEXT NOT NULL REFERENCES station_playlists(id) ON DELETE CASCADE,
-  start_hm    TEXT NOT NULL,
-  end_hm      TEXT NOT NULL,
-  days_mask   INTEGER NOT NULL,
-  priority    INTEGER NOT NULL DEFAULT 0,
-  created_at  INTEGER NOT NULL
-);
-CREATE INDEX idx_station_schedules_station ON station_schedules(station_id);
-
--- 频道播放记账：独立成表不进曲库 tracks.last_played（污染用户手动播放统计）；
--- 防重复窗口按 (station_id, played_at) 查
-CREATE TABLE station_history (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  station_id TEXT NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
-  track_id   TEXT NOT NULL,
-  played_at  INTEGER NOT NULL
-);
-CREATE INDEX idx_station_history_station ON station_history(station_id, played_at);

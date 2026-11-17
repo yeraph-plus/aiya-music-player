@@ -8,6 +8,7 @@ mod events;
 mod host;
 mod ipc;
 mod media;
+mod program;
 mod scan;
 mod state;
 mod station;
@@ -64,7 +65,7 @@ async fn main() {
         scan: scan::ScanCtl::new(),
         station: station::StationCtl::new(),
         beets_install: std::sync::Arc::new(aiya_host_core::InstallRegistry::new()),
-        last_played: Mutex::new((String::new(), 0)),
+        last_played: Mutex::new((0, String::new(), 0)),
         last_persist_ms: std::sync::atomic::AtomicU64::new(0),
         db: Mutex::new(db),
         db_path: db_path.clone(),
@@ -133,6 +134,7 @@ async fn main() {
         // `/hls/{*tail}`（nest_service 的内部形态）在顶层共存会路由冲突 panic
         let hls_router = Router::new()
             .route("/{dir}/ws", get(crate::station::StationCtl::ws_endpoint))
+            .route("/{dir}/{file}", get(media::hls_file))
             .fallback_service(ServeDir::new(dir));
         app = app.nest("/hls", hls_router);
     }

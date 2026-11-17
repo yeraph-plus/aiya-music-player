@@ -41,8 +41,8 @@ pub struct ServerState {
     pub station: crate::station::StationCtl,
     /// beets 安装登记表（host-core）：子进程回收槽 + 占位互斥
     pub beets_install: std::sync::Arc<aiya_host_core::InstallRegistry>,
-    /// 最近一次位置回报（记账秒数的估算源）：(track_id, ms)
-    pub last_played: Mutex<(String, u64)>,
+    /// 最近一次位置回报（记账秒数的估算源）：(token, track_id, ms)
+    pub last_played: Mutex<(u64, String, u64)>,
     /// 队列状态行上次落库时间（毫秒；位置回报 5s 节流）
     pub last_persist_ms: std::sync::atomic::AtomicU64,
     pub db: Mutex<DbHandle>,
@@ -147,22 +147,23 @@ pub fn drive(st: &ServerState) -> aiya_player::PlayerState {
     if actor.take_pending_stop() {
         acted = true;
     }
-    let persist =
-        acted.then(|| queue_persist_from_actor(&actor, setting_flag(st, "rememberPosition", true)));
+    let queue_changed = actor.take_queue_changed();
+    let persist = (acted || queue_changed).then(|| {
+        (
+            queue_persist_from_actor(&actor, setting_flag(st, "rememberPosition", true)),
+            actor
+                .queue_refs()
+                .iter()
+                .map(queue_item_from_ref)
+                .collect::<Vec<_>>(),
+        )
+    });
     let snapshot = actor.state();
     drop(actor);
-    if let Some(p) = persist {
-        persist_queue_full(st, p, &queue_items_of(st));
+    if let Some((p, items)) = persist {
+        persist_queue_full(st, p, &items);
     }
     snapshot
-}
-
-fn queue_items_of(st: &ServerState) -> Vec<aiya_data::QueueItem> {
-    player_lock(st)
-        .queue_refs()
-        .iter()
-        .map(queue_item_from_ref)
-        .collect()
 }
 
 pub fn queue_persist_from_actor(
@@ -399,12 +400,12 @@ pub fn read_paused_roots(conn: &rusqlite::Connection) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub fn root_prefix_lower(path: &str) -> String {
-    let s = path.trim().to_lowercase();
-    if s.ends_with('\\') || s.ends_with('/') || s.is_empty() {
+pub fn root_prefix(path: &str) -> String {
+    let s = aiya_data::repo::path_key(path.trim());
+    if s.ends_with(std::path::MAIN_SEPARATOR) || s.is_empty() {
         s
     } else {
-        format!("{s}\\")
+        format!("{s}{}", std::path::MAIN_SEPARATOR)
     }
 }
 
@@ -612,6 +613,7 @@ pub fn restore_queue(st: &ServerState) {
         current_id.as_deref(),
     );
     let _ = actor.take_pending_load();
+    let _ = actor.take_queue_changed();
     let snapshot = actor.state();
     drop(actor);
     tracing::info!(
@@ -619,4 +621,68 @@ pub fn restore_queue(st: &ServerState) {
         position = snapshot.position_ms,
         "player state restored"
     );
+}
+
+#[cfg(test)]
+pub(crate) fn test_state(path: &Path) -> std::sync::Arc<ServerState> {
+    std::sync::Arc::new(ServerState {
+        auth: crate::auth::AuthGate::new(None, None),
+        events: crate::events::EventBus::new(),
+        scan: crate::scan::ScanCtl::new(),
+        station: crate::station::StationCtl::new(),
+        beets_install: std::sync::Arc::new(aiya_host_core::InstallRegistry::new()),
+        last_played: Mutex::new((0, String::new(), 0)),
+        last_persist_ms: std::sync::atomic::AtomicU64::new(0),
+        db: Mutex::new(aiya_data::open(path).unwrap()),
+        db_path: path.to_path_buf(),
+        artwork_dir: path.parent().unwrap_or(Path::new("")).join("artwork"),
+        beets_index_dir: PathBuf::new(),
+        player: Mutex::new(PlayerActor::new()),
+        settings: Mutex::new(serde_json::json!({})),
+        enrich_store: std::sync::OnceLock::new(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aiya_player::{PlayerCommand, QueueOp, TrackRef};
+
+    #[test]
+    fn drive_persists_queue_edits_before_restore() {
+        let st = test_state(Path::new(":memory:"));
+        let track = |name: &str| TrackRef::transient_file(&format!("D:/music/{name}.flac"), name);
+        player_lock(&st).reduce(PlayerCommand::Queue(QueueOp::ReplaceAll {
+            tracks: vec![track("a"), track("b"), track("c")],
+            start: 0,
+        }));
+        drive(&st);
+        for (op, expected) in [
+            (
+                QueueOp::Append {
+                    tracks: vec![track("d")],
+                },
+                vec!["a", "b", "c", "d"],
+            ),
+            (
+                QueueOp::PlayNext {
+                    tracks: vec![track("x")],
+                },
+                vec!["a", "x", "b", "c", "d"],
+            ),
+            (
+                QueueOp::Remove { indices: vec![2] },
+                vec!["a", "x", "c", "d"],
+            ),
+            (QueueOp::Move { from: 3, to: 0 }, vec!["d", "a", "x", "c"]),
+        ] {
+            player_lock(&st).reduce(PlayerCommand::Queue(op));
+            drive(&st);
+            restore_queue(&st);
+            let actor = player_lock(&st);
+            let titles: Vec<_> = actor.queue_refs().into_iter().map(|r| r.title).collect();
+            assert_eq!(titles, expected);
+            assert_eq!(actor.state().current.unwrap().title, "a");
+        }
+    }
 }

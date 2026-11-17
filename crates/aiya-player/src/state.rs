@@ -351,6 +351,18 @@ impl PlayHistory {
         self.stack.clear();
     }
 
+    /// 删除历史中的指定原序下标，并按剩余队列重映射。参数升序且无重复。
+    pub(crate) fn remove_indices(&mut self, removed: &[usize]) {
+        self.stack
+            .retain_mut(|index| match removed.binary_search(index) {
+                Ok(_) => false,
+                Err(shift) => {
+                    *index -= shift;
+                    true
+                }
+            });
+    }
+
     /// 当前栈深（仅测试断言用）。
     #[cfg(test)]
     pub fn len(&self) -> usize {

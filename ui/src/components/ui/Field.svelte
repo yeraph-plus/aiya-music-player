@@ -20,7 +20,11 @@
     disabled?: boolean;
     /** 等宽字体：路径、快捷键、数字 */
     mono?: boolean;
-    type?: 'text' | 'search' | 'number' | 'date';
+    type?: 'text' | 'search' | 'number' | 'date' | 'time' | 'url';
+    required?: boolean;
+    min?: number;
+    max?: number;
+    step?: number;
     oninput?: (value: string) => void;
     /** 回车提交（搜索框、重命名对话框） */
     onenter?: () => void;
@@ -29,6 +33,10 @@
     hideLabel?: boolean;
     /** 最大字符数（歌单名 80、搜索词 200 这类由业务决定，零件只负责转达） */
     maxlength?: number;
+    inputmode?: 'text' | 'numeric' | 'decimal';
+    pattern?: string;
+    /** 输入过滤同时更新 DOM 与受控值，拒绝的字符不会滞留在输入框。 */
+    inputFilter?: (value: string) => string;
     /** 输入框元素，用于 `autofocus` / `select()`（对话框拿到后自己决定要不要选中全文） */
     ref?: HTMLInputElement | null;
   }
@@ -48,6 +56,13 @@
     id,
     hideLabel = false,
     maxlength,
+    inputmode,
+    pattern,
+    inputFilter,
+    required = false,
+    min,
+    max,
+    step,
     ref = $bindable(null),
   }: Props = $props();
 
@@ -64,13 +79,29 @@
       {type}
       {placeholder}
       {maxlength}
+      {inputmode}
+      {pattern}
+      {required}
+      {min}
+      {max}
+      {step}
       {disabled}
       value={value}
       class="k-field-input"
       class:mono
       aria-invalid={error ? 'true' : undefined}
       aria-describedby={error || hint ? descId : undefined}
-      oninput={(event) => oninput?.(event.currentTarget.value)}
+      oninput={(event) => {
+        const input = event.currentTarget;
+        const next = inputFilter ? inputFilter(input.value) : input.value;
+        if (next !== input.value) {
+          const caret = input.selectionStart;
+          const position = caret === null ? null : inputFilter!(input.value.slice(0, caret)).length;
+          input.value = next;
+          if (position !== null) input.setSelectionRange(position, position);
+        }
+        oninput?.(next);
+      }}
       onkeydown={(event) => {
         if (event.key === 'Enter') onenter?.();
       }}

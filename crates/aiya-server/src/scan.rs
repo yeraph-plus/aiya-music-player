@@ -12,6 +12,40 @@ use crate::state::{db_lock, read_paused_roots, read_roots, ServerState};
 
 pub const DEFAULT_INTERVAL_SECS: u64 = 30;
 
+pub fn root_key(path: &str) -> std::path::PathBuf {
+    #[cfg(windows)]
+    let path = path.replace('/', "\\").to_lowercase();
+    std::path::PathBuf::from(path)
+}
+
+fn active_roots(roots: Vec<String>, paused: Vec<String>) -> Vec<std::path::PathBuf> {
+    let paused: Vec<_> = paused.iter().map(|p| root_key(p)).collect();
+    roots
+        .into_iter()
+        .filter(|r| !paused.iter().any(|p| root_key(r).starts_with(p)))
+        .map(std::path::PathBuf::from)
+        .collect()
+}
+
+fn scan_roots(
+    st: &ServerState,
+    roots: &[std::path::PathBuf],
+) -> aiya_data::DbResult<aiya_data::scanner::ScanResult> {
+    let mut conn = aiya_data::open_conn(&st.db_path)?;
+    aiya_data::scanner::scan_roots_ext(
+        &mut conn,
+        roots,
+        Some(&st.artwork_dir),
+        || st.scan.cancel.load(Ordering::SeqCst),
+        |p| {
+            st.events.emit(
+                "scan:progress",
+                &serde_json::to_value(p).unwrap_or_default(),
+            )
+        },
+    )
+}
+
 pub struct ScanCtl {
     pub scanning: AtomicBool,
     pub cancel: AtomicBool,
@@ -99,21 +133,11 @@ pub fn spawn_timer(st: Arc<ServerState>) {
 
 fn run_scan(st: &Arc<ServerState>, trigger: &str) {
     let started = Instant::now();
-    let artwork_dir = st.artwork_dir.clone();
     let roots: Vec<std::path::PathBuf> = match db_lock(st)
-        .send(move |conn| Ok((read_roots(conn), read_paused_roots(conn), artwork_dir)))
+        .send(move |conn| Ok((read_roots(conn), read_paused_roots(conn))))
         .map_err(|e| e.to_string())
     {
-        Ok((roots, paused, _art)) => roots
-            .into_iter()
-            .map(std::path::PathBuf::from)
-            .filter(|p| {
-                let s = p.to_string_lossy();
-                !paused
-                    .iter()
-                    .any(|p| s.to_lowercase().starts_with(&p.to_lowercase()))
-            })
-            .collect(),
+        Ok((roots, paused)) => active_roots(roots, paused),
         Err(e) => {
             finish(st, trigger, RefreshSnapshot::skipped(trigger, 0, Some(e)));
             return;
@@ -124,24 +148,7 @@ fn run_scan(st: &Arc<ServerState>, trigger: &str) {
         return;
     }
 
-    let art = st.artwork_dir.clone();
-    let events = st.events.clone();
-    let st2 = Arc::clone(st);
-    let result = db_lock(st).send(move |conn| {
-        aiya_data::scanner::scan_roots_ext(
-            conn,
-            &roots,
-            Some(&art),
-            || st2.scan.cancel.load(Ordering::SeqCst),
-            |p| {
-                // 进度事件：扫描器回调粒度较粗，无需额外节流
-                events.emit(
-                    "scan:progress",
-                    &serde_json::to_value(p).unwrap_or_default(),
-                );
-            },
-        )
-    });
+    let result = scan_roots(st, &roots);
     let elapsed = started.elapsed().as_millis() as u64;
     match result {
         Ok(r) => {
@@ -215,16 +222,7 @@ pub fn run_scan_inline(
         .send(|conn| Ok((read_roots(conn), read_paused_roots(conn))))
         .map_err(|e| e.to_string())
     {
-        Ok((roots, paused)) => roots
-            .into_iter()
-            .map(std::path::PathBuf::from)
-            .filter(|p| {
-                let s = p.to_string_lossy();
-                !paused
-                    .iter()
-                    .any(|p| s.to_lowercase().starts_with(&p.to_lowercase()))
-            })
-            .collect(),
+        Ok((roots, paused)) => active_roots(roots, paused),
         Err(e) => {
             return Err(e);
         }
@@ -232,22 +230,55 @@ pub fn run_scan_inline(
     if roots.is_empty() {
         return Err("no scan folders configured".to_string());
     }
-    let art = st.artwork_dir.clone();
-    let events = st.events.clone();
-    let st2 = Arc::clone(st);
-    let result = db_lock(st).send(move |conn| {
-        aiya_data::scanner::scan_roots_ext(
-            conn,
-            &roots,
-            Some(&art),
-            || st2.scan.cancel.load(Ordering::SeqCst),
-            |p| {
-                events.emit(
-                    "scan:progress",
-                    &serde_json::to_value(p).unwrap_or_default(),
-                )
-            },
-        )
-    });
+    let result = scan_roots(st, &roots);
     result.map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paused_roots_compare_path_components() {
+        let result = active_roots(
+            vec![
+                "/music/A".into(),
+                "/music/A/disc".into(),
+                "/music/Albums".into(),
+            ],
+            vec!["/music/A".into()],
+        );
+        assert_eq!(result, vec![std::path::PathBuf::from("/music/Albums")]);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_roots_keep_case_and_backslashes() {
+        let result = active_roots(
+            vec![
+                "/music/a".into(),
+                "/music/A".into(),
+                "/music/A\\disc".into(),
+            ],
+            vec!["/music/A".into()],
+        );
+        assert_eq!(
+            result,
+            vec![
+                std::path::PathBuf::from("/music/a"),
+                std::path::PathBuf::from("/music/A\\disc")
+            ]
+        );
+    }
+
+    #[test]
+    fn scan_uses_its_own_connection_without_waiting_on_the_db_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        let music = dir.path().join("music");
+        std::fs::create_dir(&music).unwrap();
+        let st = crate::state::test_state(&dir.path().join("library.sqlite"));
+        let _locked = db_lock(&st);
+        let result = scan_roots(&st, &[music]).unwrap();
+        assert_eq!(result.scanned, 0);
+    }
 }

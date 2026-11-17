@@ -44,6 +44,8 @@ services:
 
   liquidsoap:
     image: savonet/liquidsoap:v2.4.6
+    environment:
+      - TZ=Asia/Shanghai
     # 官方 release tag 镜像可能随重建变动——生产建议 digest 钉扎：
     # image: savonet/liquidsoap:v2.4.6@sha256:<digest>
     # 镜像源实测（docs/68 §13.3）：1ms 对该镜像挂起、daocloud 白名单不含
@@ -59,7 +61,7 @@ services:
       # aiya-server 侧一致——两处挂载点改要一起改）
       - /path/to/music:/music:ro
       - ./docker/liq-keeper.sh:/keeper.sh:ro
-    command: ["sh", "/keeper.sh"]
+    entrypoint: ["sh", "/keeper.sh"]
     restart: unless-stopped
 
 volumes:

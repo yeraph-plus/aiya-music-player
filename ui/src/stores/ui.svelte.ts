@@ -14,17 +14,18 @@ import {
   type View,
 } from '../lib/view';
 import { readLook } from '../lib/look';
+import { backendCaps } from '../lib/backend-caps';
 import { t } from '../lib/i18n.svelte';
 import { notify } from './notify.svelte';
 
 /**
- * 一级路由：**12 个值**，每个值对应 `App.svelte` 的渲染分支（
+ * 一级路由：每个值对应 `App.svelte` 的渲染分支（
  * `albums` / `artists` 共用一个宫格分支）。
  *
  * 列表页为 `library` / `playlist` / `album` / `artist` / `search`，共用
  * `ListStore` 的查询与虚拟列表（见 `isListPage`）；`albums` / `artists` 是宫格
  * 浏览页，`album` / `artist` 是详情页，`nowPlaying` / `settings` / `beets` /
- * `live` 各自独立成页。
+ * `live` / `broadcast` 各自独立成页。
  *
  * `playlist` 的参数是 `playlistId`；`album` / `artist` 的参数复用
  * `albumId` / `artistId` 两个筛选字段，不设独立 `facetId`：详情页的曲目列表
@@ -47,7 +48,8 @@ export type AppPage =
   | 'nowPlaying'
   | 'settings'
   | 'beets'
-  | 'live';
+  | 'live'
+  | 'broadcast';
 
 /**
  * 设置页的分组 id。
@@ -154,7 +156,7 @@ class UiStore {
    * 维护后，三者天然一致，getter 保持纯读。
    */
   private setRoute(page: AppPage, playlistId: string | null): void {
-    this.page = page;
+    this.page = page === 'broadcast' && !backendCaps().streaming ? 'live' : page;
     this.playlistId = playlistId;
     this.playlistView = playlistId === null ? null : { kind: 'playlist', id: playlistId };
   }

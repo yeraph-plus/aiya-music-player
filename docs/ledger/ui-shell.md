@@ -5,7 +5,17 @@
 
 ## 条目（新→旧）
 
+- 2026-11-18 · 推流七阶段迭代统一收尾；清除旧控件的 62 个无调用文案键和 UI 状态包装兼容读取，现行形态与审查结果集中在 docs/75。
+
+- 2026-11-18 · StationPanel / ProgramEditor / WeekTimePicker · 草稿校验提示按队列项归入卡片，时段移除改 X；保存/取消及应用更新移入顶部操作行右侧，页底不再保留操作栏 · 用户实地反馈收敛，验收见 docs/75 第七阶段。
+
+- 2026-11-18 · StationPanel / ProgramEditor / WeekTimePicker · 推流标题常驻，下方切换频道列表与组件工作台；队列整卡使用统一优先级和指定时段开关，周格松手直接追加草稿时段，字段同步且最终一次保存 · docs/75 第四阶段承接实地反馈，去掉中间确认与全部安排按钮。
+
+- 2026-11-17 · StationPanel / ProgramEditor / WeekTimePicker · 推流主页恢复统一 Header，频道配置进入内页；歌单封面卡片加号进入下层节目列表，周格与点击时间字段同步并使用指针捕获处理格间拖动 · 用户实地反馈取代上下抽屉与穿梭框方案，详见 docs/75 第三阶段。
+
 <!-- 每条一行：- YYYY-MM-DD · 代码位置 · 事实/取舍 · 来龙去脉（可选） -->
+- 2026-11-17 · StationPanel / ProgramEditor / WeekTimePicker / nav.svelte.ts · 推流采用全宽频道行与上下展开抽屉，系统歌单穿梭框配置独立播出队列，紧凑周格提供框选、分钟编辑与概览，草稿在导航前统一处理 · 第二阶段实现与引擎实测见 docs/75。
+- 2026-11-17 · BroadcastView / LiveView / Sidebar / ui.svelte.ts · Web 推流管理独立为 broadcast 页面，侧栏位于设置上方；直播页仅收听，桌面恢复 broadcast 时回到 live，服务卡在进入收听页时同步增删改 · 方案与验证见 docs/75。
 - 2026-11-04 · stores/notify.svelte.ts、components/AppShell.svelte、stores/overlay.svelte.ts 及各 store/view 失败路径 · 运行时报错三档通道：后端/数据错误→界面错误条、不阻断运行的播放报错→播放条吐司、须用户介入的（设备丢失/未知故障）→overlay 弹窗 · 判据是"是否需要用户介入才能继续"；吐司档曲名不进文案（播放条正显示着它）。
 - 2026-11-04 · stores/beets-session.svelte.ts · beets:import 事件订阅必须懒触发（首次发命令时）· 模块在静态 import 链上、求值早于 main.ts 装 mock transport：构造期订阅在浏览器预览下落到 Tauri 通道被吞、此后再无订阅者（表现为会话停在"匹配中"）。
 
