@@ -1,9 +1,9 @@
 # Rust 依赖清单（自动生成，勿手改）
 
-生成时间：2026-11-17　条目数：588
+生成时间：2026-11-19　条目数：588
 生成命令：`node tools/gen-notices.mjs`
 
-本仓库自有的 10 个 crate（aiya-audio-host@0.3.0、aiya-audio@0.3.0、aiya-beets-client@0.3.0、aiya-beets-store@0.3.0、aiya-data@0.3.0、aiya-dto@0.3.0、aiya-host-core@0.3.0、aiya-player@0.3.0、aiya-server@0.3.0、aiya@0.3.0）以 GPL-3.0-or-later 发布，
+本仓库自有的 10 个 crate（aiya-audio-host@0.4.0、aiya-audio@0.4.0、aiya-beets-client@0.4.0、aiya-beets-store@0.4.0、aiya-data@0.4.0、aiya-dto@0.4.0、aiya-host-core@0.4.0、aiya-player@0.4.0、aiya-server@0.4.0、aiya@0.4.0）以 GPL-3.0-or-later 发布，
 不在此表内。下表为 crates.io 上的第三方依赖，均已静态链接进 `aiya-music.exe`
 或 `aiya-audio-host.exe`。
 
