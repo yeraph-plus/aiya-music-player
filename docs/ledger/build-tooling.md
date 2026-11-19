@@ -5,6 +5,7 @@
 
 ## 条目（新→旧）
 
+- 2026-11-19 · ui/e2e/http/http.spec.ts 双击播放用例 + ci.yml 失败留存 · CI 连两红（run 44429155960/44434247482）同为「本地有 GPU 恒绿、线上必炸」的档位写死：http e2e 新增的探针与 canvas 断言把档 2 行为写死——runner 无 GPU 软件光栅落档 1，按 capability.ts 设计档 1 不申请频谱 tap（探针恒 0）且背景走 CSS 静态渐变不挂 canvas（B2 删 Canvas 2D 副本后的 `{#if glActive}`），与 11-12 smoke.spec 先例同根；修法同拍板——测试先在页面里探一次硬件能力（webgl2 + failIfMajorPerformanceCaveat）再按档位钉契约，GPU 能力不进断言。顺带修 ci.yml 失败留存位：原 path 指向 playwright-report/ 恒不存在（本批 http config 输出 test-results/http-regression），两次线上红都零现场可查——改为 ui/test-results/ + ignore｜本地验证：--disable-gpu 强制档 1 与默认档 2 双分支过 + http 全量 9/9 + foreground/background 18 绿
 - 2026-11-18 · Playwright configs / contrast e2e · 标准 Edge、HTTP、Firefox 使用独立输出目录，避免根输出清理专项证据；对比度基于合成截图、可见文本布局框和祖先透明度 · docs/77 C。
 
 - 2026-11-18 · keeper 清理死亡 .pid 与停播失败位；回归同时断言崩溃上限、运行位消失及稳定恢复 · docs/74、75 整批审查。

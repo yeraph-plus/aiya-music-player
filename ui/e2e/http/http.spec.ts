@@ -88,8 +88,20 @@ test('双击播放：浏览器引擎装载并真实出声', async ({ page }) => 
     await page.waitForTimeout(400);
   }
   expect(last, JSON.stringify(last)).toMatchObject({ playing: true });
-  await expect.poll(() => page.locator('html').getAttribute('data-spectrum-probe').then(value => Number(value))).toBeGreaterThan(0);
-  await expect(page.locator('.ambient-bg canvas')).toHaveCount(1);
+  // B2 之后渲染路径由硬件档位决定（capability.ts）：档 2 → 播放页申请频谱
+  // tap（探针有数据）且背景恰好 1 canvas；档 1（软件光栅，CI runner 无 GPU）
+  // → 不申请 tap、背景走 CSS 静态渐变（canvas 恒 0）。GPU 能力不进断言
+  // （11-12 smoke 先例）：测试先在页面里探一次能力再钉契约，不写死档位。
+  const tier2 = await page.evaluate(() => {
+    const probe = document.createElement('canvas');
+    return probe.getContext('webgl2', { failIfMajorPerformanceCaveat: true }) !== null;
+  });
+  if (tier2) {
+    await expect.poll(() => page.locator('html').getAttribute('data-spectrum-probe').then(value => Number(value))).toBeGreaterThan(0);
+    await expect(page.locator('.ambient-bg canvas')).toHaveCount(1);
+  } else {
+    await expect(page.locator('.ambient-bg canvas')).toHaveCount(0);
+  }
 });
 
 test('设置页 web 形态：桌面段落隐身、目录模态框与单次扫描', async ({ page }) => {
