@@ -33,7 +33,7 @@ class LibraryStore {
    */
   playlists = $state<PlaylistSummary[]>([]);
 
-  readonly scanning = $derived(this.scan?.phase === 'walking' || this.scan?.phase === 'parsing');
+  readonly scanning = $derived(this.scan?.phase === 'walking' || this.scan?.phase === 'parsing' || this.scan?.phase === 'importing');
 
   async loadStats(): Promise<void> {
     try {
@@ -168,6 +168,7 @@ class LibraryStore {
   watchScan(onDone: () => void): () => void {
     return events.scanProgress((raw) => {
       const progress = readScanProgress(raw);
+      if (!progress) return;
       this.scan = progress;
       if (progress.phase === 'done' || progress.phase === 'cancelled') onDone();
     });
@@ -248,14 +249,16 @@ export interface ScanProgressView {
   missing: number;
   currentPath: string | null;
   elapsedMs: number;
+  message?: string | null;
 }
 
 /** 动态载荷 → 视图形状：缺字段不报错，按 0/null 处理 */
-function readScanProgress(raw: unknown): ScanProgressView {
+function readScanProgress(raw: unknown): ScanProgressView | null {
   const o = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  if (typeof o.phase !== 'string' || !['walking', 'parsing', 'importing', 'done', 'cancelled', 'failed'].includes(o.phase)) return null;
   const num = (key: string): number => (typeof o[key] === 'number' ? (o[key] as number) : 0);
   return {
-    phase: typeof o.phase === 'string' ? o.phase : 'unknown',
+    phase: o.phase,
     scanned: num('scanned'),
     // 后端新增 parsed 之前的事件没有这个字段 → 0，UI 会退回"只显示已入库"
     parsed: num('parsed'),
@@ -267,6 +270,7 @@ function readScanProgress(raw: unknown): ScanProgressView {
     missing: num('missing'),
     currentPath: typeof o.currentPath === 'string' ? o.currentPath : null,
     elapsedMs: num('elapsedMs'),
+    message: typeof o.message === 'string' ? o.message : null,
   };
 }
 

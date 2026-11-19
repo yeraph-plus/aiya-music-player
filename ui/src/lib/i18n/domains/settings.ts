@@ -39,14 +39,14 @@ export const settingsZh = {
   'settings.appearance.glEffects': '全局 3D 效果',
   'settings.appearance.glEffects.hint':
     '关闭后三维频谱与动态背景全部停用，只留静态渐变，频谱相关设置一并失效',
-  'settings.appearance.glEffects.warn': '本机只检测到软件渲染，建议保持关闭',
+  'settings.appearance.glEffects.warn': '本机无法使用硬件 WebGL，背景使用静态渐变，播放页频谱停用',
   'settings.appearance.bgSpectrum': '背景动态频谱',
   'settings.appearance.bgSpectrum.hint.on':
-    '整个应用的背景随音乐起伏，呈现山形环境光；关闭后只剩静态渐变',
+    '整个应用的背景随音乐起伏；关闭后只保留静态渐变',
   'settings.appearance.offByGl': '已随「全局 3D 效果」关闭',
   'settings.appearance.bgSpectrumStyle': '背景频谱形态',
   'settings.appearance.bgSpectrumStyle.hint.on':
-    '山形：底部一团起伏的环境光；波纹：一层层等深线铺满下半屏，与「正在播放」页的形态各自独立',
+    '山形保留起伏轮廓，极光绸幕呈现平滑光带，漫射光帘呈现柔和明暗；与播放页频谱独立',
   'settings.appearance.ridgeGlow': '背景频谱光效',
   'settings.appearance.ridgeGlow.hint.on':
     '控制光效的强度与锐度：柔雾只有形状没有光，平衡在边缘带一点光，锐光明亮清晰',
@@ -55,7 +55,7 @@ export const settingsZh = {
     '只在「正在播放」页显示的可视化，与背景环境光各自独立；关掉不影响背景',
   'settings.appearance.spectrumStyle': '频谱形态',
   'settings.appearance.spectrumStyle.hint':
-    '「正在播放」页的频谱形状：镜像沿中线对称，环带绕圆一周，残影留余波轨迹，波纹山谷交替，切换即时生效',
+    '轨道光环与回声轮廓呈环形，声纹丝带、游弦单线和双岸声场横向流动，韵律晶格呈现逐带节奏',
 
   // 输出模式（含分段控件选项；'null' 静音档不进分段控件，仅供 hint 查询）
   'settings.output.title': '输出模式',
@@ -119,6 +119,7 @@ export const settingsZh = {
 
   // 快捷键
   'settings.shortcuts.footHint': 'Esc 取消录制，Backspace 清空绑定；↑/↓ 与 Enter 是列表导航，不占用快捷键',
+  'settings.shortcuts.record': '录制{action}快捷键',
   'settings.shortcuts.reset': '恢复默认',
   'settings.shortcuts.conflict': '「{binding}」同时绑定多个动作：{actions}',
   'settings.shortcuts.actionSep': '、',
@@ -153,15 +154,18 @@ export const settingsZh = {
   'settings.ambient.meadow': '苔原',
   'settings.ambient.dusk': '暮紫',
   'settings.ambient.mono': '素白',
-  'settings.spectrum.mirror': '镜像',
-  'settings.spectrum.radial': '环带',
-  'settings.spectrum.ripple': '残影',
-  'settings.spectrum.wave': '波纹',
+  'settings.spectrum.orbit': '轨道光环',
+  'settings.spectrum.ribbon': '声纹丝带',
+  'settings.spectrum.lattice': '韵律晶格',
+  'settings.spectrum.contour': '回声轮廓',
+  'settings.spectrum.string': '游弦单线',
+  'settings.spectrum.shore': '双岸声场',
   'settings.ridgeGlow.soft': '柔雾',
   'settings.ridgeGlow.balanced': '平衡',
   'settings.ridgeGlow.neon': '锐光',
   'settings.bgSpectrumStyle.ridge': '山形',
-  'settings.bgSpectrumStyle.ripple': '波纹',
+  'settings.bgSpectrumStyle.aurora': '极光绸幕',
+  'settings.bgSpectrumStyle.curtain': '漫射光帘',
 } as const;
 
 export const settingsEn: Record<keyof typeof settingsZh, string> = {
@@ -200,14 +204,14 @@ export const settingsEn: Record<keyof typeof settingsZh, string> = {
   'settings.appearance.glEffects': 'Global 3D effects',
   'settings.appearance.glEffects.hint':
     'When off, the 3D spectrum and dynamic background are disabled entirely, leaving static gradients, and spectrum settings stop applying',
-  'settings.appearance.glEffects.warn': 'Only software rendering detected on this machine; keep this off',
+  'settings.appearance.glEffects.warn': 'Hardware WebGL is unavailable; the background stays static and the Now Playing spectrum is disabled',
   'settings.appearance.bgSpectrum': 'Dynamic background spectrum',
   'settings.appearance.bgSpectrum.hint.on':
-    'The app background rises and falls with the music as a mountain-shaped ambient glow; when off only static gradients remain',
+    'The app background responds to the music; when off only static gradients remain',
   'settings.appearance.offByGl': 'Disabled with "Global 3D effects"',
   'settings.appearance.bgSpectrumStyle': 'Background spectrum style',
   'settings.appearance.bgSpectrumStyle.hint.on':
-    'Mountain: one rolling glow along the bottom; ripple: layers of contour lines filling the lower half of the screen, independent of the Now Playing style',
+    'Ridge outlines rolling hills, Aurora Veil forms smooth ribbons, and Diffuse Curtain adds soft vertical light; independent of the Now Playing spectrum',
   'settings.appearance.ridgeGlow': 'Background spectrum glow',
   'settings.appearance.ridgeGlow.hint.on':
     'Controls glow intensity and sharpness: Soft is shape without light, Balanced adds a slight edge glow, Sharp is bright and crisp',
@@ -216,7 +220,7 @@ export const settingsEn: Record<keyof typeof settingsZh, string> = {
     'A visualization shown only on the Now Playing page, independent of the background glow; turning it off does not affect the background',
   'settings.appearance.spectrumStyle': 'Spectrum style',
   'settings.appearance.spectrumStyle.hint':
-    'The spectrum shape on the Now Playing page: mirror is symmetric about the center line, ring wraps a full circle, trail leaves fading paths, ripple alternates peaks and valleys; changes apply instantly',
+    'Orbital Halo and Echo Contours form rings; Spectral Ribbon, Drifting String, and Twin Shores flow horizontally; Rhythm Lattice follows individual bands',
 
   'settings.output.title': 'Output mode',
   'settings.output.hint.fallback': 'Shared: mixes with the system; other apps keep playing sound',
@@ -282,6 +286,7 @@ export const settingsEn: Record<keyof typeof settingsZh, string> = {
 
   'settings.shortcuts.footHint':
     'Esc cancels recording, Backspace clears the binding; Up/Down and Enter are list navigation and are not captured as shortcuts',
+  'settings.shortcuts.record': 'Record shortcut for {action}',
   'settings.shortcuts.reset': 'Reset to defaults',
   'settings.shortcuts.conflict': '"{binding}" is bound to multiple actions: {actions}',
   'settings.shortcuts.actionSep': ', ',
@@ -312,13 +317,16 @@ export const settingsEn: Record<keyof typeof settingsZh, string> = {
   'settings.ambient.meadow': 'Meadow',
   'settings.ambient.dusk': 'Dusk',
   'settings.ambient.mono': 'Mono',
-  'settings.spectrum.mirror': 'Mirror',
-  'settings.spectrum.radial': 'Ring',
-  'settings.spectrum.ripple': 'Trail',
-  'settings.spectrum.wave': 'Ripple',
+  'settings.spectrum.orbit': 'Orbital Halo',
+  'settings.spectrum.ribbon': 'Spectral Ribbon',
+  'settings.spectrum.lattice': 'Rhythm Lattice',
+  'settings.spectrum.contour': 'Echo Contours',
+  'settings.spectrum.string': 'Drifting String',
+  'settings.spectrum.shore': 'Twin Shores',
   'settings.ridgeGlow.soft': 'Soft',
   'settings.ridgeGlow.balanced': 'Balanced',
   'settings.ridgeGlow.neon': 'Sharp',
-  'settings.bgSpectrumStyle.ridge': 'Mountain',
-  'settings.bgSpectrumStyle.ripple': 'Ripple',
+  'settings.bgSpectrumStyle.ridge': 'Ridge',
+  'settings.bgSpectrumStyle.aurora': 'Aurora Veil',
+  'settings.bgSpectrumStyle.curtain': 'Diffuse Curtain',
 };

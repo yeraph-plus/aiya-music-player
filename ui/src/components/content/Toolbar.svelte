@@ -69,8 +69,9 @@
   .content-toolbar {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 0 0 10px;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    padding: 0 0 var(--space-4);
     min-width: 0;
   }
 
@@ -83,13 +84,13 @@
 
   .pt-spacer {
     flex: 1;
-    min-width: 6px;
+    min-width: var(--space-2);
   }
 
   .pt-end {
     flex: none;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-3);
   }
 </style>

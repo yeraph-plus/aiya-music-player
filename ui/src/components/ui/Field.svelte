@@ -1,97 +1,44 @@
 <script lang="ts">
-  
-  /**
-   * 字段：标签、单行输入、说明与错误，表单输入的唯一实现
-   * （顶栏搜索框、新建与重命名歌单、诊断页路径均复用它）。
-   *
-   * 受控：`value` 由调用方持有，`oninput` 只上报新值，内部不保存副本。内部副本
-   * 会与防抖保存冲突，用户快速输入时最后一次写盘可能落在中间状态。
-   *
-   * `error` 与 `hint` 共用同一个描述位，`aria-describedby` 只指向当前显示的一项，
-   * 否则读屏会连读两句。
-   */
+  import type { Snippet } from 'svelte';
+  import type { HTMLInputAttributes } from 'svelte/elements';
 
-  interface Props {
+  /** 原生输入属性透传；过滤和提交只上报业务值，不保存受控值的副本。 */
+  interface Props extends Omit<HTMLInputAttributes, 'value' | 'oninput' | 'children' | 'size' | 'prefix'> {
     label: string;
     value?: string;
-    placeholder?: string;
     hint?: string;
     error?: string | null;
-    disabled?: boolean;
-    /** 等宽字体：路径、快捷键、数字 */
     mono?: boolean;
-    type?: 'text' | 'search' | 'number' | 'date' | 'time' | 'url';
-    required?: boolean;
-    min?: number;
-    max?: number;
-    step?: number;
-    oninput?: (value: string) => void;
-    /** 回车提交（搜索框、重命名对话框） */
-    onenter?: () => void;
-    id?: string;
-    /** 视觉上隐藏标签（标题栏搜索框这种"位置已说明用途"的场景） */
     hideLabel?: boolean;
-    /** 最大字符数（歌单名 80、搜索词 200 这类由业务决定，零件只负责转达） */
-    maxlength?: number;
-    inputmode?: 'text' | 'numeric' | 'decimal';
-    pattern?: string;
-    /** 输入过滤同时更新 DOM 与受控值，拒绝的字符不会滞留在输入框。 */
+    variant?: 'default' | 'search';
+    prefix?: Snippet;
+    trailing?: Snippet;
+    oninput?: (value: string) => void;
+    onenter?: () => void;
     inputFilter?: (value: string) => string;
-    /** 输入框元素，用于 `autofocus` / `select()`（对话框拿到后自己决定要不要选中全文） */
     ref?: HTMLInputElement | null;
   }
-
   const uid = $props.id();
   let {
-    label,
-    value = '',
-    placeholder,
-    hint,
-    error,
-    disabled = false,
-    mono = false,
-    type = 'text',
-    oninput,
-    onenter,
-    id,
-    hideLabel = false,
-    maxlength,
-    inputmode,
-    pattern,
-    inputFilter,
-    required = false,
-    min,
-    max,
-    step,
-    ref = $bindable(null),
+    label, value = '', hint, error, mono = false, hideLabel = false, variant = 'default',
+    prefix, trailing, oninput, onenter, onkeydown, inputFilter, type = 'text', id,
+    disabled = false, class: className = '', ref = $bindable(null), ...rest
   }: Props = $props();
-
   const fieldId = $derived(id ?? `k-field-${uid}`);
   const descId = $derived(`${fieldId}-desc`);
+  const describedBy = $derived([rest['aria-describedby'], error || hint ? descId : null].filter(Boolean).join(' ') || undefined);
 </script>
 
-<div class="k-field" class:with-error={!!error}>
+<div class={`k-field ${className}`} class:with-error={!!error} class:disabled class:search={variant === 'search'}>
   <label for={fieldId} class="k-field-label" class:sr-only={hideLabel}>{label}</label>
   <div class="k-field-box">
+    {#if prefix}<span class="k-field-prefix" aria-hidden="true">{@render prefix()}</span>{/if}
     <input
-      bind:this={ref}
-      id={fieldId}
-      {type}
-      {placeholder}
-      {maxlength}
-      {inputmode}
-      {pattern}
-      {required}
-      {min}
-      {max}
-      {step}
-      {disabled}
-      value={value}
-      class="k-field-input"
-      class:mono
-      aria-invalid={error ? 'true' : undefined}
-      aria-describedby={error || hint ? descId : undefined}
-      oninput={(event) => {
+      {...rest} bind:this={ref} id={fieldId} {type} {disabled} {value}
+      class="k-field-input" class:mono class:custom-clear={!!trailing}
+      aria-invalid={error ? 'true' : rest['aria-invalid']}
+      aria-describedby={describedBy}
+      oninput={event => {
         const input = event.currentTarget;
         const next = inputFilter ? inputFilter(input.value) : input.value;
         if (next !== input.value) {
@@ -102,105 +49,36 @@
         }
         oninput?.(next);
       }}
-      onkeydown={(event) => {
-        if (event.key === 'Enter') onenter?.();
+      onkeydown={event => {
+        onkeydown?.(event);
+        if (onenter && event.key === 'Enter' && !event.isComposing && event.keyCode !== 229 && !event.defaultPrevented) {
+          event.preventDefault();
+          onenter();
+        }
       }}
     />
+    {#if trailing}<span class="k-field-trailing">{@render trailing()}</span>{/if}
   </div>
-  {#if error}
-    <p class="k-field-msg error" id={descId}>{error}</p>
-  {:else if hint}
-    <p class="k-field-msg" id={descId}>{hint}</p>
-  {/if}
+  {#if error}<p class="k-field-msg error" id={descId}>{error}</p>
+  {:else if hint}<p class="k-field-msg" id={descId}>{hint}</p>{/if}
 </div>
 
 <style>
-  .k-field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    min-width: 0;
-  }
-
-  .k-field-label {
-    font-size: var(--fs-sm);
-    color: var(--text-2);
-  }
-
-  .k-field-box {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    height: var(--control-h);
-    padding: 0 var(--space-3);
-    border: 1px solid var(--line);
-    border-radius: var(--radius-md);
-    background: var(--surface-input);
-    transition:
-      border-color var(--dur-fast) var(--ease),
-      background var(--dur-fast) var(--ease);
-  }
-
-  .k-field-box:focus-within {
-    border-color: var(--accent);
-    background: var(--surface-hover);
-  }
-
-  .k-field.with-error .k-field-box {
-    border-color: var(--danger);
-  }
-
-  .k-field-input {
-    flex: 1;
-    min-width: 0;
-    height: 100%;
-    border: none;
-    outline: none;
-    background: none;
-    color: var(--text-1);
-    font-size: var(--fs-base);
-  }
-
-  .k-field-input.mono {
-    font-family: var(--font-mono);
-    font-size: var(--fs-sm);
-  }
-
-  .k-field-input::placeholder {
-    color: var(--text-3);
-  }
-
-  /* 原生日期控件的内框留给自己画（type=date）；日历图标跟随 color-scheme */
-  .k-field-input[type='date']::-webkit-calendar-picker-indicator {
-    cursor: pointer;
-  }
-
-  .k-field-input:disabled {
-    opacity: var(--disabled-opacity);
-    cursor: default;
-  }
-
-
-  .k-field-msg {
-    margin: 0;
-    font-size: var(--fs-sm);
-    color: var(--text-2);
-    line-height: 1.5;
-  }
-
-  .k-field-msg.error {
-    color: var(--danger);
-  }
-
-  /* 视觉隐藏但仍可被读屏读到：标题栏搜索框的 label */
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
+  .k-field {display:flex;flex-direction:column;gap:var(--space-2);min-width:0;}
+  .k-field-label {font-size:var(--fs-base);color:var(--text-2);line-height:1.5;}
+  .k-field-box {display:flex;align-items:center;gap:var(--space-2);height:var(--control-h);padding:0 var(--space-3);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface-input);transition:border-color var(--dur-fast) var(--ease),background var(--dur-fast) var(--ease);}
+  .k-field-box:focus-within {border-color:var(--accent);background:var(--surface-hover);outline:2px solid var(--accent);outline-offset:2px;}
+  .with-error .k-field-box {border-color:var(--danger);}
+  .disabled {opacity:var(--disabled-opacity);}
+  .k-field-input {flex:1;min-width:0;width:100%;height:100%;padding:0;border:none;outline:none;background:none;color:var(--text-1);font-size:var(--fs-md);line-height:1.4;}
+  .k-field-input.mono {font-family:var(--font-mono);font-variant-numeric:tabular-nums;}
+  .k-field-input::placeholder {color:var(--text-3);}
+  .k-field-input:disabled {cursor:default;}
+  .k-field-input.custom-clear::-webkit-search-cancel-button {display:none;}
+  .k-field-input[type='date']::-webkit-calendar-picker-indicator {cursor:pointer;}
+  .k-field-prefix, .k-field-trailing {display:inline-flex;align-items:center;flex:none;color:var(--text-2);}
+  .search .k-field-box {border-radius:var(--radius-pill);padding-inline:var(--space-4) var(--space-1);}
+  .k-field-msg {margin:0;font-size:var(--fs-base);color:var(--text-2);line-height:1.5;}
+  .k-field-msg.error {color:var(--danger);}
+  .sr-only {position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}
 </style>

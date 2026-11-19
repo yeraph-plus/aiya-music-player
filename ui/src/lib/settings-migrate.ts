@@ -62,22 +62,19 @@ export function mergeSettings(raw: unknown): AppSettings {
 
   // 取值须在剔除之前（剔除后只剩 undefined）
   const legacySpectrum = obj.spectrum;
-  const legacyStyle = obj.spectrumStyle;
   const rest: Record<string, unknown> = { ...obj };
   for (const key of RETIRED_KEYS) delete rest[key];
 
   const merged: AppSettings = { ...DEFAULT_SETTINGS, ...(rest as Partial<AppSettings>) };
 
-  // 形态/档位白名单：退役取值（如频谱的 'off'）要靠**不在白名单**这件事被
-  // 消化掉，而不是到处写 `if (x === 'off')`（那种写法会在加第四种形态时漏掉）。
+  // 未知形态和档位直接落默认。
   if (!SPECTRUM_STYLE_VALUES.has(String(merged.spectrumStyle))) {
     merged.spectrumStyle = DEFAULT_SETTINGS.spectrumStyle;
   }
   if (!RIDGE_GLOW_VALUES.has(String(merged.ridgeGlow))) {
     merged.ridgeGlow = DEFAULT_SETTINGS.ridgeGlow;
   }
-  // 背景形态是新键：老配置里根本没有它（`...DEFAULT_SETTINGS` 已经兜成山形），
-  // 这里只负责挡住将来写坏的值。
+  // 未知背景形态直接落默认，不映射到其他效果。
   if (!BG_SPECTRUM_STYLE_VALUES.has(String(merged.bgSpectrumStyle))) {
     merged.bgSpectrumStyle = DEFAULT_SETTINGS.bgSpectrumStyle;
   }
@@ -112,9 +109,7 @@ export function mergeSettings(raw: unknown): AppSettings {
   if (typeof legacySpectrum === 'boolean') {
     if (typeof rest.bgSpectrum !== 'boolean') merged.bgSpectrum = legacySpectrum;
     if (typeof rest.npSpectrum !== 'boolean') {
-      // 判据用**原始** spectrumStyle：'off' 表示旧配置下页面未渲染频谱。若改用
-      // 已归一化为 'mirror' 的值，会被误判为"页面开着"。
-      merged.npSpectrum = legacySpectrum && String(legacyStyle) !== 'off';
+      merged.npSpectrum = legacySpectrum;
     }
   }
 

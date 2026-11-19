@@ -20,7 +20,7 @@
     normalizeUiScale,
   } from '../lib/settings';
   import StatBlock from './ui/StatBlock.svelte';
-import TextTabs from './ui/TextTabs.svelte';
+  import TextTabs from './ui/TextTabs.svelte';
   import {
     SHORTCUT_ACTIONS,
     SHORTCUT_LABELS,
@@ -39,6 +39,9 @@ import TextTabs from './ui/TextTabs.svelte';
   import Button from './ui/Button.svelte';
   import SegmentedControl from './ui/SegmentedControl.svelte';
   import Switch from './ui/Switch.svelte';
+  import Select from './ui/Select.svelte';
+  import IconButton from './ui/IconButton.svelte';
+  import { reducedMotion } from '../lib/motion.svelte';
   import Header from './content/Header.svelte';
   import { capture } from '../stores/capture.svelte';
   import { library } from '../stores/library.svelte';
@@ -118,7 +121,7 @@ import TextTabs from './ui/TextTabs.svelte';
 
   function jumpTo(section: Section): void {
     active = section;
-    sectionEls[section]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    sectionEls[section]?.scrollIntoView({ behavior: reducedMotion.value ? 'instant' : 'smooth', block: 'start' });
   }
 
   /**
@@ -162,13 +165,7 @@ import TextTabs from './ui/TextTabs.svelte';
    */
   const gl = $derived(settings.glEffects);
 
-  /**
-   * 本机 3D 能力（探测结果在 `lib/render/capability` 内缓存，每次挂载只探一次）。
-   *
-   * `glEffects` 的后果对用户不可见，因此由应用直接给出结论而不是让用户试错：
-   * 软件渲染（远程桌面、禁用硬件加速）下保持开启只会增加开销，提示语据此
-   * 建议关闭。
-   */
+  /** 能力探测结果在渲染模块缓存。 */
   const cap = detectCapability();
   // 后端能力面（lib/backend-caps）：Web 宿主下隐藏桌面专属段落（输出/EQ/
   // 防休眠/窗口壳），设置字段照常落库，只是不画。
@@ -176,8 +173,7 @@ import TextTabs from './ui/TextTabs.svelte';
 
   function setShortcut(action: ShortcutAction, binding: string): void {
     const shortcuts = { ...settings.shortcuts };
-    if (!binding) delete shortcuts[action];
-    else shortcuts[action] = binding;
+    shortcuts[action] = binding;
     apply({ shortcuts });
   }
 
@@ -318,7 +314,7 @@ import TextTabs from './ui/TextTabs.svelte';
       不依赖页面壳）。
     -->
     <section class="settings-section" id="settings-library" bind:this={sectionEls.library}>
-      <h3 class="group-title">{t('settings.section.library')}</h3>
+      <h2 class="group-title">{t('settings.section.library')}</h2>
 
       <!-- 统计卡：图标 + 数值 + 标签。数值使用等宽数字（tabular-nums）以免更新时抖动；图标用中性描边样式，不与数值争夺视觉权重。六项铺满 3×2
       网格。索引大小与文件容量是两个量：前者为 SQLite 索引自身体积，后者为音频文件总量 -->
@@ -367,12 +363,11 @@ import TextTabs from './ui/TextTabs.svelte';
         </div>
       {/if}
 
-      <!-- 16px 出血：统计卡与目录卡自带 16px 水平内边距，与内容列（720 居中）叠加后卡内文字比下方设置行左缘多缩进
-      16px，整块显得比页面窄一圈。负 margin 抵消该差值，卡内文字回到与设置行相同的左缘。 -->
+
       <div class="lib-bleed"><LibraryTools /></div>
     </section>
     <section class="settings-section" bind:this={sectionEls.appearance}>
-      <h3 class="group-title">{t('settings.section.appearance')}</h3>
+      <h2 class="group-title">{t('settings.section.appearance')}</h2>
       <div class="setting-row">
           <div>
             <div class="setting-title">{t('settings.appearance.theme')}</div>
@@ -455,7 +450,7 @@ import TextTabs from './ui/TextTabs.svelte';
           />
         </div>
 
-        <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
+        <div class="setting-row" >
           <div>
             <div class="setting-title">{t('settings.appearance.bgSpectrum')}</div>
             <div class="setting-hint">
@@ -472,7 +467,7 @@ import TextTabs from './ui/TextTabs.svelte';
           />
         </div>
 
-        <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
+        <div class="setting-row" >
           <div>
             <div class="setting-title">{t('settings.appearance.bgSpectrumStyle')}</div>
             <div class="setting-hint">
@@ -481,34 +476,36 @@ import TextTabs from './ui/TextTabs.svelte';
                 : t('settings.appearance.offByGl')}
             </div>
           </div>
-          <SegmentedControl
+          <div class="effect-select"><Select
             label={t('settings.appearance.bgSpectrumStyle')}
             value={settings.bgSpectrumStyle}
             options={segOptions(BG_SPECTRUM_STYLES)}
-            disabled={!gl}
+            disabled={!gl || !settings.bgSpectrum}
             onchange={(value) => apply({ bgSpectrumStyle: value as BgSpectrumStyle })}
-          />
+          /></div>
         </div>
 
-        <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
-          <div>
-            <div class="setting-title">{t('settings.appearance.ridgeGlow')}</div>
-            <div class="setting-hint">
-              {gl
-                ? t('settings.appearance.ridgeGlow.hint.on')
-                : t('settings.appearance.offByGl')}
+        {#if settings.bgSpectrumStyle === 'ridge'}
+          <div class="setting-row" >
+            <div>
+              <div class="setting-title">{t('settings.appearance.ridgeGlow')}</div>
+              <div class="setting-hint">
+                {gl
+                  ? t('settings.appearance.ridgeGlow.hint.on')
+                  : t('settings.appearance.offByGl')}
+              </div>
             </div>
+            <SegmentedControl
+              label={t('settings.appearance.ridgeGlow')}
+              value={settings.ridgeGlow}
+              options={segOptions(RIDGE_GLOWS)}
+              disabled={!gl || !settings.bgSpectrum}
+              onchange={(value) => apply({ ridgeGlow: value as RidgeGlow })}
+            />
           </div>
-          <SegmentedControl
-            label={t('settings.appearance.ridgeGlow')}
-            value={settings.ridgeGlow}
-            options={segOptions(RIDGE_GLOWS)}
-            disabled={!gl}
-            onchange={(value) => apply({ ridgeGlow: value as RidgeGlow })}
-          />
-        </div>
+        {/if}
 
-        <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
+        <div class="setting-row" >
           <div>
             <div class="setting-title">{t('settings.appearance.npSpectrum')}</div>
             <div class="setting-hint">
@@ -525,25 +522,25 @@ import TextTabs from './ui/TextTabs.svelte';
           />
         </div>
 
-        <div class="setting-row" style:opacity={gl ? 1 : 0.5}>
+        <div class="setting-row" >
           <div>
             <div class="setting-title">{t('settings.appearance.spectrumStyle')}</div>
             <div class="setting-hint">
               {t('settings.appearance.spectrumStyle.hint')}
             </div>
           </div>
-          <SegmentedControl
+          <div class="effect-select"><Select
             label={t('settings.appearance.spectrumStyle')}
             value={settings.spectrumStyle}
             options={segOptions(SPECTRUM_STYLES)}
-            disabled={!gl}
+            disabled={!gl || !settings.npSpectrum}
             onchange={(value) => apply({ spectrumStyle: value as SpectrumStyle })}
-          />
+          /></div>
         </div>
       </section>
 
     <section class="settings-section" bind:this={sectionEls.playback}>
-      <h3 class="group-title">{t('settings.section.playback')}</h3>
+      <h2 class="group-title">{t('settings.section.playback')}</h2>
       <!-- 输出段整组是桌面引擎的事，Web 宿主换成一条静态说明 -->
       {#if caps.output}
       <div class="setting-row">
@@ -669,7 +666,7 @@ import TextTabs from './ui/TextTabs.svelte';
       </section>
 
     <section class="settings-section" bind:this={sectionEls.system}>
-      <h3 class="group-title">{t('settings.section.system')}</h3>
+      <h2 class="group-title">{t('settings.section.system')}</h2>
       <!-- 窗口壳两行（托盘/缩放补偿）只对 Tauri 宿主有意义；浏览器没有这些语义 -->
       {#if caps.shell}
       <div class="setting-row">
@@ -723,17 +720,17 @@ import TextTabs from './ui/TextTabs.svelte';
               {t('settings.system.historyRetention.hint')}
             </div>
           </div>
-          <SegmentedControl
+          <div class="effect-select"><Select
             label={t('settings.system.historyRetention.control')}
             value={String(settings.historyDays ?? 90)}
             options={HISTORY_DAYS_OPTIONS}
             onchange={(value) => apply({ historyDays: Number(value) })}
-          />
+          /></div>
         </div>
       </section>
 
     <section class="settings-section" bind:this={sectionEls.shortcuts}>
-      <h3 class="group-title">{t('settings.section.shortcuts')}</h3>
+      <h2 class="group-title">{t('settings.section.shortcuts')}</h2>
 
       <!-- 录制规则与恢复默认放在组首：用户在点击绑定键之前需要知道 Esc / Backspace 的行为。外框使其读作操作须知，而非列表末尾的附注。 -->
       <div class="shortcut-foot">
@@ -748,7 +745,7 @@ import TextTabs from './ui/TextTabs.svelte';
                 {t('settings.shortcuts.conflict', {
                   binding: formatBinding(conflict.binding),
                   actions: conflict.actions
-                    .map((action) => SHORTCUT_LABELS[action as ShortcutAction])
+                    .map((action) => t(SHORTCUT_LABELS[action as ShortcutAction]))
                     .join(t('settings.shortcuts.actionSep')),
                 })}
               </div>
@@ -759,15 +756,15 @@ import TextTabs from './ui/TextTabs.svelte';
         <div class="shortcut-list">
           {#each SHORTCUT_ACTIONS as action (action)}
             <div class="shortcut-row">
-              <span class="shortcut-label">{SHORTCUT_LABELS[action]}</span>
-              <button
-                class="binding"
-                class:capturing={capturing === action}
-                class:unset={!bindings[action]}
-                onclick={() => capture.start(action)}
-              >
-                {capturing === action ? t('settings.shortcuts.pressNewKey') : formatBinding(bindings[action])}
-              </button>
+              <span class="shortcut-label">{t(SHORTCUT_LABELS[action])}</span>
+              <div class="binding">
+                <Button size="sm" variant={capturing === action ? 'primary' : 'secondary'}
+                  pressed={capturing === action}
+                  ariaLabel={t('settings.shortcuts.record', { action: t(SHORTCUT_LABELS[action]) })}
+                  onclick={() => capture.start(action)}>
+                  {capturing === action ? t('settings.shortcuts.pressNewKey') : formatBinding(bindings[action])}
+                </Button>
+              </div>
             </div>
           {/each}
         </div>
@@ -776,17 +773,14 @@ import TextTabs from './ui/TextTabs.svelte';
     <!-- 关于组：识别信息与排障。布局与设置项一致（一行一项）。平台、Schema 版本、播放列表计数不展示：属内部信息或恒为
     0。不提供「重新读取」按钮：诊断随页面加载自动拉取。「获取更新」为占位按钮，功能未提供，恒禁用。数据目录与「打开目录」合为一行。 -->
     <section class="settings-section settings-about" bind:this={sectionEls.about}>
-      <h3 class="group-title">{t('settings.section.about')}</h3>
+      <h2 class="group-title">{t('settings.section.about')}</h2>
       <div class="setting-row">
         <div>
           <div class="setting-title">{t('settings.about.version')}</div>
           <div class="setting-hint">{sys?.version ?? '…'}</div>
         </div>
         <div class="about-actions">
-          <Button size="sm" onclick={() => ui.openUrl(RELEASES_URL)}
-            title={t('settings.about.releases.open')}>
-            {#snippet icon()}<ExternalLink size={14} />{/snippet}
-          </Button>
+          <IconButton size="sm" label={t('settings.about.releases.open')} onclick={() => ui.openUrl(RELEASES_URL)}><ExternalLink size={14} /></IconButton>
           <Button size="sm" disabled title={t('settings.about.checkUpdates.title')}>
             {t('settings.about.checkUpdates')}
           </Button>
@@ -799,7 +793,7 @@ import TextTabs from './ui/TextTabs.svelte';
           <!-- 完整路径可复制（user-select 豁免见样式区），过长省略、悬停给全路径 -->
           <div class="setting-hint datadir-path" title={sys?.dataDir ?? ''}>{sys?.dataDir ?? '…'}</div>
         </div>
-        <Button size="sm" onclick={() => ui.openDataDir()}>{t('settings.about.openDir')}</Button>
+        {#if caps.shell}<Button size="sm" onclick={() => ui.openDataDir()}>{t('settings.about.openDir')}</Button>{/if}
       </div>
 
       <div class="setting-row">
@@ -902,19 +896,17 @@ import TextTabs from './ui/TextTabs.svelte';
     margin-top: 4px;
   }
 
-  /* 统计卡：左侧为图标座（accent 弱底色圆角方块），右侧竖排数值与标签。使用 grid 而非 flex-wrap：设置列宽 720，按内容宽度排列会折成 4 + 1，「索引大小」单独占一行。等宽网格得到 3 + 2，各卡同宽且左缘对齐。minmax(180px)
-     使窄窗口自动降为两列，无需额外断点。六项填满 3 × 2。左右 -17px 为出血：卡片自带 1px 边框与 16px 内边距，与内容列叠加后卡内文字比下方设置行多缩进 17px；负 margin 将卡片外缘推出，卡内文字与设置行左缘对齐 */
+
   .lib-stats {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 11.25rem), 1fr));
     gap: 12px;
-    margin: 12px -17px 14px;
+    margin: var(--space-4) 0;
   }
 
-  /* 目录卡同款出血（`LibraryTools` 根元素 `.library-tools` 定义在全局样式表，
-     此处需包一层才能应用 scoped 规则） */
+
   .lib-bleed {
-    margin: 0 -17px;
+    min-width: 0;
   }
 
   /* 数据目录路径：等宽 + 超长省略（悬停 title 给全路径） */
@@ -992,6 +984,7 @@ import TextTabs from './ui/TextTabs.svelte';
     flex: 1;
     min-height: 0;
     min-width: 0;
+    container-type: inline-size;
     display: flex;
     flex-direction: column;
   }
@@ -999,7 +992,7 @@ import TextTabs from './ui/TextTabs.svelte';
   /* 居中列（1064 = 内容 1020 + 左右 padding
      22×2）：头部与滚动容器同一列宽，标题、tab、设置行左缘全部对齐；窄窗口 max-width 不生效，行为与全宽时一致 */
   .settings-headwrap {
-    max-width: 1064px;
+    max-width: 66.5rem;
     width: 100%;
     margin: 0 auto;
   }
@@ -1008,16 +1001,15 @@ import TextTabs from './ui/TextTabs.svelte';
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 0 22px 28px;
-    max-width: 1064px;
+    padding: 0 var(--space-6) var(--space-6);
+    max-width: 66.5rem;
     width: 100%;
     margin: 0 auto;
   }
 
   /* tab 形态与曲库页一致：纯文字 + accent 下划线，小标题档（由 TextTabs 统一） */
 
-  /* 被「全局 3D 效果」闸门关闭的行：整行压暗，与"该项自身关闭"区分。仅给控件加 disabled 不足以表达——关闭态的开关本身即为灰色，两种情况会混淆。使用内联 style:opacity 而非 `.setting-row.muted`
-     规则：Svelte 5 的未使用选择器裁剪会把"仅由 class: 指令产生"的类名判为未使用并删除整条规则 （表现为 class 已加上、规则不存在、computed opacity 仍为 1） */
+
 
   /* 环境警告（如"仅检测到软件渲染"）：随 hint 排布，需具备足够对比度 */
   .hint-warn {
@@ -1026,4 +1018,20 @@ import TextTabs from './ui/TextTabs.svelte';
     font-weight: 600;
     color: var(--warn);
   }
+
+  .setting-row {display:flex;align-items:center;justify-content:space-between;gap:var(--space-5);padding:var(--space-4) 0;border-bottom:1px solid var(--line);}
+  .setting-row>div:first-child {min-width:0;flex:1;}
+  .setting-title {font-size:var(--fs-md);margin-bottom:var(--space-1);}
+  .setting-hint {font-size:var(--fs-sm);color:var(--text-2);line-height:1.6;max-width:28.75rem;overflow-wrap:anywhere;}
+  .effect-select {width:15rem;max-width:100%;flex:none;}
+  .shortcut-list {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 var(--space-6);}
+  .shortcut-row {display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);padding:var(--space-2) 0;border-bottom:1px solid var(--line);}
+  .shortcut-label {font-size:var(--fs-md);color:var(--text-2);overflow-wrap:anywhere;}
+  .binding {flex:none;font-family:var(--font-mono);font-variant-numeric:tabular-nums;}
+  @container (max-width: 45rem) {
+    .setting-row {flex-wrap:wrap;}
+    .setting-row>div:first-child {flex-basis:100%;}
+    .shortcut-list {grid-template-columns:minmax(0,1fr);}
+  }
+  .settings-section {max-width:45rem;margin:0 auto;padding-bottom:var(--space-3);scroll-margin-top:var(--space-3);}
 </style>

@@ -20,6 +20,7 @@
   interface Props {
     /** 当前列表总数（「播放全部」的禁用条件） */
     total: number;
+    showPlayAll?: boolean;
     /** 当前选择集行数（批量动作的禁用条件与「已选 N 首」展示） */
     count: number;
     /** 移除按钮文案随视图变：曲库=从曲库中删除，歌单=从播放列表移除 */
@@ -43,6 +44,7 @@
 
   let {
     total,
+    showPlayAll = true,
     count,
     removeLabel,
     batchMode,
@@ -59,11 +61,13 @@
   }: Props = $props();
 </script>
 
-<div class="list-toolbar" role="toolbar" aria-label={t('library.toolbar.aria')}>
+<div class="list-toolbar" role="group" aria-label={t('library.toolbar.aria')}>
+  {#if showPlayAll}
   <Button size="sm" variant="primary" disabled={total === 0} onclick={onplayall}>
     {#snippet icon()}<Icon name="play" size={12} />{/snippet}
     {t('library.playAll')}
   </Button>
+  {/if}
   <Button size="sm" disabled={count === 0} onclick={onenqueue}>
     {#snippet icon()}<ListPlus size={13} />{/snippet}
     {t('lib.menu.enqueue')}
@@ -120,13 +124,14 @@
 <style>
   .list-toolbar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
-    padding: 0 22px 8px;
+    gap: var(--space-3);
+    padding: 0 var(--space-6) var(--space-3);
   }
 
   .lt-count {
-    font-size: var(--fs-sm);
+    font-size: var(--fs-base);
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
   }

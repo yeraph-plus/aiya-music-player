@@ -35,6 +35,7 @@ type RouteSnapshot = {
   sort: TrackSort;
   direction: 'asc' | 'desc';
   scrollTop: number;
+  browse: { search: string; page: number; scrollTop: number };
 };
 
 export type NavTarget =
@@ -160,6 +161,7 @@ class NavStore {
       sort: ui.sort,
       direction: ui.direction,
       scrollTop: ui.scrollTop,
+      browse: { ...ui.browse },
     };
   }
 
@@ -200,6 +202,7 @@ class NavStore {
         list.openPlaylist(target.id);
         break;
       case 'browse':
+        ui.browse = { search: '', page: 1, scrollTop: 0 };
         ui.openPage(target.view);
         break;
       case 'album':
@@ -229,6 +232,7 @@ class NavStore {
     ui.sort = s.sort;
     ui.direction = s.direction;
     ui.scrollTop = s.scrollTop;
+    ui.browse = { ...s.browse };
     ui.closeQueue();
 
     // 只有落在列表页才重拉列表：正在播放/设置页看不到列表，

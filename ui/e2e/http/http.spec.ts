@@ -22,7 +22,7 @@ async function login(page: Page): Promise<void> {
   await page.goto('/');
   await page.locator('.gate input[type="password"]').fill(PASSWORD);
   await page.locator('.gate button').click();
-  await page.locator('nav').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.locator('aside nav').waitFor({ state: 'visible', timeout: 15_000 });
   await expect(page.locator('.gate')).toHaveCount(0);
 }
 
@@ -35,10 +35,10 @@ test('登录闸首帧渲染，口令进闸后应用可用', async ({ page }) => 
   await page.goto('/');
   // 首帧即闸（mount 前的 /auth/state 预检）：主界面不得先闪现
   await page.locator('.gate').waitFor({ state: 'visible', timeout: 10_000 });
-  expect(await page.locator('nav').count()).toBe(0);
+  expect(await page.locator('aside nav').count()).toBe(0);
   await page.locator('.gate input[type="password"]').fill(PASSWORD);
   await page.locator('.gate button').click();
-  await page.locator('nav').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.locator('aside nav').waitFor({ state: 'visible', timeout: 15_000 });
   await expect(page.locator('.gate')).toHaveCount(0);
 });
 
@@ -54,8 +54,16 @@ test('首启种子根已入库，浏览器解不了的容器行打灰', async ({
 });
 
 test('双击播放：浏览器引擎装载并真实出声', async ({ page }) => {
+  await page.addInitScript(() => {
+    const read = AnalyserNode.prototype.getByteFrequencyData;
+    AnalyserNode.prototype.getByteFrequencyData = function (buffer) {
+      read.call(this, buffer);
+      document.documentElement.dataset.spectrumProbe = String(Math.max(Number(document.documentElement.dataset.spectrumProbe ?? 0), ...buffer));
+    };
+  });
   await login(page);
   await goToLibrary(page);
+  await page.locator('audio').evaluate((audio: HTMLAudioElement) => { audio.loop = true; });
   // 指定一支可播容器（AIFF 行点了会走报错，不选）；曲目无标签，标题=文件名
   await page.locator('.row', { hasText: 'tone-mp3' }).dblclick();
   // <audio> 真装载：src 指向 /audio/ 且确实在走表。轮询带回显诊断——
@@ -80,9 +88,11 @@ test('双击播放：浏览器引擎装载并真实出声', async ({ page }) => 
     await page.waitForTimeout(400);
   }
   expect(last, JSON.stringify(last)).toMatchObject({ playing: true });
+  await expect.poll(() => page.locator('html').getAttribute('data-spectrum-probe').then(value => Number(value))).toBeGreaterThan(0);
+  await expect(page.locator('.ambient-bg canvas')).toHaveCount(1);
 });
 
-test('设置页 web 形态：桌面段落隐身 + webDecode 说明 + 路径手输', async ({ page }) => {
+test('设置页 web 形态：桌面段落隐身、目录模态框与单次扫描', async ({ page }) => {
   await login(page);
   await page.locator('aside button', { hasText: /设置|Settings/ }).click();
   // 固定中文语向（语言钮是语文名，两种语言下都这么叫）
@@ -105,7 +115,7 @@ test('设置页 web 形态：桌面段落隐身 + webDecode 说明 + 路径手�
       eqHidden: !labels.some((l) => /均衡器|EQ \(/.test(l ?? '')),
       // web 静态说明与路径手输在
       webDecode: text.includes('由浏览器解码播放') || text.includes('Decoded and played by the browser'),
-      rootInput: !!document.querySelector<HTMLInputElement>('.roots-actions .root-input'),
+      rootInput: !!document.querySelector<HTMLInputElement>('.roots-actions input'),
     };
   });
   expect(shape).toEqual({
@@ -115,15 +125,49 @@ test('设置页 web 形态：桌面段落隐身 + webDecode 说明 + 路径手�
     windowChromeHidden: true,
     eqHidden: true,
     webDecode: true,
-    rootInput: true,
+    rootInput: false,
   });
+  await page.getByRole('button', { name: '添加目录', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  const field = dialog.getByLabel('容器内目录', { exact: true });
+  await expect(field).toBeFocused();
+  await field.fill('relative');
+  await field.press('Enter');
+  await expect(dialog).toContainText('请输入绝对目录路径');
+  const token = await page.evaluate(() => localStorage.getItem('aiya.authToken'));
+  const call = async (cmd: string, data: Record<string, unknown> = {}) => {
+    const r = await page.request.post(`/ipc/${cmd}`, { data, headers: { authorization: `Bearer ${token}` } });
+    expect(r.ok(), await r.text()).toBeTruthy(); return r.json();
+  };
+  const roots = await call('library_roots_get');
+  await field.fill(roots.roots[0]);
+  await dialog.getByRole('button', { name: '添加并追踪', exact: true }).click();
+  await expect(dialog).toContainText('该目录已在曲库根里');
+  const info = await call('app_info');
+  const folder = join(dirname(info.dataDir), 'extra-music');
+  await mkdir(folder, { recursive: true });
+  await field.fill(join(folder, 'missing'));
+  await dialog.getByRole('button', { name: '添加并追踪', exact: true }).click();
+  await expect(dialog).toContainText('Folder does not exist');
+  let extraScanRequests = 0;
+  page.on('request', r => { if (r.url().endsWith('/ipc/library_scan')) extraScanRequests++; });
+  await field.fill(folder);
+  await dialog.getByRole('button', { name: '添加并追踪', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.root-path', { hasText: folder })).toBeVisible();
+  await expect(page.locator('.status-block')).toContainText('上次索引：');
+  expect(extraScanRequests).toBe(0);
+  await page.getByRole('button', { name: '立即索引', exact: true }).click();
+  await expect(page.locator('.status-block')).toContainText('上次索引：');
+  await expect(page.locator('.status-block')).not.toContainText(/unknown|异常退出/);
+  await expect.poll(async () => (await call('refresh_state')).last?.trigger).toBe('action');
 });
 
 test('会话刷新直进 + 双语抽查（English）', async ({ page }) => {
   await login(page);
   // 有效会话刷新：预检带凭据，直接进应用不再落闸
   await page.reload();
-  await page.locator('nav').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.locator('aside nav').waitFor({ state: 'visible', timeout: 15_000 });
   await expect(page.locator('.gate')).toHaveCount(0);
   // 双语抽查：切 English 后设置页曲库组标题是英文
   await page.locator('aside button', { hasText: /设置|Settings/ }).click();
@@ -231,7 +275,8 @@ test('推流工作台：全曲库、整卡队列与多时段一次保存', async
     await expect(page.locator('.station-workbench')).toHaveCount(0);
     const row=page.locator('.station-list article');
     await expect(row.locator('button')).toHaveText(['','','','']);
-    await expect(row.getByRole('button',{name:/开播|Go on air/})).toHaveAttribute('title',/开播|Go on air/);
+    await row.getByRole('button',{name:/开播|Go on air/}).hover();
+    await expect(page.getByRole('tooltip')).toHaveText(/开播|Go on air/);
     await expect(row.locator('.on-air')).toHaveAttribute('aria-label',/已停播|Stopped/);
     await expect(row.locator('.k-card-title')).toContainText(/E2E Radio（公开）|E2E Radio \(Public\)/);
     await expect(row.getByRole('link')).toHaveAttribute('href',/\/hls\/.*live.m3u8$/);
@@ -239,8 +284,9 @@ test('推流工作台：全曲库、整卡队列与多时段一次保存', async
     await row.getByRole('button',{name:/^配置$|^Configure$/}).click();
     await expect(queue.locator('.slot-row').first().getByLabel(/开始|Start/,{exact:true})).toHaveValue('08:30');
     await page.locator('.workbench-toolbar').getByRole('button',{name:/^删除$|^Delete$/}).click();
-    await expect(dialog).toContainText('E2E Radio');
-    await dialog.getByRole('button',{name:/取消|Cancel/}).click();
+    const confirmation = page.getByRole('alertdialog');
+    await expect(confirmation).toContainText('E2E Radio');
+    await confirmation.getByRole('button',{name:/取消|Cancel/}).click();
     await page.locator('aside button',{hasText:/直播|Live/}).click();
     await expect(page.getByText('E2E Radio').first()).toBeVisible();
     await call('station_delete',{stationId});stationId=undefined;
@@ -271,7 +317,8 @@ for (const locale of ['zh', 'en'] as const) test(`推流双语 ${locale}：校�
     await expect(page.locator('.broadcast h1')).toHaveText(zh ? '推流' : 'Broadcasting');
     const row = page.locator(`article[data-station="${station.id}"]`);
     await expect(row.locator('.k-card-title')).toHaveText(zh ? 'I18N Radio（私密）' : 'I18N Radio (Private)');
-    await expect(row.getByRole('button', { name: zh ? '复制收听地址' : 'Copy stream URL', exact: true })).toHaveAttribute('title', zh ? '复制收听地址' : 'Copy stream URL');
+    await row.getByRole('button', { name: zh ? '复制收听地址' : 'Copy stream URL', exact: true }).hover();
+    await expect(page.getByRole('tooltip')).toHaveText(zh ? '复制收听地址' : 'Copy stream URL');
     await row.getByRole('button', { name: zh ? '开播' : 'Go on air', exact: true }).click();
     const emptyQueue = zh ? '开播前请先添加系统歌单或全曲库。' : 'Add a playlist or all tracks before broadcasting.';
     await expect(page.getByText(emptyQueue, { exact: true })).toBeVisible();

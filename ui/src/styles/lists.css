@@ -34,17 +34,17 @@
 .row {
   display: grid;
   grid-template-columns:
-    22px 34px 42px minmax(150px, 2.2fr) minmax(100px, 1.3fr) minmax(100px, 1.3fr)
+    22px 34px 42px minmax(0, 2.2fr) minmax(0, 1.3fr) minmax(0, 1.3fr)
     56px;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   padding: 0 12px;
 }
 
 .list-shell.no-batch .grid-head,
 .list-shell.no-batch .row {
   grid-template-columns:
-    34px 42px minmax(150px, 2.2fr) minmax(100px, 1.3fr) minmax(100px, 1.3fr)
+    34px 42px minmax(0, 2.2fr) minmax(0, 1.3fr) minmax(0, 1.3fr)
     56px;
 }
 
@@ -63,7 +63,7 @@
 
 .row {
   height: var(--row-h);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   cursor: default;
   /* 行与行贴在一起，多选时分不清边界。2px 透明底边框制造视觉间隙——footprint
      不变（border-box），虚拟滚动的行高算术一行都不用改；background-clip 让 hover/ 选中/播放中底色不画进边框区，间隙才是真的"空" */
@@ -129,7 +129,8 @@
 .row .play-btn {
   position: absolute;
   inset: 0;
-  display: none;
+  display: inline-flex;
+  opacity: 0;
   align-items: center;
   justify-content: center;
   padding: 0;
@@ -140,8 +141,9 @@
   cursor: pointer;
 }
 
-.row:hover .play-btn {
-  display: inline-flex;
+.row:hover .play-btn,
+.row:focus-within .play-btn {
+  opacity: 1;
 }
 
 .row .play-btn:hover {
@@ -213,6 +215,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.row .title { font-size: var(--fs-md); }
 
 .cell.dim {
   color: var(--text-2);

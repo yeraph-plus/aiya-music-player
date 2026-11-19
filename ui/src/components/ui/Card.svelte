@@ -20,19 +20,20 @@
     icon?: Snippet;
     onclick?: () => void;
     titleAttr?: string;
+    avatar?: boolean;
     actions?: Snippet;
     metadata?: Snippet;
     children?: Snippet;
   }
 
-  let { title, subtitle, cover, icon, onclick, titleAttr, actions, metadata, children }: Props = $props();
+  let { title, subtitle, cover, icon, onclick, titleAttr, avatar = false, actions, metadata, children }: Props = $props();
 </script>
 
 {#snippet content()}
   {#if cover !== undefined}
     <Cover src={cover} size="md" />
   {:else if icon}
-    <span class="k-card-icon" aria-hidden="true">{@render icon()}</span>
+    <span class="k-card-icon" class:avatar aria-hidden="true">{@render icon()}</span>
   {/if}
   <span class="k-card-text">
     <span class="k-card-title">{title}</span>
@@ -89,14 +90,15 @@
     flex: none;
     display: grid;
     place-items: center;
-    width: 48px;
-    height: 48px;
+    width: 3rem;
+    height: 3rem;
     border-radius: var(--radius-md);
     background: var(--surface-cover);
     color: var(--accent-text);
   }
 
   .k-card-actions {display:flex;align-items:center;gap:var(--space-2);flex:none;}
+  .k-card-icon.avatar {border-radius:var(--radius-pill);}
   .with-body {display:block;padding:var(--space-5);}.k-card-head {display:flex;align-items:center;gap:var(--space-3);}.k-card-body {border-top:1px solid var(--line);margin-top:var(--space-3);padding-top:var(--space-4);}
 
   .k-card-text {
@@ -111,7 +113,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: var(--fs-base);
+    font-size: var(--fs-md);
     font-weight: 500;
   }
 
@@ -119,7 +121,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: var(--fs-sm);
+    font-size: var(--fs-base);
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
   }

@@ -12,19 +12,7 @@
   import { nav } from '../stores/nav.svelte';
   import { ui } from '../stores/ui.svelte';
 
-  /**
-   * 正在播放页。
-   *
-   * 内容层（第 4 层）= 左列封面信息 + 右列歌词，**去卡片化**浮在背景上；
-   * 第 1-2 层（固定渐变 / 山形环境光）由 AppShell 根部的 AmbientBackdrop
-   * 全应用提供，本页**不画自己的背景**：侧栏在这一页整体退出、
-   * 主区铺满，背景层因此连续地铺满整个窗口。
-   *
-   * 页内**可视化**（形态由设置「频谱形态」控制：
-   * 镜像曲线 / 径向环形 / 中轴波纹）垫在两栏内容之后——
-   * 与背景层共享同一 SpectrumSource 实例（start/stop 引用计数叠放），
-   * 数据源按 `npSpectrum` 开关派生：关了只影响本页，背景照常。
-   */
+  /** 封面与歌词位于共享 GL 画布之上，频谱只登记本页内容区域。 */
   const current = $derived(player.state?.current ?? null);
   const spectrumStyle = $derived(ui.settings.spectrumStyle);
 
@@ -78,7 +66,7 @@
           </span>
         {/if}
       {/if}
-      <h1>{current?.title ?? t('shell.player.notPlaying')}</h1>
+      <h1 title={current?.title}>{current?.title ?? t('shell.player.notPlaying')}</h1>
       {#if current}
         {#if current.album && current.albumId}
           <button

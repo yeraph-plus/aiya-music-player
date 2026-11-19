@@ -1207,9 +1207,6 @@ async fn dispatch(
         }
         "library_scan" => {
             // busy 闸在 run_scan_inline 内自持（ScanFlagGuard：早退/panic 全路径复位）
-            st.scan
-                .cancel
-                .store(false, std::sync::atomic::Ordering::SeqCst);
             let st2 = std::sync::Arc::clone(st);
             let result = blocking(move || crate::scan::run_scan_inline(&st2, "action"))
                 .await?
@@ -1237,6 +1234,24 @@ async fn dispatch(
                 out
             };
             let cleaned = normalize(vec_s_arg(a, "roots").unwrap_or_default());
+            let existing = db_lock(st)
+                .send(|conn| Ok((read_roots(conn), crate::state::read_paused_roots(conn))))
+                .map_err(ApiError::from)?;
+            for root in &cleaned {
+                if !existing
+                    .0
+                    .iter()
+                    .chain(&existing.1)
+                    .any(|p| crate::scan::root_key(p) == crate::scan::root_key(root))
+                {
+                    let path = std::path::Path::new(root);
+                    if !path.is_absolute() || !path.is_dir() {
+                        return Err(ApiError::invalid_arg(format!(
+                            "Folder does not exist or is not an absolute directory: {root}"
+                        )));
+                    }
+                }
+            }
             let watched: std::collections::HashSet<std::path::PathBuf> =
                 cleaned.iter().map(|r| crate::scan::root_key(r)).collect();
             let paused_cleaned: Vec<String> = normalize(vec_s_arg(a, "paused").unwrap_or_default())

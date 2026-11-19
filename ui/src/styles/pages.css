@@ -12,8 +12,7 @@
 
 /* 装饰英文：页面头（.ch-kicker，Header 内）与首页区块标题（.page-kicker）同源。
    大写 + 宽字距，字号比正文大半档（原 fs-xs 放大一档），压住标题上缘 */
-.page-kicker,
-.ch-kicker {
+.page-kicker {
   font-size: var(--fs-sm);
   font-weight: 600;
   letter-spacing: 0.16em;
@@ -23,8 +22,7 @@
 
 /* 英文模式取消装饰字：英文界面里它不是装饰，是和标题同语言的重复信息。
    data-lang 由 App 的 effect 按设置语言写在 <html> 上 */
-[data-lang='en'] .page-kicker,
-[data-lang='en'] .ch-kicker {
+[data-lang='en'] .page-kicker {
   display: none;
 }
 
@@ -64,7 +62,7 @@
   align-items: center;
   height: 18px;
   padding: 0 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--surface-hover);
   color: var(--text-2);
   font-size: var(--fs-sm);
@@ -77,7 +75,9 @@
 
 /* 歌单卡的尺寸常量：卡面 148px 见方（卡宽与卡高同源，滚动槽宽也吃它） */
 .home-page {
-  --pl-cover-size: 148px;
+  --pl-cover-size: 9.25rem;
+  container-type:inline-size;
+  container-name:home;
 }
 
 /* 第一行：歌单行（弹性占满）+ 播放统计（贴右），顶部对齐。
@@ -86,7 +86,7 @@
 .home-top {
   display: flex;
   align-items: flex-start;
-  gap: 24px;
+  gap: calc(2 * var(--space-3));
 }
 
 .home-top .home-section:first-child {
@@ -158,7 +158,7 @@
 .home-duo {
   display: flex;
   align-items: flex-start;
-  gap: 24px;
+  gap: calc(2 * var(--space-3));
 }
 
 .home-duo .home-section {
@@ -248,7 +248,7 @@
   position: relative;
   width: var(--pl-cover-size);
   height: var(--pl-cover-size);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   padding: 0;
   border: 1px solid var(--line);
@@ -321,25 +321,17 @@
 
 /* 正在播放 */
 
-/*
- * 两栏：左信息（封面 + 徽章/标题/专辑/艺人）右歌词。整页**无卡片**——
- * 没有边框、没有底色，内容直接浮在背景上；背景四层由 AppShell 根部的
- * AmbientBackdrop 全应用提供（本页进沉浸档遮罩；
- * 预模糊封面 + 频谱环境光 + 主题遮罩）
- * 真正的 backdrop-filter 玻璃只给 .np-meta 一个展示性小块。
- */
+/* 两栏封面与歌词浮在共享 GL 画布上，页内登记的区域决定前景裁切范围。 */
 .now-playing-page {
   position: relative;
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(260px, 4fr) minmax(0, 6fr);
-  gap: 44px;
-  padding: 28px 32px 24px;
-  /* 正在播放页的侧栏已退出（layout.css `.app.np-open`），本页铺满整个窗口。
-   * 居中限宽是**止血**：不限的话大屏上左列封面还是 240px 的小方块，右列歌词
-   * 一行能拉出一米宽。完整重排（封面 clamp、信息回流
-   * 歌词 26em）是 P4 的事，这里先保证"铺满之后不难看"。 */
+  grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: calc(2 * var(--space-5));
+  padding: var(--space-4) calc(2 * var(--space-4));
+  /* 播放页铺满主区，限宽保持封面与歌词的阅读距离。 */
   width: 100%;
   max-width: 1180px;
   margin-inline: auto;
@@ -355,42 +347,32 @@
   z-index: var(--z-content);
 }
 
-/* 左列布局：**封面独占流内、精确上下居中**（240px 不变）；信息块绝对定位——顶边 = 页面中线 + 半个封面高度 + 18px
-   呼吸，即正好从封面下缘开始往下排。不用"整组居中"是因为组里带着信息块，封面中心会被信息块高度顶得偏离页面中线。 */
+/* 信息与封面同处流内，短窗口由信息栏滚动承接。 */
 .np-info {
   position: relative;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  justify-content: center;
   align-items: flex-start;
+  gap: var(--space-4);
+  overflow-y: auto;
+  container-type: size;
+  padding: var(--space-2);
 }
-
 .np-cover {
-  width: min(240px, 100%);
+  width: min(15rem, 100%, max(6rem, 40cqh));
   aspect-ratio: 1;
   height: auto;
-  border-radius: 16px;
+  margin-top: auto;
+  border-radius: var(--radius-xl);
   object-fit: cover;
   background: var(--surface-cover);
   box-shadow: var(--shadow-4);
   flex: none;
 }
-
-.np-cover-empty {
-  display: grid;
-  place-items: center;
-  color: var(--text-3);
-}
-
-/* 信息块**无底色无玻璃**：背景固定渐变自身已保证可读性，不垫毛玻璃卡片。绝对定位锚在封面下方（见 .np-info 注释）。 */
-.np-meta {
-  position: absolute;
-  top: calc(50% + 120px + 18px); /* 中线 + 半封面(240/2) + 18px 呼吸 */
-  left: 0;
-  min-width: 0;
-  max-width: 100%;
-}
+.np-cover-empty { display:grid; place-items:center; color:var(--text-3); }
+.np-meta { min-width:0; width:100%; margin-bottom:auto; flex:none; }
 
 /* 格式徽章是信息块第一项：FLAC/MP3 等格式名 + 采样率位深或比特率 */
 .audio-spec {
@@ -399,7 +381,7 @@
   font-size: var(--fs-sm);
   color: var(--accent-text);
   background: var(--accent-weak);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 3px 10px;
 }
 
@@ -427,8 +409,10 @@
 
 .np-meta .np-line.np-album {
   font-size: var(--fs-base);
-  color: var(--text-3);
+  color: var(--np-text);
 }
+
+.np-meta .np-line, .np-meta .audio-spec { color: var(--np-text); }
 
 .np-meta button.np-line {
   display: block;
@@ -456,70 +440,6 @@
   align-self: center;
   height: min(64vh, 640px);
   max-height: 100%;
-}
-
-/*
- * 当前句的衬底：一团**渐隐的暗雾**，压在频谱之上、歌词文字之下。
- *
- * 为什么不是给频谱加 mask（更早的做法）：横向渐隐会把右半边的频谱条
- * 整条削没，频谱看着就是残缺的。矛盾其实只在"当前句这一小块"——
- * 那里垫一层暗色，对比度就回来了，频谱还能全宽画完。
- *
- * - 硬椭圆会被读成一块"膏体"，深色背景上尤其像脏斑。所以衰减要拉长到
- *   88% 才收干，再加 14px 模糊，边缘没有可辨认的包络。
- * - 中途试过翻成白光（提亮托底），视觉上变成一条发光横带，且白字压在白
- *   光上对比度掉得厉害（实测 2.1–2.3:1）。定版回到黑色。注意黑色不能照搬
- *   白光那版的参数（95% 收干 + blur 22）：减法被摊薄后压暗量只剩 3–4 个
- *   灰阶，等于没画。
- *
- * 为什么是这一行自己的子元素（`.lyric-halo`，由 LyricsPanel 渲染）而不是
- * 容器正中的伪元素：伪元素只能钉在 `.np-lyrics` 的中心，靠"激活行总被滚到
- * 中线"这条约定间接对上；一旦 smooth 滚动未落定、用户手动滚走，衬底就悬在
- * 空处。真元素跟着这一行走，切句、滚动、高度变化全部自洽。
- *
- * 层序靠 `z-index: -1`：激活行本身不是层叠上下文（opacity 1、无 transform），
- * 所以衬底会冒泡到 `.np-lyrics`（它自己有 `position:relative; z-index:1`，
- * 是独立层叠上下文）里、排在**所有文字之下**。这一点很关键——如果给这一行
- * 加 `isolation: isolate` 把衬底关在行内，整行就成了 z-index:0 的层叠上下文，
- * 会连衬底一起抬到上下相邻的歌词行**之上**，把邻句文字压暗。
- */
-.np-lyrics .lyric-line.active {
-  /* 衬底的定位参照物；不给 isolation，见上 */
-  position: relative;
-}
-
-.np-lyrics .lyric-halo {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  /* 宽扁形：横向跟列宽同宽（100% — 比 118% 收窄，衬底不再左右各探出一截变成横带），纵向 124px（激活行高 60px，上下各溢
-     32px）——原 200px 纵向铺太开，上半截糊到上一句上，读起来像一片雾。 */
-  width: 100%;
-  height: 124px;
-  transform: translate(-50%, -50%);
-  z-index: var(--z-under);
-  pointer-events: none;
-  /*
-   * 两处配套（都是对着截图实测调出来的）：
-   * - 衰减要长且连续：早先版本 40% 处还有 68%，中心一大片实色，边界就露出来，
-   *   整团读成一块"膏体"。现在 88% 才收干、中间 100→65→32→11→0，水平亮度
-   *   剖面单调递减无拐点，边缘没有可辨认的包络。
-   * - blur 兜底：渐变的椭圆弧是"数学曲线"，肉眼对弧线极敏感（截图里能看见
-   *   左右各一道弧）。14px 模糊把最后那点弧度抹平，才像"一层雾压在这儿"。
-   *   filter 会建层叠上下文，但元素自己就是 z-index:-1，整体仍排在所有
-   *   文字之下，不影响上面那条层序结论。
-   * 注意别照搬白光那版的参数（衰减到 95% + blur 22）：黑色是减法，被摊薄
-   * 后压暗量只剩 3–4 个灰阶，等于没画。黑色要更实的核心、更短的模糊。
-   */
-  background: radial-gradient(
-    ellipse 50% 50% at 50% 50%,
-    var(--np-scrim) 0%,
-    color-mix(in srgb, var(--np-scrim) 65%, transparent) 24%,
-    color-mix(in srgb, var(--np-scrim) 32%, transparent) 46%,
-    color-mix(in srgb, var(--np-scrim) 11%, transparent) 68%,
-    transparent 88%
-  );
-  filter: blur(14px);
 }
 
 .np-lyrics .lyrics-panel {
@@ -550,6 +470,7 @@
   text-align: center;
   font-size: var(--fs-lg);
   line-height: 1.5;
+  color: var(--np-text);
   /* 字号要过渡，否则切句时整块歌词会"跳"一下；只过渡字形不涉及布局重排
      之外的东西，代价可接受（每句最多一次） */
   transition:
@@ -559,17 +480,16 @@
     background 140ms var(--ease);
 }
 
-.np-lyrics .lyric-line.past {
-  opacity: 0.55;
-}
-
 .np-lyrics .lyric-line.active {
   background: transparent;
+  color: var(--accent-text);
   font-size: var(--fs-hero);
   line-height: 1.35;
   font-weight: 650;
   letter-spacing: -0.01em;
   opacity: 1;
+  /* 紧贴字形的轮廓与柔影仅作用于当前句，换行时随每个字形绘制。 */
+  text-shadow: 0 0 2px var(--np-lyric-shadow), 0 2px 6px var(--np-lyric-shadow), 0 0 12px var(--np-lyric-shadow);
 }
 
 /* hover 只提亮文字，不铺横条：居中排版里一整行底色会读成"一条横幅"，
@@ -583,6 +503,11 @@
 .np-lyrics .lyrics-body {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
+}
+
+.np-lyrics .lyrics-body:focus-within {
+  mask-image: none;
+  -webkit-mask-image: none;
 }
 
 .np-lyrics .lyrics-body:hover {
@@ -614,17 +539,6 @@
 /* 直播页样式归 `views/LiveView.svelte` 的 scoped 段：全局不保留
    无主的 `.radio-page` 规则（这里没有任何会匹配它的选择器）。 */
 
-/* 设置单页 */
-
-.settings-section {
-  /* 720：控件（开关/分段）不顶着行尾——太宽的话 space-between 会把
-     控件推到离标题很远的位置，观感是"选项贴右" */
-  max-width: 720px;
-  margin: 0 auto;
-  padding-bottom: 8px;
-  scroll-margin-top: 8px;
-}
-
 /* 音乐库与任务区块 */
 
 .library-tools {
@@ -636,7 +550,7 @@
 .library-roots {
   padding: 14px 16px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--surface-2);
   display: flex;
   flex-direction: column;
@@ -661,27 +575,6 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
-}
-
-/* Web 宿主的路径输入（无系统选择器时的添加目录形态）：与按钮同高同圆角 */
-.roots-actions .root-input {
-  width: 220px;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface-input);
-  color: var(--text-1);
-  font-size: var(--fs-sm);
-  outline: none;
-}
-
-.roots-actions .root-input:focus-visible {
-  border-color: var(--accent);
-}
-
-.roots-actions .root-input::placeholder {
-  color: var(--text-2);
 }
 
 /* 目录条目列表：整行一个目录（等宽字体 + 悬停出标题），右侧移除钮 */
@@ -915,7 +808,7 @@
   gap: 8px;
   padding: 12px 14px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--surface-2);
 }
 
@@ -947,7 +840,7 @@
 .beets-tool-meta .lock-badge {
   border: 1px solid var(--warn, var(--danger));
   color: var(--warn, var(--danger));
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0 8px;
   font-size: var(--fs-xs);
   white-space: nowrap;
@@ -998,7 +891,7 @@
 .task-status {
   padding: 12px 16px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--surface-2);
   display: flex;
   flex-direction: column;
@@ -1044,7 +937,7 @@
   grid-column: auto;
   border: 1px solid var(--line);
   border-left: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   backdrop-filter: none;
   background: var(--surface-2);
 }
@@ -1062,7 +955,7 @@
    展开才占视觉重量。（原「高级与诊断」折叠区已整体迁去设置页「关于」tab） */
 .maint-fold {
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--surface-2);
 }
 
@@ -1128,3 +1021,13 @@
   }
 }
 
+
+@container home (max-width: 50rem) {
+  .home-duo { flex-direction:column; }
+  .home-duo .home-section { width:100%; }
+  .home-top { flex-direction:column; gap:var(--space-4); }
+  .home-top .home-section:first-child { width:100%; }
+  .home-stats { flex-direction:row; flex-wrap:wrap; align-items:baseline; gap:var(--space-4); }
+  .home-stats::before { display:none; }
+  .home-stats .stat-block { margin-top:0; }
+}

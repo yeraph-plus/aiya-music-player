@@ -60,13 +60,13 @@
   const GRID: Record<Column, string> = {
     index: '34px',
     cover: '42px',
-    title: 'minmax(120px, 2.2fr)',
-    artist: 'minmax(80px, 1.3fr)',
-    album: 'minmax(80px, 1.3fr)',
-    plays: '56px',
-    duration: '56px',
-    added: '80px',
-    lastPlayed: '80px',
+    title: 'minmax(0, 2.2fr)',
+    artist: 'minmax(0, 1.3fr)',
+    album: 'minmax(0, 1.3fr)',
+    plays: '3.5rem',
+    duration: '3.5rem',
+    added: '5rem',
+    lastPlayed: '5rem',
   };
 
   /** 列 → 表头文案（$derived：语言切换时跟随）。cover 列无表头 */
@@ -119,8 +119,8 @@
       tabindex="0"
       style:grid-template-columns={gridStyle}
       ondblclick={(event) => {
+        if ((event.target as HTMLElement | null)?.closest('button')) return;
         onplay(index);
-        void event;
       }}
       onkeydown={(event) => {
         if ((event.target as HTMLElement | null)?.closest('button')) return;

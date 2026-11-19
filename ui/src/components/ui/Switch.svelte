@@ -39,8 +39,8 @@
   :global(.k-switch) {
     position: relative;
     flex: none;
-    width: 38px;
-    height: 22px;
+    width: 2.375rem;
+    height: 1.375rem;
     padding: 0;
     border-radius: var(--radius-pill);
     background: var(--surface-hover);
@@ -63,10 +63,10 @@
 
   :global(.k-switch-thumb) {
     position: absolute;
-    top: 3px;
-    left: 3px;
-    width: 16px;
-    height: 16px;
+    top: .1875rem;
+    left: .1875rem;
+    width: 1rem;
+    height: 1rem;
     border-radius: 50%;
     background: var(--accent-fg);
     box-shadow: var(--shadow-1);
@@ -74,6 +74,6 @@
   }
 
   :global(.k-switch[data-state='checked'] .k-switch-thumb) {
-    transform: translateX(16px);
+    transform: translateX(1rem);
   }
 </style>

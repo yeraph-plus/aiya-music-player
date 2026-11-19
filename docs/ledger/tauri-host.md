@@ -5,6 +5,10 @@
 
 ## 条目（新→旧）
 
+- 2026-11-18 · library_scan_body · 扫描终态绕过 100ms 进度节流，保证快速小曲库收到完成事件并刷新界面；隔离三首曲库重编译复测 done 与统计 · docs/77 C。
+
+- 2026-11-18 · aiya-server/scan.rs · 定时扫描静默运行，结果走刷新事件，不向阶段通道发送 RefreshSnapshot；手动扫描更新诊断快照，避免索引完成后被无 phase 载荷覆盖为 unknown · docs/76。
+
 - 2026-11-18 · aiya-server/station.rs · 切歌跳过当前输出源；引擎就绪后登记已应用指纹，启动失败统一清理，InProcess 停止等待守护任务退出且可中断退避 · docs/74、75 整批静态审查与真实 Liquidsoap 对照。
 
 - 2026-11-18 · aiya-dto/station.rs、aiya-server/program.rs · 推流来源增加内置全曲库 __library__，不创建数据库歌单；优先级归队列项，终点支持 24:00，同一来源多个时段合并为单一选源条件 · docs/75 第四阶段更新来源与时间契约，无旧配置兼容。

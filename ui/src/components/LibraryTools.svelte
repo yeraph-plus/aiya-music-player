@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { FolderOpen, Radar, RefreshCw, ScanSearch } from '@lucide/svelte';
+  import { Radar, RefreshCw, ScanSearch } from '@lucide/svelte';
+  import AddLibraryFolder from './AddLibraryFolder.svelte';
   import Button from './ui/Button.svelte';
   import Popover from './ui/Popover.svelte';
   import Progress from './ui/Progress.svelte';
   import Icon from './Icon.svelte';
   import { errorMessage } from '../lib/errors';
   import { t } from '../lib/i18n.svelte';
-  import { isNative } from '../lib/window-chrome';
+  import { rootKey } from '../lib/library-path';
   import { history } from '../stores/history.svelte';
   import { library } from '../stores/library.svelte';
   import { scan } from '../stores/scan.svelte';
@@ -77,16 +78,14 @@
   /** 行展示序：监听中在前、停用在后（后端对两组各自保序归一化） */
   const displayRoots = $derived([...library.roots, ...library.pausedRoots]);
 
-  /** 监听判定走大小写不敏感比较：后端归一化不改变已有条目的大小写 */
+  /** 路径比较遵循目录宿主语义，POSIX 路径保留大小写。 */
   function isWatched(root: string): boolean {
-    const lower = root.trim().toLowerCase();
-    return library.roots.some((r) => r.trim().toLowerCase() === lower);
+    return library.roots.some((r) => rootKey(r) === rootKey(root));
   }
 
-  /** 大小写不敏感地剔除一个路径（两组列表都用它做移动/遗忘） */
+  /** 从监听组或停用组移除同一目录。 */
   function withoutPath(paths: string[], target: string): string[] {
-    const lower = target.trim().toLowerCase();
-    return paths.filter((p) => p.trim().toLowerCase() !== lower);
+    return paths.filter((p) => rootKey(p) !== rootKey(target));
   }
 
   onMount(() => {
@@ -170,38 +169,6 @@
     }
   }
 
-  /** 添加目录：系统选择器选中即追加（后端 `library_choose_root` 追加语义） */
-  async function addRoot(): Promise<void> {
-    await scan.pickRootAndScan();
-  }
-
-  /**
-   * Web 宿主没有系统目录选择器：绝对路径文本输入，追加进曲库根后立即索引。
-   * 语义与桌面的选目录追加一致（`library.saveRoots` 全量写回 + `scan.start()`）；
-   * 容器部署里宿主把任意目录挂进容器，路径在应用内配——输入容器内路径。
-   */
-  let rootDraft = $state('');
-  const normPath = (p: string): string => p.trim().replace(/[\\/]+$/, '');
-  async function addRootByPath(): Promise<void> {
-    const path = normPath(rootDraft);
-    if (!path || saving || clearing || library.scanning) return;
-    if (displayRoots.some((r) => normPath(r).toLowerCase() === path.toLowerCase())) {
-      showNotice(t('library.tools.noticeRootExists'));
-      return;
-    }
-    saving = true;
-    rootsError = null;
-    try {
-      await library.saveRoots([...library.roots, path], library.pausedRoots);
-      rootDraft = '';
-      await scan.start();
-    } catch (err) {
-      rootsError = errorMessage(err);
-    } finally {
-      saving = false;
-    }
-  }
-
   /* 清空曲库 */
 
   async function doClear(): Promise<void> {
@@ -244,28 +211,7 @@
     <div class="roots-head">
       <strong>{t('library.tools.rootsTitle')}</strong>
       <div class="roots-actions">
-        {#if isNative}
-          <Button size="sm" onclick={() => void addRoot()} disabled={saving || clearing || library.scanning}>
-            {#snippet icon()}<FolderOpen size={14} />{/snippet}
-            {t('library.tools.addFolder')}
-          </Button>
-        {:else}
-          <!-- Web 宿主：无系统选择器，绝对路径手输（容器部署把宿主目录挂进容器，
-               路径在应用内配——AIYA_MUSIC_DIR 只是首启种子） -->
-          <input
-            class="root-input"
-            type="text"
-            bind:value={rootDraft}
-            placeholder={t('library.tools.rootPlaceholder')}
-            aria-label={t('library.tools.addFolder')}
-            spellcheck="false"
-            onkeydown={(e) => e.key === 'Enter' && void addRootByPath()}
-          />
-          <Button size="sm" onclick={() => void addRootByPath()} disabled={saving || clearing || library.scanning}>
-            {#snippet icon()}<FolderOpen size={14} />{/snippet}
-            {t('library.tools.addFolder')}
-          </Button>
-        {/if}
+        <AddLibraryFolder size="sm" disabled={saving || clearing || library.scanning}/>
         <Button variant="primary" size="sm" onclick={() => void scan.start()} disabled={library.scanning || clearing}>
           {#snippet icon()}<ScanSearch size={14} />{/snippet}
           {library.scanning ? t('library.tools.indexing') : t('library.tools.indexNow')}
@@ -411,7 +357,7 @@
           </span>
           <Button variant="link" onclick={() => scan.cancel()}>{t('library.tools.cancelTask')}</Button>
         </div>
-        <Progress value={progress.total ? Math.min(100, Math.round((progress.scanned / progress.total) * 100)) : 8} label={t('library.tools.progressLabel')} size="md" />
+        <Progress value={progress.total ? Math.min(100, Math.round((progress.scanned / progress.total) * 100)) : null} label={t('library.tools.progressLabel')} size="md" />
         <div class="task-detail">
           {#if progress.phase === 'walking'}
             {t('library.tools.walkingLine')}
@@ -427,6 +373,8 @@
             {t('library.tools.lastIndexMain', { imported: progress.imported, updated: progress.updated, missing: progress.missing, skipped: progress.skipped })}{#if progress.failed} · <span class="danger">{t('library.tools.lastIndexFailed', { failed: progress.failed })}</span>{/if} {t('library.tools.lastIndexDuration', { s: Math.round(progress.elapsedMs / 100) / 10 })}
           {:else if progress.phase === 'cancelled'}
             {t('library.tools.lastIndexCancelled')}
+          {:else if progress.phase === 'failed' && progress.message}
+            <span class="danger" role="alert">{progress.message}</span>
           {:else}
             {t('library.tools.lastIndexAborted', { phase: progress.phase })}
           {/if}

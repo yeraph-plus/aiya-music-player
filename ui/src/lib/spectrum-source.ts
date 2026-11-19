@@ -39,6 +39,7 @@ export class RemoteSpectrumSource implements SpectrumSource {
   private running = false;
   private refs = 0;
   private disposed = false;
+  private lastFrameAt = -Infinity;
   private unsubscribe: (() => void) | null = null;
 
   constructor(bandCount = 48) {
@@ -47,7 +48,7 @@ export class RemoteSpectrumSource implements SpectrumSource {
   }
 
   get live(): boolean {
-    return this.running && this.unsubscribe !== null;
+    return this.running && performance.now() - this.lastFrameAt < 1000;
   }
 
   start(): void {
@@ -59,8 +60,10 @@ export class RemoteSpectrumSource implements SpectrumSource {
     void ipc.app.spectrumSet(true).catch(() => undefined);
     this.unsubscribe = events.spectrumFrame((frame) => {
       if (!this.running || !Array.isArray(frame)) return;
+      this.lastFrameAt = performance.now();
       const n = Math.min(this.bandCount, frame.length);
       for (let i = 0; i < n; i += 1) this.bands[i] = (frame[i] ?? 0) / 255;
+      this.bands.fill(0, n);
     });
   }
 
@@ -74,6 +77,7 @@ export class RemoteSpectrumSource implements SpectrumSource {
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.bands.fill(0);
+    this.lastFrameAt = -Infinity;
   }
 
   frame(): Float32Array {
@@ -82,6 +86,7 @@ export class RemoteSpectrumSource implements SpectrumSource {
 
   dispose(): void {
     this.disposed = true;
+    this.refs = 0;
     this.stop();
   }
 }

@@ -11,6 +11,7 @@ import { defineConfig } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e/http',
+  outputDir: './test-results/http-regression',
   timeout: 30_000,
   retries: 0,
   workers: 1, // 单实例服务端 + 共享曲库，禁并发

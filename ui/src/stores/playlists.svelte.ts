@@ -100,14 +100,15 @@ class PlaylistsStore {
     }
   }
 
-  async rename(playlist: PlaylistSummary, name: string): Promise<void> {
+  async rename(playlist: PlaylistSummary, name: string): Promise<boolean> {
     try {
       await ipc.playlist.rename(playlist.id, name);
     } catch (err) {
       notify.showError(errorMessage(err));
-      return;
+      return false;
     }
     await this.refresh();
+    return true;
   }
 
   /**
@@ -203,16 +204,17 @@ class PlaylistsStore {
   }
 
   /** 歌单内拖动排序 */
-  async moveItem(from: number, to: number): Promise<void> {
+  async moveItem(from: number, to: number): Promise<boolean> {
     const view = ui.view;
-    if (view.kind !== 'playlist') return;
+    if (view.kind !== 'playlist') return false;
     try {
       await ipc.playlist.move(view.id, from, to);
     } catch (err) {
       notify.showError(errorMessage(err));
-      return;
+      return false;
     }
     await list.reload({ restore: true });
+    return !list.error;
   }
 
   /** 歌单内删一首（右键「从歌单移除」） */

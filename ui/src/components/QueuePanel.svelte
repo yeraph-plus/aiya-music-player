@@ -1,8 +1,9 @@
 <script lang="ts">
+  import { tick, untrack } from 'svelte';
   import type { TrackDetail } from '../lib/ipc';
   import type { TrackRef } from '../lib/ipc/generated/TrackRef';
   import { artworkUrl } from '../lib/artwork';
-  import { startRowDrag, consumeClickSuppressed } from '../lib/drag';
+  import { startRowDrag } from '../lib/drag';
   import { createVirtualWindow } from '../lib/create-virtual-window.svelte';
   import { formatDurationLong, formatTime, isStreamId, transientOrigin } from '../lib/format';
   import { t } from '../lib/i18n.svelte';
@@ -10,7 +11,7 @@
   import Cover from './ui/Cover.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import IconButton from './ui/IconButton.svelte';
-import Button from './ui/Button.svelte';
+  import Button from './ui/Button.svelte';
   import Icon from './Icon.svelte';
 
   interface Props {
@@ -26,8 +27,8 @@ import Button from './ui/Button.svelte';
     /** 当前播放位置（播放顺序下标）；空队列 = null（契约：不用 -1 哨兵） */
     index: number | null;
     onplay: (index: number) => void;
-    onremove: (index: number) => void;
-    onmove: (from: number, to: number) => void;
+    onremove: (index: number) => Promise<boolean>;
+    onmove: (from: number, to: number) => Promise<boolean>;
     onclear: () => void;
     /** 播放中与否：决定当前行的声条是否跳动 */
     playing: boolean;
@@ -180,25 +181,55 @@ import Button from './ui/Button.svelte';
     }
   });
 
+  let panel: HTMLDivElement | null = $state(null);
+  let pendingFocus: { index: number; ids: string[] } | null = null;
+  $effect(() => {
+    const current = ids;
+    const request = pendingFocus;
+    if (!request || request.ids === current) return;
+    pendingFocus = null;
+    const target = Math.min(request.index, current.length - 1);
+    untrack(() => { void tick().then(() => {
+      if (target < 0) { panel?.querySelector<HTMLButtonElement>('header button:last-child')?.focus(); return; }
+      if (vw.scroller) {
+        vw.scroller.scrollTop = Math.max(0, CONTENT_TOP + target * ROW_HEIGHT - vw.viewportHeight / 2);
+        vw.handleScroll();
+      }
+      void tick().then(() => vw.scroller?.querySelector<HTMLButtonElement>(`[data-queue-index="${target}"]`)?.focus());
+    }); });
+  });
+  function removeRow(rowIndex: number): void {
+    const request = { index: rowIndex, ids };
+    pendingFocus = request;
+    void onremove(rowIndex).then(ok => { if (!ok && pendingFocus === request) pendingFocus = null; });
+  }
+  function rowKey(event: KeyboardEvent, rowIndex: number): void {
+    if (event.key === 'Delete') { event.preventDefault(); removeRow(rowIndex); }
+    if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+      event.preventDefault();
+      const to = rowIndex + (event.key === 'ArrowUp' ? -1 : 1);
+      if (to < 0 || to >= ids.length) return;
+      const request = { index: to, ids };
+      pendingFocus = request;
+      void onmove(rowIndex, to).then(ok => { if (!ok && pendingFocus === request) pendingFocus = null; });
+    }
+  }
+
   function handlePointerDown(event: PointerEvent, rowIndex: number): void {
     startRowDrag({
       event,
+      handle: true,
       index: rowIndex,
       count: ids.length,
       rowHeight: ROW_HEIGHT,
       scroller: vw.scroller,
       onState: (next) => (dragState = next),
-      onDrop: (from, to) => onmove(from, to),
+      onDrop: (from, to) => { void onmove(from, to); },
     });
   }
 </script>
 
-<!-- 职责边界：本组件只渲染内容。定位、Esc、外点关闭、焦点还原、可访问名称与
-aria-expanded 都由外层 SideDrawer 的 role=dialog 提供——aria-label 不允许落在
-无角色的 generic 容器上，写了读屏也会忽略。行内交互语义是 button（Enter/Space
-= 播放、Delete = 移除），子元素因此不得再标 grid 的 cell 角色（button 子树里
-的 cell 对读屏是坏表；列语义由 TrackList 的 grid→row→cell 结构承担）。 -->
-<div class="queue-panel queue-float">
+<div class="queue-panel queue-float" bind:this={panel}>
   <header>
     <strong>{t('shell.drawer.queue')}</strong>
     <span class="dim">{t('common.trackCount', { n: ids.length })}{totalMs > 0 ? ` · ${formatDurationLong(totalMs)}` : ''}</span>
@@ -223,27 +254,16 @@ aria-expanded 都由外层 SideDrawer 的 role=dialog 提供——aria-label 不
           class="queue-row"
           class:active={row.index === index}
           class:drag-source={dragState?.active && dragState.from === row.index}
-          onclick={(event) => {
-            // 拖拽激活后松手会派发一次残留 click，吞掉避免误播放
-            if (consumeClickSuppressed()) {
-              event.stopPropagation();
-              return;
-            }
-            onplay(row.index);
-          }}
-          onpointerdown={(event) => handlePointerDown(event, row.index)}
-          role="button"
-          tabindex="0"
-          onkeydown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              onplay(row.index);
-            } else if (event.key === 'Delete') {
-              onremove(row.index);
-            }
-          }}
         >
-          <span class="q-grip" aria-hidden="true"><Icon name="grip" size={13} /></span>
+          <button type="button" class="q-grip" aria-label={t('now.queue.reorder')}
+            onkeydown={(event) => rowKey(event, row.index)} onpointerdown={(event) => handlePointerDown(event, row.index)}>
+            <Icon name="grip" size={13} />
+          </button>
+          <button type="button" class="q-play" data-queue-index={row.index}
+            aria-label={t('tracks.playTrack', { title: row.transient?.title ?? row.track?.title ?? t('now.queue.loadingMeta') })}
+            aria-current={row.index === index ? 'true' : undefined}
+            onkeydown={(event) => rowKey(event, row.index)}
+            onclick={() => onplay(row.index)}>
           <span class="q-index">
             {#if row.index === index}
               <span class="bars" class:animated={playing === true} aria-label={t('format.status.playing')}>
@@ -277,12 +297,13 @@ aria-expanded 都由外层 SideDrawer 的 role=dialog 提供——aria-label 不
             </span>
             <span class="q-duration">{formatTime(row.track?.durationMs ?? 0)}</span>
           {/if}
+          </button>
           <IconButton
             label={t('now.queue.remove')}
             size="sm"
             onclick={(event) => {
               event.stopPropagation();
-              onremove(row.index);
+              removeRow(row.index);
             }}
           >
             <Icon name="close" size={12} />

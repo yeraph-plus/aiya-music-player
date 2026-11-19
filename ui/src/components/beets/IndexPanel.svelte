@@ -313,12 +313,12 @@
         onchange={(v) => (q.mode = v as 'rules' | 'raw')}
       />
       <span class="beets-dim">{t('beets.query.limitPrefix')}</span>
-      <Select
+      <div class="query-limit"><Select
         label={t('beets.query.limitLabel')}
         value={String(q.limit)}
         options={[100, 200, 500, 2000].map((n) => ({ value: String(n), label: t('beets.query.limitOption', { n }) }))}
         onchange={(v) => (q.limit = Number(v))}
-      />
+      /></div>
     </div>
 
     {#if q.mode === 'rules'}
@@ -391,7 +391,7 @@
     </div>
 
     {#if q.error}
-      <p class="beets-danger">{q.error}</p>
+      <p class="beets-danger" role="alert">{q.error}</p>
     {/if}
   </section>
 
@@ -476,21 +476,22 @@
 {#if q.saveOpen}
   <Dialog
     title={t('beets.result.savePlaylist')}
+    dismissible={!q.saving}
     description={t('beets.save.desc', { n: q.selectedTrackIds.length })}
-    onclose={() => q.closeSave()}
-    autofocus={() => undefined}
+    onclose={() => { if (!q.saving) q.closeSave(); }}
   >
     <Field
       label={t('beets.save.nameLabel')}
       value={q.saveName}
       placeholder={t('beets.save.namePh')}
       maxlength={60}
+      disabled={q.saving}
       oninput={(v) => (q.saveName = v)}
       onenter={() => void q.save()}
       error={q.saveError}
     />
     {#snippet actions()}
-      <Button variant="ghost" onclick={() => q.closeSave()}>{t('common.cancel')}</Button>
+      <Button variant="ghost" disabled={q.saving} onclick={() => q.closeSave()}>{t('common.cancel')}</Button>
       <Button variant="primary" loading={q.saving} onclick={() => void q.save()}>{t('common.save')}</Button>
     {/snippet}
   </Dialog>
@@ -500,41 +501,41 @@
   .mode-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-3);
     flex-wrap: wrap;
   }
 
   .rules {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-3);
   }
 
   .rule-row {
     display: grid;
-    grid-template-columns: minmax(140px, 180px) minmax(96px, 120px) minmax(160px, 1fr) auto;
-    gap: 8px;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.5fr) auto;
+    gap: var(--space-3);
     align-items: center;
   }
 
   .rules-actions {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-3);
   }
 
   .run-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: var(--space-4);
   }
 
   .result-panel {
     display: flex;
     flex-direction: column;
     border: 1px solid var(--line);
-    border-radius: 12px;
-    overflow: hidden;
+    border-radius: var(--radius-lg);
+    overflow: auto;
     background: var(--surface-2);
   }
 
@@ -546,7 +547,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-4);
     padding: 9px 16px;
     background: var(--surface-head);
     backdrop-filter: blur(var(--blur-head));
@@ -557,7 +558,7 @@
     display: flex;
     align-items: center;
     gap: 9px;
-    font-size: var(--fs-base);
+    font-size: var(--fs-md);
   }
 
   /* 表格与表头共用同一套列宽：两边各写一份的话，改列时会漏改一边，
@@ -565,16 +566,16 @@
   .table-head,
   .row {
     display: grid;
-    grid-template-columns: 28px minmax(160px, 2fr) minmax(110px, 1fr) minmax(110px, 1fr);
-    grid-auto-columns: minmax(56px, auto);
+    grid-template-columns: 1.75rem minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+    grid-auto-columns: minmax(3.5rem, auto);
     grid-auto-flow: column;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-3);
     padding: 0 16px;
   }
 
   .table-head {
-    height: 30px;
+    height: 1.875rem;
     font-size: var(--fs-sm);
     color: var(--text-3);
     border-bottom: 1px solid var(--line);
@@ -587,8 +588,8 @@
   }
 
   .row {
-    height: 38px;
-    font-size: var(--fs-base);
+    min-height: 2.375rem;
+    font-size: var(--fs-md);
     color: var(--text-1);
     border-bottom: 1px solid var(--line);
   }
@@ -633,14 +634,18 @@
   .col-extra {
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
-    min-width: 56px;
+    min-width: 0;
   }
 
   code {
     font-family: var(--font-mono, ui-monospace, monospace);
     font-size: var(--fs-sm);
     padding: 1px 5px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     background: var(--surface-input);
   }
+  .rule-row > :global(*) {min-width:0;}
+  .query-limit {width:8rem;}
+  .result-bar,.rules-actions,.run-row {flex-wrap:wrap;}
+  @container (max-width: 34rem) {.rule-row {grid-template-columns:minmax(0,1fr) minmax(0,1fr);}}
 </style>

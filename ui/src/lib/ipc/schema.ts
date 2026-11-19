@@ -30,12 +30,8 @@ export const settingsSchema = z
     npSpectrum: z.boolean().optional(),
     /** 山形光晕档位 */
     ridgeGlow: z.enum(['soft', 'balanced', 'neon']).optional(),
-    /**
-     * 频谱形态。`off` / `wave` 在这里保留：它们是**旧配置里的存量值**，读进来
-     * 要能过校验（再由 mergeSettings 迁移）。新代码不再写这两个值。
-     */
-    spectrumStyle: z.enum(['mirror', 'radial', 'wave', 'ripple', 'off']).optional(),
-    bgSpectrumStyle: z.enum(['ridge', 'ripple']).optional(),
+    spectrumStyle: z.enum(['orbit', 'ribbon', 'lattice', 'contour', 'string', 'shore']).catch('orbit').optional(),
+    bgSpectrumStyle: z.enum(['ridge', 'aurora', 'curtain']).catch('ridge').optional(),
     language: z.string().optional(),
     mediaKeys: z.boolean().optional(),
     autoplayOnStart: z.boolean().optional(),

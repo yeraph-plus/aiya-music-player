@@ -1,22 +1,8 @@
 /**
- * 渲染能力探测。
+ * 硬件 WebGL2 能力探测，结果只描述设备能力，用户开关单独计算。
  *
- * 需要探测而非"有 WebGL 即使用"的原因： 实测显示，软件光栅环境
- * （SwiftShader，对应远程桌面、禁用硬件加速、部分老核显）下 Canvas 2D 管线无法
- * 完成一次测量，而 WebGL shader 版 p95 为 1.3ms。因此"为兼容低端机保留 Canvas 2D"
- * 的直觉并不成立：两条路径都需保留，选择取决于具体机器。
- *
- * 探测结果分三档，只回答"该机器可达到哪一档"：
- *
- *   档 2  WebGL（硬件加速可用）      —— 流动渐变、山形光晕、页面频谱
- *   档 1  Canvas 2D（GL 不可用）      —— 两套 2D 实现，原样保留
- *   档 0  静态背景                    —— 仅 CSS 渐变，不执行逐帧绘制
- *
- * 探测本身只返回 2 或 1。软件光栅落档 1 而非档 0：软栅下 shader 版 p95 1.3ms，
- * 快于 Canvas 2D 管线，保留 2D 兜底优于全部关闭。档 0 仅由用户的「全局 3D 效果」
- * 开关触发（见 `AppShell` 的 `glEffects` 闸门）。
- *
- * 用户开关（`settings.glEffects`）单独计算：关闭时无论探测结果如何均走档 0。
+ * 档 2 表示可创建动态舞台；档 1 表示无法使用硬件 WebGL2。
+ * 档 1 使用 CSS 静态背景，播放页关闭绘制，不申请频谱 tap。
  */
 
 /** 渲染档位（不含用户开关） */
@@ -94,8 +80,6 @@ function probe(): Capability {
 
     gl = strict;
     const renderer = readRenderer(strict);
-    release(strict);
-
     if (SOFTWARE_HINT.test(renderer)) {
       return { tier: 1, hardware: false, renderer, note: 'software renderer string' };
     }

@@ -71,26 +71,16 @@ export function normalizeUiScale(value: unknown): UiScale {
   return (found ?? 100) as UiScale;
 }
 
-/**
- * 正在播放页的频谱形态。
- *
- * 取值：`mirror` 镜像、`radial` 环带、`ripple` 残影（中轴单线 + 反馈式残影
- * 缓冲）、`wave` 波纹（频谱曲线逐带交替成山与谷，振幅跨中线上下两段）。
- * `ripple` 在页内只画一条居中曲线：等深线地形形态（多层等深线铺满下半屏）
- * 与背景层 `bgSpectrumStyle = 'ripple'` 重复，且页内只覆盖内容区，水面会在
- * 画布边缘断开，因此水面仅用于背景。
- *
- * 旧取值 `'off'`（与 `npSpectrum = false` 语义重复）由 `mergeSettings` 消化：
- * 落默认形态，不写回磁盘。
- */
-export type SpectrumStyle = 'mirror' | 'radial' | 'ripple' | 'wave';
+/** 播放页前景形态，与背景开关和形态独立。 */
+export type SpectrumStyle = 'orbit' | 'ribbon' | 'lattice' | 'contour' | 'string' | 'shore';
 
-/** 设置页与 NowPlayingSpectrum 共用的形态清单（id 顺序即展示顺序）；label 存 i18n 键 */
 export const SPECTRUM_STYLES: Array<{ value: SpectrumStyle; label: Msg }> = [
-  { value: 'mirror', label: 'settings.spectrum.mirror' },
-  { value: 'radial', label: 'settings.spectrum.radial' },
-  { value: 'ripple', label: 'settings.spectrum.ripple' },
-  { value: 'wave', label: 'settings.spectrum.wave' },
+  { value: 'orbit', label: 'settings.spectrum.orbit' },
+  { value: 'ribbon', label: 'settings.spectrum.ribbon' },
+  { value: 'lattice', label: 'settings.spectrum.lattice' },
+  { value: 'contour', label: 'settings.spectrum.contour' },
+  { value: 'string', label: 'settings.spectrum.string' },
+  { value: 'shore', label: 'settings.spectrum.shore' },
 ];
 
 /**
@@ -99,9 +89,7 @@ export const SPECTRUM_STYLES: Array<{ value: SpectrumStyle; label: Msg }> = [
  * 审美开关，非性能开关：三档只改 shader 的衰减与线宽系数，开销差异可忽略。
  * "柔雾"（形状不可辨的光）与"锐光"（脊线清晰）互斥，故不固定单档。
  *
- * 山形与波纹共用该档位：两图层几何不同，档位语义仍统一为光的强度与边缘锐度；
- * 语义不统一会使同一档位在两种形态下表现不一致，被视为开关失效。
- * 键名 `ridgeGlow` 沿用山形时期的命名，改名会牵动迁移。
+ * 仅山形消费该档位，其他背景形态使用各自的固定光效。
  */
 export type RidgeGlow = 'soft' | 'balanced' | 'neon';
 
@@ -119,13 +107,15 @@ export const RIDGE_GLOWS: Array<{ value: RidgeGlow; label: Msg }> = [
  * 页内试形态而改动背景。
  *
  * - `ridge` 山形：闭合填充的环境光，边界柔和（默认）
- * - `ripple` 波纹：等深线层叠铺向下半屏，结构感强
+ * - `aurora` 极光绸幕：宽光带与平滑折叠
+ * - `curtain` 漫射光帘：柔和的垂直明暗
  */
-export type BgSpectrumStyle = 'ridge' | 'ripple';
+export type BgSpectrumStyle = 'ridge' | 'aurora' | 'curtain';
 
 export const BG_SPECTRUM_STYLES: Array<{ value: BgSpectrumStyle; label: Msg }> = [
   { value: 'ridge', label: 'settings.bgSpectrumStyle.ridge' },
-  { value: 'ripple', label: 'settings.bgSpectrumStyle.ripple' },
+  { value: 'aurora', label: 'settings.bgSpectrumStyle.aurora' },
+  { value: 'curtain', label: 'settings.bgSpectrumStyle.curtain' },
 ];
 
 export interface AppSettings {
@@ -166,7 +156,7 @@ export interface AppSettings {
   npSpectrum: boolean;
   /** 频谱形态：正在播放页可视化的形态（背景形态见 `bgSpectrumStyle`） */
   spectrumStyle: SpectrumStyle;
-  /** 背景频谱形态（山形 / 波纹）；与页内的 `spectrumStyle` 各自独立 */
+  /** 背景频谱形态（山形 / 极光绸幕 / 漫射光帘）；与页内的 `spectrumStyle` 各自独立 */
   bgSpectrumStyle: BgSpectrumStyle;
   /** 背景山形光晕档位（审美开关，见 `RidgeGlow`；只对山形形态有效） */
   ridgeGlow: RidgeGlow;
@@ -260,8 +250,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // 背景/页面频谱：背景默认开（山形环境光是应用的主视觉之一），页面默认关
   bgSpectrum: true,
   npSpectrum: false,
-  // 默认环带
-  spectrumStyle: 'radial',
+  // 默认轨道光环
+  spectrumStyle: 'orbit',
   // 背景默认山形：常驻图层，不因新增形态而改变既有观感
   bgSpectrumStyle: 'ridge',
   // 默认柔雾：有氛围不刺眼

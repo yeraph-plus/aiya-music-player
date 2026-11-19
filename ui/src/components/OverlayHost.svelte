@@ -4,7 +4,9 @@
   import Button from './ui/Button.svelte';
   import Cover from './ui/Cover.svelte';
   import Dialog from './ui/Dialog.svelte';
+  import AlertDialog from './ui/AlertDialog.svelte';
   import Field from './ui/Field.svelte';
+  import InlineError from './ui/InlineError.svelte';
   import Menu from './ui/Menu.svelte';
   import Toast from './ui/Toast.svelte';
   import { playlistMenuItems, trackMenuItems } from '../lib/menu';
@@ -152,6 +154,8 @@
   }
 
   let editName = $state('');
+  let editBusy = $state(false);
+  let editError = $state<string | null>(null);
   let editKind = $state<'manual' | 'smart'>('manual');
   let editRule = $state<SmartRule>({ all: [], sort: 'title', direction: 'asc' });
   let nameInput = $state<HTMLInputElement | null>(null);
@@ -162,6 +166,7 @@
   $effect(() => {
     const d = overlay.dialog;
     if (d?.kind === 'playlistEdit') {
+      editError = null;
       editName = d.playlist?.name ?? '';
       editKind = d.playlist ? (d.playlist.kind === 'smart' ? 'smart' : 'manual') : 'manual';
       editRule = parseRuleJson(d.playlist?.ruleJson);
@@ -230,7 +235,8 @@
     return editGenres.includes(current) ? editGenres : [current, ...editGenres];
   }
 
-  function submitPlaylistEdit(): void {
+  async function submitPlaylistEdit(): Promise<void> {
+    if (editBusy) return;
     const name = editName.trim();
     if (!name) return;
     const d = overlay.dialog;
@@ -248,24 +254,26 @@
       };
       const err = validateRule(rule);
       if (err) {
-        notify.showError(err);
+        editError = err;
+        nameInput?.focus();
         return;
       }
     }
     const existing = d.playlist;
-    const seed = d.seedIds;
-    overlay.closeDialog();
-    if (existing) {
-      const shouldRename = existing.name !== name;
-      if (isSmart) {
-        // 名称与规则是两路命令：都发，规则保存自带提示
-        if (shouldRename) void playlists.rename(existing, name);
-        void playlists.setRule(existing, rule);
-      } else if (shouldRename) {
-        void playlists.rename(existing, name);
+    editBusy = true;
+    editError = null;
+    try {
+      let ok = true;
+      if (existing) {
+        if (existing.name !== name) ok = await playlists.rename(existing, name);
+        if (ok && isSmart) ok = await playlists.setRule(existing, rule);
+      } else {
+        ok = !!(await playlists.create(name, d.seedIds, isSmart ? rule : undefined));
       }
-    } else {
-      void playlists.create(name, seed, isSmart ? rule : undefined);
+      if (ok && overlay.dialog === d) overlay.closeDialog();
+      else if (!ok) editError = notify.error;
+    } finally {
+      editBusy = false;
     }
   }
 
@@ -441,21 +449,22 @@
   动态值控件」两列；排序与上限已移除（入库按标题排序，视图内可拖拽重排，刷新只追加），编辑器仅保留条件行。名称输入框在对话框打开时初始化（见 script 中的 effect），否则歌单列表刷新会覆盖正在输入的内容。 -->
   <Dialog
     title={editing ? t('shell.playlist.editTitle') : t('shell.playlist.newTitle')}
-    onclose={() => overlay.closeDialog()}
+    dismissible={!editBusy}
+    onclose={() => { if (!editBusy) overlay.closeDialog(); }}
     autofocus={() => {
       nameInput?.focus();
       // 编辑场景是「改已有名字」，全选后直接输入比让用户先删更快
       if (editing) nameInput?.select();
     }}
   >
-    <div class="prompt-body">
+    <form id="playlist-edit" onsubmit={event => { event.preventDefault(); void submitPlaylistEdit(); }}><fieldset class="prompt-body" disabled={editBusy}>
       <Field
         label={t('shell.playlist.nameLabel')}
         bind:ref={nameInput}
         value={editName}
         maxlength={80}
+        required
         oninput={(next) => (editName = next)}
-        onenter={submitPlaylistEdit}
       />
       {#if !editing}
         <div class="edit-kind">
@@ -522,16 +531,17 @@
           {/if}
         </div>
       {/if}
-    </div>
+      {#if editError}<InlineError message={editError} />{/if}
+    </fieldset></form>
     {#snippet actions()}
-      <Button onclick={() => overlay.closeDialog()}>{t('common.cancel')}</Button>
-      <Button variant="primary" disabled={!editName.trim()} onclick={submitPlaylistEdit}>
+      <Button disabled={editBusy} onclick={() => overlay.closeDialog()}>{t('common.cancel')}</Button>
+      <Button variant="primary" disabled={!editName.trim()} loading={editBusy} type="submit" form="playlist-edit">
         {editing ? t('common.save') : t('common.create')}
       </Button>
     {/snippet}
   </Dialog>
 {:else if overlay.dialog?.kind === 'deletePlaylist'}
-  <Dialog
+  <AlertDialog
     title={t('shell.playlist.deleteTitle')}
     description={t('shell.playlist.deleteDesc', { name: overlay.dialog.playlist.name })}
     onclose={() => overlay.closeDialog()}
@@ -541,9 +551,9 @@
       <Button bind:ref={deleteCancelEl} onclick={() => overlay.closeDialog()}>{t('common.cancel')}</Button>
       <Button variant="danger" onclick={submitDelete}>{t('common.delete')}</Button>
     {/snippet}
-  </Dialog>
+  </AlertDialog>
 {:else if overlay.dialog?.kind === 'removeTracks'}
-  <Dialog
+  <AlertDialog
     title={t('shell.playlist.removeTracksTitle')}
     description={t('shell.playlist.removeTracksDesc', { n: overlay.dialog.ids.length })}
     onclose={() => overlay.closeDialog()}
@@ -553,7 +563,7 @@
       <Button bind:ref={removeCancelEl} onclick={() => overlay.closeDialog()}>{t('common.cancel')}</Button>
       <Button variant="danger" onclick={submitRemoveTracks}>{t('common.remove')}</Button>
     {/snippet}
-  </Dialog>
+  </AlertDialog>
 {:else if overlay.dialog?.kind === 'trackFilter'}
   <!--
     筛选器：固定字段表单，每个可筛字段一行，留空即不过滤
@@ -658,6 +668,7 @@
   Menu：选择歌单属于需要看到各歌单曲目数的浏览行为，而菜单面向 "已知要点哪一项"的快捷路径，两者交互模型不同。 -->
   <Dialog
     label={t('shell.pick.title')}
+    bodyPadding="none"
     description={t('shell.pick.title')}
     width="md"
     onclose={() => overlay.closeDialog()}
@@ -679,16 +690,14 @@
 
 <style>
   /* 输入对话框与歌单选择器的主体样式（随内联模板一并迁入，原为独立组件的 scoped 样式） */
-  .prompt-body {
-    padding: 14px 16px 2px;
-  }
+  .prompt-body {min-width:0;padding:0;margin:0;border:0;}
 
   /* 动态歌单开关行：开关 + 可见标题（Switch 的 label 只供读屏，可见文本在这里） */
   .edit-kind {
-    margin-top: 12px;
+    margin-top: var(--space-4);
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-3);
   }
 
   .edit-kind-label {
@@ -698,12 +707,12 @@
 
   /* 规则编辑区：上分隔线与名称/开关区分开；添加条件按钮靠左 */
   .rule-editor {
-    margin-top: 12px;
-    padding-top: 12px;
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
     border-top: 1px solid var(--line);
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-3);
   }
 
   .rule-head {
@@ -712,15 +721,16 @@
   }
 
   .rule-row {
+    flex-wrap:wrap;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-2);
   }
 
   /* 条件行：模式下拉定宽、值控件占满剩余（控件本体是 kit 的 Select/Field） */
   .rule-mode {
     flex: none;
-    width: 118px;
+    width: 7.375rem;
   }
 
   .rule-value-box {
@@ -752,19 +762,19 @@
   .filter-body {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 14px 16px 4px;
+    gap: var(--space-3);
+    padding: 0;
   }
 
   .filter-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: var(--space-4);
   }
 
   .filter-label {
     flex: none;
-    width: 56px;
+    width: 3.5rem;
     font-size: var(--fs-base);
     color: var(--text-2);
   }
@@ -780,7 +790,7 @@
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-2);
   }
 
   /* Field 的根节点是子组件内部元素，scoped 选择器够不到，:global 兜住 */
@@ -804,7 +814,7 @@
   .pick-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-3);
     padding: 6px 8px;
     border-radius: var(--radius-md);
     text-align: left;

@@ -77,25 +77,31 @@
   .content-header {
     display: flex;
     align-items: center;
-    gap: 16px;
-    padding: 12px 0 18px;
+    flex-wrap: wrap;
+    gap: var(--space-5);
+    padding: var(--space-4) 0 var(--space-5);
     min-width: 0;
   }
 
   .ch-text {
-    flex: 1;
+    flex: 1 1 12rem;
     min-width: 0;
   }
 
-  /* 装饰英文与正文样式在 pages.css 的 .ch-kicker（与首页区块的 .page-kicker 同源） */
   .ch-kicker {
     display: block;
+    font-size: var(--fs-2xs);
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-2);
   }
+  :global(html[data-lang='en']) .ch-kicker {display:none;}
 
   /* 主标题：全站单一量级（26px）——三层结构里它就是视觉锚点，不再分档。
      不加粗：26px 的字号本身够重，粗体会和装饰英文抢对比 */
   h1 {
-    margin: 2px 0 4px;
+    margin: 0 0 var(--space-1);
     font-size: var(--fs-display);
     font-weight: 400;
     letter-spacing: -0.01em;
@@ -107,6 +113,7 @@
   p {
     margin: 0;
     font-size: var(--fs-base);
+    line-height: 1.5;
     color: var(--text-2);
   }
 
@@ -119,30 +126,21 @@
     flex: none;
     display: grid;
     place-items: center;
-    width: 92px;
-    height: 92px;
+    width: 5.75rem;
+    height: 5.75rem;
     border-radius: 50%;
     background: var(--surface-cover);
     color: var(--accent-text);
     box-shadow: var(--shadow-3);
   }
 
-  /*
-   * 右侧操作区：tab（TextTabs）/ 子搜索框 / 按钮三类混用时上下居中、
-   * 高度统一吃到 --control-h。文本页签没有自带高度，这里给 nav 撑到
-   * 同档（内部保持自己的 baseline 对齐），搜索框由调用方取同一变量。
-   */
   .ch-actions {
     display: flex;
     align-items: center;
     justify-content: flex-end;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: var(--space-3);
     min-height: var(--control-h);
   }
 
-  .ch-actions :global(.text-tabs.underline) {
-    align-items: center;
-    min-height: var(--control-h);
-  }
 </style>

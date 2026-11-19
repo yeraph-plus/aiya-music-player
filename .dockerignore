@@ -12,6 +12,8 @@ node_modules/
 .github/
 docs/
 test-results/
+.aiya-tmp/
+test-music/
 beets-tool/.venv/
 beets-tool/.runtime/
 beets-tool/.runtime-linux/

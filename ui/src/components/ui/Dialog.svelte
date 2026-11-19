@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { Dialog } from 'bits-ui';
+  import './dialog.css';
   import { X } from '@lucide/svelte';
   import { t } from '../../lib/i18n.svelte';
   import IconButton from './IconButton.svelte';
@@ -36,6 +37,9 @@
     /** 说明文字。给了才渲染 `Dialog.Description`，并自动接上 aria-describedby */
     description?: string;
     width?: 'sm' | 'md';
+    bodyPadding?: 'default' | 'none';
+    /** 异步提交期间阻止关闭按钮、Esc 与遮罩关闭。 */
+    dismissible?: boolean;
     /** 打开后要聚焦的元素；不给则聚焦内容区第一个可聚焦元素 */
     autofocus?: () => void;
     onclose: () => void;
@@ -45,15 +49,17 @@
     actions?: Snippet;
   }
 
-  let { title, label, description, width = 'sm', autofocus, onclose, children, actions }: Props = $props();
+  let { title, label, description, width = 'sm', bodyPadding = 'default', dismissible = true, autofocus, onclose, children, actions }: Props = $props();
 </script>
 
 <Dialog.Root open={true} onOpenChange={(value) => (value ? undefined : onclose())}>
   <Dialog.Portal>
-    <!-- 覆盖层：视觉沿用旧 .modal-backdrop（重色 + 4px 模糊） -->
+    <!-- 遮罩与面板共享模态层级。 -->
     <Dialog.Overlay class="k-dlg-overlay" />
     <Dialog.Content
       class={`k-dlg${width === 'md' ? ' md' : ''}`}
+      escapeKeydownBehavior={dismissible ? 'close' : 'ignore'}
+      interactOutsideBehavior={dismissible ? 'close' : 'ignore'}
       onOpenAutoFocus={(event) => {
         if (!autofocus) return;
         // 拦住 FocusScope 的默认选择，交给调用方指定的元素
@@ -64,7 +70,7 @@
       {#if title}
         <header class="k-dlg-head">
           <Dialog.Title class="k-dlg-title">{title}</Dialog.Title>
-          <IconButton label={t('common.close')} size="sm" onclick={onclose}>
+          <IconButton label={t('common.close')} size="sm" disabled={!dismissible} onclick={onclose}>
             <X size={14} />
           </IconButton>
         </header>
@@ -78,7 +84,7 @@
       {/if}
 
       {#if children}
-        <div class="k-dlg-body">
+        <div class="k-dlg-body" class:flush={bodyPadding === 'none'}>
           {@render children()}
         </div>
       {/if}
@@ -91,117 +97,3 @@
     </Dialog.Content>
   </Dialog.Portal>
 </Dialog.Root>
-
-<style>
-  :global(.k-dlg-overlay) {
-    position: fixed;
-    inset: 0;
-    z-index: var(--z-modal);
-    background: var(--backdrop);
-    backdrop-filter: blur(var(--blur-scrim));
-    /* 入场动画 120ms，与 SideDrawer、Toast 的弹层节奏一致。bits-ui 关闭时立即移除 DOM，CSS
-       无法承担退场动画，因此退场仍是瞬消。仅动画 opacity 与 transform，reduced-motion 下关闭。 */
-    animation: k-dlg-fade 120ms var(--ease);
-  }
-
-  :global(.k-dlg) {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    /* bits-ui 的浮层用 transform 做动画/定位，居中也走 transform，
-       所以这里必须写成 translate(-50%, -50%) 而不是 margin */
-    transform: translate(-50%, -50%);
-    z-index: var(--z-modal-content);
-    width: 380px;
-    max-height: 80vh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    border: 1px solid var(--line-strong);
-    border-radius: 14px;
-    background: var(--surface-3);
-    box-shadow: var(--shadow-5);
-    backdrop-filter: blur(var(--blur-modal));
-    outline: none;
-    animation: k-dlg-pop 120ms var(--ease);
-  }
-
-  @keyframes k-dlg-fade {
-    from {
-      opacity: 0;
-    }
-  }
-
-  @keyframes k-dlg-pop {
-    from {
-      opacity: 0;
-      transform: translate(-50%, -50%) scale(0.98);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    :global(.k-dlg-overlay),
-    :global(.k-dlg) {
-      animation: none;
-    }
-  }
-
-  :global(.k-dlg.md) {
-    width: 460px;
-    max-height: 70vh;
-  }
-
-  .k-dlg-head {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 12px 12px 12px 16px;
-    border-bottom: 1px solid var(--line);
-  }
-
-  /* Title 是 bits-ui 渲染的元素，不在本组件作用域里 → 样式也要 :global */
-  :global(.k-dlg-title) {
-    flex: 1;
-    min-width: 0;
-    font-size: var(--fs-md);
-    font-weight: 600;
-    color: var(--text-1);
-  }
-
-  :global(.k-dlg-desc) {
-    flex: none;
-    margin: 0;
-    padding: 14px 16px 0;
-    font-size: var(--fs-base);
-    line-height: 1.7;
-    color: var(--text-2);
-  }
-
-  .k-dlg-body {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-  }
-
-  .k-dlg-actions {
-    flex: none;
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    padding: 14px 16px;
-  }
-
-  /* 无头部对话框的视觉隐藏标题（a11y 用） */
-  :global(.k-dlg-sr) {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-    border: 0;
-  }
-</style>

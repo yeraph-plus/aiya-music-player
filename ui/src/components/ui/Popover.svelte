@@ -67,9 +67,9 @@
 <style>
   :global(.k-pop) {
     z-index: var(--z-pop);
-    padding: 12px;
+    padding: var(--space-5);
     border: 1px solid var(--line);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     background: var(--surface-4);
     box-shadow: var(--shadow-4);
     backdrop-filter: blur(var(--blur-pop));

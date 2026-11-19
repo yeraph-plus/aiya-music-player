@@ -29,6 +29,9 @@ export function artworkUrl(artworkId: string | null, size: number = DEFAULT_SIZE
     );
   }
   const safe = (ARTWORK_SIZES as readonly number[]).includes(size) ? size : DEFAULT_SIZE;
+  if (import.meta.env.DEV && /^preview-cover-[0-2]$/.test(artworkId)) {
+    return `/src/dev/assets/${artworkId}.svg`;
+  }
   // Tauri 2 的自定义协议在 Windows 上经 `http://<scheme>.localhost` 暴露。处理器返回 `Access-Control-Allow-Origin:
   // *`，`artwork-blob` 的 fetch 与 canvas 取色依赖该响应头。当前仅发布 Windows；跨平台时按平台切换 URL 前缀。
   // Web 版第三形态：同源相对路径（aiya-server 的 /artwork 路由），凭据随

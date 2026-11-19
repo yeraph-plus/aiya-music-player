@@ -76,14 +76,14 @@
 
 <section class="week-picker" aria-label={t('station.schTitle')}>
   <div class="week-head"><p>{timezone??t('station.localTimezone')} · {t('station.gridHint')}</p></div>
-  <div class="week-grid" bind:this={grid} aria-label={t('station.dragSchedule')}>
+  <div class="grid-scroll"><div class="week-grid" bind:this={grid} aria-label={t('station.dragSchedule')}>
     <div class="week-row hour-row"><span></span>{#each hours as hour (hour)}<span class="hour">{String(hour).padStart(2,'0')}</span>{/each}</div>
     {#each WEEK_DAYS as dayKey,day (dayKey)}
       <div class="week-row">
         <span class="day">{t(dayKey)}</span>
         {#each hours as hour (hour)}
           <button class="week-cell" data-index={day*24+hour} data-day={day} data-hour={hour}
-            tabindex={focused===day*24+hour?0:-1} aria-label={`${t('station.weekday',{day:t(dayKey)})} ${hm(hour*60)}–${hm((hour+1)*60)}`}
+            type="button" tabindex={focused===day*24+hour?0:-1} aria-label={`${t('station.weekday',{day:t(dayKey)})} ${hm(hour*60)}–${hm((hour+1)*60)}`}
             title={`${t('station.weekday',{day:t(dayKey)})} ${hm(hour*60)}–${hm((hour+1)*60)}`} {disabled} onkeydown={e=>key(e,day,hour)}
             onpointerdown={e=>{if(e.button!==0 || disabled)return;e.preventDefault();e.currentTarget.focus();grid.setPointerCapture(e.pointerId);focused=day*24+hour;anchor={day,hour};endpoint={day,hour};document.documentElement.classList.add('station-selecting');}}
             onclick={e=>{if(e.detail===0 && !disabled)onchange([...item.slots,range({day,hour},{day,hour})]);}}><span></span></button>
@@ -98,6 +98,7 @@
       </div>
     {/each}
   </div>
+  </div>
   <div class="legend"><span><i class="current"></i>{t('station.currentSlot')}</span><span><i></i>{t('station.otherSlot')}</span></div>
   <div class="editor-head"><Button size="sm" {disabled} onclick={add}>{#snippet icon()}<Plus size={13}/>{/snippet}{t('station.newSlot')}</Button></div>
   <div class="slot-list">
@@ -110,7 +111,7 @@
             <span class="time-separator" aria-hidden="true">-</span>
             <Field label={t('station.schEnd')} hideLabel value={slot.endHm} placeholder="HH:MM" maxlength={5} inputmode="numeric" pattern="([01][0-9]|2[0-3]):[0-5][0-9]|24:00" inputFilter={timeInput} mono {disabled} oninput={v=>update(index,{endHm:v})}/>
           </div>
-          <IconButton label={t('station.schDelete')} {disabled} onclick={()=>onchange(item.slots.filter((_,i)=>i!==index))}><X size={14}/></IconButton>
+          <span class="remove-slot"><IconButton label={t('station.schDelete')} {disabled} onclick={()=>onchange(item.slots.filter((_,i)=>i!==index))}><X size={14}/></IconButton></span>
         </div>
       </div>
     {/each}
@@ -121,17 +122,19 @@
 <style>
   .week-picker {border-top:1px solid var(--line);padding-top:var(--space-4);margin-top:var(--space-4);}
   .week-head {text-align:center;margin-bottom:var(--space-3);}.week-head p {margin:var(--space-2) 0 0;font-size:var(--fs-sm);color:var(--text-2);line-height:1.6;}
-  .week-grid {max-width:658px;margin:0 auto;user-select:none;touch-action:none;cursor:crosshair;}
-  .week-row {display:grid;grid-template-columns:34px repeat(24,minmax(0,1fr));position:relative;height:26px;}.hour-row {height:18px;align-items:center;}
-  .hour {font-size:9px;text-align:center;color:var(--text-2);}.day {font-size:var(--fs-sm);align-self:center;color:var(--text-2);}
-  .week-cell {min-width:0;position:relative;padding:0;background:none;border:0;cursor:inherit;touch-action:none;}.week-cell>span {position:absolute;inset:2px;border:1px solid var(--line-strong);border-radius:3px;background:var(--surface-input);pointer-events:none;}
+  .grid-scroll {overflow-x:auto;overscroll-behavior-x:contain;padding:var(--space-1) 0;}
+  .week-grid {min-width:38rem;max-width:48rem;margin:0 auto;user-select:none;touch-action:none;cursor:crosshair;}
+  .week-row {display:grid;grid-template-columns:2rem repeat(24,minmax(0,1fr));position:relative;height:1.75rem;}.hour-row {height:1.5rem;align-items:center;}
+  .hour {font-size:var(--fs-sm);font-variant-numeric:tabular-nums;text-align:center;color:var(--text-2);}.day {font-size:var(--fs-sm);align-self:center;color:var(--text-2);}
+  .week-cell {min-width:0;position:relative;padding:0;background:none;border:0;cursor:inherit;touch-action:none;}.week-cell>span {position:absolute;inset:2px;border:1px solid var(--line-strong);border-radius:var(--radius-xs);background:var(--surface-input);pointer-events:none;}
   .week-cell:focus-visible {outline:2px solid var(--text-1);outline-offset:-2px;}
-  .range-track {position:absolute;left:34px;right:0;top:2px;bottom:2px;pointer-events:none;}.time-band {position:absolute;top:0;bottom:0;border-radius:3px;border:1px solid color-mix(in srgb,var(--accent) 65%,transparent);background:color-mix(in srgb,var(--accent) 28%,transparent);}.time-band.other {background:color-mix(in srgb,var(--text-2) 18%,transparent);border-color:color-mix(in srgb,var(--text-2) 30%,transparent);}.time-band.preview {background:color-mix(in srgb,var(--accent) 50%,transparent);border-color:var(--accent);}
+  .range-track {position:absolute;left:2rem;right:0;top:2px;bottom:2px;pointer-events:none;}.time-band {position:absolute;top:0;bottom:0;border-radius:var(--radius-xs);border:1px solid color-mix(in srgb,var(--accent) 65%,transparent);background:color-mix(in srgb,var(--accent) 28%,transparent);}.time-band.other {background:color-mix(in srgb,var(--text-2) 18%,transparent);border-color:color-mix(in srgb,var(--text-2) 30%,transparent);}.time-band.preview {background:color-mix(in srgb,var(--accent) 50%,transparent);border-color:var(--accent);}
   :global(html.station-selecting),:global(html.station-selecting *) {cursor:crosshair !important;user-select:none !important;}
   .legend {display:flex;justify-content:center;align-items:center;gap:var(--space-4);margin:var(--space-3) 0 var(--space-5);font-size:var(--fs-sm);color:var(--text-2);}.legend span {display:flex;align-items:center;gap:var(--space-1);}.legend i {width:8px;height:8px;border-radius:2px;background:var(--thumb);}.legend .current {background:color-mix(in srgb,var(--accent) 50%,transparent);}
   .editor-head {display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3);}
   .slot-list {display:flex;flex-direction:column;}.slot-row {border-top:1px solid var(--line);padding:var(--space-4) 0;}.slot-row:last-child {padding-bottom:0;}.slot-row.invalid {border-top-color:var(--danger);}
-  .slot-line {display:flex;align-items:center;gap:var(--space-3);}.days {display:flex;gap:var(--space-1);flex:none;}
-  .time-range {display:grid;grid-template-columns:76px 10px 76px;align-items:center;gap:var(--space-2);flex:none;}.time-separator {text-align:center;font-size:var(--fs-sm);color:var(--text-2);}.slot-line :global(.k-icon-btn) {margin-left:auto;}
+  .slot-line {display:flex;align-items:center;gap:var(--space-3);overflow-x:auto;padding:var(--space-1);overscroll-behavior-x:contain;}.days {display:flex;gap:var(--space-1);flex:none;}
+  .time-range {display:grid;grid-template-columns:4.75rem .625rem 4.75rem;align-items:center;gap:var(--space-2);flex:none;}.time-separator {text-align:center;font-size:var(--fs-sm);color:var(--text-2);}
   .empty-hint {font-size:var(--fs-sm);color:var(--text-2);line-height:1.6;}
+  .remove-slot {display:flex;flex:none;margin-left:auto;}
 </style>

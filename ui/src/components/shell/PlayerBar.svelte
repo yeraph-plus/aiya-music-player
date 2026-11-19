@@ -378,15 +378,11 @@
       sideOffset={12}
     >
       {#snippet trigger(props)}
-        <button
-          {...props}
-          class={`rate-chip${rate !== 1 ? ' on' : ''}`}
-          ondblclick={() => onrate(1)}
-          aria-label={t('shell.player.rate')}
-          title={t('shell.player.rateTip', { rate: formatRate(rate) })}
-        >
+        <Button {...props} variant="ghost" size="sm" round active={rate !== 1}
+          ondblclick={() => onrate(1)} ariaLabel={t('shell.player.rate')}
+          title={t('shell.player.rateTip', { rate: formatRate(rate) })}>
           {formatRate(rate)}
-        </button>
+        </Button>
       {/snippet}
 
       <div class="rate-panel">
@@ -433,13 +429,12 @@
 
   .player {
     display: grid;
-    /* 左中右三段：左侧曲目信息固定下限、中间传输区占大头、右侧控制固定下限。
-       三段的 minmax 让窄窗时先压缩左右，传输区不会被挤没。 */
-    grid-template-columns: minmax(170px, 1fr) minmax(300px, 2.1fr) minmax(170px, 1fr);
+    /* 右侧按控件实际宽度占位，曲目信息可收缩，传输区保留最小操作宽度。 */
+    grid-template-columns: minmax(0, 1fr) minmax(18.75rem, 2.1fr) max-content;
     align-items: center;
-    gap: 16px;
+    gap: var(--space-4);
     height: var(--player-h);
-    padding: 0 18px;
+    padding: 0 var(--space-5);
     /* 不设边线：与主区的分隔由上抛阴影承担。播放条是全应用最实的一层，
      * 阴影既给出分界，也表明它悬浮于背景之上（方向朝上，光源在上）。 */
     box-shadow: var(--shadow-up);
@@ -739,31 +734,6 @@
 
 
 
-  .rate-chip {
-    flex: none;
-    height: 22px;
-    min-width: 44px;
-    padding: 0 7px;
-    border-radius: var(--radius-pill);
-    font-size: var(--fs-xs);
-    font-variant-numeric: tabular-nums;
-    color: var(--text-2);
-    border: 1px solid transparent;
-    display: grid;
-    place-items: center;
-  }
-
-  .rate-chip:hover {
-    color: var(--text-1);
-    background: var(--surface-hover);
-  }
-
-  /* 非 1× 高亮：和模式键的开启态同一套语义 */
-  .rate-chip.on {
-    color: var(--accent);
-    background: var(--accent-weak);
-  }
-
   .rate-panel {
     width: 186px;
   }
@@ -774,18 +744,6 @@
     justify-content: space-between;
     font-size: var(--fs-sm);
     margin-bottom: 10px;
-  }
-
-  .rate-reset {
-    font-size: var(--fs-sm);
-    color: var(--text-2);
-    padding: 1px 6px;
-    border-radius: 4px;
-  }
-
-  .rate-reset:hover {
-    color: var(--text-1);
-    background: var(--surface-hover);
   }
 
   .rate-scale {

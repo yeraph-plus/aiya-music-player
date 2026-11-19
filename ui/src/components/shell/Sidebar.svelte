@@ -260,10 +260,10 @@
   /* `.sidebar` 的网格席位（grid-row / grid-column）定义在 layout.css，属四区布局；
      本文件只负责其外观。 */
   .sidebar {
-    padding: 8px 10px 12px;
+    padding: var(--space-3) var(--space-3) var(--space-4);
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: var(--space-2);
     min-height: 0;
     /* 半透明：应用级背景从下层透出。不使用 backdrop-filter——持久壳层覆盖在
      * 动画频谱 canvas 之上时，每帧都需重新模糊。
@@ -282,11 +282,11 @@
   .nav-item {
     display: flex;
     align-items: center;
-    gap: 9px;
+    gap: var(--space-3);
     width: 100%;
-    min-height: 30px;
-    padding: 7px 9px;
-    border-radius: 8px;
+    min-height: var(--control-h);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
     color: var(--text-2);
     text-align: left;
   }
@@ -320,7 +320,7 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    margin-top: 10px;
+    margin-top: var(--space-4);
   }
 
   .side-head {

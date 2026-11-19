@@ -39,7 +39,7 @@
   </BitsTooltip.Trigger>
 
   <BitsTooltip.Portal>
-    <BitsTooltip.Content class="k-tip" {side} {align} sideOffset={6} collisionPadding={8}>
+    <BitsTooltip.Content role="tooltip" class="k-tip" escapeKeydownBehavior="defer-otherwise-close" {side} {align} sideOffset={6} collisionPadding={8}>
       {label}
     </BitsTooltip.Content>
   </BitsTooltip.Portal>
@@ -48,14 +48,16 @@
 <style>
   :global(.k-tip) {
     z-index: var(--z-tooltip);
-    padding: 5px 8px;
+    padding: var(--space-2) var(--space-3);
     border: 1px solid var(--line);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--surface-4);
     color: var(--text-1);
-    font-size: var(--fs-sm);
+    font-size: var(--fs-base);
     line-height: 1.4;
     box-shadow: var(--shadow-2);
     pointer-events: none;
+    max-width: min(22rem, calc(100vw - 2 * var(--space-4)));
+    overflow-wrap: anywhere;
   }
 </style>

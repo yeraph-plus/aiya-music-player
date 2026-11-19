@@ -1,0 +1,118 @@
+.k-dlg-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal);
+    background: var(--backdrop);
+    backdrop-filter: blur(var(--blur-scrim));
+    /* 入场动画 120ms，与 SideDrawer、Toast 的弹层节奏一致。bits-ui 关闭时立即移除 DOM，CSS
+       无法承担退场动画，因此退场仍是瞬消。仅动画 opacity 与 transform，reduced-motion 下关闭。 */
+    animation: k-dlg-fade 120ms var(--ease);
+  }
+
+  .k-dlg {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    /* bits-ui 的浮层用 transform 做动画/定位，居中也走 transform，
+       所以这里必须写成 translate(-50%, -50%) 而不是 margin */
+    transform: translate(-50%, -50%);
+    z-index: var(--z-modal-content);
+    width: min(23.75rem, calc(100vw - 2 * var(--space-5)));
+    max-height: calc(100dvh - 2 * var(--space-5));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-xl);
+    background: var(--surface-4);
+    box-shadow: var(--shadow-5);
+    backdrop-filter: blur(var(--blur-modal));
+    outline: none;
+    animation: k-dlg-pop 120ms var(--ease);
+  }
+
+  @keyframes k-dlg-fade {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes k-dlg-pop {
+    from {
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(0.98);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .k-dlg-overlay,
+    .k-dlg {
+      animation: none;
+    }
+  }
+
+  .k-dlg.md {
+    width: min(28.75rem, calc(100vw - 2 * var(--space-5)));
+  }
+
+  .k-dlg-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .k-dlg-title {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--fs-lg);
+    font-weight: 600;
+    color: var(--text-1);
+    overflow-wrap: anywhere;
+  }
+
+  .k-dlg-desc {
+    flex: none;
+    margin: 0;
+    padding: var(--space-5);
+    font-size: var(--fs-md);
+    line-height: 1.5;
+    color: var(--text-2);
+  }
+
+  .k-dlg-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: var(--space-5);
+  }
+
+  .k-dlg-body.flush {padding:0;}
+  .k-dlg-desc + .k-dlg-body:not(.flush) {padding-top:0;}
+
+  .k-dlg-actions {
+    flex: none;
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    padding: var(--space-4) var(--space-5);
+    border-top: 1px solid var(--line);
+  }
+
+  /* 无头部对话框的视觉隐藏标题（a11y 用） */
+  .k-dlg-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }

@@ -198,10 +198,18 @@ async fn events_sse(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
     if let Some(snap) = snap {
+        let initial = if let Some(error) = &snap.error {
+            serde_json::json!({"type":"libraryRefreshFailed","message":error})
+        } else {
+            let mut value = serde_json::to_value(&snap).unwrap_or_default();
+            value["type"] = "libraryRefreshed".into();
+            value["changed"] = false.into();
+            value
+        };
         let _ = tx
             .send(Ok(axum::response::sse::Event::default()
-                .event("scan:progress")
-                .data(serde_json::to_string(&snap).unwrap_or_default())))
+                .event("beets:import")
+                .data(initial.to_string())))
             .await;
     }
     tokio::spawn(async move {

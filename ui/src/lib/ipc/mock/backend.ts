@@ -363,6 +363,17 @@ function decodeCursorId(cursor: string): string {
 
 /* Mock 后端 */
 
+export interface MockSeed {
+  settings?: Partial<AppSettings>;
+  uiState?: UiState;
+  roots?: string[];
+  empty?: boolean;
+  track?: (track: TrackRow, index: number) => TrackRow;
+  playlist?: (playlist: PlaylistSummary, index: number) => PlaylistSummary;
+  lyrics?: Lyrics;
+  startTrack?: boolean;
+}
+
 export class MockBackend {
   readonly emitter = new Emitter();
 
@@ -375,11 +386,10 @@ export class MockBackend {
    */
   beetsFound = true;
 
-  private tracks: TrackRow[] = buildLibrary();
-  private readonly playlistSeed = buildPlaylistSeed(this.tracks);
-  private playlists: PlaylistSummary[] = this.playlistSeed.summaries;
+  private tracks: TrackRow[];
+  private playlists: PlaylistSummary[];
   /** 歌单内容（真实库对应 playlist_items 表） */
-  private playlistItems: Map<string, string[]> = new Map(this.playlistSeed.items);
+  private playlistItems: Map<string, string[]>;
   private settings: AppSettings = loadSettings();
   private uiState: UiState = loadJson('aiya.uiState', {} as UiState);
   private look: { theme: ThemeMode } = loadJson('aiya.look', {
@@ -419,22 +429,29 @@ export class MockBackend {
    */
   private stateTimer: ReturnType<typeof setInterval> | null = null;
 
+  constructor(private readonly seed: MockSeed = {}) {
+    this.tracks = seed.empty ? [] : buildLibrary().map((track, index) => seed.track?.(track, index) ?? track);
+    const playlists = buildPlaylistSeed(this.tracks);
+    this.playlists = seed.empty ? [] : playlists.summaries.map((playlist, index) => seed.playlist?.(playlist, index) ?? playlist);
+    this.playlistItems = seed.empty ? new Map() : playlists.items;
+    if (seed.settings) {
+      this.settings = { ...DEFAULT_SETTINGS, liveRecent: PREVIEW_STATIONS, ...seed.settings };
+      this.look = { theme: this.settings.theme };
+    }
+    if (seed.uiState) this.uiState = seed.uiState;
+    if (seed.roots) this.scanRoots = seed.roots;
+    if (seed.startTrack && this.tracks.length) {
+      this.playQueue(this.tracks.slice(0, 8).map(track => track.id), 0);
+      this.seek(24_000);
+    }
+  }
+
   /* library */
 
   libraryList(rawQuery: TrackQuery | undefined): TrackPage {
     const started = performance.now();
     const q: TrackQueryParsed = parseTrackQuery(rawQuery ?? { mode: 'cursor' });
-    let rows = this.filter(q);
-    const src = q.source;
-    if (src.kind === 'playlist') {
-      // 先按歌单内容过滤，再按用户拖出来的顺序铺底（sortForSource 会在其上覆盖排序）
-      const ids = this.playlistItems.get(src.playlistId) ?? [];
-      const order = new Map(ids.map((id, i) => [id, i]));
-      rows = rows
-        .filter((t) => order.has(t.id))
-        .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
-    }
-    rows = this.sortForSource(rows, q);
+    const rows = this.sortForSource(this.filter(q), q);
     const total = rows.length;
     let start = 0;
     if (q.mode === 'offset') {
@@ -1657,6 +1674,7 @@ export class MockBackend {
 
   lyricsGet(_trackId: string): Lyrics {
     void _trackId;
+    if (this.seed.lyrics) return this.seed.lyrics;
     return { found: false, lines: [], offsetMs: 0, synced: false, encoding: null };
   }
 
@@ -2101,7 +2119,7 @@ export class MockBackend {
     // 整体覆盖，不合并 —— 与真后端（setting_set 整键覆盖）同语义。合并的话
     // 旧 UiState 文件里的退役字段（libraryDetail/view）会永远洗不掉（e2e 实测）。
     this.uiState = state;
-    saveJson('aiya.uiState', state);
+    if (!this.seed.uiState) saveJson('aiya.uiState', state);
   }
 
   getSettings(): AppSettings {
@@ -2110,10 +2128,10 @@ export class MockBackend {
 
   setSettings(settings: AppSettings): AppSettings {
     this.settings = settings;
-    saveJson('aiya.settings', settings);
+    if (!this.seed.settings) saveJson('aiya.settings', settings);
     const look = { theme: settings.theme };
     this.look = look;
-    saveJson('aiya.look', look);
+    if (!this.seed.settings) saveJson('aiya.look', look);
     return this.settings;
   }
 
@@ -2259,7 +2277,13 @@ export class MockBackend {
             a.id.localeCompare(b.id),
         );
     }
-    // library / playlist：mock 不建 playlist_items 表，歌单视图就用同一批曲目
+    if (source.kind === 'playlist') {
+      const byId = new Map(rows.map(row => [row.id, row]));
+      return (this.playlistItems.get(source.playlistId) ?? []).flatMap(id => {
+        const row = byId.get(id);
+        return row ? [row] : [];
+      });
+    }
     return [...rows].sort(cmp);
   }
 }

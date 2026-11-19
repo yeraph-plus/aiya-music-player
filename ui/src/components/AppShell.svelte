@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import { provideRenderHost } from '../lib/render/host.svelte';
   import AmbientBackdrop from './AmbientBackdrop.svelte';
   import PlayerBar from './shell/PlayerBar.svelte';
   import Sidebar from './shell/Sidebar.svelte';
@@ -26,6 +27,7 @@
   let { children }: Props = $props();
 
   const playerState = $derived(player.state);
+  const renderHost = provideRenderHost();
 
   /**
    * 运行时播放错误的分档（报错三档通道）：
@@ -72,15 +74,7 @@
     }
   });
 
-  /**
-   * 全应用背景的频谱源：仅在设置开启时创建，tap 按需订阅
-   * 关闭时引擎侧零开销。
-   *
-   * `spectrum` 拆为两个开关后，本层只读取 `bgSpectrum`；
-   * 正在播放页的开关由 NowPlayingView 自行派生。任一为真时 tap 均开启
-   * （`RemoteSpectrumSource` 通过引用计数处理叠加）。
-   * `glEffects` 为能力闸门：关闭时不创建源，引擎侧也不订阅。
-   */
+  /** 背景按开关惰性取得共享源，实际 tap 引用由舞台按可用性申请与释放。 */
   let spectrumSource = $state<SpectrumSource | null>(null);
 
   const bgSpectrumOn = $derived(ui.settings.glEffects && ui.settings.bgSpectrum);
@@ -121,6 +115,7 @@
   <!-- 背景：绝对定位在 .app 根部、四区席位之下。第 1 层为固定渐变，不跟随封面。全应用只有这一套背景；正在播放页通过"侧栏退出 +
   主区铺满"露出它，不另叠一层，否则两套频谱会同时消耗 GPU。 -->
   <AmbientBackdrop
+    host={renderHost}
     source={spectrumSource}
     enabled={bgSpectrumOn}
     shape={ui.settings.bgSpectrumStyle}
@@ -134,7 +129,7 @@
   <main class="main">
     {#if notify.error}
       <!-- 阻断类错误：没有可自救动作，只有「关闭」（InlineError 的两类之一） -->
-      <InlineError message={notify.error} ondismiss={() => notify.clearError()} />
+      <div class="shell-error"><InlineError message={notify.error} ondismiss={() => notify.clearError()} /></div>
     {/if}
     <!-- 运行时播放错误不在这里：按阻断级分档走弹窗/播放条吐司，见上方 effect -->
 
@@ -170,13 +165,7 @@
     />
   </div>
 
-  <!--
-    队列 / EQ 抽屉：窗口右缘滑出的悬浮 SideDrawer 宿主
-    （上下让出顶栏/播放条栏高再留呼吸边）。抽屉几何确定
-    （贴右缘、定宽、定边距），没有测量参与——floating-ui 式测量+碰撞翻转
-    的开合位置有可见抖动，不用于此壳。
-    互斥仍由 ui store 的 setQueue/setEqDrawer 负责，这里只做壳。
-  -->
+  <!-- 队列与 EQ 的互斥状态归 ui store，非模态抽屉保留播放条操作。 -->
   <SideDrawer open={ui.queueOpen} label={t('shell.drawer.queue')} onclose={() => ui.closeQueue()}>
     <QueuePanel
       ids={player.queueIds}
@@ -193,7 +182,7 @@
 
   <SideDrawer open={ui.eqOpen} label={t('shell.drawer.eq')} onclose={() => ui.setEqDrawer(false)}>
     <div class="eq-drawer-body">
-      <EqPanel />
+      <EqPanel onclose={() => ui.setEqDrawer(false)} />
     </div>
   </SideDrawer>
 
@@ -218,6 +207,7 @@
 </div>
 
 <style>
+  .shell-error {padding:0 var(--space-6) var(--space-3);}
   /*
    * 拖放蒙版。
    *

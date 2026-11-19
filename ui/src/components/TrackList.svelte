@@ -77,6 +77,7 @@ import CheckCell from './ui/CheckCell.svelte';
     /** 跳到正在播放的条目（解析下标在父组件，这里只透传给工具条） */
     onlocate: () => void;
     onplayall: () => void;
+    showPlayAll?: boolean;
     onenqueue: () => void;
     onaddto: () => void;
     onremove: () => void;
@@ -126,6 +127,7 @@ import CheckCell from './ui/CheckCell.svelte';
     onbatchmode,
     onlocate,
     onplayall,
+    showPlayAll = true,
     onenqueue,
     onaddto,
     onremove,
@@ -245,6 +247,7 @@ import CheckCell from './ui/CheckCell.svelte';
     canLocate={currentId !== null}
     onlocate={onlocate}
     {onplayall}
+    {showPlayAll}
     {onenqueue}
     {onaddto}
     {onremove}

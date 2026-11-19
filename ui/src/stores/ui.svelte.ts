@@ -92,6 +92,7 @@ export function isListPage(page: AppPage): boolean {
  */
 class UiStore {
   page = $state<AppPage>('home');
+  browse = $state({ search: '', page: 1, scrollTop: 0 });
   /** `page === 'playlist'` 时的参数。其余路由下无意义（保留旧值，返回时才清） */
   playlistId = $state<string | null>(null);
   queueOpen = $state(false);

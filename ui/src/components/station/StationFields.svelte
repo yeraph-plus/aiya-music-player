@@ -19,7 +19,7 @@
 </div>
 
 <style>
-  .station-fields {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--space-4);padding:var(--space-4) 16px 0;}
+  .station-fields {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--space-4);}
   .visibility-field {display:flex;flex-direction:column;gap:var(--space-2);min-width:0;}
   .visibility-field>span {font-size:var(--fs-sm);color:var(--text-2);}
   .wide {grid-column:1/-1;}

@@ -47,14 +47,14 @@ class EqStore {
   loaded = $state(false);
   enabled = $state(false);
   bands = $state<number[]>([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-  /** 低音旋钮（dB，±12）：引擎侧 90 Hz 低架，独立于图示段 */
+  /** 低音滑杆（dB，±12）：引擎侧 90 Hz 低架，独立于图示段 */
   bass = $state(0);
-  /** 高音旋钮（dB，±12）：引擎侧 7.5 kHz 高架，独立于图示段 */
+  /** 高音滑杆（dB，±12）：引擎侧 7.5 kHz 高架，独立于图示段 */
   treble = $state(0);
   pregain = $state(0);
 
   /** 当前是否恰好命中某个预设的曲线（是则菜单里显示它，否则"自定义"）。
-   * 只看 bands：预设定义的是 10 段增益，pregain 是独立旋钮，调它不改曲线身份 */
+   * 只看 bands：预设定义的是 10 段增益，pregain 是独立增益，调它不改曲线身份 */
   get presetKey(): string | null {
     return isPreset(this.bands);
   }

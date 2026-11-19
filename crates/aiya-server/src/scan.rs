@@ -30,6 +30,7 @@ fn active_roots(roots: Vec<String>, paused: Vec<String>) -> Vec<std::path::PathB
 fn scan_roots(
     st: &ServerState,
     roots: &[std::path::PathBuf],
+    report_progress: bool,
 ) -> aiya_data::DbResult<aiya_data::scanner::ScanResult> {
     let mut conn = aiya_data::open_conn(&st.db_path)?;
     aiya_data::scanner::scan_roots_ext(
@@ -38,10 +39,12 @@ fn scan_roots(
         Some(&st.artwork_dir),
         || st.scan.cancel.load(Ordering::SeqCst),
         |p| {
-            st.events.emit(
-                "scan:progress",
-                &serde_json::to_value(p).unwrap_or_default(),
-            )
+            if report_progress {
+                st.events.emit(
+                    "scan:progress",
+                    &serde_json::to_value(p).unwrap_or_default(),
+                );
+            }
         },
     )
 }
@@ -148,29 +151,11 @@ fn run_scan(st: &Arc<ServerState>, trigger: &str) {
         return;
     }
 
-    let result = scan_roots(st, &roots);
+    let result = scan_roots(st, &roots, trigger == "action");
     let elapsed = started.elapsed().as_millis() as u64;
     match result {
         Ok(r) => {
-            let changed = r.imported > 0 || r.updated > 0 || r.missing > 0;
-            let cancelled = st.scan.cancel.load(Ordering::SeqCst);
-            let snap = if cancelled {
-                RefreshSnapshot::skipped(trigger, elapsed, None)
-            } else {
-                RefreshSnapshot {
-                    trigger: trigger.to_string(),
-                    at_ms: now_ms(),
-                    changed,
-                    scanned: r.scanned,
-                    imported: r.imported,
-                    updated: r.updated,
-                    missing: r.missing,
-                    failed: r.failed,
-                    elapsed_ms: elapsed,
-                    error: None,
-                }
-            };
-            finish(st, trigger, snap);
+            finish(st, trigger, snapshot(trigger, &r));
         }
         Err(e) => finish(
             st,
@@ -181,6 +166,21 @@ fn run_scan(st: &Arc<ServerState>, trigger: &str) {
     // 标志复位由闭包里的 ScanFlagGuard Drop 负责（早退/panic 全路径兜底），
     // 这里不得手动 store(false)：guard 仍存活时误复位会放行下一个扫描、
     // 随后 guard Drop 又把它误杀
+}
+
+fn snapshot(trigger: &str, result: &aiya_data::scanner::ScanResult) -> RefreshSnapshot {
+    RefreshSnapshot {
+        trigger: trigger.into(),
+        at_ms: now_ms(),
+        changed: result.imported > 0 || result.updated > 0 || result.missing > 0,
+        scanned: result.scanned,
+        imported: result.imported,
+        updated: result.updated,
+        missing: result.missing,
+        failed: result.failed,
+        elapsed_ms: result.elapsed_ms,
+        error: None,
+    }
 }
 
 fn finish(st: &Arc<ServerState>, trigger: &str, snap: RefreshSnapshot) {
@@ -196,10 +196,22 @@ fn finish(st: &Arc<ServerState>, trigger: &str, snap: RefreshSnapshot) {
         .last
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(snap.clone());
-    st.events.emit(
-        "scan:progress",
-        &serde_json::to_value(&snap).unwrap_or_default(),
-    );
+    if let Some(error) = &snap.error {
+        st.events.emit(
+            "beets:import",
+            &serde_json::json!({"type":"libraryRefreshFailed","message":error}),
+        );
+        if trigger == "action" {
+            st.events.emit(
+                "scan:progress",
+                &serde_json::json!({"phase":"failed","message":error}),
+            );
+        }
+    } else if snap.changed && trigger != "action" {
+        let mut event = serde_json::to_value(&snap).unwrap_or_default();
+        event["type"] = "libraryRefreshed".into();
+        st.events.emit("beets:import", &event);
+    }
 }
 
 fn now_ms() -> u64 {
@@ -213,8 +225,9 @@ fn now_ms() -> u64 {
 /// 复位交给 ScanFlagGuard Drop；返回完整结果（进度事件与 spawn_scan 共用一条路径）。
 pub fn run_scan_inline(
     st: &Arc<ServerState>,
-    _trigger: &'static str,
+    trigger: &'static str,
 ) -> Result<aiya_data::scanner::ScanResult, String> {
+    let started = Instant::now();
     let _guard =
         ScanFlagGuard::acquire(st).ok_or_else(|| "a scan is already in progress".to_string())?;
     st.scan.cancel.store(false, Ordering::SeqCst);
@@ -224,13 +237,36 @@ pub fn run_scan_inline(
     {
         Ok((roots, paused)) => active_roots(roots, paused),
         Err(e) => {
+            finish(
+                st,
+                trigger,
+                RefreshSnapshot::skipped(trigger, 0, Some(e.clone())),
+            );
             return Err(e);
         }
     };
     if roots.is_empty() {
-        return Err("no scan folders configured".to_string());
+        let error = "no scan folders configured".to_string();
+        finish(
+            st,
+            trigger,
+            RefreshSnapshot::skipped(trigger, 0, Some(error.clone())),
+        );
+        return Err(error);
     }
-    let result = scan_roots(st, &roots);
+    let result = scan_roots(st, &roots, true);
+    match &result {
+        Ok(result) => finish(st, trigger, snapshot(trigger, result)),
+        Err(error) => finish(
+            st,
+            trigger,
+            RefreshSnapshot::skipped(
+                trigger,
+                started.elapsed().as_millis() as u64,
+                Some(error.to_string()),
+            ),
+        ),
+    }
     result.map_err(|e| e.to_string())
 }
 
@@ -278,7 +314,80 @@ mod tests {
         std::fs::create_dir(&music).unwrap();
         let st = crate::state::test_state(&dir.path().join("library.sqlite"));
         let _locked = db_lock(&st);
-        let result = scan_roots(&st, &[music]).unwrap();
+        let result = scan_roots(&st, &[music], true).unwrap();
         assert_eq!(result.scanned, 0);
+    }
+
+    #[test]
+    fn automatic_scan_is_silent_and_manual_completion_has_a_phase() {
+        let dir = tempfile::tempdir().unwrap();
+        let music = dir.path().join("music");
+        std::fs::create_dir(&music).unwrap();
+        let st = crate::state::test_state(&dir.path().join("library.sqlite"));
+        db_lock(&st)
+            .send(move |conn| {
+                crate::state::setting_set(conn, "library.roots", &serde_json::json!([music]))?;
+                Ok(())
+            })
+            .unwrap();
+        let mut events = st.events.subscribe();
+        run_scan(&st, "timer");
+        assert!(events.try_recv().is_err());
+        assert_eq!(
+            st.scan.last.lock().unwrap().as_ref().unwrap().trigger,
+            "timer"
+        );
+        run_scan_inline(&st, "action").unwrap();
+        let mut phases = Vec::new();
+        while let Ok((channel, data)) = events.try_recv() {
+            assert_eq!(channel, "scan:progress");
+            let event: serde_json::Value = serde_json::from_str(&data).unwrap();
+            phases.push(event["phase"].as_str().unwrap().to_owned());
+        }
+        assert_eq!(phases.last().map(String::as_str), Some("done"));
+        assert_eq!(
+            st.scan.last.lock().unwrap().as_ref().unwrap().trigger,
+            "action"
+        );
+        assert!(!st.scan.scanning.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn automatic_changes_and_errors_use_refresh_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::state::test_state(&dir.path().join("library.sqlite"));
+        let mut events = st.events.subscribe();
+        let mut changed = RefreshSnapshot::skipped("timer", 10, None);
+        changed.changed = true;
+        changed.imported = 1;
+        finish(&st, "timer", changed);
+        let (channel, data) = events.try_recv().unwrap();
+        assert_eq!(channel, "beets:import");
+        let event: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert_eq!(event["type"], "libraryRefreshed");
+        finish(
+            &st,
+            "timer",
+            RefreshSnapshot::skipped("timer", 10, Some("db error".into())),
+        );
+        let (channel, data) = events.try_recv().unwrap();
+        assert_eq!(channel, "beets:import");
+        let event: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert_eq!(event["type"], "libraryRefreshFailed");
+        assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn failed_scan_releases_busy_and_does_not_reset_an_existing_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::state::test_state(&dir.path().join("library.sqlite"));
+        assert!(run_scan_inline(&st, "action").is_err());
+        assert!(!st.scan.scanning.load(Ordering::SeqCst));
+        let _guard = ScanFlagGuard::acquire(&st).unwrap();
+        st.scan.cancel.store(true, Ordering::SeqCst);
+        assert!(run_scan_inline(&st, "action")
+            .unwrap_err()
+            .contains("already"));
+        assert!(st.scan.cancel.load(Ordering::SeqCst));
     }
 }

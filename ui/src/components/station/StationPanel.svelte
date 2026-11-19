@@ -10,6 +10,7 @@
   import Button from '../ui/Button.svelte';
   import IconButton from '../ui/IconButton.svelte';
   import Dialog from '../ui/Dialog.svelte';
+  import AlertDialog from '../ui/AlertDialog.svelte';
   import Card from '../ui/Card.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import StationFields from './StationFields.svelte';
@@ -156,18 +157,18 @@
 </div>
 
 {#if editing}
-  <Dialog title={t(editing==='new'?'station.formTitleNew':'station.editInfo')} description={t('station.formHint')} width="md" onclose={()=>{if(!busy)editing=null;}}>
-    <StationFields bind:value={form} disabled={busy}/>
-    {#snippet actions()}<Button disabled={busy} onclick={()=>editing=null}>{t('station.cancel')}</Button><Button variant="primary" loading={busy} disabled={!form.name.trim()} onclick={()=>void saveInfo()}>{t('station.save')}</Button>{/snippet}
+  <Dialog title={t(editing==='new'?'station.formTitleNew':'station.editInfo')} description={t('station.formHint')} width="md" dismissible={!busy} onclose={()=>{if(!busy)editing=null;}}>
+    <form id="station-info" onsubmit={event=>{event.preventDefault();void saveInfo();}}><StationFields bind:value={form} disabled={busy}/></form>
+    {#snippet actions()}<Button disabled={busy} onclick={()=>editing=null}>{t('station.cancel')}</Button><Button variant="primary" loading={busy} disabled={!form.name.trim()} type="submit" form="station-info">{t('station.save')}</Button>{/snippet}
   </Dialog>
 {/if}
 {#if deleting && detail}
-  <Dialog title={t('station.del')} description={t('station.deleteStation',{name:detail.name})} autofocus={()=>cancelDelete?.focus()} onclose={()=>{if(!busy)deleting=false;}}>
+  <AlertDialog title={t('station.del')} description={t('station.deleteStation',{name:detail.name})} dismissible={!busy} autofocus={()=>cancelDelete?.focus()} onclose={()=>{if(!busy)deleting=false;}}>
     {#snippet actions()}<Button bind:ref={cancelDelete} disabled={busy} onclick={()=>deleting=false}>{t('station.cancel')}</Button><Button variant="danger" loading={busy} onclick={()=>void remove()}>{t('station.del')}</Button>{/snippet}
-  </Dialog>
+  </AlertDialog>
 {/if}
 {#if pending}
-  <Dialog title={t('station.unsaved')} description={t('station.unsavedHint')} onclose={()=>pending=null}>
+  <Dialog title={t('station.unsaved')} description={t('station.unsavedHint')} dismissible={!busy} onclose={()=>{if(!busy)pending=null;}}>
     {#snippet actions()}
       <Button disabled={busy} onclick={()=>pending=null}>{t('station.keepEditing')}</Button>
       <Button disabled={busy} onclick={()=>{const action=pending;capture();pending=null;action?.();}}>{t('station.discard')}</Button>
@@ -178,10 +179,10 @@
 
 <style>
   .station-list {display:flex;flex-direction:column;gap:var(--space-3);}
-  .listen-url {color:var(--text-2);text-decoration:none;font-family:var(--font-mono);font-size:var(--fs-sm);}
+  .listen-url {color:var(--text-2);text-decoration:none;font-family:var(--font-mono);font-size:var(--fs-sm);overflow-wrap:anywhere;}
   .listen-url:hover {color:var(--accent-text);text-decoration:underline;}
-  .workbench-toolbar {display:flex;gap:var(--space-2);align-items:center;margin-bottom:var(--space-5);flex-wrap:wrap;}.workbench-save {margin-left:auto;display:flex;align-items:center;gap:var(--space-2);}.program-status {font-size:var(--fs-sm);color:var(--text-2);}
-  .workbench-heading {margin-bottom:var(--space-5);}.workbench-heading h2 {font-size:var(--fs-md);font-weight:600;margin:0;}.workbench-heading h2 span {font-size:var(--fs-sm);font-weight:400;color:var(--text-2);}.workbench-heading p {font-size:var(--fs-sm);color:var(--text-2);margin:var(--space-2) 0 0;}
+  .workbench-toolbar {display:flex;gap:var(--space-2);align-items:center;margin-bottom:var(--space-5);flex-wrap:wrap;}.workbench-save {margin-left:auto;flex-wrap:wrap;display:flex;align-items:center;gap:var(--space-2);}.program-status {font-size:var(--fs-sm);color:var(--text-2);}
+  .workbench-heading {margin-bottom:var(--space-5);}.workbench-heading h2 {font-size:var(--fs-lg);font-weight:600;margin:0;overflow-wrap:anywhere;}.workbench-heading h2 span {font-size:var(--fs-sm);font-weight:400;color:var(--text-2);}.workbench-heading p {font-size:var(--fs-sm);color:var(--text-2);margin:var(--space-2) 0 0;}
   .on-air {width:7px;height:7px;border-radius:50%;background:var(--danger);margin-right:var(--space-1);flex:none;}.on-air.running {background:var(--ok);}.configure {display:flex;}
   .pending,.program-issues {color:var(--warn);}
   .program-issues {padding-left:var(--space-4);font-size:var(--fs-sm);line-height:1.7;}

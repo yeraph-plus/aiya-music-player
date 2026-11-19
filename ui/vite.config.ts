@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
 
@@ -11,17 +11,28 @@ import tailwindcss from '@tailwindcss/vite';
  *
  * 端口 1420 是 Tauri devUrl 的约定值（tauri.conf.json 保持一致）。
  */
-export default defineConfig({
-  plugins: [tailwindcss(), svelte()],
-  clearScreen: false,
-  server: {
-    port: 1420,
-    strictPort: true,
-  },
-  build: {
-    // top-level await（main.ts 里动态装配预览后端）需要 esnext 级别；
-    // chrome110 = WebView2 的保守下限，两者交集下 TLA 是安全的
-    target: 'chrome110',
-    outDir: 'dist',
-  },
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), 'AIYA_');
+  const target = env.AIYA_DEV_HTTP_TARGET;
+  const proxy = target ? Object.fromEntries(
+    ['/auth', '/ipc', '/events', '/artwork', '/audio', '/stream', '/hls'].map(path => [path, {
+      target,
+      changeOrigin: true,
+    }]),
+  ) : undefined;
+  return {
+    plugins: [tailwindcss(), svelte()],
+    clearScreen: false,
+    server: {
+      port: 1420,
+      strictPort: true,
+      proxy,
+    },
+    build: {
+      // top-level await（main.ts 里动态装配预览后端）需要 esnext 级别；
+      // chrome110 = WebView2 的保守下限，两者交集下 TLA 是安全的
+      target: 'chrome110',
+      outDir: 'dist',
+    },
+  };
 });

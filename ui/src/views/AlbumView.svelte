@@ -72,7 +72,7 @@
     cover={header.cover}
   >
     {#snippet actions()}
-      <Button variant="primary" onclick={() => void list.playAll()} disabled={list.total === 0}>
+      <Button variant="primary" onclick={() => void list.playAll()} disabled={list.total === 0 || list.loading || !!list.error}>
         {#snippet icon()}<Icon name="play" size={12} />{/snippet}
         {t('library.playAll')}
       </Button>
@@ -81,7 +81,7 @@
 </div>
 
 <!-- 专辑页把"专辑"列链接废掉（disableAlbumLink）：点了指向的是当前页，nav 视为刷新，只会白丢一次滚动位置。歌手列保持可点——那是真正能走的路。 -->
-<TrackListPanel canSort={true} removeLabel={t('library.deleteFromLibrary')} showFilter={false} disableAlbumLink={true}>
+<TrackListPanel canSort={true} removeLabel={t('library.deleteFromLibrary')} showFilter={false} showPlayAll={false} disableAlbumLink={true}>
   {#snippet empty()}
     <EmptyState title={t('album.emptyTitle')} hint={t('album.emptyHint')}>
       {#snippet action()}

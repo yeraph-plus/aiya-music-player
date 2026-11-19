@@ -48,7 +48,7 @@ test('正在播放页两栏沉浸：左信息右歌词，卡片与切换条已�
   await expect(page.locator('.now-playing-tabs')).toHaveCount(0);
 });
 
-test('EQ 抽屉：从播放条进入，预设命中打 ✓；与队列抽屉互斥', async ({ page }) => {
+test('EQ 抽屉：从播放条进入，预设选择与共享滑杆；与队列抽屉互斥', async ({ page }) => {
   await page.goto('/');
   await page.locator('.sidebar .nav-item', { hasText: '曲库' }).click();
   await expect(page.locator('.main .list .row').first()).toBeVisible();
@@ -57,16 +57,15 @@ test('EQ 抽屉：从播放条进入，预设命中打 ✓；与队列抽屉互�
   await eqTrigger.click();
   const panel = page.locator('.eq-panel');
   await expect(panel).toBeVisible();
-  await expect(panel.locator('.k-slider')).toHaveCount(10);
-  await expect(panel.locator('.knob[role="slider"]')).toHaveCount(3);
+  await expect(panel.locator('.k-slider')).toHaveCount(13);
 
   // 开预设菜单 → 选「重低音」→ 菜单关、按钮显示命中名、滑杆值写入
-  await panel.locator('.preset-btn').click();
-  const menu = page.locator('.k-menu');
+  await panel.getByRole('combobox').click();
+  const menu = page.getByRole('listbox');
   await expect(menu).toBeVisible();
-  await menu.getByRole('menuitem', { name: '重低音' }).click();
+  await menu.getByRole('option', { name: '重低音' }).click();
   await expect(menu).toHaveCount(0);
-  await expect(panel.locator('.preset-btn')).toHaveText(/重低音/);
+  await expect(panel.getByRole('combobox')).toHaveText(/重低音/);
   await expect(page.locator('.eq-band').first().locator('.eq-val')).toHaveText('+7');
   // 最后一段（16k）仍是 0 —— 重低音只抬低频
   await expect(page.locator('.eq-band').last().locator('.eq-val')).toHaveText('0');

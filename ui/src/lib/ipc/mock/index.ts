@@ -15,7 +15,19 @@ import type { ApiError, EqSettings, RepeatMode } from '../generated';
 import type { UiState } from '../schema';
 import type { Transport } from '../transport';
 import { setTransport } from '../transport';
-import { MockBackend } from './backend';
+import { MockBackend, type MockSeed } from './backend';
+
+export type MockCommands = Record<string, (args: Record<string, unknown>) => unknown>;
+
+export interface MockOptions {
+  failCommands?: string[];
+  beetsFound?: boolean;
+  missingLocations?: number;
+  liveStream?: string;
+  seed?: MockSeed;
+  commands?: (mock: MockBackend) => MockCommands;
+  delayMs?: number;
+}
 
 /** 契约形状的失败：`toApiError` 会原样认出来，走正常的错误条渲染 */
 function mockError(cmd: string): ApiError {
@@ -299,36 +311,25 @@ function dispatch(mock: MockBackend, cmd: string, a: Record<string, unknown>): u
 }
 
 /**
- * 安装预览后端。返回卸载函数（预览下没人调它，留给将来切环境用）。
+ * 安装预览后端。卸载函数释放模拟播放、频谱计时器与 transport。
  *
  * 事件侧：`listen` 直接挂 `Emitter.on`，subscribe 立刻 resolve —— 与真
  * `listen` 的异步语义一致，`events.ts` 的 sub 不用改。
  */
 export function installMock(
-  options: {
-    failCommands?: string[];
-    beetsFound?: boolean;
-    missingLocations?: number;
-    /**
-     * 启动即进"正在播一个直播流"的状态（`?live=<url>`）。
-     *
-     * 为什么要在**安装时**就把状态摆好、而不是暴露一个 `window.__mock` 让 e2e
-     * 去调：真机上"直播在播"这个画面只有一条入口（`live_open` 或拖入 m3u8），
-     * 测试从同一份状态出发才能证明播放条的渲染分支走的是契约字段
-     * （`source` / `durationMs`），而不是被测试工具硬塞的本地变量。
-     */
-    liveStream?: string;
-  } = {},
+  options: MockOptions = {},
 ): () => void {
-  const mock = new MockBackend();
+  const mock = new MockBackend(options.seed);
   if (options.beetsFound !== undefined) mock.beetsFound = options.beetsFound;
   if (options.missingLocations !== undefined) mock.missingLocations = options.missingLocations;
   // 早于任何监听者：状态存在 `playerState` 里，`boot` 的 fetchState 会取到
   if (options.liveStream) mock.liveOpen(options.liveStream);
   const failing = new Set(options.failCommands ?? []);
+  const commands = options.commands?.(mock) ?? {};
 
   const transport: Transport = {
     invoke: async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
+      if (options.delayMs) await new Promise(resolve => setTimeout(resolve, options.delayMs));
       if (failing.has(cmd)) {
         // 显式故障注入：用来手验错误条渲染（query param `?failCmd=library_list`）
         throw {
@@ -338,7 +339,8 @@ export function installMock(
           retryable: true,
         } satisfies ApiError;
       }
-      return dispatch(mock, cmd, args ?? {}) as T;
+      const extra = commands[cmd];
+      return (extra ? extra(args ?? {}) : dispatch(mock, cmd, args ?? {})) as T;
     },
     listen: <T,>(event: string, cb: (payload: T) => void): Promise<() => void> => {
       const off = mock.emitter.on(event, (payload) => cb(payload as T));
@@ -351,5 +353,9 @@ export function installMock(
   // 默认主题/密度：真宿主由 initialization_script 注入，预览没有，这里补上
   window.__AIYA_LOOK__ = mock.initialLook;
 
-  return () => setTransport(null);
+  return () => {
+    mock.setSpectrum(false);
+    mock.clear();
+    setTransport(null);
+  };
 }

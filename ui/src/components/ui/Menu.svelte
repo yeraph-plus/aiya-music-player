@@ -104,11 +104,11 @@
 
   :global(.k-menu) {
     z-index: var(--z-menu);
-    /* 视觉沿用旧 .context-menu：190px 起、6px 内距、10px 圆角、毛玻璃 */
-    min-width: 190px;
-    padding: 6px;
+    /* 最小宽度保证操作文字和选中标记有独立空间。 */
+    min-width: 11.875rem;
+    padding: var(--space-2);
     border: 1px solid var(--line);
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     background: var(--surface-4);
     box-shadow: var(--shadow-4);
     backdrop-filter: blur(var(--blur-pop));
@@ -118,9 +118,9 @@
     display: block;
     width: 100%;
     text-align: left;
-    padding: 7px 10px;
-    border-radius: 7px;
-    font-size: var(--fs-base);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-md);
     color: var(--text-1);
     cursor: default;
     user-select: none;

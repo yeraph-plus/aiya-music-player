@@ -39,13 +39,14 @@
     removeLabel: string;
     /** 筛选器按钮是否出现（曲库页开；歌单/详情页是固定上下文不给筛） */
     showFilter: boolean;
+    showPlayAll?: boolean;
     /**
      * 拖放排序回调。**传了就渲染 PlaylistList（可拖表），不传渲染
      * TrackList（管理表）**——判据由页面给：歌单的顺序是用户语义可拖
      * （物化模型后手动/动态歌单一视同仁，顺序都是入库序）；
      * 曲库/详情页是查询语义，不可拖。
      */
-    dragSort?: (from: number, to: number) => void;
+    dragSort?: (from: number, to: number) => Promise<boolean>;
     /**
      * 详情页把自己的列链接废掉：专辑页上"查看专辑"指向的就是
      * 当前页，nav 会当成"刷新"重拉列表——滚动位置凭空丢一次，还让人以为
@@ -61,6 +62,7 @@
     canSort,
     removeLabel,
     showFilter,
+    showPlayAll = true,
     dragSort,
     disableArtistLink = false,
     disableAlbumLink = false,
@@ -155,8 +157,8 @@
   }
 
   /** 歌单视图拖拽排序的落点（PlaylistList 专用）：手动歌单的顺序是用户语义 */
-  function movePlaylistItem(from: number, to: number): void {
-    dragSort?.(from, to);
+  function movePlaylistItem(from: number, to: number): Promise<boolean> {
+    return dragSort?.(from, to) ?? Promise.resolve(false);
   }
 
   /** 两个列表组件共用的 props（接线只有这一份，页面只声明差异） */
@@ -198,6 +200,7 @@
     batchMode: ui.batchMode,
     onbatchmode: setBatchMode,
     onplayall: () => void list.playAll(),
+    showPlayAll,
     onenqueue: enqueueSelection,
     onaddto: addSelectionToPlaylist,
     onremove: removeSelection,
@@ -211,15 +214,7 @@
   });
 </script>
 
-{#if list.total > 0}
-  {#if dragSort}
-    <PlaylistList {...shared} onmove={movePlaylistItem} />
-  {:else}
-    <TrackList {...shared} />
-  {/if}
-{:else if !list.booted}
-  <EmptyState fill title={t('library.panel.booting')} />
-{:else if notify.error}
+{#if list.error}
   <!-- 查询失败时 total 也是 0，但这时候说"曲库还是空的"是错的：
        用户会去设置页重新扫描，而真正该做的是重试查询 -->
   <EmptyState fill title={t('library.panel.loadFailedTitle')} hint={t('library.panel.loadFailedHint')}>
@@ -227,6 +222,14 @@
       <Button onclick={() => void list.reload()}>{t('library.panel.retry')}</Button>
     {/snippet}
   </EmptyState>
+{:else if list.total > 0}
+  {#if dragSort}
+    <PlaylistList {...shared} onmove={movePlaylistItem} />
+  {:else}
+    <TrackList {...shared} />
+  {/if}
+{:else if !list.booted}
+  <EmptyState fill title={t('library.panel.booting')} />
 {:else}
   {@render empty()}
 {/if}

@@ -73,12 +73,19 @@ test('启动装配：顶栏四件 + 仪表盘三级 + 播放条空态', async ({
   await expect(page.locator('.sidebar .playlist-item')).not.toHaveCount(0);
   // 背景四层是全应用的——推荐页也有背景渐变层；
   // 沉浸档：可读性遮罩 veil 整层删除（不再有 .ambient-veil），断言其缺席。
-  // 动态层恰好一条渲染路径：GL 档（tier≥2）是 .ambient-flow，软件光栅
-  // （CI headless Edge 实测落档 1）走 2D 兜底 .ambient-spectrum——钉哪条
-  // 都等于把宿主 GPU 能力写死进断言，钉"二选一"才是层结构本身的契约。
   await expect(page.locator('.ambient-art')).toHaveCount(1);
   await expect(page.locator('.ambient-veil')).toHaveCount(0);
-  await expect(page.locator('.ambient-flow, .ambient-spectrum')).toHaveCount(1);
+  const hardware = await page.evaluate(() => {
+    const c = document.createElement('canvas');
+    const gl = c.getContext('webgl2', { failIfMajorPerformanceCaveat: true });
+    if (!gl) return false;
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const name = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    return !/swiftshader|llvmpipe|basic render|software|microsoft basic/i.test(name);
+  });
+  await expect(page.locator('.ambient-flow')).toHaveCount(hardware ? 1 : 0);
+
 });
 
 test('歌单：侧栏点开 → 标题与列表来自该歌单', async ({ page }) => {
@@ -229,8 +236,7 @@ test('正在播放页：起播后两栏沉浸布局 + 背景四层接住真实�
   // 频谱环境光不被压暗
   await expect(page.locator('.ambient-art')).toBeVisible();
   await expect(page.locator('.ambient-veil')).toHaveCount(0);
-  // canvas 只在 **WebGL 不可用的 2D 兜底**路径上才存在，正常机器上恒为空—— 断言"为 0"是真的，只是它什么都没验。正在播放页的频谱是页内
-  // `<canvas class="np-spectrum">`，由「正在播放页频谱」开关派生。
+  // 播放页只登记区域，画布由应用共享舞台提供。
   await expect(page.locator('.np-spectrum')).toHaveCount(0); // mock 默认关
 
   // 侧栏在这一页整体退出，所以要去设置得先退出去；

@@ -86,13 +86,13 @@
   overflow-y: auto;
   /* 顶栏从 36 提到 46 并吸收了 TopBar，页面顶部不再有那一层 14px 内边距，
    * 这里补回来（原来 6 是叠在 TopBar 的 padding 上的） */
-  padding: 18px 22px 28px;
+  padding: var(--space-5) var(--space-6) calc(var(--space-5) + var(--space-4));
 }
 
 /* 固定头（不随列表滚动）的页面用它给零件补横向 padding：PageHeader / PageToolbar 自己不带宽边距 ——
    这样同一个零件既能放进 `.page-scroll`（已带 22px），也能放在这里。 */
 .page-pad {
-  padding: 4px 22px 0;
+  padding: var(--space-1) var(--space-6) 0;
 }
 
 .player-dock {

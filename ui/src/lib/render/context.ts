@@ -12,16 +12,16 @@
  * 3. 舞台是分辨率、DPR 与上下文丢失等问题的唯一处理点。图层只负责绘制，不各自
  *    处理 `devicePixelRatio` 变化与 `webglcontextlost`。
  *
- * 图层按 `add()` 顺序在同一帧内依次绘制（`autoClear = false`），后加图层叠在先加
- * 图层之上，等价于 DOM 的 z 序。调整叠放顺序应修改 `add` 顺序，不能依赖 z-index：
- * 图层共享同一张画布，CSS 层级对其无效。
+ * 同一帧先按登记顺序绘制全窗图层，再绘制区域图层。区域绘制受 viewport/scissor
+ * 限制，随后恢复全窗状态。共享画布只在帧入口清除一次，DOM 内容保持在其上方。
  */
 
 import { WebGLRenderer } from 'three';
 import { detectCapability } from './capability';
+import { RegionTracker } from './region';
 
 export interface Frame {
-  /** 舞台启动至今的秒数（不是 `performance.now()/1000`，从 0 起算） */
+  /** 累积的有效绘制秒数；隐藏与上下文丢失期间不累加。 */
   time: number;
   /**
    * 距上一帧的秒数，已截断到 [0, 0.1]。
@@ -51,13 +51,16 @@ const MAX_DPR = 2;
 export class GlStage {
   readonly renderer: WebGLRenderer;
   private readonly layers: GlLayer[] = [];
+  private readonly regions = new Map<GlLayer, RegionTracker>();
+  private readonly regionSizes = new Map<GlLayer, { width: number; height: number }>();
   private readonly canvas: HTMLCanvasElement;
   private width = 0;
   private height = 0;
   private dpr = 0;
-  private startedAt = 0;
-  private lastFrameAt = 0;
+  private elapsed = 0;
+  private lastFrameAt: number | null = null;
   private lost = false;
+  private disposed = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -80,7 +83,10 @@ export class GlStage {
 
     canvas.addEventListener('webglcontextlost', this.handleLost);
     canvas.addEventListener('webglcontextrestored', this.handleRestored);
+    document.addEventListener('visibilitychange', this.resetClock);
   }
+
+  private resetClock = (): void => { this.lastFrameAt = null; };
 
   /**
    * 上下文丢失与恢复。
@@ -92,33 +98,42 @@ export class GlStage {
   private handleLost = (event: Event): void => {
     event.preventDefault();
     this.lost = true;
+    this.resetClock();
     console.warn('[render] webgl context lost; pausing until restored');
   };
 
   private handleRestored = (): void => {
     this.lost = false;
+    this.resetClock();
     // three 自己会在 restored 后重建 program/texture（它监听同一个事件），
     // 但尺寸状态要重新下发一次，否则恢复后画布是旧大小
     this.dpr = 0;
     this.width = 0;
     this.height = 0;
+    this.regionSizes.clear();
     console.info('[render] webgl context restored');
   };
 
-  add(layer: GlLayer): void {
+  add(layer: GlLayer, region?: HTMLElement): void {
     this.layers.push(layer);
+    if (region) this.regions.set(layer, new RegionTracker(this.canvas, region));
     // 已经有尺寸时立刻补一次 resize，避免"后加的图层第一帧画在 0×0 上"
-    if (this.width > 0) layer.resize?.(this.width, this.height);
+    if (this.width > 0 && !region) layer.resize?.(this.width, this.height);
   }
 
   remove(layer: GlLayer): void {
     const index = this.layers.indexOf(layer);
-    if (index >= 0) this.layers.splice(index, 1);
+    if (index < 0) return;
+    this.layers.splice(index, 1);
+    this.regions.get(layer)?.dispose();
+    this.regions.delete(layer);
+    this.regionSizes.delete(layer);
+    layer.dispose();
   }
 
   /** 舞台是否在正常工作（上下文丢失期间为 false） */
   get usable(): boolean {
-    return !this.lost;
+    return !this.lost && !this.disposed;
   }
 
   /**
@@ -129,11 +144,11 @@ export class GlStage {
    * 读一次布局属性（非几何）不会强制 reflow。
    */
   render(nowMs: number): void {
-    if (this.lost) return;
+    if (!this.usable || document.hidden) return;
 
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
-    if (w === 0 || h === 0) return;
+    if (w === 0 || h === 0) { this.resetClock(); return; }
 
     const dpr = Math.min(MAX_DPR, window.devicePixelRatio || 1);
     if (dpr !== this.dpr) {
@@ -145,31 +160,57 @@ export class GlStage {
       this.height = h;
       // 第三个参数 false：CSS 尺寸由样式表管（100%），three 别去写 style
       this.renderer.setSize(w, h, false);
-      for (const layer of this.layers) layer.resize?.(w, h);
+      for (const layer of this.layers) if (!this.regions.has(layer)) layer.resize?.(w, h);
     }
 
-    if (this.startedAt === 0) {
-      this.startedAt = nowMs;
-      this.lastFrameAt = nowMs;
-    }
-    const rawDt = (nowMs - this.lastFrameAt) / 1000;
+    const rawDt = this.lastFrameAt === null ? 0 : (nowMs - this.lastFrameAt) / 1000;
     this.lastFrameAt = nowMs;
+    const dt = Math.min(0.1, Math.max(0, rawDt));
+    this.elapsed += dt;
     const frame: Frame = {
-      time: (nowMs - this.startedAt) / 1000,
-      dt: Math.min(0.1, Math.max(0, rawDt)),
+      time: this.elapsed,
+      dt,
       width: w,
       height: h,
     };
 
+    this.restoreViewport();
     this.renderer.clear();
-    for (const layer of this.layers) {
-      try {
-        layer.draw(this, frame);
-      } catch (error) {
-        // 单个图层绘制失败不应影响其他图层
-        console.error(`[render] layer "${layer.name}" failed:`, error);
+    // 全窗层先绘制，区域层最后绘制，形态切换不改变前后景顺序。
+    for (let pass = 0; pass < 2; pass += 1) {
+      for (const layer of this.layers) {
+        const tracker = this.regions.get(layer);
+        if (Boolean(tracker) !== (pass === 1)) continue;
+        try {
+          let localFrame = frame;
+          if (tracker) {
+            const rect = tracker.measure();
+            if (!rect) continue;
+            const size = this.regionSizes.get(layer);
+            if (!size || size.width !== rect.width || size.height !== rect.height) {
+              layer.resize?.(rect.width, rect.height);
+              this.regionSizes.set(layer, { width: rect.width, height: rect.height });
+            }
+            this.renderer.setViewport(rect.x, rect.y, rect.width, rect.height);
+            this.renderer.setScissor(rect.clipX, rect.clipY, rect.clipWidth, rect.clipHeight);
+            this.renderer.setScissorTest(true);
+            localFrame = { ...frame, width: rect.width, height: rect.height };
+          }
+          layer.draw(this, localFrame);
+        } catch (error) {
+          console.error(`[render] layer "${layer.name}" failed:`, error);
+        } finally {
+          this.restoreViewport();
+        }
       }
     }
+  }
+
+  private restoreViewport(): void {
+    this.renderer.setRenderTarget(null);
+    this.renderer.setViewport(0, 0, this.width, this.height);
+    this.renderer.setScissor(0, 0, this.width, this.height);
+    this.renderer.setScissorTest(false);
   }
 
   /**
@@ -178,6 +219,9 @@ export class GlStage {
    * 达到上下文数量上限。
    */
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    document.removeEventListener('visibilitychange', this.resetClock);
     this.canvas.removeEventListener('webglcontextlost', this.handleLost);
     this.canvas.removeEventListener('webglcontextrestored', this.handleRestored);
     for (const layer of this.layers) {
@@ -188,18 +232,16 @@ export class GlStage {
       }
     }
     this.layers.length = 0;
+    for (const region of this.regions.values()) region.dispose();
+    this.regions.clear();
+    this.regionSizes.clear();
     this.renderer.dispose();
     this.renderer.forceContextLoss();
   }
 }
 
 /**
- * 建舞台。**能力不足时返回 null**，调用方据此完全不建 canvas。
- *
- * 只在档 2（硬件加速）建：档 1 的机器是软件光栅，全屏 fragment shader 在
- * 那种环境下的表现没有实测数据（只测了三种 shader 的软栅
- * 单帧 1.3ms，但不确定性太大），保持"软件光栅 → 用现有 Canvas 2D"这条
- * 已经验证过的退路更稳。
+ * 仅在硬件 WebGL2 可用时创建舞台；失败时保留 CSS 静态背景。
  */
 export function createGlStage(canvas: HTMLCanvasElement): GlStage | null {
   const capability = detectCapability();
@@ -207,8 +249,7 @@ export function createGlStage(canvas: HTMLCanvasElement): GlStage | null {
   try {
     return new GlStage(canvas);
   } catch (error) {
-    // 创建失败（驱动黑名单、上下文名额耗尽）不该让背景整个消失：
-    // 退回 2D 路径，静态渐变仍然在
+    // 驱动黑名单或上下文名额耗尽时，CSS 渐变继续显示。
     console.warn('[render] gl stage unavailable:', error);
     return null;
   }

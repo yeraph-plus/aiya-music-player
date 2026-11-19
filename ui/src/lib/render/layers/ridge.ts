@@ -1,17 +1,4 @@
-/**
- * 山形频谱图层：以 WebGL 绘制背景山形并叠加边缘光晕。
- *
- * 不对 Canvas 2D 使用 `shadowBlur`：它是逐像素高斯，在 160×90 的 buffer 上
- * 尚可接受，全分辨率下开销过高。该形状的光晕无需卷积——每个像素到脊线的
- * 垂直距离在 fragment 中即可获得，光晕即为该距离的指数衰减。因此只需一次
- * pass，无离屏缓冲与模糊核，并可同时输出描边、内层光与外层弥散三种半径。
- *
- * 数值规则与 `ridge-curve.ts` 保持一致：
- * - 时间平滑 0.3/帧、`v^1.2` 伽马、近山 0.82 全幅、远山倒序 0.5 幅
- * - 竖直渐变填充（顶部实、底边透明），此处用 `grad = vUv.y` 复现
- * - 与 Canvas 2D 实现的差异仅在于光栅器：折线与中点二次贝塞尔改为
- *   Catmull-Rom 256 点，blur 改为解析光晕
- */
+/** 山形背景：双层曲线高度纹理与解析光晕，使用预乘 alpha 合成。 */
 
 import { DataUtils, DataTexture, HalfFloatType, LinearFilter, Mesh, OrthographicCamera, PlaneGeometry, RedFormat, Scene, ShaderMaterial, Color, CustomBlending, OneFactor, OneMinusSrcAlphaFactor, AddEquation } from 'three';
 import { onThemeChange, themeColor } from '../../accent';
@@ -69,10 +56,7 @@ const FRAG = /* glsl */ `
     float hN = texture2D(uRamp, vec2(vUv.x, 0.25)).r;
     float hF = texture2D(uRamp, vec2(vUv.x, 0.75)).r;
 
-    // d > 0 必须对应脊线下方（山体自底边升起，Canvas 2D 实现为
-    // moveTo(0,H) → 曲线 → lineTo(W,H)）。写成 vUv.y - h 会把山体填到脊线
-    // 以上，上半屏被实色覆盖，表现为背景整体过亮。
-    // 注意：本段位于模板字符串内，注释中不可使用反引号
+    // 正距离表示脊线下方，填充山体内部。
     float dN = (hN - vUv.y) * uHeightPx;
     float dF = (hF - vUv.y) * uHeightPx;
 
@@ -114,17 +98,12 @@ const PRESETS: Record<RidgeGlow, GlowPreset> = {
   neon: { bodyNear: 0.28, bodyFar: 0.22, rim: 0.28, rimK: 0.9, glow: 0.18, glowK: 0.095, halo: 0.08, haloK: 0.014 },
 };
 
-let quad: PlaneGeometry | null = null;
-function sharedQuad(): PlaneGeometry {
-  if (!quad) quad = new PlaneGeometry(2, 2);
-  return quad;
-}
-
 export class RidgeLayer implements GlLayer {
   readonly name = 'ridge';
 
   private readonly scene = new Scene();
   private readonly camera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  private readonly geometry = new PlaneGeometry(2, 2);
   private readonly material: ShaderMaterial;
   private readonly texture: DataTexture;
   /**
@@ -185,7 +164,7 @@ export class RidgeLayer implements GlLayer {
       blendEquation: AddEquation,
     });
 
-    const mesh = new Mesh(sharedQuad(), this.material);
+    const mesh = new Mesh(this.geometry, this.material);
     mesh.frustumCulled = false;
     this.scene.add(mesh);
 
@@ -218,20 +197,20 @@ export class RidgeLayer implements GlLayer {
 
   draw(stage: GlStage, frame: Frame): void {
     // 收平系数（暂停 → 0）
-    const target = this.paused ? 0 : 1;
+    const active = !this.paused && this.source.live;
+    const target = active ? 1 : 0;
     const k = 1 - Math.exp(-frame.dt / 0.07);
     this.gate += (target - this.gate) * k;
     if (Math.abs(this.gate - target) < 0.002) this.gate = target;
 
     // 暂停时喂全 0：曲线衰减到底边，恢复播放时从底边重新长起来
-    this.curve.update(this.paused ? this.zero : this.source.frame(), frame.dt);
+    this.curve.update(active ? this.source.frame() : this.zero, frame.dt);
     this.upload();
     stage.renderer.render(this.scene, this.camera);
   }
 
   /**
    * 播放与暂停：暂停时山形落回底边，不停留在暂停瞬间的起伏上。
-   * 与 `RippleLayer.setPaused` 语义一致。
    */
   setPaused(paused: boolean): void {
     this.paused = paused;
@@ -262,5 +241,7 @@ export class RidgeLayer implements GlLayer {
     this.unsubscribeTheme();
     this.texture.dispose();
     this.material.dispose();
+    this.geometry.dispose();
+    this.scene.clear();
   }
 }

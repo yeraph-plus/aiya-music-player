@@ -1,7 +1,6 @@
 import type { AlbumFacet, ArtistFacet } from '../lib/ipc';
 import { ipc } from '../lib/ipc';
 import { errorMessage } from '../lib/errors';
-import { notify } from './notify.svelte';
 
 /**
  * 专辑 / 艺人聚合数据（宫格浏览的按需视图）。
@@ -22,7 +21,13 @@ class FacetsStore {
   /** 过滤后总数（后端截断到 500 不静默：total > items.length 即有更多） */
   albumsTotal = $state(0);
   artistsTotal = $state(0);
-  loading = $state(false);
+  albumsLoading = $state(false);
+  artistsLoading = $state(false);
+  albumsQuery = $state<string | null>(null);
+  artistsQuery = $state<string | null>(null);
+  albumsError = $state('');
+  artistsError = $state('');
+  loading = $derived(this.albumsLoading || this.artistsLoading);
 
   /**
    * 请求代次，按字段各持一个（与 stores/list 的 reload 同一模式）。
@@ -34,50 +39,58 @@ class FacetsStore {
 
   /**
    * 拉专辑宫格。空白 search = 全量（前 500，total 可大于 items）。
-   * 失败走全局错误条（宫格页没有 InlineError 位），返回 [] 让页面渲染空态。
+   * 请求状态与结果查询词一起保存，页面据此区分加载、失败与无匹配结果。
    */
   async loadAlbums(search?: string): Promise<AlbumFacet[]> {
     const generation = (this.albumsGeneration += 1);
-    this.loading = true;
+    const query = search?.trim() ?? '';
+    this.albumsLoading = true;
+    this.albumsError = '';
     try {
-      const page = await ipc.library.albums(search);
+      const page = await ipc.library.albums(query || undefined);
       if (generation === this.albumsGeneration) {
         this.albums = page.items;
         this.albumsTotal = page.total;
+        this.albumsQuery = query;
       }
       return page.items;
     } catch (err) {
       if (generation === this.albumsGeneration) {
-        notify.showError(errorMessage(err));
+        this.albumsError = errorMessage(err);
+        this.albumsQuery = query;
         this.albums = [];
         this.albumsTotal = 0;
       }
       return [];
     } finally {
       // 过期响应不碰 loading：新一轮还在飞行中，提前清掉会闪一帧空态
-      if (generation === this.albumsGeneration) this.loading = false;
+      if (generation === this.albumsGeneration) this.albumsLoading = false;
     }
   }
 
   async loadArtists(search?: string): Promise<ArtistFacet[]> {
     const generation = (this.artistsGeneration += 1);
-    this.loading = true;
+    const query = search?.trim() ?? '';
+    this.artistsLoading = true;
+    this.artistsError = '';
     try {
-      const page = await ipc.library.artists(search);
+      const page = await ipc.library.artists(query || undefined);
       if (generation === this.artistsGeneration) {
         this.artists = page.items;
         this.artistsTotal = page.total;
+        this.artistsQuery = query;
       }
       return page.items;
     } catch (err) {
       if (generation === this.artistsGeneration) {
-        notify.showError(errorMessage(err));
+        this.artistsError = errorMessage(err);
+        this.artistsQuery = query;
         this.artists = [];
         this.artistsTotal = 0;
       }
       return [];
     } finally {
-      if (generation === this.artistsGeneration) this.loading = false;
+      if (generation === this.artistsGeneration) this.artistsLoading = false;
     }
   }
 

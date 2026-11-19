@@ -58,9 +58,9 @@
   --thumb-hover: rgba(255, 255, 255, 0.24);
   --shadow: rgba(0, 0, 0, 0.45);
   --backdrop: rgba(4, 6, 10, 0.55);
-  /* 正在播放页当前句的衬底色（渐隐椭圆的中心值，压住频谱让 30px 的当前句始终读得清）。刻意不跟
-     accent：这是"降亮度"，不是"加颜色"。深色背景上更像一条发光的横带，黑衬底才是"退到后面"。形状与模糊沿用白光那版调出来的参数（见 pages.css .lyric-halo）。 */
-  --np-scrim: rgba(0, 0, 0, 0.92);
+  /* 当前歌词的字形阴影随主题使用深浅轮廓。 */
+  --np-lyric-shadow: rgba(0, 0, 0, 0.85);
+  --np-text: rgba(255, 255, 255, 0.78);
   --glow-1: rgba(90, 120, 255, 0.16);
   --glow-2: rgba(255, 110, 180, 0.09);
   /* Windows 关闭键的悬停红：系统语义，不随主题（亮色下也是这个红） */
@@ -127,6 +127,8 @@
   --z-toast: 65;
   --z-tooltip: 70;
 
+  --control-h-sm: 1.75rem;
+  --control-h-lg: 2.25rem;
   --control-h: 2rem; /* 按钮/输入框的默认高 */
   --row-h: 3.25rem; /* 列表行高：JS 从 CSS 读同一个值（lib/look.ts，探针测量） */
   --titlebar-h: 3.375rem;
@@ -190,8 +192,8 @@ html[data-theme='light'] {
   --thumb-hover: rgba(18, 24, 44, 0.3);
   --shadow: rgba(20, 30, 60, 0.16);
   --backdrop: rgba(20, 26, 40, 0.32);
-  /* 浅色下同样的黑只会变成一块脏灰：降不透明度，读成"文字底下的一点阴影" */
-  --np-scrim: rgba(20, 30, 60, 0.24);
+  --np-lyric-shadow: rgba(255, 255, 255, 0.9);
+  --np-text: rgba(18, 22, 34, 0.82);
   --glow-1: rgba(90, 120, 255, 0.12);
   --glow-2: rgba(255, 110, 180, 0.07);
 

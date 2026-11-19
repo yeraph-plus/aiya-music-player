@@ -25,8 +25,8 @@
   // 别名导入：组件已有 `selection` prop（选择集 ReadonlySet），同名会遮蔽 store
   import { selection as selectionStore } from '../stores/selection.svelte';
   import Button from './ui/Button.svelte';
-import Cover from './ui/Cover.svelte';
-import CheckCell from './ui/CheckCell.svelte';
+  import Cover from './ui/Cover.svelte';
+  import CheckCell from './ui/CheckCell.svelte';
   import ListToolbar from './ListToolbar.svelte';
   import { formatTime, highlight } from '../lib/format';
   import type { TrackWindow } from '../lib/track-window';
@@ -76,13 +76,14 @@ import CheckCell from './ui/CheckCell.svelte';
     onrestored: () => void;
     onretry: (index: number) => void;
     /** 拖放排序（本组件存在的前提）：松手时报告 from → to */
-    onmove: (from: number, to: number) => void;
+    onmove: (from: number, to: number) => Promise<boolean>;
     /* 工具条（内置，替代悬浮 BatchBar） */
     batchMode: boolean;
     onbatchmode: (on: boolean) => void;
     /** 跳到正在播放的条目（解析下标在父组件，这里只透传给工具条） */
     onlocate: () => void;
     onplayall: () => void;
+    showPlayAll?: boolean;
     onenqueue: () => void;
     onaddto: () => void;
     onremove: () => void;
@@ -133,6 +134,7 @@ import CheckCell from './ui/CheckCell.svelte';
     onbatchmode,
     onlocate,
     onplayall,
+    showPlayAll = true,
     onenqueue,
     onaddto,
     onremove,
@@ -146,6 +148,7 @@ import CheckCell from './ui/CheckCell.svelte';
     rowHeight = 52,
   }: Props = $props();
 
+  const reorderHintId = $props.id();
   const ROW_HEIGHT = $derived(rowHeight);
   const OVERSCAN = 6;
   /**
@@ -254,9 +257,22 @@ import CheckCell from './ui/CheckCell.svelte';
       rowHeight,
       scroller: vw.scroller,
       onState: (next) => (dragState = next),
-      onDrop: (from, to) => onmove(from, to),
+      onDrop: (from, to) => { void onmove(from, to); },
     });
   }
+
+  let moveFocus: { to: number; version: number } | null = null;
+  $effect(() => {
+    const updated = version;
+    if (!moveFocus || moveFocus.version === updated) return;
+    const to = moveFocus.to;
+    moveFocus = null;
+    if (vw.scroller) {
+      vw.scroller.scrollTop = scrollTopForRow(to, ROW_HEIGHT, vw.viewportHeight, vw.scroller.scrollTop, HEAD_HEIGHT);
+      vw.handleScroll();
+    }
+    void tick().then(() => vw.scroller?.querySelector<HTMLElement>(`[data-index="${to}"]`)?.focus());
+  });
 
   /** 行内点击要排除的来源：勾选框 / 封面悬浮播放键 / 歌手·专辑跳转链接 */
   function isRowInternalTarget(target: EventTarget | null): boolean {
@@ -266,6 +282,7 @@ import CheckCell from './ui/CheckCell.svelte';
 
 <!-- 外壳与 TrackList 同构（工具条 + 滚动区）。`.list` 是虚拟滚动的 scroller（vw.scroller 绑在这里，几何不变）。 -->
 <div class="list-shell" class:no-batch={!batchMode}>
+  <span id={reorderHintId} hidden>{t('library.reorderHint')}</span>
   <ListToolbar
     {total}
     count={selection.size}
@@ -276,6 +293,7 @@ import CheckCell from './ui/CheckCell.svelte';
     canLocate={currentId !== null}
     onlocate={onlocate}
     {onplayall}
+    {showPlayAll}
     {onenqueue}
     {onaddto}
     {onremove}
@@ -293,6 +311,7 @@ import CheckCell from './ui/CheckCell.svelte';
       onscroll(vw.scrollTop, Math.floor(vw.scrollTop / ROW_HEIGHT));
     }}
     role="grid"
+    aria-describedby={reorderHintId}
     aria-rowcount={total}
   >
     {#snippet sortArrow(field: 'title' | 'artist' | 'album')}
@@ -366,6 +385,16 @@ import CheckCell from './ui/CheckCell.svelte';
             onkeydown={(event) => {
               // 焦点在行内的按钮（勾选框 / 播放键 / 链接）上时，Enter/Space 归按钮自己
               if ((event.target as HTMLElement | null)?.closest('button')) return;
+              if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+                event.preventDefault();
+                const to = row.index + (event.key === 'ArrowUp' ? -1 : 1);
+                if (to >= 0 && to < total) {
+                  const request = { to, version };
+                  moveFocus = request;
+                  void onmove(row.index, to).then(ok => { if (!ok && moveFocus === request) moveFocus = null; });
+                }
+                return;
+              }
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
                 onplay(row.index);

@@ -40,6 +40,7 @@ export const nowZh = {
   'now.queue.emptyTitle': '队列是空的',
   'now.queue.emptyHint': '右键曲目可加入队列',
   'now.queue.remove': '从队列移除',
+  'now.queue.reorder': '拖动排序，或按 Alt + 上下方向键移动',
   'now.queue.transientFile': '文件',
   'now.queue.loadingMeta': '载入中…',
 
@@ -78,6 +79,7 @@ export const nowEn: Record<keyof typeof nowZh, string> = {
   'now.queue.emptyTitle': 'The queue is empty',
   'now.queue.emptyHint': 'Right-click a track to add it to the queue',
   'now.queue.remove': 'Remove from queue',
+  'now.queue.reorder': 'Drag to reorder, or press Alt + Up or Down',
   'now.queue.transientFile': 'File',
   'now.queue.loadingMeta': 'Loading…',
 

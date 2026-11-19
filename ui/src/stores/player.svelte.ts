@@ -214,12 +214,14 @@ class PlayerStore {
     void ipc.player.clear().catch((e) => this.fail('clear', e));
   }
 
-  removeAt(index: number): void {
-    void ipc.player.removeAt(index).catch((e) => this.fail('removeAt', e));
+  async removeAt(index: number): Promise<boolean> {
+    try { await ipc.player.removeAt(index); return true; }
+    catch (e) { this.fail('removeAt', e); return false; }
   }
 
-  move(from: number, to: number): void {
-    void ipc.player.move(from, to).catch((e) => this.fail('move', e));
+  async move(from: number, to: number): Promise<boolean> {
+    try { await ipc.player.move(from, to); return true; }
+    catch (e) { this.fail('move', e); return false; }
   }
 
   insertNext(trackId: string): void {

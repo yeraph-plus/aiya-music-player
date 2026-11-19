@@ -12,21 +12,27 @@
    * 凭据形态由 /auth/state 的 mode 决定：password（login 端点换会话）或
    * token（只发静态令牌的部署没有 login 端点，令牌即凭据直接入保险库）。
    */
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import AmbientBackdrop from './AmbientBackdrop.svelte';
+  import { provideRenderHost } from '../lib/render/host.svelte';
+  import Field from './ui/Field.svelte';
+  import Button from './ui/Button.svelte';
+  import InlineError from './ui/InlineError.svelte';
   import { t } from '../lib/i18n.svelte';
+  import { httpLogin, type LoginAuth, type LoginMode } from '../lib/login';
+
+  let { auth = httpLogin }: { auth?: LoginAuth } = $props();
+  const renderHost = provideRenderHost();
 
   let password = $state('');
-  let mode = $state<'password' | 'token'>('password');
+  let mode = $state<LoginMode>('password');
   let err = $state('');
   let busy = $state(false);
   let inputEl = $state<HTMLInputElement | null>(null);
 
   onMount(async () => {
     try {
-      const r = await fetch('/auth/state');
-      const s = (await r.json()) as { mode?: string };
-      if (s.mode === 'token') mode = 'token';
+      mode = await auth.mode();
     } catch {
       /* 探测失败保持口令形态：login 401 错误文案会兜底 */
     }
@@ -37,44 +43,19 @@
     if (busy) return;
     busy = true;
     err = '';
-    if (mode === 'token') {
-      // 静态令牌部署：令牌即凭据（校验交给首次 API 调用），入保险库重载
-      try {
-        localStorage.setItem('aiya.authToken', password.trim());
-      } catch {
-        /* 隐私模式：仅本次会话内存持有 */
-      }
-      location.reload();
-      return;
-    }
     try {
-      const r = await fetch('/auth/login', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ password }),
-      });
-      if (r.ok) {
-        const { token } = (await r.json()) as { token: string };
-        try {
-          localStorage.setItem('aiya.authToken', token);
-        } catch {
-          /* 隐私模式：仅本次会话内存持有 */
-        }
-        // 带令牌整页重载：引导/订阅/引擎以新会话重建
-        location.reload();
-        return;
-      }
-      err = r.status === 401 ? t('gate.wrong') : t('gate.failed', { status: r.status });
+      await auth.submit(password, mode);
     } catch (e) {
-      err = t('gate.failed', { status: String(e) });
+      err = e instanceof Error ? e.message : t('gate.failed', { status: String(e) });
     }
     busy = false;
+    await tick();
     inputEl?.focus();
   }
 </script>
 
 <div class="gate">
-  <AmbientBackdrop source={null} enabled={false} shape="ridge" glow="soft" paused={true} />
+  <AmbientBackdrop host={renderHost} source={null} enabled={false} shape="ridge" glow="soft" paused={true} />
   <section class="card" aria-label={t('gate.title')}>
     <!-- 品牌块与 TitleBar 的 .tb-brand 同款（mark + 字标 + 副标，token 一致） -->
     <h1 class="brand">
@@ -83,17 +64,14 @@
       <span class="sub">MUSIC</span>
     </h1>
     <p>{mode === 'token' ? t('gate.tokenHint') : t('gate.hint')}</p>
-    <input
-      bind:this={inputEl}
-      bind:value={password}
-      type="password"
-      autocomplete="current-password"
-      onkeydown={(e) => e.key === 'Enter' && submit()}
-    />
-    <button onclick={submit} disabled={busy}>{t('gate.enter')}</button>
-    {#if err}
-      <p class="err" role="alert">{err}</p>
-    {/if}
+    <form onsubmit={event => {event.preventDefault();void submit();}}>
+      <Field label={mode === 'token' ? t('gate.token') : t('gate.password')} type="password"
+        name={mode === 'token' ? 'token' : 'password'} autocomplete="current-password"
+        bind:ref={inputEl} value={password} oninput={value => password = value} required disabled={busy}
+        aria-invalid={!!err} aria-describedby={err ? 'gate-error' : undefined} />
+      <Button variant="primary" type="submit" loading={busy}>{t('gate.enter')}</Button>
+      {#if err}<InlineError id="gate-error" message={err} />{/if}
+    </form>
   </section>
 </div>
 
@@ -102,6 +80,8 @@
   .gate {
     position: fixed;
     inset: 0;
+    padding:var(--space-5);
+    overflow:auto;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -111,12 +91,12 @@
   .card {
     position: relative;
     z-index: var(--z-content);
-    width: 380px;
-    max-width: calc(100vw - 48px);
-    padding: 26px 28px;
+    width: 23.75rem;
+    max-width: calc(100vw - 2 * var(--space-5));
+    padding: var(--space-6);
     border: 1px solid var(--line-strong);
-    border-radius: 14px;
-    background: var(--surface-3);
+    border-radius: var(--radius-xl);
+    background: var(--surface-4);
     box-shadow: var(--shadow-5);
     backdrop-filter: blur(var(--blur-modal));
     animation: gate-pop 120ms var(--ease);
@@ -126,17 +106,17 @@
   .brand {
     display: flex;
     align-items: center;
-    gap: 6px;
-    margin: 0 0 4px;
+    gap: var(--space-2);
+    margin: 0 0 var(--space-1);
     letter-spacing: 0.14em;
   }
 
   .brand .mark {
     display: inline-grid;
     place-items: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 6px;
+    width: var(--space-6);
+    height: var(--space-6);
+    border-radius: var(--radius-sm);
     background: var(--accent);
     color: var(--surface-1);
     font-size: var(--fs-md);
@@ -157,48 +137,13 @@
   }
 
   .card p {
-    margin: 0 0 16px;
-    font-size: 12px;
-    color: var(--text-3);
+    margin: var(--space-4) 0 var(--space-5);
+    font-size: var(--fs-md);
+    line-height: 1.5;
+    color: var(--text-2);
   }
 
-  .card input {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 9px 12px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: var(--surface-1);
-    color: var(--text-1);
-    outline: none;
-  }
-
-  .card input:focus-visible {
-    border-color: var(--accent);
-  }
-
-  .card button {
-    width: 100%;
-    margin-top: 12px;
-    padding: 9px 12px;
-    border: 0;
-    border-radius: 8px;
-    background: var(--accent);
-    color: var(--accent-fg);
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .card button:disabled {
-    opacity: 0.6;
-  }
-
-  .err {
-    margin: 10px 0 0;
-    min-height: 18px;
-    font-size: 12px;
-    color: var(--danger, #e06c75);
-  }
+  form {display:flex;flex-direction:column;gap:var(--space-4);}
 
   @keyframes gate-pop {
     from {

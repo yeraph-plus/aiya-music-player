@@ -1,20 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
-  /**
-   * 文本页签：页内导航与视图切换的统一实现。
-   *
-   * 语义只有一种：`nav` 加 `aria-current="true"`。页签切换的是"当前视图"，而非
-   * tabpanel 的显隐，因此不适用 tab 角色模型。
-   *
-   * 外观两档：`pill`（内容工具条）/ `underline`（页面级分组）。
-   *
-   * `disabled` 置灰失效（beets 未安装时的分析、整理页签）：不可点击但保留位置，
-   * 用户仍可看到这两页存在。
-   *
-   * `count` 为可选角标（工具条的曲目数）；`title` 透传（曲库页签的"再次点击切换
-   * 排序方向"提示）。
-   */
+  /** 滚动锚点与排序导航使用 nav/current；互斥内容面板使用 TabList 与 Bits Tabs。 */
   interface TabItem {
     id: string;
     label: string;
@@ -41,6 +28,7 @@
 <nav class={`text-tabs ${variant}`} aria-label={label}>
   {#each items as tab (tab.id)}
     <button
+      type="button"
       class="text-tab"
       class:on={value === tab.id}
       aria-current={value === tab.id ? 'true' : undefined}
@@ -54,83 +42,3 @@
     </button>
   {/each}
 </nav>
-
-<style>
-  .text-tabs {
-    display: flex;
-    min-width: 0;
-  }
-
-  .text-tabs.pill {
-    gap: 2px;
-    flex-wrap: wrap;
-  }
-
-  .text-tabs.underline {
-    align-items: baseline;
-    gap: 14px;
-  }
-
-  .text-tab {
-    color: var(--text-2);
-    font-size: var(--fs-base);
-    white-space: nowrap;
-  }
-
-  .text-tab:hover {
-    color: var(--text-1);
-  }
-
-  .text-tab.on {
-    color: var(--text-1);
-  }
-
-  /* pill（内容工具条） */
-  .pill .text-tab {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 28px;
-    padding: 5px 11px;
-    border-radius: var(--radius-md);
-  }
-
-  .pill .text-tab:hover {
-    background: var(--surface-hover);
-  }
-
-  .pill .text-tab.on {
-    background: var(--surface-active);
-  }
-
-  /* underline（页面级分组） */
-  .underline .text-tab {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    padding: 2px 0;
-    border-bottom: 2px solid transparent;
-  }
-
-  .underline .text-tab.on {
-    font-weight: 600;
-    border-bottom-color: var(--accent);
-  }
-
-  .text-tab-count {
-    color: var(--text-3);
-    font-size: var(--fs-xs);
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* 置灰失效：压暗 + 不响应 hover 抬色（disabled 按钮不触发 click，但 :hover 仍会算） */
-  .text-tab:disabled {
-    opacity: var(--disabled-opacity);
-    cursor: default;
-  }
-
-  .text-tab:disabled:hover {
-    color: var(--text-2);
-    background: transparent;
-  }
-</style>

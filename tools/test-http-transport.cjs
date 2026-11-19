@@ -5,6 +5,46 @@ const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('../ui/node_modules/typescript');
 
+test('library roots preserve POSIX case, volume roots and directory identity', () => {
+  const ctx = { exports: {} };
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname, '../ui/src/lib/library-path.ts'), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, ctx);
+  const { normalizeRoot, rootKey, absoluteRoot } = ctx.exports;
+  assert.equal(normalizeRoot(' / '), '/');
+  assert.equal(normalizeRoot('C:\\'), 'C:\\');
+  assert.equal(normalizeRoot('/music/A///'), '/music/A');
+  assert.equal(normalizeRoot('/music/A\\'), '/music/A\\');
+  assert.notEqual(rootKey('/music/A'), rootKey('/music/a'));
+  assert.equal(rootKey('C:\\Music\\'), rootKey('c:/music'));
+  for (const path of ['/', '/music/专辑', 'C:\\Music', '\\\\server\\share']) assert.equal(absoluteRoot(path), true, path);
+  for (const path of ['', 'music', 'C:Music']) assert.equal(absoluteRoot(path), false, path);
+});
+
+test('library scan ignores refresh snapshots and keeps the importing phase busy', () => {
+  let listener;
+  const ctx = { exports: {}, $state: value => value, $derived: value => value,
+    require: name => name.includes('errors') ? { errorMessage: String } : {
+      events: { scanProgress: fn => { listener = fn; return () => {}; } }, ipc: {},
+    },
+  };
+  let source = fs.readFileSync(path.join(__dirname, '../ui/src/stores/library.svelte.ts'), 'utf8');
+  source = source.replace(/readonly scanning = \$derived\(([^;]+)\);/, 'get scanning() { return $1; }');
+  vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, ctx);
+  const { library } = ctx.exports;
+  let completions = 0;
+  library.watchScan(() => completions++);
+  listener({ phase: 'done', scanned: 3 });
+  assert.equal(completions, 1);
+  listener({ trigger: 'timer', scanned: 3, atMs: 123 });
+  assert.equal(library.scan.phase, 'done');
+  listener({ phase: 'importing', scanned: 1 });
+  assert.equal(library.scanning, true);
+  listener({ phase: 'cancelled' });
+  assert.equal(library.scanning, false);
+  assert.equal(completions, 2);
+});
+
 test('broadcast translations preserve parameters, source names and both languages', () => {
   const cache = new Map();
   function load(file) {

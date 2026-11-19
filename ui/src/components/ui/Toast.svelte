@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { reducedMotion } from '../../lib/motion.svelte';
   import { fade } from 'svelte/transition';
 
   /**
@@ -20,31 +21,27 @@
   let { message }: Props = $props();
 </script>
 
-<div class="k-toast" aria-live="polite" out:fade={{ duration: 120 }}>{message}</div>
+<div class="k-toast" role="status" out:fade={{ duration: reducedMotion.value ? 0 : 120 }}>{message}</div>
 
 <style>
   .k-toast {
     position: fixed;
     left: 50%;
-    bottom: calc(var(--player-h) + 16px);
+    bottom: calc(var(--player-h) + var(--space-5));
+    max-width: calc(100vw - 2 * var(--space-5));
+    overflow-wrap: anywhere;
     transform: translateX(-50%);
     /* 层序 65：位于 Menu(61)、Select(62) 之上，Tooltip(70) 之下。与菜单同值时，
        菜单打开状态下弹出 toast 的叠放结果取决于 portal 的 DOM 顺序 */
     z-index: var(--z-toast);
-    padding: 8px 14px;
-    border-radius: 999px;
+    padding: var(--space-3) var(--space-5);
+    border-radius: var(--radius-lg);
     border: 1px solid var(--line-strong);
     background: var(--surface-4);
     box-shadow: var(--shadow-3);
-    font-size: var(--fs-base);
+    font-size: var(--fs-md);
     color: var(--text-1);
     animation: toast-in 160ms ease-out;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .k-toast {
-      animation: none;
-    }
   }
 
   @keyframes toast-in {

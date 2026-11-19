@@ -58,6 +58,8 @@ class ListStore {
   booted = $state(false);
   /** 首屏加载中（视图切换时用，与扫描进度无关） */
   loading = $state(false);
+  loadedSearch = $state<string | null>(null);
+  error = $state('');
   /** 下一次渲染后要滚到的位置；`null` = 不恢复（停在顶部） */
   restoreScrollTop = $state<number | null>(null);
 
@@ -115,11 +117,14 @@ class ListStore {
    */
   async reload(options: { restore?: boolean } = {}): Promise<void> {
     const generation = (this.generation += 1);
+    const query = this.query();
     this.loading = true;
+    this.error = '';
     notify.clearError();
     try {
-      const page = await library.list(this.query());
+      const page = await library.list(query);
       if (generation !== this.generation) return;
+      this.loadedSearch = query.search ?? '';
       this.trackWindow.reset(page.total);
       this.trackWindow.primePage(0, page.items);
       this.total = page.total;
@@ -128,10 +133,11 @@ class ListStore {
       this.restoreScrollTop = options.restore ? ui.scrollTop : 0;
     } catch (err) {
       if (generation !== this.generation) return;
-      notify.showError(errorMessage(err));
+      this.loadedSearch = query.search ?? '';
+      this.error = errorMessage(err);
+      notify.showError(this.error);
     } finally {
-      if (generation === this.generation) this.loading = false;
-      this.booted = true;
+      if (generation === this.generation) { this.loading = false; this.booted = true; }
     }
   }
 
@@ -168,6 +174,7 @@ class ListStore {
     // 结果页，不寄居曲库列表）；已经在搜索页就只更新查询，不再重置视图。
     if (value.trim() && ui.page !== 'search') ui.enterSearch();
     ui.search = value;
+    this.generation += 1;
     clearTimeout(this.searchTimer);
     this.searchTimer = setTimeout(() => void this.reload(), SEARCH_DEBOUNCE_MS);
   }

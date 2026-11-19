@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { Checkbox } from 'bits-ui';
+  import AlertDialog from '../ui/AlertDialog.svelte';
+  import Progress from '../ui/Progress.svelte';
+  import { Check } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import { Download, Package, RefreshCw, Trash2, TriangleAlert } from '@lucide/svelte';
   import Button from '../ui/Button.svelte';
@@ -33,6 +37,8 @@
   let picked = $state<string[] | null>(null);
   const chosen = $derived(picked ?? table.filter((p) => p.default).map((p) => p.name));
   let confirming = $state(false);
+  let cancelDelete = $state<HTMLButtonElement | null>(null);
+  const busy = $derived(install.running || uninstall.running);
 
   onMount(() => {
     // 内嵌插件表在二进制里，不依赖"已装组件"
@@ -44,6 +50,7 @@
    *  会把它们恒并回启用行，UI 置灰而不是"勾了又被改回"——勾选态必须与
    *  config 实际启用态一致。 */
   function toggle(name: string): void {
+    if (busy) return;
     if (table.find((p) => p.name === name)?.required) return;
     const next = new Set(chosen);
     if (next.has(name)) next.delete(name);
@@ -80,12 +87,13 @@
 <!-- 卡内安装状态：跟在按钮正下方——阶段是徽章，消息是文本 -->
 {#snippet status()}
   {#if install.running}
-    <p class="track-status">
+    <Progress value={null} label={t('beets.downloadInstall')} size="md" />
+    <p class="track-status" role="status">
       <span class="beets-badge">{stageLabel(install.stage)}</span>
       <span>{install.message}</span>
     </p>
   {:else if install.error}
-    <p class="track-status track-status-error">{install.error}</p>
+    <p class="track-status track-status-error" role="alert">{install.error}</p>
   {/if}
 {/snippet}
 
@@ -93,7 +101,7 @@
   {#if uninstall.running}
     <p class="beets-dim">{uninstall.message || t('beets.uninstallRunning')}</p>
   {:else if uninstall.error}
-    <p class="beets-danger">{uninstall.error}</p>
+    <p class="beets-danger" role="alert">{uninstall.error}</p>
   {:else if uninstall.message}
     <p class="beets-dim">{uninstall.message}</p>
   {/if}
@@ -108,13 +116,11 @@
       {#each table as p (p.name)}
         <li>
           <label>
-            <input
-              type="checkbox"
-              checked={chosen.includes(p.name)}
-              disabled={p.required}
-              title={p.required ? t('beets.install.requiredTip') : undefined}
-              onchange={() => toggle(p.name)}
-            />
+            <Checkbox.Root class="plugin-check" aria-label={p.title} checked={chosen.includes(p.name)}
+              disabled={p.required || busy} onCheckedChange={() => toggle(p.name)}
+              title={p.required ? t('beets.install.requiredTip') : undefined}>
+              {#snippet children({ checked })}{#if checked}<Check size={12} />{/if}{/snippet}
+            </Checkbox.Root>
             <span class="pick-name">{p.name}</span>
             <span class="pick-title">{p.title}</span>
             {#if p.packages.length > 0}
@@ -158,7 +164,7 @@
           variant="primary"
           size="sm"
           loading={install.running}
-          disabled={install.running}
+          disabled={busy}
           onclick={() => void ui.installBeets()}
           title={t('beets.downloadInstall')}
         >
@@ -184,7 +190,7 @@
             variant="primary"
             size="sm"
             loading={install.running}
-            disabled={install.running}
+            disabled={busy}
             onclick={() => void ui.installBeets()}
           >
             {#snippet icon()}<Package size={14} />{/snippet}
@@ -216,7 +222,7 @@
             {t('beets.libraryLock', { holder: ui.beets.libraryLockHolder ?? t('beets.libraryLockFallback') })}
           </span>
         {/if}
-        <Button size="sm" onclick={() => void ui.refreshBeets()} title={t('beets.redetectTip')}>
+        <Button size="sm" disabled={busy} onclick={() => void ui.refreshBeets()} title={t('beets.redetectTip')}>
           {#snippet icon()}<RefreshCw size={13} />{/snippet}
           {t('beets.redetect')}
         </Button>
@@ -254,7 +260,7 @@
         <Button
           size="sm"
           loading={install.running}
-          disabled={install.running}
+          disabled={busy}
           onclick={() => void ui.setBeetsPlugins(chosen)}
           title={t('beets.changePluginsTip')}
         >
@@ -268,7 +274,7 @@
         <Button
           size="sm"
           loading={install.running}
-          disabled={install.running}
+          disabled={busy}
           onclick={() => void ui.installBeets()}
           title={t('beets.updateLatestTip')}
         >
@@ -278,27 +284,9 @@
       </div>
 
       <div class="beets-gate">
-        {#if confirming}
-          <Button
-            variant="danger"
-            size="sm"
-            loading={uninstall.running}
-            disabled={uninstall.running}
-            onclick={() => {
-              confirming = false;
-              void ui.uninstallBeets();
-            }}
-          >
-            {#snippet icon()}<Trash2 size={14} />{/snippet}
-            {t('beets.confirmDelete')}
-          </Button>
-          <Button size="sm" disabled={uninstall.running} onclick={() => (confirming = false)}>{t('common.cancel')}</Button>
-        {:else}
-          <Button size="sm" disabled={uninstall.running} onclick={() => (confirming = true)}>
-            {#snippet icon()}<Trash2 size={14} />{/snippet}
-            {t('beets.deleteBundle')}
-          </Button>
-        {/if}
+        <Button size="sm" disabled={busy} onclick={() => confirming = true}>
+          {#snippet icon()}<Trash2 size={14} />{/snippet}{t('beets.deleteBundle')}
+        </Button>
       </div>
       <p class="install-note">
         {t('beets.deleteNoteHead')}<b>{t('beets.deleteNoteKept')}</b>{t('beets.deleteNoteTail')}
@@ -307,6 +295,17 @@
     </section>
   {/if}
 </div>
+
+{#if confirming}
+  <AlertDialog title={t('beets.deleteBundle')}
+    description={t('beets.deleteNoteHead') + t('beets.deleteNoteKept') + t('beets.deleteNoteTail')}
+    autofocus={() => cancelDelete?.focus()} onclose={() => confirming = false}>
+    {#snippet actions()}
+      <Button bind:ref={cancelDelete} onclick={() => confirming = false}>{t('common.cancel')}</Button>
+      <Button variant="danger" onclick={() => { confirming = false; void ui.uninstallBeets(); }}>{t('beets.confirmDelete')}</Button>
+    {/snippet}
+  </AlertDialog>
+{/if}
 
 <style>
   /* 状态行：裸文本不进卡，与安装卡同列间距 */
@@ -318,7 +317,7 @@
   .track-status {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-2);
     margin: 0;
     font-size: var(--fs-sm);
     color: var(--text-3);
@@ -348,15 +347,16 @@
   .pick label {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-2);
     flex-wrap: wrap;
-    font-size: var(--fs-base);
+    font-size: var(--fs-md);
     cursor: pointer;
   }
 
-  .pick input {
-    accent-color: var(--accent);
-  }
+  :global(.plugin-check) {display:inline-grid;place-items:center;flex:none;width:1.125rem;height:1.125rem;border:1px solid var(--line-strong);border-radius:var(--radius-xs);background:var(--surface-input);color:var(--accent-fg);}
+  :global(.plugin-check[data-state='checked']) {background:var(--accent);border-color:var(--accent);}
+  :global(.plugin-check:disabled) {opacity:var(--disabled-opacity);}
+  :global(.plugin-check:focus-visible) {outline:2px solid var(--accent);outline-offset:2px;}
 
   .pick-name {
     font-family: var(--font-mono, ui-monospace, Consolas, monospace);
@@ -369,8 +369,8 @@
 
   .pick-tag {
     padding: 0 5px;
-    border-radius: 4px;
-    border: 1px solid var(--line-1);
+    border-radius: var(--radius-xs);
+    border: 1px solid var(--line);
     font-family: var(--font-mono, ui-monospace, Consolas, monospace);
     font-size: var(--fs-xs);
     color: var(--text-3);
@@ -387,14 +387,15 @@
   .facts {
     width: 100%;
     border-collapse: collapse;
-    font-size: var(--fs-base);
+    table-layout: fixed;
+    font-size: var(--fs-md);
   }
 
   .facts th {
     text-align: left;
     font-weight: 400;
     color: var(--text-3);
-    width: 82px;
+    width: 6.5rem;
     padding: 3px 0;
     vertical-align: top;
   }
@@ -405,7 +406,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 0; /* 配合 table-layout 让省略号生效 */
+    user-select: text;
   }
 
   .facts .mono {
@@ -417,7 +418,7 @@
   .warn-title {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-2);
     color: var(--warn);
   }
 </style>

@@ -19,13 +19,10 @@ export const eqZh = {
   'eq.bandGainAria': '频段 {freq} Hz 增益',
   'eq.gain': '增益',
 
-  /* EqPanel：三旋钮（label + 旋钮名） */
+  /* EqPanel：三个增益滑杆 */
   'eq.pregain': '前置增益',
-  'eq.pregainShort': '前置',
   'eq.bassGain': '低音增益',
-  'eq.bassShort': '低音',
   'eq.trebleGain': '高音增益',
-  'eq.trebleShort': '高音',
 
   /* stores/eq.svelte.ts：预设名（EQ_PRESETS.label 存键，EqPanel 渲染时 t()） */
   'eq.preset.flat': '平直',
@@ -55,11 +52,8 @@ export const eqEn: Record<keyof typeof eqZh, string> = {
   'eq.gain': 'Gain',
 
   'eq.pregain': 'Pregain',
-  'eq.pregainShort': 'Pre',
   'eq.bassGain': 'Bass gain',
-  'eq.bassShort': 'Bass',
   'eq.trebleGain': 'Treble gain',
-  'eq.trebleShort': 'Treble',
 
   'eq.preset.flat': 'Flat',
   'eq.preset.bass': 'Bass boost',

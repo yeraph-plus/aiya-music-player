@@ -364,7 +364,7 @@
     {/if}
 
     {#if sess.lastError}
-      <p class="beets-danger">
+      <p class="beets-danger" role="alert">
         {sess.lastError}
         <span class="beets-dim">{t('beets.organize.errorHint')}</span>
       </p>
@@ -503,20 +503,11 @@
   .root-chips {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-2);
     flex-wrap: wrap;
   }
 
-  /* 长路径上限：Chip 自身不裁文本，目录 chip 限宽后省略 */
-  .root-chips :global(.k-chip),
-  .root-chips :global(.k-chip-main) {
-    max-width: 260px;
-  }
-
-  .root-chips :global(.k-chip-main) {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
+  .root-chips {min-width:0;}
 
   .apply-bar {
     padding-top: 2px;
@@ -525,7 +516,7 @@
   .summary {
     padding: 8px 10px;
     border: 1px solid var(--accent);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
   }
 
   .summary.has-failed {
@@ -536,26 +527,26 @@
     display: flex;
     flex-direction: column;
     gap: 3px;
-    font-size: var(--fs-base);
+    font-size: var(--fs-md);
     color: var(--danger);
     line-height: 1.5;
   }
 
   .album-card {
     border: 1px solid var(--line);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     background: var(--surface-2);
-    padding: 12px 14px;
+    padding: var(--space-5);
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    font-size: var(--fs-base);
+    gap: var(--space-3);
+    font-size: var(--fs-md);
   }
 
   .album-head {
     display: flex;
     align-items: baseline;
-    gap: 8px;
+    gap: var(--space-3);
     flex-wrap: wrap;
   }
 
@@ -567,7 +558,7 @@
   .evidence-line {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-3);
     flex-wrap: wrap;
     font-size: var(--fs-sm);
   }
@@ -575,6 +566,7 @@
   .diff-table {
     width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
     font-size: var(--fs-sm);
   }
 
@@ -582,6 +574,7 @@
   .diff-table th {
     padding: 2px 6px;
     text-align: left;
+    overflow-wrap: anywhere;
     border-bottom: 1px solid var(--line);
   }
 
@@ -602,7 +595,7 @@
   .track-row {
     display: flex;
     justify-content: space-between;
-    gap: 8px;
+    gap: var(--space-3);
     padding: 1px 0;
   }
 
@@ -623,4 +616,6 @@
   .fail-line.conflict {
     color: var(--warn);
   }
+  .track-row>span {min-width:0;flex:1;overflow-wrap:anywhere;}
+  .album-head b,.error-list {overflow-wrap:anywhere;}
 </style>

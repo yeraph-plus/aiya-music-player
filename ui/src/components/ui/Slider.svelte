@@ -24,6 +24,7 @@
     disabled?: boolean;
     /** 无障碍名称，如「播放进度」「音量」 */
     label: string;
+    valueText?: string;
     oninput?: (value: number) => void;
     oncommit?: (value: number) => void;
     /** 轨道宽度：进度条 100%，音量固定 84px */
@@ -42,6 +43,7 @@
     step = 1,
     disabled = false,
     label,
+    valueText,
     oninput,
     oncommit,
     width,
@@ -64,7 +66,7 @@
   style={width ? `width:${width}` : undefined}
 >
   <Slider.Range class="k-slider-range" />
-  <Slider.Thumb class="k-slider-thumb" index={0} aria-label={label} />
+  <Slider.Thumb class="k-slider-thumb" index={0} aria-label={label} aria-valuetext={valueText} />
 </Slider.Root>
 
 <style>

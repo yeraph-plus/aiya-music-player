@@ -8,7 +8,8 @@ import { defineConfig } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
-  testIgnore: '**/e2e/http/**',
+  outputDir: './test-results/firefox-regression',
+  testIgnore: ['**/e2e/http/**', '**/e2e/dev/**'],
   timeout: 30_000,
   retries: 0,
   workers: 1,

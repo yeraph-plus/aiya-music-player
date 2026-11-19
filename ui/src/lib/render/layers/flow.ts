@@ -126,18 +126,13 @@ const FRAG_COMPOSITE = /* glsl */ `
   }
 `;
 
-let quad: PlaneGeometry | null = null;
-function sharedQuad(): PlaneGeometry {
-  if (!quad) quad = new PlaneGeometry(2, 2);
-  return quad;
-}
-
 export class FlowLayer implements GlLayer {
   readonly name = 'flow';
 
   private readonly fieldScene = new Scene();
   private readonly compositeScene = new Scene();
   private readonly camera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  private readonly geometry = new PlaneGeometry(2, 2);
   private readonly target: WebGLRenderTarget;
   private readonly fieldMaterial: ShaderMaterial;
   private readonly compositeMaterial: ShaderMaterial;
@@ -145,7 +140,8 @@ export class FlowLayer implements GlLayer {
 
   private lastFieldAt = -Infinity;
   private fieldDirty = true;
-  private light = false;
+  private paused = false;
+  private time = 0;
 
   constructor() {
     this.target = new WebGLRenderTarget(FIELD_W, FIELD_H, {
@@ -191,11 +187,11 @@ export class FlowLayer implements GlLayer {
       blendEquation: AddEquation,
     });
 
-    const mesh = new Mesh(sharedQuad(), this.fieldMaterial);
+    const mesh = new Mesh(this.geometry, this.fieldMaterial);
     mesh.frustumCulled = false;
     this.fieldScene.add(mesh);
 
-    const composite = new Mesh(sharedQuad(), this.compositeMaterial);
+    const composite = new Mesh(this.geometry, this.compositeMaterial);
     composite.frustumCulled = false;
     this.compositeScene.add(composite);
 
@@ -211,7 +207,6 @@ export class FlowLayer implements GlLayer {
     const light =
       typeof document !== 'undefined' &&
       document.documentElement.getAttribute('data-theme') === 'light';
-    this.light = light;
 
     const accent = new Color(themeColor('--accent'));
     const secondary = accent.clone().offsetHSL(0.09, 0.02, 0.08);
@@ -233,15 +228,19 @@ export class FlowLayer implements GlLayer {
   resize(width: number, height: number): void {
     // 场是正方形像素的 render target，宽高比只用来把光斑在屏幕上还原成椭圆
     this.fieldMaterial.uniforms.uAspect!.value = height > 0 ? width / height : FIELD_W / FIELD_H;
+    this.fieldDirty = true;
   }
 
+  setPaused(paused: boolean): void { this.paused = paused; }
+
   draw(stage: GlStage, frame: Frame): void {
+    if (!this.paused) this.time += frame.dt * .65;
     const nowMs = frame.time * 1000;
-    if (this.fieldDirty || nowMs - this.lastFieldAt >= FIELD_INTERVAL_MS) {
+    if (this.fieldDirty || (!this.paused && nowMs - this.lastFieldAt >= FIELD_INTERVAL_MS)) {
       this.lastFieldAt = nowMs;
       this.fieldDirty = false;
       // 时间系数 0.06：整场跑一轮约 100s，是"慢速"的量级
-      this.fieldMaterial.uniforms.uTime!.value = frame.time * 0.06;
+      this.fieldMaterial.uniforms.uTime!.value = this.time * 0.06;
 
       stage.renderer.setRenderTarget(this.target);
       stage.renderer.render(this.fieldScene, this.camera);
@@ -256,7 +255,9 @@ export class FlowLayer implements GlLayer {
     this.target.dispose();
     this.fieldMaterial.dispose();
     this.compositeMaterial.dispose();
-    // 共享几何体不销毁：其他图层还在用（由模块级生命周期管）
+    this.geometry.dispose();
+    this.fieldScene.clear();
+    this.compositeScene.clear();
   }
 }
 

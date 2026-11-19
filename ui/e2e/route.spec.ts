@@ -374,7 +374,7 @@ test('docs/51：安装页给出插件勾选与卸载入口（卸载只删组件�
   const main = page.locator('.main');
   // 内嵌插件表不依赖已装组件（`beets_plugin_table` 读的是编译期 JSON），
   // 所以勾选清单现在就应该在——否则用户没法在安装前决定要什么
-  await expect(main.locator('.pick input[type="checkbox"]')).toHaveCount(4);
+  await expect(main.locator('.pick').getByRole('checkbox')).toHaveCount(4);
   await expect(main).toContainText('beautifulsoup4>=4.12,<5');
   // 依赖"另下"提示已删：脚本自己下载，装前不再罗列缺什么
   await expect(main).not.toContainText('另下');
@@ -383,7 +383,7 @@ test('docs/51：安装页给出插件勾选与卸载入口（卸载只删组件�
   // 破坏性操作不该一次点击就执行
   await expect(main.getByRole('button', { name: '确认卸载' })).toHaveCount(0);
   await main.getByRole('button', { name: '删除组件' }).click();
-  await expect(main.getByRole('button', { name: '确认删除' })).toBeVisible();
+  await expect(page.getByRole('alertdialog').getByRole('button', { name: '确认删除' })).toBeVisible();
   // 文案必须写明数据不动——这是卸载唯一容易误解的地方
   await expect(main).toContainText('曲库与分析库');
 });
@@ -434,8 +434,7 @@ test('docs/49：Beets 拆成 安装/分析/整理 三个子页，各自只放自
   await expect(tabs.nth(2)).toHaveText('整理');
 
   // 默认停在「分析」：装好的人占多数，每次先看安装说明是无用的
-  // TextTabs 的当前项语义是 aria-current（比类字符串稳，类名是样式的事）
-  await expect(tabs.nth(1)).toHaveAttribute('aria-current', 'true');
+  await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true');
   await expect(main.getByRole('button', { name: '查询' })).toBeVisible();
   await expect(main).not.toContainText('待整理目录');
 

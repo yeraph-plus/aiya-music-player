@@ -5,6 +5,11 @@ import { mount } from 'svelte';
 import App from './App.svelte';
 import { applyLook, readLook } from './lib/look';
 import { startDpiDiagnostics } from './lib/dpi-diagnostics';
+import type { LoginAuth } from './lib/login';
+import type { Look } from './lib/look';
+
+let previewLogin: LoginAuth | null = null;
+let previewLook: Look | null = null;
 
 /**
  * 浏览器预览（ui/ 目录下 `npm run dev`）的装配点：没有 Tauri 运行时就把假后端
@@ -25,7 +30,7 @@ if (!('__TAURI_INTERNALS__' in window)) {
   // 宿主三态：tauri（默认）/ http（server 注入的 __AIYA_BOOT__ 标志，或
   // ?backend=http）/ mock（预览与 e2e；?backend=mock 强制）。无标志不探测——
   // 探测的 404 会在 e2e 的运行期错误收集器里记账。
-  const useHttp = mode === 'http' || (window as { __AIYA_BOOT__?: string }).__AIYA_BOOT__ === 'http';
+  const useHttp = mode !== 'mock' && (mode === 'http' || (window as { __AIYA_BOOT__?: string }).__AIYA_BOOT__ === 'http');
   if (useHttp) {
     const { installHttpTransport, probeAuthGate } = await import('./lib/ipc/http');
     installHttpTransport();
@@ -33,10 +38,23 @@ if (!('__TAURI_INTERNALS__' in window)) {
     await probeAuthGate();
   } else {
     const { installMock } = await import('./lib/ipc/mock');
+    const preview = import.meta.env.DEV ? await import('./dev/preview') : null;
+    const previewConfig = preview?.previewOptions(params);
+    if (previewConfig?.seed?.settings) {
+      const settings = previewConfig.seed.settings;
+      previewLook = { theme: settings.theme!, ambient: 'aurora', uiScale: settings.uiScale! };
+      const { setLocale } = await import('./lib/i18n.svelte');
+      setLocale(settings.language === 'en' ? 'en' : 'zh');
+    }
+    if (import.meta.env.DEV && params.has('gate')) {
+      const { previewAuth } = await import('./dev/login');
+      previewLogin = previewAuth(params);
+    }
     const failCmd = params.get('failCmd');
     const missing = Number(params.get('missing'));
     const live = params.get('live');
-    installMock({
+    const uninstallMock = installMock({
+      ...previewConfig,
       ...(failCmd ? { failCommands: [failCmd] } : {}),
       ...(params.get('beets') === 'absent' ? { beetsFound: false } : {}),
       ...(Number.isFinite(missing) && missing > 0 ? { missingLocations: missing } : {}),
@@ -44,6 +62,7 @@ if (!('__TAURI_INTERNALS__' in window)) {
       // 这条渲染分支没有别的入口能稳定复现
       ...(live ? { liveStream: live } : {}),
     });
+    import.meta.hot?.dispose(uninstallMock);
   }
 }
 
@@ -57,10 +76,12 @@ if (!target) throw new Error('#app not found');
  * 上次写下的 localStorage 镜像（`lib/look.ts` 有完整理由）。三级回退：
  * 镜像 → `__AIYA_LOOK__` → 默认深色。
  */
-applyLook(readLook());
+applyLook(previewLook ?? readLook());
 // 高分屏分诊日志：dpr 是否等于系统缩放，一眼定位"文字过小"的类别
 startDpiDiagnostics();
 
-const app = mount(App, { target });
+const app = previewLogin
+  ? mount((await import('./components/LoginView.svelte')).default, { target, props: { auth: previewLogin } })
+  : mount(App, { target });
 
 export default app;

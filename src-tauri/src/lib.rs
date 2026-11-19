@@ -1912,7 +1912,9 @@ async fn library_scan_body(
                         .unwrap_or_default()
                         .as_millis() as u64;
                     let last = last_emit_ms.load(Ordering::Relaxed);
-                    if now >= last + 100 {
+                    if matches!(p.phase.as_str(), "done" | "cancelled" | "failed")
+                        || now >= last + 100
+                    {
                         last_emit_ms.store(now, Ordering::Relaxed);
                         if let Ok(v) = serde_json::to_value(&p) {
                             let _ = app2.emit("scan:progress", v);

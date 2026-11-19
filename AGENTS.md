@@ -97,6 +97,9 @@ src-tauri ──▶ aiya-beets-client ⇠ stdio NDJSON ⇢ aiya-beets（独立�
 | `npm run test:data` / `test:audio` / `test:player` / `test:app` | 单 crate 测试 |
 | `npm run test:all` | 先编 sidecar → Rust 全量 + UI 类型检查 + HTTP transport 回归 + 依赖/边界/分层/协议门禁 + UI 构建 |
 | `npm run test:e2e` | Playwright（mock 后端 + 系统 Edge） |
+| `npm run test:e2e:dev -- --project=regression` | 源码回归：连接或启动 Vite 1420，可复用已有 server，无需构建 |
+| `npm run test:ui:baseline` | 四代表页 × 明暗 × 三窗口截图与 computed style，输出 ui/test-results/ui-baseline |
+| `npm run audit:ui-styles` | kit/Bits 引用及 CSS 声明初筛，输出 ui/test-results/ui-style-inventory.json |
 | `npm run test:e2e:http` | Playwright × 真 aiya-server（8799，cargo 增量构建 + 临时曲库，登录闸/播放/隐身清单） |
 | `npm run test:e2e:firefox` | 同 test:e2e 跑 Playwright bundled Firefox（真机矩阵；需先 `npx playwright install firefox`） |
 | `npm run verify` | `test:all` + `test:e2e` + `test:e2e:http` + `check:fmt` + `check:clippy`（-D warnings）+ `gen:types:check` + `check:style:strict` + beets 九项冒烟（apply/maint/proto/config/catalog/bins/uninstall/lock/enrich） |
@@ -199,6 +202,13 @@ HTTP 推流节目（docs/75）：频道队列直接引用当前服务库内的�
 每个队列项的全部时段共用一个优先级；周时段结束允许 24:00，以表示整日。
 节目可用性通过带判别字段的 StationProgramIssue 返回，由 UI 翻译原因、星期和内置
 来源名；未设置 TZ 时返回 null，由 UI 展示服务器本地时区，技术诊断保留原始文本。
+
+频谱绘制（docs/77）：硬件 WebGL2 可用时由单个 GlStage 组合 Flow、当前背景
+与播放页前景，共用 scheduler 和引用计数 SpectrumSource；只保留当前形态的
+GPU 资源。播放页登记 DOM 区域，由共享舞台统一 viewport/scissor 裁切与恢复。
+硬件不可用、reduced motion 或效果关闭时背景仅使用 CSS 静态渐变，前景停止
+绘制，不维护 Canvas 2D 副本，不申请对应 tap。前后景各自拥有源引用，独立
+开关；暂停冻结艺术运动并衰减幅度。舞台时钟不累计隐藏和上下文丢失期间的时间。
 
 ### 3.1 范围边界（现在不做什么）
 

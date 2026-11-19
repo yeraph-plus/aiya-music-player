@@ -136,11 +136,6 @@
               }}
               title={t('now.lyrics.lineSeekTip')}
             >
-              <!-- 当前句的衬底（正在播放页：压在频谱上的一团渐隐暗雾）。做成**这一行自己的子元素**而不是容器中心的伪元素：切句、用户滚动、smooth
-              滚动中它都跟着这一行走，永远对得准。样式在 pages.css（`--np-scrim` 定义在 tokens.css）。 -->
-              {#if index === activeIndex}
-                <span class="lyric-halo" aria-hidden="true"></span>
-              {/if}
               {line.text || '·'}
             </button>
           {/each}

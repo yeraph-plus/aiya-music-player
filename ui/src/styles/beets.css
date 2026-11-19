@@ -11,26 +11,29 @@
 
 /* 页面容器：一列卡片，间距统一（跨子页复用，故进本表） */
 .beets-page {
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-5);
 }
 
 /* 卡片：标题 + 说明 + 内容 */
 .beets-panel {
+  min-width: 0;
+  container-type: inline-size;
   background: var(--surface-2);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .beets-panel-head {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--space-1);
 }
 
 .beets-panel-head strong {
@@ -42,9 +45,9 @@
 .beets-row {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: var(--space-5);
   flex-wrap: wrap;
-  font-size: var(--fs-base);
+  font-size: var(--fs-md);
   color: var(--text-2);
 }
 
@@ -57,27 +60,29 @@
 /* 路径展示：等宽 + 单行省略，title 挂全路径 */
 .beets-path {
   font-family: var(--font-mono, ui-monospace, Consolas, monospace);
-  font-size: var(--fs-base);
+  font-size: var(--fs-md);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 100%;
+  user-select: text;
   min-width: 0;
 }
 
 .beets-dim {
-  font-size: var(--fs-base);
+  font-size: var(--fs-md);
   line-height: 1.55;
   color: var(--text-2);
 }
 
 .beets-danger {
-  font-size: var(--fs-base);
+  font-size: var(--fs-md);
   line-height: 1.5;
   color: var(--danger);
 }
 
 .beets-warn {
-  font-size: var(--fs-base);
+  font-size: var(--fs-md);
   line-height: 1.5;
   color: var(--warn);
 }
@@ -86,14 +91,14 @@
 .beets-gate {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-4);
   flex-wrap: wrap;
 }
 
 /* 小徽标：锁定状态 / 未入库 / 证据层级 */
 .beets-badge {
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: var(--fs-sm);
   background: var(--surface-input);
   color: var(--text-3);
@@ -109,3 +114,7 @@
   background: color-mix(in srgb, var(--ok) 16%, transparent);
   color: var(--ok);
 }
+
+.beets-panel p {margin:0;overflow-wrap:anywhere;}
+.beets-panel-head {overflow-wrap:anywhere;}
+.beets-row > * {max-width:100%;}

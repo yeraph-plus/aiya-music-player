@@ -57,7 +57,7 @@
       <div class="artist-badge"><User size={40} strokeWidth={1.6} /></div>
     {/snippet}
     {#snippet actions()}
-      <Button variant="primary" onclick={() => void list.playAll()} disabled={list.total === 0}>
+      <Button variant="primary" onclick={() => void list.playAll()} disabled={list.total === 0 || list.loading || !!list.error}>
         {#snippet icon()}<Icon name="play" size={12} />{/snippet}
         {t('library.playAll')}
       </Button>
@@ -66,7 +66,7 @@
 </div>
 
 <!-- 艺人页把"歌手"列链接废掉（disableArtistLink）：点了指向的是当前页，nav 视为刷新，只会白丢一次滚动位置。专辑列保持可点。 -->
-<TrackListPanel canSort={true} removeLabel={t('library.deleteFromLibrary')} showFilter={false} disableArtistLink={true}>
+<TrackListPanel canSort={true} removeLabel={t('library.deleteFromLibrary')} showFilter={false} showPlayAll={false} disableArtistLink={true}>
   {#snippet empty()}
     <EmptyState title={t('artist.emptyTitle')} hint={t('artist.emptyHint')}>
       {#snippet action()}

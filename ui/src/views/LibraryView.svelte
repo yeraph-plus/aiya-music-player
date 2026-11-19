@@ -1,14 +1,16 @@
 <script lang="ts">
-  import { ArrowDown, ArrowUp } from '@lucide/svelte';
+  import { ArrowDown, ArrowUp, User } from '@lucide/svelte';
   import Icon from '../components/Icon.svelte';
   import TextTabs from '../components/ui/TextTabs.svelte';
-import Progress from '../components/ui/Progress.svelte';
+  import Progress from '../components/ui/Progress.svelte';
   import Header from '../components/content/Header.svelte';
   import Button from '../components/ui/Button.svelte';
   import Card from '../components/ui/Card.svelte';
   import Toolbar from '../components/content/Toolbar.svelte';
   import TrackListPanel from '../components/TrackListPanel.svelte';
   import EmptyState from '../components/ui/EmptyState.svelte';
+  import InlineError from '../components/ui/InlineError.svelte';
+  import AddLibraryFolder from '../components/AddLibraryFolder.svelte';
   import { artworkUrl } from '../lib/artwork';
   import { formatDurationLong } from '../lib/format';
   import { t } from '../lib/i18n.svelte';
@@ -19,7 +21,6 @@ import Progress from '../components/ui/Progress.svelte';
   import { nav } from '../stores/nav.svelte';
   import { overlay } from '../stores/overlay.svelte';
   import { playlists } from '../stores/playlists.svelte';
-  import { scan } from '../stores/scan.svelte';
   import { ui } from '../stores/ui.svelte';
 
   /**
@@ -52,7 +53,7 @@ import Progress from '../components/ui/Progress.svelte';
           ? t('library.playlistMeta', { n: playlist.trackCount, duration: formatDurationLong(playlist.durationMs) })
           : '',
         cover: playlist?.artworkId ? (artworkUrl(playlist.artworkId, 256) ?? null) : null,
-        playDisabled: !playlist || playlist.trackCount === 0,
+        playDisabled: !playlist || playlist.trackCount === 0 || list.loading || !!list.error,
       };
     }
     if (isSearchPage) {
@@ -60,7 +61,7 @@ import Progress from '../components/ui/Progress.svelte';
         kicker: 'SEARCH',
         title: ui.search.trim() ? t('library.searchTitle', { q: ui.search.trim() }) : t('library.searchTitleEmpty'),
         subtitle: t('library.searchSubtitle'),
-        meta: t('library.searchMeta', { n: list.total }),
+        meta: searchPending ? t('library.searching') : list.error ? '' : t('library.searchMeta', { n: list.total }),
         cover: undefined as string | null | undefined,
         playDisabled: list.total === 0,
       };
@@ -79,6 +80,7 @@ import Progress from '../components/ui/Progress.svelte';
   /* 搜索结果页 */
 
   const isSearchPage = $derived(ui.page === 'search');
+  const searchPending = $derived(list.loading || list.loadedSearch !== ui.search.trim());
 
   /**
    * 曲库页 tab 索引：「全部曲目」旁的三个小标题 tab。排序控件只在「全部曲目」给——
@@ -105,14 +107,12 @@ import Progress from '../components/ui/Progress.svelte';
    * 空词不拉（空搜索页显示提示，不是全库）。
    */
   let facetSearchTimer: ReturnType<typeof setTimeout> | undefined;
-  let facetQuery = $state('');
   $effect(() => {
     if (!isSearchPage) return;
     const q = ui.search.trim();
     clearTimeout(facetSearchTimer);
     facetSearchTimer = setTimeout(
       () => {
-        facetQuery = q;
         if (!q) return;
         void facets.loadAlbums(q);
         void facets.loadArtists(q);
@@ -122,13 +122,12 @@ import Progress from '../components/ui/Progress.svelte';
     return () => clearTimeout(facetSearchTimer);
   });
 
-  /** 卡片段只在查询词与当前展示一致时渲染（防抖期间保留上一次结果）。
-   *  搜索命中多少给多少，不截断——换行网格放得下，后端聚合自带上限 */
+  /** 结果只在响应所属查询词与当前输入一致时展示。 */
   const searchAlbums = $derived(
-    isSearchPage && facetQuery ? facets.albums : null,
+    isSearchPage && facets.albumsQuery === ui.search.trim() && !facets.albumsLoading ? facets.albums : null,
   );
   const searchArtists = $derived(
-    isSearchPage && facetQuery ? facets.artists : null,
+    isSearchPage && facets.artistsQuery === ui.search.trim() && !facets.artistsLoading ? facets.artists : null,
   );
 
   /**
@@ -254,40 +253,45 @@ import Progress from '../components/ui/Progress.svelte';
   </div>
 {/if}
 
-{#if isSearchPage && (searchAlbums?.length || searchArtists?.length)}
+{#if isSearchPage && ui.search.trim()}
   <div class="facet-rows">
-    {#if searchAlbums?.length}
-      <section class="facet-row">
-        <h2>{t('library.sectionAlbums')}</h2>
+    <section class="facet-row" aria-busy={searchAlbums === null}>
+      <h2>{t('library.sectionAlbums')}</h2>
+      {#if searchAlbums === null}
+        <p class="search-status" role="status">{t('library.searching')}</p>
+      {:else if facets.albumsError}
+        <InlineError message={facets.albumsError} />
+        <Button size="sm" onclick={() => void facets.loadAlbums(ui.search.trim())}>{t('library.panel.retry')}</Button>
+      {:else if searchAlbums.length}
         <div class="facet-grid">
           {#each searchAlbums as al (al.id)}
-            <Card
-              title={al.title}
-              subtitle={al.artist
-                ? `${al.artist} · ${t('common.trackCount', { n: al.trackCount })}`
-                : t('common.trackCount', { n: al.trackCount })}
+            <Card title={al.title}
+              subtitle={al.artist ? `${al.artist} · ${t('common.trackCount', { n: al.trackCount })}` : t('common.trackCount', { n: al.trackCount })}
               cover={al.artworkId ? artworkUrl(al.artworkId, 256) : null}
-              onclick={() => nav.go({ kind: 'album', id: al.id })}
-            />
+              onclick={() => nav.go({ kind: 'album', id: al.id })} />
           {/each}
         </div>
-      </section>
-    {/if}
-    {#if searchArtists?.length}
-      <section class="facet-row">
-        <h2>{t('library.sectionArtists')}</h2>
+      {:else}<p class="search-status">{t('library.noMatchTitle')}</p>{/if}
+    </section>
+    <section class="facet-row" aria-busy={searchArtists === null}>
+      <h2>{t('library.sectionArtists')}</h2>
+      {#if searchArtists === null}
+        <p class="search-status" role="status">{t('library.searching')}</p>
+      {:else if facets.artistsError}
+        <InlineError message={facets.artistsError} />
+        <Button size="sm" onclick={() => void facets.loadArtists(ui.search.trim())}>{t('library.panel.retry')}</Button>
+      {:else if searchArtists.length}
         <div class="facet-grid">
           {#each searchArtists as ar (ar.id)}
-            <Card
-              title={ar.name}
+            <Card title={ar.name} avatar
               subtitle={t('browse.artistCardMeta', { n: ar.trackCount, albums: ar.albumCount })}
-              cover={ar.artworkId ? artworkUrl(ar.artworkId, 256) : null}
-              onclick={() => nav.go({ kind: 'artist', id: ar.id })}
-            />
+              onclick={() => nav.go({ kind: 'artist', id: ar.id })}>
+              {#snippet icon()}<User size={22} />{/snippet}
+            </Card>
           {/each}
         </div>
-      </section>
-    {/if}
+      {:else}<p class="search-status">{t('library.noMatchTitle')}</p>{/if}
+    </section>
   </div>
 {/if}
 
@@ -299,12 +303,16 @@ import Progress from '../components/ui/Progress.svelte';
   {#if isSearchPage}
     <div class="facet-rows tracks-head"><h2>{t('library.sectionTracks')}</h2></div>
   {/if}
+  {#if isSearchPage && searchPending}
+    <p class="search-status tracks-loading" role="status">{t('library.searching')}</p>
+  {:else}
   <TrackListPanel
     {canSort}
+    showPlayAll={view.kind !== 'playlist'}
     removeLabel={view.kind === 'playlist' ? t('library.removeFromPlaylist') : t('library.deleteFromLibrary')}
     showFilter={ui.page === 'library'}
     dragSort={
-      view.kind === 'playlist' ? (from, to) => void playlists.moveItem(from, to) : undefined
+      view.kind === 'playlist' ? (from, to) => playlists.moveItem(from, to) : undefined
     }
   >
     {#snippet empty()}
@@ -339,14 +347,13 @@ import Progress from '../components/ui/Progress.svelte';
       {:else}
         <EmptyState title={t('library.emptyTitle')} hint={t('library.emptyHint')}>
           {#snippet action()}
-            <Button variant="primary" onclick={() => void scan.pickRootAndScan()} disabled={library.scanning}>
-              {t('library.chooseFolder')}
-            </Button>
+            <AddLibraryFolder primary label={t('library.chooseFolder')} disabled={library.scanning}/>
           {/snippet}
         </EmptyState>
       {/if}
     {/snippet}
   </TrackListPanel>
+  {/if}
 {/if}
 </div><!-- /lib-root -->
 
@@ -366,7 +373,7 @@ import Progress from '../components/ui/Progress.svelte';
   }
 
   .lib-root.scroll :global(.list-shell) {
-    min-height: 340px;
+    min-height: 21.25rem;
   }
 
   /* 搜索结果页的专辑/艺人段：换行网格，不做横滚——结果不该藏在滚动方向
@@ -375,20 +382,20 @@ import Progress from '../components/ui/Progress.svelte';
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
-    padding: 0 22px var(--space-3);
+    padding: 0 var(--space-6) var(--space-3);
   }
 
   .facet-row h2,
   .tracks-head h2 {
     margin: 0 0 var(--space-2);
-    font-size: var(--fs-sm);
+    font-size: var(--fs-lg);
     font-weight: 600;
     color: var(--text-2);
   }
 
   .facet-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
     gap: var(--space-2);
   }
 
@@ -396,4 +403,6 @@ import Progress from '../components/ui/Progress.svelte';
   .tracks-head {
     padding-bottom: 0;
   }
+  .search-status {margin:var(--space-3) 0;color:var(--text-2);font-size:var(--fs-base);}
+  .tracks-loading {padding-inline:var(--space-6);}
 </style>

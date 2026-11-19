@@ -14,14 +14,15 @@
    */
   interface Props {
     message: string;
+    id?: string;
     ondismiss?: () => void;
     action?: { label: string; onclick: () => void };
   }
 
-  let { message, ondismiss, action }: Props = $props();
+  let { message, id, ondismiss, action }: Props = $props();
 </script>
 
-<div class="k-inline-error" role="alert" aria-live="assertive">
+<div {id} class="k-inline-error" role="alert" aria-live="assertive">
   <!-- 错误详情是用户可能要贴给别人的内容，放开选择 -->
   <span class="msg selectable">{message}</span>
   {#if action}
@@ -36,10 +37,10 @@
   .k-inline-error {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin: 0 22px 8px;
-    padding: 8px 12px;
-    border-radius: 8px;
+    gap: var(--space-3);
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
     border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
     background: color-mix(in srgb, var(--danger) 10%, transparent);
     color: var(--danger);

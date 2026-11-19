@@ -23,6 +23,7 @@ export interface RowDragOptions {
   scroller: HTMLElement | null;
   /** 按下后移动超过这个距离才算拖拽，否则仍然是一次点击 */
   threshold?: number;
+  handle?: boolean;
   onState: (state: { from: number; to: number; active: boolean } | null) => void;
   onDrop: (from: number, to: number) => void;
 }
@@ -50,7 +51,7 @@ export function startRowDrag(options: RowDragOptions): void {
   const { event, index, count, rowHeight, scroller, onState, onDrop } = options;
   const target = event.target as HTMLElement | null;
   // 行内的按钮（移除、播放）不参与拖拽
-  if (target?.closest('button, input, a')) return;
+  if (!options.handle && target?.closest('button, input, a')) return;
   if (event.button !== 0) return;
 
   const startY = event.clientY;

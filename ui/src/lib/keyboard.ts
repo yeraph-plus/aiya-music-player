@@ -115,8 +115,8 @@ export function runShortcut(action: ShortcutAction): void {
 }
 
 export function onKeydown(event: KeyboardEvent): void {
-  // 行组件/歌词行/Knob 等已经 preventDefault 的按键不再重复处理：它们各自消化掉了（起播/seek/调值），全局再走一遍就是双触发
-  // （聚焦列表行按空格"先起播再暂停"、设置页旋钮方向键同时 seek）。
+  // 行组件/歌词行/Slider 等已经 preventDefault 的按键不再重复处理：它们各自消化掉了（起播/seek/调值），全局再走一遍就是双触发
+  // （聚焦列表行按空格"先起播再暂停"、滑杆方向键同时 seek）。
   if (event.defaultPrevented) return;
 
   // 正在设置页录制快捷键：**所有**全局快捷键让路。两个 listener 都在 window 上，录制侧 stopPropagation

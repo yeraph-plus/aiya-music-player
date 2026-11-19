@@ -79,11 +79,10 @@
     border-radius: var(--radius-md);
     background: var(--surface-input);
     color: var(--text-1);
-    font-size: var(--fs-base);
+    font-size: var(--fs-md);
     transition:
       border-color var(--dur-fast) var(--ease),
       background var(--dur-fast) var(--ease);
-    outline: none;
   }
 
   :global(.k-select-trigger:focus-visible),
@@ -119,11 +118,11 @@
     z-index: var(--z-select);
     /* 与触发按钮同宽（bits-ui 会设 --bits-select-anchor-width），长选项再撑开 */
     width: var(--bits-select-anchor-width, max-content);
-    min-width: 120px;
-    max-height: 320px;
-    padding: 6px;
+    min-width: 7.5rem;
+    max-height: min(20rem, var(--bits-select-content-available-height));
+    padding: var(--space-2);
     border: 1px solid var(--line);
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     background: var(--surface-4);
     box-shadow: var(--shadow-4);
     backdrop-filter: blur(var(--blur-pop));
@@ -139,9 +138,9 @@
     display: block;
     width: 100%;
     text-align: left;
-    padding: 7px 10px;
-    border-radius: 7px;
-    font-size: var(--fs-base);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-md);
     color: var(--text-1);
     cursor: default;
     user-select: none;
@@ -157,4 +156,6 @@
     color: var(--accent-text);
     background: var(--accent-weak);
   }
+  :global(.k-select-trigger:disabled) {opacity:var(--disabled-opacity);cursor:default;}
+  :global(.k-select-trigger:focus-visible) {outline:2px solid var(--accent);outline-offset:2px;}
 </style>

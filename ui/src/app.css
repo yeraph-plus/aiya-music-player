@@ -7,6 +7,7 @@
  * 拆开之后一次改动只看一个文件，也便于以后换皮 —— 换皮只动 tokens.css。
  */
 @import './styles/tokens.css';
+@import './styles/tabs.css';
 @import './styles/base.css';
 @import './styles/layout.css';
 @import './styles/shell.css';

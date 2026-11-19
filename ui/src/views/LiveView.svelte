@@ -331,7 +331,7 @@
             aria-label={cardAria(entry)}
           >
             {#if entry.cover}
-              <img class="face-cover" src={entry.cover} alt="" loading="lazy" />
+              <img width="250" height="400" class="face-cover" src={entry.cover} alt="" loading="lazy" />
             {:else}
               <span class="face-mark" aria-hidden="true"><AudioLines size={48} strokeWidth={1.2} /></span>
             {/if}
@@ -436,9 +436,9 @@
     autofocus={() => urlFieldRef?.focus()}
     onclose={closeAdd}
   >
-    <div class="add-form">
+    <form id="live-add" class="add-form" onsubmit={event=>{event.preventDefault();submitAdd();}}>
       <Field
-        label={t('live.fieldUrl')}
+        label={t('live.fieldUrl')} type="url" name="stream-url" autocomplete="off" spellcheck={false}
         bind:ref={urlFieldRef}
         value={draftUrl}
         error={draftError}
@@ -448,7 +448,6 @@
           draftUrl = value;
           draftError = null;
         }}
-        onenter={submitAdd}
       />
       <Field
         label={t('live.fieldName')}
@@ -456,7 +455,6 @@
         maxlength={80}
         placeholder={t('live.fieldNamePh')}
         oninput={(value) => (draftName = value)}
-        onenter={submitAdd}
       />
       <Field
         label={t('live.fieldSubtitle')}
@@ -464,7 +462,6 @@
         maxlength={60}
         placeholder={t('live.fieldSubtitlePh')}
         oninput={(value) => (draftSubtitle = value)}
-        onenter={submitAdd}
       />
       <Field
         label={t('live.fieldDesc')}
@@ -472,34 +469,36 @@
         maxlength={200}
         placeholder={t('live.fieldDescPh')}
         oninput={(value) => (draftDescription = value)}
-        onenter={submitAdd}
       />
-    </div>
+    </form>
     {#snippet actions()}
       <Button onclick={closeAdd}>{t('common.cancel')}</Button>
-      <Button variant="primary" disabled={!draftUrl.trim()} onclick={submitAdd}>{t('live.addConfirm')}</Button>
+      <Button variant="primary" disabled={!draftUrl.trim()} type="submit" form="live-add">{t('live.addConfirm')}</Button>
     {/snippet}
   </Dialog>
 {/if}
 
 <style>
   .live {
-    --live-card-w: 250px;
-    --live-card-h: 400px;
+    --live-card-w: 15.625rem;
+    --live-card-h: 25rem;
 
     flex: 1;
     min-height: 0;
+    min-width:0;
+    container-type:inline-size;
+    overflow:auto;
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 6px 22px 8px;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-6) var(--space-3);
   }
 
   /* 内容区高度吃紧时卡组缩一档，头部与信息块不动 */
   @media (max-height: 799px) {
     .live {
-      --live-card-w: 200px;
-      --live-card-h: 320px;
+      --live-card-w: 12.5rem;
+      --live-card-h: 20rem;
     }
   }
 
@@ -508,7 +507,7 @@
   .deck {
     position: relative;
     flex: 1;
-    min-height: 0;
+    min-height: calc(var(--live-card-h) * 1.4);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -518,7 +517,7 @@
      与 --z-* 阶梯无关；箭头/信息块仍在阶梯上 */
   .stage {
     position: relative;
-    width: calc(var(--live-card-w) * 3.2);
+    width: min(100%, calc(var(--live-card-w) * 3.2));
     height: var(--live-card-h);
     perspective: 1000px;
   }
@@ -599,10 +598,10 @@
     display: grid;
     place-content: center;
     justify-items: center;
-    gap: 12px;
+    gap: var(--space-4);
     width: 100%;
     height: 100%;
-    padding: 18px;
+    padding: var(--space-5);
     border: 1px solid var(--line);
     border-radius: var(--radius-lg);
     background: color-mix(in srgb, var(--surface-3) 45%, transparent);
@@ -650,7 +649,7 @@
   }
 
   .live-card:hover .card-remove,
-  .card-remove:focus-visible,
+  .live-card:focus-within .card-remove,
   .live-card:hover .card-mark {
     opacity: 1;
   }
@@ -693,19 +692,11 @@
   }
 
   .deck-arrow.arrow-left {
-    left: -5%;
+    left: 0;
   }
 
   .deck-arrow.arrow-right {
-    right: -5%;
-  }
-
-  /* 切换按钮放大一档（lg 是 36px，轮播是本页唯一操作，值得这个体量）；
-     IconButton 的尺寸档是组件 scoped 的，这里借 :global 覆盖 */
-  .deck-arrow :global(.k-icon-btn) {
-    width: 52px;
-    height: 52px;
-    border-radius: var(--radius-lg);
+    right: 0;
   }
 
   .stage.locked .deck-arrow {
@@ -788,7 +779,7 @@
     line-clamp: 3;
     margin: 0;
     overflow: hidden;
-    font-size: var(--fs-xs);
+    font-size: var(--fs-sm);
     line-height: 1.5;
     color: var(--text-3);
     overflow-wrap: anywhere;
@@ -840,8 +831,8 @@
 
   .add-form {
     display: grid;
-    gap: 12px;
-    padding: 14px 16px;
+    gap: var(--space-4);
+    padding: 0;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -849,5 +840,11 @@
     .deck-arrow {
       transition-duration: 0s;
     }
+  }
+  .card-face:focus-visible {outline:2px solid var(--accent);outline-offset:2px;}
+  .info-name,.info-sub {max-width:100%;}
+  @container (max-width: 40rem) {
+    .deck {--live-card-h:min(16rem,45dvh);--live-card-w:calc(var(--live-card-h) * .625);overflow:hidden;}
+    .live-info {left:var(--space-5);max-width:calc(100% - 2 * var(--space-5));}
   }
 </style>

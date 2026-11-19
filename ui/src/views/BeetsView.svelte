@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { Wrench } from '@lucide/svelte';
   import Header from '../components/content/Header.svelte';
-  import TextTabs from '../components/ui/TextTabs.svelte';
+  import { Tabs } from 'bits-ui';
+  import TabList from '../components/ui/TabList.svelte';
   import Button from '../components/ui/Button.svelte';
   import EmptyState from '../components/ui/EmptyState.svelte';
   import InstallPanel from '../components/beets/InstallPanel.svelte';
@@ -73,6 +74,10 @@
 </script>
 
 <div class="page-scroll beets-page">
+  <Tabs.Root value={ui.beetsTab} onValueChange={id => {
+    ui.beetsTabTouched = true;
+    ui.beetsTab = id as 'install' | 'index' | 'organize';
+  }}>
   <Header
     kicker="LIBRARY TOOLS"
     title="Beets"
@@ -81,19 +86,14 @@
   >
     {#snippet actions()}
       <!-- tab 在头部右侧（与设置页同构），不再单独占一条工具栏 -->
-      <TextTabs
-        items={tabs}
-        value={ui.beetsTab}
-        onchange={(id) => {
-          ui.beetsTabTouched = true;
-          ui.beetsTab = id as 'install' | 'index' | 'organize';
-        }}
-        label={t('beets.tabAria')}
-      />
+      <TabList items={tabs} label={t('beets.tabAria')} />
     {/snippet}
   </Header>
 
-  {#if ui.beetsTab === 'install'}
+  {#each tabs as tab (tab.id)}
+    <Tabs.Content value={tab.id}>
+      {#if ui.beetsTab === tab.id}
+  {#if tab.id === 'install'}
     <InstallPanel />
   {:else if !ready}
     <section class="gate-panel">
@@ -110,18 +110,22 @@
         {/snippet}
       </EmptyState>
     </section>
-  {:else if ui.beetsTab === 'index'}
+  {:else if tab.id === 'index'}
     <IndexPanel />
   {:else}
     <OrganizePanel />
   {/if}
+      {/if}
+    </Tabs.Content>
+  {/each}
+  </Tabs.Root>
 </div>
 
 <style>
   .gate-panel {
     border: 1px solid var(--line);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     background: var(--surface-2);
-    padding: 24px 16px;
+    padding: var(--space-6) var(--space-5);
   }
 </style>
